@@ -1,6 +1,11 @@
 // src/sm64_events/ui/components/stratmodal.js — the strategy-creation modal:
 // name + the full rank ladder (blank time + optional example-video URL per
-// rank), Save/Cancel. Writes ride the EXISTING ranks endpoints in order
+// rank), Save/Cancel. On a 100-COIN star it also asks which EXIT STAR the run
+// ends on, and the server qualifies the stored name with that variant's label
+// (spec 2026-08-03-hundred-coin-exit-variants) — which is why `save` uses the
+// name the POST RETURNS for every follow-up write instead of the one it sent.
+// Picking an ending the community has no times for MINTS a variant, so this
+// modal is the whole "define your own 100-coin route" path. Writes ride the EXISTING ranks endpoints in order
 // (create → PUT each filled threshold → PUT each filled video), so a partial
 // failure leaves a valid strat and re-Save is idempotent (create no-ops,
 // PUTs overwrite). Callers own what happens after save (set active / reload)
@@ -32,6 +37,15 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
   // save it will have standards, so an exclusion is the only thing that can
   // still keep it out of a rating.
   const [included, setIncluded] = useState(true);
+  // [{star_id, name, label}] for a 100-coin star, [] for everything else — the
+  // server's own answer, so neither call site has to know which entities have
+  // exit stars. `null` exit means "not asked yet / not applicable".
+  const [exitOptions, setExitOptions] = useState([]);
+  const [exitStar, setExitStar] = useState(null);
+  // The server's own grouping, kept only so the duplicate check can compare
+  // LEAVES within the chosen variant. Composing the qualified name here to
+  // compare it would be a second implementation of the qualification rule.
+  const [groups, setGroups] = useState([]);
   // Written only if the user actually touches it. Saving the state back
   // unconditionally would let a failed/absent fetch (the checkbox falling
   // back to its default) silently rewrite an exclusion the user set
@@ -41,6 +55,18 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
   useEffect(() => { nameRef.current && nameRef.current.focus(); }, []);
   useEffect(() => {
     let alive = true;
+    getJSON(`/api/ranks/standards?entity=${enc(entity)}`)
+      .then((response) => {
+        if (!alive) return;
+        const options = response.exit_star_options || [];
+        setExitOptions(options);
+        setGroups(response.strategy_groups || []);
+        // Default to the first ending the community already rates, so the
+        // common case is one click and the unrated ones stay a deliberate pick.
+        const rated = options.find((o) => o.label);
+        if (rated) setExitStar(rated.star_id);
+      })
+      .catch(() => { /* no exit stars is the normal case */ });
     getJSON("/api/marelo/exclusions")
       .then((response) => alive
         && setIncluded(!(response.excluded || []).includes(entity)))
@@ -51,8 +77,15 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
   async function save() {
     const strat = name.trim();
     if (!strat) { setError("Strategy name required."); return; }
-    if ((existing || []).includes(strat)) {
+    const takenHere = exitStar === null
+      ? (existing || [])
+      : ((groups.find((g) => g.exit_star === exitStar) || {}).strategies || [])
+          .map((s) => s.leaf);
+    if (takenHere.includes(strat)) {
       setError(`"${strat}" already exists here.`); return;
+    }
+    if (exitOptions.length && exitStar === null) {
+      setError("Pick the star this run ends on."); return;
     }
     // Dropdown sentinels ("+ new strat…" option values) — a strat with this
     // literal name could never be selected, only re-open the modal.
@@ -72,24 +105,34 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
       // strats, which would let a community-seeded name slip through and
       // silently overwrite its times.
       const current = await getJSON(`/api/ranks/standards?entity=${enc(entity)}`);
-      if (Object.hasOwn(current.strategies || {}, strat)) {
+      const takenNow = exitStar === null
+        ? Object.keys(current.strategies || {})
+        : (((current.strategy_groups || [])
+            .find((g) => g.exit_star === exitStar) || {}).strategies || [])
+            .map((s) => s.leaf);
+      if (takenNow.includes(strat)) {
         setError(`"${strat}" already exists here.`); setSaving(false); return;
       }
-      await send("POST", `/api/ranks/standards/${enc(entity)}`, { strategy: strat });
+      const created = await send("POST", `/api/ranks/standards/${enc(entity)}`,
+        { strategy: strat, exit_star: exitStar });
+      // THE stored name — variant-qualified when an exit star was chosen.
+      // Composing it here instead would be a second implementation of the
+      // qualification rule, which is exactly what ranks/standards.py owns.
+      const stored = (created && created.strategy) || strat;
       for (const rank of LADDER_RANKS) {
         const rawTime = (times[rank] || "").trim();
         if (rawTime !== "") {
           const seconds = parseFloat(rawTime);
           if (!isNaN(seconds)) {
             await send("PUT",
-              `/api/ranks/standards/${enc(entity)}/${enc(strat)}/${enc(rank)}`,
+              `/api/ranks/standards/${enc(entity)}/${enc(stored)}/${enc(rank)}`,
               { seconds });
           }
         }
         const url = (videos[rank] || "").trim();
         if (url) {
           await send("PUT",
-            `/api/ranks/standards/${enc(entity)}/${enc(strat)}/${enc(rank)}/video`,
+            `/api/ranks/standards/${enc(entity)}/${enc(stored)}/${enc(rank)}/video`,
             { url });
         }
       }
@@ -98,7 +141,7 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
       // preference the breakdown can still toggle.
       if (includeTouched)
         await send("POST", "/api/marelo/exclude", { entity, excluded: !included });
-      onSaved(strat);
+      onSaved(stored);
     } catch (requestError) {
       // Keep the modal open: the strat may exist with partial data — re-Save
       // is safe (idempotent), and the auto-column union means nothing created
@@ -122,6 +165,24 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
           ref=${nameRef} autofocus
           oninput=${(inputEvent) => setName(inputEvent.target.value)} />
     </label>
+    ${exitOptions.length ? html`<label class="modal-field">
+      <span class="field-label">Ends on</span>
+      <select value=${exitStar === null ? "" : String(exitStar)}
+          onchange=${(changeEvent) => setExitStar(
+            changeEvent.target.value === "" ? null
+              : Number(changeEvent.target.value))}>
+        <option value="">— pick the exit star —</option>
+        ${exitOptions.map((option) => html`
+          <option value=${String(option.star_id)}>
+            ${option.name}${option.label ? "" : "  (no community times)"}
+          </option>`)}
+      </select>
+      <span class="meta">
+        A 100-coin run is timed per exit star, so this decides which ladder
+        the strategy is graded against.${" "}
+        Ending somewhere the community does not rate starts a new variant.
+      </span>
+    </label>` : null}
     <label class="strategy-include-field">
       <input type="checkbox" checked=${included} onchange=${(changeEvent) => {
         setIncluded(changeEvent.target.checked); setIncludeTouched(true);

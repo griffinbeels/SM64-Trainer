@@ -140,11 +140,31 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // custom strats are fillable the moment they exist. Object.hasOwn (not
   // `in`): a strat named e.g. "constructor" must not vanish via the proto
   // chain.
-  const strats = data
+  const allStrats = data
     ? [...Object.keys(data.strategies).filter((s) => inFamily(s, family)),
        ...(strategies || []).filter((s) => inFamily(s, family)
          && !Object.hasOwn(data.strategies, s))]
     : [];
+  // A 100-coin star is timed separately per EXIT star, so its columns are
+  // BANDED by variant with the leaf name in the column head — "Standard"
+  // under "100c + Race" (spec 2026-08-03-hundred-coin-exit-variants). Bands
+  // come from the server's own `strategy_groups`; nothing here works out which
+  // variant a strategy belongs to. `bands` is empty for every ordinary entity
+  // and the table renders exactly as it did before.
+  const bands = ((data && data.strategy_groups) || [])
+    .map((group) => ({
+      label: group.label,
+      names: group.strategies.map((s) => s.name).filter((s) => allStrats.includes(s)),
+    }))
+    .filter((band) => band.names.length);
+  const banded = new Set(bands.flatMap((band) => band.names));
+  const loose = allStrats.filter((s) => !banded.has(s));
+  if (bands.length && loose.length) bands.push({ label: "Other", names: loose });
+  // Banded order, so a column always sits under its own heading.
+  const strats = bands.length ? bands.flatMap((band) => band.names) : allStrats;
+  const leafOf = new Map(((data && data.strategy_groups) || [])
+    .flatMap((group) => group.strategies.map((s) => [s.name, s.leaf])));
+  const colHead = (strat) => leafOf.get(strat) || strat;
   // "You are here": the grading basis under the ACTIVE strategy. Avg rank
   // modes carry it on sectionRank.basis; pb mode carries none (the same
   // split _section_banner already encodes server-side), so it falls back to
@@ -190,10 +210,14 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
         ${data.xcams_url ? html`<a class="meta" href=${data.xcams_url} target="_blank" rel="noopener"
             title="browse every example run for this star on the xcams Daily Star page">Examples on xcams ↗</a>` : null}
       </div>
-      <table class="stdtable"><thead><tr><th>Strat</th>
+      <table class="stdtable"><thead>
+        ${bands.length ? html`<tr class="std-variant-row"><th></th>
+          ${bands.map((band) => html`<th class="std-variant" colspan=${band.names.length}
+              title="the star this 100-coin run ends on">${band.label}</th>`)}</tr>` : null}
+        <tr><th>Strat</th>
         ${strats.map((strat) => html`<th class=${strat === activeStrat ? "col-active" : ""}>${headVid(strat)
-          ? html`<a href=${headVid(strat)} target="_blank" rel="noopener" title="fastest-time video">${strat}</a>`
-          : strat}${editing ? html` <button class="candx" title=${isSeeded(strat) ? "clear this strategy's standards" : "delete this strategy"} onclick=${() => delStrat(strat)}>×</button>` : ""}
+          ? html`<a href=${headVid(strat)} target="_blank" rel="noopener" title="fastest-time video">${colHead(strat)}</a>`
+          : colHead(strat)}${editing ? html` <button class="candx" title=${isSeeded(strat) ? "clear this strategy's standards" : "delete this strategy"} onclick=${() => delStrat(strat)}>×</button>` : ""}
           ${marker && strat === activeStrat ? html`<span class="std-you-badge"
               title="your current time and score on this ladder">◀ you · ${fmtIgt(basisFrames)}${entityScore != null ? ` · ${fmtScore(entityScore)}` : ""}</span>` : ""}</th>`)}</tr></thead>
         <tbody>

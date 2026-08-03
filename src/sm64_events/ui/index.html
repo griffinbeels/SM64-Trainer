@@ -511,6 +511,11 @@
   .stdtable{border-collapse:collapse;font-size:11px}
   .stdtable th,.stdtable td{border:1px solid #21262d;padding:3px 7px;text-align:center}
   .stdtable .col-active{box-shadow:inset 0 0 0 2px #3a8d8d}
+  /* Exit-star variant band over a 100-coin star's columns: a heading, not a
+     pickable column, so it reads quieter than the strategy names under it. */
+  .stdtable .std-variant{font-weight:600;letter-spacing:.02em;color:#8b98a6;
+    background:#131b26;border-bottom-color:#2b323b}
+  .stdtable .std-variant-row th:first-child{border:0;background:transparent}
   .stdinp{width:48px;background:#0d1117;border:1px solid #30363d;color:#e6e9ee;border-radius:4px;text-align:center}
   .stdcell{display:inline-flex;align-items:center;gap:4px}
   .vidbtn{border:none;background:transparent;color:#6cb6ff;cursor:pointer;font-size:11px;padding:0 2px;line-height:1}

@@ -30,6 +30,7 @@ from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking import practicable
 from sm64_events.tracking.caveats import pb_blocked_by
 from sm64_events.tracking.defaults import resolve_steps
+from sm64_events.tracking.hundred_coin import classify
 from sm64_events.tracking.prune import PRUNE_EVENT, prunable_ids
 from sm64_events.tracking.projection import (Projector, journal_id, replay,
                                              wipe_matches)
@@ -110,7 +111,8 @@ class TrackerService:
         self._segment_defs = self._load_segment_defs()
         self._projector = Projector(segments=self._segment_defs,
                                     time_filters=self._time_filters(),
-                                    origin_overrides=self._origin_overrides())
+                                    origin_overrides=self._origin_overrides(),
+                                    hundred_coin_strat=self._hundred_coin_strat)
         self._current_stage = {"course_id": None, "level": None,
                                "area": None, "mode": None}
         self._persisted_runs: list[int] = []
@@ -149,7 +151,8 @@ class TrackerService:
         self._segment_defs = self._load_segment_defs()
         self._projector = Projector(segments=self._segment_defs,
                                     time_filters=self._time_filters(),
-                                    origin_overrides=self._origin_overrides())
+                                    origin_overrides=self._origin_overrides(),
+                                    hundred_coin_strat=self._hundred_coin_strat)
         await self.start()
 
     # -- pipeline -------------------------------------------------------------
@@ -169,7 +172,8 @@ class TrackerService:
         attempts, self._projector = replay(
             events, segments=self._segment_defs,
             time_filters=self._time_filters(),
-            origin_overrides=self._origin_overrides())
+            origin_overrides=self._origin_overrides(),
+            hundred_coin_strat=self._hundred_coin_strat)
         self.db.replace_attempts(attempts)
         # Boot repair, same reason as in _reproject: an orphaned pb row keeps
         # GRADING, so a db that already carries some from an older delete or
@@ -1100,15 +1104,40 @@ class TrackerService:
             raise RuntimeError("rank standards unavailable")
         return self.ranks
 
+    def _hundred_coin_strat(self, star, exit_star, current):
+        """The 100-coin strategy a run ending on `exit_star` belongs to, or
+        None to keep what is remembered (spec 2026-08-03-hundred-coin-exit-
+        variants). Handed to the Projector rather than looked up there: the
+        answer lives in the rank STANDARDS, a user-editable file the projector
+        has no business opening, and passing it as a callable keeps replay
+        driveable from a test with no store at all.
+
+        Read live rather than snapshotted, deliberately — the same choice
+        `ranks/history.py` already makes. Adding a variant re-classifies the
+        history that belongs to it on the next reprojection, which is the
+        behaviour the user asked for, and the alternative (freezing the map at
+        startup) would leave a strategy he just created unable to claim the run
+        he created it for."""
+        if self.ranks is None:
+            return None
+        ek = entity_key(*star)
+        return classify(self.ranks.strategies(ek), self.ranks.exit_variants(ek),
+                        current, exit_star)
+
     async def set_rank_threshold(self, ek, strat, rank, seconds) -> None:
         self._require_ranks().set_threshold(ek, strat, rank, seconds)
         await self._rank_standards_changed()
 
-    async def create_rank_strategy(self, ek, strat) -> None:
-        self._require_ranks().create_strategy(ek, strat)
+    async def create_rank_strategy(self, ek, strat, exit_star=None) -> str:
+        """Returns the name the strategy was STORED under — the caller's own
+        `strat` unless an `exit_star` qualified it (a 100-coin variant). The
+        tombstone clear uses that same stored name, or a previously-deleted
+        qualified strat would come back hidden."""
+        stored = self._require_ranks().create_strategy(ek, strat, exit_star)
         if self.db is not None:
-            self._clear_tombstone(self.db, ek, strat)
+            self._clear_tombstone(self.db, ek, stored)
         await self._rank_standards_changed()
+        return stored
 
     async def delete_rank_strategy(self, ek, strat) -> None:
         self._require_ranks().delete_strategy(ek, strat)
@@ -1551,9 +1580,11 @@ class TrackerService:
         db = self._require_db()
         before = self._projector.target
         old_armed = self._projector.armed_segment_ids()
-        attempts, projector = replay(db.events(), segments=self._segment_defs,
-                                     time_filters=self._time_filters(),
-                                     origin_overrides=self._origin_overrides())
+        attempts, projector = replay(
+            db.events(), segments=self._segment_defs,
+            time_filters=self._time_filters(),
+            origin_overrides=self._origin_overrides(),
+            hundred_coin_strat=self._hundred_coin_strat)
         # keep the live session: replayed projector state is authoritative
         self._projector = projector
         db.replace_attempts(attempts)

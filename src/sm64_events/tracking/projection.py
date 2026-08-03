@@ -467,7 +467,16 @@ class Projector:
                  touched: set[int] | None = None,
                  strat_overrides: dict[int, str | None] | None = None,
                  origin_overrides: dict | None = None,
-                 time_corrections: dict[int, dict] | None = None):
+                 time_corrections: dict[int, dict] | None = None,
+                 hundred_coin_strat=None):
+        # ((course_id, star_id), exit_star, current_strat) -> the 100-coin
+        # strategy this run belongs to, or None for "keep what is remembered"
+        # (spec 2026-08-03-hundred-coin-exit-variants). Injected rather than
+        # imported because the answer lives in the rank STANDARDS, which are a
+        # user-editable file the projector must not reach into; None leaves
+        # the pre-2026-08-03 behaviour byte for byte, which is what every test
+        # and tool constructing a bare Projector still gets.
+        self._hundred_coin_strat = hundred_coin_strat
         self._cleared = cleared if cleared is not None else {}
         # attempt_id -> reclassified strat (caveat 16); shadows the strat
         # remembered at close time.
@@ -780,11 +789,33 @@ class Projector:
                             timed_by="igt",
                             timed_at=(ev.payload.get("igt_timed_at")
                                       if ev.type == "star_collected" else None))
+                # WHICH EXIT STAR ended the run is a fact the closing event
+                # carries, and it decides which of the 100-coin star's ladders
+                # this time is graded against (spec 2026-08-03-hundred-coin-
+                # exit-variants). The sub-strategy inside that variant stays
+                # the user's, so the resolver moves variant and keeps the leaf.
+                # A FAILED run has no exit star and therefore no answer — it
+                # keeps whatever was remembered, which for an unlabelled
+                # historical row means it stays unlabelled and prunable.
+                remembered = self.strat_by_star.get(hc)
+                derived = None
+                if self._hundred_coin_strat is not None:
+                    derived = self._hundred_coin_strat(
+                        hc,                       # the ENTITY, not its parts
+                        (ev.payload.get("star_id")
+                         if ev.type == "star_collected" else None),
+                        remembered)
                 a = replace(a,
                             strat_tag=self._strat_overrides.get(
-                                a.id, self.strat_by_star.get(hc)),
+                                a.id, derived if derived is not None
+                                else remembered),
                             cleared=a.id in self._cleared,
                             cleared_reason=self._cleared.get(a.id))
+                # The card follows the run: the variant you actually ended on
+                # becomes the selected one, so the next attempt starts where
+                # this one finished rather than on the ladder you did not run.
+                if derived is not None and not a.cleared:
+                    self.strat_by_star[hc] = derived
             else:
                 # same first-event-id cleared keying as _build (caveat 2/11)
                 a = replace(a,
@@ -1255,8 +1286,9 @@ def wipe_matches(a: Attempt, p: dict) -> bool:
     return True  # kind == "all"
 
 
-def replay(events, segments=None, time_filters=None,
-           origin_overrides=None, on_notices=None) -> tuple[list[Attempt], Projector]:
+def replay(events, segments=None, time_filters=None, origin_overrides=None,
+           on_notices=None, hundred_coin_strat=None
+           ) -> tuple[list[Attempt], Projector]:
     """`on_notices`, default None (spec 2026-07-28-multi-step-segments, the
     backtest arm-count gap): an optional callback invoked with
     `proj.segment_notices` after every fed event, for a caller that needs
@@ -1281,7 +1313,8 @@ def replay(events, segments=None, time_filters=None,
                      time_filters=time_filters, touched=touched_ids(events),
                      strat_overrides=strat_overrides(events),
                      origin_overrides=origin_overrides,
-                     time_corrections=time_corrections(events))
+                     time_corrections=time_corrections(events),
+                     hundred_coin_strat=hundred_coin_strat)
     attempts: list[Attempt] = []
     for ev in events:
         if ev.type == "data_wiped":
