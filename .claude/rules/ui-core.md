@@ -88,6 +88,21 @@ and a row reshuffling four times in a tenth of a second is the flicker.
   lands. So a burst is one exchange, and the repaint count stops depending on how
   the server sequenced its events. A burst that cancels itself (away and back)
   comes straight back up instead of swapping to an identical set.
+- **TWO granularities, one owner each** (his second round, same day: *"it doesn't
+  fire in ALL situations… if there previously were no options available, but I
+  transition to a stage with options… right now it incorrectly cuts"*). A row
+  component that unmounts takes its exchange state with it, so a swap that
+  replaces the ROW — no context → placeholder, stars → castle movements, a course
+  → a Bowser stage — cuts by construction, and no care inside a row could cover
+  it. `SurfaceExchange` therefore sits in `StageBanner`, the one thing here that
+  never unmounts, wrapping everything it can draw including the placeholder;
+  `CellRow` keeps the cell-set changes inside a surface that stays put. They nest
+  without double-fading: a surface swap remounts the inner row (so it starts idle
+  at full opacity), and a cell change leaves the outer identity untouched.
+  `selectorSurfaceId` lives in `stagecontext.js` beside `practiceMode` — same
+  reason that module exists — and is deliberately COARSER than "the cells
+  changed": the castle's three areas are three sets of movements, a course's own
+  subareas are the same seven stars, so entering SSL's pyramid must not blink.
 - **`CellRow` is the single door**, and `tests/test_ui_exchange.py` fails if any
   row renders `<div class="starrow">` itself: a second door looks completely
   correct and reintroduces the flicker in one row while the others stay smooth.
