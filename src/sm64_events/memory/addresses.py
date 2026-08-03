@@ -841,3 +841,55 @@ def course_for_level(level: int | None) -> int | None:
     arenas, and unknown ids (see COURSE_BY_LEVEL). None means "not a course
     stage" — callers must not treat it as a course change."""
     return COURSE_BY_LEVEL.get(level)
+
+
+# The community abbreviation for each main course. Lives HERE rather than in
+# links.py (which held it until 2026-08-03) because two unrelated consumers
+# need the same fifteen strings: that module builds Ukikipedia/xcams URLs from
+# them, and `node_short_label` below writes them on screen. links.py cannot own
+# it — it already imports this module, so the dependency only runs one way.
+COURSE_ABBREV = {
+    1: "BoB", 2: "WF", 3: "JRB", 4: "CCM", 5: "BBH", 6: "HMC", 7: "LLL",
+    8: "SSL", 9: "DDD", 10: "SL", 11: "WDW", 12: "TTM", 13: "THI",
+    14: "TTC", 15: "RR",
+}
+
+# Short forms for the levels COURSE_ABBREV does not reach: the two hubs, the
+# three Bowser fight arenas, and the six secret stages whose full LEVEL_NAMES
+# entry is a sentence. Spelled the way the seeded corpus already spells them in
+# its own segment names ("WF → BitDW", "WF → PSS", "WF → Secret Aquarium"), so
+# a step chip and the segment title above it read as the same route.
+_SHORT_LEVEL_NAMES = {
+    16: "Grounds", 26: "Courtyard",
+    17: "BitDW", 19: "BitFS", 21: "BitS",
+    BOWSER_1_ARENA: "Bowser 1", BOWSER_2_ARENA: "Bowser 2",
+    BOWSER_3_ARENA: "Bowser 3",
+    27: "PSS", 28: "MC", 29: "WC", 18: "VC", 31: "WMotR", 20: "Aquarium",
+}
+
+
+def node_short_label(key: str) -> str:
+    """`node_label` in its short, route-notation form.
+
+    A castle subarea is already short ("Basement"); a main course takes its
+    COURSE_ABBREV; everything else takes `_SHORT_LEVEL_NAMES`, falling back to
+    the full name for a level no table names.
+
+    This is a PRESENTATION choice, and worth stating so nobody re-derives it as
+    a fitting constraint: the practice card's step track has room for the full
+    names (the corpus's longest route needs 386px into 614px at the 850px
+    floor — measured 2026-08-03, not estimated). It is short because the step
+    track is route notation, and a route reads as "BitFS › Lobby › Upstairs ›
+    BitS" beside a card titled "Bowser 2 → BitS". Mixing one sentence-length
+    name into a line of codes is what would look broken, which is why
+    `tests/test_addresses.py` pins every node in the world graph to a short
+    form rather than pinning a width.
+    """
+    level_str, _, area_str = key.partition(":")
+    if area_str:
+        return node_label(key)
+    level = int(level_str)
+    course = COURSE_BY_LEVEL.get(level)
+    if course in COURSE_ABBREV:
+        return COURSE_ABBREV[course]
+    return _SHORT_LEVEL_NAMES.get(level, node_label(key))

@@ -199,3 +199,28 @@ def test_mips_stars_resolve_to_the_basement():
 def test_node_label_reads_subareas_and_levels():
     assert A.node_label(A.node_key(A.LEVEL_CASTLE_INSIDE, A.AREA_BASEMENT)) == "Basement"
     assert A.node_label(A.node_key(8)) == "Shifting Sand Land"
+
+
+def test_node_short_label_shortens_the_names_that_need_it():
+    assert A.node_short_label(A.node_key(8)) == "SSL"           # main course
+    assert A.node_short_label(A.node_key(19)) == "BitFS"        # Bowser stage
+    assert A.node_short_label(A.node_key(A.BOWSER_2_ARENA)) == "Bowser 2"
+    # A castle subarea is already short and keeps the name it has everywhere
+    # else -- a second spelling for the room you are standing in would read as
+    # two different places.
+    assert A.node_short_label(A.node_key(A.LEVEL_CASTLE_INSIDE,
+                                         A.AREA_BASEMENT)) == "Basement"
+
+
+def test_every_world_node_has_a_short_form():
+    """A step track is route notation, so ONE sentence-length name among a
+    line of codes is what reads as broken -- not the width, which has plenty
+    of headroom (see `node_short_label`). Covers every node in the world
+    graph, so a level added to `WORLD_EDGES_*` without a short form fails here
+    rather than turning up on his card as the odd one out. Mutation-proved by
+    deleting a `_SHORT_LEVEL_NAMES` row.
+    """
+    over = {node: A.node_short_label(node)
+            for node in A.world_connections()
+            if len(A.node_short_label(node)) > 12}
+    assert over == {}

@@ -1081,6 +1081,53 @@
   .seg-waiting-for {
     min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   }
+  /* The step track: the whole route on ONE line, never two. `.objective-card`
+     is fixed-height, so a track that wrapped would not grow the card -- it
+     would push its own siblings out under `overflow: hidden`, which looks
+     like nothing at all until a row silently disappears. The chips shrink
+     (min-width: 0 + per-chip ellipsis) rather than wrap; the widest label the
+     seeded corpus can produce is 37 characters, measured, so shrinking is the
+     safety net and not the normal case. */
+  .step-track {
+    display: flex; align-items: baseline; min-width: 0; overflow: hidden;
+    margin: 0; padding: 0; list-style: none; gap: .5rem;
+  }
+  .step-chip {
+    display: flex; align-items: baseline; gap: .22rem; min-width: 0;
+    white-space: nowrap;
+    /* ONE transition declaration per element -- a :hover/state block that
+       redeclares `transition` REPLACES this wholesale and the property
+       silently loses its animation exactly while the state is active
+       (`.claude/rules/ui-core.md`). State rules below set values only. */
+    transition: color .26s ease, opacity .26s ease;
+    color: var(--muted); opacity: .58;
+  }
+  .step-chip + .step-chip::before {
+    content: "›"; margin-right: .34rem; color: var(--muted); opacity: .5;
+    flex: none;
+  }
+  .step-chip.done { color: var(--text); opacity: .78; }
+  .step-chip.now { color: var(--gold); opacity: 1; font-weight: 700; }
+  .step-name {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* One marker slot holding BOTH glyphs stacked in the same grid cell, so the
+     slot is exactly as wide as the wider of them and a chip cannot shift
+     sideways when its glyph changes -- the step being marked is the one thing
+     on this row that is supposed to move. A grid stack rather than an absolute
+     pair inside a hand-picked width: absolute children do not size their
+     parent, so any glyph wider than the guess silently overprints the label
+     beside it (seen at 4x on the first render of this row, 2026-08-03). */
+  .step-mark { display: inline-grid; flex: none; }
+  .step-mark > span {
+    grid-area: 1 / 1; opacity: 0; transition: opacity .13s ease;
+  }
+  /* SEQUENTIAL, never a crossfade: the incoming glyph waits out the outgoing
+     one's fade, so no frame paints both. Same law climbcurve.js's
+     exchangeFade encodes for JS-animated text. */
+  .step-chip.done .mark-done,
+  .step-chip.now .mark-now,
+  .step-chip.ahead .mark-ahead { opacity: 1; transition-delay: .13s; }
   /* Trailing `auto` track added 2026-07-28 for the collapse toggle. Without
      it the button becomes an implicit 5th column at the grid's default size
      and pushes the strategy picker out of the card. */
@@ -3726,14 +3773,17 @@
     .objective-card:has(.seg-waiting) .rank-banner:not(:last-child)::before {
       bottom: -12px;
     }
-    /* Narrow-pane variant of the waiting-for line (Task 6, this branch):
-       the stacked rank banners already claim most of the taller card, so
-       this tightens rather than wraps -- .seg-waiting-for still ellipsises
-       instead of growing a second line. Kept through the main merge; the
-       rank rules above are main's (42404b7), which fixes the stacked-wash
-       overlap by widening the gap past the bleed rather than zeroing the
-       inner edges as this branch had. */
+    /* Narrow-pane variant of the step row (Task 6, this branch): the stacked
+       rank banners already claim most of the taller card, so this tightens
+       rather than wraps -- the chips ellipsise instead of growing a second
+       line, which inside this fixed-height card would clip a sibling rather
+       than show anything. Kept through the main merge; the rank rules above
+       are main's (42404b7), which fixes the stacked-wash overlap by widening
+       the gap past the bleed rather than zeroing the inner edges as this
+       branch had. */
     .seg-waiting { font-size: .74rem; gap: .35rem; margin-top: .3rem; }
+    .step-track { gap: .34rem; }
+    .step-chip + .step-chip::before { margin-right: .22rem; }
   }
 
   /* The tight band: both the star name and the strategy picker want the row.

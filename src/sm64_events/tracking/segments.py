@@ -327,6 +327,7 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           course_for_level,
                                           DOOR_ACTIONS, LEVEL_CASTLE_INSIDE,
                                           LEVEL_NAMES, node_key, node_label,
+                                          node_short_label,
                                           region_for_node, star_count,
                                           star_name, world_connections,
                                           world_regions)
@@ -511,6 +512,14 @@ class TriggerType:
     # builder's own clause form has no fallback-text concept, only real
     # dropdown values) -- read only by `_render_clause` in card mode.
     card_fallbacks: dict = field(default_factory=dict)
+    # THIRD voice, and the shortest: a two-or-three-word noun for the practice
+    # card's one-line step track (2026-08-03), where a chip has room for a
+    # place and nothing else. Most types never need it — a clause naming a
+    # world node is labelled by `node_short_label` and never reaches this — so
+    # None means "fall back to card_label", which is why the registry carries
+    # only the three rows whose card voice is a verb phrase ("Enter the pipe")
+    # where the track wants the thing itself ("Pipe").
+    chip_label: str | None = None
 
 
 def _real_edge(ev) -> bool:
@@ -621,7 +630,8 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 {"level": {"kind": "level", "required": True}},
                 "in {level}",
                 lambda p, ev, ctx: ev.type == "warp_entered"
-                and ev.payload["level"] == p["level"]),
+                and ev.payload["level"] == p["level"],
+                chip_label="Pipe"),
     TriggerType("key_grabbed", "You grab a Bowser key / grand star",
                 "Grab the key",
                 # key_grabbed claims all three fight-ending grabs: the Bowser
@@ -633,7 +643,8 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 "in {level}",
                 lambda p, ev, ctx: ev.type == "key_grabbed"
                 and (p.get("level") is None
-                     or ev.payload["level"] == p["level"])),
+                     or ev.payload["level"] == p["level"]),
+                chip_label="Key"),
     TriggerType("star_grabbed", "You grab a star", "Grab",
                 {"course": {"kind": "course", "required": False},
                  "star": {"kind": "star", "required": False}},
@@ -826,6 +837,55 @@ def card_waiting_for_sentence(d: SegmentDef, progress: int) -> str:
     clause_set = (d.waypoints[progress] if progress < len(d.waypoints)
                  else d.end_triggers)
     return " or ".join(_render_clause(clause) for clause in clause_set)
+
+
+def _step_chip(clause: dict) -> str:
+    """The shortest honest name for ONE clause: the place it lands on."""
+    node = step_node(clause)
+    if node is not None:
+        return node_short_label(node)
+    kind = clause.get("type")
+    if kind == "star_grabbed" and clause.get("course") is not None:
+        return star_name(clause["course"], clause.get("star", 0))
+    trigger = TRIGGERS.get(kind)
+    if trigger is None:
+        return str(kind)
+    return trigger.chip_label or trigger.card_label
+
+
+def card_step_labels(d: SegmentDef) -> list[str]:
+    """Every step this definition requires, shortest-form, in order —
+    its waypoints then its end trigger, one label each.
+
+    The card draws these as a single line of chips with the arm's own
+    `progress` marking which are done, which is live, and which are still
+    ahead ("✓ Basement › ▶ SSL"). `card_waiting_for_sentence` answers a
+    different question — the FULL imperative for the one step you are on —
+    and both are shipped, because a track with room for a place has no room
+    for "coming from Bowser in the Fire Sea" and a player still needs to be
+    told which door.
+
+    A clause SET is an any-of (see `_matches`), so its members collapse to
+    their distinct labels. The one shape in the shipped corpus that has more
+    than one is the 100-coin exit's end — six `star_grabbed` alternatives in
+    a single course, meaning "leave with anything" — which reads as
+    **Any star** rather than as six names nobody can fit on a line. Stated
+    as a rule about the clauses (same type, same course, more than two), not
+    as a lookup for that family, so a user-authored def of the same shape
+    reads the same way.
+    """
+    labels = []
+    for clause_set in list(d.waypoints) + [d.end_triggers]:
+        distinct = list(dict.fromkeys(_step_chip(c) for c in clause_set))
+        if len(distinct) == 1:
+            labels.append(distinct[0])
+        elif len(clause_set) > 2 \
+                and {c.get("type") for c in clause_set} == {"star_grabbed"} \
+                and len({c.get("course") for c in clause_set}) == 1:
+            labels.append("Any star")
+        else:
+            labels.append(" / ".join(distinct))
+    return labels
 
 
 def arm_level(trig: dict) -> int | None:
@@ -2359,6 +2419,11 @@ class SegmentEngine:
         """Returns (closed raw Attempts, notices). Closures before arming."""
         from sm64_events.tracking.projection import Attempt  # cycle-free at call time
         closed, notices = [], []
+        # Where every armed def stood BEFORE this event, so the one place at
+        # the bottom of this method can tell the browser about any step that
+        # moved. See `_progress_notices` for why it is a diff and not an
+        # append at each of the four sites that can move a cursor.
+        progress_before = {sid: arm.progress for sid, arm in self._armed.items()}
         # Drop spent deferred destination-subarea entries (_pending): once an
         # event at a LATER frame arrives, the entry frame's co-frame area_changed
         # burst is over. Arming/retraction already happened LIVE on those co-frame
@@ -2633,7 +2698,47 @@ class SegmentEngine:
                     notices.append({"event": "segment_armed",
                                     "segment_id": d.id, "name": d.name,
                                     "frame": ev.frame})
+        self._progress_notices(progress_before, ev.frame, notices)
         return closed, notices
+
+    def _progress_notices(self, before: dict, frame: int,
+                          notices: list) -> None:
+        """Say so whenever an armed def's step cursor MOVED.
+
+        THE BUG (live report 2026-08-02): he walked into the Basement, the
+        engine advanced `WF → SSL` to step 2 on that exact frame — proved by
+        replaying his own journal — and the card read "Step 1 of 2 · Waiting
+        for Enter Castle Inside Basement" for the next 77 seconds, until an
+        unrelated event happened to force a view refetch. `armed_detail` is
+        re-derived from this arm on every `/api/session` fetch and is
+        therefore always correct WHEN ASKED; nothing was asking. A cursor
+        move journals no event of its own and `area_changed` is not in the
+        browser's `REFRESH_ON` set, so the one state change the whole
+        multi-step display exists to show was the one change with no way to
+        reach the screen.
+
+        A DIFF rather than an append at each site, deliberately: four
+        branches move a cursor (`_feed_waypoint`'s advance and its anchor
+        rewind to 0, and the same pair in `_feed_loose`), a fifth would be
+        added by the next mode, and a notice missing from one of them looks
+        exactly like this bug again — a card frozen on a step the player has
+        already passed. Comparing the arm before and after cannot be
+        forgotten by a branch that does not know it exists.
+
+        Broadcast-only, never journaled — same rule the arm/disarm notices
+        follow (`tracking/service.py`): the projector re-derives arm state
+        from the journal on replay, so writing a derived row back would make
+        replay non-idempotent.
+        """
+        for sid, arm in self._armed.items():
+            was = before.get(sid)
+            if was is None or was == arm.progress:
+                continue
+            d = self._def_by_id.get(sid)
+            notices.append({"event": "segment_progress", "segment_id": sid,
+                            "name": d.name if d else "", "frame": frame,
+                            "progress": arm.progress,
+                            "total": len(d.waypoints) if d else 0})
 
     def _matches(self, triggers, ev, ctx) -> bool:
         return any(TRIGGERS[t["type"]].match(t, ev, ctx) for t in triggers)

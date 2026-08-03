@@ -9,6 +9,7 @@ from sm64_events.storage.db import EventRow
 from sm64_events.tracking import segments as segments_module
 from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
                                            arms_ambiently,
+                                           card_step_labels,
                                            card_waiting_for_sentence,
                                            clause_sentence,
                                            course_groups, level_groups,
@@ -4307,3 +4308,77 @@ def test_a_shorter_movement_ending_where_a_longer_one_passes_through_records():
     closed, _ = e.feed(jev(20, "level_changed", 3000, {"from": 6, "to": 8}),
                        ctx(level=8, prev_level=6))
     assert [(a.segment_id, a.outcome) for a in closed] == [(87, "success")]
+
+
+# ---------------------------------------------------------------------------
+# The step TRACK: the whole route on the card, and the notice that gets a
+# cursor move onto the screen (live report 2026-08-02, WF -> SSL).
+# ---------------------------------------------------------------------------
+
+def test_step_labels_are_the_places_the_route_passes_through():
+    assert card_step_labels(WF_SSL_STRICT) == ["Basement", "SSL"]
+
+
+def test_a_definition_with_no_waypoints_is_a_one_step_route():
+    assert card_step_labels(WF_SSL) == ["SSL"]
+
+
+def test_every_step_of_a_four_step_route_is_labelled_in_order():
+    long_way = SegmentDef(
+        id=90, name="Bowser 2 -> BitS", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 33}],
+        end_triggers=[{"type": "level_enter", "to": 21}],
+        waypoints=[[{"type": "level_enter", "to": 19}],
+                   [{"type": "area_enter", "level": 6, "area": 1}],
+                   [{"type": "area_enter", "level": 6, "area": 2}]],
+        guards=[], match_mode="strict")
+    assert card_step_labels(long_way) == ["BitFS", "Lobby", "Upstairs", "BitS"]
+
+
+def test_an_any_of_clause_set_over_one_courses_stars_reads_as_any_star():
+    # The 100-coin exit's shape, and the ONLY multi-member clause set in the
+    # shipped corpus: six star_grabbed alternatives meaning "leave with
+    # anything". Six star names cannot go on a one-line track, and the rule is
+    # written about the clauses (same type, same course) rather than about
+    # that family, so a hand-authored def of the same shape reads the same.
+    hundred = SegmentDef(
+        id=91, name="SSL -- 100 Coins -> Exit", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 8}],
+        end_triggers=[{"type": "star_grabbed", "course": 8, "star": s}
+                      for s in range(6)],
+        waypoints=[[{"type": "star_grabbed", "course": 8, "star": 6}]],
+        guards=[], match_mode="strict")
+    assert card_step_labels(hundred) == ["100 Coins", "Any star"]
+
+
+def test_a_placeless_step_falls_back_to_the_registrys_own_chip_noun():
+    pipe = SegmentDef(
+        id=92, name="BitDW Pipe Entry", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 17}],
+        end_triggers=[{"type": "warp_entered", "level": 17}],
+        waypoints=[], guards=[], match_mode="strict")
+    assert card_step_labels(pipe) == ["Pipe"]
+
+
+def test_advancing_a_step_says_so_out_loud():
+    """THE BUG: the cursor moved to step 2 the frame he entered the Basement
+    and the card read step 1 for the next 77 seconds, because a cursor move
+    journals nothing and no broadcast carried it. Mutation proof: drop the
+    `_progress_notices` call at the bottom of `feed` and this goes red while
+    every other segment test stays green -- the engine was always right."""
+    e = SegmentEngine([WF_SSL_STRICT])
+    _exit_wf_into_the_lobby(e)
+    assert e.armed_items()[80].path_index == 0
+    _, notices = _walk(e, 10, 2000, 6, 3)          # lobby -> basement
+    progress = [n for n in notices if n["event"] == "segment_progress"]
+    assert [(n["segment_id"], n["progress"], n["total"]) for n in progress] \
+        == [(80, 1, 1)]
+
+
+def test_standing_still_announces_nothing():
+    # The other half of the mutation: a notice on every event would be a
+    # refetch storm, and "the cursor moved" is the only claim being made.
+    e = SegmentEngine([WF_SSL_STRICT])
+    _exit_wf_into_the_lobby(e)
+    _, notices = e.feed(jev(30, "mario_acted", 2500, {}), ctx(level=6, area=1))
+    assert [n for n in notices if n["event"] == "segment_progress"] == []

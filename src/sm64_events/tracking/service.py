@@ -262,7 +262,13 @@ class TrackerService:
             await self.broadcaster.publish(Event(
                 type=n["event"], frame=n["frame"],
                 timestamp_utc=event.timestamp_utc,
-                payload={"segment_id": n["segment_id"], "name": n["name"]}))
+                # Every key but the two the Event envelope already
+                # carries. armed/disarmed still publish exactly
+                # {segment_id, name}; segment_progress (2026-08-03)
+                # adds progress/total, so the step track's own numbers
+                # ride the notice announcing them.
+                payload={k: v for k, v in n.items()
+                         if k not in ("event", "frame")}))
             if self._projector is not proj:
                 return
         # Run drain: persist any newly finished/aborted runs produced by this
@@ -312,7 +318,13 @@ class TrackerService:
         for n in proj.settle(frame):
             await self.broadcaster.publish(Event(
                 type=n["event"], frame=n["frame"], timestamp_utc=_now(),
-                payload={"segment_id": n["segment_id"], "name": n["name"]}))
+                # Every key but the two the Event envelope already
+                # carries. armed/disarmed still publish exactly
+                # {segment_id, name}; segment_progress (2026-08-03)
+                # adds progress/total, so the step track's own numbers
+                # ride the notice announcing them.
+                payload={k: v for k, v in n.items()
+                         if k not in ("event", "frame")}))
             if self._projector is not proj:
                 return   # a CRUD reproject swapped it; its state is authoritative
 

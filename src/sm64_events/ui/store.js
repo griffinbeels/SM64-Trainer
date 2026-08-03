@@ -4,10 +4,17 @@ import { getJSON, send } from "./api.js";
 import { coalesce } from "./coalesce.js";
 import { getRankIconStyle, setRankIconStyle } from "./components/rankicon.js";
 
+// segment_progress: an armed segment's step cursor moved. It is the ONLY
+// signal that reaches the browser for it -- a cursor move journals nothing of
+// its own, and the position events that cause it (area_changed/level_changed)
+// are deliberately not in this set. Without it the step track sits on a step
+// the player passed until some unrelated event happens to force a fetch: 77
+// seconds, on the live report that produced this (2026-08-02, WF -> SSL).
 const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   "pb_saved", "pb_undone", "session_started", "target_changed",
   "star_collected", "strat_set", "rank_standards_changed",
   "rank_mode_changed", "icons_changed", "marelo_changed", "route_selected",
+  "segment_progress",
 ]);
 const RUN_REFRESH_ON = new Set(["run_started", "run_progress",
   "run_finished", "run_aborted", "game_reset"]);

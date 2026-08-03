@@ -55,11 +55,25 @@ def test_the_card_keeps_a_pinned_segment_while_it_is_armed():
     assert pin_guard(src)
 
 
-def test_the_card_renders_what_the_segment_is_waiting_for():
+def test_the_card_renders_the_whole_step_track():
+    """Every step, not only the one you are on, and the full imperative for
+    the current one still reachable on hover (2026-08-03 live report)."""
     src = strip_comments(read("components/practice.js"))
     assert "waiting_for" in src
-    assert "armed_detail.progress" in src
-    assert "armed_detail.total" in src
+    assert "detail.progress" in src
+    assert "detail.total" in src
+    assert "detail.steps" in src
+
+
+def test_both_cards_draw_the_step_track_through_the_ONE_component():
+    """Rule 11 with teeth: the star card (100 Coins) and the segment card
+    were two byte-identical copies of this markup until 2026-08-03. A second
+    copy looks perfectly correct and drifts on the next change, so what is
+    pinned is that only StepTrack may build the row."""
+    src = strip_comments(read("components/practice.js"))
+    assert src.count("<${StepTrack}") == 2
+    assert src.count('class="seg-waiting"') == 1
+    assert src.count('class="step-track"') == 1
 
 
 def test_the_guards_can_still_fail():
