@@ -119,6 +119,72 @@ def test_two_different_sets_can_never_share_an_identity():
     """) is False
 
 
+def _surface_ids(cases: str) -> object:
+    """Drive `stagecontext.selectorSurfaceId` in node. Cases are JS expressions
+    building a fake store slot — `hasPracticeContext` needs only `view` plus a
+    `stage.mode` off the practice list."""
+    script = (f"import {{ selectorSurfaceId }} from "
+              f"{(UI / 'stagecontext.js').as_uri()!r};\n"
+              f"console.log(JSON.stringify({cases}));")
+    done = subprocess.run(["node", "--input-type=module", "-"],
+                          input=script, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+def test_the_empty_state_is_its_own_surface():
+    """His second round on this feature: "if there previously were no options
+    available, but I transition to a stage with options, I would expect the
+    animation to happen (right now it incorrectly cuts)." That only works if
+    "nothing here" is a surface identity like any other."""
+    ids = _surface_ids("""[
+      selectorSurfaceId({view: {}, stage: {mode: null}}),
+      selectorSurfaceId({view: {}, stage: {mode: "stars", level: 8, area: 1}}),
+    ]""")
+    assert ids[0] != ids[1] and ids[0] == "nothing-here"
+
+
+def test_a_courses_own_subareas_are_the_same_surface():
+    """SSL's pyramid interior offers the same seven stars as its desert, so the
+    row must not blink on the way in. The cells decide their own changes."""
+    ids = _surface_ids("""[
+      selectorSurfaceId({view: {}, stage: {mode: "stars", level: 8, area: 1}}),
+      selectorSurfaceId({view: {}, stage: {mode: "stars", level: 8, area: 2}}),
+      selectorSurfaceId({view: {}, stage: {mode: "stars", level: 22, area: 1}}),
+    ]""")
+    assert ids[0] == ids[1], "a subarea change must not exchange the surface"
+    assert ids[0] != ids[2], "a different course IS a different surface"
+
+
+def test_the_castles_three_areas_are_three_surfaces():
+    """The one place where the area DOES decide: the lobby, the basement and
+    upstairs each offer a different set of movements."""
+    ids = _surface_ids("""[1, 2, 3].map((area) =>
+      selectorSurfaceId({view: {}, stage: {mode: "castle", level: 6, area}}))""")
+    assert len(set(ids)) == 3, ids
+
+
+def test_the_banner_wraps_everything_it_can_draw_in_one_exchange():
+    """Including the placeholder, and ABOVE the row swap. A row component that
+    unmounts takes its exchange state with it, so an exchange nested inside the
+    rows can only ever animate a change WITHIN one row — which is exactly the
+    gap he reported."""
+    source = code_only(BANNER)
+    start = source.index("export function StageBanner(")
+    body = source[start:source.index("\nfunction ", start)]
+    assert "return html`<${SurfaceExchange}" in body, (
+        "the exchange must be the OUTERMOST thing StageBanner returns — inside "
+        "a branch it unmounts with that branch, which is the bug")
+    assert body.count("return") == 1, (
+        f"StageBanner returns from more than one place, so at least one of its "
+        f"surfaces bypasses the exchange:\n{body}")
+    # The row components keep their own defensive `if (!course) return
+    # StagePlaceholder` branches, and those are fine — they are already INSIDE
+    # the exchange. What must never come back is StageBanner returning one.
+    assert "StagePlaceholder" in body, \
+        "the empty state must still be reachable, just from inside the wrapper"
+
+
 def test_no_selector_row_draws_its_own_cell_container():
     """The single door. A row that renders `<div class="starrow">` itself looks
     completely correct and quietly opts out of the exchange, so the flicker

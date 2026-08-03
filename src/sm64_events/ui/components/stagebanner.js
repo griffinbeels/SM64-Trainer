@@ -43,12 +43,12 @@
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
-import { CellRow } from "./cellrow.js";
+import { CellRow, SurfaceExchange } from "./cellrow.js";
 import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
 import { send } from "../api.js";
 import { armedSegments, hasPracticeContext, hasStandardsFor,
-         justCompletedSegment, justCompletedStar,
-         practiceMode } from "../stagecontext.js";
+         justCompletedSegment, justCompletedStar, practiceMode,
+         selectorSurfaceId } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
 import { handIsEmpty, loneRouteOption } from "../loneoption.js";
 import { Icon } from "./icons.js";
@@ -84,10 +84,20 @@ export function StageBanner({ t, freshIds }) {
   // the two cannot say different things about the same place — they did, at
   // the file select, where this drew its placeholder while the card below
   // still named a star from the session before.
-  if (!hasPracticeContext(t)) return html`<${StagePlaceholder} t=${t} />`;
   const Row = STAGE_ROWS[practiceMode(t)];
-  return Row ? html`<${Row} t=${t} v=${v} stage=${t.stage} freshIds=${freshIds} />`
-             : html`<${ArmedOnlyRow} t=${t} v=${v} />`;
+  const body = !hasPracticeContext(t)
+    ? html`<${StagePlaceholder} t=${t} />`
+    : (Row ? html`<${Row} t=${t} v=${v} stage=${t.stage} freshIds=${freshIds} />`
+           : html`<${ArmedOnlyRow} t=${t} v=${v} />`);
+  // The whole CARD swapping is a change to the same display, so it exchanges
+  // too (live report 2026-08-02: "if there previously were no options
+  // available, but I transition to a stage with options... right now it
+  // incorrectly cuts. In all circumstances where we change this display, it
+  // should animate in / out"). This wrapper is the one thing here that never
+  // unmounts, which is the whole reason the fade can outlive the row it is
+  // fading out — a row component takes its own state with it when it goes.
+  return html`<${SurfaceExchange} class="selector-exchange"
+    identity=${selectorSurfaceId(t)}>${body}<//>`;
 }
 
 function StagePlaceholder({ t }) {

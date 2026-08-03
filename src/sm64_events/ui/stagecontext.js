@@ -68,6 +68,28 @@ export function practicedHere(section, t) {
 // divergence above (tests/test_single_source.py owns that rule).
 export const practiceMode = (t) => (t.stage && t.stage.mode) || null;
 
+// WHICH selector surface is on screen — the empty state, a course's stars, a
+// Bowser row, an arena, one of the castle's three areas. The exchange in
+// stagebanner.js fades between two of these (live report 2026-08-02: "if there
+// previously were no options available, but I transition to a stage with
+// options, I would expect the animation to happen"), and it lives here for the
+// same reason `practiceMode` does: this is a judgement about the PLACE, and a
+// second file deciding what counts as a different place is how the two surfaces
+// came apart in the first place.
+//
+// It is deliberately COARSER than "the cells changed" — that question belongs to
+// the cells themselves (components/cellrow.js). The line between them is drawn
+// where the player would agree: the castle's three areas are three different
+// sets of movements, while a course's own subareas are the same seven stars, so
+// entering SSL's pyramid must not blink a row that is not changing.
+export function selectorSurfaceId(t) {
+  if (!hasPracticeContext(t)) return "nothing-here";
+  const stage = t.stage || {};
+  const mode = practiceMode(t);
+  return mode === "castle" ? `castle:${stage.area}`
+                           : `${mode}:${stage.level}`;
+}
+
 // Can a STAR be practiced where the player is standing? Narrower than
 // hasPracticeContext on purpose, and the distinction is the whole point.
 //

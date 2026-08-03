@@ -41,9 +41,43 @@ const identity = (list) =>
   identityOf(list.map((child, at) =>
     (child.key == null ? `@${at}` : String(child.key))));
 
-export function CellRow({ class: className, children }) {
+/** ONE row of cells: the identity is the cells themselves.
+ *
+ *  Use this when the thing that changes is WHICH options are offered inside a
+ *  surface that stays put. */
+export const CellRow = ({ class: className, children }) =>
+  html`<${Exchanged} className=${className}
+    identity=${identity(cells(children))}>${children}<//>`;
+
+/** A whole SURFACE swapping for a different one — the empty state becoming a
+ *  course's stars, a course row becoming the castle's movements.
+ *
+ *  Live report 2026-08-02 (second round on this feature): "it doesn't fire in
+ *  *all* situations when it should. For example, if there previously were no
+ *  options available, but I transition to a stage with options, I would expect
+ *  the animation to happen (right now it incorrectly cuts). In all circumstances
+ *  where we change this display, it should animate in / out."
+ *
+ *  Why `CellRow` alone could not cover it: those swaps replace the whole card,
+ *  and a row component that unmounts takes its exchange state with it — the
+ *  replacement mounts fresh and idle, i.e. it cuts. So the surface-level
+ *  exchange lives ABOVE the swap, in `StageBanner`, which never unmounts, and
+ *  the identity has to be handed to it rather than read off the children (the
+ *  children here are one card, and a card carries no key).
+ *
+ *  The two nest without double-fading: a surface swap remounts the inner
+ *  `CellRow`, which therefore starts idle at full opacity while this one does
+ *  the fade; a cell-set change leaves this identity untouched, so the inner one
+ *  does it. Each granularity has exactly one owner. */
+export const SurfaceExchange = ({ class: className, identity: id, children }) =>
+  html`<${Exchanged} className=${className} identity=${id}>${children}<//>`;
+
+// The machine, wearing whichever identity its caller decided on. A real
+// component rather than a helper both of the above call: its hooks then belong
+// to ONE stable instance per surface, which is exactly the state that has to
+// survive the children swapping underneath it.
+function Exchanged({ className, identity: id, children }) {
   const current = cells(children);
-  const id = identity(current);
   const [state, dispatch] = useReducer(nextState, id, initialState);
   // The last children whose identity the machine had adopted. Written during
   // RENDER, not in an effect: an effect runs a frame too late, and that frame
