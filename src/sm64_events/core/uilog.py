@@ -49,8 +49,9 @@ TRIM_ABOVE_BYTES = 2_000_000
 # Fields a client may set. Anything else is dropped rather than stored: this
 # endpoint takes a free-shaped body from the browser, and an unbounded key set
 # would let a page bloat the file that has to stay cheap to append to.
-CLIENT_FIELDS = ("surface", "client_utc", "title", "note", "cells", "cards")
-SURFACES = ("selector", "target")
+CLIENT_FIELDS = ("surface", "client_utc", "title", "note", "cells", "cards",
+                 "logs", "marks")
+SURFACES = ("selector", "target", "log")
 
 MAX_TEXT = 200
 MAX_CELLS = 40

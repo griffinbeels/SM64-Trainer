@@ -51,8 +51,21 @@ def test_loading_the_practice_page_records_what_it_painted(tmp_path, monkeypatch
         "whole module exists to prevent.")
 
     surfaces = {entry["surface"] for entry in entries}
-    assert surfaces == {"selector", "target"}, (
-        f"expected both halves he asked for, got {sorted(surfaces)}")
+    assert surfaces == {"selector", "target", "log"}, (
+        f"expected all three halves he asked for, got {sorted(surfaces)}")
+    # The log half must carry ROWS, not merely exist. Its first version queried
+    # the attempt tables inside `.objective-card`, where there are none — the
+    # log is its own section two cards below — so it returned a well-formed
+    # record with an empty row list on every render, posted once at mount, and
+    # never again. Nothing errored and every class it names really is rendered,
+    # so the selector guard stayed green; only a real page with real attempts
+    # can tell the difference (2026-08-04, found by the end-to-end report
+    # joining zero grabs after a session of play).
+    logs = [entry for entry in entries if entry["surface"] == "log"]
+    assert any(log.get("rows") for entry in logs for log in entry["logs"]), (
+        "the log reader found no attempt rows on a page the fixture seeded "
+        "attempts into — it is reading the wrong element and will report "
+        "silence for every latency question asked of it")
 
     selector = [entry for entry in entries if entry["surface"] == "selector"][-1]
     names = [cell["name"] for cell in selector["cells"]]

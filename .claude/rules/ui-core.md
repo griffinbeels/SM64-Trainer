@@ -148,6 +148,34 @@ and a row reshuffling four times in a tenth of a second is the flicker.
 
 ## UI verification norms
 
+- **An instrument is not shipped until you have READ ITS OUTPUT on real data.**
+  Not "its tests pass" — the actual first line, with a value you can check by
+  hand. `tools/star_to_screen.py` shipped 2026-08-04 with every part verified
+  in isolation (node-driven marks, a render test confirming its records land)
+  and the CHAIN verified nowhere, and it had three faults, each visible in its
+  first real output: a reader querying the wrong element (empty row list, every
+  render, forever), marks claimed only when some surface changed (a 17-second
+  "render"), and a join on a `seq` that RESTARTS at 0 every server run while
+  the log it joins to persists — pairing a grab with a paint from another day.
+  His verdict after one run: *"Reads like noise to me, some of those numbers
+  make no sense."* Two of the three were found by reading output, one line
+  each; the method works, and it was applied one step too late.
+- **The three habits that would have caught all of them**, in the order they
+  pay: (1) drive one KNOWN input end to end and assert the number that comes
+  out — a self-test of the instrument, not of its parts; (2) make every guard
+  assert CONTENT, never existence — "a record was posted" passed while its row
+  list was empty, which is a *vacuous guard* written fresh; (3) never assert a
+  guarantee you have not tested — this tool printed "exact — no timestamp
+  matching" in its own output, and the join was never unique. That last one is
+  the mirror of the global rule about untested LIMITS, and it is the more
+  dangerous direction: a false limit stops you doing something, a false
+  guarantee makes everyone downstream believe a wrong number.
+- **A reader that can return "nothing" must not be able to look like "nothing
+  happened".** `ui/uilog.js`'s own header names this failure and the new reader
+  reproduced it exactly — the guard for it is the RENDER test asserting a
+  non-empty result, because a class-name scan cannot see whether one element is
+  actually INSIDE another.
+
 - **htm COLLAPSES the whitespace between a text node and an interpolation or
   an element**, so `into <code>x</code>` renders as `intoy`, `but ${n}ms`
   renders as `but220ms`, and `each (350ms…)` renders as `each(350ms…)`. Three

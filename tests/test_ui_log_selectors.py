@@ -41,8 +41,9 @@ RENDERERS = (UI / "components" / "stagebanner.js",
 def _reader_source() -> str:
     source = strip_comments(READER.read_text(encoding="utf-8"))
     match = re.search(r"export function readSelector.*?^}\n.*?"
-                      r"export function readTargets.*?^}", source, re.S | re.M)
-    assert match, "the two reader functions are not both in uilog.js any more"
+                      r"export function readTargets.*?^}\n.*?"
+                      r"export function readLogs.*?^}", source, re.S | re.M)
+    assert match, "the three reader functions are not all in uilog.js any more"
     return match.group(0)
 
 
@@ -92,6 +93,18 @@ def test_the_reader_covers_both_surfaces_griffin_asked_for():
     assert "objective-card" in needed, "the active-target half"
     assert "active-star" in needed, (
         "which cell is HIGHLIGHTED is half of what the reports are about")
+
+
+def test_the_reader_can_see_the_practice_log_itself():
+    """The surface every latency report is actually about, and the one this
+    reader could not see until 2026-08-04 — it watched the selector and the
+    card headers while he was timing how long an ENTRY took to appear, so the
+    end-to-end gap he asked for could not be computed at all. Losing these two
+    classes puts that back without any test going red for the right reason."""
+    needed = classes_the_reader_needs(_reader_source())
+    assert "attempt-table" in needed, "the log's rows"
+    assert "attempt-result" in needed, (
+        "the row's own text is what says a NEW entry appeared")
 
 
 @pytest.mark.parametrize("sample,expected", [

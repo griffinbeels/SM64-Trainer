@@ -20,6 +20,7 @@
 // modes and three objective cards.
 import { useEffect, useRef } from "preact/hooks";
 import { send } from "./api.js";
+import { takeMarks } from "./latency.js";
 
 // ---------------------------------------------------------------------------
 // The readers. Pure functions of a root element, so the only thing they can
@@ -70,8 +71,47 @@ export function readTargets(root) {
   };
 }
 
+// The PRACTICE LOG itself — the rows he watches for, and until 2026-08-04 the
+// one surface on this page nothing observed. Every latency report so far has
+// been about "the entry appearing", and the instrument could see the selector
+// and the card headers but not the entry, so the end-to-end gap he asked about
+// (*"the timegap between detecting the xcam… and when we actually display
+// it"*) could not be computed at all.
+//
+// The NEWEST rows rather than all of them: a log can hold hundreds and this
+// file is appended to on every change, so what is recorded is the head of each
+// card's table plus how many rows it has. A new entry moves both.
+// It reads `.attempts-card`, NOT `.objective-card`. The first version read the
+// tables INSIDE the objective card, where there are none — the log is its own
+// `<section>` two cards below it — so `readLogs` returned a well-formed record
+// with an empty row list, every time, and the log filled with everything
+// except the one thing it had just been added for. Nothing errored; the
+// end-to-end report simply said it had joined nothing (2026-08-04, first live
+// run: *"I definitely just did a ton of stars, so… seems like that tool didn't
+// work"*). SILENT FALLBACK, through the nesting rather than through a class
+// name — which is why `tests/test_ui_log_selectors.py` cannot catch it: both
+// classes really are rendered, just not inside one another. The guard for THIS
+// is the render test, which now requires a real page to produce a non-empty
+// row list.
+const LOG_ROWS = 3;
+
+export function readLogs(root) {
+  return {
+    surface: "log",
+    logs: Array.from(root.querySelectorAll(".attempts-card")).map((card) => {
+      const rows = Array.from(card.querySelectorAll(".attempt-table tr"));
+      return {
+        name: text(card.querySelector(".attempts-heading h3")),
+        rows: rows.slice(0, LOG_ROWS)
+          .map((row) => text(row.querySelector(".attempt-result"))),
+        total: rows.length,
+      };
+    }),
+  };
+}
+
 // ---------------------------------------------------------------------------
-// One ordered channel, shared by both surfaces.
+// One ordered channel, shared by every surface.
 // ---------------------------------------------------------------------------
 // Serialised deliberately. Posts are fired from a render effect, so a level
 // load produces a burst; letting them race would scramble the ORDER, and
@@ -111,11 +151,16 @@ function flush() {
     .then(release, release);
 }
 
-export function postObservation(body) {
+export function postObservation(body, marks) {
   // A bounded backlog: if the server is gone the queue must not grow without
   // limit for the rest of the session.
   if (queue.length > 200) queue.shift();
-  queue.push({ ...body, client_utc: new Date().toISOString() });
+  // `client_utc` IS the paint time — this is called from a render effect, so
+  // it runs after Preact has committed. `marks`, when present, names the
+  // WebSocket event that caused this paint and when each stage between them
+  // happened (ui/latency.js).
+  queue.push({ ...body, client_utc: new Date().toISOString(),
+               ...(marks ? { marks } : {}) });
   flush();
 }
 
@@ -133,12 +178,26 @@ export function useUiLog(rootRef) {
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
-    [readSelector(root), readTargets(root)].forEach((snap) => {
+    // Claimed UNCONDITIONALLY by the first render pass after the fetch, and
+    // shared by whichever surfaces changed in it — they were painted by the
+    // same commit, so charging the latency to one and not the others would
+    // make the number depend on which surface happened to be compared first.
+    //
+    // Unconditionally is the load-bearing word. Taking them only when
+    // something changed leaves an unclaimed set sitting in latency.js until
+    // some LATER, unrelated paint picks it up, and the render stage then
+    // silently absorbs the gap in between: the first live run of
+    // `tools/star_to_screen.py` reported a 17-SECOND render for a grab, which
+    // was really "nothing visible changed for 17 seconds, then something did".
+    // A render that painted nothing has no paint time, and dropping the marks
+    // is the honest answer to that.
+    const marks = takeMarks();
+    [readSelector(root), readTargets(root), readLogs(root)].forEach((snap) => {
       if (!snap) return;
       const key = JSON.stringify(snap);
       if (sent.current.get(snap.surface) === key) return;
       sent.current.set(snap.surface, key);
-      postObservation(snap);
+      postObservation(snap, marks);
     });
   });
 }

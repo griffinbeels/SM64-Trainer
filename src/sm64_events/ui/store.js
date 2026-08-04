@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { getJSON, send } from "./api.js";
 import { coalesce } from "./coalesce.js";
+import { noteEvent, noteFetchDone, noteFetchStart } from "./latency.js";
 import { getRankIconStyle, setRankIconStyle } from "./components/rankicon.js";
 
 // segment_progress: an armed segment's step cursor moved. It is the ONLY
@@ -381,7 +382,12 @@ export function useTracker() {
       // keys its own fetches off this counter, so it should reload alongside
       // this one instead of a round trip behind it.
       setMareloRev((prevRev) => prevRev + 1);
+      // Stamped around the WHOLE round, not around refresh() alone: both
+      // fetches are awaited together, so what the page waits for is the slower
+      // of the two and measuring one of them would understate it (latency.js).
+      noteFetchStart(new Date().toISOString());
       await Promise.all([refresh(), refreshMarelo()]);
+      noteFetchDone(new Date().toISOString());
     });
   }
 
@@ -408,7 +414,13 @@ export function useTracker() {
       ws.onmessage = (e) => {
         const ev = JSON.parse(e.data);
         setFeed((f) => [ev, ...f].slice(0, 200));
-        if (REFRESH_ON.has(ev.type)) requestRefresh.current();
+        if (REFRESH_ON.has(ev.type)) {
+          // BEFORE the request, so the mark is the moment the news arrived
+          // rather than the moment we got round to acting on it — the
+          // coalescer's own window is one of the four stages being measured.
+          noteEvent(ev.type, ev.seq, ev.frame, new Date().toISOString());
+          requestRefresh.current();
+        }
         if (RUN_REFRESH_ON.has(ev.type)) refreshRun();
         if (ev.type === "segment_armed") {
           const id = ev.payload.segment_id;
