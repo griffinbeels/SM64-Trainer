@@ -183,7 +183,13 @@ mario_acted event: emitted once per anchor period at Mario's first
   acted_tracking: true so old journals (no such events) keep legacy semantics.
   Death actions are involuntary and never count as activity (a same-tick
   mario_acted would defeat the unacted-death discard); involuntary knockback
-  still counts — accepted limitation.
+  still counts — accepted limitation. A LEVEL-EXIT cutscene never counts
+  either (addresses.LEVEL_EXIT_ACTIONS, 2026-08-03): Mario is flung out of the
+  level with no control, and the byte then LINGERS — 62 anchors across both
+  journals land on one of those actions and 62 of 62 read as having acted,
+  which is how a menu warp 92 seconds after a death banked a phantom 1.5 s
+  reset row on the arrival ("The first time we enter a map should never be
+  considered a reset, because there's nothing to reset").
 
 VERIFY (live gate): confirm with the human that a Usamune SECTION state
 load moves global_timer backward (full-RAM restore). If Usamune implements
@@ -196,6 +202,7 @@ from sm64_events.memory.addresses import (ACT_INTRO_CUTSCENE,
                                            ACT_TELEPORT_FADE_OUT,
                                            CASTLE_LEVELS, DEATH_ACTIONS,
                                            DIALOG_ACTIONS, DOOR_ACTIONS,
+                                           LEVEL_EXIT_ACTIONS,
                                            PASSIVE_ACTIONS,
                                            SAVE_DIALOG_ACTIONS)
 
@@ -341,7 +348,8 @@ class AnchorDetector:
             return events
         self._update_pause_streak(prev, curr)
         if (curr.mario_action not in PASSIVE_ACTIONS
-                and curr.mario_action not in DEATH_ACTIONS):
+                and curr.mario_action not in DEATH_ACTIONS
+                and curr.mario_action not in LEVEL_EXIT_ACTIONS):
             self._acted = True
             if not self._acted_reported:
                 self._acted_reported = True

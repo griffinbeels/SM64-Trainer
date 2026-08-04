@@ -1254,6 +1254,17 @@ class Projector:
         # a death is always a meaningful failed attempt.
         first = self._open if self._open is not None else ev
         star_tgt = self._star_target()
+        if self._engine_records_this_too(star_tgt, "death"):
+            # ONE death, ONE row — the same suppression `_close` applies to a
+            # reset, and it was missing here because this method calls `_build`
+            # DIRECTLY instead of going through `_close`. That made "death" a
+            # VACUOUS member of `_ENGINE_MIRRORED_OUTCOMES`: the set listed it,
+            # nothing asked. Live report 2026-08-03: "triggering a death caused
+            # TWO deaths simultaneously… when we have a 100 coin star selected,
+            # there's always 2 deaths (I tested this across courses, with and
+            # without 100 coins selected)."
+            self._open = None
+            return []
         course_id, star_id = star_tgt if star_tgt else (None, None)
         strat = self.strat_by_star.get(star_tgt) if star_tgt else None
         attempt = self._build(

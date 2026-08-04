@@ -8,6 +8,7 @@ import pytest
 
 from sm64_events.ranks.standards import RankStandards, VARIANT_SEP, qualify
 from sm64_events.tracking.hundred_coin import classify
+from sm64_events.tracking.projection import Projector
 
 # CCM as the seed really ships it: two exit stars, and BOTH define "Standard"
 # and "Open" — which is why a bare strategy name cannot identify a ladder here.
@@ -375,3 +376,88 @@ def test_leaving_the_course_still_records_the_abandoned_run(tmp_path):
     assert any(a.star_id == 6 and a.outcome == "abandoned"
                for a in db.attempts()), [
         (a.star_id, a.outcome) for a in db.attempts()]
+
+
+def test_a_death_on_a_targeted_100_coin_star_records_ONE_row(tmp_path):
+    """Live report 2026-08-03, the same defect the reset fix left behind:
+    "triggering a death caused TWO deaths simultaneously... when we have a 100
+    coin star selected, there's always 2 deaths (I tested this across courses,
+    with and without 100 coins selected)."
+
+    ONE `death` event in the journal, two rows out of it. The reset fix put
+    `_engine_records_this_too` in `_close`, and `_ENGINE_MIRRORED_OUTCOMES`
+    already listed "death" — but `_close_by_death` calls `_build` DIRECTLY and
+    so never consults the guard, which made that set member vacuous.
+    """
+    import asyncio
+
+    from sm64_events.tracking.projection import journal_id
+    from tests.test_tracker_service import ev
+
+    db, service = _wf_engine_service(tmp_path)
+    asyncio.run(service.publish(ev("level_changed", 900, {"from": 16, "to": 24})))
+    asyncio.run(service.set_target(2, 6, strat_tag="100c + Reds · Standard"))
+    _reset(service, 1000, 0)                      # arms the engine and acts
+    asyncio.run(service.publish(ev("death", 1400, {"igt_frames": 400,
+                                                   "cause": "fall"})))
+
+    rows = [a for a in db.attempts() if a.star_id == 6 and a.outcome == "death"]
+    assert rows, "no death recorded at all — the fixture never reached a run"
+    ids = [journal_id(a.id) for a in rows]
+    assert len(ids) == len(set(ids)), (
+        f"one death recorded twice: {[(a.id, a.rta_frames) for a in rows]}")
+
+
+def test_the_plain_death_still_records_when_no_engine_is_armed(tmp_path):
+    """Same fallback the reset half keeps: with nothing timing the course
+    visit, the ordinary star attempt is the only record of the death."""
+    import asyncio
+
+    from tests.test_tracker_service import ev
+
+    db, service = _wf_engine_service(tmp_path, engine_enabled=False)
+    asyncio.run(service.publish(ev("level_changed", 900, {"from": 16, "to": 24})))
+    asyncio.run(service.set_target(2, 6, strat_tag="100c + Reds · Standard"))
+    _reset(service, 1000, 0)
+    asyncio.run(service.publish(ev("death", 1400, {"igt_frames": 400,
+                                                   "cause": "fall"})))
+
+    rows = [a for a in db.attempts() if a.star_id == 6 and a.outcome == "death"]
+    assert len(rows) == 1, f"the only record of the death vanished: {rows}"
+
+
+@pytest.mark.parametrize("outcome", sorted(Projector._ENGINE_MIRRORED_OUTCOMES))
+def test_every_mirrored_outcome_is_actually_suppressed(tmp_path, outcome):
+    """The MECHANISM against this bug recurring, rather than a third fix.
+
+    `_ENGINE_MIRRORED_OUTCOMES` listed "death" while nothing asked about it —
+    a *vacuous guard*, because `_close_by_death` builds its row directly
+    instead of routing through `_close`. Any future member added to that set
+    with no closer consulting the guard fails here instead of shipping as a
+    duplicate row nobody notices for a month.
+    """
+    import asyncio
+
+    from sm64_events.tracking.projection import journal_id
+    from tests.test_tracker_service import ev
+
+    db, service = _wf_engine_service(tmp_path)
+    asyncio.run(service.publish(ev("level_changed", 900, {"from": 16, "to": 24})))
+    asyncio.run(service.set_target(2, 6, strat_tag="100c + Reds · Standard"))
+    _reset(service, 1000, 0)                   # arms the engine and acts
+    closer = {
+        "reset": lambda: _reset(service, 1400, 400),
+        "death": lambda: asyncio.run(service.publish(
+            ev("death", 1400, {"igt_frames": 400, "cause": "fall"}))),
+        "hard_reset": lambda: asyncio.run(service.publish(
+            ev("game_reset", 1400, {}))),
+    }[outcome]
+    closer()
+
+    rows = [a for a in db.attempts()
+            if a.star_id == 6 and a.outcome == outcome]
+    assert rows, f"no {outcome} recorded at all — the fixture never ran"
+    ids = [journal_id(a.id) for a in rows]
+    assert len(ids) == len(set(ids)), (
+        f"one {outcome} span recorded twice: "
+        f"{[(a.id, a.rta_frames) for a in rows]}")

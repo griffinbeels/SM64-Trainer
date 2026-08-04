@@ -101,6 +101,30 @@ own journal against the fix took star-6 rows from 18 to 15 — exactly the three
 duplicated spans, with every other row and both courses' outcome sets
 unchanged. Restarting the server is the whole repair.
 
+#### …and one DEATH, one row — the half the above left behind
+
+Live report the next day: *"triggering a death caused TWO deaths
+simultaneously… when we have a 100 coin star selected, there's always 2 deaths
+(I tested this across courses, with and without 100 coins selected)."* ONE
+`death` event in the journal, two rows out of it — confirmed by reading his
+journal, which held exactly one event per death.
+
+`_ENGINE_MIRRORED_OUTCOMES` **already listed `death`**, and that is the whole
+lesson: `_close_by_death` calls `_build` DIRECTLY instead of routing through
+`_close`, so nothing ever asked, and the set member was a *vacuous guard* —
+present, documented, doing nothing. The fix is the same call in that method.
+
+**The mechanism against a third round** is
+`test_every_mirrored_outcome_is_actually_suppressed`, parametrised over the set
+itself and driven end to end through the real service, so a member added later
+with no closer consulting it fails there instead of shipping as a duplicate row
+nobody notices. Mutation-proved by restoring the vacuous state.
+
+Measured over all journals: his live one loses **4 duplicate death rows**, each
+with a surviving twin for the same span and entity (so zero data loss), nothing
+added and nothing else changed; the installed exe loses none, which is expected
+— it predates the 100-coin standards that made this reachable at all.
+
 
 ## The 100-coin star IS the segment
 

@@ -792,3 +792,60 @@ def test_teleport_recency_cleared_on_backward_jump_self_heal():
         snap(3000, igt=120, action=ACT_WALKING, level=5, area=1)])
     [anchor] = [e for e in events if e.type == "state_loaded"]
     assert anchor.payload["teleport"] is False
+
+
+# ---------------------------------------------------------------------------
+# A LEVEL-EXIT CUTSCENE IS NOT ACTIVITY (live report 2026-08-03: "there's
+# sometimes a Reset entry RIGHT when we start the map... The first time we
+# enter a map should never be considered a reset, because there's nothing to
+# reset (we just got there!)").
+#
+# Mario is FLUNG out of a level in one of these actions and the byte then sits
+# there. He died in WF at f14069, was flung to the castle, spent 92 seconds in
+# the pause menu, and menu-warped back into WF at f16851 with the action byte
+# STILL reading ACT_DEATH_EXIT — so the arrival's own anchors reported
+# mario_acted=true, the unacted-reset discard could not fire, and the 44 frames
+# between the arrival's two anchors banked a phantom 1.5 s reset row.
+#
+# Measured across both journals: 62 anchors land on one of these actions and
+# 62 of 62 carry mario_acted=true. Six of the seven family members appear in
+# real play. Same shape as the teleport fade-in: a lingering action byte read
+# as a live state.
+# ---------------------------------------------------------------------------
+
+ACT_DEATH_EXIT = 0x00001928
+
+
+def test_a_level_exit_cutscene_does_not_count_as_acting():
+    detector = AnchorDetector()
+    events = run(detector, [
+        snap(16850, igt=1, action=ACT_DEATH_EXIT, level=6, area=1),
+        snap(16851, igt=1, action=ACT_DEATH_EXIT, level=24, area=2),
+        snap(16895, igt=0, action=ACT_DEATH_EXIT, level=24, area=1)])
+    assert [e.type for e in events if e.type == "mario_acted"] == []
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["mario_acted"] is False
+
+
+def test_every_exit_action_in_the_registry_is_involuntary():
+    """One row in the registry, not a branch here — so a family member added
+    later is covered without touching the detector."""
+    from sm64_events.memory.addresses import LEVEL_EXIT_ACTIONS
+    assert LEVEL_EXIT_ACTIONS, "an empty set makes this scan vacuous"
+    for action in LEVEL_EXIT_ACTIONS:
+        events = AnchorDetector().process(
+            snap(1000, igt=500, action=action),
+            snap(1002, igt=0, action=action))
+        [anchor] = [e for e in events if e.type == "practice_reset"]
+        assert anchor.payload["mario_acted"] is False, hex(action)
+
+
+def test_real_play_after_an_exit_still_counts_as_acting():
+    """Opt-in: the exit byte is only ignored while it IS the exit byte. The
+    moment Mario does something, the next anchor is a real retry again."""
+    events = run(AnchorDetector(), [
+        snap(16895, igt=0, action=ACT_DEATH_EXIT, level=24, area=1),
+        snap(16950, igt=55, action=ACT_WALKING, level=24, area=1),
+        snap(17000, igt=0, action=ACT_WALKING, level=24, area=1)])
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["mario_acted"] is True

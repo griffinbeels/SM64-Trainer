@@ -207,6 +207,38 @@ PENDING_WARP_OP = 0x8033B252  # s16 sDelayedWarpOp; 0 = no warp pending
 WARP_OP_WARP_FLOOR = 0x13  # void-out: resolves to the death node (or game
                            # over at 0 lives) unless the level has node 0xF3
 
+# Level-EXIT cutscene actions — Mario is FLUNG out of a level and has no
+# control (decomp include/sm64.h, the contiguous 0x1926-0x192D block). These
+# are involuntary exactly as DEATH_ACTIONS are, and AnchorDetector excludes
+# them from its activity flag for the same reason.
+#
+# LIVE-EVIDENCED 2026-08-03, and the evidence is why this set exists: the byte
+# STAYS at the exit action long after the exit. He died in WF, was flung to the
+# castle, sat in the pause menu for 92 seconds, and menu-warped back into WF
+# with mario_action still reading ACT_DEATH_EXIT — so the arrival's own anchors
+# reported mario_acted=true, the unacted-reset discard could not fire, and the
+# 44 frames between the arrival's two anchors banked a phantom 1.5 s reset row
+# ("there's sometimes a Reset entry RIGHT when we start the map... The first
+# time we enter a map should never be considered a reset"). Measured over both
+# journals: 62 anchors land on one of these and 62 of 62 carry
+# mario_acted=true. Six of the seven appear in his real play — every one but
+# ACT_UNUSED_DEATH_EXIT, which vanilla never triggers.
+#
+# NOT added to PASSIVE_ACTIONS, deliberately: that set also drives
+# replay/activity.py's idle check, and the recorder should keep rolling through
+# an exit cutscene so a clip is not cut short at the moment the star pays off.
+ACT_EXIT_AIRBORNE = 0x00001926
+ACT_DEATH_EXIT = 0x00001928
+ACT_UNUSED_DEATH_EXIT = 0x00001929
+ACT_FALLING_DEATH_EXIT = 0x0000192A
+ACT_SPECIAL_EXIT_AIRBORNE = 0x0000192B
+ACT_SPECIAL_DEATH_EXIT = 0x0000192C
+ACT_FALLING_EXIT_AIRBORNE = 0x0000192D
+LEVEL_EXIT_ACTIONS = frozenset({
+    ACT_EXIT_AIRBORNE, ACT_DEATH_EXIT, ACT_UNUSED_DEATH_EXIT,
+    ACT_FALLING_DEATH_EXIT, ACT_SPECIAL_EXIT_AIRBORNE,
+    ACT_SPECIAL_DEATH_EXIT, ACT_FALLING_EXIT_AIRBORNE})
+
 # Actions Mario passes through or rests in WITHOUT user input (spawn-in,
 # idle, sleep). Used by AnchorDetector's activity flag: any OTHER action
 # observed since the last anchor means the player actually did something.
