@@ -119,11 +119,13 @@ def test_the_render_fork_guard_can_fail(tmp_path):
     forked = real.replace(
         'return html`<div class=${`rank-banner${climb.climbing ? " is-climbing" : ""}${\n'
         '      layout === "stacked" ? " rank-banner-stacked" : ""}${\n'
-        '      layout === "column" ? " rank-banner-column" : ""}`} style=${vars}>',
+        '      layout === "column" ? " rank-banner-column" : ""}${\n'
+        '      nextStepMode === "hover" ? " rank-banner-nextstep-hover" : ""}`} style=${vars}>',
         'return html`<div class="rank-banner-stacked-mutant"></div>`;\n'
         '  return html`<div class=${`rank-banner${climb.climbing ? " is-climbing" : ""}${\n'
         '      layout === "stacked" ? " rank-banner-stacked" : ""}${\n'
-        '      layout === "column" ? " rank-banner-column" : ""}`} style=${vars}>',
+        '      layout === "column" ? " rank-banner-column" : ""}${\n'
+        '      nextStepMode === "hover" ? " rank-banner-nextstep-hover" : ""}`} style=${vars}>',
         1)
     assert forked != real, "the mutation's anchor text did not match ranks.js -- update it"
     mutated_path = tmp_path / "ranks.js"

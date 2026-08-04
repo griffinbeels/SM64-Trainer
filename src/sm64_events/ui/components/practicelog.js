@@ -16,7 +16,7 @@
 // ONE card serves both kinds. That is rule 11 becoming structural rather
 // than an agreement between two hand-written sections that a test compares.
 import { h } from "preact";
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { displayName, entityKey, entityNoun, sectionClock, sectionPb }
   from "../entitysection.js";
@@ -30,7 +30,8 @@ import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
          ResetFilterToggle, StatMenuTrigger, comparator, bannerLabel,
          bannerHint, ranksAreAtFloor, showsEntityBanner, rankIdentity, PbTag }
   from "./attemptlog.js";
-import { logTuning, logTuningVars, logTuningClasses } from "../logtuning.js";
+import { logTuning, logTuningVars, logTuningClasses, rankPlacementFor,
+         nextStepModeFor, NARROW_CONTAINER_PX } from "../logtuning.js";
 
 const html = htm.bind(h);
 
@@ -58,7 +59,8 @@ export function orderedSections(view) {
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, selected, onSelect, forceOpen,
                           active = false,
-                          nameOverflow = "ellipsis", rankIconSize = 24 }) {
+                          nameOverflow = "ellipsis", rankIconSize = 24,
+                          rankPlacement = "head", nextStepMode = "classic" }) {
   const [open, setOpen] = useState(true);
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
@@ -123,8 +125,38 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   // `showsEntityBanner` -> this class -> CSS picks the cell; nothing here
   // re-derives it.
   const twoLadder = showsEntityBanner(sec);
+  // Whether this card's rank displays live in the head (today) or the body
+  // (spec practice-log-entity-cards, round 3 -- Griffin: "imagine we display
+  // the ranked display inside the dropdown when it's opened... If I close
+  // the dropdown, I wouldn't see the rank standards in this mode, and
+  // instead, the course identity would take up the space"). `rankPlacement`
+  // is resolved once per section by `PracticeLog` (below), never here --
+  // this is the third crack in "LogCard never imports the registry"
+  // (nameOverflow/rankIconSize are the other two), because a CSS class alone
+  // cannot move a MOUNTED `RankBanner` between two DOM subtrees without
+  // restarting its climb. The markup itself is built ONCE, as a value,
+  // so there is exactly one `.log-card-ranks` in the DOM regardless of
+  // which placement applies -- never a second copy rendered and hidden,
+  // which would double-run `useRankClimb` for the same lane/order identity.
+  const inBody = rankPlacement === "body";
+  const ranksBlock = html`<div class="log-card-ranks">
+      <${RankBanner} label=${bannerLabel(sec, entityNoun(sec))}
+          hint=${bannerHint(sec, entityNoun(sec))} banner=${sec.rank}
+          atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${0}
+          replayKey=${sec.last_strat || ""}
+          identity=${rankIdentity(ek, "strategy", sec, t)}
+          showNext=${active} iconSize=${rankIconSize}
+          nextStepMode=${nextStepMode} />
+      ${twoLadder && html`<${RankBanner}
+          label=${entityNoun(sec)} banner=${sec.entity_rank}
+          atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${1}
+          identity=${rankIdentity(ek, "entity", sec, t)}
+          showNext=${active} iconSize=${rankIconSize}
+          nextStepMode=${nextStepMode} />`}
+    </div>`;
   return html`<section class="log-card ${selected ? "is-selected" : ""}
-      ${isOpen ? "" : "is-closed"} ${twoLadder ? "log-card-two-ladder" : "log-card-one-ladder"}">
+      ${isOpen ? "" : "is-closed"} ${twoLadder ? "log-card-two-ladder" : "log-card-one-ladder"}
+      ${inBody ? "log-card-ranks-in-body" : ""}">
     ${/* The HEADING selects; the chevron opens. Two gestures, two targets,
          so browsing a card's graphs and folding it away never fight. */""}
     <div class="log-card-head">
@@ -137,21 +169,20 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
           <span class="log-card-context">${named.context}</span>
           <${ShrinkToFitName} text=${named.name}
             enabled=${nameOverflow === "shrinkToFit"} />
+          ${/* Ranks-in-body mode only: a collapsed card in this mode shows
+               NO rank display anywhere (it lives inside `.log-card-body`,
+               which only renders while open), so the strategy identity has
+               to live somewhere else or a card cannot be told apart from a
+               sibling on the same star/segment (Griffin: "we should also
+               display the strategy name used for this entry... each
+               strategy gets its own card"). Shown in BOTH open and closed
+               states for one consistent answer to "which strategy is this"
+               rather than one that appears and disappears with the fold. */""}
+          ${inBody && sec.last_strat
+            && html`<span class="log-card-strat">${sec.last_strat}</span>`}
         </span>
       </button>
-      <div class="log-card-ranks">
-        <${RankBanner} label=${bannerLabel(sec, entityNoun(sec))}
-            hint=${bannerHint(sec, entityNoun(sec))} banner=${sec.rank}
-            atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${0}
-            replayKey=${sec.last_strat || ""}
-            identity=${rankIdentity(ek, "strategy", sec, t)}
-            showNext=${active} iconSize=${rankIconSize} />
-        ${twoLadder && html`<${RankBanner}
-            label=${entityNoun(sec)} banner=${sec.entity_rank}
-            atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${1}
-            identity=${rankIdentity(ek, "entity", sec, t)}
-            showNext=${active} iconSize=${rankIconSize} />`}
-      </div>
+      ${!inBody && ranksBlock}
       <${PbTag} pb=${sectionPb(sec, t.clock)} mode=${clock} rows=${rows}
         pick=${null} t=${t} />
       <button type="button" class="log-card-fold" onclick=${() => setOpen(!isOpen)}
@@ -177,6 +208,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
          entity happens to also appear as in the log. */""}
     <${StepTrack} detail=${sec.armed_detail} />
     ${isOpen && html`<div class="log-card-body">
+      ${inBody && ranksBlock}
       ${rows.length
         ? html`<${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
             focus=${selected ? focus : null} clearFocus=${clearFocus}
@@ -305,10 +337,44 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
   // reactively. LogCard passes RankBanner no `layout` (its "row" default);
   // index.html's "Layout matrix" CSS section reaches `.rank-banner` and its
   // children through ancestor context instead.
+  //
+  // `rankPlacement`/`nextStepMode` (spec practice-log-entity-cards, round 3)
+  // are a THIRD and FOURTH crack, and a genuinely different shape from the
+  // first two: they vary PER SECTION (crossed with each entity's own ladder
+  // count), not once for the whole page, because a card's rank display can
+  // only physically relocate between the head and the body via a JS
+  // decision (see LogCard's own comment on `rankPlacement`). That decision
+  // also needs to know whether THIS card's own container is currently
+  // narrow -- the one fact `showsEntityBanner`/`nameOverflow`/`rankIconSize`
+  // never had to track live, since none of them change the physical DOM
+  // location of anything. `isNarrow` mirrors the "Layout matrix" section's
+  // own `@container (max-width: 860px)` threshold
+  // (`NARROW_CONTAINER_PX`, logtuning.js) via a `ResizeObserver` on
+  // `.practice-page` itself -- the same element every `@container` rule in
+  // this card measures against (`.claude/rules/ui-core.md`'s own
+  // responsiveness law: the sidebar's 1180px step makes the WINDOW width an
+  // unreliable proxy, so nothing here reads `window.innerWidth`). A resize
+  // during the one frame this races CSS's own synchronous `@container`
+  // match is the one accepted seam -- see this file's own module doc for
+  // why it is small and, at the shipped "head" default, unreachable (no
+  // physical relocation ever happens unless a cell is actually dialed to
+  // "body").
+  const pageRef = useRef(null);
+  const [isNarrow, setIsNarrow] = useState(false);
+  useEffect(() => {
+    if (!pageRef.current || typeof ResizeObserver === "undefined") return undefined;
+    const container = pageRef.current.closest(".practice-page") || pageRef.current;
+    const measure = () => setIsNarrow(container.getBoundingClientRect().width <= NARROW_CONTAINER_PX);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
   const logVars = useMemo(() => logTuningVars(logTuning()), []);
   const logClasses = useMemo(() => logTuningClasses(logTuning()), []);
-  const nameOverflow = logTuning().nameOverflow;
-  const rankIconSize = logTuning().rankIconSize;
+  const tuning = logTuning();
+  const nameOverflow = tuning.nameOverflow;
+  const rankIconSize = tuning.rankIconSize;
   const sections = orderedSections(v);
   // The focused entity (the active target, by default, or a manual browse
   // pick) is not necessarily among the first CARDS_PER_PAGE cards -- recency
@@ -327,7 +393,8 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
     setShown((current) => (idx >= current ? idx + 1 : current));
   }, [focusKey]);
   const page = sections.slice(0, shown);
-  return html`<section class="practice-card log-list-card ${logClasses}" style=${logVars}>
+  return html`<section class="practice-card log-list-card ${logClasses}"
+      style=${logVars} ref=${pageRef}>
     <div class="card-heading attempts-heading">
       <div><span class="eyebrow">Practice log</span><h3>Recent activity</h3></div>
       <div class="attempts-tools">
@@ -346,13 +413,26 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
     <div class="log-list">
       ${page.map((sec) => {
         const ek = entityKey(sec);
+        // Resolved here, per section, and handed to LogCard as plain
+        // strings -- see this component's own comment above for why this
+        // (unlike nameOverflow/rankIconSize) cannot be a single page-level
+        // value. `twoLadder` is computed a second time (LogCard also
+        // computes its own, for the `log-card-two-ladder`/`-one-ladder`
+        // class) rather than threaded down -- both calls are the same pure,
+        // cheap function of `sec`, and keeping LogCard's own computation is
+        // what lets it stay a self-contained component a test can render
+        // with no page-level wiring at all.
+        const twoLadder = showsEntityBanner(sec);
+        const rankPlacement = rankPlacementFor(tuning, { isNarrow, twoLadder });
+        const nextStepMode = nextStepModeFor(tuning, { isNarrow, twoLadder });
         return html`<${LogCard} key=${ek} sec=${sec} t=${t} ui=${ui}
           freshIds=${freshIds} openCompare=${openCompare}
           focus=${focus} clearFocus=${clearFocus}
           selected=${ek === focusKey} onSelect=${onSelect}
           forceOpen=${ek === focusKey}
           active=${activeKey != null && ek === activeKey}
-          nameOverflow=${nameOverflow} rankIconSize=${rankIconSize} />`;
+          nameOverflow=${nameOverflow} rankIconSize=${rankIconSize}
+          rankPlacement=${rankPlacement} nextStepMode=${nextStepMode} />`;
       })}
       <${UnassignedLogCard} v=${v} t=${t} ui=${ui} freshIds=${freshIds}
         openCompare=${openCompare} />

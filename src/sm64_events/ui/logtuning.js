@@ -339,7 +339,212 @@ export const CHOICES = {
     cssPrefix: "log-identitycondense",
     why: "Shrinks the identity column's floor and share by 40% and lets a long name wrap onto a second line instead of shrinking/ellipsising -- the freed width flows into the ranks/PB tracks automatically (both are `fr` shares of the same row). Only visible in the oneLine collapsed layout, the one place identity/ranks/PB genuinely split a row three ways.",
   },
+
+  // ---- Rank PLACEMENT: head (today) or inside the dropdown -----------------
+  //
+  // ANOTHER four-cell decision table, same shape as the rankStyle rows above
+  // and for the same stated reason -- Griffin: "for each rank display size /
+  // ladder quadrant." His own framing for the feature itself: "imagine we
+  // display the ranked display inside the dropdown when it's opened, above
+  // the entries. We should test out the different display options if we move
+  // all of it inside the dropdown... this is important -- each strategy gets
+  // its own card, since we are showing rank standards for strategy/star
+  // here." He asked to "test this out" rather than picking a shape outright,
+  // so -- same convention as `identityCondense` above -- every cell SHIPS at
+  // "head", a genuine no-op: today's card is byte-identical until one of
+  // these four is dialed to "body".
+  //
+  // "body" moves the SAME `.log-card-ranks` markup (the exact DOM node, not a
+  // copy) out of the head and into `.log-card-body`, above the attempt rows
+  // -- every existing rankStyle shape (banners/chips/capsOnly/stacked/
+  // stackedRow/column) keeps applying unmodified there, since none of those
+  // rules depend on WHERE `.log-card-ranks` sits, only on what is inside it
+  // (index.html's own "Rank placement" section has the detail). Two
+  // consequences fall out of `.log-card-body` already being conditional on
+  // `isOpen` (practicelog.js) rather than needing a rule of their own: a
+  // collapsed card in "body" mode shows NO rank display anywhere (Griffin: "If
+  // I close the dropdown, I wouldn't see the rank standards in this mode"),
+  // and the head's freed identity column widens to fill the space, with the
+  // active strategy's name printed there so a collapsed card can still be told
+  // apart from a sibling on the same star/segment.
+  //
+  // Resolved in JS, not CSS, unlike every choice above -- `rankPlacementFor`
+  // below is the one place a quadrant becomes a value; practicelog.js calls it
+  // once per section (crossing `isNarrow`, tracked live off `.practice-page`'s
+  // own width at the SAME 860px `@container` threshold the "Layout matrix"
+  // section already uses, against `sec`'s own two-ladder fact) and hands
+  // `LogCard` the answer as a plain "head"/"body" prop -- a THIRD deliberate
+  // crack in "LogCard never imports the registry," following nameOverflow/
+  // rankIconSize's own precedent, because a CSS class alone cannot relocate a
+  // mounted `RankBanner` to a different DOM subtree without unmounting and
+  // remounting it (which would restart its climb -- the one thing every round
+  // on this card has protected). The modifier classes below are still real,
+  // read CSS (index.html's own "Rank placement" section), not vestigial: they
+  // style the strategy-name line's own size, which is worth reading smaller on
+  // a narrow card than a wide one purely on its own crowding, independent of
+  // the placement decision itself.
+  rankPlacementNarrowTwoLadders: {
+    group: "Ranks", label: "Rank placement -- narrow, different ladders",
+    value: "head",
+    options: {
+      head: "In the card head (today)",
+      body: "Inside the dropdown, above the attempts",
+    },
+    cssPrefix: "log-rankplace-narrow-two",
+    why: "Narrow card, strategy and star/segment graded on different ladders -- the most crowded cell, and the one Griffin named first when asking to try this.",
+  },
+  rankPlacementNarrowOneLadder: {
+    group: "Ranks", label: "Rank placement -- narrow, shared ladder",
+    value: "head",
+    options: {
+      head: "In the card head (today)",
+      body: "Inside the dropdown, above the attempts",
+    },
+    cssPrefix: "log-rankplace-narrow-one",
+    why: "Narrow card, one shared ladder (a single rank display).",
+  },
+  rankPlacementWideTwoLadders: {
+    group: "Ranks", label: "Rank placement -- wide, different ladders",
+    value: "head",
+    options: {
+      head: "In the card head (today)",
+      body: "Inside the dropdown, above the attempts",
+    },
+    cssPrefix: "log-rankplace-wide-two",
+    why: "Wide card, strategy and star/segment graded on different ladders.",
+  },
+  rankPlacementWideOneLadder: {
+    group: "Ranks", label: "Rank placement -- wide, shared ladder",
+    value: "head",
+    options: {
+      head: "In the card head (today)",
+      body: "Inside the dropdown, above the attempts",
+    },
+    cssPrefix: "log-rankplace-wide-one",
+    why: "Wide card, one shared ladder.",
+  },
+
+  // ---- "Time to go": the next-rank timesave line ----------------------------
+  //
+  // A fourth four-cell table, same "for each rank display size / ladder
+  // quadrant" framing. Unlike rankPlacement above, this one ships with a real
+  // opinion rather than a no-op -- Griffin gave a definite instruction, not
+  // just a thing to try: "I think we tighten up the wording, and no need to
+  // tell them what they're ranking up to (e.g., no need to say 'Waluigi 4 ->
+  // Waluigi 3' -- people will understand, no need). What we DO need is an
+  // indicator of the timesave needed." The tightened wording ("X.XXs to go",
+  // no destination rank, no arrow) is not itself one of these four options --
+  // it is how `always`/`compact` below both read, always, the moment either
+  // is picked. What genuinely varies per cell is WHEN it is worth showing at
+  // all: "present this as simply and screen-space efficiently as possible,
+  // given the lack of visual real estate (especially in narrow display
+  // mode). Maybe we don't actually even display it at all, until the user
+  // hovers over the bar?" -- his own words did the narrow/wide split for us,
+  // so the two narrow cells ship at `hover` (space is the scarce resource
+  // there) and the two wide cells ship at `always` (plenty of room, no reason
+  // to hide it). Both are real, considered picks -- flag to Griffin as a call
+  // worth double-checking against the live card, not treated as settled.
+  //
+  // Four options, one more than his own three (`always`/`hidden`/`hover`) --
+  // `compact` is the natural next rung his own "as screen-space efficiently as
+  // possible" already asks for: `always` still spends the width of "s to go";
+  // `compact` drops even that suffix, showing the bare number alone. Between
+  // "always visible" and "invisible until hovered" there was room for one
+  // more always-visible-but-smaller step, so it is here rather than left out.
+  //
+  // `hover`: the line itself renders nothing inline (index.html hides
+  // `.rank-banner-next` under this class); hovering `.rank-progress-track`
+  // blinks its own UNFILLED portion and reveals a centred "XX.YYs to go"
+  // popup above that portion -- both scoped to the hovered `.rank-banner`
+  // alone by plain CSS `:hover`, so two banners on one card can never
+  // cross-react. Suppressed outright while `.is-climbing` is on the banner's
+  // root (ranks.js's own class, unchanged) -- see ranks.js's own comment for
+  // why: the bar's fill moves continuously during a climb, and showing this
+  // popup's position/text while it moves would break the standing "may only
+  // change while invisible" rule (.claude/rules/ui-climb.md) a second way.
+  nextStepNarrowTwoLadders: {
+    group: "Ranks", label: "\"Time to go\" -- narrow, different ladders",
+    value: "hover",
+    options: {
+      always: "Always shown (tightened wording, no destination rank)",
+      compact: "Always shown, bare number only (tightest always-on reading)",
+      hidden: "Never shown",
+      hover: "Hidden until you hover the bar",
+    },
+    cssPrefix: "log-nextstep-narrow-two",
+    why: "Narrow card, two rank displays -- the least room of any cell, so it ships hover-revealed per Griffin's own lean (\"especially in narrow display mode... maybe we don't display it at all, until hover\").",
+  },
+  nextStepNarrowOneLadder: {
+    group: "Ranks", label: "\"Time to go\" -- narrow, shared ladder",
+    value: "hover",
+    options: {
+      always: "Always shown (tightened wording, no destination rank)",
+      compact: "Always shown, bare number only (tightest always-on reading)",
+      hidden: "Never shown",
+      hover: "Hidden until you hover the bar",
+    },
+    cssPrefix: "log-nextstep-narrow-one",
+    why: "Narrow card, one rank display -- still tight on width, same lean as its two-ladder sibling.",
+  },
+  nextStepWideTwoLadders: {
+    group: "Ranks", label: "\"Time to go\" -- wide, different ladders",
+    value: "always",
+    options: {
+      always: "Always shown (tightened wording, no destination rank)",
+      compact: "Always shown, bare number only (tightest always-on reading)",
+      hidden: "Never shown",
+      hover: "Hidden until you hover the bar",
+    },
+    cssPrefix: "log-nextstep-wide-two",
+    why: "Wide card -- room enough to show it plainly, tightened wording only.",
+  },
+  nextStepWideOneLadder: {
+    group: "Ranks", label: "\"Time to go\" -- wide, shared ladder",
+    value: "always",
+    options: {
+      always: "Always shown (tightened wording, no destination rank)",
+      compact: "Always shown, bare number only (tightest always-on reading)",
+      hidden: "Never shown",
+      hover: "Hidden until you hover the bar",
+    },
+    cssPrefix: "log-nextstep-wide-one",
+    why: "Wide card, one rank display -- same room as its two-ladder sibling.",
+  },
 };
+
+// The "Layout matrix" CSS section's own `@container (max-width: 860px)`
+// threshold, restated here because `rankPlacementFor`/`nextStepModeFor`
+// below need the SAME fact in JS -- a DOM subtree cannot be relocated by a
+// CSS class the way a shape can (see the rankPlacement* rows' own comment),
+// so practicelog.js tracks its own container width live rather than reading
+// one off CSS. `tests/test_ui_logtuning.py` greps index.html for the
+// literal `860px` next to the "Layout matrix" heading and compares it to
+// this constant, the same "one number in two places, pinned by a test"
+// shape `desktop/window.py::MIN_WINDOW_WIDTH` already uses.
+export const NARROW_CONTAINER_PX = 860;
+
+/** Which of `rankPlacement{Narrow,Wide}{Two,One}Ladders` applies to ONE
+ *  section, given the two facts that decide a cell: is the card's own
+ *  container currently narrow (<=860px, the same threshold the "Layout
+ *  matrix" CSS section gates on), and does this entity draw two rank
+ *  displays or one (`sec.one_ladder`, via attemptlog.js's
+ *  `showsEntityBanner` -- the same server-derived fact the CSS side reads,
+ *  never a second derivation). Pure and import-free so node can drive it
+ *  directly; practicelog.js is the one caller. */
+export function rankPlacementFor(tuning, { isNarrow, twoLadder }) {
+  const key = isNarrow
+    ? (twoLadder ? "rankPlacementNarrowTwoLadders" : "rankPlacementNarrowOneLadder")
+    : (twoLadder ? "rankPlacementWideTwoLadders" : "rankPlacementWideOneLadder");
+  return tuning[key];
+}
+
+/** Same resolution shape as `rankPlacementFor`, for the "time to go" mode. */
+export function nextStepModeFor(tuning, { isNarrow, twoLadder }) {
+  const key = isNarrow
+    ? (twoLadder ? "nextStepNarrowTwoLadders" : "nextStepNarrowOneLadder")
+    : (twoLadder ? "nextStepWideTwoLadders" : "nextStepWideOneLadder");
+  return tuning[key];
+}
 
 export const DEFAULTS = Object.freeze(Object.fromEntries([
   ...Object.entries(TUNABLES).map(([key, row]) => [key, row.value]),

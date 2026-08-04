@@ -340,3 +340,88 @@ def test_the_active_slot_defaults_and_can_be_set():
         "const after = logTuning().iconSize;\n"
         "console.log(JSON.stringify([before, after]));")
     assert result == [True, 61]
+
+
+# ---- rankPlacementFor / nextStepModeFor (spec practice-log-entity-cards, --
+# round 3) -- practicelog.js's own per-section resolvers, pure and node-
+# tested for the same reason every other decision function in this codebase
+# is: the CALLER (practicelog.js) is the only place that should ever have to
+# know which of the four registry rows applies to a given section.
+
+def test_rank_placement_resolves_all_four_cells_independently():
+    result = run_node(
+        "DEFAULTS, rankPlacementFor",
+        "const tuning = { ...DEFAULTS,\n"
+        "  rankPlacementNarrowTwoLadders: 'body',\n"
+        "  rankPlacementNarrowOneLadder: 'head',\n"
+        "  rankPlacementWideTwoLadders: 'head',\n"
+        "  rankPlacementWideOneLadder: 'body' };\n"
+        "console.log(JSON.stringify([\n"
+        "  rankPlacementFor(tuning, { isNarrow: true, twoLadder: true }),\n"
+        "  rankPlacementFor(tuning, { isNarrow: true, twoLadder: false }),\n"
+        "  rankPlacementFor(tuning, { isNarrow: false, twoLadder: true }),\n"
+        "  rankPlacementFor(tuning, { isNarrow: false, twoLadder: false }),\n"
+        "]));")
+    assert result == ["body", "head", "head", "body"]
+
+
+def test_rank_placement_ships_head_at_every_cell():
+    """The shipped default is a genuine no-op -- Griffin asked to "test this
+    out", not committing to a shape yet, same convention as identityCondense."""
+    result = run_node(
+        "DEFAULTS, rankPlacementFor",
+        "console.log(JSON.stringify([\n"
+        "  rankPlacementFor(DEFAULTS, { isNarrow: true, twoLadder: true }),\n"
+        "  rankPlacementFor(DEFAULTS, { isNarrow: true, twoLadder: false }),\n"
+        "  rankPlacementFor(DEFAULTS, { isNarrow: false, twoLadder: true }),\n"
+        "  rankPlacementFor(DEFAULTS, { isNarrow: false, twoLadder: false }),\n"
+        "]));")
+    assert result == ["head", "head", "head", "head"]
+
+
+def test_next_step_mode_resolves_all_four_cells_independently():
+    result = run_node(
+        "DEFAULTS, nextStepModeFor",
+        "const tuning = { ...DEFAULTS,\n"
+        "  nextStepNarrowTwoLadders: 'hidden',\n"
+        "  nextStepNarrowOneLadder: 'compact',\n"
+        "  nextStepWideTwoLadders: 'hover',\n"
+        "  nextStepWideOneLadder: 'always' };\n"
+        "console.log(JSON.stringify([\n"
+        "  nextStepModeFor(tuning, { isNarrow: true, twoLadder: true }),\n"
+        "  nextStepModeFor(tuning, { isNarrow: true, twoLadder: false }),\n"
+        "  nextStepModeFor(tuning, { isNarrow: false, twoLadder: true }),\n"
+        "  nextStepModeFor(tuning, { isNarrow: false, twoLadder: false }),\n"
+        "]));")
+    assert result == ["hidden", "compact", "hover", "always"]
+
+
+def test_next_step_mode_ships_hover_narrow_always_wide():
+    """Griffin's own words did the narrow/wide split: "present this as simply
+    and screen-space efficiently as possible... especially in narrow display
+    mode. Maybe we don't actually even display it at all, until hover?" """
+    result = run_node(
+        "DEFAULTS, nextStepModeFor",
+        "console.log(JSON.stringify([\n"
+        "  nextStepModeFor(DEFAULTS, { isNarrow: true, twoLadder: true }),\n"
+        "  nextStepModeFor(DEFAULTS, { isNarrow: true, twoLadder: false }),\n"
+        "  nextStepModeFor(DEFAULTS, { isNarrow: false, twoLadder: true }),\n"
+        "  nextStepModeFor(DEFAULTS, { isNarrow: false, twoLadder: false }),\n"
+        "]));")
+    assert result == ["hover", "hover", "always", "always"]
+
+
+def test_the_narrow_breakpoint_constant_matches_the_layout_matrix_css():
+    """practicelog.js's own ResizeObserver has to agree with the "Layout
+    matrix" CSS section's `@container (max-width: 860px)` -- the one number
+    in two places this file's own NARROW_CONTAINER_PX comment names. Same
+    shape as desktop/window.py::MIN_WINDOW_WIDTH vs.
+    uilab_project.py::min_viewport_width."""
+    narrow_px = run_node("NARROW_CONTAINER_PX", "console.log(JSON.stringify(NARROW_CONTAINER_PX));")
+    css = INDEX_HTML.read_text(encoding="utf-8")
+    marker = css.index("Layout matrix")
+    end = css.index("Rank placement --", marker)
+    section = css[marker:end]
+    assert f"max-width: {narrow_px}px" in section, (
+        f"NARROW_CONTAINER_PX is {narrow_px}, but the 'Layout matrix' CSS "
+        "section's own @container threshold does not match it")
