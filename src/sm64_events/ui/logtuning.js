@@ -50,12 +50,12 @@ export const TUNABLES = {
     why: "The course/star icon in the card head. Bigger is the point at a wide window, once the ranks column stops needing a whole banner's worth of room.",
   },
   nameSize: {
-    group: "Identity", label: "Name size", value: 16,
+    group: "Identity", label: "Name size", value: 13,
     min: 10, max: 32, step: 1, unit: "px",
     why: "Font size of the entity's own name — the biggest text in the head row.",
   },
   courseSize: {
-    group: "Identity", label: "Course label size", value: 11,
+    group: "Identity", label: "Course label size", value: 8,
     min: 8, max: 20, step: 1, unit: "px",
     why: "The small course/context line sitting above the name.",
   },
@@ -65,14 +65,14 @@ export const TUNABLES = {
     why: "Space between the icon and the name column.",
   },
   identityWidth: {
-    group: "Identity", label: "Identity column width", value: 300,
+    group: "Identity", label: "Identity column width", value: 245,
     min: 140, max: 520, step: 5, unit: "px",
     why: "A FIXED track, not a fraction of the card. This is the whole fix for item 1 — every card's icon lands on the same x because every card reserves the same width for it, regardless of what else is on that card's own row. Too narrow and a long star name ellipsises (tests/test_log_card_name_fits.py's own corpus tops out at 30 characters).",
   },
 
   // ---- Ranks: the strategy + star/segment rank display --------------------
   rankWidth: {
-    group: "Ranks", label: "Rank column width", value: 160,
+    group: "Ranks", label: "Rank column width", value: 420,
     min: 80, max: 420, step: 5, unit: "px",
     why: "How wide each rank banner may grow. Ships tight because Caps only (the default rank display) needs almost none of it; widen this first if you dial Rank display up to Chips or Banners, which need real room for text.",
   },
@@ -82,7 +82,7 @@ export const TUNABLES = {
     why: "Height of the within-division progress bar. Only visible in Banners mode — Chips and Caps-only hide it entirely.",
   },
   rankGap: {
-    group: "Ranks", label: "Gap between the two ranks", value: 8,
+    group: "Ranks", label: "Gap between the two ranks", value: 0,
     min: 0, max: 40, step: 1, unit: "px",
     why: "Space between the strategy rank and the star/segment rank, whichever direction they're laid out (side by side in One line/Two line, stacked in Stacked).",
   },
@@ -101,17 +101,17 @@ export const TUNABLES = {
 
   // ---- Open state: the attempt table once a card is expanded --------------
   bodyIndent: {
-    group: "Open state", label: "Body indent", value: 24,
+    group: "Open state", label: "Body indent", value: 50,
     min: 0, max: 80, step: 2, unit: "px",
     why: "Extra left padding on the attempt table once a card is open — item 4's whole fix: the rows read as belonging to the head above them, not floating beside it.",
   },
   bodyTint: {
-    group: "Open state", label: "Body darkness", value: 0.18,
+    group: "Open state", label: "Body darkness", value: 0.16,
     min: 0, max: 1, step: 0.02, unit: "x",
     why: "How much darker the open body is than the card around it — a black wash over the SAME background colour, so the rows read as sitting UNDER the card rather than as a different surface. 0 removes the wash entirely.",
   },
   bodyGap: {
-    group: "Open state", label: "Head-to-body gap", value: 10,
+    group: "Open state", label: "Head-to-body gap", value: 4,
     min: 0, max: 60, step: 2, unit: "px",
     why: "Breathing room between the divider under the head and the first attempt row.",
   },
@@ -123,7 +123,7 @@ export const TUNABLES = {
 
   // ---- Density: the log list itself ----------------------------------------
   cardGap: {
-    group: "Density", label: "Gap between cards", value: 8,
+    group: "Density", label: "Gap between cards", value: 2,
     min: 0, max: 40, step: 1, unit: "px",
     why: "Vertical space between one entity's card and the next in the log.",
   },
@@ -170,7 +170,7 @@ export const CHOICES = {
     why: "\"Maybe this can just be the same layout in both screen sizes\" (user) — Same holds whatever Collapsed layout is picked above at every supported width; Stack narrow reintroduces a width-triggered switch to Stacked, for comparison.",
   },
   rankStyle: {
-    group: "Ranks", label: "Rank display", value: "capsOnly",
+    group: "Ranks", label: "Rank display", value: "banners",
     options: {
       banners: "Full banners (bar + next-step line)",
       chips: "Chips (icon + rank name only)",
