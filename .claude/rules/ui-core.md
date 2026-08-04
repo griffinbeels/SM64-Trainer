@@ -258,6 +258,27 @@ and a row reshuffling four times in a tenth of a second is the flicker.
   memory above.
 - Kill any `python -m http.server` (or fixture server) you start, in the same
   session.
+- **Wait for the CONTROL you are about to assert on, not for its container.**
+  A modal's shell mounts a tick before anything it fetches: the 100-coin
+  strategy modal renders `.modal-body` immediately and its exit-star field only
+  after `/api/ranks/standards` answers, so a probe that waited for the shell
+  failed about **one run in six** — in either test order, so it read as
+  order-dependence and was not. What makes this expensive rather than annoying
+  is the message: `no exit-star control on a 100-coin star` is
+  indistinguishable from the feature being absent (2026-08-03).
+- **A driven test writes to the REAL store, and `data/` is gitignored, so its
+  edits outlive its fixture.** `serve_ui` leaves `rank_standards_path()`
+  pointing at the worktree's own `data/rank_standards.json`; a test that edits a
+  cutoff through the UI leaves it edited for every later run. It surfaced as a
+  screenshot taken for review showing the TEST's `1'21"32` in two columns
+  instead of the seeded cutoffs (2026-08-03). Restore what you change, through
+  the same control — or the rig measures a page only it has ever seen.
+- **`subprocess.run(text=True)` decodes with the Windows ANSI codepage.** A
+  node-driven probe returning any non-ASCII comes back mojibake'd —
+  `100c + Reds · Half Cycle` arrives as `100c + Reds Â· Half Cycle`, and the
+  KeyError names the data rather than the encoding. Pass `encoding="utf-8"`.
+  Same trap the `concurrent-agents` skill names for `git show`; it bites
+  anything that shells out, not only git (2026-08-03).
 - **A hand-built harness must mount inside the real ancestors, or it measures
   a layout that does not exist** (rank-banner ellipsis, 2026-07-25 — measured
   wrong three times, twice by eye and once by a harness). Two clauses, both
