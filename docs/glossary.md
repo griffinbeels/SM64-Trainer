@@ -116,7 +116,7 @@ thing you practice toward, rather than the thing you practice.
 
 ### Route step
 
-One entry in a [[route]]: a group of candidate [[target]]s and how many of them
+One item in a [[route]]: a group of candidate [[target]]s and how many of them
 you need. "Any 3 of these 7 [[star]]s" is one step, so a [[route]] tolerates you
 taking them in a different order.
 
@@ -323,6 +323,43 @@ The map of which course you can reach from which, which the trainer judges a
 did not happen.
 
 - **Lives** — the world graph (`src/sm64_events/tracking/topology.py`)
+
+### Ultimate Sheet
+
+The community spreadsheet this trainer reads its [[approach]]es from — one row
+per documented way of doing a [[target]], one column per [[runner]].
+
+- **Lives** — the sheet reader (`src/sm64_events/library/sheet.py`)
+
+### Approach
+
+One documented way of doing a [[target]], as the [[Ultimate Sheet]] publishes
+it. Adopting an approach mints a [[strategy]] you can practice.
+
+- **Lives** — the library builder (`src/sm64_events/library/build.py`)
+- **Not** — a [[strategy]]. You practice a [[strategy]] and hold a [[personal
+  best]] on it; an approach is only what the community wrote down.
+
+### Subsection
+
+A stretch inside a [[target]] that the [[Ultimate Sheet]] times separately — a
+warp fadeout, the boss fight after a warp. A subsection never becomes a
+[[strategy]]; adopting one proposes a [[segment]] you define.
+
+- **Lives** — the sheet reader (`src/sm64_events/library/sheet.py`)
+
+### Entry
+
+One [[runner]]'s recorded time for one [[approach]], and the video they linked
+to it.
+
+- **Lives** — the library builder (`src/sm64_events/library/build.py`)
+
+### Runner
+
+A person holding at least one [[entry]] in the [[Ultimate Sheet]].
+
+- **Lives** — the library builder (`src/sm64_events/library/build.py`)
 
 ---
 
