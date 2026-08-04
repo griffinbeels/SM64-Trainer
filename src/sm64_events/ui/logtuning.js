@@ -96,6 +96,16 @@ export const TUNABLES = {
     min: 30, max: 160, step: 2, unit: "px",
     why: "How wide the tier/division text under the icon may grow in Stacked before it ellipsises -- the same job MARELO's own rank-name column plays under its icon.",
   },
+  rankIconSize: {
+    group: "Ranks", label: "Rank icon size", value: 28,
+    min: 16, max: 64, step: 1, unit: "px",
+    why: "The cap/medal icon inside a rank display. Was a bare 24px with no dial at all -- every other size on this card grew a tunable of its own while this one stayed frozen, which is why the whole display read as too short beside a bigger course icon and a wider name column (2026-08-04 round).",
+  },
+  columnRankWidth: {
+    group: "Ranks", label: "Column rank width", value: 96,
+    min: 50, max: 200, step: 2, unit: "px",
+    why: "How wide each rank display is in the Column rank style -- narrower than Stacked's own width on purpose, since Column's whole point is fitting two of them side by side in less room than Stacked needs for one.",
+  },
 
   // ---- Result: the PB tag ---------------------------------------------------
   pbWidth: {
@@ -191,9 +201,30 @@ export const CHOICES = {
       chips: "Chips (icon + rank name only)",
       capsOnly: "Caps only (icon, no text)",
       stacked: "Stacked (MARELO-shaped: icon+name left, bar+next right)",
+      stackedRow: "Stacked, side by side (both MARELO-shaped displays in a row)",
+      column: "Column (even more condensed: cap, bar, name, type -- side by side)",
     },
     cssPrefix: "log-rankstyle",
-    why: "How much of each rank banner shows in the card head. Ships at Caps only: two full rank NAMES (up to \"Grandmaster 1\", 13 characters, each) cannot both fit beside an icon, a long star name, a PB tag and a chevron on one line at the app's 850px supported floor without either truncating one of them or growing the card past what the floor allows — measured against the real rank corpus, not guessed. Caps only is the one setting that has NO text to truncate at any width; Chips is fully real and worth dialing up once Rank column width is opened wider than the shipped default, on a window wide enough to afford it. Stacked is RankBanner's own MARELO-shaped layout (the `layout` prop, ranks.js) rather than a field-hiding rule like the other three -- the same bar + next-step-line fields Banners shows, arranged in far less horizontal space; the next-step line only ever appears on the entity you're actively practicing (LogCard's own `active` prop, never a display rule here).",
+    why: "How much of each rank banner shows in the card head. Widen Rank column width first if you dial this up to Chips or Banners, which need real room for text; Caps only is the one setting that has NO text to truncate at any width. Stacked and Stacked-side-by-side are RankBanner's own MARELO-shaped layout (the `layout` prop, ranks.js) rather than a field-hiding rule like the first three -- the same bar + next-step-line fields Banners shows, arranged in far less horizontal space; only their CONTAINER direction differs (the two rank displays one above the other, or side by side -- the row-based op.gg-style Scope Chips on the Rank tab already shows several same-shaped rank displays side by side, so this reading has precedent in the app). Column is a THIRD `layout` value, even more condensed still (cap, bar, name, then the entity noun in a small font, all in one column -- Griffin's own sketch), also arranged side by side. The next-step line only ever appears on the entity you're actively practicing (LogCard's own `active` prop, never a display rule here) in every style but Column, which drops it outright to stay condensed.",
+  },
+  nameOverflow: {
+    group: "Identity", label: "Name overflow", value: "ellipsis",
+    options: {
+      ellipsis: "Ellipsis (today's behaviour)",
+      shrinkToFit: "Shrink to fit (steps the font size down, never truncates)",
+      wrap: "Wrap to a second line",
+    },
+    cssPrefix: "log-nameoverflow",
+    why: "What happens when an entity's name is wider than the identity column. Ellipsis truncates it; Wrap lets the head row grow a second line instead; Shrink to fit is measured in JS (CSS has no way to size text by its own rendered length, ui/components/shrinkname.js) and steps the font down just far enough that the name is never cut, down to a floor where it stops being worth reading further.",
+  },
+  courseName: {
+    group: "Identity", label: "Show course name", value: "show",
+    options: {
+      show: "Show the course/context label above the name",
+      hide: "Hide it (icon only, more room for the rest)",
+    },
+    cssPrefix: "log-coursename",
+    why: "The small course/context line above the entity name (\"WHOMP'S FORTRESS\", above \"Blast Away the Wall in Front\"). Hiding it frees a whole line of the identity column's height -- worth trying at a narrow window, but not wired to one: it is a plain preference, on at every width until you say otherwise.",
   },
 };
 

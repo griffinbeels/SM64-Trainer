@@ -139,15 +139,16 @@ function PlanReadout({ values, startLevel, destLevel, destFill }) {
 // StarSection because that section is welded into practice.js with a live
 // store behind it; extracting it is the follow-up, and until then this is
 // honest about being the same CSS rather than the same component.
-// `layout` previews RankBanner's own layout prop ("row"/"stacked",
+// `layout` previews RankBanner's own layout prop ("row"/"stacked"/"column",
 // ranks.js) on the SAME climb this whole page already plays -- the point
-// being made twice over here, since the stacked (MARELO-shaped) rank
-// display is a LAYOUT VARIANT of this exact component, never a second
-// implementation: proving the climb still animates here is proving it for
-// both arrangements at once, because there is only one `useRankClimb` call
-// underneath either of them (`.claude/rules/ui-climb.md`,
-// `.claude/rules/ui-ranks.md`). `tests/test_ui_rank_stacked_climb.py` drives
-// this control to make exactly that claim against the real page.
+// being made twice (three times, since "column" landed) over here, since the
+// stacked (MARELO-shaped) and column (even more condensed) rank displays are
+// LAYOUT VARIANTS of this exact component, never a second implementation:
+// proving the climb still animates here is proving it for every arrangement
+// at once, because there is only one `useRankClimb` call underneath any of
+// them (`.claude/rules/ui-climb.md`, `.claude/rules/ui-ranks.md`).
+// `tests/test_ui_rank_stacked_climb.py`/`tests/test_ui_rank_column_climb.py`
+// drive this control to make exactly that claim against the real page.
 function ObjectiveCard({ startLevel, destLevel, destFill, playing, layout }) {
   const level = playing ? destLevel : startLevel;
   const fill = playing ? destFill : 0;
@@ -306,6 +307,7 @@ function Inspector() {
               onchange=${(e) => setLayout(e.target.value)}>
             <option value="row">Row (today's banner)</option>
             <option value="stacked">Stacked (MARELO-shaped)</option>
+            <option value="column">Column (even more condensed)</option>
           </select>
         </div>
       </div>

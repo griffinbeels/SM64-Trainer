@@ -1416,6 +1416,35 @@
   .rank-banner-stacked .rank-banner-next {
     grid-area: next; align-self: start; font-size: .68rem;
   }
+  /* .rank-banner-column -- the even-more-condensed layout (Option 3,
+     spec 2026-08-04-rank-variants: Griffin's own sketch, `[cap]` /
+     `[progress_bar]` / `[rank_name]`, with the entity noun -- "Strategy" or
+     the star/segment noun -- in a small font under the name). Same
+     reasoning as `.rank-banner-stacked` above: ranks.js renders the
+     IDENTICAL tree, only the arrangement differs (a THIRD value of the same
+     `layout` prop), so the climb this animates is still the one hook, one
+     plan, one set of animated values. Column is what gives the kicker (the
+     `label` prop -- dropped entirely by Stacked) a home again: two Column
+     banners sit side by side, same as Stacked-side-by-side, so position
+     alone does not say which is which the way Stacked's own top/bottom
+     order does -- hence the small kicker line under the name, exactly what
+     the sketch asked for. Basis and the next-step line are dropped, same as
+     Chips/Caps-only/Stacked -- Column's whole point is fitting the most
+     condensed reading in the least room, and neither fits that budget. */
+  .rank-banner-column {
+    display: grid; justify-items: center; align-content: center;
+    grid-template-areas: "icon" "bar" "name" "kicker";
+    row-gap: .12rem;
+  }
+  .rank-banner-column .rank-banner-row { display: contents; }
+  .rank-banner-column .rank-banner-basis,
+  .rank-banner-column .rank-banner-next { display: none; }
+  .rank-banner-column .rank-icon-slot.rank-banner-icon { grid-area: icon; }
+  .rank-banner-column .rank-banner-name {
+    grid-area: name; text-align: center; font-size: .68rem; max-width: 96px;
+  }
+  .rank-banner-column .rank-progress-track { grid-area: bar; width: 96px; }
+  .rank-banner-column .rank-banner-kicker { grid-area: kicker; text-align: center; }
   /* MARELO header bar. It used to sit right-aligned on a 44px row of its own
      UNDER the context grid, because .context-bar's 4-column template is
      redefined at two breakpoints and a 5th column would have meant touching
@@ -4346,6 +4375,26 @@
      kept so the human can dial back to it and compare rather than having it
      deleted out from under him.
 
+     2026-08-04 round (spec 2026-08-04-rank-variants): two more genuine
+     layout bugs plus four new options to try, all against this same
+     registry. BUG 1 -- the ranks grid track absorbing free space up to its
+     own fixed cap instead of genuinely, so the PB tag and chevron sat well
+     short of the card's true right edge -- is at the `log-layout-oneline`
+     rule below, with the full reasoning. BUG 2 -- the rank icon having no
+     tunable of its own while every OTHER size on the card grew one, which
+     read as the whole rank display being too short -- is at
+     `.log-list-card .rank-banner-icon`, below. The four options:
+     `nameOverflow` (shrink-to-fit, JS-measured, ui/components/shrinkname.js)
+     and `courseName` (hide the course/context line) both live in the
+     Identity rules just above; `rankStyle` gained `stackedRow` (the same
+     MARELO-shaped Stacked display, side by side instead of one above the
+     other) and `column` (a third, even more condensed `layout` value of
+     RankBanner's own, `.rank-banner-column` above) -- both proved to keep
+     the climb by the SAME live guards `stacked` already has
+     (tests/test_ui_rank_stacked_climb.py's sibling for column;
+     tests/test_ui_rank_stacked_layout_source.py already covers every
+     `layout` value structurally, not just one).
+
      Two things this card deliberately does NOT inherit, unlike every other
      `.practice-card` on this page: a fixed height (`.analysis-card`/
      `.objective-card` are a hard 458-463px so an OBS capture never reflows
@@ -4425,11 +4474,65 @@
   .log-list-card.log-align-left .log-card-select { justify-content: flex-start; }
   .log-list-card.log-align-centred .log-card-select { justify-content: center; }
   .log-list-card.log-align-centred .log-card-name { align-items: center; text-align: center; }
+  /* nameOverflow (Option 1): what happens to `.log-card-name b` when the
+     name is wider than the identity column. "ellipsis" restates the base
+     rule above explicitly (a genuine no-op, same reasoning as `log-align-
+     left`) -- it is what the base rule already does with no choice applied
+     at all. "wrap" is the real change: the row's own `min-height` is a
+     FLOOR, not a ceiling, so a second line simply grows the head (and the
+     grid row it shares with identity/ranks/pb/fold) rather than being
+     clipped. "shrinktofit" is measured in JS
+     (ui/components/shrinkname.js -- CSS cannot size text by its own
+     rendered length) and keeps the SAME overflow/ellipsis fallback as
+     "ellipsis": the JS writes an inline `font-size` that outranks this
+     rule entirely when it fits, and this is the honest degrade for the one
+     case its own floor still cannot resolve (a name far longer than
+     anything the corpus this was tuned against carries). */
+  .log-list-card.log-nameoverflow-ellipsis .log-card-name b {
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
+  .log-list-card.log-nameoverflow-wrap .log-card-name b {
+    overflow: visible; white-space: normal; text-overflow: clip;
+  }
+  .log-list-card.log-nameoverflow-shrinktofit .log-card-name b {
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
+  /* courseName (Option 4): the small course/context line above the entity
+     name. "show" restates the default (a genuine no-op); "hide" frees a
+     whole line of the identity column's own height -- built as a plain
+     preference rather than tied to a width, since he asked for the choice
+     of whether it is worth the room, not for it to vanish only when the
+     window narrows (`.claude/rules/`-style: a control this codebase already
+     avoids hard-wiring to a breakpoint when the user only asked for an
+     option). */
+  .log-list-card.log-coursename-show .log-card-context { display: block; }
+  .log-list-card.log-coursename-hide .log-card-context { display: none; }
   /* The two rank banners for this entity (strategy + star/segment). Row or
      column depending on `collapsedLayout` (below); `--log-rank-width` caps
      how wide either banner may grow regardless of which. No overflow clip
      here: a hat's wings paint outside its own box, same reason as
      `.rank-slot`. */
+  /* BUG 1 (2026-08-04 round): this box's own GRID CELL is now the flexible
+     one (see the oneLine `grid-template-columns` rule below -- its own
+     comment there has the full reasoning), which is what lets it take the
+     slack instead of the PB tag and chevron. No `justify-self` override is
+     needed for that, and adding one was tried and reverted: this box is
+     ALSO a flex container capped by its own `max-width` below, so the
+     browser's default "stretch, but no further than max-width" already
+     renders it at exactly that width and anchors it to the START of its
+     (now often much wider) cell -- the free space this choice creates
+     shows up on the side facing the PB tag, which is what "the rank area
+     takes the slack" (user) actually meant. An explicit `justify-self:
+     start` produces the identical POSITION but changes how this box
+     computes its OWN width in the process (a grid item with a real
+     justify-self value sizes to fit-content instead of stretch-then-cap),
+     which starves `.rank-banner-name`'s flex-grow of the room the stretched
+     box used to hand it for free -- measured live: it cost `.rank-banner-
+     name` exactly the pixel or two some maxed-tier names (a Mario/Luigi
+     rank) needed, turning 28 pre-existing narrow-width truncations
+     (tests/test_responsive.py's own long-owed 850-913px shortfall) into 88
+     across nearly every viewport in the matrix, caught only by running the
+     real sweep, not by eye. */
   .log-card-ranks {
     grid-area: ranks;
     min-width: 0; max-width: var(--log-rank-width, 420px);
@@ -4437,6 +4540,14 @@
     align-self: stretch; justify-content: center;
   }
   .log-card-ranks .rank-progress-track { height: var(--log-rank-bar-height, 5px); }
+  /* BUG 2 (2026-08-04 round): scoped to the log card, not the generic
+     `.rank-banner-icon` rule above -- that rule also reaches the objective
+     card's own banners and both tuning demos, none of which this registry
+     tunes, and widening it there would move something nobody asked to move.
+     The old bare 24px is what made the whole rank display read as too short
+     next to a bigger course icon and a wider name column once THOSE grew
+     tunables of their own; this is the one size on the card that had none. */
+  .log-list-card .rank-banner-icon { --icon-size: var(--log-rank-icon-size, 28px); }
   .log-card-head .pbtag {
     grid-area: pb; justify-self: end;
     min-width: var(--log-pb-width, 92px); font-size: var(--log-pb-size, 13px);
@@ -4525,31 +4636,65 @@
   .log-list-card.log-rankstyle-capsonly .log-card-ranks .rank-banner::before {
     display: none;
   }
-  /* "stacked" is not a field-hiding rule like the three above -- RankBanner
-     draws its own MARELO-shaped arrangement (`.rank-banner-stacked`, above)
-     once `layout="stacked"` reaches it (practicelog.js threads this CHOICE
-     through as that prop). What's left here is sizing the log card's OWN
-     column around it: its width independent of Rank column width (which the
-     three row-based styles above still share), and the rank-name text width
-     (same job as the generic 72px default above, tunable in this context).
-     The COLUMN direction this style also forces on `.log-card-ranks`
-     (two MARELO-shaped widgets side by side in a narrow column read as
-     cramped) is declared separately, at the END of this section -- it has
-     to beat `collapsedLayout`'s own `flex-direction` rules below, which
-     share this exact selector's specificity, so source order is what wins
-     and it must come after them (same trap `log-width-stacknarrow` already
-     documents at the bottom of this section). */
+  /* "stacked", "stackedRow" and "column" are not field-hiding rules like the
+     three above -- RankBanner draws its own MARELO-shaped or column
+     arrangement (`.rank-banner-stacked`/`.rank-banner-column`, above) once
+     `layout` reaches it as "stacked" or "column" (practicelog.js resolves
+     this CHOICE to that prop, `RANK_LAYOUT_BY_STYLE`). What's left here is
+     sizing the log card's OWN column around each: a width independent of
+     Rank column width (which the three row-based styles above still
+     share), and the rank-name text width (same job as each layout's own
+     generic default above, tunable in this context). No per-rankStyle
+     `grid-template-columns` override is needed any more (BUG 1, 2026-08-04
+     round) -- the shared oneLine rule below gives the ranks GRID CELL a
+     flexible `1fr` track for every rankStyle uniformly, and each rule here
+     caps the BOX inside that cell instead, so a style's own width tunable
+     is still what decides how much of the cell its content actually fills.
+     The flex DIRECTION each of the three forces on `.log-card-ranks`
+     (`stacked` stands its pair one above the other; `stackedRow`/`column`
+     sit theirs side by side) is declared separately, at the END of this
+     section -- it has to beat `collapsedLayout`'s own `flex-direction`
+     rules below, which share this exact selector's specificity, so source
+     order is what wins and it must come after them (same trap
+     `log-width-stacknarrow` already documents at the bottom of this
+     section). */
   .log-list-card.log-rankstyle-stacked .log-card-ranks {
     max-width: var(--log-stacked-rank-width, 200px);
   }
   .log-list-card.log-rankstyle-stacked .rank-banner-name {
     max-width: var(--log-stacked-name-width, 72px);
   }
-  .log-list-card.log-rankstyle-stacked.log-layout-oneline
-      .log-card:not(.is-unassigned) .log-card-head {
-    grid-template-columns: minmax(0, var(--log-identity-width, 245px))
-      minmax(0, var(--log-stacked-rank-width, 200px)) auto auto;
+  /* "stackedRow" (Option 2): the identical MARELO-shaped banner as
+     "stacked" above -- same `--log-stacked-rank-width`/`--log-stacked-name-
+     width`, so the two never need separate retuning -- laid out side by
+     side instead of one above the other. The container's own cap is
+     doubled (plus the gap between them) rather than left at the single-
+     item width, or the second banner would have nowhere to go but wrap
+     under the first. */
+  .log-list-card.log-rankstyle-stackedrow .log-card-ranks {
+    max-width: calc(var(--log-stacked-rank-width, 200px) * 2 + var(--log-rank-gap, 0px));
   }
+  .log-list-card.log-rankstyle-stackedrow .rank-banner-name {
+    max-width: var(--log-stacked-name-width, 72px);
+  }
+  /* "column" (Option 3): its own independent width, narrower by design --
+     see `columnRankWidth`'s own `why` in logtuning.js for the reasoning.
+     The bar has no natural width of its own to stretch into (unlike the
+     row/stacked layouts, where it is sized by a flex/grid track that
+     already has one) -- `.rank-banner-column`'s own base rule centres its
+     children with `justify-items: center`, which shrinks anything with no
+     intrinsic size to nothing, so the bar needs an EXPLICIT width here or
+     it would render invisible. */
+  .log-list-card.log-rankstyle-column .log-card-ranks {
+    max-width: calc(var(--log-column-rank-width, 96px) * 2 + var(--log-rank-gap, 0px));
+  }
+  .log-list-card.log-rankstyle-column .rank-banner-name {
+    max-width: var(--log-column-rank-width, 96px);
+  }
+  .log-list-card.log-rankstyle-column .rank-progress-track {
+    width: var(--log-column-rank-width, 96px);
+  }
+  .log-list-card.log-rankstyle-column .rank-banner-column { flex: 0 0 auto; }
 
   /* ---- collapsedLayout: the head's own grid shape ------------------------
      All three are real, always-selectable shapes -- not a responsive
@@ -4559,8 +4704,8 @@
      `twoLine`/`stacked` give identity the whole first row, so a flexible
      `minmax(0,1fr)` already keeps every card's icon flush left with no fixed
      track needed there. */
-  /* `minmax(0, …)` on both fixed-looking tracks, not a bare length -- a
-     plain `<length>` track has that length as BOTH its base size and its
+  /* `minmax(0, …)` on the fixed-looking identity track, not a bare length --
+     a plain `<length>` track has that length as BOTH its base size and its
      growth limit, so it never shrinks below it even when the row has less
      room than that, and the excess bleeds past the card's own edge rather
      than being clipped (live report 2026-08-03, at his own tuned 420px Rank
@@ -4570,10 +4715,32 @@
      afford it -- while letting it shrink toward 0 under real pressure, same
      as every `.log-card-ranks`/`.pbtag` child already does via `min-width:
      0`. Truncating text at that point is the honest degrade; bleeding past
-     the card is not. */
+     the card is not.
+
+     BUG 1 (2026-08-04 round): the RANKS track used to be a second
+     `minmax(0, …)` fixed-looking cap, reading the SAME --log-rank-width
+     tunable `.log-card-ranks`'s own max-width still reads below (420px by
+     default) -- the identical species as identity's own track. A grid
+     track with a definite `<length>` max
+     still grows to fill LEFTOVER free space up to that max before anything
+     else gets a look at it (the "maximize tracks" step of grid track
+     sizing), and once both fixed-looking tracks were maxed out, nothing in
+     this template had a claim on whatever space remained -- it simply sat
+     unused, past the PB tag and the fold chevron, at the card's own true
+     right edge. That is exactly the reported bug: "the PB number should be
+     right aligned all the way to the right of the card, along with the
+     dropdown arrow." `minmax(0, 1fr)` makes ranks the one GENUINELY
+     flexible track -- it, and only it, absorbs every leftover pixel, which
+     is what pins the auto-sized PB/fold columns after it flush against the
+     row's true end. The rank display itself does not grow to match: its own
+     box is still capped by `.log-card-ranks`'s `max-width` (below, or a
+     `log-rankstyle-*` override of it), so the free space this track now
+     absorbs shows up as room around that capped box, not as a wider rank
+     display -- "the rank area takes the slack" (user, 2026-08-04), not the
+     rank CONTENT. */
   .log-list-card.log-layout-oneline .log-card:not(.is-unassigned) .log-card-head {
     grid-template-columns: minmax(0, var(--log-identity-width, 245px))
-      minmax(0, var(--log-rank-width, 420px)) auto auto;
+      minmax(0, 1fr) auto auto;
     grid-template-areas: "identity ranks pb fold";
   }
   .log-list-card.log-layout-oneline .log-card-ranks { flex-direction: row; flex-wrap: wrap; align-items: center; }
@@ -4636,6 +4803,18 @@
      source order decides" reasoning `log-width-stacknarrow` above already
      uses for the identical trap. */
   .log-list-card.log-rankstyle-stacked .log-card-ranks { flex-direction: column; }
+  /* Stacked-side-by-side (Option 2) and Column (Option 3) both want the
+     OPPOSITE of Stacked's own override just above -- their whole point is
+     the two rank displays sitting in a ROW, same reasoning ("declared
+     after, so source order decides" at identical specificity) and same
+     place in the cascade. `flex-wrap: wrap` is the honest degrade if a
+     narrow window genuinely cannot fit both side by side; `align-items:
+     center` keeps the pair vertically centred on each other rather than on
+     whichever is taller. */
+  .log-list-card.log-rankstyle-stackedrow .log-card-ranks,
+  .log-list-card.log-rankstyle-column .log-card-ranks {
+    flex-direction: row; flex-wrap: wrap; align-items: center;
+  }
 
 </style></head>
 <body>

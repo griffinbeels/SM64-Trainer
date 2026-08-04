@@ -109,21 +109,30 @@ function sentinelMsg(banner) {
 // data, and this component is deliberately ignorant of which two ladders
 // produced the banner it was handed.
 // `layout` is a LAYOUT VARIANT, not a second implementation: "row" (default,
-// today's single-line shape, byte-identical) and "stacked" (the MARELO-shaped
+// today's single-line shape, byte-identical), "stacked" (the MARELO-shaped
 // compact form -- cap icon + name in a left column, the bar and the next-step
-// line in a right one, spec 2026-08-03-practice-log-entity-cards). Every line
-// above this point in the render -- the `useRankClimb` call, the climb plan,
-// the animated values -- is untouched by it; only the CSS class on the root
-// selects which arrangement of the SAME DOM parts applies (`.rank-banner-row`
-// turns `display: contents` under `.rank-banner-stacked` in index.html, so
-// its own children become direct grid items alongside `.rank-progress-track`,
-// its existing sibling -- no second render tree to keep in sync with this
-// one). The alternative -- forking the JSX on `layout` -- is exactly what a
-// user requirement this spec exists to satisfy forbids: "I want the user to
-// be able to use this new design AND STILL be able to have all the
-// animations that they'd normally get," and a second tree has no reason to
-// keep carrying `--climb-reveal`/`climb.vars`/`is-climbing` unless whoever
-// wrote it remembered to copy them by hand.
+// line in a right one, spec 2026-08-03-practice-log-entity-cards), and
+// "column" (the even-more-condensed form -- cap, bar, name, then the entity
+// noun in a small font, all in ONE column, spec 2026-08-04-rank-variants:
+// Griffin's own sketch, `[cap]` / `[progress_bar]` / `[rank_name]` / a small
+// "type" line, two of these side by side). Every line above this point in the
+// render -- the `useRankClimb` call, the climb plan, the animated values -- is
+// untouched by either: only the CSS class on the root selects which
+// arrangement of the SAME DOM parts applies (`.rank-banner-row` turns
+// `display: contents` under both `.rank-banner-stacked` and
+// `.rank-banner-column` in index.html, so its own children become direct grid
+// items alongside `.rank-progress-track`, its existing sibling -- no second
+// render tree to keep in sync with this one). "column" is what finally gives
+// the kicker (`label` -- "Strategy" or the entity noun) a home again: stacked
+// hides it outright since two side-by-side banners already say which is which
+// by position, but column's two banners sit side by side too, so it is drawn
+// small, under the name, as the "type" line his sketch asked for. The
+// alternative -- forking the JSX on `layout` -- is exactly what a user
+// requirement this spec exists to satisfy forbids: "I want the user to be
+// able to use this new design AND STILL be able to have all the animations
+// that they'd normally get," and a second tree has no reason to keep carrying
+// `--climb-reveal`/`climb.vars`/`is-climbing` unless whoever wrote it
+// remembered to copy them by hand.
 //
 // `showNext` is the caller's own answer to "is the reader actively
 // practising this entity right now" (practicelog.js's `LogCard`, from the
@@ -133,10 +142,20 @@ function sentinelMsg(banner) {
 // still computed exactly as before, so the "may only change while invisible"
 // rule (`.claude/rules/ui-climb.md`) stays true whenever the line IS shown --
 // there is simply nothing to violate it when it is not.
+//
+// `iconSize` defaults to 24 -- every caller but the practice log's own
+// (practicelog.js, from logtuning.js's `rankIconSize`) keeps the exact pixel
+// size it always rendered at. It is a prop rather than a CSS var alone
+// because `RankIcon`'s own `size` is a JS NUMBER the Hat/Medal sprite draws
+// at (`rankicon.js`), not something a `--icon-size` custom property can
+// resize by itself -- that variable only ever reserved the wrapping
+// `.rank-icon-slot`'s wing-spill MARGIN (caps.js's `HAT_WING_SPILL_RATIO`),
+// which is why widening it alone (BUG 2, 2026-08-04 round) grew the reserved
+// space around the icon without growing the icon drawn inside it.
 export function RankBanner({ label, banner, hint = null, identity = null,
                              atFloor: atFloorProp = false,
                              lane = null, order = 0, replayKey = null,
-                             layout = "row", showNext = true }) {
+                             layout = "row", showNext = true, iconSize = 24 }) {
   const ranked = !!(banner && banner.rank);
   // Called unconditionally (rules of hooks) even on the sentinel/empty path
   // below — `null` passes straight through with no animation, which is what
@@ -318,7 +337,8 @@ export function RankBanner({ label, banner, hint = null, identity = null,
   // celebration wipe it in; that is what could never be in sync.
   const vars = { ...climb.vars, "--climb-reveal": climb.reveal };
   return html`<div class=${`rank-banner${climb.climbing ? " is-climbing" : ""}${
-      layout === "stacked" ? " rank-banner-stacked" : ""}`} style=${vars}>
+      layout === "stacked" ? " rank-banner-stacked" : ""}${
+      layout === "column" ? " rank-banner-column" : ""}`} style=${vars}>
     <div class="rank-banner-row">
       <!-- At the floor default the sentinel's own wording ("no PB on this
            strategy yet") is the only thing lost by showing Capless 5, so it
@@ -339,7 +359,7 @@ export function RankBanner({ label, banner, hint = null, identity = null,
            row's real painted content stops overlapping, without widening
            the whole row's gap for every OTHER pair of children too. -->
       <span class="rank-icon-slot rank-banner-icon"><${RankIcon} ...${climb.icon}
-          tier=${climb.tier} division=${climb.division} size=${24} /></span>
+          tier=${climb.tier} division=${climb.division} size=${iconSize} /></span>
       <b class="rank-banner-name">${capName(climb.tier).toUpperCase()}${climb.division ? ` ${divisionDigit(climb.division)}` : ""}</b>
       ${basis && html`<span class="meta rank-banner-basis" title=${basisTitle}>${basisText}</span>`}
       <!-- "X.XXs to rank up", not a bare "−0.22s" (user, 2026-07-27) -- the

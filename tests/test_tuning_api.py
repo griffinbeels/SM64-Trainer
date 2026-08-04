@@ -370,29 +370,35 @@ def test_a_css_disagreement_fails_the_whole_save_leaving_both_files_untouched(
     from sm64_events.server import tuning_api
     endpoint, tmp_js, tmp_css = log_endpoint
 
-    # `--log-rank-width` appears TWICE in the real index.html (the one-line
-    # and stacked grid templates both name it) -- corrupt only the FIRST
-    # occurrence so the two disagree, the same failure mode
+    # `--log-stacked-rank-width` appears TWICE in the real index.html (the
+    # vertically-stacked and side-by-side rankStyle rules both read it, spec
+    # 2026-08-04-rank-variants) -- corrupt only the FIRST occurrence so the
+    # two disagree, the same failure mode
     # `test_disagreeing_fallbacks_are_refused_rather_than_picked_between`
     # proves against a hand-built sample, reproduced here against the real
-    # file's structure.
+    # file's structure. (This test named `--log-rank-width` until that round
+    # removed its own second occurrence as part of fixing BUG 1 -- a rank
+    # column that absorbed free space up to a fixed cap instead of genuinely
+    # -- leaving only one real reader of that var; `--log-stacked-rank-width`
+    # is the var this same atomicity guarantee now has two real readers of.)
     original = tmp_css.read_text(encoding="utf-8")
     corrupted = original.replace(
-        "var(--log-rank-width, 420px)", "var(--log-rank-width, 999px)", 1)
+        "var(--log-stacked-rank-width, 200px)",
+        "var(--log-stacked-rank-width, 999px)", 1)
     assert corrupted != original, (
         "the replace above matched nothing -- index.html's own fallback "
         "text no longer looks like what this test assumes")
-    assert corrupted.count("var(--log-rank-width, 420px)") == 1, (
+    assert corrupted.count("var(--log-stacked-rank-width, 200px)") == 1, (
         "expected exactly one surviving agreeing occurrence -- the real "
-        "file's rankWidth fallback count no longer matches what this test "
-        "assumes")
+        "file's stackedRankWidth fallback count no longer matches what this "
+        "test assumes")
     tmp_css.write_text(corrupted, encoding="utf-8", newline="")
 
     before_js = tmp_js.read_text(encoding="utf-8")
     before_css = tmp_css.read_text(encoding="utf-8")
 
     with pytest.raises(HTTPException) as raised:
-        endpoint("log", tuning_api.TuningBody(values={"rankWidth": 300}))
+        endpoint("log", tuning_api.TuningBody(values={"stackedRankWidth": 300}))
     assert raised.value.status_code == 409
     assert "disagreeing" in raised.value.detail
 
