@@ -319,6 +319,21 @@ and a row reshuffling four times in a tenth of a second is the flicker.
   (a 1181px window gives a card a 947px pane; a 1180px window gives it
   1076px). Gate card-internal layout on `@container` against
   `.practice-page`, the way the star row's `cqw` sizing already does.
+- **When a style is built from a custom property the COMPONENT supplies, assert
+  the painted value — the markup stays correct through the failure.** This file
+  hands several components a colour that way (`--band-tint` on the rank ladder,
+  `--std-band` on the standards table's exit-star bands, `--icon-size` on every
+  rank-icon slot), and the failure has no DOM signature at all: with a fallback,
+  `color-mix(in srgb, var(--std-band, transparent) 24%, #131b26)` computes to
+  plain `transparent`, a perfectly valid colour; without one the declaration is
+  invalid at computed-value time and the property quietly reverts to what the
+  cascade already had. Either way the class is on the element, the `style`
+  attribute is exactly where you put it, `node --check` is happy, and nothing
+  paints. So a class-name or attribute assertion is green through precisely the
+  bug it was written for — read `getComputedStyle()` and reject
+  `rgba(0, 0, 0, 0)`. Worked case, mutation-proved both ways (one hue for every
+  band; the property dropped):
+  `tests/test_ui_hundred_coin_render.py::test_each_exit_star_band_wears_its_own_colour`.
 - **A test that reads source text asserts on `strip_comments(source)`**
   (`tests/source_scan.py`) and is probed in both directions. A raw substring
   cannot tell code from prose: `assert "Escape" in MODAL` stayed green with the
