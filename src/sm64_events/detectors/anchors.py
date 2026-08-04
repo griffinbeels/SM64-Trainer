@@ -198,6 +198,8 @@ acceptable for attempt tracking, but the payload distinction matters for
 the anchor→outcome clock, so characterize it once on real hardware."""
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
+from sm64_events.detectors import counter_epoch
+from sm64_events.detectors.counter_epoch import EpochTracker
 from sm64_events.memory.addresses import (ACT_INTRO_CUTSCENE,
                                            ACT_TELEPORT_FADE_OUT,
                                            CASTLE_LEVELS, DEATH_ACTIONS,
@@ -210,17 +212,15 @@ BOOT_TIMER_MAX = 120   # global_timer below ~4 s after a backward jump = console
 NEAR_ZERO_IGT = 30     # 30 frames = 1 s at 30 fps; <= so exactly 1 s still counts
 IGT_WRAP_CEILING = 65000  # u16 wrap guard: 65535->0 looks like a reset without this
 PAUSE_WARP_MIN_STREAK = 5  # walked load echoes pause 0-3 frames, menu warps 13+
-# How far apart the area edge and the counter zero may be and still be one
-# event. Not zero: a 60 Hz poll of a 30 fps game reads them on different polls
-# of the same game frame, and the area byte is documented to move a poll after
-# the level byte. Mirrors IgtClock.AREA_LOAD_WINDOW, which pairs the same two
-# facts for the same reason.
-AREA_LOAD_WINDOW = 10
-# Same poll-skew allowance for the in-level teleporter (docstring): the counter
-# zeroes 1 frame after the last fade-out tick on all three demonstrated warps,
-# and inputs are locked for the whole fade, so no L-reset can hide in here.
-TELEPORT_WINDOW = 10
-COURSE_START_AREA = 1  # every course spawns Mario here; only the castle differs
+# The pairing windows and the destination-area rule live in
+# `detectors/counter_epoch.py` since 2026-08-04 — igt_clock.py needs the SAME
+# answer to know whether the counter it is reading measures a whole star or one
+# leg of one, and two modules answering that privately is what made a star's
+# row wait 1.5 s (task 0083). Re-exported here because this module's docstring
+# is where the evidence for them lives.
+AREA_LOAD_WINDOW = counter_epoch.AREA_LOAD_WINDOW
+TELEPORT_WINDOW = counter_epoch.TELEPORT_WINDOW
+COURSE_START_AREA = counter_epoch.COURSE_START_AREA
 # (live logs 2026-06-12; segments._MENU_PAUSE_FRAMES mirrors the same evidence)
 
 
@@ -234,8 +234,9 @@ class AnchorDetector:
         self._pending_warp: Event | None = None  # pause-warp anchor awaiting position-stable tick
         self._save_menu_seen = False  # save-prompt screen observed this anchor period
         self._last_warp_op: tuple[int, int] | None = None  # (frame, op), inert — see docstring
-        self._last_area_edge: tuple[int, int] | None = None  # (frame, area entered)
-        self._last_teleport_frame: int | None = None  # last tick of an in-level teleporter's fade-out
+        # WHY the counter last restarted — shared with igt_clock.py, which
+        # needs the same answer for the star's time (counter_epoch.py).
+        self._epoch = EpochTracker()
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         # Self-heal on backward global_timer jump (domain rule 4): stale door
@@ -249,8 +250,7 @@ class AnchorDetector:
             self._last_dialog_frame = None
         if self._last_warp_op and curr.global_timer < self._last_warp_op[0]:
             self._last_warp_op = None   # same self-heal as the two above
-        if curr.global_timer < (self._last_teleport_frame or 0):
-            self._last_teleport_frame = None   # and the same again
+        # …and the epoch tracker heals its own two recencies in observe().
         # Track the most recent frame where a door action was observed so that
         # anchors emitted 1-5 frames after the door animation ends can still
         # be classified as echoes via frames_since_door (non-warp door shape).
@@ -282,22 +282,12 @@ class AnchorDetector:
         # read by nothing.
         if curr.pending_warp_op:
             self._last_warp_op = (curr.global_timer, curr.pending_warp_op)
-        # Where the area last moved TO, within this level. A level change is
-        # not an area load — the counter measures from the door, which is the
-        # start of the run — so it clears the pairing rather than setting it.
-        if curr.curr_level != prev.curr_level:
-            self._last_area_edge = None
-            # …and an in-level teleporter is over the moment the level moves:
-            # the same action serves cap-course warps that really do leave,
-            # and leaving a level is a boundary whoever caused it (docstring).
-            self._last_teleport_frame = None
-        elif curr.curr_area != prev.curr_area:
-            self._last_area_edge = (curr.global_timer, curr.curr_area)
-        # When the fade-OUT last ran. The counter zeroes one frame after its
-        # last tick, so this — not curr.mario_action, which reads FADE_IN for
-        # a long time afterwards — is what says the zero belongs to the warp.
-        if curr.mario_action == ACT_TELEPORT_FADE_OUT:
-            self._last_teleport_frame = curr.global_timer
+        # Where the area last moved TO within this level, and when the
+        # teleporter's fade-OUT last ran — the two recencies that say what a
+        # counter restart MEANT. Both live in counter_epoch.EpochTracker now,
+        # because igt_clock.py asks the identical question about the identical
+        # frame and a second private answer is what cost a star's row 1.5 s.
+        self._epoch.observe(prev, curr)
         events = self._classify(prev, curr)
         if events:
             self._pending_warp = None  # one load, one anchor: classified wins
@@ -376,21 +366,16 @@ class AnchorDetector:
         — into the pyramid, the volcano — rather than because he retried?
 
         The full derivation, the three readings that do not work, and why the
-        destination area is the one that does, are in the module docstring."""
-        if self._last_area_edge is None or curr.curr_level in CASTLE_LEVELS:
-            return False
-        frame, entered = self._last_area_edge
-        return (entered != COURSE_START_AREA
-                and curr.global_timer - frame <= AREA_LOAD_WINDOW)
+        destination area is the one that does, are in the module docstring; the
+        rule itself is `counter_epoch.EpochTracker`, shared with igt_clock.py."""
+        return self._epoch.is_area_load(curr)
 
     def _is_teleport(self, curr: GameSnapshot) -> bool:
         """Did Usamune's counter zero because Mario took an IN-LEVEL
         teleporter — the CCM broken bridge, a WDW corner — rather than because
         he retried? The measurement and the two readings it rules out are in
         the module docstring."""
-        if self._last_teleport_frame is None:
-            return False
-        return curr.global_timer - self._last_teleport_frame <= TELEPORT_WINDOW
+        return self._epoch.is_teleport(curr)
 
     def _classify(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         # frames_since_door: how many game frames have elapsed since the most

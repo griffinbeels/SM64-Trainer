@@ -32,6 +32,7 @@ leaderboard accepts — see its docstring and detectors/star_grab.py.
 from collections import deque
 
 from sm64_events.core.snapshot import GameSnapshot
+from sm64_events.detectors import counter_epoch
 # ONE definition of "the counter is back at zero", shared with the detector
 # that turns the same edge into an anchor — two thresholds would mean two
 # opinions about whether a run just restarted.
@@ -50,59 +51,39 @@ class IgtClock:
     # wider than either skew and far narrower than any gap between two real
     # transitions, and the cost of pairing them WRONGLY is latency, never a
     # wrong number — see counter_may_be_subarea_local.
-    AREA_LOAD_WINDOW = 10
-    # How long a LEVEL load keeps moving the area byte. Arriving in a course
-    # is not a warp deeper into one, but the two are indistinguishable frame
-    # by frame: the level byte changes once and the area byte then SETTLES
-    # (entering SSL walks it 3->2->1 over ~47 frames), so the load's own area
-    # edges land long after the level edge that explains them, and the counter
-    # zeroes beside one of them. Measured across 911 level entries in his
-    # journal: every edge belonging to a load lands within 59 frames — they
-    # cluster hard at 44-49 — and the earliest edge that is a genuine warp
-    # deeper into the level appears at 60. The cutoff sits in that gap, and it
-    # errs the recoverable way: too NARROW costs the settle wait on a grab
-    # that did not need it, too wide would publish a subarea-local number.
-    LEVEL_LOAD_TAIL_FRAMES = 60
+    AREA_LOAD_WINDOW = counter_epoch.AREA_LOAD_WINDOW
 
     def __init__(self):
         # (global_timer, igt_overall, igt_result) samples
         self._history: deque[tuple[int, int, int]] = deque()
-        # (frame, level, area, overall) of the previous observation — the
-        # basis tracking below needs the level and area, which the sample
-        # history deliberately does not carry.
-        self._last: tuple[int, int, int, int] | None = None
-        self._area_edge_frame: int | None = None
-        self._area_edge_to: int | None = None
-        self._zero_frame: int | None = None
-        self._level_edge_frame: int | None = None
-        self._subarea_local = False
-        # What the counter had already counted when it zeroed at a warp DEEPER
-        # into the level — the missing half of a subarea star, and None
-        # whenever we cannot prove that is what the zero was.
-        self._carry_base: int | None = None
-        self._pre_zero_overall: int | None = None
+        # The previous observation, kept whole so the epoch tracker can be fed
+        # consecutive pairs exactly as a detector is.
+        self._last: GameSnapshot | None = None
+        # WHY the counter last restarted, and what this star banked before the
+        # leg now running (detectors/counter_epoch.py) — the SAME rule
+        # anchors.py stamps on every anchor, read here for the star's time.
+        self._epoch = counter_epoch.EpochTracker()
 
     def empty(self) -> bool:
         return not self._history
 
-    def counter_may_be_subarea_local(self) -> bool:
-        """Is `USAMUNE_OVERALL`'s zero point an AREA load rather than the start
-        of this run — i.e. does it measure part of the star instead of all of
-        it? (star_grab.py reads this to decide whether it can trust its own
-        derivation enough to publish immediately.)
+    def banked_frames(self) -> int:
+        """What this star has already taken before the leg the counter is
+        currently measuring — 0 when the counter's zero point IS the start of
+        the star, which it is for 851 of 875 measured grabs."""
+        return self._epoch.banked
 
-        MAY, not IS. An L-reset taken inside a subarea also zeroes the counter
-        beside an area change, and no signal in a snapshot separates the two:
-        measured 2026-08-01 across his whole journal, of 477 in-course
-        area-load anchors only 6% carry a warp action and 6% a nearby
-        `warp_entered`, while 21% of the ones that are plainly resets do. So
-        this answers the SAFE half of the question — a false True costs the
-        settle wait on a grab that did not need it (~23% of his grabs, the
-        ones after a subarea reset), and a false False is caught by the
-        correction path. Both failure directions are recoverable, which is the
-        only reason a heuristic is allowed here at all; the ATTEMPT side of
-        the same ambiguity has no such luxury and is deliberately unfixed."""
-        return self._subarea_local
+    def counter_may_be_subarea_local(self) -> bool:
+        """Does `USAMUNE_OVERALL` measure only part of this star?
+
+        Now a FACT rather than a heuristic, and the reason is that the
+        classification moved: `counter_epoch.EpochTracker` decides what each
+        restart MEANT by the same measured rule anchors.py stamps on every
+        anchor, so a retry zeroes the accumulator and a door banks a leg. This
+        answers whether anything is banked, and `whole_star_igt_at_xcam` adds
+        it back — so a True here no longer means "we cannot state this star's
+        time", it means "the raw counter alone would understate it"."""
+        return self._epoch.banked > 0
 
     def observe(self, snap: GameSnapshot) -> None:
         h = self._history
@@ -113,103 +94,49 @@ class IgtClock:
         cutoff = snap.global_timer - self.HISTORY_FRAMES
         while h and h[0][0] < cutoff:
             h.popleft()
-        self._track_basis(snap)
+        self._track_epoch(snap)
 
-    def _inside_a_level_load(self, frame: int) -> bool:
-        """Is this frame still part of the last level entry's own load?
-
-        The one signal that separates arriving in a course from warping deeper
-        inside it, and it is a hard one rather than a heuristic: a level entry
-        moves the LEVEL byte, and a pyramid door never does. Everything the
-        arrival then does to the area byte belongs to it."""
-        return (self._level_edge_frame is not None
-                and frame - self._level_edge_frame
-                <= self.LEVEL_LOAD_TAIL_FRAMES)
-
-    def _track_basis(self, snap: GameSnapshot) -> None:
-        """Remember WHY the counter last zeroed, so a reader can ask whether
-        its zero point is the start of the star or the start of a subarea."""
-        prev, self._last = self._last, (snap.global_timer, snap.curr_level,
-                                        snap.curr_area, snap.igt_overall)
+    def _track_epoch(self, snap: GameSnapshot) -> None:
+        """Keep the accumulator current: bank a leg at every restart the LEVEL
+        caused, and start a fresh star at every restart the PLAYER caused."""
+        prev, self._last = self._last, snap
         if prev is None:
             return
-        frame, level, area, overall = prev
-        if snap.curr_level != level:
-            # A level entry rebases the counter legitimately: it measures from
-            # the door, which IS the whole star. Clears the pairing so a
-            # previous level's area edge cannot reach across.
-            self._area_edge_frame = self._zero_frame = None
-            self._area_edge_to = self._carry_base = None
-            self._level_edge_frame = snap.global_timer
-            self._subarea_local = False
-            return
-        if snap.curr_area != area and not self._inside_a_level_load(
-                snap.global_timer):
-            # An edge the level load itself explains is skipped rather than
-            # remembered, so the zero below has nothing to pair with and the
-            # arrival reads as what it is. Deliberately not an early return:
-            # the counter can zero on the very frame the area byte moves, and
-            # `_zero_frame` has to be recorded either way.
-            self._area_edge_frame = snap.global_timer
-            self._area_edge_to = snap.curr_area
-            if (self._zero_frame is not None
-                    and snap.global_timer - self._zero_frame
-                    <= self.AREA_LOAD_WINDOW):
-                self._subarea_local = True   # the edge was seen after the zero
-                self._carry_base = self._carried_at(self._pre_zero_overall)
-        if snap.igt_overall < overall and snap.igt_overall <= NEAR_ZERO_IGT:
-            self._zero_frame = snap.global_timer
-            self._pre_zero_overall = overall
-            self._subarea_local = (
-                self._area_edge_frame is not None
-                and snap.global_timer - self._area_edge_frame
-                <= self.AREA_LOAD_WINDOW)
-            self._carry_base = (self._carried_at(overall)
-                                if self._subarea_local else None)
+        self._epoch.observe(prev, snap)
+        if (snap.igt_overall < prev.igt_overall
+                and snap.igt_overall <= NEAR_ZERO_IGT):
+            self._epoch.restarted(snap, prev.igt_overall)
 
-    def _carried_at(self, pre_zero_overall: int | None) -> int | None:
-        """What to carry across this zero, or None to carry nothing.
-
-        The destination area is the discriminator, and it is anchors.py's,
-        measured there against his whole journal rather than reasoned about
-        here: a course always starts in area 1, so an edge into a NON-1 area
-        is Mario going deeper and the counter's old value is the first half of
-        the star. A reset's own reload walks the byte back to 1, and so does
-        walking out of a subarea on foot — neither is proof of anything, and
-        carrying a base across a RESET would add a previous run's time to this
-        one. Refusing there costs the settle wait we already pay today."""
-        if pre_zero_overall is None or self._area_edge_to == 1:
-            return None
-        return pre_zero_overall
-
-    def carried_base(self) -> int | None:
-        """The time this star had already taken before the counter restarted,
-        or None when we cannot prove the restart was a warp deeper in."""
-        return self._carry_base
-
-    def carried_igt_at_xcam(self, xcam_frame: int,
-                            curr: GameSnapshot) -> tuple[int, str] | None:
-        """OUR OWN whole-star answer for a subarea star, or None.
+    def whole_star_igt_at_xcam(self, xcam_frame: int,
+                               curr: GameSnapshot) -> tuple[int, str]:
+        """OUR OWN answer for the whole star at this x-cam — every leg of it.
 
         His idea, 2026-08-02: *"If we cache the time it took for the player to
         enter the subarea, then the xcam time is just the cached
         subarea_entry_time plus the time it took to finish the subarea. Isn't
         that basically what Usamune is doing anyway?"* — and his own journal
-        says yes, twice over. Usamune writes the subarea-local number first
-        and the whole star later, so the burst carries the difference: LLL
-        Elevator `[[2, 388], [27, 686]]` -> 298, SSL Pyramid
-        `[[0, 69], [1, 71], [27, 551]]` -> 480. That difference IS this base.
+        says yes: Usamune writes the leg-local number first and the whole star
+        later, so the burst carries the difference (LLL Elevator
+        `[[2, 388], [27, 686]]` -> 298; SSL Pyramid
+        `[[0, 69], [1, 71], [27, 551]]` -> 480). That difference is the bank.
+
+        It ACCUMULATES rather than caching one leg, which is not a
+        generalisation for its own sake: of 875 grabs in the live journal, 2
+        cross two involuntary restarts and both are the CCM 100-coin rows that
+        published 37 seconds short of the truth (2026-08-04, task 0083).
 
         The result STORE is deliberately not consulted: at the x-cam it holds
-        the early echo of our subarea-local counter (the 69 above), which is
-        the one number that must never be published on a star like this.
-        Reading only the counter also keeps this whole-star answer independent
-        of Usamune's, which is what lets `star_grab.py` treat their agreement
-        as proof rather than as a coincidence."""
-        if self._carry_base is None:
-            return None
-        post = max(0, curr.igt_overall - (curr.global_timer - xcam_frame))
-        return post + self.DISPLAY_TICK + self._carry_base, "counter"
+        the early echo of the leg-local counter (the 69 above), which is the
+        one number that must never be published. Reading only the counter also
+        keeps this answer INDEPENDENT of Usamune's, which is what lets
+        `star_grab.py` treat their agreement as proof rather than coincidence."""
+        return (self._leg_igt_at(xcam_frame, curr) + self._epoch.banked,
+                "counter")
+
+    def _leg_igt_at(self, frame: int, curr: GameSnapshot) -> int:
+        """The current leg's own contribution, back-computed to `frame`."""
+        post = max(0, curr.igt_overall - (curr.global_timer - frame))
+        return post + self.DISPLAY_TICK
 
     def igt_at(self, touch_frame: int, curr: GameSnapshot) -> tuple[int, str]:
         """Usamune's number at a TOUCH — used by key.py (grand star) and
@@ -233,8 +160,8 @@ class IgtClock:
         still taken verbatim and that path stays torn-read-free."""
         return self._reading(xcam_frame, curr, self._result_written_at_or_after)
 
-    def settled_result_at_or_after(self, xcam_frame: int,
-                                   curr: GameSnapshot) -> int | None:
+    def settled_result_at_or_after(self, xcam_frame: int, curr: GameSnapshot,
+                                   strictly_after: bool = False) -> int | None:
         """Usamune's OWN written answer for an x-cam, or None if it never
         wrote one after that moment (`STOP` of Grab or None).
 
@@ -250,7 +177,8 @@ class IgtClock:
         samples.append((curr.global_timer, curr.igt_overall, curr.igt_result))
         if not curr.igt_result:
             return None
-        if not self._result_written_at_or_after(xcam_frame, samples):
+        if not self._result_written_at_or_after(xcam_frame, samples,
+                                                strictly_after):
             return None
         return curr.igt_result
 
@@ -318,7 +246,8 @@ class IgtClock:
         return before is not None and before >= touch_frame - self.RESULT_FRESH_FRAMES
 
     def _result_written_at_or_after(self, xcam_frame: int,
-                                    samples: list[tuple[int, int, int]]) -> bool:
+                                    samples: list[tuple[int, int, int]],
+                                    strictly_after: bool = False) -> bool:
         """True when the write can only have landed on or after `xcam_frame`.
 
         The write is bracketed: it happened somewhere after the last sample
@@ -327,6 +256,17 @@ class IgtClock:
         the conservative half of the bracket — a rejected write costs a fall
         through to the counter, which is the same number give or take our own
         one-frame read skew, while a wrongly ACCEPTED one is the grab-time
-        value and is wrong by however long Mario was in the air."""
+        value and is wrong by however long Mario was in the air.
+
+        `strictly_after` demands the last stale sample itself reach the x-cam,
+        so the write PROVABLY landed later. That is what a MIDAIR grab needs
+        before it may call a write final: the loose bracket admits a write that
+        could still be the grab-time one, and admitting it is what published a
+        number a correction then moved 1.5 s later, on screen, on every one of
+        the five corrections in the live journal (2026-08-04, task 0083). A
+        GROUND grab is exempt because its grab frame IS its x-cam frame, so
+        there is no earlier write for the bracket to be confused by."""
         before = self._last_result_write_after(samples)
-        return before is not None and before + 1 >= xcam_frame
+        if before is None:
+            return False
+        return before >= xcam_frame if strictly_after else before + 1 >= xcam_frame

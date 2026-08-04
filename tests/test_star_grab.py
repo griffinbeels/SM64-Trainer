@@ -548,6 +548,53 @@ def through_the_door(snaps):
     return prefix + [replace(s, curr_level=8, curr_area=2) for s in snaps]
 
 
+def after_a_retry(snaps):
+    """Run, then RETRY in the course's main area: the reload walks the area
+    byte 1 -> 2 -> 1 and Usamune's counter zeroes on the way back.
+
+    This is the shape behind the 45-frame waits in the 2026-08-04 audit — it
+    looks exactly like a warp deeper in, and the clock used to read it that
+    way, flag its own counter unusable, and make the next grab wait 1.5 s for a
+    correction that was never coming (22 of 128 measured grabs, 16 of them with
+    Usamune's final answer already written at +0 or +1)."""
+    prefix = [snap(global_timer=WARP_AT + offset, igt_overall=BEFORE_THE_DOOR,
+                   curr_level=8, curr_area=1) for offset in range(3)]
+    prefix.append(snap(global_timer=WARP_AT + 3, igt_overall=BEFORE_THE_DOOR,
+                       curr_level=8, curr_area=2))     # the reload's own walk
+    prefix.append(snap(global_timer=WARP_AT + 4, igt_overall=BEFORE_THE_DOOR,
+                       curr_level=8, curr_area=1))     # …and back
+    prefix.append(snap(global_timer=WARP_AT + 5, igt_overall=0,
+                       curr_level=8, curr_area=1))     # the counter zeroes
+    return prefix + [replace(s, curr_level=8, curr_area=1) for s in snaps]
+
+
+def test_a_grab_after_a_retry_does_not_wait_for_a_correction():
+    # THE fix for the reported lag. Nothing was banked by that retry, so the
+    # counter measures the whole star, Usamune's write at +1 agrees with it,
+    # and the row leaves on the agreement instead of on a 45-frame deadline.
+    retried = after_a_retry(subarea_snaps(usamune=72, write_at=4))
+    [(published_at, row)] = emitted_at(retried)
+    assert row.payload["igt_frames"] == 72
+    assert row.payload["carried_igt"] is None      # a retry banks nothing
+    assert published_at - XCAM <= StarGrabDetector.PUBLISH_WAIT_FRAMES
+    assert published_at - XCAM < StarGrabDetector.RESULT_SETTLE_FRAMES
+
+
+def test_a_midair_grab_refuses_a_write_it_cannot_prove_is_the_xcams():
+    # The five corrections he actually saw, including the reported 22"00 ->
+    # 22"06: Usamune's write is first OBSERVED on the x-cam frame itself, so it
+    # could still be the grab-time write, and it was -- the real answer lands
+    # two frames later. Taking the first one published a number the watch then
+    # moved 1.5 s later, on screen.
+    ambiguous = subarea_snaps(usamune=74, write_at=5, first_write=(3, 72))
+    events = emitted_at(ambiguous)
+    assert [ev.type for _, ev in events] == ["star_collected"], \
+        "the row must not need correcting"
+    (published_at, row) = events[0]
+    assert row.payload["igt_frames"] == 74         # the x-cam's own write
+    assert published_at - XCAM <= StarGrabDetector.PUBLISH_WAIT_FRAMES
+
+
 def test_a_carried_subarea_star_publishes_at_the_xcam():
     # Whole star = 480 before the door + 72 inside it, and we can say so at
     # the x-cam without asking anyone. Usamune's echo of the subarea-local 72

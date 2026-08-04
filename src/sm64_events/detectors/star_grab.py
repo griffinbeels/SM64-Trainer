@@ -59,16 +59,29 @@ the fact rather than before it. So the emit is an OPTIMISTIC UPDATE:
   is dancing. Agreement is the point: when both sources say the same number
   there is nothing left to wait for. Failing that, `PUBLISH_WAIT_FRAMES` (12,
   ~400 ms) is the backstop, and it publishes Usamune's value regardless — the
-  cost of a disagreement is latency, never a wrong row. A subarea star used to
-  be the exception — our number there is the time since the area load, so
-  agreement was meaningless and the grab waited the full
-  `RESULT_SETTLE_FRAMES`. It no longer is: `IgtClock` keeps what the counter
-  had reached BEFORE the warp (`carried_igt_at_xcam`), so the sum is the whole
-  star and we can state it at the x-cam with nobody's help. Scored on his
-  2026-08-02 session, 4/4 exact against Usamune's own whole-star write. The
-  one thing that must not be taken there is Usamune's EARLY write, which
-  echoes our subarea-local counter — `_answer` recognises it by that value and
-  keeps ours.
+  cost of a disagreement is latency, never a wrong row.
+* **A MULTI-LEG star does not wait at all.** `USAMUNE_OVERALL` restarts at
+  every warp deeper into a level and at every in-level teleporter, so on those
+  stars it is timing one LEG. `IgtClock` banks each leg as its boundary passes
+  (`whole_star_igt_at_xcam`), so the whole star is ours to state at the x-cam
+  with nobody's help, and Usamune's own whole-star write — which does not
+  arrive until ~27 frames later — becomes the correction check rather than the
+  thing being waited for. Scored 4/4 exact on his 2026-08-02 session before it
+  was trusted. The one thing that must not be taken there is Usamune's EARLY
+  write, which echoes the leg-local counter: `_usamune_answer` recognises it by
+  that value and keeps ours.
+
+**There is no third case, and removing it is the 2026-08-04 change.** Until
+then the clock could not tell a RETRY's own reload from a warp deeper in — both
+move the area byte and zero the counter — so it flagged its own number unusable
+and the grab waited the full `RESULT_SETTLE_FRAMES` for a correction. Measured
+over his journal: **22 of 128 grabs took that branch and only 6 were genuine
+multi-leg stars**; the other 16 had Usamune's final answer already written at
++0 or +1 and sat on screen doing nothing for 1.5 s. The classification moved to
+`detectors/counter_epoch.py`, which is the rule `anchors.py` already stamps on
+every anchor and had already measured — so a retry now banks nothing, the
+counter reads as the whole star it is, and there is nothing left to wait for.
+His words, and the whole brief: *"We should NOT artificially wait."*
 * **Keep watching** to x-cam + `RESULT_SETTLE_FRAMES` regardless. If Usamune's
   answer CHANGES after we published, emit `star_time_corrected` carrying the
   final number and the recorded row is revised in place
@@ -213,6 +226,9 @@ class StarGrabDetector:
     # them with three frames of margin and still publishes inside 400 ms,
     # which is where a person stops reading a response as instant.
     #
+    # It is now the ONLY deadline — `RESULT_SETTLE_FRAMES` below bounds the
+    # correction WATCH and no longer bounds any publish (2026-08-04).
+    #
     # It is a fixed deadline and NOT "publish the moment a write lands", which
     # is what it was for one afternoon: Usamune writes MORE THAN ONCE even on
     # an ordinary star (WF "Shoot into the Wild Blue": +1=328, then +3=330),
@@ -319,22 +335,17 @@ class StarGrabDetector:
         grab.xcam_frame = frame
         grab.xcam_igt, grab.xcam_igt_source = self._clock.igt_at_xcam(frame, curr)
         grab.xcam_counter_is_partial = self._clock.counter_may_be_subarea_local()
-        carried = self._clock.carried_igt_at_xcam(frame, curr)
-        if grab.xcam_counter_is_partial and carried is not None:
-            # We can answer a subarea star ourselves after all: the counter is
-            # subarea-local, but we kept what it had counted before the warp,
-            # so the sum is the whole star (IgtClock.carried_igt_at_xcam).
-            # That turns the settle WAIT back into the ordinary agreement
-            # door — Usamune's early echo of the subarea-local number
-            # disagrees with this and is waited through, and the whole-star
-            # write agrees and publishes. The DEADLINE deliberately stays the
-            # long one (`_ready_to_publish`): a carry is a prediction until a
-            # session of play has scored it, so if nothing ever agrees with
-            # it, this ends exactly where it ends today — on Usamune's own
-            # number, 45 frames out. A wrong carry costs latency, never a row.
-            grab.carried_igt = carried[0]
+        if grab.xcam_counter_is_partial:
+            # The counter is measuring one LEG of this star, and the clock has
+            # banked the others (detectors/counter_epoch.py), so the whole star
+            # is ours to state right here. What the raw counter said on its own
+            # is kept because Usamune ECHOES it early in its write burst — that
+            # echo is the one number that must never be published, and this is
+            # how `_answer` recognises it.
             grab.subarea_local_igt = grab.xcam_igt
-            grab.xcam_igt, grab.xcam_igt_source = carried
+            grab.carried_igt, grab.xcam_igt_source = \
+                self._clock.whole_star_igt_at_xcam(frame, curr)
+            grab.xcam_igt = grab.carried_igt
 
     def _identify(self, prev: GameSnapshot,
                   curr: GameSnapshot) -> _PendingGrab | None:
@@ -462,63 +473,82 @@ class StarGrabDetector:
                           waited: int) -> bool:
         """Has Usamune finished answering — or must we stop waiting anyway?
 
-        The fast door is AGREEMENT. We derive the x-cam number ourselves from
-        the counter and Usamune writes its own into the result store, and when
-        those two say the same thing there is nothing left to learn: no later
-        write can move a number both sources already agree on, except the
-        whole-star correction on a subarea star, which is the branch above.
-        That is what makes it safe to leave BEFORE the deadline — publishing
+        ONE rule for every star since 2026-08-04, and that is the whole point
+        of the change: the branch that made a "the counter might only be
+        measuring part of this" grab wait the full 45 frames is GONE, because
+        the clock now knows what every restart meant and adds the other legs
+        back itself (detectors/counter_epoch.py). There is no longer a case
+        where we cannot state the star's time, so there is nothing to wait for.
+        Measured before the change: 22 of 128 grabs took that branch, and only
+        6 of them were genuine multi-leg stars.
+
+        The door is AGREEMENT. We derive the whole star ourselves and Usamune
+        writes its own number into the result store, and when two independent
+        sources say the same thing there is nothing left to learn. Publishing
         on the mere EXISTENCE of a write is what flickered, because the burst
-        includes the grab-time value (WF: +1=328 when the answer was 330).
+        includes the leg-local value (SSL: 69, 71, then 551) — so a write that
+        merely echoes our own leg-local counter is not an answer and is waited
+        through.
 
         Agreement is exact to a frame, and deliberately not two: the counter
         path ran 1-2 frames under Usamune across the measured grabs, so a
-        two-frame tolerance would match that 328 and publish the number this
-        whole file exists to refuse. When they disagree by more, the deadline
-        publishes Usamune's own value anyway — the cost of a torn read is
-        latency, never a wrong row."""
-        if grab.xcam_counter_is_partial and grab.carried_igt is None:
-            return waited >= self.RESULT_SETTLE_FRAMES
+        two-frame tolerance would match the grab-time write. When they disagree
+        by more, `PUBLISH_WAIT_FRAMES` publishes Usamune's own value anyway —
+        the cost of a torn read is latency, never a wrong row."""
         if grab.carried_igt is not None:
-            # SCORED and then trusted, which is the only reason this is not a
-            # guess: over his 2026-08-02 session every carried subarea star
-            # matched Usamune's own whole-star write EXACTLY (4/4, diff 0),
-            # having published on agreement 27 frames after the x-cam. There
-            # is nothing left for those 27 frames to teach us, so a subarea
-            # star now leaves at the x-cam like every other star. The watch
-            # runs on regardless, so the one failure this could have — a base
-            # captured across missed polls — still corrects itself.
+            # A MULTI-LEG star: our sum is the only whole-star number that
+            # exists at the x-cam, because Usamune's own arrives ~27 frames
+            # later. Waiting for it buys no information — it buys 900 ms — so
+            # the row leaves now and the watch below checks the sum afterwards.
+            # Scored 4/4 exact against Usamune's whole-star write on his
+            # 2026-08-02 session before it was trusted.
             return True
-        usamune = self._clock.settled_result_at_or_after(grab.xcam_frame, curr)
+        usamune = self._usamune_answer(grab, curr, proven_final=True)
         if (usamune is not None
                 and abs(usamune - grab.xcam_igt) <= self.AGREEMENT_FRAMES
                 and grab.xcam_igt_source != "reconstructed"):
             return True
-        # A CARRIED subarea star keeps the long deadline. Its early write is
-        # the subarea-local echo, and leaving on the short backstop would
-        # publish that echo — the impossible PB this file exists to refuse.
-        # The carry buys an early exit through agreement, never a later one.
-        return waited >= (self.RESULT_SETTLE_FRAMES
-                          if grab.xcam_counter_is_partial
-                          else self.PUBLISH_WAIT_FRAMES)
+        return waited >= self.PUBLISH_WAIT_FRAMES
+
+    def _usamune_answer(self, grab: _PendingGrab, curr: GameSnapshot,
+                        proven_final: bool = False) -> int | None:
+        """Usamune's own number for THIS x-cam, with the writes that are not
+        answers filtered out — the one door both the publish decision and
+        `_answer` read, so they can never disagree about what Usamune said.
+
+        `proven_final` is the difference between the two questions they ask.
+        *Is this final?* (the fast door) demands a MIDAIR grab prove the write
+        landed strictly after the x-cam: the loose bracket admits a write that
+        could still be the grab-time one, and admitting it is what published a
+        number a correction then moved 1.5 s later — every one of the five
+        corrections in the live journal (2026-08-04, task 0083). *What is the
+        best we know?* (the deadline, `_answer`) takes the loose bracket, so
+        refusing to leave EARLY on an ambiguous write never costs us the write
+        itself. A ground grab is exempt: its grab frame IS its x-cam frame, so
+        there is no earlier write to be confused by.
+
+        A write matching our own leg-local counter is dropped either way — that
+        is Usamune echoing the part of the star we already know is not all of
+        it, and it lands before the whole-star write every time (SSL: 69, 71,
+        then 551)."""
+        usamune = self._clock.settled_result_at_or_after(
+            grab.xcam_frame, curr,
+            strictly_after=proven_final and grab.grab_frame != grab.xcam_frame)
+        if usamune is None:
+            return None
+        if (grab.subarea_local_igt is not None
+                and abs(usamune - grab.subarea_local_igt)
+                <= self.AGREEMENT_FRAMES):
+            return None
+        return usamune
 
     def _answer(self, grab: _PendingGrab,
                 curr: GameSnapshot) -> tuple[int, str]:
         """Usamune's number for this x-cam, as best known RIGHT NOW — the one
         door both the publish and the correction read, so the two can never
         disagree about anything except when they were asked."""
-        usamune = self._clock.settled_result_at_or_after(grab.xcam_frame, curr)
+        usamune = self._usamune_answer(grab, curr)
         if usamune is not None and grab.xcam_igt_source != "reconstructed":
-            if (grab.subarea_local_igt is not None
-                    and abs(usamune - grab.subarea_local_igt)
-                    <= self.AGREEMENT_FRAMES):
-                # That write is Usamune ECHOING our subarea-local counter, not
-                # answering the star. On a carried grab it is the number we
-                # already know is half the truth, and it lands before the
-                # whole-star write every time (SSL: 69, 71, then 551), so
-                # preferring "Usamune's own value" here would publish the
-                # impossible PB at speed instead of at leisure.
-                return grab.carried_igt, "counter"
             # Usamune's own number for this x-cam beats our derivation of it —
             # not for precision (they agreed to a frame on nine of eleven live
             # grabs) but because ours is subarea-local; see

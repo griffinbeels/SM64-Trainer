@@ -176,6 +176,53 @@ Usamune exactly. **key.py is deliberately NOT changed**: whether STOP moves
 the grand star's number is unmeasured, and `ACT_JUMBO_STAR_CUTSCENE` has no
 fall/dance pair to derive one from
 
+### The 45-frame wait is GONE (2026-08-04, task 0083) — we own the epoch, Usamune owns the tick
+
+Everything above stands except the settle WAIT. `USAMUNE_OVERALL` is a LEG's
+clock, not a star's, and until now the clock could not tell a RETRY's own
+reload from a warp deeper in — both move the area byte and zero the counter —
+so it flagged its own number unusable and the row waited `RESULT_SETTLE_FRAMES`
+(1.5 s) for a correction. Read back from his own journal's `published_after`:
+**22 of 128 grabs took that branch and only 6 were genuine multi-leg stars.**
+The other 16 had Usamune's final answer already written at +0 or +1. WF "Shoot
+into the Wild Blue" is in that list four times — the star he named in the
+report.
+
+**`detectors/counter_epoch.py` is the fix, and it is a single-source move
+rather than a new heuristic.** `anchors.py` had already measured this exact
+question against the whole journal (destination area for a door, fade-OUT
+recency for an in-level teleporter) and stamps its verdict on every anchor as
+`area_load`/`teleport`; `igt_clock.py` was answering it privately and worse.
+`EpochTracker` is the one door now: it BANKS a leg at every restart the level
+caused and ZEROES at every restart the player caused, so the whole star is
+always `banked + the counter`, and `counter_may_be_subarea_local()` stopped
+meaning "we cannot state this time".
+
+Three consequences worth knowing:
+
+* **It accumulates rather than caching one leg**, and that is measured rather
+  than generality for its own sake: of 875 grabs, 851 cross no involuntary
+  restart, 22 cross one, and **2 cross two — the CCM 100-coin rows that
+  published 37 seconds short** (`0'51"43` against `1'28"86`, journal ids
+  23370/23799). A single cached half could never have stated those.
+* **`LEVEL_LOAD_TAIL_FRAMES` moved into the shared rule**, where it stops the
+  clock banking a leg for a course ENTRY's own area settling. Confirmed to
+  change no anchor classification: **0 of 29 `area_load` anchors sit inside a
+  tail.**
+* **`_usamune_answer` asks two different questions of the same write.** *Is it
+  final?* makes a MIDAIR grab prove the write landed strictly after the x-cam;
+  *what is the best we know?* takes the loose bracket. All five corrections in
+  the live journal came from conflating them — a write first OBSERVED on the
+  x-cam frame can still be the grab-time write, and taking it published a
+  number the watch then moved 1.5 s later (his report: `22"00`, then `22"06`).
+
+KNOWN RESIDUAL, stated rather than discovered later: walking back OUT of a
+subarea on foot zeroes the counter exactly as a retry does, and the destination
+area cannot separate them (the attempt side of anchors.py says the same about
+itself). It appears **0 times in those 875 grabs**, and the correction watch
+still covers it. That watch is unchanged and still runs to
+`RESULT_SETTLE_FRAMES`; it simply no longer bounds any publish.
+
 ## Recipes
 
 **Add a new event type:** tests first (`snap(**overrides)` fixture pattern from
