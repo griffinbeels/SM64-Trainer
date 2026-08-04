@@ -223,6 +223,16 @@ def test_editing_a_cutoff_offers_three_boxes_and_saves_what_was_typed(hundred_co
         .querySelectorAll("input")).map((i) => i.value)
     """) != ["", "", ""]
 
+    # What this cell held before, so it can be put back: the store is the
+    # worktree's real data/rank_standards.json, and an unrestored edit leaks
+    # into every later run and every screenshot taken for review.
+    before = hundred_coin_page.evaluate("""
+      (() => {
+        const boxes = document.querySelectorAll(
+          ".stdtable .timefields")[0].querySelectorAll("input");
+        return [...boxes].map((b) => b.value);
+      })()
+    """)
     hundred_coin_page.evaluate("""
       (() => {
         const boxes = document.querySelectorAll(
@@ -246,3 +256,62 @@ def test_editing_a_cutoff_offers_three_boxes_and_saves_what_was_typed(hundred_co
         .querySelectorAll("td")[1].textContent.trim()
     """)
     assert printed == "1'21\"32", printed
+
+    # Put it back through the same editor, so the next run (and the next
+    # screenshot) sees the seeded cutoffs rather than this test's.
+    hundred_coin_page.evaluate("""
+      (() => { const b = Array.from(document.querySelectorAll(".stdtools button"))
+                 .find((x) => x.textContent.includes("Edit"));
+               if (b) b.click(); })()
+    """)
+    hundred_coin_page.wait_for(".stdtable .timefields", timeout_ms=10000)
+    hundred_coin_page.evaluate("""
+      (() => {
+        const boxes = document.querySelectorAll(
+          ".stdtable .timefields")[0].querySelectorAll("input");
+        const set = (el, v) => {
+          el.value = v;
+          el.dispatchEvent(new Event("input", {bubbles: true}));
+          el.dispatchEvent(new Event("blur", {bubbles: true}));
+        };
+        set(boxes[0], %s); set(boxes[1], %s); set(boxes[2], %s);
+      })()
+    """ % tuple(repr(v) for v in before))
+
+
+def _cs(text):
+    """`1'21"32` / `23"00` -> centiseconds. Local to this test: the app never
+    parses its own display, so this is a test-side reader, not a second door."""
+    minutes, _, rest = text.rpartition("'")
+    secs, _, cents = rest.partition('"')
+    return (int(minutes) * 6000 if minutes else 0) + int(secs) * 100 + int(cents)
+
+
+def test_the_mario_row_runs_slowest_to_fastest(hundred_coin_page):
+    hundred_coin_page.evaluate("""
+      (() => { const b = document.querySelector(".standards-toggle");
+               if (b && b.getAttribute("aria-expanded") !== "true") b.click(); })()
+    """)
+    hundred_coin_page.wait_for(".stdtable", timeout_ms=10000)
+    rows = hundred_coin_page.evaluate("""
+      (() => {
+        const bands = Array.from(
+          document.querySelectorAll(".stdtable .std-variant"))
+          .map((th) => Number(th.getAttribute("colspan")));
+        const mario = Array.from(
+          document.querySelectorAll(".stdtable tbody tr")[0]
+            .querySelectorAll("td")).slice(1)
+          .map((td) => td.textContent.trim());
+        return {bands, mario};
+      })()
+    """)
+    assert rows["mario"], rows
+    times = [_cs(t) for t in rows["mario"] if t and t != "\u2014"]
+    # Within each exit-star band the columns descend; a band boundary may step
+    # back up, since a band is ordered by its own fastest column.
+    start = 0
+    for span in rows["bands"] or [len(times)]:
+        window = times[start:start + span]
+        assert window == sorted(window, reverse=True), (window, rows)
+        start += span
+    assert start == len(times), (start, len(times), rows)

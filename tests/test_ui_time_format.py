@@ -37,7 +37,11 @@ def _node(expression: str):
               f"from {FORMAT_JS.as_uri()!r};\n"
               f"console.log(JSON.stringify({expression}));")
     out = subprocess.run(["node", "--input-type=module", "-e", script],
-                         capture_output=True, text=True, check=True)
+                         capture_output=True, text=True, check=True,
+                         # subprocess decodes with the Windows ANSI codepage
+                         # unless told otherwise, which mojibakes the middle
+                         # dot in every variant-qualified strategy name.
+                         encoding="utf-8")
     return json.loads(out.stdout)
 
 
@@ -118,7 +122,11 @@ def _node_fields(expression: str):
               f"from {FORMAT_JS.as_uri()!r};\n"
               f"console.log(JSON.stringify({expression}));")
     out = subprocess.run(["node", "--input-type=module", "-e", script],
-                         capture_output=True, text=True, check=True)
+                         capture_output=True, text=True, check=True,
+                         # subprocess decodes with the Windows ANSI codepage
+                         # unless told otherwise, which mojibakes the middle
+                         # dot in every variant-qualified strategy name.
+                         encoding="utf-8")
     return json.loads(out.stdout)
 
 

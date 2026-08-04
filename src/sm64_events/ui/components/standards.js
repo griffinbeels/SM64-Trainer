@@ -11,6 +11,7 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { fmtIgtShort, fmtSeconds } from "../format.js";
 import { TimeFields } from "./timefields.js";
+import { ceilingOf, slowestFirst } from "../ladderorder.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
 import { capName, capGradient } from "./caps.js";
 import { StratModal } from "./stratmodal.js";
@@ -161,8 +162,24 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   const banded = new Set(bands.flatMap((band) => band.names));
   const loose = allStrats.filter((s) => !banded.has(s));
   if (bands.length && loose.length) bands.push({ label: "Other", names: loose });
+  // SLOWEST on the left, FASTEST on the right — the table is a PATH, read
+  // bottom-left to top-right as you improve (user, 2026-08-03; the rule and
+  // its tie-breaks live in ui/ladderorder.js). Applied WITHIN each exit-star
+  // band, and to the bands themselves by their own fastest column, so the
+  // progression still reads left-to-right across a banded 100-coin table
+  // without a column leaving its heading.
+  const ladders = (data && data.strategies) || {};
+  for (const band of bands) band.names = slowestFirst(band.names, ladders);
+  bands.sort((a, b) => {
+    const fastest = (band) => Math.min(
+      ...band.names.map((name) => ceilingOf(ladders[name])));
+    const one = fastest(a), other = fastest(b);
+    return one === other ? 0 : other - one;
+  });
   // Banded order, so a column always sits under its own heading.
-  const strats = bands.length ? bands.flatMap((band) => band.names) : allStrats;
+  const strats = bands.length
+    ? bands.flatMap((band) => band.names)
+    : slowestFirst(allStrats, ladders);
   const leafOf = new Map(((data && data.strategy_groups) || [])
     .flatMap((group) => group.strategies.map((s) => [s.name, s.leaf])));
   const colHead = (strat) => leafOf.get(strat) || strat;
