@@ -108,9 +108,35 @@ function sentinelMsg(banner) {
 // wording built here because the reason is a fact about the CALL SITE's
 // data, and this component is deliberately ignorant of which two ladders
 // produced the banner it was handed.
+// `layout` is a LAYOUT VARIANT, not a second implementation: "row" (default,
+// today's single-line shape, byte-identical) and "stacked" (the MARELO-shaped
+// compact form -- cap icon + name in a left column, the bar and the next-step
+// line in a right one, spec 2026-08-03-practice-log-entity-cards). Every line
+// above this point in the render -- the `useRankClimb` call, the climb plan,
+// the animated values -- is untouched by it; only the CSS class on the root
+// selects which arrangement of the SAME DOM parts applies (`.rank-banner-row`
+// turns `display: contents` under `.rank-banner-stacked` in index.html, so
+// its own children become direct grid items alongside `.rank-progress-track`,
+// its existing sibling -- no second render tree to keep in sync with this
+// one). The alternative -- forking the JSX on `layout` -- is exactly what a
+// user requirement this spec exists to satisfy forbids: "I want the user to
+// be able to use this new design AND STILL be able to have all the
+// animations that they'd normally get," and a second tree has no reason to
+// keep carrying `--climb-reveal`/`climb.vars`/`is-climbing` unless whoever
+// wrote it remembered to copy them by hand.
+//
+// `showNext` is the caller's own answer to "is the reader actively
+// practising this entity right now" (practicelog.js's `LogCard`, from the
+// active target it already knows) -- ranks.js never reaches for a store to
+// ask. It gates only whether `.rank-banner-next` is RENDERED; every value
+// feeding its fade (`climb.reveal`, `mode`, `sentenceRef`/`priorRef`) is
+// still computed exactly as before, so the "may only change while invisible"
+// rule (`.claude/rules/ui-climb.md`) stays true whenever the line IS shown --
+// there is simply nothing to violate it when it is not.
 export function RankBanner({ label, banner, hint = null, identity = null,
                              atFloor: atFloorProp = false,
-                             lane = null, order = 0, replayKey = null }) {
+                             lane = null, order = 0, replayKey = null,
+                             layout = "row", showNext = true }) {
   const ranked = !!(banner && banner.rank);
   // Called unconditionally (rules of hooks) even on the sentinel/empty path
   // below — `null` passes straight through with no animation, which is what
@@ -291,7 +317,8 @@ export function RankBanner({ label, banner, hint = null, identity = null,
   // ranks.js used to pin it to 0 for the whole climb and let a settle-triggered
   // celebration wipe it in; that is what could never be in sync.
   const vars = { ...climb.vars, "--climb-reveal": climb.reveal };
-  return html`<div class=${`rank-banner${climb.climbing ? " is-climbing" : ""}`} style=${vars}>
+  return html`<div class=${`rank-banner${climb.climbing ? " is-climbing" : ""}${
+      layout === "stacked" ? " rank-banner-stacked" : ""}`} style=${vars}>
     <div class="rank-banner-row">
       <!-- At the floor default the sentinel's own wording ("no PB on this
            strategy yet") is the only thing lost by showing Capless 5, so it
@@ -323,8 +350,8 @@ export function RankBanner({ label, banner, hint = null, identity = null,
            The whole line flips to its settled wording the instant that
            closing sweep starts, so the fade reveals one finished sentence
            rather than animating a changing one. -->
-      <span class="meta rank-banner-next">${nextLabel
-        ? html`→ <b>${nextLabel}</b>${gap ? ` · ${gap}s to rank up` : ""}` : "top rank"}</span>
+      ${showNext && html`<span class="meta rank-banner-next">${nextLabel
+        ? html`→ <b>${nextLabel}</b>${gap ? ` · ${gap}s to rank up` : ""}` : "top rank"}</span>`}
     </div>
     <div class="rank-progress-track" title=${trackTitle}>
       <i style=${`width:${fillPct}%`}></i>

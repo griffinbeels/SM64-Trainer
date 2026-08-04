@@ -54,7 +54,8 @@ export function orderedSections(view) {
 }
 
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
-                          clearFocus, selected, onSelect, forceOpen }) {
+                          clearFocus, selected, onSelect, forceOpen,
+                          rankLayout = "row", active = false }) {
   const [open, setOpen] = useState(true);
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
@@ -131,11 +132,13 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
             hint=${bannerHint(sec, entityNoun(sec))} banner=${sec.rank}
             atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${0}
             replayKey=${sec.last_strat || ""}
-            identity=${rankIdentity(ek, "strategy", sec, t)} />
+            identity=${rankIdentity(ek, "strategy", sec, t)}
+            layout=${rankLayout} showNext=${active} />
         ${showsEntityBanner(sec) && html`<${RankBanner}
             label=${entityNoun(sec)} banner=${sec.entity_rank}
             atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${1}
-            identity=${rankIdentity(ek, "entity", sec, t)} />`}
+            identity=${rankIdentity(ek, "entity", sec, t)}
+            layout=${rankLayout} showNext=${active} />`}
       </div>
       <${PbTag} pb=${sectionPb(sec, t.clock)} mode=${clock} rows=${rows}
         pick=${null} t=${t} />
@@ -255,18 +258,34 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
  * Analysis card the caller renders above this one (Task 6 owns that
  * wiring); this component only decides which ONE card carries `.is-selected`
  * and receives the live `focus`/`clearFocus` graph-pick pair.
+ *
+ * `activeKey` names the entity the player is ACTUALLY practicing right now
+ * (practice.js's `activeStar`/`primarySeg`, the same signal `focustarget.js`
+ * already reads as `live.activeKey`) -- separate from `focusKey`, which is
+ * only ever a BROWSE pick and may point at a card the player left minutes
+ * ago. It exists for exactly one thing: whether a card's rank banners show
+ * their next-step line at all (Griffin: "hide the 'to level up' display
+ * there, and only display it when the user's actively practicing that
+ * star"). LogCard resolves its own `active` from this and hands it to
+ * RankBanner as `showNext` -- ranks.js itself never reaches for the store.
  */
 export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
-                              clearFocus, focusKey, onSelect }) {
+                              clearFocus, focusKey, onSelect, activeKey = null }) {
   const [shown, setShown] = useState(CARDS_PER_PAGE);
   // The tuning slot is read ONCE here, at the page-level wiring layer -- never
   // inside LogCard, and never per attempt-row render. What comes back is a
   // CSS custom-property style object plus a modifier-class string; every
   // `.log-card` underneath inherits the vars for free (they cascade) and
   // matches the class-scoped rules in index.html by being a descendant.
-  // LogCard itself stays entirely unaware that a tuning system exists.
+  // LogCard itself stays entirely unaware that a tuning system exists --
+  // except for `rankLayout`, which is JS rather than CSS (RankBanner's
+  // `layout` prop selects an actual arrangement of DOM parts, not merely a
+  // class an already-rendered tree can hide fields under) and so has to be
+  // resolved here and handed down explicitly, the one deliberate crack in
+  // that wall.
   const logVars = useMemo(() => logTuningVars(logTuning()), []);
   const logClasses = useMemo(() => logTuningClasses(logTuning()), []);
+  const rankLayout = logTuning().rankStyle === "stacked" ? "stacked" : "row";
   const sections = orderedSections(v);
   // The focused entity (the active target, by default, or a manual browse
   // pick) is not necessarily among the first CARDS_PER_PAGE cards -- recency
@@ -308,7 +327,8 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
           freshIds=${freshIds} openCompare=${openCompare}
           focus=${focus} clearFocus=${clearFocus}
           selected=${ek === focusKey} onSelect=${onSelect}
-          forceOpen=${ek === focusKey} />`;
+          forceOpen=${ek === focusKey}
+          rankLayout=${rankLayout} active=${activeKey != null && ek === activeKey} />`;
       })}
       <${UnassignedLogCard} v=${v} t=${t} ui=${ui} freshIds=${freshIds}
         openCompare=${openCompare} />

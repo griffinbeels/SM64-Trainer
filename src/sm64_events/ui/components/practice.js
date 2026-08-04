@@ -636,7 +636,8 @@ export function Practice({ t, openCompare }) {
 
     <${PracticeLog} v=${v} t=${held} ui=${ui} freshIds=${freshIds}
       openCompare=${openCompare} focus=${focus} clearFocus=${clearFocus}
-      focusKey=${focusKey} onSelect=${selectFocus} />
+      focusKey=${focusKey} onSelect=${selectFocus}
+      activeKey=${live.activeKey} />
 
     <${EntityDrawer} sec=${focusedSec} t=${held} />
 

@@ -86,6 +86,16 @@ export const TUNABLES = {
     min: 0, max: 40, step: 1, unit: "px",
     why: "Space between the strategy rank and the star/segment rank, whichever direction they're laid out (side by side in One line/Two line, stacked in Stacked).",
   },
+  stackedRankWidth: {
+    group: "Ranks", label: "Stacked ranks width", value: 200,
+    min: 80, max: 420, step: 5, unit: "px",
+    why: "How much room the two MARELO-shaped rank displays share when Rank display is set to Stacked -- independent of Rank column width above, so switching between Stacked and the row-based styles never forces retuning one shared number.",
+  },
+  stackedNameWidth: {
+    group: "Ranks", label: "Stacked rank-name width", value: 72,
+    min: 30, max: 160, step: 2, unit: "px",
+    why: "How wide the tier/division text under the icon may grow in Stacked before it ellipsises -- the same job MARELO's own rank-name column plays under its icon.",
+  },
 
   // ---- Result: the PB tag ---------------------------------------------------
   pbWidth: {
@@ -97,6 +107,11 @@ export const TUNABLES = {
     group: "Result", label: "PB text size", value: 13,
     min: 9, max: 28, step: 1, unit: "px",
     why: "Font size of the PB tag in the card head.",
+  },
+  pbOffset: {
+    group: "Result", label: "PB offset from ranks", value: 0,
+    min: 0, max: 160, step: 2, unit: "px",
+    why: "Extra space pushing the PB tag away from the rank column -- for when a wide rank display (Stacked or otherwise) leaves the two crowded together.",
   },
 
   // ---- Open state: the attempt table once a card is expanded --------------
@@ -175,9 +190,10 @@ export const CHOICES = {
       banners: "Full banners (bar + next-step line)",
       chips: "Chips (icon + rank name only)",
       capsOnly: "Caps only (icon, no text)",
+      stacked: "Stacked (MARELO-shaped: icon+name left, bar+next right)",
     },
     cssPrefix: "log-rankstyle",
-    why: "How much of each rank banner shows in the card head. Ships at Caps only: two full rank NAMES (up to \"Grandmaster 1\", 13 characters, each) cannot both fit beside an icon, a long star name, a PB tag and a chevron on one line at the app's 850px supported floor without either truncating one of them or growing the card past what the floor allows — measured against the real rank corpus, not guessed. Caps only is the one setting that has NO text to truncate at any width; Chips is fully real and worth dialing up once Rank column width is opened wider than the shipped default, on a window wide enough to afford it.",
+    why: "How much of each rank banner shows in the card head. Ships at Caps only: two full rank NAMES (up to \"Grandmaster 1\", 13 characters, each) cannot both fit beside an icon, a long star name, a PB tag and a chevron on one line at the app's 850px supported floor without either truncating one of them or growing the card past what the floor allows — measured against the real rank corpus, not guessed. Caps only is the one setting that has NO text to truncate at any width; Chips is fully real and worth dialing up once Rank column width is opened wider than the shipped default, on a window wide enough to afford it. Stacked is RankBanner's own MARELO-shaped layout (the `layout` prop, ranks.js) rather than a field-hiding rule like the other three -- the same bar + next-step-line fields Banners shows, arranged in far less horizontal space; the next-step line only ever appears on the entity you're actively practicing (LogCard's own `active` prop, never a display rule here).",
   },
 };
 

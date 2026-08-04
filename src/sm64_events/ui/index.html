@@ -1351,6 +1351,48 @@
      it -- the same reason the wings use `rotate`/`scale` instead of
      `transform`. */
   .rank-banner { scale: calc(1 + var(--climb-settle-scale, 0)); }
+  /* .rank-banner-stacked -- the MARELO-shaped compact layout (spec
+     2026-08-03-practice-log-entity-cards, `RankBanner`'s `layout` prop,
+     ranks.js). ranks.js renders the IDENTICAL tree either way -- kicker,
+     icon, name, basis and next-step line all still inside `.rank-banner-row`,
+     `.rank-progress-track` still its sibling -- because the climb this
+     animates must stay the one hook, one plan, one set of animated values
+     every OTHER rank display shares ("I want the user to be able to use this
+     new design AND STILL be able to have all the animations that they'd
+     normally get"). Only the ARRANGEMENT of those same parts differs, and
+     this class is the whole of that difference: `.rank-banner-row` turns
+     `display: contents`, so its own children stop being ONE flex row and
+     become direct grid items of `.rank-banner` itself, laid out into a
+     named-area grid alongside `.rank-progress-track` (already a sibling, so
+     it needs no `display: contents` of its own). Kicker and basis are
+     dropped -- the same way the narrower Chips/Caps-only rank styles already
+     drop them (`.log-rankstyle-chips`/`.log-rankstyle-capsonly`, below) --
+     since a caller rendering two of these side by side (a card's Strategy
+     and Star/Segment banners) already tells them apart by POSITION, not by
+     a label neither of those two styles shows either. */
+  .rank-banner-stacked {
+    display: grid; align-content: center;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "icon bar" "name next";
+    column-gap: .5rem; row-gap: .1rem;
+  }
+  .rank-banner-stacked .rank-banner-row { display: contents; }
+  .rank-banner-stacked .rank-banner-kicker,
+  .rank-banner-stacked .rank-banner-basis { display: none; }
+  .rank-banner-stacked .rank-icon-slot.rank-banner-icon {
+    grid-area: icon; justify-self: center; align-self: end;
+  }
+  .rank-banner-stacked .rank-banner-name {
+    grid-area: name; justify-self: center; align-self: start;
+    max-width: 72px; font-size: .68rem; text-align: center;
+  }
+  .rank-banner-stacked .rank-progress-track { grid-area: bar; align-self: center; }
+  /* Still opts into the SAME `--climb-reveal` fade `.rank-banner-next`
+     always has (above) -- this rule only repositions it, nothing here
+     touches opacity. */
+  .rank-banner-stacked .rank-banner-next {
+    grid-area: next; align-self: start; font-size: .68rem;
+  }
   /* MARELO header bar. It used to sit right-aligned on a 44px row of its own
      UNDER the context grid, because .context-bar's 4-column template is
      redefined at two breakpoints and a 5th column would have meant touching
@@ -4375,6 +4417,10 @@
   .log-card-head .pbtag {
     grid-area: pb; justify-self: end;
     min-width: var(--log-pb-width, 92px); font-size: var(--log-pb-size, 13px);
+    /* Pushes the PB tag away from the rank column -- 0 by default (byte-
+       identical), a real gap once a wide rank display (Stacked included)
+       leaves the two crowded together. */
+    margin-left: var(--log-pb-offset, 0px);
     white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 700;
   }
   .log-card-fold {
@@ -4456,6 +4502,31 @@
   .log-list-card.log-rankstyle-capsonly .log-card-ranks .rank-banner::before {
     display: none;
   }
+  /* "stacked" is not a field-hiding rule like the three above -- RankBanner
+     draws its own MARELO-shaped arrangement (`.rank-banner-stacked`, above)
+     once `layout="stacked"` reaches it (practicelog.js threads this CHOICE
+     through as that prop). What's left here is sizing the log card's OWN
+     column around it: its width independent of Rank column width (which the
+     three row-based styles above still share), and the rank-name text width
+     (same job as the generic 72px default above, tunable in this context).
+     The COLUMN direction this style also forces on `.log-card-ranks`
+     (two MARELO-shaped widgets side by side in a narrow column read as
+     cramped) is declared separately, at the END of this section -- it has
+     to beat `collapsedLayout`'s own `flex-direction` rules below, which
+     share this exact selector's specificity, so source order is what wins
+     and it must come after them (same trap `log-width-stacknarrow` already
+     documents at the bottom of this section). */
+  .log-list-card.log-rankstyle-stacked .log-card-ranks {
+    max-width: var(--log-stacked-rank-width, 200px);
+  }
+  .log-list-card.log-rankstyle-stacked .rank-banner-name {
+    max-width: var(--log-stacked-name-width, 72px);
+  }
+  .log-list-card.log-rankstyle-stacked.log-layout-oneline
+      .log-card:not(.is-unassigned) .log-card-head {
+    grid-template-columns: minmax(0, var(--log-identity-width, 300px))
+      minmax(0, var(--log-stacked-rank-width, 200px)) auto auto;
+  }
 
   /* ---- collapsedLayout: the head's own grid shape ------------------------
      All three are real, always-selectable shapes -- not a responsive
@@ -4465,8 +4536,21 @@
      `twoLine`/`stacked` give identity the whole first row, so a flexible
      `minmax(0,1fr)` already keeps every card's icon flush left with no fixed
      track needed there. */
+  /* `minmax(0, …)` on both fixed-looking tracks, not a bare length -- a
+     plain `<length>` track has that length as BOTH its base size and its
+     growth limit, so it never shrinks below it even when the row has less
+     room than that, and the excess bleeds past the card's own edge rather
+     than being clipped (live report 2026-08-03, at his own tuned 420px Rank
+     column width and the app's 850-900px supported floor: identity 245px +
+     ranks 420px alone already exceeds the pane). `minmax(0, Npx)` keeps Npx
+     as the track's PREFERRED size -- unchanged at any width wide enough to
+     afford it -- while letting it shrink toward 0 under real pressure, same
+     as every `.log-card-ranks`/`.pbtag` child already does via `min-width:
+     0`. Truncating text at that point is the honest degrade; bleeding past
+     the card is not. */
   .log-list-card.log-layout-oneline .log-card:not(.is-unassigned) .log-card-head {
-    grid-template-columns: var(--log-identity-width, 300px) var(--log-rank-width, 160px) auto auto;
+    grid-template-columns: minmax(0, var(--log-identity-width, 300px))
+      minmax(0, var(--log-rank-width, 160px)) auto auto;
     grid-template-areas: "identity ranks pb fold";
   }
   .log-list-card.log-layout-oneline .log-card-ranks { flex-direction: row; flex-wrap: wrap; align-items: center; }
@@ -4511,6 +4595,24 @@
      anyway (a genuine no-op) for the same reason `.log-align-left` and
      `.log-rankstyle-banners` are: every option gets a real rule. */
   .log-list-card.log-width-same .log-card-head { opacity: 1; }
+
+  /* Stacked rankStyle's own COLUMN direction (promised above, in the
+     rankStyle section) -- declared here, LAST, because it has to outrank
+     every `collapsedLayout`/`widthMode` rule above that also sets
+     `.log-card-ranks`'s `flex-direction` at the identical specificity
+     (`.log-list-card.log-rankstyle-stacked .log-card-ranks` and, say,
+     `.log-list-card.log-layout-oneline .log-card-ranks` are both three
+     classes deep) -- declared earlier, it LOST the tie and both of this
+     card's rank banners sat side by side regardless of the choice, cramming
+     each MARELO-shaped widget into half the already-narrower Stacked width
+     (measured by render: the wing tips of the second banner's icon
+     overlapping the first banner's bar). Two MARELO-shaped widgets read as
+     cramped side by side and as the compact list this style exists for one
+     above the other, regardless of which `collapsedLayout` is otherwise
+     chosen -- so this wins unconditionally, the same "declared after, so
+     source order decides" reasoning `log-width-stacknarrow` above already
+     uses for the identical trap. */
+  .log-list-card.log-rankstyle-stacked .log-card-ranks { flex-direction: column; }
 
 </style></head>
 <body>
