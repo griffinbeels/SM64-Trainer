@@ -41,3 +41,34 @@ surprise:
    the temporal veto is left, so this is the mutation that proves it.
 3. **Give it a new id and leave it grey** → parses as a subsection. That is the
    case with no counterexample on today's sheet, and it must keep working.
+
+The general shape, which cost a wrong step in the plan: **a mutation that two
+guards both catch proves neither of them.** To prove guard N has teeth, disable
+every OTHER guard in the same mutant.
+
+## What phase 2 must know, since the spec is a local file
+
+Phase 2 fits rank ladders from the sheet's distribution for targets the
+community publishes no standards for. Three things settled before it starts:
+
+- **The fit is meant to work.** One global percentile per rank is the STARTING
+  model, not the answer; if it misses, bucket by target duration (the vetted
+  ladders demonstrably widen with length — Bronze is 1.219× Mario under 15s and
+  1.389× at 40–120s), fit per section, and weight by sample size. A residue
+  that survives all that comes back as a measurement to discuss, never as
+  loosely-fitted ladders and never as shipping nothing. User's ruling,
+  2026-08-04.
+- **Vetted standards are never touched**, only gaps filled. A test must assert
+  the intersection of fitted and vetted keys is empty.
+- **The hypothesis, measured on 8 hand-mapped rows and not yet on 320:** each
+  Daily Star cutoff sits at a stable PERCENTILE of that approach's community
+  distribution — Mario ≈ 4–8%, Grandmaster ≈ 18%, Master ≈ 33%, Diamond ≈ 54%,
+  Platinum ≈ 71%, Gold ≈ 86%, Silver ≈ 90%, Bronze ≈ 99%. A fixed ratio off the
+  Mario cutoff does NOT reproduce them (coefficient of variation stays above
+  0.69 at every exponent tried over 302 complete ladders).
+- **Clusters are real, rare and cycle-shaped**, and they feed the fitter rather
+  than only the display: a percentile-placed cutoff landing inside a valley
+  mints a rank band nobody can occupy, so it moves to the valley's slow edge.
+  Multi-modality counts are bandwidth artefacts (3–15%) and must not be quoted;
+  WHICH approaches surface is stable — Into the Igloo, Time stopped, Log
+  firsty, Navigating the Toxic Maze, the 100-coin red-coin runs.
