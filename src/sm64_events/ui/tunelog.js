@@ -40,6 +40,7 @@ import { h, render } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { PracticeLog } from "/ui/components/practicelog.js";
+import { entityKey } from "/ui/entitysection.js";
 import { TUNABLES, CHOICES, DEFAULTS, GROUPS, setLogTuning, encodeTuning,
          decodeTuning, changedFromDefault, withDefaults } from "/ui/logtuning.js";
 import { ControlGroups } from "/ui/tunecontrols.js";
@@ -77,10 +78,18 @@ const OPEN_ATTEMPTS = [
 ];
 
 // A graded strategy rank, shared shape between the star and segment secs.
+//
+// No `basis` key -- every card here grades in "pb" mode, and the real server
+// (`views.py::_section_banner`) only ever attaches one for the avg-N modes
+// ("non-pb modes with a gradeable basis also carry 'basis'"). This fixture
+// carried one unconditionally until it was caught rendering a literal
+// "12·0'24"11"" on every card's next-step line -- a fixture artefact, not a
+// real formatting bug: `ranks.js` trusts the server never to send `basis`
+// alongside `mode: "pb"`, and until this fix nothing here honoured that.
 const GRADED = (tier, division, fillPct) => ({
   rank: tier, division, fill: fillPct / 100,
   next_tier: tier, next_division: division === "I" ? tier : "I", // close enough for a preview
-  next_gap_cs: 240, mode: "pb", basis: { count: 12, window: null, display: "0'24\"11" },
+  next_gap_cs: 240, mode: "pb", basis: null,
   reason: null,
 });
 
@@ -177,6 +186,16 @@ function fixtureView() {
   };
 }
 
+// The first section (the OPEN-card / long-name demonstration above) doubles
+// as "the entity the player is actively practicing" for this page -- there
+// is no real target here for `PracticeLog`'s `activeKey` to answer, and
+// showing every card WITHOUT one would leave the next-step line (item 2,
+// "only display it when the user's actively practicing that star") with
+// nothing to preview at all. Every other card renders with it hidden, which
+// is the contrast worth judging -- both states, side by side, rather than
+// one asserted from a comment.
+const ACTIVE_KEY = entityKey(SECTIONS[0]);
+
 // Minimal store slice `entityIconSrc`/`AttemptTable`/`RankBanner` need. Every
 // field falls back gracefully to "no art override, generic star" when
 // missing -- entityicons.js's own contract (`t || {}` at every call site) --
@@ -232,7 +251,8 @@ function Pane({ label, width, view, t, ui, tuningKey }) {
         <${PracticeLog} key=${tuningKey} v=${view} t=${t} ui=${ui}
           freshIds=${new Set()} openCompare=${null}
           focus=${null} clearFocus=${() => {}}
-          focusKey=${null} onSelect=${() => {}} />
+          focusKey=${null} onSelect=${() => {}}
+          activeKey=${ACTIVE_KEY} />
       </div>
     </div>
   </div>`;
