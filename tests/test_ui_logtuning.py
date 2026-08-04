@@ -365,18 +365,35 @@ def test_rank_placement_resolves_all_four_cells_independently():
     assert result == ["body", "head", "head", "body"]
 
 
-def test_rank_placement_ships_head_at_every_cell():
-    """The shipped default is a genuine no-op -- Griffin asked to "test this
-    out", not committing to a shape yet, same convention as identityCondense."""
+def test_rank_placement_resolves_every_cell_to_a_declared_option():
+    """Every cell answers, and answers with something its own control offers.
+
+    This deliberately does NOT assert WHICH option ships. It used to, and it
+    went red the first time Griffin used the inspector -- which is the
+    standing rule in CLAUDE.md arriving on schedule: "no test may assert the
+    CONTENTS of a shipped default... pin the law against a reference config
+    and check only that the live values are in range." SAVE writes these
+    values; they are his, not ours.
+
+    The law worth pinning is that the decision table is TOTAL -- all four
+    cells resolve, and none resolves to a value the control cannot express,
+    which is what a typo in a cssPrefix or a renamed option would produce.
+    """
     result = run_node(
-        "DEFAULTS, rankPlacementFor",
-        "console.log(JSON.stringify([\n"
-        "  rankPlacementFor(DEFAULTS, { isNarrow: true, twoLadder: true }),\n"
-        "  rankPlacementFor(DEFAULTS, { isNarrow: true, twoLadder: false }),\n"
-        "  rankPlacementFor(DEFAULTS, { isNarrow: false, twoLadder: true }),\n"
-        "  rankPlacementFor(DEFAULTS, { isNarrow: false, twoLadder: false }),\n"
-        "]));")
-    assert result == ["head", "head", "head", "head"]
+        "DEFAULTS, CHOICES, rankPlacementFor",
+        "const cells = [\n"
+        "  ['rankPlacementNarrowTwoLadders', { isNarrow: true, twoLadder: true }],\n"
+        "  ['rankPlacementNarrowOneLadder', { isNarrow: true, twoLadder: false }],\n"
+        "  ['rankPlacementWideTwoLadders', { isNarrow: false, twoLadder: true }],\n"
+        "  ['rankPlacementWideOneLadder', { isNarrow: false, twoLadder: false }],\n"
+        "];\n"
+        "console.log(JSON.stringify(cells.map(([key, ctx]) => {\n"
+        "  const value = rankPlacementFor(DEFAULTS, ctx);\n"
+        "  return Object.keys(CHOICES[key].options).includes(value);\n"
+        "})));")
+    assert result == [True, True, True, True], (
+        "a rank-placement cell resolved to a value its own control does not "
+        "offer -- a renamed option or a mis-keyed cell")
 
 
 def test_next_step_mode_resolves_all_four_cells_independently():
@@ -396,19 +413,28 @@ def test_next_step_mode_resolves_all_four_cells_independently():
     assert result == ["hidden", "compact", "hover", "always"]
 
 
-def test_next_step_mode_ships_hover_narrow_always_wide():
-    """Griffin's own words did the narrow/wide split: "present this as simply
-    and screen-space efficiently as possible... especially in narrow display
-    mode. Maybe we don't actually even display it at all, until hover?" """
+def test_next_step_mode_resolves_every_cell_to_a_declared_option():
+    """Same law as the placement table above, and it went red the same way.
+
+    The narrow/wide split this used to assert was a reasoned default, not a
+    contract -- Griffin moved the wide cells to hover the first evening he
+    used the rig. What must stay true is only that every cell answers with
+    something its own control offers.
+    """
     result = run_node(
-        "DEFAULTS, nextStepModeFor",
-        "console.log(JSON.stringify([\n"
-        "  nextStepModeFor(DEFAULTS, { isNarrow: true, twoLadder: true }),\n"
-        "  nextStepModeFor(DEFAULTS, { isNarrow: true, twoLadder: false }),\n"
-        "  nextStepModeFor(DEFAULTS, { isNarrow: false, twoLadder: true }),\n"
-        "  nextStepModeFor(DEFAULTS, { isNarrow: false, twoLadder: false }),\n"
-        "]));")
-    assert result == ["hover", "hover", "always", "always"]
+        "DEFAULTS, CHOICES, nextStepModeFor",
+        "const cells = [\n"
+        "  ['nextStepNarrowTwoLadders', { isNarrow: true, twoLadder: true }],\n"
+        "  ['nextStepNarrowOneLadder', { isNarrow: true, twoLadder: false }],\n"
+        "  ['nextStepWideTwoLadders', { isNarrow: false, twoLadder: true }],\n"
+        "  ['nextStepWideOneLadder', { isNarrow: false, twoLadder: false }],\n"
+        "];\n"
+        "console.log(JSON.stringify(cells.map(([key, ctx]) => {\n"
+        "  const value = nextStepModeFor(DEFAULTS, ctx);\n"
+        "  return Object.keys(CHOICES[key].options).includes(value);\n"
+        "})));")
+    assert result == [True, True, True, True], (
+        "a time-to-go cell resolved to a value its own control does not offer")
 
 
 def test_the_narrow_breakpoint_constant_matches_the_layout_matrix_css():

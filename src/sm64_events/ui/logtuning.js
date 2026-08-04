@@ -385,7 +385,7 @@ export const CHOICES = {
   // the placement decision itself.
   rankPlacementNarrowTwoLadders: {
     group: "Ranks", label: "Rank placement -- narrow, different ladders",
-    value: "head",
+    value: "body",
     options: {
       head: "In the card head (today)",
       body: "Inside the dropdown, above the attempts",
@@ -395,7 +395,7 @@ export const CHOICES = {
   },
   rankPlacementNarrowOneLadder: {
     group: "Ranks", label: "Rank placement -- narrow, shared ladder",
-    value: "head",
+    value: "body",
     options: {
       head: "In the card head (today)",
       body: "Inside the dropdown, above the attempts",
@@ -405,7 +405,7 @@ export const CHOICES = {
   },
   rankPlacementWideTwoLadders: {
     group: "Ranks", label: "Rank placement -- wide, different ladders",
-    value: "head",
+    value: "body",
     options: {
       head: "In the card head (today)",
       body: "Inside the dropdown, above the attempts",
@@ -415,7 +415,7 @@ export const CHOICES = {
   },
   rankPlacementWideOneLadder: {
     group: "Ranks", label: "Rank placement -- wide, shared ladder",
-    value: "head",
+    value: "body",
     options: {
       head: "In the card head (today)",
       body: "Inside the dropdown, above the attempts",
@@ -488,7 +488,7 @@ export const CHOICES = {
   },
   nextStepWideTwoLadders: {
     group: "Ranks", label: "\"Time to go\" -- wide, different ladders",
-    value: "always",
+    value: "hover",
     options: {
       always: "Always shown (tightened wording, no destination rank)",
       compact: "Always shown, bare number only (tightest always-on reading)",
@@ -500,7 +500,7 @@ export const CHOICES = {
   },
   nextStepWideOneLadder: {
     group: "Ranks", label: "\"Time to go\" -- wide, shared ladder",
-    value: "always",
+    value: "hover",
     options: {
       always: "Always shown (tightened wording, no destination rank)",
       compact: "Always shown, bare number only (tightest always-on reading)",
