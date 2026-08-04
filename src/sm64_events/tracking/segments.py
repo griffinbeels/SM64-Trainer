@@ -291,9 +291,22 @@ Matcher invariants (spec §Matcher semantics — tests are the contract):
         never split timing on a textbox in any level/circumstance (user rule
         2026-06-14).  Historical events (no key): .get() -> None -> out of
         window -> conservative close behaviour preserved.
+    (6) in-level teleporter echo: ev.payload["teleport"] is True -- suppressed
+        unconditionally.  The CCM broken bridge, the WDW corner warps and the
+        HMC toxic-maze pads relocate Mario inside the SAME area, so no
+        area_changed fires for shape (3) to catch and no door/dialogue context
+        exists for (2)/(5) -- yet Usamune zeroes its overall counter for the
+        warp exactly as it does for an L-reset.  "these should not trigger
+        resets, because they are a legitimate part of the level" (live demo in
+        CCM and WDW, 2026-08-03).  detectors/anchors.py::_is_teleport is the
+        discriminator (fade-out recency, NOT the current action -- the action
+        byte reads FADE_IN long after the warp) and carries the measurement.
+        Historical events (no key): .get() -> False -> conservative close
+        behaviour preserved.
   Shapes (1)/(3) are detected by frame equality.  Shape (2) is detected by
   prev_action/action in DOOR_ACTIONS (falling back through the chain) or
   frames_since_door.  Shape (5) is detected by frames_since_dialog recency.
+  Shape (6) is a detector-set boolean.
   Historical events (no prev_action / frames_since_door / frames_since_dialog):
   .get() returns None -> conservative close behaviour preserved.
   ECHO INVISIBILITY (live regression 2026-06-12): an echo anchor is
@@ -2754,13 +2767,13 @@ class SegmentEngine:
     def _anchor_echo(self, ev) -> bool:
         """True when a practice_reset/state_loaded is an INVOLUNTARY IGT-reset
         echo — a door crossing, the post-star save prompt, a textbox/cutscene
-        time-stop, or a paused-briefly transition co-frame — rather than a
-        real player reset. Moved verbatim out of `feed`'s per-event
+        time-stop, a paused-briefly transition co-frame, or an in-level
+        teleporter — rather than a real player reset. Moved verbatim out of `feed`'s per-event
         `anchor_is_echo` local (spec 2026-07-23-default-routes-foundation) so
         the waypoint matcher (`_feed_waypoint`) shares the SAME echo
         definition instead of a second copy that could drift; the full
         shape-by-shape rationale lives in the module docstring's "load-echo
-        rule" section. Shapes (2a)/(2b)/(3)/(4)/(5) depend only on the event
+        rule" section. Shapes (2a)/(2b)/(3)/(4)/(5)/(6) depend only on the event
         payload + `_last_transition_frame` (an instance attribute), never on
         a per-def arm — shape (1), the arm-frame echo, is checked separately
         per def by its callers (`ev.frame == arm.start_frame`)."""
@@ -2796,7 +2809,17 @@ class SegmentEngine:
             # split timing on a textbox in any level (user rule 2026-06-14).
             or (ev.payload.get("frames_since_dialog") is not None
                 and 0 <= ev.payload["frames_since_dialog"]
-                <= _DIALOG_ECHO_WINDOW))
+                <= _DIALOG_ECHO_WINDOW)
+            # (6) in-level teleporter echo: the CCM broken bridge and the WDW
+            # corner warps relocate Mario inside the SAME area, so no
+            # transition fires for shape (3) to catch, and Usamune zeroes its
+            # counter anyway. The player took a route the level provides —
+            # "these should not trigger resets, because they are a legitimate
+            # part of the level" (2026-08-03) — so a segment running through
+            # one must not rewind, re-arm or bank a row. Still an ANCHOR, so
+            # `_zeroes_usamune_igt` moves the IGT basis and the segment's time
+            # falls back to the rta delta rather than measuring from the warp.
+            or ev.payload.get("teleport", False))
 
     def _arrived_by_a_real_move(self, ev) -> bool:
         """True when this anchor landed on the same frame as a LEGITIMATE

@@ -717,3 +717,78 @@ def test_the_zero_may_land_a_few_frames_after_the_area_byte_moves():
         snap(1004, igt=0, level=8, area=2)])
     [anchor] = [e for e in events if e.type == "practice_reset"]
     assert anchor.payload["area_load"] is True
+
+
+# ---------------------------------------------------------------------------
+# In-level teleporters (task 0082, live demo 2026-08-03 in CCM and WDW).
+# Standing on the CCM broken bridge (or in a WDW corner) teleports Mario
+# somewhere else in the SAME area, and Usamune zeroes the overall counter for
+# it exactly as it does for an L-reset. No area edge fires, so the area_load
+# discriminator above cannot see it and the warp read as a retry. The anchor
+# still has to EXIST -- segments.py::_zeroes_usamune_igt reads it to know the
+# counter's basis moved -- so this is a payload flag, not a suppression.
+# ---------------------------------------------------------------------------
+
+ACT_TELEPORT_FADE_OUT = 0x00001336
+ACT_TELEPORT_FADE_IN = 0x00001337
+
+
+def test_an_in_level_teleporter_is_not_a_retry():
+    # Journal ids 23218-23219, CCM: the counter zeroes on the very frame Mario
+    # goes from the fade-out to the fade-in, 42 frames after touching the warp.
+    events = run(AnchorDetector(), [
+        snap(227618, igt=228, action=ACT_WALKING, level=5, area=1),
+        snap(227660, igt=266, action=ACT_TELEPORT_FADE_OUT, level=5, area=1),
+        snap(227701, igt=266, action=ACT_TELEPORT_FADE_OUT, level=5, area=1),
+        snap(227702, igt=0, action=ACT_TELEPORT_FADE_IN, level=5, area=1)])
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["teleport"] is True
+    assert anchor.payload["area_load"] is False
+
+
+def test_a_reset_taken_after_the_teleport_is_still_a_retry():
+    # The false positive a bare action test would produce: mario_action still
+    # reads ACT_TELEPORT_FADE_IN long after the warp is over (journal ids
+    # 23223/23226 carry it 125 and 172 frames later), so the flag is keyed on
+    # how recently the fade-OUT ran, not on what Mario looks like now.
+    events = run(AnchorDetector(), [
+        snap(227618, igt=228, action=ACT_WALKING, level=5, area=1),
+        snap(227660, igt=266, action=ACT_TELEPORT_FADE_OUT, level=5, area=1),
+        snap(227701, igt=266, action=ACT_TELEPORT_FADE_OUT, level=5, area=1),
+        snap(227702, igt=0, action=ACT_TELEPORT_FADE_IN, level=5, area=1),
+        snap(227780, igt=78, action=ACT_TELEPORT_FADE_IN, level=5, area=1),
+        snap(227785, igt=0, action=ACT_TELEPORT_FADE_IN, level=5, area=1)])
+    anchors = [e for e in events if e.type == "practice_reset"]
+    assert [a.payload["teleport"] for a in anchors] == [True, False]
+
+
+def test_a_teleport_that_crosses_a_level_is_still_a_boundary():
+    # The action is shared with cap-course warps, which DO leave the level --
+    # and leaving a level is a real attempt boundary whoever caused it. The
+    # level edge drops the pairing, mirroring what it already does to
+    # _last_area_edge, so the flag can only ever mean an IN-level teleporter.
+    events = run(AnchorDetector(), [
+        snap(999, igt=499, action=ACT_WALKING, level=29, area=1),
+        snap(1000, igt=500, action=ACT_TELEPORT_FADE_OUT, level=29, area=1),
+        snap(1001, igt=0, action=ACT_TELEPORT_FADE_IN, level=6, area=1)])
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["teleport"] is False
+
+
+def test_an_ordinary_reset_is_not_flagged_as_a_teleport():
+    events = run(AnchorDetector(), [
+        snap(1000, igt=500, action=ACT_WALKING, level=5, area=1),
+        snap(1002, igt=0, level=5, area=1)])
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["teleport"] is False
+
+
+def test_teleport_recency_cleared_on_backward_jump_self_heal():
+    # Domain rule 4: a savestate rewind must not let a pre-jump teleport
+    # explain away the load that follows it.
+    events = run(AnchorDetector(), [
+        snap(4999, igt=499, action=ACT_WALKING, level=5, area=1),
+        snap(5000, igt=500, action=ACT_TELEPORT_FADE_OUT, level=5, area=1),
+        snap(3000, igt=120, action=ACT_WALKING, level=5, area=1)])
+    [anchor] = [e for e in events if e.type == "state_loaded"]
+    assert anchor.payload["teleport"] is False

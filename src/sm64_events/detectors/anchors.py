@@ -108,6 +108,40 @@ area_load (2026-08-01, live report: "if we enter a subarea within a stage, we
   polls of the SAME game frame, so the edge and the zero need a window
   (AREA_LOAD_WINDOW) rather than an exact match.
 
+teleport (2026-08-03, live demo in CCM and WDW; task 0082): an IN-LEVEL
+  teleporter — the CCM broken bridge, the WDW corner warps, the HMC toxic-maze
+  pads — relocates Mario inside the SAME area, and Usamune zeroes the overall
+  counter for it exactly as it does for an L-reset. His words: *"we need to not
+  actually detect this as a reset when playing the level, because otherwise we
+  can't complete these stars in the practice tool."*
+
+  `area_load` above cannot see it: no area edge fires at all, so there is
+  nothing to pair the zero with. **The discriminator is how recently
+  ACT_TELEPORT_FADE_OUT ran.** Measured on his three demonstrated warps
+  (journal ids 23199/23200, 23218/23219, 23231/23232, 2026-08-03): the counter
+  zeroes on the very frame Mario crosses from the fade-out to the fade-in, 42
+  frames after touching the pad — `act_teleport_fade_out` calls
+  `level_trigger_warp` at actionTimer 20 and the delayed warp takes another 20.
+  Recency is therefore 1 frame, and TELEPORT_WINDOW is the same poll-skew
+  allowance AREA_LOAD_WINDOW gets, for the same reason.
+
+  **Recency, NOT the current action, and the difference is measured**: Mario's
+  action byte still reads ACT_TELEPORT_FADE_IN long after the warp is over —
+  the two other anchors in that same session carried it 125 and 172 frames
+  later, across a Usamune menu warp into WDW — so testing `action` alone would
+  have swallowed a real attempt boundary. A level edge CLEARS the pairing for
+  the same reason it clears `_last_area_edge`: the action is shared with
+  cap-course warps that really do leave the level, and leaving a level is a
+  boundary whoever caused it.
+
+  The anchor is still EMITTED, flagged, exactly as `area_load` is — suppressing
+  it outright would be simpler and wrong, because `tracking/segments.py::
+  _zeroes_usamune_igt` reads every anchor to know when Usamune's counter last
+  restarted, and a segment running through the warp would then bank a time
+  measured from the warp instead of from its arm. `projection.py` records no
+  attempt for it; `segments.py`'s echo shape (6) keeps it invisible to the
+  matcher while still moving that basis frame.
+
 warp_op / frames_since_warp_op (2026-08-01, INERT — read by nothing): the
   game's own pending warp op (`sDelayedWarpOp`) most recently seen non-zero,
   and how long ago. Kept as evidence for the case `area_load` above does NOT
@@ -152,9 +186,11 @@ acceptable for attempt tracking, but the payload distinction matters for
 the anchor→outcome clock, so characterize it once on real hardware."""
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
-from sm64_events.memory.addresses import (ACT_INTRO_CUTSCENE, CASTLE_LEVELS,
-                                           DEATH_ACTIONS, DIALOG_ACTIONS,
-                                           DOOR_ACTIONS, PASSIVE_ACTIONS,
+from sm64_events.memory.addresses import (ACT_INTRO_CUTSCENE,
+                                           ACT_TELEPORT_FADE_OUT,
+                                           CASTLE_LEVELS, DEATH_ACTIONS,
+                                           DIALOG_ACTIONS, DOOR_ACTIONS,
+                                           PASSIVE_ACTIONS,
                                            SAVE_DIALOG_ACTIONS)
 
 BOOT_TIMER_MAX = 120   # global_timer below ~4 s after a backward jump = console reset; shared by lifecycle.py
@@ -167,6 +203,10 @@ PAUSE_WARP_MIN_STREAK = 5  # walked load echoes pause 0-3 frames, menu warps 13+
 # the level byte. Mirrors IgtClock.AREA_LOAD_WINDOW, which pairs the same two
 # facts for the same reason.
 AREA_LOAD_WINDOW = 10
+# Same poll-skew allowance for the in-level teleporter (docstring): the counter
+# zeroes 1 frame after the last fade-out tick on all three demonstrated warps,
+# and inputs are locked for the whole fade, so no L-reset can hide in here.
+TELEPORT_WINDOW = 10
 COURSE_START_AREA = 1  # every course spawns Mario here; only the castle differs
 # (live logs 2026-06-12; segments._MENU_PAUSE_FRAMES mirrors the same evidence)
 
@@ -182,6 +222,7 @@ class AnchorDetector:
         self._save_menu_seen = False  # save-prompt screen observed this anchor period
         self._last_warp_op: tuple[int, int] | None = None  # (frame, op), inert — see docstring
         self._last_area_edge: tuple[int, int] | None = None  # (frame, area entered)
+        self._last_teleport_frame: int | None = None  # last tick of an in-level teleporter's fade-out
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         # Self-heal on backward global_timer jump (domain rule 4): stale door
@@ -195,6 +236,8 @@ class AnchorDetector:
             self._last_dialog_frame = None
         if self._last_warp_op and curr.global_timer < self._last_warp_op[0]:
             self._last_warp_op = None   # same self-heal as the two above
+        if curr.global_timer < (self._last_teleport_frame or 0):
+            self._last_teleport_frame = None   # and the same again
         # Track the most recent frame where a door action was observed so that
         # anchors emitted 1-5 frames after the door animation ends can still
         # be classified as echoes via frames_since_door (non-warp door shape).
@@ -231,8 +274,17 @@ class AnchorDetector:
         # start of the run — so it clears the pairing rather than setting it.
         if curr.curr_level != prev.curr_level:
             self._last_area_edge = None
+            # …and an in-level teleporter is over the moment the level moves:
+            # the same action serves cap-course warps that really do leave,
+            # and leaving a level is a boundary whoever caused it (docstring).
+            self._last_teleport_frame = None
         elif curr.curr_area != prev.curr_area:
             self._last_area_edge = (curr.global_timer, curr.curr_area)
+        # When the fade-OUT last ran. The counter zeroes one frame after its
+        # last tick, so this — not curr.mario_action, which reads FADE_IN for
+        # a long time afterwards — is what says the zero belongs to the warp.
+        if curr.mario_action == ACT_TELEPORT_FADE_OUT:
+            self._last_teleport_frame = curr.global_timer
         events = self._classify(prev, curr)
         if events:
             self._pending_warp = None  # one load, one anchor: classified wins
@@ -317,6 +369,15 @@ class AnchorDetector:
         return (entered != COURSE_START_AREA
                 and curr.global_timer - frame <= AREA_LOAD_WINDOW)
 
+    def _is_teleport(self, curr: GameSnapshot) -> bool:
+        """Did Usamune's counter zero because Mario took an IN-LEVEL
+        teleporter — the CCM broken bridge, a WDW corner — rather than because
+        he retried? The measurement and the two readings it rules out are in
+        the module docstring."""
+        if self._last_teleport_frame is None:
+            return False
+        return curr.global_timer - self._last_teleport_frame <= TELEPORT_WINDOW
+
     def _classify(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         # frames_since_door: how many game frames have elapsed since the most
         # recent tick where a door action was observed.  None if no door has
@@ -340,7 +401,8 @@ class AnchorDetector:
         observed = {"warp_op": warp_op,
                     "frames_since_warp_op": frames_since_warp_op,
                     "area": curr.curr_area, "prev_area": prev.curr_area,
-                    "area_load": self._is_area_load(curr)}
+                    "area_load": self._is_area_load(curr),
+                    "teleport": self._is_teleport(curr)}
         if curr.global_timer < prev.global_timer:
             if curr.global_timer < BOOT_TIMER_MAX:
                 return []  # console reset — GameResetDetector owns this

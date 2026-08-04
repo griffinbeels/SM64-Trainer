@@ -317,7 +317,16 @@ DOOR_ACTIONS = frozenset({
 # ACT_DISAPPEARED fired on the BitDW pipe, the BitS end funnel, AND the
 # castle upstairs -> BitS entry warp (all 0x1300).
 ACT_DISAPPEARED = 0x00001300       # generic "Mario left the world" (pipes, some warps); live-verified 2026-06-12
-ACT_TELEPORT_FADE_OUT = 0x00001336  # teleporter/cap-warp fade; also fires for in-level teleporters elsewhere — harmless: warp triggers filter by level. VERIFY (live gate pending)
+# LIVE-VERIFIED 2026-08-03 (task 0082), and the "harmless" note below was
+# wrong: an in-level teleporter — the CCM broken bridge, a WDW corner — zeroes
+# Usamune's overall counter, so it fired a practice_reset the player never
+# made. Journal ids 23199/23200, 23218/23219, 23231/23232 all show the pair
+# 0x1336 -> ACT_TELEPORT_FADE_IN (0x1337) on the frame the counter drops, 42
+# frames after touching the pad (decomp `act_teleport_fade_out` triggers the
+# warp at actionTimer 20 and the delayed warp takes 20 more). The action byte
+# then KEEPS reading 0x1337 for well over a hundred frames, which is why
+# detectors/anchors.py keys on fade-out RECENCY rather than on the action.
+ACT_TELEPORT_FADE_OUT = 0x00001336  # teleporter/cap-warp fade; also fires for in-level teleporters elsewhere
 WARP_ENTRY_ACTIONS = frozenset({ACT_DISAPPEARED, ACT_TELEPORT_FADE_OUT})
 
 # Spawn actions — same decomp fetch. Live-verified 2026-06-12:

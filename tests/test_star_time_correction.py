@@ -218,10 +218,11 @@ def test_the_hundred_coin_row_closed_by_the_same_grab_is_corrected_too():
 
 # --- entering a subarea is not a reset --------------------------------------
 
-def anchor(id, frame, igt_before, area_load=False):
+def anchor(id, frame, igt_before, area_load=False, teleport=False):
     return jev(id, "practice_reset", frame,
                {"igt_frames_before": igt_before, "mario_acted": True,
-                "acted_tracking": True, "area_load": area_load})
+                "acted_tracking": True, "area_load": area_load,
+                "teleport": teleport})
 
 
 def test_entering_a_subarea_records_no_attempt_at_all():
@@ -253,6 +254,28 @@ def test_an_area_load_with_nothing_open_still_starts_an_attempt():
         grab(4, frame=1830),
     ])
     assert attempt.id == 2 and attempt.anchor_type == "practice_reset"
+
+
+def test_an_in_level_teleporter_records_no_attempt_either():
+    # Task 0082, live demo 2026-08-03 in CCM and WDW: standing on the broken
+    # bridge warps Mario across the SAME area and Usamune zeroes its counter
+    # for it, so the tool banked a reset the player never made — "these should
+    # not trigger resets, because they are a legitimate part of the level".
+    # No area edge fires, so area_load cannot see it; the anchor carries its
+    # own flag (detectors/anchors.py::_is_teleport) and reads the same here.
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 5}),
+        anchor(2, 1000, 400),                                   # a real retry
+        jev(3, "mario_acted", 1010, {}),
+        jev(4, "warp_entered", 1660, {"level": 5, "area": 1}),  # the bridge
+        anchor(5, 1702, 266, teleport=True),                    # 42 frames later
+        grab(6, frame=1830),
+        correction(7, frame=1830),
+    ])
+    assert [a.outcome for a in attempts] == ["success"]
+    [success] = attempts
+    assert success.id == 2                # the run began at the retry, not the warp
+    assert success.rta_frames == 830      # 1830 - 1000, the whole run
 
 
 # --- live: a correction is what makes the recorded row change ---------------

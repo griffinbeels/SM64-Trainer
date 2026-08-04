@@ -872,14 +872,20 @@ class Projector:
 
     def _dispatch(self, ev) -> list[Attempt]:
         if ev.type in ANCHOR_EVENT_TYPES:
-            if ev.payload.get("area_load"):
+            if ev.payload.get("area_load") or ev.payload.get("teleport"):
                 # Going DEEPER into the level is not a retry: "if we enter a
                 # subarea within a stage, we fundamentally DID NOT RESET…
                 # showing a reset there is an error" (2026-08-01). Usamune
                 # zeroes its counter on the load exactly as it does on an
                 # L-reset, which is why this arrives as an anchor at all;
                 # detectors/anchors.py::_is_area_load carries the measurement
-                # that tells the two apart. Closes NOTHING, so the run
+                # that tells the two apart. An IN-LEVEL TELEPORTER (the CCM
+                # broken bridge, a WDW corner) zeroes it the same way with no
+                # area edge at all to pair the zero with, and is read the same
+                # way here — "we need to not actually detect this as a reset
+                # when playing the level, because otherwise we can't complete
+                # these stars in the practice tool" (2026-08-03);
+                # `_is_teleport` there is that discriminator. Closes NOTHING, so the run
                 # continues across the door and its rta spans the whole star.
                 # Still OPENS one if nothing is open — walking into a course
                 # and straight into its subarea has to start an attempt

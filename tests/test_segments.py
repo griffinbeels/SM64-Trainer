@@ -4492,3 +4492,67 @@ def test_a_menu_warp_along_a_fabricated_edge_still_rewinds():
                 "acted_tracking": True, "area": 2, "prev_area": 2}),
            ctx(level=6, area=2))
     assert e.armed_items()[32].progress == 0
+
+
+# ---------------------------------------------------------------------------
+# ECHO SHAPE (6) — IN-LEVEL TELEPORTER (task 0082, live demo 2026-08-03).
+# The CCM broken bridge and the WDW corner warps relocate Mario inside the SAME
+# area: no transition fires for shape (3), no door or dialogue context exists
+# for (2)/(5), and Usamune zeroes its overall counter anyway. "these should not
+# trigger resets, because they are a legitimate part of the level."
+# ---------------------------------------------------------------------------
+
+CCM_RUN = SegmentDef(id=4, name="CCM run", enabled=True,
+                     start_triggers=[{"type": "spawned", "level": 5}],
+                     end_triggers=[{"type": "level_enter", "to": 6}],
+                     waypoints=[], guards=[])
+
+
+def _bridge_warp_anchor(teleport):
+    # Journal ids 23218-23219: the counter zeroes as Mario crosses from
+    # ACT_TELEPORT_FADE_OUT to ACT_TELEPORT_FADE_IN, 42 frames after the pad.
+    return jev(111, "practice_reset", 227702,
+               {"igt_frames_before": 266, "mario_acted": True,
+                "paused_frames_before": 2, "acted_tracking": True,
+                "action": 0x1337, "prev_action": 0x1336,
+                "save_pending": False, "frames_since_door": None,
+                "frames_since_dialog": None, "area_load": False,
+                "teleport": teleport})
+
+
+def test_in_level_teleporter_is_echo_segment_stays_armed():
+    e = SegmentEngine([CCM_RUN])
+    e.feed(jev(108, "spawned", 227434, {"kind": "spawn", "level": 5}),
+           ctx(level=5))
+    assert e.armed_ids() == {4}, "the course spawn arms the run"
+    closed, _ = e.feed(_bridge_warp_anchor(True), ctx(level=5))
+    assert closed == [], "the bridge warp must not bank a reset row"
+    assert e.armed_ids() == {4}, "and must not rewind or re-arm the segment"
+    done, _ = e.feed(jev(140, "level_changed", 228000, {"from": 5, "to": 6}),
+                     ctx(level=6, prev_level=5))
+    [a] = done
+    assert a.outcome == "success"
+    assert a.rta_frames == 228000 - 227434, "timed from the spawn, not the warp"
+
+
+def test_the_same_anchor_without_the_flag_still_closes():
+    """Opt-in, exactly like every other echo shape: an ordinary L-reset in the
+    same place, carrying the same actions, still records its reset row."""
+    e = SegmentEngine([CCM_RUN])
+    e.feed(jev(108, "spawned", 227434, {"kind": "spawn", "level": 5}),
+           ctx(level=5))
+    closed, _ = e.feed(_bridge_warp_anchor(False), ctx(level=5))
+    assert len(closed) == 1 and closed[0].outcome == "reset"
+
+
+def test_historical_anchor_without_the_teleport_key_closes():
+    """No key at all (every event journaled before 2026-08-03): .get() returns
+    False, so old journals replay with their conservative close behaviour."""
+    e = SegmentEngine([CCM_RUN])
+    e.feed(jev(108, "spawned", 227434, {"kind": "spawn", "level": 5}),
+           ctx(level=5))
+    payload = dict(_bridge_warp_anchor(False).payload)
+    payload.pop("teleport")
+    closed, _ = e.feed(jev(111, "practice_reset", 227702, payload),
+                       ctx(level=5))
+    assert len(closed) == 1 and closed[0].outcome == "reset"
