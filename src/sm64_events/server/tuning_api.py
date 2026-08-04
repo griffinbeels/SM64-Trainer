@@ -43,6 +43,7 @@ _UI = Path(__file__).resolve().parents[1] / "ui"
 TUNING_REGISTRIES = {
     "climb": _UI / "climbtuning.js",
     "marelo": _UI / "marelotuning.js",
+    "log": _UI / "logtuning.js",
 }
 
 # The original single-surface name, kept as the climb's own path so nothing

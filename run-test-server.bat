@@ -76,6 +76,7 @@ REM  path and was unreachable the moment this script picked a different port
 REM  (2026-07-27) -- if you add another one, add its line here too.
 echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tune.html   (rank-up climb feel)
 echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tunemarelo.html   (overall rank-up feel)
+echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tunelog.html   (practice log card layout)
 echo   The real trainer exe keeps its own port (8064) untouched.
 echo   Press CTRL+C in this window to stop the test server.
 echo ============================================================

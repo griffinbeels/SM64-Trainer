@@ -4238,13 +4238,48 @@
   }
 
   /* ===================================================================
-     Practice log entity cards (Task 7)
+     Practice log entity cards (Task 7; re-tuned 2026-08-03, spec
+     practice-log-entity-cards -- the round that turned this into a REGISTRY)
      ===================================================================
      practicelog.js's `.log-card` -- one row per practiced star or segment,
-     newest activity first -- mounted with no styles at all (Task 6). This
-     is the whole block: the row itself, gated on @container against
-     `.practice-page` like every other component-internal rule here
-     (ui-core.md's responsiveness law), ordered wide -> narrow.
+     newest activity first. Every number and shape choice below is a row in
+     `ui/logtuning.js`, threaded through as a CSS custom property
+     (`var(--log-<kebab-key>, <fallback>)`) or a modifier class
+     (`<prefix>-<value>`) on the log's own wrapper, `.log-list-card` --
+     `PracticeLog` (practicelog.js) sets both ONCE, at mount, from the active
+     tuning slot, and every `.log-card` underneath inherits the custom
+     properties for free (they cascade) and matches the class-scoped rules
+     below by being a descendant. `LogCard` itself never imports the
+     registry -- it does not need to, which is the whole point of routing
+     the tuning through CSS instead of props. `/ui/tunelog.html` is the
+     inspector; fallback values in `var()` below match the registry's own
+     shipped defaults so the page still looks right before JS has run.
+
+     What the fallbacks implement, and why: the user reported four things
+     about the shipped log ("reads as disorganized / sloppy") --
+       1. collapsed cards didn't line up (a flexible identity column sized
+          itself per-card); fixed by `--log-identity-width`, a genuinely
+          FIXED grid track -- every card's icon lands on the same x because
+          every card reserves the same width for it.
+       2/3. a closed card was vertically massive at a narrow window, and
+          should look the SAME at a wide one, just bigger ("maybe this can
+          just be the same layout in both screen sizes") -- fixed by
+          `collapsedLayout: oneLine` (icon, name, ranks, PB, chevron on one
+          row) plus `widthMode: same` (no width-triggered layout switch),
+          both the shipped default; `rankStyle: chips` is what makes ONE
+          LINE possible at all, since a full rank banner (progress bar,
+          next-step line, basis) cannot fit beside a name, a second rank, a
+          PB tag and a chevron on one row.
+       4. an open card's attempt rows didn't read as belonging to it; fixed
+          by `--log-body-indent` (pushes the table right) and
+          `--log-body-tint` (a black wash over the SAME background colour,
+          so the rows read as sitting UNDER the card rather than as a
+          different surface).
+
+     `collapsedLayout: stacked` and `widthMode: stackNarrow` both survive as
+     real, selectable options -- they ARE today's original narrow layout,
+     kept so the human can dial back to it and compare rather than having it
+     deleted out from under him.
 
      Two things this card deliberately does NOT inherit, unlike every other
      `.practice-card` on this page: a fixed height (`.analysis-card`/
@@ -4256,7 +4291,7 @@
      tell a wing from a word). Neither rule lives on `.practice-card` or
      `.log-list-card` itself, so this section is what keeps it that way
      rather than adding one by accident. */
-  .log-list { display: flex; flex-direction: column; gap: .5rem; margin-top: .2rem; }
+  .log-list { display: flex; flex-direction: column; gap: var(--log-card-gap, 8px); margin-top: .2rem; }
   .log-card {
     min-width: 0; border: 1px solid var(--border-soft); border-radius: 9px;
     background: rgba(9,22,36,.55);
@@ -4273,16 +4308,23 @@
   }
   .log-card.is-selected { border-color: #5d89b8; background: rgba(20,42,66,.55); }
   .log-card.is-unassigned { background: rgba(9,22,36,.3); }
-  /* select (art+name) | ranks | PB | fold -- the same four things every
-     other section's own heading carries, one row instead of a whole card. */
+  /* identity (art+name) | ranks | PB | fold -- the same four things every
+     other section's own heading carries, one row instead of a whole card.
+     `min-height` derives from the icon size and the head's own vertical
+     padding rather than a fifth literal, so a bigger icon never gets
+     silently clipped by a shorter row. Every layout choice below overrides
+     grid-template-columns/areas; nothing else in this base rule changes
+     between them. */
   .log-card-head {
-    min-width: 0; display: grid; min-height: 54px;
-    grid-template-columns: minmax(0,1fr) minmax(0,1.05fr) auto auto;
-    align-items: center; gap: .65rem; padding: .5rem .7rem;
+    min-width: 0; display: grid;
+    min-height: calc(var(--log-icon-size, 40px) + var(--log-head-pad-y, 10px) * 2);
+    align-items: center; gap: .65rem;
+    padding: var(--log-head-pad-y, 10px) var(--log-head-pad-x, 14px);
   }
   .log-card.is-unassigned .log-card-head { grid-template-columns: minmax(0,1fr) auto; }
   .log-card-select {
-    min-width: 0; display: flex; align-items: center; gap: .6rem;
+    grid-area: identity;
+    min-width: 0; display: flex; align-items: center; gap: var(--log-identity-gap, 10px);
     padding: 0; border: 0; border-radius: 6px; background: none;
     color: inherit; font: inherit; text-align: left; cursor: pointer;
     /* Same shape as `.log-card` above: one declaration here, `:hover` sets
@@ -4296,36 +4338,47 @@
      actually clicked it. Same treatment `.log-card-fold`'s own hover uses. */
   .log-card-select:hover { background: #16283e; }
   .log-card-select:focus-visible { outline: 2px solid #78b9ff; outline-offset: 3px; }
-  .log-card-art { flex: 0 0 auto; width: 36px; height: 36px; object-fit: contain; }
+  .log-card-art {
+    flex: 0 0 auto; width: var(--log-icon-size, 40px); height: var(--log-icon-size, 40px);
+    object-fit: contain;
+  }
   .log-card-name { min-width: 0; display: flex; flex-direction: column; gap: .05rem; }
   .log-card-context {
-    color: var(--muted); font-size: .68rem; text-transform: uppercase;
+    color: var(--muted); font-size: var(--log-course-size, 11px); text-transform: uppercase;
     letter-spacing: .04em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   }
   .log-card-name b {
-    font-weight: 700; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    font-size: var(--log-name-size, 16px); font-weight: 700;
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   }
-  /* STACKED, not side by side -- unlike `.rank-slot` (the objective card's
-     own two-banner row, above). Measured against the real fixture (two
-     graded banners: "Mario 1 · top rank" / "Luigi 2 → Luigi 1 · 0.03s to
-     rank up"): side by side, this column only ever gets a FRACTION of the
-     head row (it shares the row with the name and the PB tag, where
-     `.rank-slot` gets the whole metrics row to itself), so even at the
-     widest supported pane the second banner ellipsised to "LUI…" -- worse
-     than the objective card's own comparable state at any width it
-     supports. Stacking gives each banner the ranks column's FULL width
-     instead of half of it, which is what actually fits the text; the cost
-     is a taller head row, which this card can afford (it is not fixed-
-     height, above). No overflow clip here either, same reason as
-     `.rank-slot`: a hat's wings paint outside its own box. */
+  /* identityAlign: "left" restates the flex row's own default start-
+     alignment EXPLICITLY (a genuine no-op, since `justify-content` is
+     already `flex-start` with no rule at all) so it is a real, greppable
+     rule rather than an implicit gap a reader -- or the tuning guard's own
+     "is this option actually read" scan -- has to infer. "centred" is the
+     one that visibly moves something. */
+  .log-list-card.log-align-left .log-card-select { justify-content: flex-start; }
+  .log-list-card.log-align-centred .log-card-select { justify-content: center; }
+  .log-list-card.log-align-centred .log-card-name { align-items: center; text-align: center; }
+  /* The two rank banners for this entity (strategy + star/segment). Row or
+     column depending on `collapsedLayout` (below); `--log-rank-width` caps
+     how wide either banner may grow regardless of which. No overflow clip
+     here: a hat's wings paint outside its own box, same reason as
+     `.rank-slot`. */
   .log-card-ranks {
-    min-width: 0; display: flex; flex-direction: column; gap: .3rem;
+    grid-area: ranks;
+    min-width: 0; max-width: var(--log-rank-width, 160px);
+    display: flex; gap: var(--log-rank-gap, 8px);
     align-self: stretch; justify-content: center;
   }
+  .log-card-ranks .rank-progress-track { height: var(--log-rank-bar-height, 5px); }
   .log-card-head .pbtag {
+    grid-area: pb; justify-self: end;
+    min-width: var(--log-pb-width, 92px); font-size: var(--log-pb-size, 13px);
     white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 700;
   }
   .log-card-fold {
+    grid-area: fold;
     flex: 0 0 auto; width: 30px; height: 30px; display: inline-flex;
     align-items: center; justify-content: center; padding: 0;
     border: 1px solid transparent; border-radius: 7px;
@@ -4339,16 +4392,25 @@
      visual language rather than growing its own. */
   .log-card.is-closed .log-card-fold { transform: rotate(-90deg); }
   .log-card .seg-waiting { padding: 0 .7rem .55rem; }
+  /* Item 4: an open card's rows read as belonging to it -- extra LEFT
+     padding (the RIGHT/bottom stay the card's own .7rem/.6rem, only the
+     side facing the head's fold column grows) plus a black wash the same
+     hue as the card itself, so the rows read as sitting UNDER the card
+     rather than as a different surface. `--log-body-gap` is the padding
+     ABOVE the first row, under the divider. */
   .log-card-body {
-    padding: .1rem .7rem .6rem; border-top: 1px solid var(--border-soft);
+    padding: var(--log-body-gap, 10px) .7rem .6rem calc(.7rem + var(--log-body-indent, 24px));
+    border-top: 1px solid var(--border-soft);
+    background: rgba(0, 0, 0, var(--log-body-tint, 0.18));
   }
+  .log-card-body .attempt-table tr { height: var(--log-row-height, 40px); }
   .log-list-footer { display: flex; justify-content: center; margin-top: .3rem; }
   /* The rank wash (`.rank-banner::before`, near the top of this file) bleeds
      -8px top / -12px bottom / -16px left assuming it lands in a CARD's own
      padding -- true for `.objective-card`/`.analysis-card`, whose rank
      banners sit as the last thing before the card's own edge (or a fixed row
      re-scoped for it, `.seg-waiting` above). A log card's head is a tight
-     single ROW (select | ranks | PB | fold), so above and beside
+     single ROW (identity | ranks | PB | fold), so above and beside
      `.log-card-ranks` are other interactive controls, not empty padding --
      measured, the wash bled 12px onto the fold button, 8px onto the select
      button, 5px onto the sibling banner and 3px onto the PB tag at every
@@ -4364,61 +4426,91 @@
   .log-card-ranks .rank-banner::before { top: 0; bottom: 0; left: 0; right: 0; }
   .log-card-ranks .rank-banner:first-child::before { left: 0; border-radius: 0; }
 
-  /* CORRECTED 2026-08-03 (final whole-branch review, item 1) -- this comment
-     used to claim `.log-card-head`'s scrollWidth never exceeds its
-     clientWidth at any supported width, and concluded a `@container` rule
-     here would gate on a width the app never reaches. That measurement
-     could not have found the defect it was checking for: both rank-banner
-     children (`.rank-banner-name`/`.rank-banner-next`, above) ellipsise
-     THEMSELVES (`text-overflow: ellipsis`), which is exactly what keeps a
-     PARENT's scrollWidth from ever exceeding its clientWidth -- the
-     overflow is clipped by the CHILD before the parent's own box would have
-     to grow. A row whose children truncate correctly measures as "not
-     overflowing" by that test every time, so the row was never actually
-     free of truncation; the test used could not have detected it.
+  /* ---- rankStyle: how much of each banner shows in the card head --------
+     "banners" (every field) needs no rule -- it is the RankBanner component's
+     own unmodified output. "chips" drops the label, the within-division bar,
+     the next-step line and the basis line, leaving just the icon and the
+     rank name; "capsOnly" drops the name too, leaving the icon alone (its
+     own `title` still answers a hover). The wash (`::before`) goes with them
+     in both -- a colour flourish behind text that is no longer there reads
+     as a stray highlight, not as an omission. `.rank-banner-empty` (the "—
+     pick a strat to see your rank" sentinel) is UNTOUCHED by all three: its
+     text lives in a plain `.meta` span, not in any of the fields above, and
+     it is exactly the void item 4's brief calls out -- it must stay legible
+     at every rank-display setting. */
+  /* "banners" is RankBanner's own unmodified output -- there is no field to
+     hide. Declared explicitly anyway (a genuine no-op) for the same reason
+     as `.log-align-left` above: every option in a choice gets a real rule,
+     never an implicit "nothing happens" gap. */
+  .log-list-card.log-rankstyle-banners .log-card-ranks .rank-banner { opacity: 1; }
+  .log-list-card.log-rankstyle-chips .log-card-ranks .rank-banner-kicker,
+  .log-list-card.log-rankstyle-chips .log-card-ranks .rank-banner-basis,
+  .log-list-card.log-rankstyle-chips .log-card-ranks .rank-banner-next,
+  .log-list-card.log-rankstyle-chips .log-card-ranks .rank-progress-track,
+  .log-list-card.log-rankstyle-chips .log-card-ranks .rank-banner::before,
+  .log-list-card.log-rankstyle-capsonly .log-card-ranks .rank-banner-kicker,
+  .log-list-card.log-rankstyle-capsonly .log-card-ranks .rank-banner-basis,
+  .log-list-card.log-rankstyle-capsonly .log-card-ranks .rank-banner-next,
+  .log-list-card.log-rankstyle-capsonly .log-card-ranks .rank-progress-track,
+  .log-list-card.log-rankstyle-capsonly .log-card-ranks .rank-banner-name,
+  .log-list-card.log-rankstyle-capsonly .log-card-ranks .rank-banner::before {
+    display: none;
+  }
 
-     Measured directly against the two elements that DO truncate (headless,
-     the two-banner star fixture, `scrollWidth - clientWidth` swept every 1px
-     of window width from 1050px down to 850px): `.rank-banner-next` is the
-     first to fail, at an 866px CONTAINER (985px window) and every narrower
-     container down to the 731px floor; `.rank-banner-name` follows one step
-     later, at an 858px container (977px window). `.log-card-name b` survives
-     the ONE star this fixture seeds by a single pixel at the 731px floor,
-     but the wider corpus does not (`tests/test_log_card_name_fits.py`) --
-     same cause, since it shares this one crowded row with the ranks column
-     and the PB tag.
+  /* ---- collapsedLayout: the head's own grid shape ------------------------
+     All three are real, always-selectable shapes -- not a responsive
+     override -- so the inspector can flip between them at one width and
+     compare. `oneLine` is the shipped default and needs `--log-identity-width`
+     (a FIXED track) precisely because three other things share its row;
+     `twoLine`/`stacked` give identity the whole first row, so a flexible
+     `minmax(0,1fr)` already keeps every card's icon flush left with no fixed
+     track needed there. */
+  .log-list-card.log-layout-oneline .log-card:not(.is-unassigned) .log-card-head {
+    grid-template-columns: var(--log-identity-width, 300px) var(--log-rank-width, 160px) auto auto;
+    grid-template-areas: "identity ranks pb fold";
+  }
+  .log-list-card.log-layout-oneline .log-card-ranks { flex-direction: row; flex-wrap: wrap; align-items: center; }
 
-     The fix is not a smaller font or a narrower kicker, the levers
-     `.objective-card` used at its own tight band -- it is giving the ranks
-     column and the PB tag their OWN full-width rows, the way
-     `.log-card-ranks` already stacks its two banners internally instead of
-     sharing a row. This card is deliberately not fixed-height (unlike
-     `.objective-card`/`.analysis-card`, above) specifically so it can afford
-     a taller head at a narrow pane instead of losing text.
+  .log-list-card.log-layout-twoline .log-card:not(.is-unassigned) .log-card-head {
+    grid-template-columns: minmax(0,1fr) auto;
+    grid-template-areas: "identity fold" "ranks pb";
+    row-gap: .45rem;
+  }
+  .log-list-card.log-layout-twoline .log-card-ranks { flex-direction: row; flex-wrap: wrap; align-items: center; }
 
-     900px picked with margin above the measured 866/858px failures, a round
-     number rather than the exact pixel. Its window-equivalent probe pair
-     (1019/1020px, `extra_viewports` in uilab_project.py) straddles the
-     threshold the same way 912/913 already straddle the objective card's own
-     793px container threshold -- the derived matrix otherwise probes 900/901
-     as VIEWPORT pixels, which lands at a ~781px container deep inside the
-     narrow layout and never exercises the actual crossover. */
+  /* Today's original narrow layout, promoted to a selectable shape rather
+     than a width-triggered fallback -- see `log-width-stacknarrow` below for
+     the one place it still switches in automatically. */
+  .log-list-card.log-layout-stacked .log-card:not(.is-unassigned) .log-card-head {
+    grid-template-columns: minmax(0,1fr) auto;
+    grid-template-areas: "identity fold" "ranks ranks" "pb pb";
+    row-gap: .45rem;
+  }
+  .log-list-card.log-layout-stacked .log-card-ranks { flex-direction: column; }
+
+  /* ---- widthMode: does a narrow window override the choice above? -------
+     "same" (the shipped default -- "maybe this can just be the same layout
+     in both screen sizes") declares nothing here on purpose: whatever
+     `collapsedLayout` picked above holds at every supported width, 850px
+     included. "stackNarrow" reintroduces a width-triggered switch to the
+     Stacked shape below a 900px container -- same threshold this card
+     always used, kept for a straight comparison against "same" -- REGARDLESS
+     of which `collapsedLayout` is chosen; it does not require
+     `log-layout-stacked` to also be set. Equal specificity with the three
+     blocks above (5 classes each), so source order is what makes this win
+     once its container query matches -- it must stay declared AFTER them. */
   @container (max-width: 900px) {
-    /* Excludes `.log-card.is-unassigned`: that card has no ranks and no PB
-       tag to give a row to, and keeps its own plain 2-column template
-       (above) untouched. `grid-area` on a card that has no matching named
-       area (the unassigned case) behaves as `auto` per spec -- a documented
-       no-op, not a special case to guard against here. */
-    .log-card:not(.is-unassigned) .log-card-head {
+    .log-list-card.log-width-stacknarrow .log-card:not(.is-unassigned) .log-card-head {
       grid-template-columns: minmax(0,1fr) auto;
-      grid-template-areas: "select fold" "ranks ranks" "pb pb";
+      grid-template-areas: "identity fold" "ranks ranks" "pb pb";
       row-gap: .45rem;
     }
-    .log-card-select { grid-area: select; }
-    .log-card-fold { grid-area: fold; }
-    .log-card-ranks { grid-area: ranks; }
-    .log-card-head .pbtag { grid-area: pb; justify-self: end; }
+    .log-list-card.log-width-stacknarrow .log-card-ranks { flex-direction: column; }
   }
+  /* "same" is the absence of the @container override above -- declared here
+     anyway (a genuine no-op) for the same reason `.log-align-left` and
+     `.log-rankstyle-banners` are: every option gets a real rule. */
+  .log-list-card.log-width-same .log-card-head { opacity: 1; }
 
 </style></head>
 <body>

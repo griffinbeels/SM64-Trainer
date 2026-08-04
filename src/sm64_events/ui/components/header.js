@@ -231,6 +231,11 @@ export function Header({ t, settingsOpen, closeSettings }) {
               overall rank-up tuning page</a> — fly the card out, tune the
             flight and the hold, and save the result straight back into the code.
           </p>
+          <p class="settings-note">
+            <a href="/ui/tunelog.html" target="_blank" rel="noopener">Open the
+              practice log tuning page</a> — dial the card's layout at two
+            widths side by side, and save the result straight back into the code.
+          </p>
           <label class="settings-field">
             <span>Dust-trick counts</span>
             <input type="checkbox" checked=${t.showDust}

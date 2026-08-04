@@ -16,7 +16,7 @@
 // ONE card serves both kinds. That is rule 11 becoming structural rather
 // than an agreement between two hand-written sections that a test compares.
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import htm from "htm";
 import { displayName, entityKey, entityNoun, sectionClock, sectionPb }
   from "../entitysection.js";
@@ -28,6 +28,7 @@ import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
          ResetFilterToggle, StatMenuTrigger, comparator, bannerLabel,
          bannerHint, ranksAreAtFloor, showsEntityBanner, rankIdentity, PbTag }
   from "./attemptlog.js";
+import { logTuning, logTuningVars, logTuningClasses } from "../logtuning.js";
 
 const html = htm.bind(h);
 
@@ -258,6 +259,14 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
 export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
                               clearFocus, focusKey, onSelect }) {
   const [shown, setShown] = useState(CARDS_PER_PAGE);
+  // The tuning slot is read ONCE here, at the page-level wiring layer -- never
+  // inside LogCard, and never per attempt-row render. What comes back is a
+  // CSS custom-property style object plus a modifier-class string; every
+  // `.log-card` underneath inherits the vars for free (they cascade) and
+  // matches the class-scoped rules in index.html by being a descendant.
+  // LogCard itself stays entirely unaware that a tuning system exists.
+  const logVars = useMemo(() => logTuningVars(logTuning()), []);
+  const logClasses = useMemo(() => logTuningClasses(logTuning()), []);
   const sections = orderedSections(v);
   // The focused entity (the active target, by default, or a manual browse
   // pick) is not necessarily among the first CARDS_PER_PAGE cards -- recency
@@ -276,7 +285,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
     setShown((current) => (idx >= current ? idx + 1 : current));
   }, [focusKey]);
   const page = sections.slice(0, shown);
-  return html`<section class="practice-card log-list-card">
+  return html`<section class="practice-card log-list-card ${logClasses}" style=${logVars}>
     <div class="card-heading attempts-heading">
       <div><span class="eyebrow">Practice log</span><h3>Recent activity</h3></div>
       <div class="attempts-tools">

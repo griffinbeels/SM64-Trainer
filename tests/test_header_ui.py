@@ -244,6 +244,12 @@ def test_the_tuning_page_is_reachable_from_the_app_and_from_the_launcher():
         "the settings drawer no longer links to the overall rank-up tuning page"
     assert not re.search(r'href="https?://[^"]*tunemarelo\.html', code), \
         "the tunemarelo.html link must be origin-relative, never a hardcoded host/port"
+    # The practice-log card's own inspector (spec practice-log-entity-cards,
+    # 2026-08-03) needs the identical guarantee -- same failure, same fix.
+    assert 'href="/ui/tunelog.html"' in code, \
+        "the settings drawer no longer links to the practice-log tuning page"
+    assert not re.search(r'href="https?://[^"]*tunelog\.html', code), \
+        "the tunelog.html link must be origin-relative, never a hardcoded host/port"
 
     launcher = (UI.parent.parent.parent / "run-test-server.bat").read_text(
         encoding="utf-8")
@@ -252,6 +258,8 @@ def test_the_tuning_page_is_reachable_from_the_app_and_from_the_launcher():
     assert "%SM64_PORT%/ui/tune.html" in launcher, \
         ("the launcher's URL must interpolate the port it actually chose -- a "
          "literal port there is the exact failure this test exists for")
+    assert "/ui/tunelog.html" in launcher and "%SM64_PORT%/ui/tunelog.html" in launcher, \
+        "run-test-server.bat must also print the practice-log tuning page, port interpolated"
 
 
 def test_the_card_label_is_derived_from_the_rated_scope_not_the_client_slot():
