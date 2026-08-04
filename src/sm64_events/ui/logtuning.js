@@ -98,12 +98,12 @@ export const TUNABLES = {
     why: "Space between the strategy rank and the star/segment rank, whichever direction they're laid out (side by side in One line/Two line, stacked in Stacked).",
   },
   stackedRankWidth: {
-    group: "Ranks", label: "Stacked ranks width", value: 200,
+    group: "Ranks", label: "Stacked ranks width", value: 420,
     min: 80, max: 420, step: 5, unit: "px",
     why: "How much room the two MARELO-shaped rank displays share when Rank display is set to Stacked -- independent of Rank column width above, so switching between Stacked and the row-based styles never forces retuning one shared number.",
   },
   stackedNameWidth: {
-    group: "Ranks", label: "Stacked rank-name width", value: 100,
+    group: "Ranks", label: "Stacked rank-name width", value: 72,
     min: 30, max: 160, step: 2, unit: "px",
     why: "How wide the tier/division text under the icon may grow in Stacked/stackedRow before it ellipsises -- the same job MARELO's own rank-name column plays under its icon. Raised 72->100 (2026-08-04, layout-matrix round): measured against every real tier name in caps.js at the shipped font, \"TOADSWORTH 5\" needs 96px unwrapped -- 72px was truncating it (\"TOADSWO...\") at every width wide enough to even reach this style, which is exactly item 4's report (\"the names of the rank standards aren't cut off\").",
   },
@@ -120,7 +120,7 @@ export const TUNABLES = {
 
   // ---- Result: the PB tag ---------------------------------------------------
   pbPercent: {
-    group: "Result", label: "PB column width", value: 10,
+    group: "Result", label: "PB column width", value: 8,
     min: 3, max: 40, step: 1, unit: "%",
     why: "A SHARE of the row's own width — same normalizing rule as Identity/Rank column width above. This is the PB TAG's own share (it sits right-aligned inside it, so a share wider than the tag itself just becomes breathing room on its left); the fold chevron beside it stays its own fixed ~30px column, untouched by any of these three shares — small enough at every supported card width that folding it into a combined 'PB + chevron' share was not worth restructuring the row's markup to express.",
   },
@@ -259,7 +259,7 @@ export const CHOICES = {
   },
   rankStyleNarrowOneLadder: {
     group: "Ranks", label: "Rank display -- narrow, shared ladder",
-    value: "stackedRow",
+    value: "column",
     options: {
       banners: "Full banners (bar + next-step line)",
       chips: "Chips (icon + rank name only)",
@@ -273,7 +273,7 @@ export const CHOICES = {
   },
   rankStyleWideTwoLadders: {
     group: "Ranks", label: "Rank display -- wide, different ladders",
-    value: "stackedRow",
+    value: "column",
     options: {
       banners: "Full banners (bar + next-step line)",
       chips: "Chips (icon + rank name only)",
@@ -287,7 +287,7 @@ export const CHOICES = {
   },
   rankStyleWideOneLadder: {
     group: "Ranks", label: "Rank display -- wide, shared ladder",
-    value: "stackedRow",
+    value: "column",
     options: {
       banners: "Full banners (bar + next-step line)",
       chips: "Chips (icon + rank name only)",

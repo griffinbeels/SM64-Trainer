@@ -4858,7 +4858,7 @@
         .log-list-card.log-rankstyle-wide-one-stackedrow .log-card.log-card-one-ladder
       ) .log-card-ranks .rank-banner-name {
       grid-area: name; justify-self: center; align-self: start;
-      max-width: var(--log-stacked-name-width, 100px); font-size: .68rem;
+      max-width: var(--log-stacked-name-width, 72px); font-size: .68rem;
       text-align: center;
     }
     :is(
@@ -4931,7 +4931,7 @@
         .log-list-card.log-rankstyle-narrow-one-stackedrow .log-card.log-card-one-ladder
       ) .log-card-ranks .rank-banner-name {
       grid-area: name; justify-self: center; align-self: start;
-      max-width: var(--log-stacked-name-width, 100px); font-size: .68rem;
+      max-width: var(--log-stacked-name-width, 72px); font-size: .68rem;
       text-align: center;
     }
     :is(
@@ -4957,7 +4957,7 @@
         .log-list-card.log-rankstyle-wide-one-stacked .log-card.log-card-one-ladder
       ) .log-card-ranks {
       flex-direction: column;
-      max-width: var(--log-stacked-rank-width, 200px);
+      max-width: var(--log-stacked-rank-width, 420px);
     }
   }
 
@@ -4967,7 +4967,7 @@
         .log-list-card.log-rankstyle-narrow-one-stacked .log-card.log-card-one-ladder
       ) .log-card-ranks {
       flex-direction: column;
-      max-width: var(--log-stacked-rank-width, 200px);
+      max-width: var(--log-stacked-rank-width, 420px);
     }
   }
 
@@ -4978,7 +4978,7 @@
         .log-list-card.log-rankstyle-wide-one-stackedrow .log-card.log-card-one-ladder
       ) .log-card-ranks {
       flex-direction: row; flex-wrap: wrap; align-items: center;
-      max-width: calc(var(--log-stacked-rank-width, 200px) * 2 + var(--log-rank-gap, 13px));
+      max-width: calc(var(--log-stacked-rank-width, 420px) * 2 + var(--log-rank-gap, 13px));
     }
   }
 
@@ -4988,7 +4988,7 @@
         .log-list-card.log-rankstyle-narrow-one-stackedrow .log-card.log-card-one-ladder
       ) .log-card-ranks {
       flex-direction: row; flex-wrap: wrap; align-items: center;
-      max-width: calc(var(--log-stacked-rank-width, 200px) * 2 + var(--log-rank-gap, 13px));
+      max-width: calc(var(--log-stacked-rank-width, 420px) * 2 + var(--log-rank-gap, 13px));
     }
   }
 
@@ -5144,7 +5144,7 @@
     grid-template-columns:
       minmax(calc(var(--log-identity-floor, 220px) * .6), calc(var(--log-identity-percent, 20fr) * .6))
       minmax(0, var(--log-ranks-percent, 70fr))
-      minmax(auto, var(--log-pb-percent, 10fr))
+      minmax(auto, var(--log-pb-percent, 8fr))
       auto;
   }
   /* `contain: inline-size` on the GRID ITEM (not `<b>` itself) -- the actual
@@ -5287,7 +5287,7 @@
     grid-template-columns:
       minmax(var(--log-identity-floor, 220px), var(--log-identity-percent, 20fr))
       minmax(0, var(--log-ranks-percent, 70fr))
-      minmax(auto, var(--log-pb-percent, 10fr))
+      minmax(auto, var(--log-pb-percent, 8fr))
       auto;
     grid-template-areas: "identity ranks pb fold";
   }
