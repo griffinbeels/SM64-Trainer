@@ -136,6 +136,12 @@ def test_the_new_strategy_modal_asks_which_star_the_run_ends_on(hundred_coin_pag
       })()
     """)
     hundred_coin_page.wait_for(".modal-body", timeout_ms=10000)
+    # Wait for the CONTROL, not just the dialog. The exit-star field arrives
+    # from the modal own fetch of /api/ranks/standards, so .modal-body is
+    # present a tick before it is — asserting there failed about one run in
+    # six, and the message ("no exit-star control on a 100-coin star") reads
+    # exactly like the feature being missing rather than the test being early.
+    hundred_coin_page.wait_for(".modal-body .exit-star-field", timeout_ms=10000)
     fields = hundred_coin_page.evaluate("""
       Array.from(document.querySelectorAll(".modal-body .field-label"))
         .map((el) => el.textContent.trim())
