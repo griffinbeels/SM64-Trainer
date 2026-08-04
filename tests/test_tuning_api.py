@@ -370,17 +370,20 @@ def test_a_css_disagreement_fails_the_whole_save_leaving_both_files_untouched(
     from sm64_events.server import tuning_api
     endpoint, tmp_js, tmp_css = log_endpoint
 
-    # `--log-stacked-rank-width` appears TWICE in the real index.html (the
-    # vertically-stacked and side-by-side rankStyle rules both read it, spec
-    # 2026-08-04-rank-variants) -- corrupt only the FIRST occurrence so the
-    # two disagree, the same failure mode
+    # `--log-stacked-rank-width` appears FOUR times in the real index.html
+    # (2026-08-04, layout-matrix round: the "stacked" and "stackedRow"
+    # direction rules each need their own copy for the wide cells AND the
+    # narrow, @container-scoped ones -- up from the two rankStyle rules the
+    # single-choice mechanism this replaced had) -- corrupt only the FIRST
+    # occurrence so the rest disagree with it, the same failure mode
     # `test_disagreeing_fallbacks_are_refused_rather_than_picked_between`
     # proves against a hand-built sample, reproduced here against the real
-    # file's structure. (This test named `--log-rank-width` until that round
-    # removed its own second occurrence as part of fixing BUG 1 -- a rank
-    # column that absorbed free space up to a fixed cap instead of genuinely
-    # -- leaving only one real reader of that var; `--log-stacked-rank-width`
-    # is the var this same atomicity guarantee now has two real readers of.)
+    # file's structure. (This test named `--log-rank-width` until an earlier
+    # round removed its own second occurrence as part of fixing BUG 1 -- a
+    # rank column that absorbed free space up to a fixed cap instead of
+    # genuinely -- leaving only one real reader of that var;
+    # `--log-stacked-rank-width` is the var this same atomicity guarantee now
+    # has multiple real readers of.)
     original = tmp_css.read_text(encoding="utf-8")
     corrupted = original.replace(
         "var(--log-stacked-rank-width, 200px)",
@@ -388,8 +391,8 @@ def test_a_css_disagreement_fails_the_whole_save_leaving_both_files_untouched(
     assert corrupted != original, (
         "the replace above matched nothing -- index.html's own fallback "
         "text no longer looks like what this test assumes")
-    assert corrupted.count("var(--log-stacked-rank-width, 200px)") == 1, (
-        "expected exactly one surviving agreeing occurrence -- the real "
+    assert corrupted.count("var(--log-stacked-rank-width, 200px)") == 3, (
+        "expected exactly three surviving agreeing occurrences -- the real "
         "file's stackedRankWidth fallback count no longer matches what this "
         "test assumes")
     tmp_css.write_text(corrupted, encoding="utf-8", newline="")

@@ -380,8 +380,23 @@ PROJECT = Project(
     # wide template between these two exact window widths), so the derived
     # matrix's own 900/901 VIEWPORT points land at a ~781px container deep
     # inside the narrow layout and never exercise the actual crossover.
+    #
+    # 979/980 are the same shape again, for the log card's own rank-display
+    # narrow/wide split, `@container (max-width: 860px)` against
+    # `.log-card-ranks .rank-banner` (2026-08-04, layout-matrix round): the
+    # SAME ~119px window-to-container offset holds in this range (975 ->
+    # container 856, 980 -> container 861), and 979/980 is the exact window
+    # pair where a two-ladder card's shape (read off `.rank-banner`'s own
+    # `grid-template-areas`) flips from Column to stackedRow -- confirmed
+    # directly, not estimated from the offset alone. The derived matrix's own
+    # literal-860/861 VIEWPORT points are a coincidence of this threshold's
+    # chosen number, not a probe of this crossover; they land relatively
+    # narrow in real container terms (~741-742px, comfortably inside the
+    # Column band already) and happen to have surfaced an unrelated,
+    # already-owed stagebanner defect instead (see known_defects, below).
     extra_viewports=((850, 1180), (851, 1000), (900, 1180), (912, 1000),
                      (913, 1000), (1019, 1000), (1020, 1000),
+                     (979, 1000), (980, 1000),
                      (1500, 900), (1280, 720)),
     # OWED, not exempted. These became VISIBLE on 2026-07-28 when the
     # fixture finally rendered a populated practice page -- a stage, an
@@ -471,6 +486,45 @@ PROJECT = Project(
         '851x1000 [page] clipped :: span.starname':
             'scrollHeight 22 > clientHeight 20',
         '851x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        # 860/861 are BOTH SIDES of `.log-card-ranks`' own new narrow/wide
+        # `@container (max-width: 860px)` split (2026-08-04, layout-matrix
+        # round) -- the matrix derives its probe points from every declared
+        # threshold in the stylesheet, so this pair is new PURELY because
+        # nothing named 860 before. The defect itself is this same
+        # already-owed stagebanner/starcell class (see every other entry in
+        # this dict), unrelated to the log card: confirmed by diffing this
+        # round's index.html against HEAD restricted to every stagebanner/
+        # starcell/starholder/starrank/starname selector -- byte-identical,
+        # zero lines changed -- and by direct measurement that the SAME
+        # ~2px stagebanner shortfall recurs at literally every width from
+        # 859px through 900px tried by hand, not just these two.
+        '860x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 200 > clientHeight 198',
+        '860x1000 [page] clipped :: span.starname':
+            'scrollHeight 22 > clientHeight 20',
+        '860x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '861x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 200 > clientHeight 198',
+        '861x1000 [page] clipped :: span.starname':
+            'scrollHeight 22 > clientHeight 20',
+        '861x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        # 979/980 are the REAL window-pixel crossover for the SAME log-card
+        # threshold (extra_viewports' own comment above has the measurement);
+        # same already-owed defect class again.
+        '979x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 217 > clientHeight 215',
+        '979x1000 [page] clipped :: span.starname':
+            'scrollHeight 26 > clientHeight 24',
+        '979x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '980x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 217 > clientHeight 215',
+        '980x1000 [page] clipped :: span.starname':
+            'scrollHeight 26 > clientHeight 24',
+        '980x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '900x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 206 > clientHeight 204',
@@ -761,6 +815,39 @@ BOWSER_PROJECT = dataclasses.replace(
         '1020x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1020x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+
+        # 860x1000/861x1000/979x1000/980x1000: PROJECT's own new rows again
+        # (2026-08-04, layout-matrix round -- the log card's rank-display
+        # `@container (max-width: 860px)` split; see PROJECT's own
+        # `extra_viewports` comment for the full measurement), same shape as
+        # the 900/901/1019/1020 block just above: the SAME long-owed defect
+        # class, at this row's own 26x2px overlap magnitude rather than
+        # PROJECT's 7x2px. Measured directly against this project's own
+        # sweep output.
+        '860x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 200 > clientHeight 198',
+        '860x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '860x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '861x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 200 > clientHeight 198',
+        '861x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '861x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '979x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 217 > clientHeight 215',
+        '979x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '979x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '980x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 217 > clientHeight 215',
+        '980x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '980x1000 [bowser-row] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
     },
 )

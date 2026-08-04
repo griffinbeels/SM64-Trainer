@@ -5,9 +5,9 @@
 // until the name fits its column, instead of ellipsizing or wrapping.
 //
 // CSS has nothing that sizes text by its own rendered length, so this is a
-// measure-then-write component -- the same deliberate crack in
-// logtuning.js's "everything here is consumed by CSS" contract that
-// `rankLayout` already opened for a JS-resolved choice (practicelog.js). The
+// measure-then-write component -- one of the deliberate cracks in
+// logtuning.js's "everything here is consumed by CSS" contract, alongside
+// `rankIconSize` (a JS number the Hat/Medal sprite draws itself at). The
 // actual sizing MATH is import-free (`ui/shrinkfit.js::fittedFontSize`), the
 // same split climbcurve.js/rankclimb.js already draw between "how fast" and
 // "the rAF loop that applies it" -- this file is only the DOM-measuring half.

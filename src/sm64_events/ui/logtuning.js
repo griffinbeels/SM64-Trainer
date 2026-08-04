@@ -56,7 +56,7 @@ export const TUNABLES = {
     why: "The course/star icon in the card head. Bigger is the point at a wide window, once the ranks column stops needing a whole banner's worth of room.",
   },
   nameSize: {
-    group: "Identity", label: "Name size", value: 13,
+    group: "Identity", label: "Name size", value: 11,
     min: 10, max: 32, step: 1, unit: "px",
     why: "Font size of the entity's own name — the biggest text in the head row.",
   },
@@ -76,7 +76,7 @@ export const TUNABLES = {
     why: "A SHARE of the row's own width, replacing a FIXED px cap that was correct at exactly one card width and wrong at every other (user, 2026-08-04: \"we should be able to control the relative overall spacing as a percentage of the whole column width\"). Doesn't need to sum to 100 with Rank column width / PB column width below — see this file's own unit doc — so nothing here can express an impossible layout. Still one FIXED track, in the sense that matters for item 1: every card computes the same share of the same card width, so every icon still lands on the same x. Never shrinks below Identity column floor, whatever this share reads at a narrow card.",
   },
   identityFloor: {
-    group: "Identity", label: "Identity column floor", value: 248,
+    group: "Identity", label: "Identity column floor", value: 220,
     min: 140, max: 400, step: 4, unit: "px",
     why: "The hard minimum the identity column holds at ANY width, however small its own share above is dialed — a pure percentage shrinks toward zero at the app's 850px supported floor long before a share this small could hold a real name. Measured, not guessed: the widest of 97 corpus star names needs 248px at the shipped 13px name size (tests/test_log_card_name_fits.py's own corpus). Raise this if Name size grows past its shipped default; it was measured at that size, not derived from it.",
   },
@@ -93,7 +93,7 @@ export const TUNABLES = {
     why: "Height of the within-division progress bar. Only visible in Banners mode — Chips and Caps-only hide it entirely.",
   },
   rankGap: {
-    group: "Ranks", label: "Gap between the two ranks", value: 0,
+    group: "Ranks", label: "Gap between the two ranks", value: 13,
     min: 0, max: 40, step: 1, unit: "px",
     why: "Space between the strategy rank and the star/segment rank, whichever direction they're laid out (side by side in One line/Two line, stacked in Stacked).",
   },
@@ -103,9 +103,9 @@ export const TUNABLES = {
     why: "How much room the two MARELO-shaped rank displays share when Rank display is set to Stacked -- independent of Rank column width above, so switching between Stacked and the row-based styles never forces retuning one shared number.",
   },
   stackedNameWidth: {
-    group: "Ranks", label: "Stacked rank-name width", value: 72,
+    group: "Ranks", label: "Stacked rank-name width", value: 100,
     min: 30, max: 160, step: 2, unit: "px",
-    why: "How wide the tier/division text under the icon may grow in Stacked before it ellipsises -- the same job MARELO's own rank-name column plays under its icon.",
+    why: "How wide the tier/division text under the icon may grow in Stacked/stackedRow before it ellipsises -- the same job MARELO's own rank-name column plays under its icon. Raised 72->100 (2026-08-04, layout-matrix round): measured against every real tier name in caps.js at the shipped font, \"TOADSWORTH 5\" needs 96px unwrapped -- 72px was truncating it (\"TOADSWO...\") at every width wide enough to even reach this style, which is exactly item 4's report (\"the names of the rank standards aren't cut off\").",
   },
   rankIconSize: {
     group: "Ranks", label: "Rank icon size", value: 28,
@@ -205,8 +205,47 @@ export const CHOICES = {
     cssPrefix: "log-width",
     why: "\"Maybe this can just be the same layout in both screen sizes\" (user) — Same holds whatever Collapsed layout is picked above at every supported width; Stack narrow reintroduces a width-triggered switch to Stacked, for comparison.",
   },
-  rankStyle: {
-    group: "Ranks", label: "Rank display", value: "banners",
+  // ---- Rank display: a DECISION TABLE, not one global choice -------------
+  //
+  // Retired the single `rankStyle` row (2026-08-04, layout-matrix round --
+  // spec practice-log-entity-cards). Griffin: "the core answer here is that
+  // we need a different layout for narrow and a different layout for wide,
+  // and different layouts depending on if there's a different rank standard
+  // for strategy/star" -- the right style is a function of TWO facts about
+  // THIS card, never one, so a single choice could never be right for every
+  // card at every width. Four rows, one per cell of:
+  //
+  //                        two DIFFERENT ladders   |  ONE shared ladder
+  //   narrow (<=860px)     column (condensed)      |  stackedRow
+  //   wide   (>860px)      stackedRow               |  stackedRow
+  //
+  // "Different ladders" vs "shared" is `sec.one_ladder`
+  // (tracking/views.py::ranks_share_ladder, already read once by this card
+  // through `showsEntityBanner` to decide whether a second banner renders at
+  // all) -- free, never re-derived here. Narrow/wide is a real `@container`
+  // query in index.html at 860px, measured directly against `.practice-page`'s
+  // OWN width (not the app window's -- it sits inside the shell's sidebar
+  // column, so a first pass that measured the harness pane instead landed on
+  // a number nearly 220px too wide): forcing every cell to stackedRow, this
+  // is the container width where two widgets side by side first reach their
+  // own full designed size rather than being squeezed under it (never
+  // literally wrapping at any narrower width tried). Comfortably below the
+  // app's 850px supported floor once the sidebar's real width at that window
+  // size (a 76px rail below 1180px, this codebase's own responsiveness law)
+  // is accounted for, so Column is reachable in practice, not only on paper.
+  // Each row still shares the
+  // same six options every rankStyle choice always has -- Griffin's own
+  // words: "we have no reason to condense it that far when combined" is why
+  // the ONE-ladder cells both default to stackedRow regardless of width (a
+  // single MARELO widget never needs the tighter Column reading), while the
+  // TWO-ladder cells differ -- Column only once there's not enough room for
+  // stackedRow's own comfortable size. CSS resolves the table in
+  // index.html's "Layout matrix" section; RankBanner itself never sees any
+  // of these four values -- see that section's own comment for the
+  // mechanism.
+  rankStyleNarrowTwoLadders: {
+    group: "Ranks", label: "Rank display -- narrow, different ladders",
+    value: "column",
     options: {
       banners: "Full banners (bar + next-step line)",
       chips: "Chips (icon + rank name only)",
@@ -215,11 +254,53 @@ export const CHOICES = {
       stackedRow: "Stacked, side by side (both MARELO-shaped displays in a row)",
       column: "Column (even more condensed: cap, bar, name, type -- side by side)",
     },
-    cssPrefix: "log-rankstyle",
-    why: "How much of each rank banner shows in the card head. Widen Rank column width first if you dial this up to Chips or Banners, which need real room for text; Caps only is the one setting that has NO text to truncate at any width. Stacked and Stacked-side-by-side are RankBanner's own MARELO-shaped layout (the `layout` prop, ranks.js) rather than a field-hiding rule like the first three -- the same bar + next-step-line fields Banners shows, arranged in far less horizontal space; only their CONTAINER direction differs (the two rank displays one above the other, or side by side -- the row-based op.gg-style Scope Chips on the Rank tab already shows several same-shaped rank displays side by side, so this reading has precedent in the app). Column is a THIRD `layout` value, even more condensed still (cap, bar, name, then the entity noun in a small font, all in one column -- Griffin's own sketch), also arranged side by side. The next-step line only ever appears on the entity you're actively practicing (LogCard's own `active` prop, never a display rule here) in every style but Column, which drops it outright to stay condensed.",
+    cssPrefix: "log-rankstyle-narrow-two",
+    why: "Narrow card, strategy and star/segment graded on DIFFERENT ladders (two real banners). Griffin's pick: Column, the condensed reading -- two full stackedRow widgets don't fit their own comfortable size below 860px, and Column is built to use the freed width rather than sit centred with slack either side.",
+  },
+  rankStyleNarrowOneLadder: {
+    group: "Ranks", label: "Rank display -- narrow, shared ladder",
+    value: "stackedRow",
+    options: {
+      banners: "Full banners (bar + next-step line)",
+      chips: "Chips (icon + rank name only)",
+      capsOnly: "Caps only (icon, no text)",
+      stacked: "Stacked (MARELO-shaped: icon+name left, bar+next right)",
+      stackedRow: "Stacked, side by side (both MARELO-shaped displays in a row)",
+      column: "Column (even more condensed: cap, bar, name, type -- side by side)",
+    },
+    cssPrefix: "log-rankstyle-narrow-one",
+    why: "Narrow card, ONE shared ladder (the strategy IS the entity's best-possible ladder, so only one banner renders). Griffin's pick: stackedRow, same as wide -- \"it's basically like using the stacked side by side mode, instead of the condensed column mode, since we have no reason to condense it that far when combined\": a single widget never crowds the row the way two do, so narrowing the card gives it no reason to change.",
+  },
+  rankStyleWideTwoLadders: {
+    group: "Ranks", label: "Rank display -- wide, different ladders",
+    value: "stackedRow",
+    options: {
+      banners: "Full banners (bar + next-step line)",
+      chips: "Chips (icon + rank name only)",
+      capsOnly: "Caps only (icon, no text)",
+      stacked: "Stacked (MARELO-shaped: icon+name left, bar+next right)",
+      stackedRow: "Stacked, side by side (both MARELO-shaped displays in a row)",
+      column: "Column (even more condensed: cap, bar, name, type -- side by side)",
+    },
+    cssPrefix: "log-rankstyle-wide-two",
+    why: "Wide card, two different ladders. Griffin's pick: stackedRow, \"given room\" -- once there's space for two full MARELO widgets side by side at their own comfortable size, there's no reason to condense further.",
+  },
+  rankStyleWideOneLadder: {
+    group: "Ranks", label: "Rank display -- wide, shared ladder",
+    value: "stackedRow",
+    options: {
+      banners: "Full banners (bar + next-step line)",
+      chips: "Chips (icon + rank name only)",
+      capsOnly: "Caps only (icon, no text)",
+      stacked: "Stacked (MARELO-shaped: icon+name left, bar+next right)",
+      stackedRow: "Stacked, side by side (both MARELO-shaped displays in a row)",
+      column: "Column (even more condensed: cap, bar, name, type -- side by side)",
+    },
+    cssPrefix: "log-rankstyle-wide-one",
+    why: "Wide card, one shared ladder. Griffin's pick: stackedRow -- the same reading every other cell but narrow/two-ladder lands on, since a lone widget is never the one crowding the row.",
   },
   nameOverflow: {
-    group: "Identity", label: "Name overflow", value: "ellipsis",
+    group: "Identity", label: "Name overflow", value: "shrinkToFit",
     options: {
       ellipsis: "Ellipsis (today's behaviour)",
       shrinkToFit: "Shrink to fit (steps the font size down, never truncates)",
@@ -236,6 +317,27 @@ export const CHOICES = {
     },
     cssPrefix: "log-coursename",
     why: "The small course/context line above the entity name (\"WHOMP'S FORTRESS\", above \"Blast Away the Wall in Front\"). Hiding it frees a whole line of the identity column's height -- worth trying at a narrow window, but not wired to one: it is a plain preference, on at every width until you say otherwise.",
+  },
+  // Item 5, 2026-08-04 layout-matrix round -- Griffin flagged this one as a
+  // MAYBE, not a decision: "Maybe there's a way to further condense the
+  // course identity information? Maybe for longer star names, it condenses
+  // into two lines, so that we free up some horizontal space for the rank
+  // standards?" Different from `nameOverflow: wrap` above, which lets a long
+  // name grow a second line WITHOUT narrowing the identity column at all
+  // (nothing is freed for the ranks column) -- this narrows the column's own
+  // floor/share first and relies on wrapping to absorb what that costs the
+  // name. "off" is the shipped shape (a genuine no-op, same as every other
+  // choice's default); ships OFF because it is exploratory, for him to try
+  // against the shipped rankStyle table above rather than something this
+  // round is committing to.
+  identityCondense: {
+    group: "Identity", label: "Condense identity to two lines", value: "off",
+    options: {
+      off: "Off (today's identity column width)",
+      on: "On (narrower column, name wraps to up to two lines, freed width goes to Ranks/PB)",
+    },
+    cssPrefix: "log-identitycondense",
+    why: "Shrinks the identity column's floor and share by 40% and lets a long name wrap onto a second line instead of shrinking/ellipsising -- the freed width flows into the ranks/PB tracks automatically (both are `fr` shares of the same row). Only visible in the oneLine collapsed layout, the one place identity/ranks/PB genuinely split a row three ways.",
   },
 };
 

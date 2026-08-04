@@ -218,10 +218,10 @@ def test_the_unknown_choice_class_guard_can_fail(tmp_path):
     mutated = tmp_path / "index.html"
     mutated.write_text(
         real_css + "\n/* injected by a mutation test */\n"
-        ".log-rankstyle-typo { opacity: .5; }\n",
+        ".log-rankstyle-wide-two-typo { opacity: .5; }\n",
         encoding="utf-8")
     unknown_here = unknown_choice_classes(mutated.read_text(encoding="utf-8"), data["choices"])
-    assert "log-rankstyle-typo" in unknown_here
+    assert "log-rankstyle-wide-two-typo" in unknown_here
     assert not unknown_choice_classes(real_css, data["choices"]), (
         "the real file already fails this check -- the mutation proved nothing")
 
@@ -297,14 +297,14 @@ def test_a_tuning_change_actually_changes_the_classes():
     data = run_node(
         "DEFAULTS, logTuningClasses",
         "console.log(JSON.stringify(logTuningClasses("
-        "  { ...DEFAULTS, rankStyle: 'capsOnly' })));")
-    assert "log-rankstyle-capsonly" in data.split(" ")
+        "  { ...DEFAULTS, rankStyleWideTwoLadders: 'capsOnly' })));")
+    assert "log-rankstyle-wide-two-capsonly" in data.split(" ")
 
 
 def test_the_settings_string_round_trips_every_value():
     same, keys, defaults_count = run_node(
         "encodeTuning, decodeTuning, DEFAULTS",
-        "const mine = { ...DEFAULTS, bodyIndent: 40, rankStyle: 'banners' };\n"
+        "const mine = { ...DEFAULTS, bodyIndent: 40, rankStyleWideOneLadder: 'banners' };\n"
         "const round = decodeTuning(encodeTuning(mine));\n"
         "console.log(JSON.stringify([\n"
         "  JSON.stringify(round) === JSON.stringify(mine),\n"

@@ -33,16 +33,6 @@ import { logTuning, logTuningVars, logTuningClasses } from "../logtuning.js";
 
 const html = htm.bind(h);
 
-// Which of RankBanner's `layout` values a `rankStyle` choice resolves to.
-// Three of the six options are field-hiding CSS rules alone (banners/chips/
-// capsOnly all render RankBanner's plain "row" layout, just with some of its
-// fields hidden by a class); Stacked and Stacked-side-by-side share
-// RankBanner's OWN "stacked" layout -- the same MARELO-shaped arrangement,
-// differing only in which direction `.log-card-ranks` lays the two banners
-// out (a CSS-only difference, index.html) -- and Column is a third, distinct
-// `layout` value of its own (spec 2026-08-04-rank-variants).
-const RANK_LAYOUT_BY_STYLE = { stacked: "stacked", stackedRow: "stacked", column: "column" };
-
 // How many entity cards render before "Show 5 more". Every shown card is
 // OPEN by default (Griffin: "The drop down should always be opened by
 // default"), so an uncapped lifetime-scope view would render every entity in
@@ -66,7 +56,7 @@ export function orderedSections(view) {
 
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, selected, onSelect, forceOpen,
-                          rankLayout = "row", active = false,
+                          active = false,
                           nameOverflow = "ellipsis", rankIconSize = 24 }) {
   const [open, setOpen] = useState(true);
   const [showHidden, setShowHidden] = useState(false);
@@ -124,8 +114,16 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   }, [selected, focus && focus.nonce]);
   const shown = rows.slice(0, visible);
   const isOpen = open;
+  // Which of the layout matrix's two ladder-count cells this card falls
+  // into (index.html's "Layout matrix" CSS section) -- the SAME predicate
+  // that decides whether the second `<RankBanner>` below renders at all, so
+  // the class can never disagree with what is actually on screen. Server
+  // truth end to end: `sec.one_ladder` (views.py::ranks_share_ladder) ->
+  // `showsEntityBanner` -> this class -> CSS picks the cell; nothing here
+  // re-derives it.
+  const twoLadder = showsEntityBanner(sec);
   return html`<section class="log-card ${selected ? "is-selected" : ""}
-      ${isOpen ? "" : "is-closed"}">
+      ${isOpen ? "" : "is-closed"} ${twoLadder ? "log-card-two-ladder" : "log-card-one-ladder"}">
     ${/* The HEADING selects; the chevron opens. Two gestures, two targets,
          so browsing a card's graphs and folding it away never fight. */""}
     <div class="log-card-head">
@@ -146,12 +144,12 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
             atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${0}
             replayKey=${sec.last_strat || ""}
             identity=${rankIdentity(ek, "strategy", sec, t)}
-            layout=${rankLayout} showNext=${active} iconSize=${rankIconSize} />
-        ${showsEntityBanner(sec) && html`<${RankBanner}
+            showNext=${active} iconSize=${rankIconSize} />
+        ${twoLadder && html`<${RankBanner}
             label=${entityNoun(sec)} banner=${sec.entity_rank}
             atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${1}
             identity=${rankIdentity(ek, "entity", sec, t)}
-            layout=${rankLayout} showNext=${active} iconSize=${rankIconSize} />`}
+            showNext=${active} iconSize=${rankIconSize} />`}
       </div>
       <${PbTag} pb=${sectionPb(sec, t.clock)} mode=${clock} rows=${rows}
         pick=${null} t=${t} />
@@ -291,20 +289,26 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
   // `.log-card` underneath inherits the vars for free (they cascade) and
   // matches the class-scoped rules in index.html by being a descendant.
   // LogCard itself stays entirely unaware that a tuning system exists --
-  // except for `rankLayout`, `nameOverflow` and `rankIconSize`, which are JS
-  // rather than CSS (RankBanner's `layout` prop selects an actual
-  // arrangement of DOM parts, not merely a class an already-rendered tree
-  // can hide fields under; the `shrinkToFit` value of `nameOverflow` is a JS
-  // measurement, not a CSS rule at all -- ui/components/shrinkname.js;
-  // `rankIconSize` is a NUMBER the Hat/Medal sprite draws itself at
-  // (`RankIcon`'s own `size` prop, rankicon.js) -- a `--icon-size` custom
-  // property alone only ever reserved the icon's wing-spill MARGIN, never
-  // resized the sprite, which is the root cause BUG 2's own fix note in
-  // index.html explains) and so have to be resolved here and handed down
-  // explicitly, the three deliberate cracks in that wall.
+  // except for `nameOverflow` and `rankIconSize`, which are JS rather than
+  // CSS (the `shrinkToFit` value of `nameOverflow` is a JS measurement, not
+  // a CSS rule at all -- ui/components/shrinkname.js; `rankIconSize` is a
+  // NUMBER the Hat/Medal sprite draws itself at (`RankIcon`'s own `size`
+  // prop, rankicon.js) -- a `--icon-size` custom property alone only ever
+  // reserved the icon's wing-spill MARGIN, never resized the sprite, which
+  // is the root cause BUG 2's own fix note in index.html explains) and so
+  // have to be resolved here and handed down explicitly, the two deliberate
+  // cracks in that wall. Which of the six rank-display SHAPES a card shows
+  // is no longer a third crack: since the 2026-08-04 layout-matrix round
+  // retired the single `rankStyle` choice for a four-cell table (narrow/wide
+  // x two-ladder/one-ladder), RankBanner's own `layout` prop can no longer
+  // be a page-level JS decision at all -- the active cell depends on THIS
+  // card's own ladder count (`showsEntityBanner`, below) crossed with the
+  // real-time container width, which only CSS (`@container`) can answer
+  // reactively. LogCard passes RankBanner no `layout` (its "row" default);
+  // index.html's "Layout matrix" CSS section reaches `.rank-banner` and its
+  // children through ancestor context instead.
   const logVars = useMemo(() => logTuningVars(logTuning()), []);
   const logClasses = useMemo(() => logTuningClasses(logTuning()), []);
-  const rankLayout = RANK_LAYOUT_BY_STYLE[logTuning().rankStyle] || "row";
   const nameOverflow = logTuning().nameOverflow;
   const rankIconSize = logTuning().rankIconSize;
   const sections = orderedSections(v);
@@ -349,7 +353,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
           focus=${focus} clearFocus=${clearFocus}
           selected=${ek === focusKey} onSelect=${onSelect}
           forceOpen=${ek === focusKey}
-          rankLayout=${rankLayout} active=${activeKey != null && ek === activeKey}
+          active=${activeKey != null && ek === activeKey}
           nameOverflow=${nameOverflow} rankIconSize=${rankIconSize} />`;
       })}
       <${UnassignedLogCard} v=${v} t=${t} ui=${ui} freshIds=${freshIds}
