@@ -121,6 +121,51 @@ def test_the_standards_table_bands_its_columns_by_variant(hundred_coin_page):
     assert sum(span for _, span in bands) == columns - 1, (bands, columns)
 
 
+def test_each_exit_star_band_wears_its_own_colour(hundred_coin_page):
+    """User, 2026-08-03: "different colors for the headers for each of the
+    overarching exit star options... to better delineate which columns belong
+    to which overarching exit star strategy."
+
+    Asserts the PAINTED colour, not the class or the custom property. A wash
+    built with `color-mix` on an undefined var computes to `transparent` and
+    the markup still looks perfectly correct in the DOM -- which is exactly
+    the silent failure a class-name assertion would wave through.
+    """
+    hundred_coin_page.evaluate("""
+      (() => { const b = document.querySelector(".standards-toggle");
+               if (b && b.getAttribute("aria-expanded") !== "true") b.click(); })()
+    """)
+    hundred_coin_page.wait_for(".stdtable .std-variant", timeout_ms=10000)
+    painted = hundred_coin_page.evaluate("""
+      Array.from(document.querySelectorAll(".stdtable .std-variant")).map((th) => {
+        const style = getComputedStyle(th);
+        return {label: th.textContent.trim(), bg: style.backgroundColor,
+                rule: style.borderLeftColor, ink: style.color};
+      })
+    """)
+    assert len(painted) >= 2, painted
+    transparent = ("rgba(0, 0, 0, 0)", "transparent")
+    for band in painted:
+        assert band["bg"] not in transparent, (
+            f"{band['label']} has no heading wash: {band}")
+        assert band["rule"] not in transparent, (
+            f"{band['label']} has no band-start rule: {band}")
+    for field in ("bg", "rule", "ink"):
+        tints = [band[field] for band in painted]
+        assert len(set(tints)) == len(tints), (
+            f"two exit-star bands share a {field}: {painted}")
+
+    # The colour has to reach the COLUMNS, or it delineates only itself: every
+    # band's first strategy column carries the same rule as its heading.
+    columns = hundred_coin_page.evaluate("""
+      Array.from(document.querySelectorAll(".stdtable .std-band-start"))
+        .map((cell) => getComputedStyle(cell).borderLeftColor)
+    """)
+    for band in painted:
+        assert columns.count(band["rule"]) > 1, (
+            f"{band['label']}'s rule stops at the heading: {band}, {columns}")
+
+
 def test_the_new_strategy_modal_asks_which_star_the_run_ends_on(hundred_coin_page):
     """Live question, 2026-08-03: "How do people add a new exit star that
     doesn't already have a strat?" — asked while running this very build, so

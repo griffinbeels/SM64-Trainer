@@ -522,9 +522,23 @@
   .stdtable th,.stdtable td{border:1px solid #21262d;padding:3px 7px;text-align:center}
   .stdtable .col-active{box-shadow:inset 0 0 0 2px #3a8d8d}
   /* Exit-star variant band over a 100-coin star's columns: a heading, not a
-     pickable column, so it reads quieter than the strategy names under it. */
-  .stdtable .std-variant{font-weight:600;letter-spacing:.02em;color:#8b98a6;
-    background:#131b26;border-bottom-color:#2b323b}
+     pickable column, so it reads quieter than the strategy names under it.
+     Each band arrives wearing its own palette hue in `--std-band`, set inline
+     by standards.js -- which is the ONLY place a band colour is chosen, so
+     adding a hue never touches this file. Three weights of the same tint, so
+     the group reads without any of them competing with the times: a wash on
+     the heading, a fainter one on the strategy names under it, and one rule
+     down the left edge marking where the band starts (that one runs the whole
+     height of the table, since the question is which COLUMNS belong to the
+     heading, not just which heading is which). */
+  .stdtable .std-variant{font-weight:600;letter-spacing:.02em;
+    color:color-mix(in srgb, var(--std-band, transparent) 80%, var(--text));
+    background:color-mix(in srgb, var(--std-band, transparent) 32%, #131b26);
+    border-bottom:2px solid color-mix(in srgb, var(--std-band, #2b323b) 70%, transparent)}
+  .stdtable th.std-banded{
+    background:color-mix(in srgb, var(--std-band, transparent) 11%, transparent)}
+  .stdtable .std-band-start{
+    border-left:2px solid color-mix(in srgb, var(--std-band, transparent) 60%, transparent)}
   .stdtable .std-variant-row th:first-child{border:0;background:transparent}
   .stdinp{width:48px;background:#0d1117;border:1px solid #30363d;color:#e6e9ee;border-radius:4px;text-align:center}
   /* Three boxes reading {m}'{s}"{cc} — a time is TYPED the way it is said.
@@ -653,6 +667,12 @@
     --blue: #68adf2;
     --green: #91e5a2;
     --coral: #ff7b73;
+    /* Sixth accent, added 2026-08-03 for the standards table's exit-star
+       bands: a course can have six exit stars, and the five accents above
+       run out at five. Nebula violet, so it sits inside the observatory
+       palette rather than beside it. Deliberately NOT a teal -- #3a8d8d is
+       the active-column ring two rules down in .stdtable. */
+    --violet: #b48bf0;
     --caveat: #e0a24a;
     --sidebar-wide: 206px;
     --sidebar-rail: 76px;

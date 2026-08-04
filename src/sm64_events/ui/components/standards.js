@@ -20,6 +20,17 @@ import { Icon } from "./icons.js";
 const html = htm.bind(h);
 const enc = encodeURIComponent;
 
+// Each exit-star variant gets its OWN hue from the site palette, so the
+// columns under one heading read as one group instead of as a run of
+// strategies that happen to sit near each other (user, 2026-08-03: "better
+// delineate which columns belong to which overarching exit star strategy").
+// THE single owner of the cycle -- the stylesheet never names a band colour,
+// it only reads the `--std-band` this hands it, so adding a hue is a row here.
+// Six is one more than any course can have exit stars, so a repeat needs the
+// unfiled-strategy "Other" band on a fully-defined course; even then two bands
+// in one hue cannot be ADJACENT until there are ten of them.
+const BAND_TINTS = ["--blue", "--gold", "--green", "--coral", "--violet", "--caveat"];
+
 // Your time is essentially never AT a cutoff, so "you are here" is not a
 // cell: it is a point BETWEEN two rows in one column. This returns that
 // point as a 0..1 fraction of the gap between the two cutoffs it falls
@@ -180,6 +191,21 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   const strats = bands.length
     ? bands.flatMap((band) => band.names)
     : slowestFirst(allStrats, ladders);
+  // Colour is assigned AFTER the bands are ordered, so the leftmost band is
+  // always the first hue and the table looks the same every time it opens.
+  bands.forEach((band, index) => {
+    band.tint = `var(${BAND_TINTS[index % BAND_TINTS.length]})`;
+  });
+  const tintOf = new Map(bands.flatMap(
+    (band) => band.names.map((name) => [name, band.tint])));
+  // Where one band ENDS and the next begins: the wash says which columns
+  // belong together, this says where the boundary is, and it runs the full
+  // height of the table rather than stopping at the heading.
+  const bandStart = new Set(bands.map((band) => band.names[0]));
+  const bandClass = (strat, ...rest) => [...rest,
+    bandStart.has(strat) ? "std-band-start" : ""].filter(Boolean).join(" ");
+  const bandStyle = (strat) => (tintOf.has(strat)
+    ? `--std-band:${tintOf.get(strat)}` : null);
   const leafOf = new Map(((data && data.strategy_groups) || [])
     .flatMap((group) => group.strategies.map((s) => [s.name, s.leaf])));
   const colHead = (strat) => leafOf.get(strat) || strat;
@@ -230,10 +256,14 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
       </div>
       <table class="stdtable"><thead>
         ${bands.length ? html`<tr class="std-variant-row"><th></th>
-          ${bands.map((band) => html`<th class="std-variant" colspan=${band.names.length}
+          ${bands.map((band) => html`<th class="std-variant std-band-start"
+              colspan=${band.names.length} style=${`--std-band:${band.tint}`}
               title="the star this 100-coin run ends on">${band.label}</th>`)}</tr>` : null}
         <tr><th>Strat</th>
-        ${strats.map((strat) => html`<th class=${strat === activeStrat ? "col-active" : ""}>${headVid(strat)
+        ${strats.map((strat) => html`<th
+          class=${bandClass(strat, tintOf.has(strat) ? "std-banded" : "",
+            strat === activeStrat ? "col-active" : "")}
+          style=${bandStyle(strat)}>${headVid(strat)
           ? html`<a href=${headVid(strat)} target="_blank" rel="noopener" title="fastest-time video">${colHead(strat)}</a>`
           : colHead(strat)}${editing ? html` <button class="candx" title=${isSeeded(strat) ? "clear this strategy's standards" : "delete this strategy"} onclick=${() => delStrat(strat)}>×</button>` : ""}
           ${marker && strat === activeStrat ? html`<span class="std-you-badge"
@@ -265,10 +295,10 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
               && (rank === marker.above || rank === marker.below);
             const beaten = marker && marker.below && strat === activeStrat
               && RANK_NAMES.indexOf(rank) > RANK_NAMES.indexOf(marker.below);
-            const cellClass = [strat === activeStrat ? "col-active" : "",
-              isBracket ? "std-marker-bracket" : (beaten ? "std-beaten" : "")]
-              .filter(Boolean).join(" ");
-            return html`<td class=${cellClass}>
+            const cellClass = bandClass(strat,
+              strat === activeStrat ? "col-active" : "",
+              isBracket ? "std-marker-bracket" : (beaten ? "std-beaten" : ""));
+            return html`<td class=${cellClass} style=${bandStyle(strat)}>
               ${editing
                 ? html`<span class="stdcell"><${TimeFields} seconds=${v} compact
                       label=${`${capName(rank)} ${strat}`}
