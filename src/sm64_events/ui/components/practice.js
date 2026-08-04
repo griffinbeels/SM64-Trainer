@@ -194,6 +194,7 @@ function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
     <td class="meta attempt-strategy">
       ${sec
         ? html`<${StratPicker} entity=${entity} strategies=${sec.strategies}
+            groups=${sec.strategy_groups}
             active=${a.strat_tag} blankLabel="— no strategy —"
             highlightUnset=${false} allowBlank=${!sec.default_strat}
             submit=${(tag) => send("POST", `/api/attempts/${a.id}/strat`,
@@ -669,6 +670,7 @@ function StarSection({ sec, t, ui, pinned, freshIds, openCompare, openPicker }) 
           <${StratPicker} entity=${`star:${sec.course_id}:${sec.star_id}`}
               identity=${{ course_id: sec.course_id, star_id: sec.star_id }}
               strategies=${sec.strategies} active=${sec.last_strat}
+              groups=${sec.strategy_groups}
               onChanged=${t.refresh} />
           <${StrategyFastestHint} sec=${sec} />
         </div>

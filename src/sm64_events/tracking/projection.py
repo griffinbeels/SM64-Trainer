@@ -467,7 +467,16 @@ class Projector:
                  touched: set[int] | None = None,
                  strat_overrides: dict[int, str | None] | None = None,
                  origin_overrides: dict | None = None,
-                 time_corrections: dict[int, dict] | None = None):
+                 time_corrections: dict[int, dict] | None = None,
+                 hundred_coin_strat=None):
+        # ((course_id, star_id), exit_star, current_strat) -> the 100-coin
+        # strategy this run belongs to, or None for "keep what is remembered"
+        # (spec 2026-08-03-hundred-coin-exit-variants). Injected rather than
+        # imported because the answer lives in the rank STANDARDS, which are a
+        # user-editable file the projector must not reach into; None leaves
+        # the pre-2026-08-03 behaviour byte for byte, which is what every test
+        # and tool constructing a bare Projector still gets.
+        self._hundred_coin_strat = hundred_coin_strat
         self._cleared = cleared if cleared is not None else {}
         # attempt_id -> reclassified strat (caveat 16); shadows the strat
         # remembered at close time.
@@ -528,6 +537,13 @@ class Projector:
         # philosophy the retired _hundred_coin_redirect used.
         self._hundred_coin_engines: set[tuple[int, int]] = {
             hc for d in (segments or []) if d.enabled
+            and (hc := hundred_coin_entity(d.start_triggers, d.waypoints))
+            is not None}
+        # def id -> the (course, 6) it times, for the SAME enabled engines.
+        # `_close` needs to ask "is one of them armed RIGHT NOW", which the
+        # entity set above cannot answer (see `_hundred_coin_engine_armed`).
+        self._hundred_coin_engine_ids: dict[int, tuple[int, int]] = {
+            d.id: hc for d in (segments or []) if d.enabled
             and (hc := hundred_coin_entity(d.start_triggers, d.waypoints))
             is not None}
         self.segment_notices: list[dict] = []  # live-broadcast queue, drained by service
@@ -787,11 +803,33 @@ class Projector:
                             timed_by="igt",
                             timed_at=(ev.payload.get("igt_timed_at")
                                       if ev.type == "star_collected" else None))
+                # WHICH EXIT STAR ended the run is a fact the closing event
+                # carries, and it decides which of the 100-coin star's ladders
+                # this time is graded against (spec 2026-08-03-hundred-coin-
+                # exit-variants). The sub-strategy inside that variant stays
+                # the user's, so the resolver moves variant and keeps the leaf.
+                # A FAILED run has no exit star and therefore no answer — it
+                # keeps whatever was remembered, which for an unlabelled
+                # historical row means it stays unlabelled and prunable.
+                remembered = self.strat_by_star.get(hc)
+                derived = None
+                if self._hundred_coin_strat is not None:
+                    derived = self._hundred_coin_strat(
+                        hc,                       # the ENTITY, not its parts
+                        (ev.payload.get("star_id")
+                         if ev.type == "star_collected" else None),
+                        remembered)
                 a = replace(a,
                             strat_tag=self._strat_overrides.get(
-                                a.id, self.strat_by_star.get(hc)),
+                                a.id, derived if derived is not None
+                                else remembered),
                             cleared=a.id in self._cleared,
                             cleared_reason=self._cleared.get(a.id))
+                # The card follows the run: the variant you actually ended on
+                # becomes the selected one, so the next attempt starts where
+                # this one finished rather than on the ladder you did not run.
+                if derived is not None and not a.cleared:
+                    self.strat_by_star[hc] = derived
             else:
                 # same first-event-id cleared keying as _build (caveat 2/11)
                 a = replace(a,
@@ -1238,6 +1276,24 @@ class Projector:
             self._open = None
             return []
         star_tgt = self._star_target()
+        if self._engine_records_this_too(star_tgt, outcome):
+            # ONE reset, ONE row. The 100-coin star's engine turns this same
+            # event into its own row and feed()'s seg_closed loop reattributes
+            # it to this very entity, so recording the plain attempt as well
+            # puts the retry in the practice log TWICE (live report
+            # 2026-08-03, WF 100 Coins: "resetting during a 100 coins star
+            # triggers two resets"). Confirmed in his journal — three reset
+            # spans, each carrying a star-namespace row AND a
+            # segment-namespace row with the same journal id, the same span
+            # and the same strategy.
+            #
+            # This is the reset/death half of the suppression `_close_by_grab`
+            # has always applied to the GRAB, and the bug is as old as that
+            # one. It was invisible until 2026-08-03 because the 100-coin star
+            # had no rank standards, so nothing could set a strategy on it, so
+            # BOTH rows were unlabelled and the startup prune ate them.
+            self._open = None
+            return []
         course_id, star_id = star_tgt if star_tgt else (None, None)
         strat = self.strat_by_star.get(star_tgt) if star_tgt else None
         attempt = self._build(
@@ -1246,6 +1302,34 @@ class Projector:
             igt_frames=igt_frames, strat=strat)
         self._open = None
         return [attempt]
+
+    #: Outcomes a 100-coin engine ALSO turns into a row of its own. A foreign
+    #: `level_changed` is deliberately absent: a strict waypoint def cancels
+    #: SILENTLY there (tracking/segments.py's `_feed_waypoint` precedence), so
+    #: the plain `abandoned` attempt is the only record that leaving mid-run
+    #: ever happened, and suppressing it would lose the row rather than
+    #: de-duplicate it.
+    _ENGINE_MIRRORED_OUTCOMES = frozenset({"reset", "hard_reset", "death"})
+
+    def _engine_records_this_too(self, star_tgt, outcome) -> bool:
+        """Would an ARMED 100-coin engine record this same span itself?
+
+        Both clauses do real work. The outcome clause keeps `abandoned`
+        recording (above). The ARMED clause is what keeps the plain attempt as
+        the fallback when no engine is running — a deleted or disabled
+        definition, or one that already cancelled earlier in the visit — the
+        same fallback philosophy `_close_by_grab` uses, so the retry stays
+        visible rather than disappearing with the engine.
+
+        Safe to read the armed set here because `_dispatch` runs BEFORE
+        `self._segments.feed()` in `feed()`: the answer is the state as the
+        event ARRIVED, which is exactly the state that decides whether the
+        engine is about to close a row for it.
+        """
+        if star_tgt is None or outcome not in self._ENGINE_MIRRORED_OUTCOMES:
+            return False
+        return any(self._hundred_coin_engine_ids.get(seg_id) == star_tgt
+                   for seg_id in self._segments.armed_ids())
 
     def _build(self, first, close, outcome, outcome_detail, course_id, star_id,
                igt_frames, strat) -> Attempt:
@@ -1317,8 +1401,9 @@ def wipe_matches(a: Attempt, p: dict) -> bool:
     return True  # kind == "all"
 
 
-def replay(events, segments=None, time_filters=None,
-           origin_overrides=None, on_notices=None) -> tuple[list[Attempt], Projector]:
+def replay(events, segments=None, time_filters=None, origin_overrides=None,
+           on_notices=None, hundred_coin_strat=None
+           ) -> tuple[list[Attempt], Projector]:
     """`on_notices`, default None (spec 2026-07-28-multi-step-segments, the
     backtest arm-count gap): an optional callback invoked with
     `proj.segment_notices` after every fed event, for a caller that needs
@@ -1343,7 +1428,8 @@ def replay(events, segments=None, time_filters=None,
                      time_filters=time_filters, touched=touched_ids(events),
                      strat_overrides=strat_overrides(events),
                      origin_overrides=origin_overrides,
-                     time_corrections=time_corrections(events))
+                     time_corrections=time_corrections(events),
+                     hundred_coin_strat=hundred_coin_strat)
     attempts: list[Attempt] = []
     for ev in events:
         if ev.type == "data_wiped":

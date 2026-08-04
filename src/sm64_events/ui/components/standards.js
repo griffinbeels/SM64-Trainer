@@ -9,7 +9,9 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
-import { fmtIgt } from "../format.js";
+import { fmtIgtShort, fmtSeconds } from "../format.js";
+import { TimeFields } from "./timefields.js";
+import { ceilingOf, slowestFirst } from "../ladderorder.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
 import { capName, capGradient } from "./caps.js";
 import { StratModal } from "./stratmodal.js";
@@ -140,11 +142,47 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // custom strats are fillable the moment they exist. Object.hasOwn (not
   // `in`): a strat named e.g. "constructor" must not vanish via the proto
   // chain.
-  const strats = data
+  const allStrats = data
     ? [...Object.keys(data.strategies).filter((s) => inFamily(s, family)),
        ...(strategies || []).filter((s) => inFamily(s, family)
          && !Object.hasOwn(data.strategies, s))]
     : [];
+  // A 100-coin star is timed separately per EXIT star, so its columns are
+  // BANDED by variant with the leaf name in the column head — "Standard"
+  // under "100c + Race" (spec 2026-08-03-hundred-coin-exit-variants). Bands
+  // come from the server's own `strategy_groups`; nothing here works out which
+  // variant a strategy belongs to. `bands` is empty for every ordinary entity
+  // and the table renders exactly as it did before.
+  const bands = ((data && data.strategy_groups) || [])
+    .map((group) => ({
+      label: group.label,
+      names: group.strategies.map((s) => s.name).filter((s) => allStrats.includes(s)),
+    }))
+    .filter((band) => band.names.length);
+  const banded = new Set(bands.flatMap((band) => band.names));
+  const loose = allStrats.filter((s) => !banded.has(s));
+  if (bands.length && loose.length) bands.push({ label: "Other", names: loose });
+  // SLOWEST on the left, FASTEST on the right — the table is a PATH, read
+  // bottom-left to top-right as you improve (user, 2026-08-03; the rule and
+  // its tie-breaks live in ui/ladderorder.js). Applied WITHIN each exit-star
+  // band, and to the bands themselves by their own fastest column, so the
+  // progression still reads left-to-right across a banded 100-coin table
+  // without a column leaving its heading.
+  const ladders = (data && data.strategies) || {};
+  for (const band of bands) band.names = slowestFirst(band.names, ladders);
+  bands.sort((a, b) => {
+    const fastest = (band) => Math.min(
+      ...band.names.map((name) => ceilingOf(ladders[name])));
+    const one = fastest(a), other = fastest(b);
+    return one === other ? 0 : other - one;
+  });
+  // Banded order, so a column always sits under its own heading.
+  const strats = bands.length
+    ? bands.flatMap((band) => band.names)
+    : slowestFirst(allStrats, ladders);
+  const leafOf = new Map(((data && data.strategy_groups) || [])
+    .flatMap((group) => group.strategies.map((s) => [s.name, s.leaf])));
+  const colHead = (strat) => leafOf.get(strat) || strat;
   // "You are here": the grading basis under the ACTIVE strategy. Avg rank
   // modes carry it on sectionRank.basis; pb mode carries none (the same
   // split _section_banner already encodes server-side), so it falls back to
@@ -190,12 +228,16 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
         ${data.xcams_url ? html`<a class="meta" href=${data.xcams_url} target="_blank" rel="noopener"
             title="browse every example run for this star on the xcams Daily Star page">Examples on xcams ↗</a>` : null}
       </div>
-      <table class="stdtable"><thead><tr><th>Strat</th>
+      <table class="stdtable"><thead>
+        ${bands.length ? html`<tr class="std-variant-row"><th></th>
+          ${bands.map((band) => html`<th class="std-variant" colspan=${band.names.length}
+              title="the star this 100-coin run ends on">${band.label}</th>`)}</tr>` : null}
+        <tr><th>Strat</th>
         ${strats.map((strat) => html`<th class=${strat === activeStrat ? "col-active" : ""}>${headVid(strat)
-          ? html`<a href=${headVid(strat)} target="_blank" rel="noopener" title="fastest-time video">${strat}</a>`
-          : strat}${editing ? html` <button class="candx" title=${isSeeded(strat) ? "clear this strategy's standards" : "delete this strategy"} onclick=${() => delStrat(strat)}>×</button>` : ""}
+          ? html`<a href=${headVid(strat)} target="_blank" rel="noopener" title="fastest-time video">${colHead(strat)}</a>`
+          : colHead(strat)}${editing ? html` <button class="candx" title=${isSeeded(strat) ? "clear this strategy's standards" : "delete this strategy"} onclick=${() => delStrat(strat)}>×</button>` : ""}
           ${marker && strat === activeStrat ? html`<span class="std-you-badge"
-              title="your current time and score on this ladder">◀ you · ${fmtIgt(basisFrames)}${entityScore != null ? ` · ${fmtScore(entityScore)}` : ""}</span>` : ""}</th>`)}</tr></thead>
+              title="your current time and score on this ladder">◀ you · ${fmtIgtShort(basisFrames)}${entityScore != null ? ` · ${fmtScore(entityScore)}` : ""}</span>` : ""}</th>`)}</tr></thead>
         <tbody>
         ${RANK_NAMES.filter((r) => r !== "Iron").map((rank) => html`<tr>
           <!-- Large flat surface -> the tier's own gradient where it has
@@ -208,7 +250,12 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
           ${strats.map((strat) => {
             const v = (data.strategies[strat] || {})[rank];
             const vid = cutoffVid(strat, rank);
-            const label = v != null ? v.toFixed(2) : "—";
+            // Every rank standard reads in the Usamune display format the practice
+            // log and every PB already use -- 1'21"32, and 23"00 under a minute
+            // (user, 2026-08-03: "This is important because that matches the
+            // format we actually display in the practice log"). Raw seconds
+            // beside a formatted PB is two vocabularies for one quantity.
+            const label = v != null ? fmtSeconds(v) : "—";
             // "You are here" — a cell highlight would be a lie (your time is
             // essentially never AT a cutoff), so instead the two cutoffs
             // bracketing your interpolated position get their own mark, and
@@ -223,8 +270,9 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
               .filter(Boolean).join(" ");
             return html`<td class=${cellClass}>
               ${editing
-                ? html`<span class="stdcell"><input class="stdinp" value=${v ?? ""} placeholder="—"
-                      onchange=${(e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) put(strat, rank, n); }} />
+                ? html`<span class="stdcell"><${TimeFields} seconds=${v} compact
+                      label=${`${capName(rank)} ${strat}`}
+                      onCommit=${(next) => { if (next != null) put(strat, rank, next); }} />
                     <button class="vidbtn" title=${`${userVid(strat, rank) ? "edit" : "add"} ${capName(rank)} example video`}
                       onclick=${() => editVideo(strat, rank)}>${userVid(strat, rank) ? "▶✎" : "▶＋"}</button></span>`
                 : (vid

@@ -1272,6 +1272,16 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                         for a in in_section],
             "stats": _stats_for(history, stat_menu, clock),
             "strategies": star_strategies,
+            # Grouping for the strategy dropdown, resolved SERVER-side and []
+            # for every star but a 100-coin one (spec 2026-08-03-hundred-coin-
+            # exit-variants). A 100-coin star's strategies are qualified by the
+            # exit star the run ends on, so a bare "Standard" names two
+            # different ladders on CCM; the picker shows them under a heading
+            # per variant, and never re-derives which is which.
+            # Rule-11 note: a SEGMENT has no exit star, so its section carries
+            # no such key at all — a stated asymmetry, not a gap.
+            "strategy_groups": (service.ranks.strategy_groups(ek)
+                                if service.ranks else []),
             "last_strat": star_strat,
             # The paired seg:reds->pipe:<abbrev> segment id, or None for every
             # star but a Bowser course's Reds -- the star/pipe toggle's escape

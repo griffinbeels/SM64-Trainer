@@ -27,6 +27,10 @@ class ThresholdBody(BaseModel):
 
 class StrategyBody(BaseModel):
     strategy: str
+    #: 0-5, the star a 100-coin run ends on. The server QUALIFIES the name with
+    #: that variant's label and returns what it stored, so no client ever
+    #: composes a variant-qualified name itself.
+    exit_star: int | None = None
 
 
 class VideoBody(BaseModel):
@@ -287,6 +291,14 @@ def create_ranks_router(service) -> APIRouter:
                 "cutoff_videos": service.ranks.cutoff_videos(entity),
                 "user_videos": service.ranks.user_videos(entity),
                 "seeded": service.ranks.seeded_strategies(entity),
+                # Grouping is resolved HERE, not in the browser: a 100-coin
+                # star's strategies are variant-qualified, and a second
+                # implementation of "which variant is this" in JS is the
+                # divergence this project has a rule against. [] for every
+                # ordinary entity, which is what keeps the renderer flat.
+                "strategy_groups": service.ranks.strategy_groups(entity),
+                "exit_variants": service.ranks.exit_variants(entity),
+                "exit_star_options": service.ranks.exit_star_options(entity),
                 "xcams_url": xcams_url(entity)}
 
     @router.put("/ranks/standards/{entity}/{strategy}/{rank}")
@@ -324,10 +336,14 @@ def create_ranks_router(service) -> APIRouter:
     @router.post("/ranks/standards/{entity}")
     async def create_strategy(entity: str, body: StrategyBody):
         try:
-            await service.create_rank_strategy(entity, body.strategy)
+            stored = await service.create_rank_strategy(
+                entity, body.strategy, exit_star=body.exit_star)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
-        return {"ok": True}
+        # The caller needs the STORED name to address its follow-up threshold
+        # and video PUTs — it differs from what was posted whenever an exit
+        # star qualified it.
+        return {"ok": True, "strategy": stored}
 
     @router.delete("/ranks/standards/{entity}/{strategy}")
     async def delete_strategy(entity: str, strategy: str, purge: bool = False):

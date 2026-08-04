@@ -521,7 +521,29 @@
   .stdtable{border-collapse:collapse;font-size:11px}
   .stdtable th,.stdtable td{border:1px solid #21262d;padding:3px 7px;text-align:center}
   .stdtable .col-active{box-shadow:inset 0 0 0 2px #3a8d8d}
+  /* Exit-star variant band over a 100-coin star's columns: a heading, not a
+     pickable column, so it reads quieter than the strategy names under it. */
+  .stdtable .std-variant{font-weight:600;letter-spacing:.02em;color:#8b98a6;
+    background:#131b26;border-bottom-color:#2b323b}
+  .stdtable .std-variant-row th:first-child{border:0;background:transparent}
   .stdinp{width:48px;background:#0d1117;border:1px solid #30363d;color:#e6e9ee;border-radius:4px;text-align:center}
+  /* Three boxes reading {m}'{s}"{cc} — a time is TYPED the way it is said.
+     The spinner arrows are suppressed: at 2ch wide they eat the digits, and
+     nobody steps a centisecond one at a time. */
+  .timefields{display:inline-flex;align-items:center;gap:1px}
+  .timefields .timefield{box-sizing:border-box;
+    width:var(--tf-width);min-width:var(--tf-width);
+    background:#0d1117;border:1px solid #30363d;color:#e6e9ee;border-radius:4px;
+    text-align:center;padding:2px 1px;font-variant-numeric:tabular-nums}
+  /* Sized in px, not ch: a `ch` is the width of "0" in the resolved font and
+     leaves no room for the border and padding the box also has, so a
+     two-digit value CLIPPED — invisible to every assertion, obvious in a
+     screenshot (2026-08-03). */
+  .timefields.compact .timefield{padding:1px 0;font-size:11px}
+  .timefield::-webkit-outer-spin-button,
+  .timefield::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  .timefield{-moz-appearance:textfield;appearance:textfield}
+  .timefield-sep{color:var(--text-dim,#8b98a6);padding:0 1px}
   .stdcell{display:inline-flex;align-items:center;gap:4px}
   .vidbtn{border:none;background:transparent;color:#6cb6ff;cursor:pointer;font-size:11px;padding:0 2px;line-height:1}
   .stdtable td a{color:#6cb6ff;text-decoration:none}

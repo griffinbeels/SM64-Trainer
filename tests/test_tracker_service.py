@@ -1967,15 +1967,21 @@ def test_newest_attempt_id_ignores_the_segment_namespace_offset(tmp_path):
                    if a.course_id == 2 and a.star_id == 6 and a.segment_id is None)
     assert hundred.id >= 10**10, "must be the SEGMENT-namespace reattributed row"
 
-    # A genuinely LATER native reset on the same star entity, via the plain
-    # target/practice_reset path (test_set_target_and_attribution's own
-    # shape) -- a plain int id, chronologically newer but numerically
-    # smaller than the reattributed row above.
+    # A genuinely LATER native attempt on the same star entity, via the plain
+    # target/anchor path -- a plain int id, chronologically newer but
+    # numerically smaller than the reattributed row above. It is ABANDONED
+    # (leaving the course) rather than a reset ON PURPOSE: a reset while a
+    # 100-coin engine is armed is recorded by the ENGINE, and the plain
+    # attempt for it is suppressed as a duplicate (projection.py::_close,
+    # live report 2026-08-03). A foreign level change cancels a strict def
+    # silently, so the plain row is the only one and this shape survives.
     asyncio.run(svc.set_target(2, 6, strat_tag="Cannonless"))
     asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 0})))
-    asyncio.run(svc.publish(ev("practice_reset", 1500, {"igt_frames_before": 100})))
+    asyncio.run(svc.publish(ev("mario_acted", 1410, {})))
+    asyncio.run(svc.publish(ev("level_changed", 1500, {"from": 24, "to": 16})))
     native_reset = next(a for a in db.attempts()
-                        if a.course_id == 2 and a.star_id == 6 and a.outcome == "reset")
+                        if a.course_id == 2 and a.star_id == 6
+                        and a.outcome == "abandoned")
     assert native_reset.id < 10**10, "must be the plain journal-namespace row"
     assert native_reset.id < hundred.id          # raw id: reset LOOKS older
     from sm64_events.tracking.projection import journal_id

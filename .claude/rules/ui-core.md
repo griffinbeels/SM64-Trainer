@@ -34,7 +34,7 @@ budget and that every `paths:` glob still matches a real file.
 Built-in viewer: `ui/index.html` — served per request: edit + refresh, no
 restart. Components/store/API client: `ui/components/` · `ui/store.js` ·
 `ui/api.js` · `ui/app.js`; vendored Preact in `ui/vendor/`. Shared formatting:
-`ui/format.js` (fmtIgt mirrors core/timefmt.py — pinned by
+`ui/format.js` — **`fmtIgt` is the CANONICAL form and is not display-only**: `core/timefmt.py::format_igt` mirrors it byte for byte AND builds saved clip FILENAMES (`replay/service.py`), so it is an identifier too and keeps its `0'`. **`fmtIgtShort`/`fmtSeconds` are the DISPLAY form** — the same notation with an empty minutes field dropped (`23"00`, not `0'23"00`; user, 2026-08-03) — and `fmtSeconds` exists as a second entry point rather than a conversion because a rank standard is stored in SECONDS at centisecond precision: routing 76.66 s through frames would print 76.63 and move a published cutoff. Both are transformations OF `fmtIgt`'s shape, pinned to it in `tests/test_ui_time_format.py` (including every one of the 1,474 seeded cutoffs round-tripping). (fmtIgt mirrors core/timefmt.py — pinned by
 `tests/test_cross_language_parity.py`, which also pins the rank ladder, the
 rank-mode registry and stat-chip identity across the two languages). Design
 system: one big CSS block in

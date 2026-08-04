@@ -15,9 +15,20 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from sm64_events.ranks.standards import entity_key  # noqa: E402
+from sm64_events.memory.addresses import star_name  # noqa: E402
+from sm64_events.ranks.standards import entity_key, qualify  # noqa: E402
 
-SEED_VERSION = 4  # bump whenever the bundled seed should push to existing installs
+SEED_VERSION = 5  # bump whenever the bundled seed should push to existing installs
+
+# A main course's 100-coin key is "<stage>_100c<N>", N being the 1-BASED exit
+# star the run ends on: "3_100c1" is CCM's 100-coin run ended on Slip Slidin'
+# Away, "3_100c3" the same run ended on the Big Penguin Race. Every one of
+# these was dropped from the seed until 2026-08-03 — `key_to_entity` read the
+# star part with `str.isdigit()` and returned None — so the 100-coin star had
+# no rank standards at all while being fully practiced.
+_HUNDRED_COIN = re.compile(r"^100c(\d+)$")
+# The 100-coin star is star 6 on every main course (addresses.star_count).
+_HUNDRED_COIN_STAR = 6
 
 # Closed vocabulary — update if xcams adds tiers (order = fastest to slowest).
 _RANKS = ["Mario", "Grandmaster", "Master", "Diamond", "Platinum",
@@ -167,12 +178,24 @@ def suspect_dropped_minute(parsed: dict) -> list[tuple[str, str, str]]:
     return out
 
 
+def hundred_coin_exit(key: str) -> int | None:
+    """The 0-based exit star a "<stage>_100c<N>" key ends on, else None.
+    Only main courses (stages 0-14) have one."""
+    stage, _, star = key.partition("_")
+    if not stage.isdigit() or not 0 <= int(stage) <= 14:
+        return None
+    match = _HUNDRED_COIN.match(star)
+    return int(match.group(1)) - 1 if match else None
+
+
 def key_to_entity(key: str) -> str | None:
     stage, _, star = key.partition("_")
     if not stage.isdigit():
         return None
     s = int(stage)
     if 0 <= s <= 14:
+        if hundred_coin_exit(key) is not None:
+            return entity_key(s + 1, _HUNDRED_COIN_STAR)
         return entity_key(s + 1, int(star) - 1) if star.isdigit() else None
     if s == 15:
         c = _SECRET.get(star)
@@ -326,6 +349,17 @@ def strat_clips(catalog_star: dict, cam_blobs: list) -> dict:
     return out
 
 
+def variant_label(key: str, exit_star: int, catalog_star=None) -> str:
+    """The exit-star variant's display label — xcams' own short name for the
+    100-coin entry ("100c + Slide", "100c + KtQ"), which is what the community
+    calls it, falling back to our star registry when the catalog is absent."""
+    short = ((catalog_star or {}).get("info") or {}).get("short")
+    if short:
+        return short
+    stage = int(key.partition("_")[0])
+    return f"100c + {star_name(stage + 1, exit_star)}"
+
+
 def build_seed(parsed: dict, catalog=None, cams=None, jp_deltas=None) -> dict:
     parsed = apply_fixups(parsed)
     cat_by_stage = {i: {s["id"]: s for s in (st or {}).get("starList", [])}
@@ -335,21 +369,40 @@ def build_seed(parsed: dict, catalog=None, cams=None, jp_deltas=None) -> dict:
         ek = key_to_entity(key)
         if ek is None:
             continue
+        stage, _, starkey = key.partition("_")
+        star = cat_by_stage.get(int(stage), {}).get(starkey) if stage.isdigit() else None
+        # SEVERAL xcams keys map to ONE entity for a 100-coin star (one per
+        # exit-star variant), so this loop MERGES. It assigned
+        # `entities[ek] = ent` until 2026-08-03, which for CCM/WDW/THI/RR would
+        # silently keep whichever variant the blob listed last.
+        exit_star = hundred_coin_exit(key)
         clock = "rta" if ek.startswith("segment:") else "igt"
-        ent = {"clock": clock, "strategies": ladders}
+        ent = entities.setdefault(ek, {"clock": clock, "strategies": {}})
+        if exit_star is None:
+            rename = {s: s for s in ladders}                # identity
+        else:
+            label = variant_label(key, exit_star, star)
+            known = ent.setdefault("exit_variants", {})
+            if known.get(label, exit_star) != exit_star:
+                raise ValueError(f"{ek}: label {label!r} claims two exit stars")
+            known[label] = exit_star
+            rename = {s: qualify(label, s) for s in ladders}
+        for was, now in rename.items():
+            if now in ent["strategies"]:
+                raise ValueError(f"{ek}: two ladders would be stored as {now!r}")
+            ent["strategies"][now] = ladders[was]
         if jp_deltas and jp_deltas.get(key):
-            ent["jp_strategies"] = jp_deltas[key]
-        if catalog and cams:
-            stage, _, starkey = key.partition("_")
-            star = cat_by_stage.get(int(stage), {}).get(starkey) if stage.isdigit() else None
-            if star:
-                vids = {s: u for s, u in strat_videos(star, cams).items() if s in ladders}
-                if vids:
-                    ent["videos"] = vids
-                clips = {s: c for s, c in strat_clips(star, cams).items() if s in ladders}
-                if clips:
-                    ent["clips"] = clips
-        entities[ek] = ent
+            ent.setdefault("jp_strategies", {}).update(
+                {rename[s]: d for s, d in jp_deltas[key].items() if s in rename})
+        if catalog and cams and star:
+            vids = {rename[s]: u for s, u in strat_videos(star, cams).items()
+                    if s in rename}
+            if vids:
+                ent.setdefault("videos", {}).update(vids)
+            clips = {rename[s]: c for s, c in strat_clips(star, cams).items()
+                     if s in rename}
+            if clips:
+                ent.setdefault("clips", {}).update(clips)
     for seg_id, strategies in DEFAULT_SEGMENT_LADDERS.items():
         entities.setdefault(f"segment:{seg_id}", {"clock": "rta", "strategies": strategies})
     return {"version": SEED_VERSION, "entities": entities}

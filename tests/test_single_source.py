@@ -78,7 +78,45 @@ def python_sources() -> tuple[Path, ...]:
     return tuple(sorted([*SRC.rglob("*.py"), *(REPO / "tools").rglob("*.py")]))
 
 
+def strategy_name_zone() -> tuple[Path, ...]:
+    """The modules that could plausibly COMPOSE a strategy name — the ranks
+    store, the tracking layer that stamps one onto an attempt, the API that
+    creates one, and the scraper that mints them.
+
+    Narrower than `python_sources()` on purpose. The ingredient here is `" · "`,
+    an ordinary typographic separator, and scanning every Python file for it
+    catches innocent uses: `core/uilog.py` joins a log line with it and has
+    nothing to do with strategy names (found when merging main into the
+    100-coin branch, 2026-08-03). A token that common needs a zone, not the
+    whole tree — the alternative was dropping the literal from the row, which
+    would have left "hardcode the separator somewhere else" uncaught, and that
+    is the failure the row exists for."""
+    return tuple(sorted([
+        *(SRC / "ranks").rglob("*.py"), *(SRC / "tracking").rglob("*.py"),
+        *(SRC / "server").rglob("*.py"), *(REPO / "tools").rglob("*.py")]))
+
+
 INVARIANTS = (
+    SingleSource(
+        concept="how a 100-coin strategy name carries its exit-star variant",
+        owners=frozenset({"standards.py", "hundred_coin.py", "scrape_ranks.py"}),
+        tokens=("VARIANT_SEP", "qualify", '" \u00b7 "'),
+        files=strategy_name_zone(),
+        why="A 100-coin star's strategies are qualified by the exit star the "
+            "run ends on (\"100c + Race \u00b7 Standard\") because CCM's two "
+            "variants both define \"Standard\" and both define \"Open\" \u2014 a "
+            "bare name cannot identify a ladder there (spec 2026-08-03-"
+            "hundred-coin-exit-variants). Composing or splitting that name "
+            "anywhere else is a second implementation of the rule, and the "
+            "failure it produces is silent: a strategy filed under a name "
+            "nothing groups, or a run graded against the ladder for a route it "
+            "did not take. ranks/standards.py owns the separator and the "
+            "split; tools/scrape_ranks.py imports `qualify` rather than "
+            "repeating the literal; tracking/hundred_coin.py is the projector's "
+            "pure resolver. The BROWSER never derives grouping at all \u2014 the "
+            "server ships `strategy_groups` already resolved, which is why "
+            "there is no JS half of this row to keep in step.",
+    ),
     SingleSource(
         concept="star/segment icon art",
         owners=frozenset({"entities.js", "entityicons.js"}),
