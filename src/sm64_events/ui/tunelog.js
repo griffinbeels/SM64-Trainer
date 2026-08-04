@@ -203,14 +203,29 @@ function collapseAllButTheFirst(container) {
 
 function Pane({ label, width, view, t, ui, tuningKey }) {
   const ref = useRef(null);
+  const paneRef = useRef(null);
+  // The label reports the width this pane ACTUALLY got, not the width it asked
+  // for. A pane squeezed by a too-narrow window would otherwise keep announcing
+  // the number it was declared with, which is the one lie this rig cannot
+  // afford -- every judgement made here is a judgement about a container width.
+  const [measured, setMeasured] = useState(null);
   useEffect(() => {
     if (!ref.current) return;
     // One frame so LogCard's own mount-time `useState(true)` has already
     // committed before this queries and clicks it.
     requestAnimationFrame(() => { if (ref.current) collapseAllButTheFirst(ref.current); });
   }, [tuningKey]);
-  return html`<div class="tunelog-pane" style=${`width:${width}px`}>
-    <p class="tunelog-pane-label">${label} · ${width}px pane</p>
+  useEffect(() => {
+    if (!paneRef.current || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(([entry]) =>
+      setMeasured(Math.round(entry.contentRect.width)));
+    observer.observe(paneRef.current);
+    return () => observer.disconnect();
+  }, []);
+  const shown = measured == null ? width : measured;
+  return html`<div class="tunelog-pane" ref=${paneRef} style=${`width:${width}px`}>
+    <p class="tunelog-pane-label">${label} · ${shown}px pane${
+      shown !== width ? ` (asked for ${width})` : ""}</p>
     <div class="app-shell">
       <div class="sidebar"></div>
       <div class="practice-page" ref=${ref}>
@@ -275,17 +290,26 @@ function Inspector() {
 
   return html`<div class="tune-layout">
     <div class="tune-stage">
-      <${Pane} label="Narrow" width=${854} view=${view} t=${t} ui=${ui} tuningKey=${tuningKey} />
+      ${/* Wide FIRST: it is the case he reported as sloppy and the one he
+           looks at most, so it should not need a scroll to reach. Narrow sits
+           below it rather than beside it -- see the .tune-stage comment in
+           tunelog.html for why side-by-side cannot be honest here. */""}
       <${Pane} label="Wide" width=${1494} view=${view} t=${t} ui=${ui} tuningKey=${tuningKey} />
+      <${Pane} label="Narrow" width=${854} view=${view} t=${t} ui=${ui} tuningKey=${tuningKey} />
     </div>
 
     <div class="tune-panel">
       <h1>Practice-log card tuning</h1>
-      <p class="tune-note">Both panes are the app's own <code>PracticeLog</code>
-        in the app's own stylesheet, one at 854px (just above the app's
-        850px supported floor) and one at 1494px. Tune here; Save writes
-        these values into <code>ui/logtuning.js</code> as the new shipped
-        defaults.</p>
+      ${/* Every space that meets a tag or an interpolation is written as an
+           explicit ${" "}: htm COLLAPSES that whitespace, and this very
+           paragraph shipped reading "the app's own PracticeLogin the app's
+           own stylesheet" -- the documented trap, caught by looking at the
+           render rather than by any assertion. */""}
+      <p class="tune-note">Both panes are the app's own${" "}
+        <code>PracticeLog</code>${" "}in the app's own stylesheet, one at
+        1494px and one at 854px (just above the app's 850px supported floor).
+        Tune here; Save writes these values into${" "}
+        <code>ui/logtuning.js</code>${" "}as the new shipped defaults.</p>
       <p class="tune-note">Every card but the first in each pane is closed
         with a real click on its own fold button after it mounts, so the
         alignment items (1-3) can be judged across several closed cards at

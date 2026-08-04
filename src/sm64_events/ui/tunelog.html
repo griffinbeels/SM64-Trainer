@@ -33,12 +33,22 @@
   body { margin: 0; }
   .tune-layout { display: grid; grid-template-columns: 1fr 380px;
     min-height: 100vh; align-items: start; }
-  /* Two fixed-width panes side by side -- wider than most windows on
-     purpose, so this scrolls horizontally rather than either pane being
-     silently shrunk to fit. An overflowing PANE would be the one thing this
-     rig must never do, since judging its real container width IS its job. */
-  .tune-stage { display: flex; gap: 28px; align-items: flex-start;
-    padding: 20px 16px; overflow-x: auto; }
+  /* The two panes STACK, wide above narrow -- they do not sit side by side.
+     The arithmetic is why: 1494 + 854 + this panel is over 2700px against a
+     ~1990px window, so side-by-side could only ever be delivered by clipping
+     one pane or shrinking it, and a pane that is not the width it claims is a
+     pane measuring the wrong thing. It shipped clipped-and-scrolling once and
+     was reported immediately ("the inspector tuning column is obscuring the
+     layout below it", 2026-08-03) -- correct behaviour by the CSS, useless in
+     the hand, and an unexpected sideways scrollbar is itself the defect in
+     this project. Stacked, the wide pane fits its declared width whole in the
+     column left of the controls, and the alignment questions this rig exists
+     for -- do the icons and names line up DOWN the list -- are all within one
+     pane anyway. `overflow-x` stays as the honest fallback for a window too
+     narrow even for that; the label below reports the MEASURED width, so a
+     pane that ever did get squeezed says so itself. */
+  .tune-stage { display: flex; flex-direction: column; gap: 28px;
+    align-items: flex-start; padding: 20px 16px; overflow-x: auto; }
   .tunelog-pane { flex: 0 0 auto; }
   .tunelog-pane .app-shell { min-height: 0; }
   .tunelog-pane-label { font-size: 11px; text-transform: uppercase;
