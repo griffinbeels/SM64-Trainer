@@ -39,7 +39,13 @@
 //           where good actually was).
 //   min/max/step  the control's range, deliberately wider than anything
 //           sensible.
-//   unit    "px" | "x" | "" — display only. "x" is a 0..1 fraction/multiplier.
+//   unit    "px" | "x" | "%" | "" — display only. "x" is a 0..1
+//           fraction/multiplier. "%" is a normalized SHARE of the row's own
+//           width, not a literal CSS percentage -- logTuningVars writes it as
+//           a bare `fr` value (see its own comment), so three shares that
+//           don't sum to 100 still render a coherent row: the browser's own
+//           grid algorithm normalizes them, the same way 20/70/10 and
+//           40/140/20 draw pixel-identical.
 //   why     one line, the control's tooltip.
 
 export const TUNABLES = {
@@ -64,17 +70,22 @@ export const TUNABLES = {
     min: 0, max: 40, step: 1, unit: "px",
     why: "Space between the icon and the name column.",
   },
-  identityWidth: {
-    group: "Identity", label: "Identity column width", value: 245,
-    min: 140, max: 520, step: 5, unit: "px",
-    why: "A FIXED track, not a fraction of the card. This is the whole fix for item 1 — every card's icon lands on the same x because every card reserves the same width for it, regardless of what else is on that card's own row. Too narrow and a long star name ellipsises (tests/test_log_card_name_fits.py's own corpus tops out at 30 characters).",
+  identityPercent: {
+    group: "Identity", label: "Identity column width", value: 20,
+    min: 5, max: 60, step: 1, unit: "%",
+    why: "A SHARE of the row's own width, replacing a FIXED px cap that was correct at exactly one card width and wrong at every other (user, 2026-08-04: \"we should be able to control the relative overall spacing as a percentage of the whole column width\"). Doesn't need to sum to 100 with Rank column width / PB column width below — see this file's own unit doc — so nothing here can express an impossible layout. Still one FIXED track, in the sense that matters for item 1: every card computes the same share of the same card width, so every icon still lands on the same x. Never shrinks below Identity column floor, whatever this share reads at a narrow card.",
+  },
+  identityFloor: {
+    group: "Identity", label: "Identity column floor", value: 248,
+    min: 140, max: 400, step: 4, unit: "px",
+    why: "The hard minimum the identity column holds at ANY width, however small its own share above is dialed — a pure percentage shrinks toward zero at the app's 850px supported floor long before a share this small could hold a real name. Measured, not guessed: the widest of 97 corpus star names needs 248px at the shipped 13px name size (tests/test_log_card_name_fits.py's own corpus). Raise this if Name size grows past its shipped default; it was measured at that size, not derived from it.",
   },
 
   // ---- Ranks: the strategy + star/segment rank display --------------------
-  rankWidth: {
-    group: "Ranks", label: "Rank column width", value: 420,
-    min: 80, max: 420, step: 5, unit: "px",
-    why: "How wide each rank banner may grow. Ships tight because Caps only (the default rank display) needs almost none of it; widen this first if you dial Rank display up to Chips or Banners, which need real room for text.",
+  ranksPercent: {
+    group: "Ranks", label: "Rank column width", value: 70,
+    min: 10, max: 90, step: 1, unit: "%",
+    why: "A SHARE of the row's own width — same normalizing rule as Identity column width above, doesn't need to sum to 100 with the other two. Replaces a FIXED 420px cap that stayed 420px on a 2000px-wide card (leaving the rank banners stranded well short of the card's true right edge) and was ALSO the tightest squeeze on a narrow one (two rank banners genuinely need the most room exactly where a fixed cap gave them the least). A share fixes both ends at once by construction — it is a FRACTION of whatever the card actually is, never a number that was only ever right once.",
   },
   rankBarHeight: {
     group: "Ranks", label: "Progress bar height", value: 5,
@@ -108,10 +119,10 @@ export const TUNABLES = {
   },
 
   // ---- Result: the PB tag ---------------------------------------------------
-  pbWidth: {
-    group: "Result", label: "PB column min-width", value: 92,
-    min: 40, max: 240, step: 4, unit: "px",
-    why: "Minimum width reserved for the PB tag, so the chevron next to it doesn't jump left and right as the saved time gets longer or shorter.",
+  pbPercent: {
+    group: "Result", label: "PB column width", value: 10,
+    min: 3, max: 40, step: 1, unit: "%",
+    why: "A SHARE of the row's own width — same normalizing rule as Identity/Rank column width above. This is the PB TAG's own share (it sits right-aligned inside it, so a share wider than the tag itself just becomes breathing room on its left); the fold chevron beside it stays its own fixed ~30px column, untouched by any of these three shares — small enough at every supported card width that folding it into a combined 'PB + chevron' share was not worth restructuring the row's markup to express.",
   },
   pbSize: {
     group: "Result", label: "PB text size", value: 13,
@@ -273,13 +284,28 @@ export function cssVarName(key) {
 
 /** Every TUNABLE as a `{ "--log-icon-size": "40px", ... }` style object,
  *  ready to spread onto an element's `style`. "x"-unit rows (fractions/
- *  multipliers) are written bare; everything else gets a "px" suffix — there
- *  is no third unit among today's rows, and a new one should extend this
- *  rather than grow a per-row unit table CSS would also have to know about. */
+ *  multipliers) are written bare; "%"-unit rows (identityPercent/
+ *  ranksPercent/pbPercent — SHARES of the row's own width) are written as a
+ *  bare CSS `fr` value rather than a literal `%`, which is what makes the
+ *  three self-normalize: a `<flex>` grid track is a WEIGHT among its
+ *  siblings, not an absolute fraction of the container, so three shares that
+ *  don't add up to 100 still tile the row exactly — the browser distributes
+ *  whatever is left after every track's own floor is subtracted, in
+ *  proportion to these weights, with no clamping/normalizing math of our own
+ *  to keep in step with a second implementation (`_css_literal`,
+ *  server/tuning_api.py) the way a literal percentage would have needed.
+ *  Everything else gets a "px" suffix — there is no fourth unit among
+ *  today's rows, and a new one should extend this rather than grow a
+ *  per-row unit table CSS would also have to know about. */
 export function logTuningVars(values = DEFAULTS) {
   const merged = withDefaults(values);
-  return Object.fromEntries(Object.entries(TUNABLES).map(([key, row]) =>
-    [cssVarName(key), row.unit === "x" ? String(merged[key]) : `${merged[key]}px`]));
+  return Object.fromEntries(Object.entries(TUNABLES).map(([key, row]) => {
+    const value = merged[key];
+    const literal = row.unit === "x" ? String(value)
+      : row.unit === "%" ? `${value}fr`
+      : `${value}px`;
+    return [cssVarName(key), literal];
+  }));
 }
 
 /** Every CHOICE as a space-joined modifier-class string, e.g.

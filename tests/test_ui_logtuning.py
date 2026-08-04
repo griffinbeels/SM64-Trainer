@@ -320,7 +320,7 @@ def test_decoding_drops_unknown_keys_and_fills_missing_ones():
         "const got = decodeTuning(JSON.stringify("
         "  { iconSize: 55, aTunableWeDeleted: 9 }));\n"
         "console.log(JSON.stringify([got.iconSize,\n"
-        "  'aTunableWeDeleted' in got, got.rankWidth === DEFAULTS.rankWidth]));")
+        "  'aTunableWeDeleted' in got, got.rowHeight === DEFAULTS.rowHeight]));")
     assert result == [55, False, True]
 
 

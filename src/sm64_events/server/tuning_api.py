@@ -139,14 +139,26 @@ def _row_unit(row_body: str) -> str | None:
 
 
 def _css_literal(formatted_number: str, unit: str) -> str:
-    """Mirrors `logTuningVars`' own two-way switch EXACTLY (`row.unit === "x"
-    ? String(merged[key]) : `${merged[key]}px``) -- "x"-unit rows (fractions/
-    multipliers) are written bare, everything else gets a "px" suffix, and
-    there is no third unit among today's rows on either side. Takes the
-    ALREADY-FORMATTED `value:` text rather than reformatting `wanted` a
-    second time, so a `value:` and its own fallback can never round or
-    stringify differently -- one number, formatted once, read twice."""
-    return formatted_number if unit == "x" else f"{formatted_number}px"
+    """Mirrors `logTuningVars`' own three-way switch EXACTLY ("x"-unit rows
+    written bare, "%"-unit rows written as a bare `fr` value, everything else
+    a "px" suffix) -- there is no fourth unit among today's rows on either
+    side. "%" rows are the practice-log card's three SHARE tunables
+    (identityPercent/ranksPercent/pbPercent, spec practice-log-entity-cards):
+    written as `fr` rather than a literal percentage so three shares that
+    don't sum to 100 still normalize instead of needing clamping/normalizing
+    arithmetic duplicated here AND in logTuningVars (exactly the "two
+    independent number-to-text roads" risk this file's own module docstring
+    already names for the numeric case).
+
+    Takes the ALREADY-FORMATTED `value:` text rather than reformatting
+    `wanted` a second time, so a `value:` and its own fallback can never
+    round or stringify differently -- one number, formatted once, read
+    twice."""
+    if unit == "x":
+        return formatted_number
+    if unit == "%":
+        return f"{formatted_number}fr"
+    return f"{formatted_number}px"
 
 
 def rewrite_defaults(source: str, values: dict[str, object],

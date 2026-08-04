@@ -4352,9 +4352,14 @@
      What the fallbacks implement, and why: the user reported four things
      about the shipped log ("reads as disorganized / sloppy") --
        1. collapsed cards didn't line up (a flexible identity column sized
-          itself per-card); fixed by `--log-identity-width`, a genuinely
-          FIXED grid track -- every card's icon lands on the same x because
-          every card reserves the same width for it.
+          itself per-card); fixed by `--log-identity-percent` (floored by
+          `--log-identity-floor`) -- every card reserves the SAME SHARE of
+          its own card width for the identity column, so every icon lands on
+          the same x regardless of what else is on that row. Re-tuned
+          2026-08-04 (spec practice-log-entity-cards) from a fixed px track
+          to a percentage share; the `oneLine` section below has the full
+          reasoning -- identity/ranks/PB are the same mechanism now, not one
+          fixed track among flexible ones.
        2/3. a closed card was vertically massive at a narrow window, and
           should look the SAME at a wide one, just bigger ("maybe this can
           just be the same layout in both screen sizes") -- fixed by
@@ -4508,34 +4513,42 @@
   .log-list-card.log-coursename-show .log-card-context { display: block; }
   .log-list-card.log-coursename-hide .log-card-context { display: none; }
   /* The two rank banners for this entity (strategy + star/segment). Row or
-     column depending on `collapsedLayout` (below); `--log-rank-width` caps
-     how wide either banner may grow regardless of which. No overflow clip
-     here: a hat's wings paint outside its own box, same reason as
-     `.rank-slot`. */
-  /* BUG 1 (2026-08-04 round): this box's own GRID CELL is now the flexible
-     one (see the oneLine `grid-template-columns` rule below -- its own
-     comment there has the full reasoning), which is what lets it take the
-     slack instead of the PB tag and chevron. No `justify-self` override is
-     needed for that, and adding one was tried and reverted: this box is
-     ALSO a flex container capped by its own `max-width` below, so the
-     browser's default "stretch, but no further than max-width" already
-     renders it at exactly that width and anchors it to the START of its
-     (now often much wider) cell -- the free space this choice creates
-     shows up on the side facing the PB tag, which is what "the rank area
-     takes the slack" (user) actually meant. An explicit `justify-self:
+     column depending on `collapsedLayout` (below). No overflow clip here: a
+     hat's wings paint outside its own box, same reason as `.rank-slot`. */
+  /* BUG 1 (2026-08-04 round): this box's own GRID CELL is the flexible one
+     in the `oneLine` layout (see its `grid-template-columns` rule below --
+     its own comment there has the full reasoning), which is what lets it
+     take the slack instead of the PB tag and chevron. No `justify-self`
+     override is used for that, DELIBERATELY: an explicit `justify-self:
      start` produces the identical POSITION but changes how this box
      computes its OWN width in the process (a grid item with a real
-     justify-self value sizes to fit-content instead of stretch-then-cap),
+     justify-self value sizes to fit-content instead of stretch-to-fill),
      which starves `.rank-banner-name`'s flex-grow of the room the stretched
      box used to hand it for free -- measured live: it cost `.rank-banner-
      name` exactly the pixel or two some maxed-tier names (a Mario/Luigi
      rank) needed, turning 28 pre-existing narrow-width truncations
      (tests/test_responsive.py's own long-owed 850-913px shortfall) into 88
      across nearly every viewport in the matrix, caught only by running the
-     real sweep, not by eye. */
+     real sweep, not by eye.
+
+     Re-tuned again 2026-08-04 (spec practice-log-entity-cards, the percent-
+     columns round): this box no longer carries its own `max-width` cap
+     either. BUG 1's fix gave the grid CELL all the leftover space and then
+     capped this BOX inside it at a fixed 420px, so on a wide card the free
+     space showed up as a gap beside a capped banner rather than a wider
+     one; now the `oneLine` cell itself IS the percentage share
+     (`--log-ranks-percent`), so the default stretch above fills that share
+     exactly -- there is no second number to keep in step with the grid
+     track, and no leftover gap for one to create. `twoLine`/`stacked`
+     (below) have no share of their own to fill instead: their `ranks` cell
+     is still a plain `minmax(0, 1fr)`, so this box now stretches to that
+     row's own full width in those two layouts -- a real, accepted
+     difference from before (they used to share this box's 420px cap too),
+     left alone because neither is the shipped default and the responsive
+     sweep only ever exercises `oneLine`. */
   .log-card-ranks {
     grid-area: ranks;
-    min-width: 0; max-width: var(--log-rank-width, 420px);
+    min-width: 0;
     display: flex; gap: var(--log-rank-gap, 0px);
     align-self: stretch; justify-content: center;
   }
@@ -4550,7 +4563,21 @@
   .log-list-card .rank-banner-icon { --icon-size: var(--log-rank-icon-size, 28px); }
   .log-card-head .pbtag {
     grid-area: pb; justify-self: end;
-    min-width: var(--log-pb-width, 92px); font-size: var(--log-pb-size, 13px);
+    font-size: var(--log-pb-size, 13px);
+    /* No `min-width` here since the percent-columns round (2026-08-04, spec
+       practice-log-entity-cards): the old `--log-pb-width` guaranteed this
+       tag a fixed 92px so the chevron beside it never jumped as the saved
+       time's digit count changed. In `oneLine` that job now belongs to the
+       `pb` grid TRACK itself (`--log-pb-percent` on the grid-template-
+       columns rule below) -- this tag is `justify-self: end` (never
+       stretched), so it still renders at its own content width, but that
+       width is now read against a track sized as a share of the CARD
+       rather than a bare literal, and the fold chevron beside it is its own
+       fixed ~30px `auto` column regardless (see that rule's own comment).
+       `twoLine`/`stacked` never had fold adjacent to this tag in the first
+       place (their `grid-template-areas` never put `pb` and `fold` on the
+       same row), so the jitter this min-width existed to prevent was never
+       reachable there -- nothing to preserve for those two layouts. */
     /* Pushes the PB tag away from the rank column -- 0 by default (byte-
        identical), a real gap once a wide rank display (Stacked included)
        leaves the two crowded together. */
@@ -4699,48 +4726,117 @@
   /* ---- collapsedLayout: the head's own grid shape ------------------------
      All three are real, always-selectable shapes -- not a responsive
      override -- so the inspector can flip between them at one width and
-     compare. `oneLine` is the shipped default and needs `--log-identity-width`
-     (a FIXED track) precisely because three other things share its row;
-     `twoLine`/`stacked` give identity the whole first row, so a flexible
-     `minmax(0,1fr)` already keeps every card's icon flush left with no fixed
-     track needed there. */
-  /* `minmax(0, …)` on the fixed-looking identity track, not a bare length --
-     a plain `<length>` track has that length as BOTH its base size and its
-     growth limit, so it never shrinks below it even when the row has less
-     room than that, and the excess bleeds past the card's own edge rather
-     than being clipped (live report 2026-08-03, at his own tuned 420px Rank
-     column width and the app's 850-900px supported floor: identity 245px +
-     ranks 420px alone already exceeds the pane). `minmax(0, Npx)` keeps Npx
-     as the track's PREFERRED size -- unchanged at any width wide enough to
-     afford it -- while letting it shrink toward 0 under real pressure, same
-     as every `.log-card-ranks`/`.pbtag` child already does via `min-width:
-     0`. Truncating text at that point is the honest degrade; bleeding past
-     the card is not.
+     compare. `oneLine` is the shipped default and its own row is the one
+     place identity/ranks/PB genuinely split ONE row three ways, which is
+     what makes a percentage split meaningful there; `twoLine`/`stacked` give
+     identity the whole first row to itself, so a flexible `minmax(0,1fr)`
+     already keeps every card's icon flush left with nothing to apportion.
 
-     BUG 1 (2026-08-04 round): the RANKS track used to be a second
-     `minmax(0, …)` fixed-looking cap, reading the SAME --log-rank-width
-     tunable `.log-card-ranks`'s own max-width still reads below (420px by
-     default) -- the identical species as identity's own track. A grid
-     track with a definite `<length>` max
-     still grows to fill LEFTOVER free space up to that max before anything
-     else gets a look at it (the "maximize tracks" step of grid track
-     sizing), and once both fixed-looking tracks were maxed out, nothing in
-     this template had a claim on whatever space remained -- it simply sat
-     unused, past the PB tag and the fold chevron, at the card's own true
-     right edge. That is exactly the reported bug: "the PB number should be
-     right aligned all the way to the right of the card, along with the
-     dropdown arrow." `minmax(0, 1fr)` makes ranks the one GENUINELY
-     flexible track -- it, and only it, absorbs every leftover pixel, which
-     is what pins the auto-sized PB/fold columns after it flush against the
-     row's true end. The rank display itself does not grow to match: its own
-     box is still capped by `.log-card-ranks`'s `max-width` (below, or a
-     `log-rankstyle-*` override of it), so the free space this track now
-     absorbs shows up as room around that capped box, not as a wider rank
-     display -- "the rank area takes the slack" (user, 2026-08-04), not the
-     rank CONTENT. */
+     PERCENT COLUMNS (2026-08-04 round, spec practice-log-entity-cards):
+     identity/ranks/PB were three independently-tuned PIXEL numbers until
+     this round -- a fixed identity track (BUG 1's own history, below, has
+     the detail), a fixed max-width cap on the rank banners, a fixed
+     min-width floor on the PB tag. User, 2026-08-04: "I think the rank
+     column should maybe take up 70% of the width, 20% for the course
+     identity, 10% for the pb+dropdown icon... we should be able to control
+     the relative overall spacing as a percentage of the whole column
+     width." A pixel number is right at exactly one card width; a SHARE is
+     right at every width by construction, which is why this is a
+     simplification and not merely a unit swap -- one fewer thing to
+     re-tune per breakpoint, not a new thing to learn.
+
+     The three shares (`--log-identity-percent`/`--log-ranks-percent`/
+     `--log-pb-percent`, all "%"-unit rows in ui/logtuning.js) are written by
+     `logTuningVars` as bare CSS `fr` values, not literal percentages --
+     see that function's own comment for why. The practical consequence
+     lives entirely in the track function below: `minmax(floor, Nfr)` for
+     identity, `minmax(0, Nfr)` for ranks and PB. A `<flex>` (`fr`) track is
+     a WEIGHT among its siblings, not an absolute fraction of the row, so
+     the three do NOT need to sum to 100 -- the grid distributes whatever
+     space is left after every track's own minimum (identity's floor; 0 for
+     the other two) in proportion to these weights, so 20/70/10 and
+     40/140/20 draw pixel-identical rows. That is the "what happens when
+     they don't total 100" decision this round had to make, stated here
+     rather than only in the registry: NORMALIZE, for free, via the
+     browser's own grid algorithm -- no clamping or renormalizing math of
+     ours to keep in step between this file and ui/logtuning.js (the
+     multiple-independent-implementations risk CLAUDE.md's dev-process rules
+     warn about). The cost is that a share can never be read as a literal
+     percentage of the card off the tuning inspector's own number --
+     20 really does mean "20 parts of however many parts the three
+     currently add up to", not "20% of the card" the instant someone dials
+     a fourth share in from the sidelines. Nothing here creates one today.
+
+     `minmax(floor, …)` on identity, not a bare length -- carried over from
+     the original fixed-track lesson (BUG 1's own paragraph below has the
+     full incident): a plain `<length>` track has that length as BOTH its
+     base size and its growth limit, so it never shrinks below it even when
+     the row has less room than that, and the excess bleeds past the card's
+     own edge rather than being clipped. `--log-identity-floor` (248px,
+     measured against the widest of 97 corpus star names at the shipped
+     13px name size) is that same protection re-aimed at a percentage: below
+     the app's 850px supported floor, 20% of the row is well under 248px, so
+     without this minimum the identity column would keep shrinking past the
+     point where a real name still fits, and truncating text is the honest
+     degrade a bare bleed past the card edge is not. Ranks/PB carry no floor
+     of their own -- `min-width: 0` on `.log-card-ranks` and the PB tag's
+     own un-stretched content width are what keeps EITHER from forcing an
+     overflow if their share reads very small; text there degrades by
+     wrapping/reflowing inside RankBanner rather than the fixed identity
+     column's single-line ellipsis, so there was no equivalent "widest
+     value in the corpus" floor to measure for either of them.
+
+     BUG 1 (2026-08-04 round, preserved -- the incident that made the RANKS
+     track genuinely flexible in the first place, before this round made
+     ALL THREE tracks flexible together): the ranks track used to be a
+     second `minmax(0, …)` fixed-looking cap (reading the same pixel
+     tunable `.log-card-ranks`'s own max-width read), the identical species
+     as identity's own track above. A grid track with a definite `<length>`
+     max still grows to fill LEFTOVER free space up to that max before
+     anything else gets a look at it (the "maximize tracks" step of grid
+     track sizing), and once both fixed-looking tracks were maxed out,
+     nothing in this template had a claim on whatever space remained -- it
+     simply sat unused, past the PB tag and the fold chevron, at the card's
+     own true right edge. That is exactly the reported bug: "the PB number
+     should be right aligned all the way to the right of the card, along
+     with the dropdown arrow." Making ranks a `minmax(0, 1fr)` track fixed
+     it by giving ranks the one genuinely flexible claim on that leftover
+     space; the rank BANNER's own content stayed capped by a separate
+     `max-width` on `.log-card-ranks` (so the space just moved to sit beside
+     a still-420px-capped banner instead of past the row's own end) until
+     THIS round removed that second cap too -- see `.log-card-ranks`'s own
+     rule, above, for why a second capping number is no longer needed now
+     that the grid track itself is the percentage share. */
+  /* The PB track's own minimum is `auto`, not `0` -- measured live, not
+     guessed (2026-08-04, same round): a bare `0` is an EXPLICIT minimum, and
+     an explicit minimum turns OFF grid's "automatic minimum size" behaviour
+     entirely, so the track shrank straight to its bare `10fr` share (as
+     little as 44px at the 850px supported floor) with nothing keeping it as
+     wide as the PB tag actually is. The tag itself is `justify-self: end`
+     (never stretched, sized to its own content) and carries no `min-width`
+     of its own any more (see its rule, above) -- so it rendered at its
+     natural ~98px, right-aligned against a 44px-wide cell, which put its
+     LEFT edge 42-53px behind the cell's own start: `.log-card-ranks x
+     .pbtag` overlap and `.rank-banner::before` decoration bleed, at every
+     viewport from the 850px floor up to ~1280px (uilab's own probe --
+     invisible to a screenshot at either end state, the exact trap this
+     round was warned about). `auto` restores the respected floor: the
+     track's minimum becomes its content's own min-content size (~98px
+     here, `white-space: nowrap` so it cannot shrink further) whenever that
+     exceeds the naive `fr` share, while the `fr` share still governs growth
+     beyond it. Identity's own track keeps its EXPLICIT floor
+     (`--log-identity-floor`) on purpose -- that one is a deliberately
+     measured constant independent of whatever text happens to be on
+     screen, not a stand-in for `auto`; ranks needs no minimum at all
+     (`.log-card-ranks` already declares its own `min-width: 0`, and its
+     `.rank-banner` children do too, so ellipsis is genuinely reachable
+     rather than something a track floor would prevent). */
   .log-list-card.log-layout-oneline .log-card:not(.is-unassigned) .log-card-head {
-    grid-template-columns: minmax(0, var(--log-identity-width, 245px))
-      minmax(0, 1fr) auto auto;
+    grid-template-columns:
+      minmax(var(--log-identity-floor, 248px), var(--log-identity-percent, 20fr))
+      minmax(0, var(--log-ranks-percent, 70fr))
+      minmax(auto, var(--log-pb-percent, 10fr))
+      auto;
     grid-template-areas: "identity ranks pb fold";
   }
   .log-list-card.log-layout-oneline .log-card-ranks { flex-direction: row; flex-wrap: wrap; align-items: center; }
