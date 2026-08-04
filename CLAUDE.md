@@ -30,6 +30,7 @@ uv run python tools/dedupe_journal.py data/tracker.db  # scan double-journaled e
 uv run python tools/what_happened.py                 # READ BACK what the human just played -- journal events AND what the UI DREW, one timeline (--no-ui for events only)
 uv run python tools/what_happened.py --list          # which journal is live: repo / each worktree / installed exe
 uv run pytest tests/test_responsive.py -q            # render every breakpoint; report layout defects (no PJ64 needed)
+uv run python tools/check_glossary.py                # docs/glossary.md's own gate: closure, active voice, live Lives paths
 uv run python tools/contact_sheet.py .objective-card # one surface at 1500/1200/900/850, in one image -- LOOK at it
 uv run python tools/mark_sheet.py                    # the caveat badge on both surfaces, side by side (the PICK is made: corner badge, 2026-08-01)
 uv run python tools/measure_objective_card.py        # re-measure the fixed card heights against real content
@@ -239,6 +240,11 @@ Contract changes land on main first, then dependent work fans out. Merge with
 ## Definition of done — every merge
 
 - `uv run pytest -q` passes; new behavior has tests
+- **glossary current** — a change that adds, renames or redefines a domain noun
+  updates its `docs/glossary.md` row in the SAME commit. The glossary is what we
+  both call things by; a name that only exists in code is not shared language.
+  `tools/check_glossary.py` keeps it closed and active-voice, and it cannot
+  notice a word missing from the file entirely — that part is yours
 - **responsive sweep clean** (`uv run pytest tests/test_responsive.py -q`) — a
   new defect is fixed, or owed in `tools/uilab_project.py::known_defects` with a
   reason. Component layout gates on `@container`, never `@media`; the law and

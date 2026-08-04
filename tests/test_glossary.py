@@ -33,6 +33,33 @@ def _fixture(name):
     return (FIXTURES / name).read_text(encoding="utf-8")
 
 
+def test_the_real_glossary_has_no_unexplained_findings():
+    """The gate. Every rule below was mutation-proved against a fixture first,
+    so a green run here means the rules held, not that they were toothless."""
+    glossary = REPO_ROOT / "docs" / "glossary.md"
+    findings = _mod.run(glossary.read_text(encoding="utf-8"), REPO_ROOT)
+    assert findings == [], "\n".join(f"{f.rule}: {f.term}: {f.detail}" for f in findings)
+
+
+def test_every_allowlist_entry_carries_a_reason():
+    for pair, reason in _mod.ALLOWED.items():
+        assert reason.strip(), f"{pair} is exempted with no reason"
+
+
+def test_the_glossary_defines_the_words_we_say_every_session():
+    """Closure keeps the glossary self-consistent but cannot notice a word
+    missing from it entirely -- an empty glossary is perfectly closed. This is
+    the floor: the nouns that appear in nearly every conversation about this
+    project."""
+    rows = {r.term.lower() for r in _mod.parse((REPO_ROOT / "docs" / "glossary.md").read_text(encoding="utf-8"))}
+    for spoken in (
+        "target", "star", "segment", "attempt", "strategy", "personal best",
+        "rank", "standard", "marelo", "selector", "objective card", "caveat",
+        "journal", "projector", "detector",
+    ):
+        assert spoken in rows, f"'{spoken}' is a word we say every session and has no row"
+
+
 def test_parse_reads_term_definition_and_lives():
     rows = _mod.parse(_fixture("glossary_ok.md"))
     assert [row.term for row in rows] == ["Journal", "Event"]
