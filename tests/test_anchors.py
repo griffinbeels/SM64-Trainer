@@ -643,6 +643,17 @@ def test_save_dialog_sets_save_pending_on_state_loaded():
 # ---------------------------------------------------------------------------
 
 def run(detector, snaps):
+    """Feed consecutive pairs, exactly as the poller does.
+
+    TRAP, and it cost two rounds on 2026-08-03: the FIRST snapshot is only ever
+    a `prev`. AnchorDetector records its recency state from `curr`
+    (`_last_door_frame`, `_last_dialog_frame`, `_last_teleport_frame`), so an
+    action that appears only in `snaps[0]` is never observed at all — the test
+    then passes or fails for a reason unrelated to what it claims to check. Two
+    teleport tests were green against a detector that had never seen a
+    fade-out. Put the action you are arming on in snaps[1] or later, with a
+    throwaway leading snapshot.
+    """
     return [ev for prev, curr in zip(snaps, snaps[1:])
             for ev in detector.process(prev, curr)]
 
