@@ -1303,8 +1303,31 @@
      away") and has neither problem. NO `transition` here on purpose -- the
      value is already animated frame by frame, and a CSS transition on top
      would lag it back out of sync. */
+  /* `flex-shrink: 999` (was 1, 2026-08-03, practice-log-entity-cards): this
+     hint and `.rank-banner-name` above are the only two children of
+     `.rank-banner-row` allowed to shrink at all -- the kicker and the icon
+     are both `flex: 0 0 auto` -- and until this round they shared that job
+     at an EQUAL weight, splitting a tight row's deficit PROPORTIONALLY
+     between them. `.rank-banner-name` is on uilab_project.py's own
+     NEVER_TRUNCATE list and this line is not; a rank NAME truncating to
+     half its characters ("LUIGI 2" -> "LU…") to leave room for this line's
+     OWN half-cut sentence is losing the wrong one. A huge shrink-factor
+     imbalance makes this line the one that gives first -- CSS resolves a
+     shrink deficit as a WEIGHTED split (shrink-factor x basis), so at 999:1
+     this line absorbs a deficit up to roughly 1000x its own width before
+     `.rank-banner-name` loses a single pixel, and only past that point (two
+     full "Banners"-style rank displays sharing a narrow tuned rank column,
+     right at the app's supported 850px floor) does the name still have to
+     give a little -- a genuine capacity conflict between his tuned rank
+     column width and two full banners' worth of content, not a priority
+     bug, and the remaining failure `tests/test_responsive.py` reports at
+     850-913px is that conflict, left for a decision rather than papered
+     over. Never `flex-shrink: 0` outright: tried and reverted the same
+     round -- an UNSHRINKABLE name overflows its own banner box at those
+     same narrow widths instead of ellipsising, which bleeds into the
+     neighbouring rank/PB tag and is worse than what it replaces. */
   .rank-banner-next {
-    flex-shrink: 1; overflow: hidden; text-overflow: ellipsis;
+    flex-shrink: 999; overflow: hidden; text-overflow: ellipsis;
     opacity: var(--climb-reveal, 1);
   }
   /* Progress toward the next rank: full slot width, never a fixed px bar —
