@@ -48,6 +48,8 @@ GREY_FONT = "FF434343"
 PLACEHOLDER_CS = 59996
 
 FIRST_RUNNER_COL = 7          # A-E are script-owned, F is a separator
+# Sub-headers inside a group: "★ BoB" sits under "Castle Movements (Lobby)".
+SUBHEADER_MARK = "★"
 
 # A whole-target time below this fraction of its basis cannot be one. Measured
 # over the live sheet: 268 non-RTA approach rows bottom out at 0.770, 145
@@ -70,6 +72,7 @@ class ClassificationConflict(Exception):
 @dataclass
 class SheetRow:
     row: int
+    group: str
     section: str
     label: str
     ids: frozenset
@@ -137,7 +140,10 @@ def read_rows(data: bytes) -> list:
     cells = read_sheet(data, SHEET_MAIN)
     runners = runner_columns(cells)
     last_row = max(row for row, _ in cells)
-    out, section, seen, best_by_id = [], "", set(), {}
+    # Headers nest two deep: "Castle Movements (Lobby)" then "★ BoB". Keeping
+    # only the innermost loses the outer context entirely, which is what tells
+    # a mapper that 113 rows are movements rather than unrecognised stars.
+    out, group, section, seen, best_by_id = [], "", "", set(), {}
     target_best, target_label = None, ""
 
     def text(row, col):
@@ -150,7 +156,10 @@ def read_rows(data: bytes) -> list:
             continue
         match = _ROW.match(head.value)
         if not match:
-            section, seen, best_by_id = head.value.strip(), set(), {}
+            section = head.value.strip()
+            if not section.startswith(SUBHEADER_MARK):
+                group = section
+            seen, best_by_id = set(), {}
             target_best, target_label = None, ""
             continue
         ids = frozenset(match.group(1).split("|"))
@@ -175,7 +184,7 @@ def read_rows(data: bytes) -> list:
 
         version = _VERSION.search(label)
         out.append(SheetRow(
-            row=row, section=section, label=label, ids=ids, kind=kind,
+            row=row, group=group, section=section, label=label, ids=ids, kind=kind,
             opens_target=bool(head.bold),
             version=version.group(1).lower() if version else None,
             best_cs=best_cs, best_runner=text(row, 3).strip(),
