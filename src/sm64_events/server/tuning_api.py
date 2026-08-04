@@ -57,6 +57,7 @@ TUNING_REGISTRIES = {
     "climb": _UI / "climbtuning.js",
     "marelo": _UI / "marelotuning.js",
     "log": _UI / "logtuning.js",
+    "selector": _UI / "selectortuning.js",
 }
 
 # The original single-surface name, kept as the climb's own path so nothing

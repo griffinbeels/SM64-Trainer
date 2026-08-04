@@ -32,10 +32,17 @@ def _plausible(snap: GameSnapshot) -> bool:
 
 
 class Poller:
-    def __init__(self, memory, detectors, broadcaster, hz: int = 60, reader=None):
+    def __init__(self, memory, detectors, broadcaster, hz: int = 60, reader=None,
+                 on_frame=None):
         self.memory = memory
         self.detectors = list(detectors)
         self.broadcaster = broadcaster
+        # Awaited with the live game frame after each tick's events are
+        # published — the tracker's deferred-judgement heartbeat (main.py wires
+        # TrackerService.settle_frame). Injected rather than duck-typed off
+        # `broadcaster`, which is sometimes a plain Broadcaster: this poller's
+        # sink contract is publish(), and a clock consumer is a second concern.
+        self.on_frame = on_frame
         self.interval = 1.0 / hz
         self.reader = reader or SnapshotReader(memory)
         self.latest: GameSnapshot | None = None
@@ -118,6 +125,11 @@ class Poller:
             self._record_tick_ms((perf_counter() - t0) * 1000)
             for event in out:
                 await self.broadcaster.publish(event)
+            # AFTER this tick's events: an event on this frame may record the
+            # very position change being judged, and closures-before-arming is
+            # the order the whole engine keeps.
+            if self.on_frame is not None:
+                await self.on_frame(curr.global_timer)
         self._prev = curr
         self.latest = curr
         self._last_timer = curr.global_timer

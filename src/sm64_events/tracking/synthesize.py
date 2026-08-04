@@ -61,8 +61,11 @@ or an explicit addition to `_NOT_SYNTHESIZABLE`.
 keeps the two sets covering `TRIGGERS` exactly.
 """
 from sm64_events.memory.addresses import (CASTLE_AREA_NAMES, LEVEL_NAMES,
-                                          course_name, star_name)
-from sm64_events.tracking.segments import _ORIGIN_PARAMS
+                                          course_name, node_short_label,
+                                          star_name)
+from sm64_events.tracking import topology
+from sm64_events.tracking.segments import (_ORIGIN_PARAMS, _real_edge,
+                                           step_node)
 
 # --- per-journal-type param builders -----------------------------------
 # Each takes the row's PAYLOAD only (the registry below already picked the
@@ -176,6 +179,102 @@ def clause_for(row, role: str) -> dict | None:
             return None
         return {"type": trig_key, **params}
     return None
+
+
+def _step_clause(node: str, via_level_edge: bool) -> dict:
+    """The clause that requires standing at `node`, in the form that can
+    actually ARM there.
+
+    This is the authoring trap the strict-path spec named, absorbed rather
+    than explained: a castle subarea reached by a LEVEL edge must be a
+    subarea-pinned `level_enter` and NOT an `area_enter`, because
+    `segments.can_run_from` rule (A) refuses to arm a definition whose next
+    step is an `area_enter` while Mario stands outside the castle. Two clause
+    types that describe the same room, one of which silently never arms —
+    exactly the distinction a person authoring by hand has no way to know
+    they got wrong, and exactly the one the journal answers for free (did a
+    `level_changed` land on this frame?).
+    """
+    level_str, _, area_str = node.partition(":")
+    level = int(level_str)
+    if not area_str:
+        return {"type": "level_enter", "to": level}
+    if via_level_edge:
+        return {"type": "level_enter", "to": level, "to_subarea": int(area_str)}
+    return {"type": "area_enter", "level": level, "area": int(area_str)}
+
+
+def walked_steps(rows, start_row, end_row) -> list[dict]:
+    """The places actually walked through between two picked journal rows —
+    the candidate STEPS of the definition those two rows would define.
+
+    The path is already recorded; the recorder just was not reading it. Every
+    settled position between the two ends is in the journal, so a movement can
+    be defined by DOING it rather than by hand-authoring an ordered clause list
+    against a trigger vocabulary — which is the difference between the user
+    being able to make `WF → SSL` himself and not (his own bar, in the spec:
+    "It needs to be easy for me to have, theoretically, made the WF→SSL
+    segment on my own as a user").
+
+    Reads `area_changed` and NOT `level_changed`, and takes the LAST candidate
+    per frame — both borrowed deliberately from `SegmentEngine.feed`, whose own
+    comments carry the evidence: an area payload names the level AND the
+    settled area outright where a level payload's context is still the old
+    level's, and every castle entry loads the Lobby for one poll before warping
+    to the real area, ALL ON ONE FRAME. Judged raw, that transient Lobby is a
+    stop the player never made. This is the one-frame defer, applied to
+    authoring instead of to matching, so what gets written down and what gets
+    enforced collapse the same walk the same way.
+
+    The arm position is dropped unconditionally — the first settled node is
+    where the start trigger left you, the spec's "the start is implicit". The
+    END is dropped by IDENTITY, never by position: a `level_changed` end row
+    sits one id BEFORE its own co-frame `area_changed`, so the destination is
+    outside the span entirely and the last walked node is a real step. Dropping
+    a trailing node blindly ate the Basement out of `WF → SSL` — the one route
+    this whole feature is measured against — while leaving four-step arena
+    routes looking perfect, which is the shape of a bug that ships. Compared
+    through `segments.step_node`, the same reader the matcher judges positions
+    with, so "is this the end" has one answer.
+
+    What remains is the intermediate stops, which is precisely what
+    `SegmentDef.waypoints` holds.
+
+    Returns one dict per step: `node` (world key), `label` (its short form,
+    the same one the practice card's step track draws), and `clause`. The
+    CALLER decides which are required — a walk contains detours and rooms you
+    merely crossed, and only the person who did it knows which was which.
+    """
+    # Sorted by id here rather than trusting the caller: ORDER is the entire
+    # content of the answer, and a caller handing over a dict's values or a
+    # filtered list is one refactor away from silently reordering the route.
+    span = sorted((row for row in rows
+                   if start_row.id <= row.id <= end_row.id),
+                  key=lambda row: row.id)
+    level_frames = {row.frame for row in span
+                    if row.type == "level_changed" and _real_edge(row)}
+    settled: list[tuple[int, str]] = []
+    for row in span:
+        if row.type != "area_changed":
+            continue
+        node = topology.node_for(row.payload.get("level"),
+                                 row.payload.get("to"))
+        if node is None:                      # position unknown; cannot judge
+            continue
+        if settled and settled[-1][0] == row.frame:
+            settled[-1] = (row.frame, node)   # last candidate of the frame wins
+        else:
+            settled.append((row.frame, node))
+    walk = [entry for index, entry in enumerate(settled)
+            if index == 0 or entry[1] != settled[index - 1][1]][1:]
+    end_clause = clause_for(end_row, "end")
+    end_node = step_node(end_clause) if end_clause else None
+    while walk and end_node is not None and walk[-1][1] == end_node:
+        walk.pop()
+    return [{"node": node,
+             "label": node_short_label(node),
+             "clause": _step_clause(node, frame in level_frames)}
+            for frame, node in walk]
 
 
 def synthesize(start_row, end_row) -> tuple[dict, dict] | None:

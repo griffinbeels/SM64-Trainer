@@ -32,9 +32,17 @@ const html = htm.bind(h);
 // falsy strat_set on a defaulted segment falls back to the default rather than
 // clearing (projection.py caveat 17) — so this only hides an option that could
 // not stick anyway.
+// `groups` (optional) is the server's own resolution of which exit-star
+// variant each strategy belongs to — [] or absent for every entity but a
+// 100-coin star. When present the list is drawn as <optgroup>s showing the
+// LEAF ("Standard") under a heading ("100c + Race"), because a 100-coin
+// strategy's stored name is variant-qualified and the qualifier is exactly
+// what the heading already says. Nothing here derives the grouping: the split
+// happens once, in ranks/standards.py, and arrives ready to render.
 export function StratPicker({ entity, identity, strategies, active, onChanged,
                               submit, blankLabel = "— no strat —",
-                              highlightUnset = true, allowBlank = true }) {
+                              highlightUnset = true, allowBlank = true,
+                              groups = null }) {
   // Bumped to force the <select> to remount and re-read `active`. A native
   // <select> change updates the DOM immediately, but if the write is dropped
   // (or cancelled) `active` stays null, so its `value` prop never changes and
@@ -75,12 +83,28 @@ export function StratPicker({ entity, identity, strategies, active, onChanged,
     onChanged();   // resync the dropdown to the server's truth either way
   }
 
+  // A grouped list must still be able to show a value the groups do not cover
+  // — a historical attempt's purged strat, or a hand-edited name matching no
+  // variant — for the same reason the flat list keeps `active` listed: a
+  // <select> whose value matches no <option> renders BLANK, which reads as
+  // "no strategy" rather than as the name it actually holds.
+  const grouped = (groups || []).filter((g) => (g.strategies || []).length);
+  const inGroups = new Set(grouped.flatMap(
+    (g) => g.strategies.map((s) => s.name)));
+  const strays = options.filter((s) => !inGroups.has(s));
+
   return html`<select key=${`strat-${nonce}`}
       class="meta ${!active && highlightUnset ? "needs-strat" : ""}"
       value=${active || ""}
       onchange=${(changeEvent) => setStrat(changeEvent.target.value)}>
     ${allowBlank ? html`<option value="">${blankLabel}</option>` : null}
-    ${options.map((s) => html`<option value=${s}>${s}</option>`)}
+    ${grouped.length
+      ? html`${grouped.map((g) => html`<optgroup label=${g.label}>
+            ${g.strategies.map((s) => html`
+              <option value=${s.name}>${s.leaf}</option>`)}
+          </optgroup>`)}
+        ${strays.map((s) => html`<option value=${s}>${s}</option>`)}`
+      : options.map((s) => html`<option value=${s}>${s}</option>`)}
     <option value="__new">+ new strat…</option>
   </select>
   ${showModal ? html`<${StratModal} entity=${entity} existing=${options}

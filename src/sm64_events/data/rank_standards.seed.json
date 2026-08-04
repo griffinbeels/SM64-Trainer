@@ -1,5 +1,5 @@
 {
- "version": 4,
+ "version": 5,
  "entities": {
   "star:1:0": {
    "clock": "igt",
@@ -238,6 +238,55 @@
      [
       2030,
       "https://www.youtube.com/watch?v=tb7M7XdsHFU"
+     ]
+    ]
+   }
+  },
+  "star:1:6": {
+   "clock": "igt",
+   "strategies": {
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 102.2,
+     "Grandmaster": 105.93,
+     "Master": 111.53,
+     "Diamond": 119.43,
+     "Platinum": 127.9,
+     "Gold": 140.66,
+     "Silver": 149.9,
+     "Bronze": 182.2
+    }
+   },
+   "exit_variants": {
+    "100c + Reds": 3
+   },
+   "jp_strategies": {
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 102.56,
+     "Grandmaster": 106.3,
+     "Master": 111.9,
+     "Diamond": 119.8,
+     "Platinum": 128.26,
+     "Gold": 141.03,
+     "Silver": 150.26,
+     "Bronze": 182.56
+    }
+   },
+   "videos": {
+    "100c + Reds \u00b7 Standard": "https://www.youtube.com/watch?v=MHmdC3CEfu8&ab_channel=Smau"
+   },
+   "clips": {
+    "100c + Reds \u00b7 Standard": [
+     [
+      9626,
+      "https://www.youtube.com/watch?v=MHmdC3CEfu8&ab_channel=Smau"
+     ],
+     [
+      9953,
+      "https://youtu.be/4CJkw0NJB-U"
+     ],
+     [
+      10293,
+      "https://x.com/geek_007/status/1797733443876597933/video/1"
      ]
     ]
    }
@@ -574,6 +623,127 @@
      [
       940,
       "https://youtu.be/FsSXikYCyv0"
+     ]
+    ]
+   }
+  },
+  "star:2:6": {
+   "clock": "igt",
+   "strategies": {
+    "100c + Reds \u00b7 Half Cycle Skip": {
+     "Mario": 60.13,
+     "Grandmaster": 60.86,
+     "Master": 61.7,
+     "Diamond": 62.43,
+     "Platinum": 63.93,
+     "Gold": 65.1,
+     "Silver": 66.1,
+     "Bronze": 69.6
+    },
+    "100c + Reds \u00b7 Half Cycle": {
+     "Mario": 66.03,
+     "Grandmaster": 66.56,
+     "Master": 67.6,
+     "Diamond": 68.33,
+     "Platinum": 69.16,
+     "Gold": 75.3,
+     "Silver": 83.43,
+     "Bronze": 89.36
+    },
+    "100c + Reds \u00b7 Kanno Cycle": {
+     "Mario": 56.06,
+     "Grandmaster": 56.4,
+     "Master": 56.8,
+     "Diamond": 57.46,
+     "Platinum": 58.9
+    },
+    "100c + Reds \u00b7 Pro Cycle": {
+     "Mario": 57.7,
+     "Grandmaster": 58.46,
+     "Master": 58.86,
+     "Diamond": 59.53,
+     "Platinum": 60.96,
+     "Gold": 62.1
+    }
+   },
+   "exit_variants": {
+    "100c + Reds": 3
+   },
+   "jp_strategies": {
+    "100c + Reds \u00b7 Half Cycle Skip": {
+     "Mario": 60.5,
+     "Grandmaster": 61.23,
+     "Master": 62.06,
+     "Diamond": 62.8,
+     "Platinum": 64.3,
+     "Gold": 65.46,
+     "Silver": 66.46,
+     "Bronze": 69.96
+    },
+    "100c + Reds \u00b7 Half Cycle": {
+     "Mario": 66.4,
+     "Grandmaster": 66.93,
+     "Master": 67.96,
+     "Diamond": 68.7,
+     "Platinum": 69.53,
+     "Gold": 75.66,
+     "Silver": 83.8,
+     "Bronze": 89.73
+    },
+    "100c + Reds \u00b7 Kanno Cycle": {
+     "Mario": 56.43,
+     "Grandmaster": 56.76,
+     "Master": 57.16,
+     "Diamond": 57.83,
+     "Platinum": 59.26
+    },
+    "100c + Reds \u00b7 Pro Cycle": {
+     "Mario": 58.06,
+     "Grandmaster": 58.83,
+     "Master": 59.23,
+     "Diamond": 59.9,
+     "Platinum": 61.33,
+     "Gold": 62.46
+    }
+   },
+   "videos": {
+    "100c + Reds \u00b7 Pro Cycle": "https://youtu.be/kpESEK4dfp0?si=TDKg25j92KM28cDO",
+    "100c + Reds \u00b7 Half Cycle Skip": "https://www.youtube.com/watch?v=2eMVYR6Xgc4",
+    "100c + Reds \u00b7 Kanno Cycle": "https://www.youtube.com/watch?v=TSve8yZWbiM"
+   },
+   "clips": {
+    "100c + Reds \u00b7 Pro Cycle": [
+     [
+      5670,
+      "https://youtu.be/kpESEK4dfp0?si=TDKg25j92KM28cDO"
+     ],
+     [
+      5696,
+      "https://youtu.be/iTb9GKT-vZM"
+     ],
+     [
+      5700,
+      "https://www.youtube.com/watch?v=tBGsfiZQ0ag"
+     ]
+    ],
+    "100c + Reds \u00b7 Half Cycle Skip": [
+     [
+      5973,
+      "https://www.youtube.com/watch?v=2eMVYR6Xgc4"
+     ],
+     [
+      5973,
+      "https://www.youtube.com/watch?v=f104Pxbt3Ys"
+     ]
+    ],
+    "100c + Reds \u00b7 Kanno Cycle": [
+     [
+      5596,
+      "https://www.youtube.com/watch?v=TSve8yZWbiM"
+     ],
+     [
+      5643,
+      "https://www.youtube.com/watch?v=wGpolh4eweU"
      ]
     ]
    }
@@ -962,6 +1132,82 @@
     ]
    }
   },
+  "star:3:6": {
+   "clock": "igt",
+   "strategies": {
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 117.96,
+     "Grandmaster": 119.46,
+     "Master": 123.4,
+     "Diamond": 128.23,
+     "Platinum": 134.76,
+     "Gold": 144.23,
+     "Silver": 150.46,
+     "Bronze": 172.23
+    },
+    "100c + Reds \u00b7 No Cutscene": {
+     "Mario": 107.36,
+     "Grandmaster": 108.86,
+     "Master": 112.8,
+     "Diamond": 117.63,
+     "Platinum": 124.16,
+     "Gold": 133.63,
+     "Silver": 139.86,
+     "Bronze": 161.63
+    }
+   },
+   "exit_variants": {
+    "100c + Reds": 3
+   },
+   "jp_strategies": {
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 118.33,
+     "Grandmaster": 119.83,
+     "Master": 123.76,
+     "Diamond": 128.6,
+     "Platinum": 135.13,
+     "Gold": 144.6,
+     "Silver": 150.83,
+     "Bronze": 172.6
+    },
+    "100c + Reds \u00b7 No Cutscene": {
+     "Mario": 107.73,
+     "Grandmaster": 109.23,
+     "Master": 113.16,
+     "Diamond": 118.0,
+     "Platinum": 124.53,
+     "Gold": 134.0,
+     "Silver": 140.23,
+     "Bronze": 162.0
+    }
+   },
+   "videos": {
+    "100c + Reds \u00b7 Standard": "https://youtu.be/88jTckjCx18",
+    "100c + Reds \u00b7 No Cutscene": "https://youtu.be/oIjXEATqusU"
+   },
+   "clips": {
+    "100c + Reds \u00b7 Standard": [
+     [
+      11663,
+      "https://youtu.be/88jTckjCx18"
+     ],
+     [
+      11670,
+      "https://youtu.be/obY1bJ4p9z0"
+     ]
+    ],
+    "100c + Reds \u00b7 No Cutscene": [
+     [
+      10553,
+      "https://youtu.be/oIjXEATqusU"
+     ],
+     [
+      10630,
+      "https://youtu.be/6QWDGsBVpm8"
+     ]
+    ]
+   }
+  },
   "star:3:4": {
    "clock": "igt",
    "strategies": {
@@ -1163,6 +1409,180 @@
      [
       2493,
       "https://youtu.be/fLBNjV-qVJ8"
+     ]
+    ]
+   }
+  },
+  "star:4:6": {
+   "clock": "igt",
+   "strategies": {
+    "100c + Slide \u00b7 Standard": {
+     "Mario": 69.13,
+     "Grandmaster": 70.06,
+     "Master": 71.43,
+     "Diamond": 72.5,
+     "Platinum": 73.73,
+     "Gold": 75.26,
+     "Silver": 76.8,
+     "Bronze": 82.16
+    },
+    "100c + Slide \u00b7 Open": {
+     "Mario": 68.06,
+     "Grandmaster": 69.0,
+     "Master": 70.36,
+     "Diamond": 71.43,
+     "Platinum": 72.66,
+     "Gold": 74.2,
+     "Silver": 75.73,
+     "Bronze": 81.1
+    },
+    "100c + Race \u00b7 Standard": {
+     "Mario": 77.8,
+     "Grandmaster": 78.46,
+     "Master": 79.4,
+     "Diamond": 80.23,
+     "Platinum": 81.53,
+     "Gold": 82.46,
+     "Silver": 83.63,
+     "Bronze": 91.7
+    },
+    "100c + Race \u00b7 Open": {
+     "Mario": 76.5,
+     "Grandmaster": 77.23,
+     "Master": 78.13,
+     "Diamond": 78.93,
+     "Platinum": 80.16,
+     "Gold": 81.06,
+     "Silver": 82.16,
+     "Bronze": 86.0
+    },
+    "100c + Race \u00b7 Atmpas Route": {
+     "Mario": 76.66,
+     "Grandmaster": 77.33,
+     "Master": 78.26,
+     "Diamond": 79.1,
+     "Platinum": 80.4,
+     "Gold": 81.33,
+     "Silver": 82.5,
+     "Bronze": 86.56
+    }
+   },
+   "exit_variants": {
+    "100c + Slide": 0,
+    "100c + Race": 2
+   },
+   "jp_strategies": {
+    "100c + Slide \u00b7 Standard": {
+     "Mario": 69.5,
+     "Grandmaster": 70.43,
+     "Master": 71.8,
+     "Diamond": 72.86,
+     "Platinum": 74.1,
+     "Gold": 75.63,
+     "Silver": 77.16,
+     "Bronze": 82.53
+    },
+    "100c + Slide \u00b7 Open": {
+     "Mario": 68.43,
+     "Grandmaster": 69.36,
+     "Master": 70.73,
+     "Diamond": 71.8,
+     "Platinum": 73.03,
+     "Gold": 74.56,
+     "Silver": 76.1,
+     "Bronze": 81.46
+    },
+    "100c + Race \u00b7 Standard": {
+     "Mario": 78.1,
+     "Grandmaster": 78.76,
+     "Master": 79.7,
+     "Diamond": 80.53,
+     "Platinum": 81.83,
+     "Gold": 82.76,
+     "Silver": 83.93,
+     "Bronze": 92.0
+    },
+    "100c + Race \u00b7 Open": {
+     "Mario": 76.8,
+     "Grandmaster": 77.53,
+     "Master": 78.43,
+     "Diamond": 79.23,
+     "Platinum": 80.46,
+     "Gold": 81.36,
+     "Silver": 82.46,
+     "Bronze": 86.3
+    },
+    "100c + Race \u00b7 Atmpas Route": {
+     "Mario": 76.96,
+     "Grandmaster": 77.63,
+     "Master": 78.56,
+     "Diamond": 79.4,
+     "Platinum": 80.7,
+     "Gold": 81.63,
+     "Silver": 82.8,
+     "Bronze": 86.86
+    }
+   },
+   "videos": {
+    "100c + Slide \u00b7 Standard": "https://www.youtube.com/watch?v=nEuyRyYRkAM",
+    "100c + Slide \u00b7 Open": "https://youtu.be/Pkxdrmznes0?si=af3aa7KV0dZp_H_W",
+    "100c + Race \u00b7 Standard": "https://www.youtube.com/watch?v=Z9jg0RRWOOE",
+    "100c + Race \u00b7 Atmpas Route": "https://youtu.be/oABoYM6qJY4?si=9RFImIyPDrL2P5SD",
+    "100c + Race \u00b7 Open": "https://www.youtube.com/watch?v=ZbK3lhqSqfI"
+   },
+   "clips": {
+    "100c + Slide \u00b7 Standard": [
+     [
+      6796,
+      "https://www.youtube.com/watch?v=nEuyRyYRkAM"
+     ],
+     [
+      6910,
+      "https://www.youtube.com/watch?v=qeavUZNL-40"
+     ]
+    ],
+    "100c + Slide \u00b7 Open": [
+     [
+      6690,
+      "https://youtu.be/Pkxdrmznes0?si=af3aa7KV0dZp_H_W"
+     ],
+     [
+      6806,
+      "https://www.youtube.com/watch?v=lCFbo6tQJ3Y"
+     ],
+     [
+      6890,
+      "https://youtu.be/evmsr22Nz_k"
+     ]
+    ],
+    "100c + Race \u00b7 Standard": [
+     [
+      7753,
+      "https://www.youtube.com/watch?v=Z9jg0RRWOOE"
+     ],
+     [
+      7756,
+      "https://www.youtube.com/watch?v=0rScfdJMrbU"
+     ]
+    ],
+    "100c + Race \u00b7 Atmpas Route": [
+     [
+      7616,
+      "https://youtu.be/oABoYM6qJY4?si=9RFImIyPDrL2P5SD"
+     ],
+     [
+      7640,
+      "https://www.youtube.com/watch?v=tN1G8XJ9rZQ"
+     ]
+    ],
+    "100c + Race \u00b7 Open": [
+     [
+      7590,
+      "https://www.youtube.com/watch?v=ZbK3lhqSqfI"
+     ],
+     [
+      7710,
+      "https://www.youtube.com/watch?v=vaF91ezSgQU"
      ]
     ]
    }
@@ -1645,6 +2065,55 @@
     ]
    }
   },
+  "star:5:6": {
+   "clock": "igt",
+   "strategies": {
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 104.06,
+     "Grandmaster": 106.1,
+     "Master": 109.06,
+     "Diamond": 114.23,
+     "Platinum": 119.6,
+     "Gold": 124.9,
+     "Silver": 133.2,
+     "Bronze": 159.76
+    }
+   },
+   "exit_variants": {
+    "100c + Reds": 3
+   },
+   "jp_strategies": {
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 104.43,
+     "Grandmaster": 106.46,
+     "Master": 109.43,
+     "Diamond": 114.6,
+     "Platinum": 119.96,
+     "Gold": 125.26,
+     "Silver": 133.56,
+     "Bronze": 160.13
+    }
+   },
+   "videos": {
+    "100c + Reds \u00b7 Standard": "https://youtu.be/xXT5vmywuXw?si=Wr-DOVZgcY5IjQ5S&t=76"
+   },
+   "clips": {
+    "100c + Reds \u00b7 Standard": [
+     [
+      10090,
+      "https://youtu.be/xXT5vmywuXw?si=Wr-DOVZgcY5IjQ5S&t=76"
+     ],
+     [
+      10106,
+      "https://youtu.be/POYw4yTau8g?si=Pf7Dt0iJow64WDX3"
+     ],
+     [
+      10186,
+      "https://youtu.be/VJdeuwufcXQ"
+     ]
+    ]
+   }
+  },
   "star:5:4": {
    "clock": "igt",
    "strategies": {
@@ -1794,6 +2263,98 @@
      [
       1296,
       "https://x.com/greensuigi/status/1931584209270772055"
+     ]
+    ]
+   }
+  },
+  "star:6:6": {
+   "clock": "igt",
+   "strategies": {
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 119.23,
+     "Grandmaster": 124.73,
+     "Master": 129.73,
+     "Diamond": 141.03,
+     "Platinum": 148.03,
+     "Gold": 163.66,
+     "Silver": 174.5,
+     "Bronze": 212.4
+    },
+    "100c + Reds \u00b7 No BLJ": {
+     "Mario": 140.4,
+     "Grandmaster": 144.66,
+     "Master": 148.53,
+     "Diamond": 157.26,
+     "Platinum": 162.66,
+     "Gold": 174.76,
+     "Silver": 183.13,
+     "Bronze": 212.4
+    }
+   },
+   "exit_variants": {
+    "100c + Reds": 1
+   },
+   "jp_strategies": {
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 119.6,
+     "Grandmaster": 125.1,
+     "Master": 130.1,
+     "Diamond": 141.4,
+     "Platinum": 148.4,
+     "Gold": 164.03,
+     "Silver": 174.86,
+     "Bronze": 212.76
+    },
+    "100c + Reds \u00b7 No BLJ": {
+     "Mario": 140.76,
+     "Grandmaster": 145.03,
+     "Master": 148.9,
+     "Diamond": 157.63,
+     "Platinum": 163.03,
+     "Gold": 175.13,
+     "Silver": 183.5,
+     "Bronze": 212.76
+    }
+   },
+   "videos": {
+    "100c + Reds \u00b7 Standard": "https://youtu.be/4V4gtIPudDA",
+    "100c + Reds \u00b7 No BLJ": "https://www.youtube.com/watch?v=rEdd_TO_QT8"
+   },
+   "clips": {
+    "100c + Reds \u00b7 Standard": [
+     [
+      11533,
+      "https://youtu.be/4V4gtIPudDA"
+     ],
+     [
+      11710,
+      "https://youtu.be/SaPWidhVE-s?si=Zejl-UPl5292MOFE"
+     ],
+     [
+      12033,
+      "https://youtu.be/TpFHkMCdpIU"
+     ],
+     [
+      12043,
+      "https://www.youtube.com/watch?v=Bd9-cjviOQM"
+     ],
+     [
+      12176,
+      "https://www.nicovideo.jp/watch/sm30050080"
+     ],
+     [
+      13110,
+      "https://www.youtube.com/watch?v=st-t6jtzTag&list=PLCxwJL2JtuSJu9k9W4Q9nBfodH92hnLe2&index=4"
+     ]
+    ],
+    "100c + Reds \u00b7 No BLJ": [
+     [
+      12760,
+      "https://www.youtube.com/watch?v=rEdd_TO_QT8"
+     ],
+     [
+      13493,
+      "https://youtu.be/JQE45CMebzA"
      ]
     ]
    }
@@ -2429,6 +2990,82 @@
     ]
    }
   },
+  "star:7:6": {
+   "clock": "igt",
+   "strategies": {
+    "100c + Volcano \u00b7 Standard": {
+     "Mario": 69.9,
+     "Grandmaster": 71.4,
+     "Master": 72.43,
+     "Diamond": 74.83,
+     "Platinum": 77.4,
+     "Gold": 82.16,
+     "Silver": 85.43,
+     "Bronze": 96.86
+    },
+    "100c + Volcano \u00b7 Lavaboost": {
+     "Mario": 69.16,
+     "Grandmaster": 70.66,
+     "Master": 71.7,
+     "Diamond": 74.1,
+     "Platinum": 76.66,
+     "Gold": 81.43,
+     "Silver": 84.7,
+     "Bronze": 96.13
+    }
+   },
+   "exit_variants": {
+    "100c + Volcano": 4
+   },
+   "jp_strategies": {
+    "100c + Volcano \u00b7 Standard": {
+     "Mario": 70.26,
+     "Grandmaster": 71.76,
+     "Master": 72.8,
+     "Diamond": 75.2,
+     "Platinum": 77.76,
+     "Gold": 82.53,
+     "Silver": 85.8,
+     "Bronze": 97.23
+    },
+    "100c + Volcano \u00b7 Lavaboost": {
+     "Mario": 69.53,
+     "Grandmaster": 71.03,
+     "Master": 72.06,
+     "Diamond": 74.46,
+     "Platinum": 77.03,
+     "Gold": 81.8,
+     "Silver": 85.06,
+     "Bronze": 96.5
+    }
+   },
+   "videos": {
+    "100c + Volcano \u00b7 Standard": "https://youtu.be/S0R8Z9C64jE",
+    "100c + Volcano \u00b7 Lavaboost": "https://youtu.be/z8Iye1LTdg8"
+   },
+   "clips": {
+    "100c + Volcano \u00b7 Standard": [
+     [
+      6780,
+      "https://youtu.be/S0R8Z9C64jE"
+     ],
+     [
+      6803,
+      "https://youtu.be/aCEhFiMvP44"
+     ]
+    ],
+    "100c + Volcano \u00b7 Lavaboost": [
+     [
+      6713,
+      "https://youtu.be/z8Iye1LTdg8"
+     ],
+     [
+      6720,
+      "https://www.youtube.com/watch?v=gu0Vy6aJaVc"
+     ]
+    ]
+   }
+  },
   "star:7:5": {
    "clock": "igt",
    "strategies": {
@@ -2892,6 +3529,105 @@
     ]
    }
   },
+  "star:8:6": {
+   "clock": "igt",
+   "strategies": {
+    "100c + Secrets \u00b7 Standard": {
+     "Mario": 110.06,
+     "Grandmaster": 114.3,
+     "Master": 120.03,
+     "Diamond": 128.1,
+     "Platinum": 137.86,
+     "Gold": 147.23,
+     "Silver": 156.56,
+     "Bronze": 189.3
+    },
+    "100c + Secrets \u00b7 Open": {
+     "Mario": 105.3,
+     "Grandmaster": 109.63,
+     "Master": 115.46,
+     "Diamond": 123.7,
+     "Platinum": 133.63,
+     "Gold": 143.16,
+     "Silver": 152.7,
+     "Bronze": 186.06
+    },
+    "100c + Secrets \u00b7 Alt Pillar": {
+     "Mario": 108.26,
+     "Grandmaster": 112.5,
+     "Master": 118.23,
+     "Diamond": 126.3,
+     "Platinum": 136.06,
+     "Gold": 145.43,
+     "Silver": 154.76,
+     "Bronze": 187.5
+    }
+   },
+   "exit_variants": {
+    "100c + Secrets": 5
+   },
+   "jp_strategies": {
+    "100c + Secrets \u00b7 Standard": {
+     "Mario": 110.43,
+     "Grandmaster": 114.66,
+     "Master": 120.4,
+     "Diamond": 128.46,
+     "Platinum": 138.23,
+     "Gold": 147.6,
+     "Silver": 156.93,
+     "Bronze": 189.66
+    },
+    "100c + Secrets \u00b7 Open": {
+     "Mario": 105.66,
+     "Grandmaster": 110.0,
+     "Master": 115.83,
+     "Diamond": 124.06,
+     "Platinum": 134.0,
+     "Gold": 143.53,
+     "Silver": 153.06,
+     "Bronze": 186.43
+    },
+    "100c + Secrets \u00b7 Alt Pillar": {
+     "Mario": 108.63,
+     "Grandmaster": 112.86,
+     "Master": 118.6,
+     "Diamond": 126.66,
+     "Platinum": 136.43,
+     "Gold": 145.8,
+     "Silver": 155.13,
+     "Bronze": 187.86
+    }
+   },
+   "videos": {
+    "100c + Secrets \u00b7 Standard": "https://www.youtube.com/watch?v=-ur_qWnhlYM",
+    "100c + Secrets \u00b7 Alt Pillar": "https://youtu.be/dA6IhrU9ElE",
+    "100c + Secrets \u00b7 Open": "https://x.com/Parsee02/status/1953360931775496237"
+   },
+   "clips": {
+    "100c + Secrets \u00b7 Standard": [
+     [
+      10550,
+      "https://www.youtube.com/watch?v=-ur_qWnhlYM"
+     ],
+     [
+      10806,
+      "https://www.youtube.com/watch?v=clbGOERISYw"
+     ]
+    ],
+    "100c + Secrets \u00b7 Alt Pillar": [
+     [
+      10370,
+      "https://youtu.be/dA6IhrU9ElE"
+     ]
+    ],
+    "100c + Secrets \u00b7 Open": [
+     [
+      10066,
+      "https://x.com/Parsee02/status/1953360931775496237"
+     ]
+    ]
+   }
+  },
   "star:9:0": {
    "clock": "igt",
    "strategies": {
@@ -2982,6 +3718,71 @@
      [
       2916,
       "https://www.youtube.com/watch?v=f2hNxPZQ5-A"
+     ]
+    ]
+   }
+  },
+  "star:9:6": {
+   "clock": "igt",
+   "strategies": {
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 114.16,
+     "Grandmaster": 119.7,
+     "Master": 126.53,
+     "Diamond": 134.33,
+     "Platinum": 144.23,
+     "Gold": 154.46,
+     "Silver": 164.7,
+     "Bronze": 200.5
+    },
+    "100c + Reds \u00b7 Poles": {
+     "Mario": 160.3,
+     "Grandmaster": 169.1,
+     "Master": 186.7,
+     "Diamond": 195.76,
+     "Platinum": 206.06,
+     "Gold": 210.53,
+     "Silver": 239.43,
+     "Bronze": 269.8
+    }
+   },
+   "exit_variants": {
+    "100c + Reds": 2
+   },
+   "jp_strategies": {
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 114.53,
+     "Grandmaster": 120.06,
+     "Master": 126.9,
+     "Diamond": 134.7,
+     "Platinum": 144.6,
+     "Gold": 154.83,
+     "Silver": 165.06,
+     "Bronze": 200.86
+    },
+    "100c + Reds \u00b7 Poles": {
+     "Mario": 160.66,
+     "Grandmaster": 169.46,
+     "Master": 187.06,
+     "Diamond": 196.13,
+     "Platinum": 206.43,
+     "Gold": 210.9,
+     "Silver": 239.8,
+     "Bronze": 270.16
+    }
+   },
+   "videos": {
+    "100c + Reds \u00b7 Standard": "https://x.com/greensuigi/status/1842722162878071036"
+   },
+   "clips": {
+    "100c + Reds \u00b7 Standard": [
+     [
+      10883,
+      "https://x.com/greensuigi/status/1842722162878071036"
+     ],
+     [
+      10993,
+      "https://www.youtube.com/watch?v=K7HUZRqyi1M"
      ]
     ]
    }
@@ -3334,6 +4135,109 @@
     ]
    }
   },
+  "star:10:6": {
+   "clock": "igt",
+   "strategies": {
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 98.96,
+     "Grandmaster": 102.76,
+     "Master": 106.43,
+     "Diamond": 114.83,
+     "Platinum": 123.5,
+     "Gold": 131.83,
+     "Silver": 140.16,
+     "Bronze": 169.3
+    },
+    "100c + Reds \u00b7 Early Spindrifts": {
+     "Mario": 99.0,
+     "Grandmaster": 102.8,
+     "Master": 106.46,
+     "Diamond": 114.86,
+     "Platinum": 123.53,
+     "Gold": 131.86,
+     "Silver": 140.2,
+     "Bronze": 169.33
+    },
+    "100c + Reds \u00b7 Moneybag Dupe": {
+     "Mario": 73.8,
+     "Grandmaster": 77.6,
+     "Master": 81.26,
+     "Diamond": 89.66,
+     "Platinum": 98.33,
+     "Gold": 106.66,
+     "Silver": 115.0,
+     "Bronze": 144.13
+    }
+   },
+   "exit_variants": {
+    "100c + Reds": 4
+   },
+   "jp_strategies": {
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 99.33,
+     "Grandmaster": 103.13,
+     "Master": 106.8,
+     "Diamond": 115.2,
+     "Platinum": 123.86,
+     "Gold": 132.2,
+     "Silver": 140.53,
+     "Bronze": 169.66
+    },
+    "100c + Reds \u00b7 Early Spindrifts": {
+     "Mario": 99.36,
+     "Grandmaster": 103.16,
+     "Master": 106.83,
+     "Diamond": 115.23,
+     "Platinum": 123.9,
+     "Gold": 132.23,
+     "Silver": 140.56,
+     "Bronze": 169.7
+    },
+    "100c + Reds \u00b7 Moneybag Dupe": {
+     "Mario": 74.16,
+     "Grandmaster": 77.96,
+     "Master": 81.63,
+     "Diamond": 90.03,
+     "Platinum": 98.7,
+     "Gold": 107.03,
+     "Silver": 115.36,
+     "Bronze": 144.5
+    }
+   },
+   "videos": {
+    "100c + Reds \u00b7 Standard": "https://youtu.be/eBh9ISPjn-4",
+    "100c + Reds \u00b7 Early Spindrifts": "https://www.youtube.com/watch?v=v9PDrcPyj4c",
+    "100c + Reds \u00b7 Moneybag Dupe": "https://www.youtube.com/watch?v=tapfBZ6WplM"
+   },
+   "clips": {
+    "100c + Reds \u00b7 Standard": [
+     [
+      9476,
+      "https://youtu.be/eBh9ISPjn-4"
+     ],
+     [
+      9783,
+      "https://www.youtube.com/watch?v=MjZF0yQ9ODA&t=34"
+     ]
+    ],
+    "100c + Reds \u00b7 Early Spindrifts": [
+     [
+      9530,
+      "https://www.youtube.com/watch?v=v9PDrcPyj4c"
+     ],
+     [
+      9560,
+      "https://youtu.be/XArhr_p_bgk"
+     ]
+    ],
+    "100c + Reds \u00b7 Moneybag Dupe": [
+     [
+      6906,
+      "https://www.youtube.com/watch?v=tapfBZ6WplM"
+     ]
+    ]
+   }
+  },
   "star:10:5": {
    "clock": "igt",
    "strategies": {
@@ -3526,6 +4430,83 @@
      [
       3220,
       "https://www.youtube.com/watch?v=a7bmztzK1Tg"
+     ]
+    ]
+   }
+  },
+  "star:11:6": {
+   "clock": "igt",
+   "strategies": {
+    "100c + Secrets \u00b7 Standard": {
+     "Mario": 72.23,
+     "Grandmaster": 73.96,
+     "Master": 75.86,
+     "Diamond": 78.46,
+     "Platinum": 81.03,
+     "Gold": 85.26,
+     "Silver": 88.66,
+     "Bronze": 100.53
+    },
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 89.83,
+     "Grandmaster": 92.33,
+     "Master": 94.66,
+     "Diamond": 99.7,
+     "Platinum": 103.9,
+     "Gold": 108.5,
+     "Silver": 113.1,
+     "Bronze": 129.2
+    }
+   },
+   "exit_variants": {
+    "100c + Secrets": 2,
+    "100c + Reds": 4
+   },
+   "jp_strategies": {
+    "100c + Secrets \u00b7 Standard": {
+     "Mario": 72.6,
+     "Grandmaster": 74.33,
+     "Master": 76.23,
+     "Diamond": 78.83,
+     "Platinum": 81.4,
+     "Gold": 85.63,
+     "Silver": 89.03,
+     "Bronze": 100.9
+    },
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 90.2,
+     "Grandmaster": 92.7,
+     "Master": 95.03,
+     "Diamond": 100.06,
+     "Platinum": 104.26,
+     "Gold": 108.86,
+     "Silver": 113.46,
+     "Bronze": 129.56
+    }
+   },
+   "videos": {
+    "100c + Secrets \u00b7 Standard": "https://youtu.be/fLKeZm0vAD0?si=-V8PYr-PdPA4QCpm",
+    "100c + Reds \u00b7 Standard": "https://youtu.be/j24549-K6nA"
+   },
+   "clips": {
+    "100c + Secrets \u00b7 Standard": [
+     [
+      7003,
+      "https://youtu.be/fLKeZm0vAD0?si=-V8PYr-PdPA4QCpm"
+     ],
+     [
+      7040,
+      "https://www.youtube.com/watch?v=DbU9c382_J8"
+     ]
+    ],
+    "100c + Reds \u00b7 Standard": [
+     [
+      8820,
+      "https://youtu.be/j24549-K6nA"
+     ],
+     [
+      8893,
+      "https://youtu.be/QLwOwTemX44?si=hbsHpBscVd79Bu5O"
      ]
     ]
    }
@@ -3858,6 +4839,82 @@
      [
       2363,
       "https://www.youtube.com/watch?v=S8oXBV3msQA"
+     ]
+    ]
+   }
+  },
+  "star:12:6": {
+   "clock": "igt",
+   "strategies": {
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 96.23,
+     "Grandmaster": 98.1,
+     "Master": 99.36,
+     "Diamond": 104.33,
+     "Platinum": 112.43,
+     "Gold": 117.8,
+     "Silver": 123.16,
+     "Bronze": 141.9
+    },
+    "100c + Reds \u00b7 Late Red": {
+     "Mario": 96.23,
+     "Grandmaster": 98.1,
+     "Master": 99.36,
+     "Diamond": 104.33,
+     "Platinum": 112.43,
+     "Gold": 117.8,
+     "Silver": 123.16,
+     "Bronze": 141.9
+    }
+   },
+   "exit_variants": {
+    "100c + Reds": 2
+   },
+   "jp_strategies": {
+    "100c + Reds \u00b7 Standard": {
+     "Mario": 96.6,
+     "Grandmaster": 98.46,
+     "Master": 99.73,
+     "Diamond": 104.7,
+     "Platinum": 112.8,
+     "Gold": 118.16,
+     "Silver": 123.53,
+     "Bronze": 142.26
+    },
+    "100c + Reds \u00b7 Late Red": {
+     "Mario": 96.6,
+     "Grandmaster": 98.46,
+     "Master": 99.73,
+     "Diamond": 104.7,
+     "Platinum": 112.8,
+     "Gold": 118.16,
+     "Silver": 123.53,
+     "Bronze": 142.26
+    }
+   },
+   "videos": {
+    "100c + Reds \u00b7 Standard": "https://www.twitch.tv/videos/1983240356",
+    "100c + Reds \u00b7 Late Red": "https://youtu.be/1fOTcMKfnPY"
+   },
+   "clips": {
+    "100c + Reds \u00b7 Standard": [
+     [
+      9403,
+      "https://www.twitch.tv/videos/1983240356"
+     ],
+     [
+      9550,
+      "https://youtu.be/m9KsMY4flVY?si=O1MrC1ZwTkeGEYdq"
+     ]
+    ],
+    "100c + Reds \u00b7 Late Red": [
+     [
+      9483,
+      "https://youtu.be/1fOTcMKfnPY"
+     ],
+     [
+      9596,
+      "https://youtu.be/nMwzCFPIkmk"
      ]
     ]
    }
@@ -4271,6 +5328,176 @@
     ]
    }
   },
+  "star:13:6": {
+   "clock": "igt",
+   "strategies": {
+    "100c + KtQ \u00b7 Standard": {
+     "Mario": 100.16,
+     "Grandmaster": 102.96,
+     "Master": 108.56,
+     "Diamond": 112.46,
+     "Platinum": 117.43,
+     "Gold": 123.6,
+     "Silver": 128.53,
+     "Bronze": 145.8
+    },
+    "100c + KtQ \u00b7 Tiny Route": {
+     "Mario": 101.36,
+     "Grandmaster": 104.16,
+     "Master": 109.76,
+     "Diamond": 113.66,
+     "Platinum": 118.63,
+     "Gold": 124.8,
+     "Silver": 129.73,
+     "Bronze": 147.0
+    },
+    "100c + Reds \u00b7 13c Start + Pole": {
+     "Mario": 89.86,
+     "Grandmaster": 92.6,
+     "Master": 95.7,
+     "Diamond": 103.4,
+     "Platinum": 109.53,
+     "Gold": 116.43,
+     "Silver": 123.33,
+     "Bronze": 147.5
+    },
+    "100c + Reds \u00b7 11c Start + Pole": {
+     "Mario": 91.1,
+     "Grandmaster": 94.03,
+     "Master": 97.33,
+     "Diamond": 105.56,
+     "Platinum": 112.13,
+     "Gold": 119.53,
+     "Silver": 126.93,
+     "Bronze": 152.8
+    },
+    "100c + Reds \u00b7 16c Start": {
+     "Mario": 85.3,
+     "Grandmaster": 88.03,
+     "Master": 91.13,
+     "Diamond": 98.83,
+     "Platinum": 104.96,
+     "Gold": 111.86,
+     "Silver": 118.76,
+     "Bronze": 142.93
+    }
+   },
+   "exit_variants": {
+    "100c + KtQ": 2,
+    "100c + Reds": 4
+   },
+   "jp_strategies": {
+    "100c + KtQ \u00b7 Standard": {
+     "Mario": 100.8,
+     "Grandmaster": 103.6,
+     "Master": 109.2,
+     "Diamond": 113.1,
+     "Platinum": 118.06,
+     "Gold": 124.23,
+     "Silver": 129.16,
+     "Bronze": 146.43
+    },
+    "100c + KtQ \u00b7 Tiny Route": {
+     "Mario": 102.0,
+     "Grandmaster": 104.8,
+     "Master": 110.4,
+     "Diamond": 114.3,
+     "Platinum": 119.26,
+     "Gold": 125.43,
+     "Silver": 130.36,
+     "Bronze": 147.63
+    },
+    "100c + Reds \u00b7 13c Start + Pole": {
+     "Mario": 90.23,
+     "Grandmaster": 92.96,
+     "Master": 96.06,
+     "Diamond": 103.76,
+     "Platinum": 109.9,
+     "Gold": 116.8,
+     "Silver": 123.7,
+     "Bronze": 147.86
+    },
+    "100c + Reds \u00b7 11c Start + Pole": {
+     "Mario": 91.46,
+     "Grandmaster": 94.4,
+     "Master": 97.7,
+     "Diamond": 105.93,
+     "Platinum": 112.5,
+     "Gold": 119.9,
+     "Silver": 127.3,
+     "Bronze": 153.16
+    },
+    "100c + Reds \u00b7 16c Start": {
+     "Mario": 85.66,
+     "Grandmaster": 88.4,
+     "Master": 91.5,
+     "Diamond": 99.2,
+     "Platinum": 105.33,
+     "Gold": 112.23,
+     "Silver": 119.13,
+     "Bronze": 143.3
+    }
+   },
+   "videos": {
+    "100c + KtQ \u00b7 Standard": "https://www.youtube.com/watch?v=hcAd0s1l9Yg",
+    "100c + KtQ \u00b7 Tiny Route": "https://www.youtube.com/watch?v=cZAYMXPjZKw",
+    "100c + Reds \u00b7 16c Start": "https://x.com/Parsee02/status/1943652842407113127",
+    "100c + Reds \u00b7 13c Start + Pole": "https://twitter.com/Parsee02/status/1788973303492923454",
+    "100c + Reds \u00b7 11c Start + Pole": "https://www.youtube.com/watch?v=EpG4ivaReiU"
+   },
+   "clips": {
+    "100c + KtQ \u00b7 Standard": [
+     [
+      9903,
+      "https://www.youtube.com/watch?v=hcAd0s1l9Yg"
+     ],
+     [
+      10580,
+      "https://www.youtube.com/watch?v=dc1o96L-MoQ"
+     ]
+    ],
+    "100c + KtQ \u00b7 Tiny Route": [
+     [
+      10323,
+      "https://www.youtube.com/watch?v=cZAYMXPjZKw"
+     ],
+     [
+      11386,
+      "https://www.youtube.com/watch?v=qNtpvvdC9OU"
+     ]
+    ],
+    "100c + Reds \u00b7 16c Start": [
+     [
+      8116,
+      "https://x.com/Parsee02/status/1943652842407113127"
+     ],
+     [
+      8263,
+      "https://youtu.be/ySJbxIfVvSg?si=Ysjuga9ukOSP5P4A"
+     ]
+    ],
+    "100c + Reds \u00b7 13c Start + Pole": [
+     [
+      8573,
+      "https://twitter.com/Parsee02/status/1788973303492923454"
+     ],
+     [
+      8870,
+      "https://www.youtube.com/watch?v=q4klREWUIhU"
+     ]
+    ],
+    "100c + Reds \u00b7 11c Start + Pole": [
+     [
+      8666,
+      "https://www.youtube.com/watch?v=EpG4ivaReiU"
+     ],
+     [
+      8870,
+      "https://www.youtube.com/watch?v=zuznZyuaBA8"
+     ]
+    ]
+   }
+  },
   "star:13:3": {
    "clock": "igt",
    "strategies": {
@@ -4642,6 +5869,82 @@
     ]
    }
   },
+  "star:14:6": {
+   "clock": "igt",
+   "strategies": {
+    "100c + Thwomp \u00b7 Safety Red": {
+     "Mario": 57.83,
+     "Grandmaster": 59.93,
+     "Master": 62.06,
+     "Diamond": 65.83,
+     "Platinum": 69.16,
+     "Gold": 79.3,
+     "Silver": 94.5,
+     "Bronze": 109.2
+    },
+    "100c + Thwomp \u00b7 Standard": {
+     "Mario": 58.5,
+     "Grandmaster": 60.6,
+     "Master": 62.73,
+     "Diamond": 66.5,
+     "Platinum": 69.83,
+     "Gold": 79.96,
+     "Silver": 95.16,
+     "Bronze": 109.86
+    }
+   },
+   "exit_variants": {
+    "100c + Thwomp": 3
+   },
+   "jp_strategies": {
+    "100c + Thwomp \u00b7 Safety Red": {
+     "Mario": 58.2,
+     "Grandmaster": 60.3,
+     "Master": 62.43,
+     "Diamond": 66.2,
+     "Platinum": 69.53,
+     "Gold": 79.66,
+     "Silver": 94.86,
+     "Bronze": 109.56
+    },
+    "100c + Thwomp \u00b7 Standard": {
+     "Mario": 58.86,
+     "Grandmaster": 60.96,
+     "Master": 63.1,
+     "Diamond": 66.86,
+     "Platinum": 70.2,
+     "Gold": 80.33,
+     "Silver": 95.53,
+     "Bronze": 110.23
+    }
+   },
+   "videos": {
+    "100c + Thwomp \u00b7 Standard": "https://youtu.be/g5o3C0-382E?si=1S7U1ApBy503R_fa",
+    "100c + Thwomp \u00b7 Safety Red": "https://youtu.be/CJ3T7Ripmzs?si=7ozBktMwGLY5265N"
+   },
+   "clips": {
+    "100c + Thwomp \u00b7 Standard": [
+     [
+      5443,
+      "https://youtu.be/g5o3C0-382E?si=1S7U1ApBy503R_fa"
+     ],
+     [
+      5816,
+      "https://www.youtube.com/watch?v=YDiMNW-xwes"
+     ]
+    ],
+    "100c + Thwomp \u00b7 Safety Red": [
+     [
+      5536,
+      "https://youtu.be/CJ3T7Ripmzs?si=7ozBktMwGLY5265N"
+     ],
+     [
+      5580,
+      "https://www.youtube.com/watch?v=O8JdLDE95Ws"
+     ]
+    ]
+   }
+  },
   "star:14:4": {
    "clock": "igt",
    "strategies": {
@@ -4933,6 +6236,200 @@
      [
       3420,
       "https://x.com/AnymanKanno/status/1883270371455164573"
+     ]
+    ]
+   }
+  },
+  "star:15:6": {
+   "clock": "igt",
+   "strategies": {
+    "100c + Big House \u00b7 Carpetful": {
+     "Mario": 167.26,
+     "Grandmaster": 169.43,
+     "Master": 172.3,
+     "Diamond": 174.3,
+     "Platinum": 179.03,
+     "Gold": 183.3,
+     "Silver": 187.56,
+     "Bronze": 211.46
+    },
+    "100c + Big House \u00b7 Carpetless": {
+     "Mario": 118.83,
+     "Grandmaster": 121.0,
+     "Master": 123.86,
+     "Diamond": 125.86,
+     "Platinum": 130.6,
+     "Gold": 134.86,
+     "Silver": 139.13,
+     "Bronze": 154.03
+    },
+    "100c + Big House \u00b7 No Cutscene": {
+     "Mario": 158.46,
+     "Grandmaster": 160.63,
+     "Master": 163.5,
+     "Diamond": 165.5,
+     "Platinum": 170.23,
+     "Gold": 174.5,
+     "Silver": 178.76,
+     "Bronze": 193.66
+    },
+    "100c + Big House \u00b7 Carpetless (NC)": {
+     "Mario": 99.86,
+     "Grandmaster": 102.03,
+     "Master": 104.9,
+     "Diamond": 106.9,
+     "Platinum": 111.63,
+     "Gold": 115.9,
+     "Silver": 120.16,
+     "Bronze": 135.06
+    },
+    "100c + Cannon \u00b7 Standard": {
+     "Mario": 97.63,
+     "Grandmaster": 99.5,
+     "Master": 106.23,
+     "Diamond": 110.96,
+     "Platinum": 116.36,
+     "Gold": 123.13,
+     "Silver": 129.9,
+     "Bronze": 153.53
+    },
+    "100c + Cannon \u00b7 No Cutscene": {
+     "Mario": 87.1,
+     "Grandmaster": 88.96,
+     "Master": 95.7,
+     "Diamond": 100.43,
+     "Platinum": 105.83,
+     "Gold": 112.6,
+     "Silver": 119.36,
+     "Bronze": 143.0
+    }
+   },
+   "exit_variants": {
+    "100c + Big House": 1,
+    "100c + Cannon": 5
+   },
+   "jp_strategies": {
+    "100c + Big House \u00b7 Carpetful": {
+     "Mario": 167.63,
+     "Grandmaster": 169.8,
+     "Master": 172.66,
+     "Diamond": 174.66,
+     "Platinum": 179.4,
+     "Gold": 183.66,
+     "Silver": 187.93,
+     "Bronze": 211.83
+    },
+    "100c + Big House \u00b7 Carpetless": {
+     "Mario": 119.2,
+     "Grandmaster": 121.36,
+     "Master": 124.23,
+     "Diamond": 126.23,
+     "Platinum": 130.96,
+     "Gold": 135.23,
+     "Silver": 139.5,
+     "Bronze": 154.4
+    },
+    "100c + Big House \u00b7 No Cutscene": {
+     "Mario": 158.83,
+     "Grandmaster": 161.0,
+     "Master": 163.86,
+     "Diamond": 165.86,
+     "Platinum": 170.6,
+     "Gold": 174.86,
+     "Silver": 179.13,
+     "Bronze": 194.03
+    },
+    "100c + Big House \u00b7 Carpetless (NC)": {
+     "Mario": 100.23,
+     "Grandmaster": 102.4,
+     "Master": 105.26,
+     "Diamond": 107.26,
+     "Platinum": 112.0,
+     "Gold": 116.26,
+     "Silver": 120.53,
+     "Bronze": 135.43
+    },
+    "100c + Cannon \u00b7 Standard": {
+     "Mario": 98.0,
+     "Grandmaster": 99.86,
+     "Master": 106.6,
+     "Diamond": 111.33,
+     "Platinum": 116.73,
+     "Gold": 123.5,
+     "Silver": 130.26,
+     "Bronze": 153.9
+    },
+    "100c + Cannon \u00b7 No Cutscene": {
+     "Mario": 87.46,
+     "Grandmaster": 89.33,
+     "Master": 96.06,
+     "Diamond": 100.8,
+     "Platinum": 106.2,
+     "Gold": 112.96,
+     "Silver": 119.73,
+     "Bronze": 143.36
+    }
+   },
+   "videos": {
+    "100c + Big House \u00b7 Carpetful": "https://www.youtube.com/watch?v=PgRIoychcy8",
+    "100c + Big House \u00b7 No Cutscene": "https://www.youtube.com/watch?v=yh9c0H_8FmU&list=PLCxwJL2JtuSKY_O0Zi9_hBOUvYkVbuWgN&index=6",
+    "100c + Big House \u00b7 Carpetless (NC)": "https://youtu.be/yNJUHEWLkjY",
+    "100c + Cannon \u00b7 Standard": "https://x.com/greensuigi/status/2043580676960637391",
+    "100c + Cannon \u00b7 No Cutscene": "https://x.com/Parsee03/status/1766174535907455014"
+   },
+   "clips": {
+    "100c + Big House \u00b7 Carpetful": [
+     [
+      16383,
+      "https://www.youtube.com/watch?v=PgRIoychcy8"
+     ],
+     [
+      16450,
+      "https://youtu.be/7COfPIDiW2o"
+     ]
+    ],
+    "100c + Big House \u00b7 No Cutscene": [
+     [
+      15540,
+      "https://www.youtube.com/watch?v=yh9c0H_8FmU&list=PLCxwJL2JtuSKY_O0Zi9_hBOUvYkVbuWgN&index=6"
+     ],
+     [
+      15656,
+      "https://youtu.be/mmcaW5_7T7s"
+     ]
+    ],
+    "100c + Big House \u00b7 Carpetless (NC)": [
+     [
+      10066,
+      "https://youtu.be/yNJUHEWLkjY"
+     ],
+     [
+      10490,
+      "https://www.youtube.com/watch?v=5mD1C9PN3I8"
+     ]
+    ],
+    "100c + Cannon \u00b7 Standard": [
+     [
+      9253,
+      "https://x.com/greensuigi/status/2043580676960637391"
+     ],
+     [
+      9496,
+      "https://youtu.be/fi7hUJTp_bo"
+     ],
+     [
+      9650,
+      "https://www.youtube.com/watch?v=cGRW3VFHD4c"
+     ]
+    ],
+    "100c + Cannon \u00b7 No Cutscene": [
+     [
+      8223,
+      "https://x.com/Parsee03/status/1766174535907455014"
+     ],
+     [
+      8333,
+      "https://www.youtube.com/watch?v=ZJIpkn1wFJM"
      ]
     ]
    }

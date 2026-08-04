@@ -467,7 +467,16 @@ class Projector:
                  touched: set[int] | None = None,
                  strat_overrides: dict[int, str | None] | None = None,
                  origin_overrides: dict | None = None,
-                 time_corrections: dict[int, dict] | None = None):
+                 time_corrections: dict[int, dict] | None = None,
+                 hundred_coin_strat=None):
+        # ((course_id, star_id), exit_star, current_strat) -> the 100-coin
+        # strategy this run belongs to, or None for "keep what is remembered"
+        # (spec 2026-08-03-hundred-coin-exit-variants). Injected rather than
+        # imported because the answer lives in the rank STANDARDS, which are a
+        # user-editable file the projector must not reach into; None leaves
+        # the pre-2026-08-03 behaviour byte for byte, which is what every test
+        # and tool constructing a bare Projector still gets.
+        self._hundred_coin_strat = hundred_coin_strat
         self._cleared = cleared if cleared is not None else {}
         # attempt_id -> reclassified strat (caveat 16); shadows the strat
         # remembered at close time.
@@ -530,7 +539,19 @@ class Projector:
             hc for d in (segments or []) if d.enabled
             and (hc := hundred_coin_entity(d.start_triggers, d.waypoints))
             is not None}
+        # def id -> the (course, 6) it times, for the SAME enabled engines.
+        # `_close` needs to ask "is one of them armed RIGHT NOW", which the
+        # entity set above cannot answer (see `_hundred_coin_engine_armed`).
+        self._hundred_coin_engine_ids: dict[int, tuple[int, int]] = {
+            d.id: hc for d in (segments or []) if d.enabled
+            and (hc := hundred_coin_entity(d.start_triggers, d.waypoints))
+            is not None}
         self.segment_notices: list[dict] = []  # live-broadcast queue, drained by service
+        # A segment target the ORIGIN rule wants to retire, held until the
+        # matcher has had this event (see `_dispatch`'s level_changed branch
+        # and the consumer at the bottom of `feed`). Transient within one
+        # event -- reset at the top of every `feed`, so replay is unaffected.
+        self._pending_target_retire: int | None = None
         self._runs = RunTracker()
         self.run_notices: list[dict] = []   # live-broadcast queue, drained by service
         self._num_stars: int | None = None
@@ -557,6 +578,7 @@ class Projector:
         self._level: int | None = None   # gCurrLevelNum per level_changed; None = unknown (legacy journals)
         self._area: int | None = None    # gCurrAreaIndex per area_changed; None = unknown (legacy journals)
         self._open_castle = False        # open attempt was OPENED in a castle hub level; only meaningful while _open is set (the open site re-arms it)
+        self._open_carried_igt = 0       # Usamune frames this attempt ran BEFORE its counter last restarted; only meaningful while _open is set (see _with_carried_igt)
         self._rollouts_total = 0
         self._rollouts_dustless = 0
         self._jumps_total = 0
@@ -584,27 +606,14 @@ class Projector:
         into privates."""
         return self._segments.armed_ids()
 
-    def _armed_loosely(self, segment_id: int) -> bool:
-        """True when `segment_id` is currently armed AND its def is LOOSE-
-        matched (task 5, spec 2026-07-28-multi-step-segments) — the property
-        that exempts a segment target from the origin-retirement rule in
-        _dispatch below.
+    def settle(self, frame: int) -> list[dict]:
+        """Let the CLOCK deliver a topological verdict the journal has no event
+        for (`SegmentEngine.settle`), and hand back the notices.
 
-        Scoped to LOOSE defs only, not "any armed segment" (the brief's
-        version): a STRICT multi-step def that wanders into a level outside
-        its waypoint sequence is SILENTLY CANCELLED by the matcher on this
-        very event (segments.py's `_feed_waypoint` "major action" branch),
-        so exempting it here too would leave a stale target pointing at a
-        def the matcher just disarmed — caught by
-        test_waypoint_level_keeps_a_multi_level_segment_target, which needs
-        exactly that retirement on an unrelated level move mid-sequence.
-        Loose mode's whole point is tolerating such a move without
-        cancelling (it "stays armed through everything but its end and a
-        staleness deadline"), so only loose earns the exemption."""
-        if segment_id not in self.armed_segment_ids():
-            return False
-        d = self._segments.definition(segment_id)
-        return d is not None and d.match_mode == "loose"
+        Returns them rather than filling `self.segment_notices`, which `feed()`
+        OVERWRITES on every event — a tick landing between two events must not
+        be able to drop a notice the service has not drained yet."""
+        return self._segments.settle(frame)
 
     def _clears_star_target(self, segment_id: int) -> bool:
         """True when `segment_id` just arming should retire the CURRENT star
@@ -689,6 +698,7 @@ class Projector:
             if fix:
                 ev = _CorrectedRow(ev, {**ev.payload, **fix})
         prev_level = self._level  # _dispatch may move it (level_changed)
+        self._pending_target_retire = None   # transient, one event only
         # Snapshotted BEFORE _dispatch (which runs _close_by_grab for a
         # star_collected event) so the grab-steals-the-target restore below
         # can tell "this segment was already my pinned, running focus" from
@@ -731,6 +741,19 @@ class Projector:
                            route_segments=self._route_segments,
                            target_segment=target_seg)
         seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
+        # The origin rule's verdict, applied now that the matcher has had this
+        # event (see _dispatch's level_changed branch for the whole argument).
+        # Still armed = has not deviated = keeps the pick; disarmed on this
+        # event, or never armed at all, and a foreign course retires it. Same
+        # observable outcome as the old immediate clear for every case that
+        # one got right — including an off-route move mid-sequence, which the
+        # matcher cancels on this very event, so the check below still fires.
+        if (self._pending_target_retire is not None
+                and self.target and self.target[0] == "segment"
+                and self.target[1] == self._pending_target_retire
+                and self._pending_target_retire not in self.armed_segment_ids()):
+            self.target = None
+        self._pending_target_retire = None
         for a in seg_closed:
             # The 100-coin star IS this segment when its def's own sequence
             # includes grabbing that course's 100-coin star (spec 2026-07-28-
@@ -780,11 +803,33 @@ class Projector:
                             timed_by="igt",
                             timed_at=(ev.payload.get("igt_timed_at")
                                       if ev.type == "star_collected" else None))
+                # WHICH EXIT STAR ended the run is a fact the closing event
+                # carries, and it decides which of the 100-coin star's ladders
+                # this time is graded against (spec 2026-08-03-hundred-coin-
+                # exit-variants). The sub-strategy inside that variant stays
+                # the user's, so the resolver moves variant and keeps the leaf.
+                # A FAILED run has no exit star and therefore no answer — it
+                # keeps whatever was remembered, which for an unlabelled
+                # historical row means it stays unlabelled and prunable.
+                remembered = self.strat_by_star.get(hc)
+                derived = None
+                if self._hundred_coin_strat is not None:
+                    derived = self._hundred_coin_strat(
+                        hc,                       # the ENTITY, not its parts
+                        (ev.payload.get("star_id")
+                         if ev.type == "star_collected" else None),
+                        remembered)
                 a = replace(a,
                             strat_tag=self._strat_overrides.get(
-                                a.id, self.strat_by_star.get(hc)),
+                                a.id, derived if derived is not None
+                                else remembered),
                             cleared=a.id in self._cleared,
                             cleared_reason=self._cleared.get(a.id))
+                # The card follows the run: the variant you actually ended on
+                # becomes the selected one, so the next attempt starts where
+                # this one finished rather than on the ladder you did not run.
+                if derived is not None and not a.cleared:
+                    self.strat_by_star[hc] = derived
             else:
                 # same first-event-id cleared keying as _build (caveat 2/11)
                 a = replace(a,
@@ -866,14 +911,20 @@ class Projector:
 
     def _dispatch(self, ev) -> list[Attempt]:
         if ev.type in ANCHOR_EVENT_TYPES:
-            if ev.payload.get("area_load"):
+            if ev.payload.get("area_load") or ev.payload.get("teleport"):
                 # Going DEEPER into the level is not a retry: "if we enter a
                 # subarea within a stage, we fundamentally DID NOT RESET…
                 # showing a reset there is an error" (2026-08-01). Usamune
                 # zeroes its counter on the load exactly as it does on an
                 # L-reset, which is why this arrives as an anchor at all;
                 # detectors/anchors.py::_is_area_load carries the measurement
-                # that tells the two apart. Closes NOTHING, so the run
+                # that tells the two apart. An IN-LEVEL TELEPORTER (the CCM
+                # broken bridge, a WDW corner) zeroes it the same way with no
+                # area edge at all to pair the zero with, and is read the same
+                # way here — "we need to not actually detect this as a reset
+                # when playing the level, because otherwise we can't complete
+                # these stars in the practice tool" (2026-08-03);
+                # `_is_teleport` there is that discriminator. Closes NOTHING, so the run
                 # continues across the door and its rta spans the whole star.
                 # Still OPENS one if nothing is open — walking into a course
                 # and straight into its subarea has to start an attempt
@@ -882,11 +933,18 @@ class Projector:
                     self._open = ev
                     self._open_acted = False
                     self._open_castle = self._level in CASTLE_LEVELS
+                    self._open_carried_igt = 0  # the attempt begins HERE
+                else:
+                    # Usamune's counter restarted, and this attempt is still
+                    # running — bank the leg it just forgot (_with_carried_igt).
+                    self._open_carried_igt += \
+                        ev.payload.get("igt_frames_before") or 0
                 return []
             closed = self._close_by_reset(ev)
             self._open = ev
             self._open_acted = False
             self._open_castle = self._level in CASTLE_LEVELS
+            self._open_carried_igt = 0
             return closed
         if ev.type == "star_collected":
             return self._close_by_grab(ev)
@@ -953,30 +1011,46 @@ class Projector:
             # matcher re-arms on return (armed pins the UI) and the arena
             # banner re-targets on entry, so nothing is lost.
             #
-            # A segment that is ARMED and LOOSE-matched is exempt from this
-            # rule (task 5, spec 2026-07-28-multi-step-segments; see
-            # _armed_loosely for why the exemption stops at loose and does
-            # not cover every armed segment): the two lines above were
-            # written for an IDLE pin, where entering a foreign course really
-            # does mean "doing something else now". Under loose matching
-            # that reasoning breaks down while the segment is RUNNING -- a
-            # re-entry movement enters another course on purpose (task
-            # 0017's second example), and this rule was hiding the card
-            # exactly while the segment was mid-sequence. Still runs in
-            # _dispatch, BEFORE feed(), so `_armed_loosely` reads
-            # armed_segment_ids() as of the PREVIOUS event, not this one --
-            # that is correct, not an off-by-one, for a loose def: loose
-            # stays armed through everything but its own end/deadline, so
-            # "was armed last event" and "is armed after this one" agree. A
-            # segment armed earlier is mid-sequence now, which is exactly
-            # the case this exception exists for. The rule is unchanged for
-            # anything not currently armed loosely, which is what it was
-            # written for.
-            if (self.target and self.target[0] == "segment" and to_course is not None
-                    and not self._armed_loosely(self.target[1])):
+            # A segment that is still ARMED after this event is exempt, in
+            # EVERY match mode (2026-08-03, live report). The two lines above
+            # were written for an IDLE pin, where entering a foreign course
+            # really does mean "doing something else now"; while the segment
+            # is RUNNING it can mean the opposite, because a re-entry movement
+            # enters another course ON PURPOSE and says so in its own steps.
+            #
+            # His rule, and it is the whole of this: *"If I select a segment,
+            # it should be selected until it's no longer possible for it to be
+            # armed / it gets invalidated by deviating from the path."* Under
+            # the strict path cursor, deviating already cancels the definition
+            # on this very event — so **the matcher's disarm IS the
+            # invalidation**, and it is the only test the target needs.
+            #
+            # THE EXEMPTION USED TO STOP AT LOOSE, via an `_armed_loosely`
+            # helper (deleted with this change, since the deferral subsumes it
+            # entirely -- a redundant condition beside a rule that already
+            # covers it is a second door to keep in step). It was honest about
+            # why it stopped there: this runs BEFORE the matcher, so
+            # `armed_segment_ids()` answers as of the PREVIOUS event — safe
+            # for loose (armed through everything but its own end), wrong for
+            # strict, where exempting on a stale reading would leave a target
+            # pointing at a def the matcher was about to cancel. That is an
+            # ORDERING problem, not a scope one, and this branch turned it
+            # from theory into a live bug: flipping all 56 movements to strict
+            # took the exemption away from every one of them, so picking
+            # `Bowser 1 → WF` and walking into BitDW — step 1 of its own
+            # declared route — retired the pick, and the Bowser row's
+            # remembered-family default then filled the hand it found empty.
+            # (That client guard is correct and never got to run; by the time
+            # it looked, the target was already gone.)
+            #
+            # So the decision is DEFERRED rather than narrowed: record it, and
+            # let the bottom of `feed()` apply it once the matcher has spoken.
+            if (self.target and self.target[0] == "segment"
+                    and to_course is not None
+                    ):
                 origin = self._seg_origins.get(self.target[1])
                 if origin is not None and origin != stage_origin(to_level):
-                    self.target = None
+                    self._pending_target_retire = self.target[1]
             if self.target and self.target[0] == "star":
                 if to_course is not None and to_course != self.target[1]:
                     self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
@@ -1071,6 +1145,30 @@ class Projector:
         return self._open is not None and self._open_castle
 
     # -- closers -------------------------------------------------------------
+    def _with_carried_igt(self, counter_frames: int | None) -> int | None:
+        """A counter reading, plus every leg the counter has already forgotten.
+
+        Usamune restarts its overall counter at an in-level teleporter and at
+        a subarea load. Neither is a retry — the attempt runs straight through
+        both — so a closing event that reads that counter reports only the
+        LAST leg. The earlier legs are not lost: each involuntary anchor this
+        attempt passed journaled its own pre-restart value, and `_dispatch`
+        banks them into `_open_carried_igt` as they go.
+
+        Live report 2026-08-03, three CCM bridge warps and a reset: the row
+        read 0'08"93 where the run had really taken 0'25"06 — "the mid-level
+        warp… should have no impact on the overall timer. We need to be able
+        to time from the actual start time of the course."
+
+        NOT applied to a star grab: that number comes from Usamune's own
+        result store, which already answers for the whole star, so summing it
+        with the legs would count them twice (pinned by
+        `test_a_star_time_is_never_inflated_by_the_carry`).
+        """
+        if counter_frames is None or self._open is None:
+            return counter_frames
+        return counter_frames + self._open_carried_igt
+
     def _close_by_reset(self, ev) -> list[Attempt]:
         if ev.payload.get("paused_frames_before", 0) >= PAUSE_DISCARD_FRAMES:
             # AFK: a long menu pause immediately before the reset — throw the
@@ -1089,7 +1187,8 @@ class Projector:
             self._open = None
             return []
         igt = ev.payload.get("igt_frames_before") if ev.type == "practice_reset" else None
-        return self._close(ev, outcome="reset", igt_frames=igt)
+        return self._close(ev, outcome="reset",
+                           igt_frames=self._with_carried_igt(igt))
 
     def _close_by_grab(self, ev) -> list[Attempt]:
         grabbed = (ev.payload["course_id"], ev.payload["star_id"])
@@ -1155,13 +1254,25 @@ class Projector:
         # a death is always a meaningful failed attempt.
         first = self._open if self._open is not None else ev
         star_tgt = self._star_target()
+        if self._engine_records_this_too(star_tgt, "death"):
+            # ONE death, ONE row — the same suppression `_close` applies to a
+            # reset, and it was missing here because this method calls `_build`
+            # DIRECTLY instead of going through `_close`. That made "death" a
+            # VACUOUS member of `_ENGINE_MIRRORED_OUTCOMES`: the set listed it,
+            # nothing asked. Live report 2026-08-03: "triggering a death caused
+            # TWO deaths simultaneously… when we have a 100 coin star selected,
+            # there's always 2 deaths (I tested this across courses, with and
+            # without 100 coins selected)."
+            self._open = None
+            return []
         course_id, star_id = star_tgt if star_tgt else (None, None)
         strat = self.strat_by_star.get(star_tgt) if star_tgt else None
         attempt = self._build(
             first=first, close=ev, outcome="death",
             outcome_detail=ev.payload.get("cause"),
             course_id=course_id, star_id=star_id,
-            igt_frames=ev.payload.get("igt_frames"), strat=strat)
+            igt_frames=self._with_carried_igt(ev.payload.get("igt_frames")),
+            strat=strat)
         self._open = None
         return [attempt]
 
@@ -1176,6 +1287,24 @@ class Projector:
             self._open = None
             return []
         star_tgt = self._star_target()
+        if self._engine_records_this_too(star_tgt, outcome):
+            # ONE reset, ONE row. The 100-coin star's engine turns this same
+            # event into its own row and feed()'s seg_closed loop reattributes
+            # it to this very entity, so recording the plain attempt as well
+            # puts the retry in the practice log TWICE (live report
+            # 2026-08-03, WF 100 Coins: "resetting during a 100 coins star
+            # triggers two resets"). Confirmed in his journal — three reset
+            # spans, each carrying a star-namespace row AND a
+            # segment-namespace row with the same journal id, the same span
+            # and the same strategy.
+            #
+            # This is the reset/death half of the suppression `_close_by_grab`
+            # has always applied to the GRAB, and the bug is as old as that
+            # one. It was invisible until 2026-08-03 because the 100-coin star
+            # had no rank standards, so nothing could set a strategy on it, so
+            # BOTH rows were unlabelled and the startup prune ate them.
+            self._open = None
+            return []
         course_id, star_id = star_tgt if star_tgt else (None, None)
         strat = self.strat_by_star.get(star_tgt) if star_tgt else None
         attempt = self._build(
@@ -1184,6 +1313,34 @@ class Projector:
             igt_frames=igt_frames, strat=strat)
         self._open = None
         return [attempt]
+
+    #: Outcomes a 100-coin engine ALSO turns into a row of its own. A foreign
+    #: `level_changed` is deliberately absent: a strict waypoint def cancels
+    #: SILENTLY there (tracking/segments.py's `_feed_waypoint` precedence), so
+    #: the plain `abandoned` attempt is the only record that leaving mid-run
+    #: ever happened, and suppressing it would lose the row rather than
+    #: de-duplicate it.
+    _ENGINE_MIRRORED_OUTCOMES = frozenset({"reset", "hard_reset", "death"})
+
+    def _engine_records_this_too(self, star_tgt, outcome) -> bool:
+        """Would an ARMED 100-coin engine record this same span itself?
+
+        Both clauses do real work. The outcome clause keeps `abandoned`
+        recording (above). The ARMED clause is what keeps the plain attempt as
+        the fallback when no engine is running — a deleted or disabled
+        definition, or one that already cancelled earlier in the visit — the
+        same fallback philosophy `_close_by_grab` uses, so the retry stays
+        visible rather than disappearing with the engine.
+
+        Safe to read the armed set here because `_dispatch` runs BEFORE
+        `self._segments.feed()` in `feed()`: the answer is the state as the
+        event ARRIVED, which is exactly the state that decides whether the
+        engine is about to close a row for it.
+        """
+        if star_tgt is None or outcome not in self._ENGINE_MIRRORED_OUTCOMES:
+            return False
+        return any(self._hundred_coin_engine_ids.get(seg_id) == star_tgt
+                   for seg_id in self._segments.armed_ids())
 
     def _build(self, first, close, outcome, outcome_detail, course_id, star_id,
                igt_frames, strat) -> Attempt:
@@ -1255,8 +1412,9 @@ def wipe_matches(a: Attempt, p: dict) -> bool:
     return True  # kind == "all"
 
 
-def replay(events, segments=None, time_filters=None,
-           origin_overrides=None, on_notices=None) -> tuple[list[Attempt], Projector]:
+def replay(events, segments=None, time_filters=None, origin_overrides=None,
+           on_notices=None, hundred_coin_strat=None
+           ) -> tuple[list[Attempt], Projector]:
     """`on_notices`, default None (spec 2026-07-28-multi-step-segments, the
     backtest arm-count gap): an optional callback invoked with
     `proj.segment_notices` after every fed event, for a caller that needs
@@ -1281,7 +1439,8 @@ def replay(events, segments=None, time_filters=None,
                      time_filters=time_filters, touched=touched_ids(events),
                      strat_overrides=strat_overrides(events),
                      origin_overrides=origin_overrides,
-                     time_corrections=time_corrections(events))
+                     time_corrections=time_corrections(events),
+                     hundred_coin_strat=hundred_coin_strat)
     attempts: list[Attempt] = []
     for ev in events:
         if ev.type == "data_wiped":

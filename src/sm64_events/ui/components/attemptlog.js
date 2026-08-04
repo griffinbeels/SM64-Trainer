@@ -177,6 +177,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
     <td class="meta attempt-strategy">
       ${sec
         ? html`<${StratPicker} entity=${entity} strategies=${sec.strategies}
+            groups=${sec.strategy_groups}
             active=${a.strat_tag} blankLabel="— no strategy —"
             highlightUnset=${false} allowBlank=${!sec.default_strat}
             submit=${(tag) => send("POST", `/api/attempts/${a.id}/strat`,

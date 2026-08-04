@@ -25,7 +25,12 @@ def test_parse_standards_excludes_iron_everywhere():
 def test_key_to_entity():
     assert scrape.key_to_entity("7_3") == "star:8:2"      # SSL star 3
     assert scrape.key_to_entity("0_1") == "star:1:0"      # BoB star 1
-    assert scrape.key_to_entity("0_100c4") is None        # 100-coin deferred
+    # A 100-coin key is the course's 100-coin STAR (star 6); the N in 100cN
+    # is the 1-based EXIT star, which lives in exit_variants, not in the key.
+    assert scrape.key_to_entity("0_100c4") == "star:1:6"   # BoB 100 Coins
+    assert scrape.hundred_coin_exit("0_100c4") == 3        # ...ended on star 4
+    assert scrape.hundred_coin_exit("0_1") is None
+    assert scrape.hundred_coin_exit("15_pss") is None      # not a main course
     assert scrape.key_to_entity("15_pss") == "star:19:0"  # Princess's Secret Slide
     assert scrape.key_to_entity("16_1n") == "segment:5"   # BitDW pipe entry (No Reds)
     assert scrape.key_to_entity("16_2x") == "segment:9"   # Bowser 2 battle
@@ -93,10 +98,15 @@ def test_bundled_seed_has_no_dropped_minute_cells():
 def test_build_seed_maps_and_adds_segment_defaults():
     parsed = {"7_3": {"Nuts Pless": {"Mario": 12.93}}, "0_100c4": {"x": {"Mario": 1.0}}}
     seed = scrape.build_seed(parsed)
-    assert seed["version"] == 4
+    assert seed["version"] == 5
     assert seed["entities"]["star:8:2"]["clock"] == "igt"
     assert seed["entities"]["star:8:2"]["strategies"]["Nuts Pless"]["Mario"] == 12.93
-    assert "star:1:6" not in seed["entities"]               # 100-coin skipped
+    # No catalog here, so the variant label falls back to OUR star registry
+    # (xcams' own short name, "100c + Reds", is used when one is available).
+    assert seed["entities"]["star:1:6"]["strategies"] == {
+        "100c + Find the 8 Red Coins · x": {"Mario": 1.0}}
+    assert seed["entities"]["star:1:6"]["exit_variants"] == {
+        "100c + Find the 8 Red Coins": 3}
     assert seed["entities"]["segment:1"]["clock"] == "rta"  # LBLJ default present
 
 def test_extract_standards_blob_picks_the_standards_object():

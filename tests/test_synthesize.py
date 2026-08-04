@@ -4,7 +4,7 @@ from sm64_events.tracking.segments import TRIGGERS
 from sm64_events.tracking.synthesize import (_NOT_SYNTHESIZABLE,
                                              _SYNTH_PARAMS, _place_name,
                                              clause_for, suggest_name,
-                                             synthesize)
+                                             synthesize, walked_steps)
 
 W = "2026-06-11T12:00:00Z"
 
@@ -252,3 +252,123 @@ def test_place_name_reads_a_level_exit_through_level_names_never_course_names():
     name = _place_name({"type": "level_exit", "from": 24})
     assert name == "Whomp's Fortress"
     assert name != COURSE_NAMES[24]
+
+
+# --- walked_steps: the path is already recorded ------------------------
+# Authoring by demonstration. Each case is the shape of a real journal, and
+# the two named routes are checked against the CORPUS rows they must
+# reproduce -- a derivation that agrees with a hand-authored row nobody
+# consulted is the whole claim.
+
+def _wf_to_ssl_journal():
+    """Exit WF into the castle, walk down to the Basement, enter SSL.
+
+    The transient co-frame lobby (from == to, from_transient) is the shape
+    every castle entry really has -- detectors/area.py.
+    """
+    return [
+        jev(1, "level_changed", 1000, {"from": 24, "to": 6, "from_area": 1}),
+        jev(2, "area_changed", 1000,
+            {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+        jev(3, "mario_acted", 1005, {}),
+        jev(4, "area_changed", 1800,
+            {"level": 6, "from": 1, "to": 3, "from_transient": False}),
+        jev(5, "level_changed", 2400, {"from": 6, "to": 8, "from_area": 3}),
+    ]
+
+
+def test_the_walk_reproduces_the_corpus_row_for_wf_to_ssl():
+    rows = _wf_to_ssl_journal()
+    steps = walked_steps(rows, rows[0], rows[-1])
+    assert [step["clause"] for step in steps] == [
+        {"type": "area_enter", "level": 6, "area": 3}]
+    assert [step["label"] for step in steps] == ["Basement"]
+
+
+def test_the_arm_position_is_not_a_step():
+    """Where the start trigger left you is implicit — the Lobby is where
+    exiting WF PUTS you, not somewhere the route asks you to go."""
+    rows = _wf_to_ssl_journal()
+    assert all(step["node"] != "6:1" for step in walked_steps(
+        rows, rows[0], rows[-1]))
+
+
+def test_a_level_change_end_row_does_not_eat_the_last_real_step():
+    """A `level_changed` end row sits one id BEFORE its own co-frame
+    `area_changed`, so the destination is outside the span and the last
+    walked node is a genuine step. Dropping a trailing node by POSITION ate
+    the Basement out of WF → SSL while leaving four-step arena routes looking
+    perfect. Mutation-proved: compare by position instead of by node identity
+    and this goes red while the arena case below stays green."""
+    rows = _wf_to_ssl_journal()
+    assert len(walked_steps(rows, rows[0], rows[-1])) == 1
+
+
+def test_the_end_node_is_dropped_when_the_span_really_reaches_it():
+    """The other side of the rule above: when the end row IS a settled
+    position the walk reaches (an `area_changed`, as it is for every route
+    ending inside the castle), that node is the finish and not a step."""
+    rows = _wf_to_ssl_journal() + [
+        jev(6, "area_changed", 2500,
+            {"level": 8, "from": 1, "to": 2, "from_transient": False})]
+    steps = walked_steps(rows, rows[0], rows[-1])
+    assert [step["node"] for step in steps] == ["6:3"]
+
+
+def test_a_castle_step_reached_by_a_level_edge_is_a_pinned_level_enter():
+    """THE authoring trap, absorbed. `can_run_from` rule (A) refuses to arm a
+    definition whose next step is an `area_enter` while Mario stands outside
+    the castle — so the Lobby, walked into from BitFS, must be a subarea-
+    pinned `level_enter`. Two clause types for the same room, one of which
+    silently never arms; the journal knows which edge it was."""
+    rows = [
+        jev(1, "level_changed", 1000, {"from": 33, "to": 6, "from_area": 1}),
+        jev(2, "area_changed", 1000,
+            {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+        jev(3, "area_changed", 1200,
+            {"level": 6, "from": 1, "to": 3, "from_transient": False}),
+        jev(4, "level_changed", 1600, {"from": 6, "to": 19, "from_area": 3}),
+        jev(5, "area_changed", 1600,
+            {"level": 19, "from": 1, "to": 1, "from_transient": True}),
+        jev(6, "level_changed", 2000, {"from": 19, "to": 6, "from_area": 1}),
+        jev(7, "area_changed", 2000,
+            {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+        jev(8, "area_changed", 2600,
+            {"level": 6, "from": 1, "to": 2, "from_transient": False}),
+    ]
+    steps = walked_steps(rows, rows[0], rows[-1])
+    assert [step["label"] for step in steps] == ["Basement", "BitFS", "Lobby"]
+    assert steps[-1]["clause"] == {"type": "level_enter", "to": 6,
+                                   "to_subarea": 1}
+    assert steps[1]["clause"] == {"type": "level_enter", "to": 19}
+
+
+def test_the_transient_lobby_of_a_castle_entry_is_never_a_step():
+    """Every castle entry loads the Lobby for one poll before warping to the
+    real area, ALL ON ONE FRAME. Judged raw that is a stop the player never
+    made — the same one-frame collapse `SegmentEngine.feed` applies to
+    matching, applied here to authoring so the two cannot disagree."""
+    rows = [
+        jev(1, "level_changed", 1000, {"from": 8, "to": 6, "from_area": 1}),
+        jev(2, "area_changed", 1000,
+            {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+        jev(3, "area_changed", 1000,       # same frame: the real destination
+            {"level": 6, "from": 1, "to": 3, "from_transient": False}),
+        jev(4, "area_changed", 1900,
+            {"level": 6, "from": 3, "to": 1, "from_transient": False}),
+        jev(5, "level_changed", 2500, {"from": 6, "to": 24, "from_area": 1}),
+    ]
+    steps = walked_steps(rows, rows[0], rows[-1])
+    assert [step["node"] for step in steps] == ["6:1"], (
+        "the arm position is the BASEMENT here (last candidate of the entry "
+        "frame), so the Lobby walked to afterwards is the one real step")
+
+
+def test_a_direct_hop_has_no_steps_at_all():
+    rows = [
+        jev(1, "level_changed", 1000, {"from": 24, "to": 6, "from_area": 1}),
+        jev(2, "area_changed", 1000,
+            {"level": 6, "from": 1, "to": 1, "from_transient": True}),
+        jev(3, "level_changed", 1500, {"from": 6, "to": 17, "from_area": 1}),
+    ]
+    assert walked_steps(rows, rows[0], rows[-1]) == []

@@ -739,6 +739,12 @@ def test_segment_section_armed_detail_reports_progress_and_waiting_for(tmp_path)
     assert detail["start_frame"] == 1000
     assert detail["deadline_frame"] is None             # strict: no budget
     assert detail["waiting_for"] == "Enter Bowser in the Dark World"
+    # 2026-08-03: the WHOLE route ships beside the one step you are on, and
+    # `progress` indexes straight into it -- so a step list one shorter than
+    # the counter above it would leave the last chip unreachable, which is
+    # the shape a client-side re-derivation would get wrong.
+    assert detail["steps"] == ["BitDW"]
+    assert len(detail["steps"]) == detail["total"] + 1
     asyncio.run(svc.publish(lvl(1085, 6, 17)))          # closes it
     view2 = build_session_view(db, svc, clock="igt")
     assert seg_section(view2, 1)["armed_detail"] is None

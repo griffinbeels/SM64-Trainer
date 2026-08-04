@@ -194,7 +194,9 @@ def test_fresh_install_seeds_the_converted_corpus(tmp_path):
     loose = [r for r in rows if r["match_mode"] == "loose"]
     strict = [r for r in rows if r["match_mode"] == "strict"]
     exclusive = [r for r in rows if r["match_mode"] == "exclusive"]
-    assert len(loose) == 56 and len(strict) == 25 and len(exclusive) == 3
+    # 0 loose since 2026-08-02: every movement flipped to strict with the
+    # path cursor, so the 56 movements joined the 25 already-strict rows.
+    assert len(loose) == 0 and len(strict) == 81 and len(exclusive) == 3
 
 
 def test_reconcile_carries_match_mode_on_insert_and_refresh(tmp_path):

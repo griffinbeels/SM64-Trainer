@@ -99,25 +99,47 @@ def test_the_time_before_the_pyramid_door_is_carried():
     walk(c, range(1500, 1503), curr_level=8, curr_area=1, igt_overall=480)
     walk(c, [1503], curr_level=8, curr_area=2, igt_overall=480)
     walk(c, [1505], curr_level=8, curr_area=2, igt_overall=0)
-    assert c.carried_base() == 480
+    assert c.banked_frames() == 480
     grabbed = snap(1577, igt_overall=71, curr_level=8, curr_area=2)
     c.observe(grabbed)
-    assert c.carried_igt_at_xcam(1577, grabbed) == (552, "counter")
+    assert c.whole_star_igt_at_xcam(1577, grabbed) == (552, "counter")
 
 
-def test_nothing_is_carried_back_into_the_courses_main_area():
-    # Walking OUT of a subarea zeroes the counter beside an area edge exactly
-    # as walking in does, and so does a reset's own reload -- both land in
-    # area 1, and carrying a previous run's time across a RESET is the one
-    # failure that would record a wrong number silently.
+def test_every_leg_is_banked_not_just_the_last_one():
+    # The two rows the single cached half could never state: CCM 100 Coins,
+    # which crosses TWO involuntary restarts and published 37 seconds short of
+    # the truth (2026-08-04, journal ids 23370 and 23799). An accumulator
+    # covers any number of legs by construction.
+    c = IgtClock()
+    enter_a_course(c)
+    walk(c, range(1500, 1503), curr_level=8, curr_area=1, igt_overall=400)
+    walk(c, [1503], curr_level=8, curr_area=2, igt_overall=400)   # deeper
+    walk(c, [1505], curr_level=8, curr_area=2, igt_overall=0)     # leg 1 banked
+    walk(c, range(1600, 1603), curr_level=8, curr_area=2, igt_overall=300)
+    walk(c, [1603], curr_level=8, curr_area=3, igt_overall=300)   # deeper again
+    walk(c, [1605], curr_level=8, curr_area=3, igt_overall=0)     # leg 2 banked
+    assert c.banked_frames() == 700
+    grabbed = snap(1700, igt_overall=95, curr_level=8, curr_area=3)
+    c.observe(grabbed)
+    assert c.whole_star_igt_at_xcam(1700, grabbed) == (796, "counter")
+
+
+def test_nothing_is_carried_across_a_restart_into_the_main_area():
+    # A retry's own reload lands back in area 1, and carrying a previous run's
+    # time across it is the one failure here that would record a wrong number
+    # silently. The KNOWN residual, stated rather than hidden: walking OUT of a
+    # subarea on foot lands in area 1 too and is indistinguishable -- it occurs
+    # 0 times in 875 measured grabs, and the correction watch still covers it.
     c = IgtClock()
     enter_a_course(c)
     walk(c, range(1500, 1503), curr_level=8, curr_area=2, igt_overall=480)
     walk(c, [1503], curr_level=8, curr_area=1, igt_overall=480)
     walk(c, [1505], curr_level=8, curr_area=1, igt_overall=0)
-    assert c.counter_may_be_subarea_local() is True   # unchanged: still partial
-    assert c.carried_base() is None                   # but nothing to add
-    assert c.carried_igt_at_xcam(1577, snap(1577, curr_level=8)) is None
+    assert c.banked_frames() == 0
+    assert c.counter_may_be_subarea_local() is False
+    grabbed = snap(1577, igt_overall=71, curr_level=8, curr_area=1)
+    c.observe(grabbed)
+    assert c.whole_star_igt_at_xcam(1577, grabbed) == (72, "counter")
 
 
 def test_a_reset_clears_the_subarea_basis():

@@ -122,13 +122,26 @@ def test_a_castle_segment_does_not_belong_in_a_course():
     assert not belongs(LBLJ, HMC)
 
 
-def test_the_castle_and_the_hubs_drop_nothing():
-    """Transit — every course is entered through them, so a card must survive
-    walking back to a movement's start, and the star you just practiced stays
-    up in the lobby (the user's ruling, asked explicitly 2026-07-27)."""
-    assert belongs(WF_STAR, LOBBY)
-    assert belongs(WF_STAR, {"course_id": None, "level": 16, "area": 1,
-                             "mode": None})
+def test_the_castle_and_the_hubs_keep_only_what_lives_there():
+    """TIGHTENED 2026-08-03. This used to assert that transit dropped NOTHING,
+    which was right about what it was written for and wrong about everything
+    else: standing anywhere with no course of its own returned True for every
+    section, so the card could name a thing belonging to a course two rooms
+    away. Live report, standing in Castle Upstairs with only `BitS Entry` in
+    the selector and the card reading `Bowser in the Fire Sea · No Reds`:
+
+        the "active" card section should never display anything other than any
+        option that's currently displayed in the segment / star selector
+        above... if we leave a bowser stage, we're no longer in the bowser
+        stage, so it shouldn't be displayed as active.
+
+    What transit was FOR still holds — a castle movement (course_id null)
+    survives the castle, which is what keeps a card up while you walk to its
+    start. A course's star does not."""
+    assert not belongs(WF_STAR, LOBBY)
+    assert not belongs(WF_STAR, {"course_id": None, "level": 16, "area": 1,
+                                 "mode": None})
+    assert belongs(LBLJ, LOBBY)            # a castle movement lives here
     assert belongs(WF_STAR, None)          # emulator detached: nothing to say
 
 
@@ -199,11 +212,31 @@ def test_the_card_rule_matches_the_projector_on_every_seeded_definition():
     answers = run_node("practicedHere", *(
         f"{json.dumps(section)}, {{stage: {json.dumps(stage)}}}"
         for section, stage in pairs))
-    disagreed = [(pair, mine, theirs)
-                 for pair, mine, theirs in zip(pairs, answers, expected)
-                 if mine != theirs]
-    assert not disagreed, (
-        f"{len(disagreed)} of {len(pairs)} disagree, e.g. {disagreed[:3]}")
+    # ONE-DIRECTIONAL since 2026-08-03, and the direction is the whole point.
+    # These two answer different questions and always did: the projector owns
+    # whether the TARGET survives (it does across a hub — walking back restores
+    # the same card), the card owns whether to SHOW it where you are standing
+    # now. This file's own rule-file entry has said so in words the whole time:
+    # "a target legitimately survives a hub... it just is not ACTIVE while you
+    # stand somewhere it cannot be run".
+    #
+    # So the card may be STRICTER than the projector and must never be LOOSER —
+    # showing a section the server has already retired is the stale-card bug
+    # this module exists to prevent, and that is what is pinned. 320 of 1848
+    # pairs are now deliberately stricter (a course's own things, seen from the
+    # castle and the hubs); zero may go the other way.
+    looser = [(pair, mine, theirs)
+              for pair, mine, theirs in zip(pairs, answers, expected)
+              if mine and not theirs]
+    assert not looser, (
+        f"the card would show {len(looser)} sections the projector retired, "
+        f"e.g. {looser[:3]}")
+    stricter = sum(1 for mine, theirs in zip(answers, expected)
+                   if theirs and not mine)
+    assert stricter > 0, (
+        "the card is no longer stricter than the projector anywhere — either "
+        "practicedHere lost its course-less clause, or this corpus stopped "
+        "containing a course-owned section reachable from the castle")
 
 
 # ---- the two surfaces cannot drift ----------------------------------------
@@ -323,3 +356,64 @@ def test_just_completed_star_is_fresh_success_only():
                             timeout=30)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == [True, False, False, False]
+
+
+def test_the_segment_he_clicked_leads_the_objective_card():
+    """Live report 2026-08-02, four screenshots: he tapped `Bowser 2 →
+    Upstairs`, the CELL lit up, and the card below kept reading `Bowser 2 →
+    BitS`. Same for WDW and DDD. *"once we select something, it should always
+    appear in that display below, and continue to be displayed while it's
+    still valid and selected."*
+
+    It became reachable the moment "no active route" stopped meaning "no
+    filter" (`segments.py::_route_allows`): all FOUR `Bowser 2 → X` movements
+    arm on the same event now, `frozen.armedOrder` cannot order things that
+    arrived together, and `armedPins[0]` was whichever landed first. Two
+    surfaces answering one question two ways — the class the single-source
+    rule in CLAUDE.md exists for, arriving as an ORDERING rather than a
+    derivation.
+
+    Both halves are pinned, because sorting armedPins alone only covers a pick
+    that happens to be armed as well:
+      1. within armedPins, the targeted section sorts to the front;
+      2. a targeted section that is NOT armed still leads.
+    Source-scan (practice.js is not import-free); the behaviour is verified by
+    rendering."""
+    body = (UI / "components" / "practice.js").read_text(encoding="utf-8")
+    assert re.search(
+        r"isTargetedSeg = \(sec\) => sec != null && tgt\.kind === \"segment\"\s*"
+        r"&& tgt\.segment_id === sec\.segment_id", body), \
+        "no single reader for 'is this section the target'"
+    assert re.search(
+        r"\.sort\(\(a, b\) => \(isTargetedSeg\(b\) \? 1 : 0\)\s*"
+        r"- \(isTargetedSeg\(a\) \? 1 : 0\)\)", body), \
+        "armedPins no longer promotes the targeted segment"
+    assert re.search(r"pickedSeg = segs\.find\(isTargetedSeg\)", body) and \
+        re.search(r"\[pickedSeg, \.\.\.armedPins\]", body), \
+        "a targeted-but-unarmed segment no longer leads"
+
+
+def test_nothing_picked_and_several_running_claims_no_active_segment():
+    """Live report 2026-08-02: standing Upstairs with `BitS Entry`, `Bowser 2 →
+    WDW` and `Bowser 2 → BitS` all armed and NO cell lit, the card still read
+    "ACTIVE SEGMENT · BitS Entry · Running". *"When I don't have selected in
+    the UI, it should never display an active segment like this, especially
+    since there are multiple options."*
+
+    It bends his own earlier rule — "a RUNNING segment is never invisible"
+    (2026-07-24) — and the reason that rule stopped fitting is worth keeping:
+    it was written when at most ONE thing armed at a time, so "the armed one"
+    and "the one he means" were the same section. Six movements arm off one
+    exit now. So ONE armed pin is still shown (nothing to be ambiguous about);
+    two or more with an empty hand shows none, because picking between them
+    asserts a selection he never made.
+
+    The threshold is `> 1`, not `>= 1`: dropping the single case would make a
+    live timer invisible, which is the bug the 2026-07-24 rule exists for."""
+    body = (UI / "components" / "practice.js").read_text(encoding="utf-8")
+    assert re.search(
+        r"ambiguousPins = !pickedSeg && armedPins\.length > 1", body), \
+        "the empty-hand ambiguity gate is gone or changed shape"
+    assert re.search(
+        r"pinnedSegs = !inContext \|\| starActive \|\| ambiguousPins \? \[\]",
+        body), "the gate is not wired into pinnedSegs"

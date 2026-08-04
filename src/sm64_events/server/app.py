@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from sm64_events.core import uilog
 from sm64_events.core.events import Event
 from sm64_events.core.paths import pidfile_path
 from sm64_events.core.perfmon import PerfMonitor
@@ -409,6 +410,26 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         if replay is not None:
             replay.recorder.set_session_paused(body.paused)
         return pause_state(poller, replay)
+
+    @app.post("/api/uilog")
+    def ui_log(body: dict):
+        """What the browser just PAINTED — see core/uilog.py for why this is a
+        separate channel from the event journal rather than an event.
+
+        Lives HERE, not api.py, for the same reason /api/pause does: it needs
+        `poller`, which only this composition surface holds. The frame is
+        stamped SERVER-side from the live snapshot rather than sent by the
+        client, so a UI observation lands on the same clock the journal is
+        indexed by and the two can be interleaved without trusting the
+        browser's idea of what frame it was.
+
+        Always 200, even for a body it drops: this is an instrument, and an
+        instrument that can make the page it observes throw is worse than no
+        instrument. `recorded` says which happened."""
+        latest = poller.latest
+        stored = uilog.record(
+            body, frame=latest.global_timer if latest else None)
+        return {"recorded": stored is not None}
 
     @app.post("/api/admin/shutdown")
     def admin_shutdown():

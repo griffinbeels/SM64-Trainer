@@ -1071,6 +1071,40 @@ def test_segment_attempt_completed_carries_segment_fields(tmp_path):
     assert "segment_disarmed" not in journaled
 
 
+def test_settle_frame_broadcasts_a_cancel_no_event_would_have_delivered(tmp_path):
+    """The wire, not the rule (live report 2026-08-02). The engine decided this
+    cancel at the move; until `settle_frame` existed the notice waited for the
+    next journaled event, so a player standing still inside a course watched a
+    dead movement claim ACTIVE SEGMENT for 27.7 s. Broadcast-only, like every
+    other arm/disarm notice — the projector re-derives them on replay."""
+    db, svc, sent = make_rec(tmp_path)
+    # The shape of the shipped seg:wf->ssl row (this db carries only the legacy
+    # ten; the 56 movements arrive via reconcile at startup). LOOSE on purpose:
+    # a strict def is disarmed by the foreign level change itself, so it could
+    # never show whether the topological verdict got delivered.
+    wf_ssl = asyncio.run(svc.create_segment({
+        "name": "WF → SSL", "match_mode": "loose", "guards": [],
+        "start_triggers": [{"type": "level_exit", "from": 24}],
+        "end_triggers": [{"type": "level_enter", "to": 8}]}))
+    asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 24, "to": 6})))
+    asyncio.run(svc.publish(ev("area_changed", 1000,
+                               {"level": 6, "from": 1, "to": 1})))
+    asyncio.run(svc.publish(ev("mario_acted", 1005)))
+    assert svc.armed_segment_ids == {wf_ssl}
+    # Into the Bowser 1 arena, which no walk from the lobby reaches. No further
+    # event: the clock alone has to deliver the verdict.
+    asyncio.run(svc.publish(ev("level_changed", 2000, {"from": 6, "to": 30})))
+    asyncio.run(svc.publish(ev("area_changed", 2000,
+                               {"level": 30, "from": 1, "to": 1})))
+    assert wf_ssl in svc.armed_segment_ids   # the arena's own fight arms too
+    asyncio.run(svc.settle_frame(2001))
+    assert wf_ssl not in svc.armed_segment_ids
+    gone = [e for e in sent if e.type == "segment_disarmed"
+            and e.payload["segment_id"] == wf_ssl]
+    assert gone and gone[-1].payload["name"] == "WF → SSL"
+    assert "segment_disarmed" not in [e.type for e in db.events()]
+
+
 def test_star_attempt_completed_carries_kind_star(tmp_path):
     db, svc, sent = make_rec(tmp_path)
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
@@ -1933,15 +1967,21 @@ def test_newest_attempt_id_ignores_the_segment_namespace_offset(tmp_path):
                    if a.course_id == 2 and a.star_id == 6 and a.segment_id is None)
     assert hundred.id >= 10**10, "must be the SEGMENT-namespace reattributed row"
 
-    # A genuinely LATER native reset on the same star entity, via the plain
-    # target/practice_reset path (test_set_target_and_attribution's own
-    # shape) -- a plain int id, chronologically newer but numerically
-    # smaller than the reattributed row above.
+    # A genuinely LATER native attempt on the same star entity, via the plain
+    # target/anchor path -- a plain int id, chronologically newer but
+    # numerically smaller than the reattributed row above. It is ABANDONED
+    # (leaving the course) rather than a reset ON PURPOSE: a reset while a
+    # 100-coin engine is armed is recorded by the ENGINE, and the plain
+    # attempt for it is suppressed as a duplicate (projection.py::_close,
+    # live report 2026-08-03). A foreign level change cancels a strict def
+    # silently, so the plain row is the only one and this shape survives.
     asyncio.run(svc.set_target(2, 6, strat_tag="Cannonless"))
     asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 0})))
-    asyncio.run(svc.publish(ev("practice_reset", 1500, {"igt_frames_before": 100})))
+    asyncio.run(svc.publish(ev("mario_acted", 1410, {})))
+    asyncio.run(svc.publish(ev("level_changed", 1500, {"from": 24, "to": 16})))
     native_reset = next(a for a in db.attempts()
-                        if a.course_id == 2 and a.star_id == 6 and a.outcome == "reset")
+                        if a.course_id == 2 and a.star_id == 6
+                        and a.outcome == "abandoned")
     assert native_reset.id < 10**10, "must be the plain journal-namespace row"
     assert native_reset.id < hundred.id          # raw id: reset LOOKS older
     from sm64_events.tracking.projection import journal_id

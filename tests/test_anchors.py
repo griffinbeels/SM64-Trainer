@@ -643,6 +643,17 @@ def test_save_dialog_sets_save_pending_on_state_loaded():
 # ---------------------------------------------------------------------------
 
 def run(detector, snaps):
+    """Feed consecutive pairs, exactly as the poller does.
+
+    TRAP, and it cost two rounds on 2026-08-03: the FIRST snapshot is only ever
+    a `prev`. AnchorDetector records its recency state from `curr`
+    (`_last_door_frame`, `_last_dialog_frame`, `_last_teleport_frame`), so an
+    action that appears only in `snaps[0]` is never observed at all — the test
+    then passes or fails for a reason unrelated to what it claims to check. Two
+    teleport tests were green against a detector that had never seen a
+    fade-out. Put the action you are arming on in snaps[1] or later, with a
+    throwaway leading snapshot.
+    """
     return [ev for prev, curr in zip(snaps, snaps[1:])
             for ev in detector.process(prev, curr)]
 
@@ -717,3 +728,135 @@ def test_the_zero_may_land_a_few_frames_after_the_area_byte_moves():
         snap(1004, igt=0, level=8, area=2)])
     [anchor] = [e for e in events if e.type == "practice_reset"]
     assert anchor.payload["area_load"] is True
+
+
+# ---------------------------------------------------------------------------
+# In-level teleporters (task 0082, live demo 2026-08-03 in CCM and WDW).
+# Standing on the CCM broken bridge (or in a WDW corner) teleports Mario
+# somewhere else in the SAME area, and Usamune zeroes the overall counter for
+# it exactly as it does for an L-reset. No area edge fires, so the area_load
+# discriminator above cannot see it and the warp read as a retry. The anchor
+# still has to EXIST -- segments.py::_zeroes_usamune_igt reads it to know the
+# counter's basis moved -- so this is a payload flag, not a suppression.
+# ---------------------------------------------------------------------------
+
+ACT_TELEPORT_FADE_OUT = 0x00001336
+ACT_TELEPORT_FADE_IN = 0x00001337
+
+
+def test_an_in_level_teleporter_is_not_a_retry():
+    # Journal ids 23218-23219, CCM: the counter zeroes on the very frame Mario
+    # goes from the fade-out to the fade-in, 42 frames after touching the warp.
+    events = run(AnchorDetector(), [
+        snap(227618, igt=228, action=ACT_WALKING, level=5, area=1),
+        snap(227660, igt=266, action=ACT_TELEPORT_FADE_OUT, level=5, area=1),
+        snap(227701, igt=266, action=ACT_TELEPORT_FADE_OUT, level=5, area=1),
+        snap(227702, igt=0, action=ACT_TELEPORT_FADE_IN, level=5, area=1)])
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["teleport"] is True
+    assert anchor.payload["area_load"] is False
+
+
+def test_a_reset_taken_after_the_teleport_is_still_a_retry():
+    # The false positive a bare action test would produce: mario_action still
+    # reads ACT_TELEPORT_FADE_IN long after the warp is over (journal ids
+    # 23223/23226 carry it 125 and 172 frames later), so the flag is keyed on
+    # how recently the fade-OUT ran, not on what Mario looks like now.
+    events = run(AnchorDetector(), [
+        snap(227618, igt=228, action=ACT_WALKING, level=5, area=1),
+        snap(227660, igt=266, action=ACT_TELEPORT_FADE_OUT, level=5, area=1),
+        snap(227701, igt=266, action=ACT_TELEPORT_FADE_OUT, level=5, area=1),
+        snap(227702, igt=0, action=ACT_TELEPORT_FADE_IN, level=5, area=1),
+        snap(227780, igt=78, action=ACT_TELEPORT_FADE_IN, level=5, area=1),
+        snap(227785, igt=0, action=ACT_TELEPORT_FADE_IN, level=5, area=1)])
+    anchors = [e for e in events if e.type == "practice_reset"]
+    assert [a.payload["teleport"] for a in anchors] == [True, False]
+
+
+def test_a_teleport_that_crosses_a_level_is_still_a_boundary():
+    # The action is shared with cap-course warps, which DO leave the level --
+    # and leaving a level is a real attempt boundary whoever caused it. The
+    # level edge drops the pairing, mirroring what it already does to
+    # _last_area_edge, so the flag can only ever mean an IN-level teleporter.
+    events = run(AnchorDetector(), [
+        snap(999, igt=499, action=ACT_WALKING, level=29, area=1),
+        snap(1000, igt=500, action=ACT_TELEPORT_FADE_OUT, level=29, area=1),
+        snap(1001, igt=0, action=ACT_TELEPORT_FADE_IN, level=6, area=1)])
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["teleport"] is False
+
+
+def test_an_ordinary_reset_is_not_flagged_as_a_teleport():
+    events = run(AnchorDetector(), [
+        snap(1000, igt=500, action=ACT_WALKING, level=5, area=1),
+        snap(1002, igt=0, level=5, area=1)])
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["teleport"] is False
+
+
+def test_teleport_recency_cleared_on_backward_jump_self_heal():
+    # Domain rule 4: a savestate rewind must not let a pre-jump teleport
+    # explain away the load that follows it.
+    events = run(AnchorDetector(), [
+        snap(4999, igt=499, action=ACT_WALKING, level=5, area=1),
+        snap(5000, igt=500, action=ACT_TELEPORT_FADE_OUT, level=5, area=1),
+        snap(3000, igt=120, action=ACT_WALKING, level=5, area=1)])
+    [anchor] = [e for e in events if e.type == "state_loaded"]
+    assert anchor.payload["teleport"] is False
+
+
+# ---------------------------------------------------------------------------
+# A LEVEL-EXIT CUTSCENE IS NOT ACTIVITY (live report 2026-08-03: "there's
+# sometimes a Reset entry RIGHT when we start the map... The first time we
+# enter a map should never be considered a reset, because there's nothing to
+# reset (we just got there!)").
+#
+# Mario is FLUNG out of a level in one of these actions and the byte then sits
+# there. He died in WF at f14069, was flung to the castle, spent 92 seconds in
+# the pause menu, and menu-warped back into WF at f16851 with the action byte
+# STILL reading ACT_DEATH_EXIT — so the arrival's own anchors reported
+# mario_acted=true, the unacted-reset discard could not fire, and the 44 frames
+# between the arrival's two anchors banked a phantom 1.5 s reset row.
+#
+# Measured across both journals: 62 anchors land on one of these actions and
+# 62 of 62 carry mario_acted=true. Six of the seven family members appear in
+# real play. Same shape as the teleport fade-in: a lingering action byte read
+# as a live state.
+# ---------------------------------------------------------------------------
+
+ACT_DEATH_EXIT = 0x00001928
+
+
+def test_a_level_exit_cutscene_does_not_count_as_acting():
+    detector = AnchorDetector()
+    events = run(detector, [
+        snap(16850, igt=1, action=ACT_DEATH_EXIT, level=6, area=1),
+        snap(16851, igt=1, action=ACT_DEATH_EXIT, level=24, area=2),
+        snap(16895, igt=0, action=ACT_DEATH_EXIT, level=24, area=1)])
+    assert [e.type for e in events if e.type == "mario_acted"] == []
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["mario_acted"] is False
+
+
+def test_every_exit_action_in_the_registry_is_involuntary():
+    """One row in the registry, not a branch here — so a family member added
+    later is covered without touching the detector."""
+    from sm64_events.memory.addresses import LEVEL_EXIT_ACTIONS
+    assert LEVEL_EXIT_ACTIONS, "an empty set makes this scan vacuous"
+    for action in LEVEL_EXIT_ACTIONS:
+        events = AnchorDetector().process(
+            snap(1000, igt=500, action=action),
+            snap(1002, igt=0, action=action))
+        [anchor] = [e for e in events if e.type == "practice_reset"]
+        assert anchor.payload["mario_acted"] is False, hex(action)
+
+
+def test_real_play_after_an_exit_still_counts_as_acting():
+    """Opt-in: the exit byte is only ignored while it IS the exit byte. The
+    moment Mario does something, the next anchor is a real retry again."""
+    events = run(AnchorDetector(), [
+        snap(16895, igt=0, action=ACT_DEATH_EXIT, level=24, area=1),
+        snap(16950, igt=55, action=ACT_WALKING, level=24, area=1),
+        snap(17000, igt=0, action=ACT_WALKING, level=24, area=1)])
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["mario_acted"] is True

@@ -386,12 +386,12 @@ def test_a_css_disagreement_fails_the_whole_save_leaving_both_files_untouched(
     # has multiple real readers of.)
     original = tmp_css.read_text(encoding="utf-8")
     corrupted = original.replace(
-        "var(--log-stacked-rank-width, 200px)",
+        "var(--log-stacked-rank-width, 420px)",
         "var(--log-stacked-rank-width, 999px)", 1)
     assert corrupted != original, (
         "the replace above matched nothing -- index.html's own fallback "
         "text no longer looks like what this test assumes")
-    assert corrupted.count("var(--log-stacked-rank-width, 200px)") == 3, (
+    assert corrupted.count("var(--log-stacked-rank-width, 420px)") == 3, (
         "expected exactly three surviving agreeing occurrences -- the real "
         "file's stackedRankWidth fallback count no longer matches what this "
         "test assumes")

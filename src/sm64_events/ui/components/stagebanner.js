@@ -43,12 +43,14 @@
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
+import { CellRow, SurfaceExchange } from "./cellrow.js";
 import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
 import { send } from "../api.js";
 import { armedSegments, hasPracticeContext, hasStandardsFor,
-         justCompletedSegment, justCompletedStar,
-         practiceMode } from "../stagecontext.js";
+         justCompletedSegment, justCompletedStar, practiceMode,
+         selectorSurfaceId } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
+import { handIsEmpty, loneRouteOption } from "../loneoption.js";
 import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
 import { caveatOf, cellBadge } from "./marks.js";
@@ -82,10 +84,20 @@ export function StageBanner({ t, freshIds }) {
   // the two cannot say different things about the same place — they did, at
   // the file select, where this drew its placeholder while the card below
   // still named a star from the session before.
-  if (!hasPracticeContext(t)) return html`<${StagePlaceholder} t=${t} />`;
   const Row = STAGE_ROWS[practiceMode(t)];
-  return Row ? html`<${Row} t=${t} v=${v} stage=${t.stage} freshIds=${freshIds} />`
-             : html`<${ArmedOnlyRow} t=${t} v=${v} />`;
+  const body = !hasPracticeContext(t)
+    ? html`<${StagePlaceholder} t=${t} />`
+    : (Row ? html`<${Row} t=${t} v=${v} stage=${t.stage} freshIds=${freshIds} />`
+           : html`<${ArmedOnlyRow} t=${t} v=${v} />`);
+  // The whole CARD swapping is a change to the same display, so it exchanges
+  // too (live report 2026-08-02: "if there previously were no options
+  // available, but I transition to a stage with options... right now it
+  // incorrectly cuts. In all circumstances where we change this display, it
+  // should animate in / out"). This wrapper is the one thing here that never
+  // unmounts, which is the whole reason the fade can outlive the row it is
+  // fading out — a row component takes its own state with it when it goes.
+  return html`<${SurfaceExchange} class="selector-exchange"
+    identity=${selectorSurfaceId(t)}>${body}<//>`;
 }
 
 function StagePlaceholder({ t }) {
@@ -239,10 +251,33 @@ const stratSub = (strat) =>
 // pick makes, extracted so BOTH StandardSegmentCell's own click AND
 // BowserCourseRow's auto-retarget effect (item 5, below) go through ONE
 // place rather than growing a second inline copy.
-async function pickSegmentTarget(t, s) {
+async function pickSegmentTarget(t, s, options) {
   if (!s.enabled)
     await send("PUT", `/api/segments/${s.segment_id}`, { enabled: true });
-  await requestTarget(t, { kind: "segment", segment_id: s.segment_id });
+  await requestTarget(t, { kind: "segment", segment_id: s.segment_id }, options);
+}
+
+// THE lone-route auto-pick, shared by the star row and the castle segment row
+// (rule 11 — one implementation, not two that drift). Task 0025: with a route
+// active, a place where the route leaves exactly ONE thing to practice needs no
+// pick from him. The RULE itself is `loneRouteOption`/`handIsEmpty` in
+// ../loneoption.js, import-free so node can test it; this is only the wiring.
+//
+// Deliberately NOT applied to the two Bowser rows above. `ArenaRow` already
+// auto-selects its single fight by its own rule (arriving in an arena IS the
+// intent, route or no route), and `BowserCourseRow` is a two-option toggle
+// whose mutual exclusion has to see both cells whether or not the route uses
+// them — route focus was already withheld there for that reason.
+//
+// Keyed on the PLACE plus the option's identity, so it fires once on arrival
+// rather than every render, and re-arms when he walks somewhere else. It never
+// loops: a successful pick makes the hand non-empty, and a REFUSED one leaves
+// both deps unchanged so the effect does not run again.
+function useLoneRouteOption(v, lone, key, commit) {
+  const empty = handIsEmpty(v.target);
+  useEffect(() => {
+    if (lone && empty) commit();
+  }, [key, empty]);
 }
 
 // The standard segment cell (castle/arena rows, armed extras): name, strat
@@ -304,7 +339,6 @@ function StarRow({ t, v, stage }) {
   // hooks first — the early return below must never change the hook count
   const [setPicking, pickerModal] = useIconPicking(t);
   const course = v.catalog.courses.find((c) => c.id === stage.course_id);
-  if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
   const tgt = v.target || {};
   const lastStratFor = (i) =>
@@ -320,11 +354,11 @@ function StarRow({ t, v, stage }) {
   const caveatFor = (i) =>
     (v.caveat_by_star || {})[`${stage.course_id}:${i}`];
 
-  async function pick(i) {
+  async function pick(i, options) {
     await requestTarget(t, {
       course_id: stage.course_id, star_id: i,
       strat_tag: lastStratFor(i) || null,
-    });
+    }, options);
   }
 
   // Route focus (user request 2026-07-24): with a route active the selector
@@ -334,10 +368,20 @@ function StarRow({ t, v, stage }) {
   // that never visits this course, falls through to the full list rather than
   // an empty row: an empty selector reads as "broken", and standing somewhere
   // your route skips is a normal thing to do.
-  const routeStars = routeStarFilter(v, stage.course_id);
-  const shown = course.stars
-    .map((name, i) => ({ name, i }))
-    .filter(({ i }) => !routeStars || routeStars.has(`${stage.course_id}:${i}`));
+  const routeStars = course ? routeStarFilter(v, stage.course_id) : null;
+  const shown = course
+    ? course.stars
+        .map((name, i) => ({ name, i }))
+        .filter(({ i }) => !routeStars || routeStars.has(`${stage.course_id}:${i}`))
+    : [];
+
+  // Task 0025 — DDD during 16 Star offers exactly one star, so pick it.
+  // Computed BEFORE the `!course` early return because a hook may not run
+  // conditionally; `shown` is empty there, so the rule answers null anyway.
+  const lone = loneRouteOption(routeStars, shown);
+  useLoneRouteOption(v, lone, `star:${stage.course_id}:${lone ? lone.i : ""}`,
+                     () => pick(lone.i, { quiet: true }));
+  if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
   return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
     <div class="shead"><b>${course.name}</b>
@@ -346,7 +390,7 @@ function StarRow({ t, v, stage }) {
         : "tap a star to practice"}</span>
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
-    <div class="starrow">
+    <${CellRow} class="starrow">
       ${shown.map(({ name, i }) => {
         return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
           key=${`${stage.course_id}:${i}`}
@@ -362,7 +406,7 @@ function StarRow({ t, v, stage }) {
           onEdit=${() => setPicking(iconIdentityForKey(starKey(stage.course_id, i)))} />`;
       })}
       ${armedExtraCells(t, v, new Set(), setPicking, startsInLevel(stage.level))}
-    </div>
+    <//>
     ${pickerModal}
   </section>`;
 }
@@ -514,12 +558,23 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
   // above both fire off the same [stage.level] change, and a `setState`
   // call doesn't update its own variable inside the same commit -- reading
   // bowserModeFor directly sidesteps that ordering question entirely.
+  //
+  // A SEGMENT ALREADY IN HAND IS NEVER TAKEN OUT OF IT (live report
+  // 2026-08-02). This row was the third thief, after _close_by_grab's star
+  // grab and ArenaRow's arena entry, and it was found the same way: he
+  // picked `Bowser 1 → WF` in the lobby, walked into BitDW to run it, and
+  // 17 ms after the level change this effect re-targeted the remembered
+  // reds family (journal ids 240 → 246), so the movement lost its target,
+  // its arm and its card. *"If I selected a segment that spans multiple
+  // courses / areas, it should stay selected."* The old guard only declined
+  // when the target was one of THIS row's own two cells, which is exactly
+  // the case that was never the problem — a convenience default may fill an
+  // empty hand; it may not take something out of one.
   useEffect(() => {
     const family = bowserFamilyFor(stage.level);
     if (!family) return;
     if (redsActive) return;
-    if (noRedsSeg && tgt.kind === "segment"
-        && tgt.segment_id === noRedsSeg.segment_id) return;
+    if (tgt.kind === "segment") return;
     if (family === "reds") {
       if (bowserModeFor(stage.level) === "pipe") pickPipe(); else pickStar();
     } else if (noRedsSeg) {
@@ -538,7 +593,7 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
 
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
-    <div class="starrow segcells">
+    <${CellRow} class="starrow segcells">
       <${RedsCell} t=${t} v=${v} stage=${stage} course=${course}
         redsActive=${redsActive} pipeMode=${pipeMode}
         pipeSeg=${pipeSeg} onPickStar=${pickStar} onPickPipe=${pickPipe}
@@ -549,7 +604,7 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
         onPicked=${() => writeBowserFamily(stage.level, "no_reds")} />`
         : null}
       ${armedExtraCells(t, v, shownIds, setPicking)}
-    </div>
+    <//>
     ${pickerModal}
   </section>`;
 }
@@ -734,11 +789,11 @@ function ArenaRow({ t, v, stage }) {
       
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
-    <div class="starrow segcells">
+    <${CellRow} class="starrow segcells">
       ${fights.map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
       ${extras}
-    </div>
+    <//>
     ${pickerModal}
   </section>`;
 }
@@ -756,6 +811,16 @@ function SegmentRow({ t, v, stage }) {
     s.start_areas.some((a) => a[0] === stage.level && a[1] === stage.area));
   const inRoute = routeSegs
     ? here.filter((s) => routeSegs.has(s.segment_id)) : here;
+
+  // Task 0025's segment half (rule 11 — the same rule, the same module).
+  // Read off `inRoute`, NOT `segs` below: `segs` falls back to the unfiltered
+  // list so the row is never empty, and a lone option in THAT list is one the
+  // route said nothing about.
+  const lone = loneRouteOption(routeSegs, inRoute);
+  useLoneRouteOption(
+    v, lone, `seg:${stage.level}:${stage.area}:${lone ? lone.segment_id : ""}`,
+    () => pickSegmentTarget(t, lone, { quiet: true }));
+
   const segs = inRoute.length ? inRoute : here;   // never empty the row
   const extras = armedExtraCells(
     t, v, new Set(segs.map((s) => s.segment_id)), setPicking);
@@ -767,11 +832,11 @@ function SegmentRow({ t, v, stage }) {
       
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
-    <div class="starrow segcells">
+    <${CellRow} class="starrow segcells">
       ${segs.map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
       ${extras}
-    </div>
+    <//>
     ${pickerModal}
   </section>`;
 }
@@ -787,10 +852,10 @@ function ArmedOnlyRow({ t, v }) {
       
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
-    <div class="starrow segcells">
+    <${CellRow} class="starrow segcells">
       ${armedSegments(t, v).map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
-    </div>
+    <//>
     ${pickerModal}
   </section>`;
 }

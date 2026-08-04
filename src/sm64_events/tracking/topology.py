@@ -1,0 +1,100 @@
+"""Is a move between world nodes physically possible, and is it progress?
+
+Reads the SAME `WORLD_EDGES_TWO_WAY`/`WORLD_EDGES_ONE_WAY` tables in
+`memory/addresses.py` that already drive the segment builder's dropdown
+filtering, and answers the two questions `SegmentEngine` needs to decide
+whether an armed segment is still being run (spec
+2026-08-01-topological-segment-validity).
+
+THIS REVERSES A DELIBERATE DECISION, knowingly. `segments.py::can_run_from`'s
+section comment refuses to consult this table: "a stored def must keep
+matching whatever edges the emulator invents... and a check derived from that
+table could only ever be tested against the table it came from." The first
+half still holds for ARMING -- nothing here gates a start trigger. The second
+half is answered by `tools/measure_topology_cancels.py`, which scores these
+rules against the real JOURNAL rather than against the table, so a missing
+edge shows up as a killed real success instead of a silent agreement.
+
+Lives in `tracking/` rather than `memory/` on purpose: `addresses.py` is the
+registry of WHAT THE WORLD IS; this module answers WHAT A MOVE MEANS, which is
+a tracking question.
+"""
+from collections import deque
+from functools import lru_cache
+
+from sm64_events.memory.addresses import (LEVEL_CASTLE_INSIDE, node_key,
+                                          world_connections)
+
+
+def node_for(level: int | None, area: int | None) -> str | None:
+    """The world-node key for a tracked position, or None when unknown.
+
+    A subarea counts ONLY inside the castle interior (level 6), which is the
+    only place `WORLD_EDGES_*` models one. Courses have their own areas -- SSL
+    area 2 is the pyramid interior, LLL area 2 the volcano -- and keying on
+    (level, area) everywhere read 97.9% of the live journal's settled moves as
+    off-graph, against the true 54% (measured 2026-08-01, the design's own
+    first pass). That failure is silent and reads exactly like a broken world
+    table, which is why it has a test of its own.
+    """
+    if level is None:
+        return None
+    return node_key(level, area if level == LEVEL_CASTLE_INSIDE else None)
+
+
+@lru_cache(maxsize=1)
+def _successors() -> dict:
+    """`world_connections()` rebuilds its map from module constants on every
+    call, and both readers below hit it once per position event per armed def.
+    Cached for the same reason `addresses.world_regions()` is, and safe for the
+    same reason: every input is a module constant, never mutated at runtime."""
+    return world_connections()
+
+
+def _dest(key: str) -> list:
+    """A node key back into the `[level, area|None]` shape
+    `world_connections()` stores its destinations in."""
+    level_str, _, area_str = key.partition(":")
+    return [int(level_str), int(area_str) if area_str else None]
+
+
+def is_legal_move(from_key: str | None, to_key: str | None) -> bool:
+    """Could a player actually walk `from_key` -> `to_key`?
+
+    False means the Usamune warp menu (or a savestate load) fabricated the
+    edge. Unknown on either side, and a move to the same node, are both True --
+    unknown means yes, the convention this codebase takes everywhere, because a
+    rule that fired on missing information would cancel every segment on a
+    legacy journal that carries no position events at all.
+    """
+    if from_key is None or to_key is None or from_key == to_key:
+        return True
+    return _dest(to_key) in _successors().get(from_key, [])
+
+
+@lru_cache(maxsize=4096)
+def hops(from_key: str | None, to_key: str | None) -> int | None:
+    """Fewest legal moves from one node to another, or None when either side is
+    unknown or no directed path exists.
+
+    Directed: the one-way rows matter. A Bowser arena exits to the castle and
+    is never re-entered from it, so `hops("30", "6:1")` is 1 while
+    `hops("6:1", "30")` is 2 (out through BitDW's pipe).
+    """
+    if from_key is None or to_key is None:
+        return None
+    if from_key == to_key:
+        return 0
+    successors = _successors()
+    seen = {from_key}
+    queue = deque([(from_key, 0)])
+    while queue:
+        node, distance = queue.popleft()
+        for level, area in successors.get(node, []):
+            neighbour = node_key(level, area)
+            if neighbour == to_key:
+                return distance + 1
+            if neighbour not in seen:
+                seen.add(neighbour)
+                queue.append((neighbour, distance + 1))
+    return None

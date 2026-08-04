@@ -47,6 +47,7 @@ from sm64_events.tracking.routes import route_stats
 from sm64_events.tracking.caveats import (attempt_caveat, caveat_for,
                                           pb_blocked_by)
 from sm64_events.tracking.segments import (arm_level, arms_ambiently,
+                                            card_step_labels,
                                             card_waiting_for_sentence,
                                             course_groups, hundred_coin_entity,
                                             origin_course,
@@ -1031,18 +1032,27 @@ def entity_label(db, ek: str) -> str:
 
 
 def _armed_detail_for(d, seg_id: int, armed_arms: dict) -> dict | None:
-    """{progress, total, start_frame, deadline_frame, waiting_for} for an
-    armed definition, or None while idle / deleted (Task 4/6, spec
+    """{progress, total, start_frame, deadline_frame, waiting_for, steps} for
+    an armed definition, or None while idle / deleted (Task 4/6, spec
     2026-07-28-multi-step-segments). Shared by segment sections and the
     100-coin star's section (spec 2026-07-28-multi-step-segments, "the
     100-coin star IS the segment") -- a HUNDRED_COIN_EXIT engine's arm state
     describes the STAR's own progress now, and this is the one place that
-    turns an armed_arms() entry into the card-facing shape either way."""
+    turns an armed_arms() entry into the card-facing shape either way.
+
+    `steps` (2026-08-03) is the WHOLE route, shortest-form, so the card can
+    draw the track rather than only the step you are on; `progress` indexes
+    into it, so the client needs no second source to know which chip is
+    live. Live report: "This display (Step X of N) should now show all of the
+    steps required to complete the segment, and visually update as we
+    progress through each step."
+    """
     if d is None or seg_id not in armed_arms:
         return None
     return {**armed_arms[seg_id],
             "waiting_for": card_waiting_for_sentence(
-                d, armed_arms[seg_id]["progress"])}
+                d, armed_arms[seg_id]["progress"]),
+            "steps": card_step_labels(d)}
 
 
 def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
@@ -1262,6 +1272,16 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                         for a in in_section],
             "stats": _stats_for(history, stat_menu, clock),
             "strategies": star_strategies,
+            # Grouping for the strategy dropdown, resolved SERVER-side and []
+            # for every star but a 100-coin one (spec 2026-08-03-hundred-coin-
+            # exit-variants). A 100-coin star's strategies are qualified by the
+            # exit star the run ends on, so a bare "Standard" names two
+            # different ladders on CCM; the picker shows them under a heading
+            # per variant, and never re-derives which is which.
+            # Rule-11 note: a SEGMENT has no exit star, so its section carries
+            # no such key at all — a stated asymmetry, not a gap.
+            "strategy_groups": (service.ranks.strategy_groups(ek)
+                                if service.ranks else []),
             "last_strat": star_strat,
             # The paired seg:reds->pipe:<abbrev> segment id, or None for every
             # star but a Bowser course's Reds -- the star/pipe toggle's escape

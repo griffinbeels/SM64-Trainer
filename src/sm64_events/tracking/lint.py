@@ -140,6 +140,17 @@ def _one_event_could_satisfy_both(start_clause: dict, next_clause: dict) -> bool
     next_to = next_clause.get("to")
     if next_to is None:
         return False
+    # A next clause that pins its own SOURCE contradicts the exit's, and one
+    # event cannot come from two places. Both match lambdas check `from`
+    # against the same `ev.payload["from"]`, so this is a fact about the
+    # event, not a heuristic. Needed once every course gained a pause exit
+    # into the castle (2026-08-02): `BBH -> Basement` really does have a
+    # single `level_changed 4 -> 6` that satisfies both an unpinned
+    # `level_exit from=4` and a bare `level_enter to=6`, and pinning the
+    # Courtyard as the waypoint's source is what separates them again.
+    next_from = next_clause.get("from")
+    if next_from is not None and next_from != start_clause.get("from"):
+        return False
     to = start_clause.get("to")
     if to is not None:
         # The exit clause already pins its own destination (e.g. MIPS Clip) --

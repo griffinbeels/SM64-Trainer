@@ -25,6 +25,7 @@ import { entityIconSrc, fallbackToGenericStar, fallbackSlotForEntityKey }
 import { RankBanner } from "./ranks.js";
 import { Icon } from "./icons.js";
 import { ShrinkToFitName } from "./shrinkname.js";
+import { StepTrack } from "./steptrack.js";
 import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
          ResetFilterToggle, StatMenuTrigger, comparator, bannerLabel,
          bannerHint, ranksAreAtFloor, showsEntityBanner, rankIdentity, PbTag }
@@ -159,25 +160,22 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
         <${Icon} name="chevron" size=${18} />
       </button>
     </div>
-    ${/* Same markup StarSection/SegmentSection render for their own
-         objective card (practice.js), and the same reason: `armed_detail` is
-         SERVER truth, re-derived from the journal on every view fetch, and
-         it is NOT segment-only -- the 100-coin star carries it too, which is
-         why both sections already draw this identically. Before this task
-         an armed-but-not-active entity still got its own full objective-card
-         (inside the now-deleted practice index) and this row rode along for
-         free; a `LogCard` is the only surface such an entity gets now, so it
-         is the one that has to carry the row, or "is the system aware I'm
-         mid-movement" silently stops being answerable the moment that
-         movement is not also the active target. Occupies zero height when
-         `armed_detail` is null -- true of every ordinary card. */""}
-    ${sec.armed_detail && html`<div class="seg-waiting">
-      <span class="seg-waiting-step">Step${" "}
-        ${sec.armed_detail.progress + 1}${" "}of${" "}
-        ${sec.armed_detail.total + 1}</span>
-      <span class="seg-waiting-for">Waiting for${" "}
-        ${sec.armed_detail.waiting_for}</span>
-    </div>`}
+    ${/* The SAME shared component StarSection/SegmentSection render for their
+         own objective card (practice.js's `StepTrack`, steptrack.js), and the
+         same reason: `armed_detail` is SERVER truth, re-derived from the
+         journal on every view fetch, and it is NOT segment-only -- the
+         100-coin star carries it too, which is why both sections already
+         draw this identically. Before this task an armed-but-not-active
+         entity still got its own full objective-card (inside the now-deleted
+         practice index) and this row rode along for free; a `LogCard` is the
+         only surface such an entity gets now, so it is the one that has to
+         carry the row, or "is the system aware I'm mid-movement" silently
+         stops being answerable the moment that movement is not also the
+         active target. `StepTrack` renders nothing when `armed_detail` is
+         null -- true of every ordinary card. No `onEdit` here: that door is
+         the PINNED card's own affordance (practice.js), not every card this
+         entity happens to also appear as in the log. */""}
+    <${StepTrack} detail=${sec.armed_detail} />
     ${isOpen && html`<div class="log-card-body">
       ${rows.length
         ? html`<${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}

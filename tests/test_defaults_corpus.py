@@ -18,7 +18,8 @@ from sm64_events.core.paths import bundled_defaults_seed
 from sm64_events.memory.addresses import (COURSE_BY_LEVEL,
                                           LEVEL_CASTLE_INSIDE,
                                           WORLD_EDGES_ONE_WAY,
-                                          WORLD_EDGES_TWO_WAY)
+                                          WORLD_EDGES_TWO_WAY,
+                                          WORLD_PAUSE_EXITS)
 from sm64_events.tracking.lint import lint_definition
 from sm64_events.tracking.segments import (MatchContext, SegmentDef,
                                            SegmentEngine, budget_frames,
@@ -60,6 +61,10 @@ def _graph():
 
 GRAPH = _graph()
 
+# The pause-exit rows as (source, destination) node pairs, so `exit_node` can
+# leave them out of "where does leaving this level put you".
+PAUSE_EXIT_EDGES = {(_node(src), _node(dst)) for src, dst in WORLD_PAUSE_EXITS}
+
 
 def path(start: tuple, goal: tuple) -> list:
     """Shortest node path start -> goal over the world topology."""
@@ -82,8 +87,21 @@ def exit_node(level: int) -> tuple:
     """Where the player stands after LEAVING `level` — its entrance region.
     Derived from the topology: the castle-interior neighbour if there is one
     (every painting), else the hub it opens onto (BBH -> courtyard, VCUtM ->
-    grounds, CotMC -> HMC). Bowser arenas have only a one-way exit edge."""
-    neighbours = GRAPH.get((level, None), [])
+    grounds, CotMC -> HMC).
+
+    Bowser 1 and 2 leave by their one-way KEY-CUTSCENE edge into the castle.
+    Bowser 3 has no such edge at all (2026-08-02 correction: winning ends the
+    game, losing drops you back into Bowser in the Sky), so it falls through to
+    its only neighbour, the course itself.
+
+    The PAUSE EXIT is deliberately not considered here, though it is a real
+    edge out of every one of these (2026-08-02). It is a different mechanism:
+    the door is how you ordinarily leave, and a walker that took the pause exit
+    would route BBH -> Lobby and never see the Courtyard. Movements that really
+    do use it declare it as a step, and the walk routes through declared steps.
+    """
+    neighbours = [n for n in GRAPH.get((level, None), [])
+                  if ((level, None), n) not in PAUSE_EXIT_EDGES]
     for candidate in neighbours:
         if candidate[0] == LEVEL_CASTLE_INSIDE:
             return candidate
@@ -146,13 +164,21 @@ class _Walker:
             if nxt[0] != self.at[0]:
                 self._add("level_changed", {"from": self.at[0], "to": nxt[0]})
                 self.at = nxt
-                if nxt[0] == LEVEL_CASTLE_INSIDE:
-                    # detectors/area.py establishes the destination area on
-                    # the SAME tick (from == to: bookkeeping, not a crossing)
-                    self._add("area_changed",
-                              {"level": LEVEL_CASTLE_INSIDE, "from": nxt[1],
-                               "to": nxt[1], "from_transient": True},
-                              same_frame=True)
+                # detectors/area.py establishes the destination area on the
+                # SAME tick (from == to: bookkeeping, not a crossing), for
+                # EVERY level and not only the castle. Counted in the live
+                # journal 2026-08-02: area_changed fires for all 29 levels
+                # seen, courses and hubs included. It used to be emitted only
+                # for level 6 here, which was harmless while the settled
+                # position only mattered inside the castle and became a
+                # vacuous pass once the path cursor started reading it
+                # everywhere -- a movement out of BBH had no settled node at
+                # all until it reached the Lobby, so its first declared step
+                # was judged against the wrong place.
+                self._add("area_changed",
+                          {"level": nxt[0], "from": nxt[1] or 1,
+                           "to": nxt[1] or 1, "from_transient": True},
+                          same_frame=True)
             else:
                 self._add("area_changed",
                           {"level": LEVEL_CASTLE_INSIDE, "from": self.at[1],
@@ -258,7 +284,10 @@ def test_exit_node_matches_the_castle_layout():
     assert exit_node(18) == (16, None)  # VCUtM -> grounds
     assert exit_node(30) == (6, 1)     # Bowser 1 arena -> lobby
     assert exit_node(33) == (6, 3)     # Bowser 2 arena -> basement
-    assert exit_node(34) == (6, 2)     # Bowser 3 arena -> upstairs
+    # NOT the castle: Bowser 3 has no exit into it. Winning ends the game and
+    # losing drops you back into Bowser in the Sky, so its only neighbour is
+    # the course (human correction 2026-08-02, reading tools/topology_map.py).
+    assert exit_node(34) == (21, None)  # Bowser 3 arena -> Bowser in the Sky
 
 
 def test_path_crosses_the_lobby_between_basement_and_upstairs():
@@ -376,36 +405,79 @@ def _seg(seed_key):
     return next(s for s in SEGMENTS if s["seed_key"] == seed_key)
 
 
-def test_bowser_1_to_wf_survives_the_bitdw_reentry_detour():
-    """Real walk: "Bowser 1 -> re-enter BitDW -> exit course to Lobby ->
-    WF." Proves the EXISTING seg:bowser1->wf (a plain, waypoint-less loose
-    def, unchanged by Task 20) survives the detour without any shape
-    change -- every intermediate step is transparent to a loose def with no
-    waypoints."""
+def test_bowser_1_to_wf_IS_the_bitdw_reentry_detour():
+    """Walk: "Bowser 1 -> re-enter BitDW -> pause-exit to Lobby -> WF."
+
+    THIS BELIEF HAS NOW REVERSED TWICE, and the pair of reversals is worth
+    keeping whole because the second one is a premise error rather than a
+    change of mind.
+
+    v1 asserted the detour SURVIVED (a loose def is transparent between its
+    start and its end). v2, 2026-08-02, asserted it was VOIDED, on Griffin's
+    strictness ruling -- *"That is a fixed path, and there are no other
+    options... There are no deviations that are allowed"* -- plus a reason
+    that turned out to be false: "the detour buys nothing here, the arena exit
+    already lands in the Lobby, so re-entering BitDW is a wrong turn, not a
+    trick."
+
+    v3, 2026-08-03, from live play: it is a trick, and it is HIS route. He
+    watched the card vanish mid-run and reported it -- "It displays when I exit
+    Bowser 1, but when I enter Bowser in the Dark World (to exit to lobby),
+    it's no longer displayed." Asked whether the detour IS the route or merely
+    one of two, he picked IS.
+
+    So the strictness ruling was never wrong; the ROUTE written under it was.
+    That is the whole argument for the Then editor and the recorder shipped the
+    same day: a declared path is only as good as the person declaring it, and
+    he can now fix one himself instead of reporting it.
+
+    The direct route records NOTHING now, deliberately -- same trade the
+    `Bowser 2 -> Upstairs` row makes one arena later, and the test below it
+    pins that half."""
     row = _seg("seg:bowser1->wf")
     origin = (30, None)
     walker = _Walker(origin)
     walker.hop(exit_node(30))    # Bowser 1 exit -> lobby
-    walker.hop((17, None))       # re-enter BitDW
-    walker.hop((6, 1))           # pause-exit BitDW -> lobby
-    walker.hop((24, None))       # walk into WF
+    walker.hop((17, None))       # re-enter BitDW -- step 1, declared
+    walker.hop((6, 1))           # pause-exit BitDW -> lobby -- step 2
+    walker.hop((24, None))       # walk into WF -- the end
     closed = run_engine(row, walker.events, origin[0], origin[1])
-    outcomes = [a.outcome for a in closed]
-    assert outcomes == ["success"], (row["seed_key"], outcomes)
+    assert [a.outcome for a in closed] == ["success"], (row["seed_key"], closed)
+
+
+def test_bowser_1_to_wf_records_nothing_run_the_direct_way():
+    """The cost of the ruling above, pinned rather than left implicit: with
+    the BitDW re-entry declared as a required step, walking straight from the
+    Lobby into WF is no longer this movement. Silent, as every off-route
+    cancel in this engine is -- a movement that never happened must not bank a
+    failure either. If he ever wants BOTH to count, that is a second
+    definition beside this one, not a loosening of this one."""
+    row = _seg("seg:bowser1->wf")
+    origin = (30, None)
+    walker = _Walker(origin)
+    walker.hop(exit_node(30))    # Bowser 1 exit -> lobby
+    walker.hop((24, None))       # straight into WF, skipping the declared BitDW
+    closed = run_engine(row, walker.events, origin[0], origin[1])
+    assert closed == [], (row["seed_key"], closed)
 
 
 def test_bowser_2_to_bits_survives_the_whole_detour():
-    # Task 0017: finish Bowser 2 -> back into BitFS -> pause exit to the
-    # basement -> lobby -> upstairs -> BLJs -> BitS. Every one of those steps
-    # cancels a strict definition; loose passes them all through
-    # transparently -- this is the whole reason Task 19 exists.
+    # Task 0017: finish Bowser 2 -> back into BitFS -> pause exit -> upstairs
+    # -> BLJs -> BitS. The route is a TRICK and is now DECLARED step by step
+    # rather than tolerated: under loose matching every one of these was
+    # merely transparent, which is the same thing the engine did for a wrong
+    # turn.
+    #
+    # The walk itself was also wrong about the game and is corrected here: a
+    # pause exit lands in the LOBBY, never back in the basement you entered
+    # from (Griffin, live-tested in every course 2026-08-02). Skipping the
+    # Basement -> Lobby walk is the entire point of re-entering BitFS.
     row = _seg("seg:bowser2->bits")
     origin = (33, None)
     walker = _Walker(origin)
     walker.hop(exit_node(33))    # Bowser 2 exit -> basement
     walker.hop((19, None))       # re-enter BitFS
-    walker.hop((6, 3))           # pause-exit BitFS -> basement
-    walker.hop((6, 1))           # lobby
+    walker.hop((6, 1))           # pause-exit BitFS -> LOBBY (skips the walk)
     walker.hop((6, 2))           # upstairs
     walker.hop((21, None))       # BLJ into BitS
     closed = run_engine(row, walker.events, origin[0], origin[1])
@@ -451,8 +523,7 @@ def test_the_two_step_bowser2_upstairs_then_bits_entry_survives_the_same_detour(
     walker = _Walker(origin)
     walker.hop(exit_node(33))    # Bowser 2 exit -> basement
     walker.hop((19, None))       # re-enter BitFS
-    walker.hop((6, 3))           # pause-exit BitFS -> basement
-    walker.hop((6, 1))           # lobby
+    walker.hop((6, 1))           # pause-exit BitFS -> LOBBY (skips the walk)
     walker.hop((6, 2))           # upstairs
     walker.hop((21, None))       # BLJ into BitS
 

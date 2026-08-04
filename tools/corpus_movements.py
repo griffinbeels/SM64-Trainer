@@ -81,7 +81,8 @@ MOVEMENTS = [
     movement("seg:wf->sa", "WF → Secret Aquarium",
              exit_level(24), enter_level(20)),
     movement("seg:wf->bitdw", "WF → BitDW", exit_level(24), enter_level(17)),
-    movement("seg:wf->ssl", "WF → SSL", exit_level(24), enter_level(8)),
+    movement("seg:wf->ssl", "WF → SSL", exit_level(24), enter_level(8),
+             via=[enter_area(BASEMENT)]),
     movement("seg:sa->jrb", "Secret Aquarium → JRB",
              exit_level(20), enter_level(12)),
     movement("seg:jrb->pss", "JRB → PSS", exit_level(12), enter_level(27)),
@@ -92,20 +93,51 @@ MOVEMENTS = [
     movement("seg:pss->bitdw", "PSS → BitDW", exit_level(27), enter_level(17)),
     movement("seg:pss->bob", "PSS → BoB", exit_level(27), enter_level(9)),
     movement("seg:ccm->bitdw", "CCM → BitDW", exit_level(5), enter_level(17)),
-    movement("seg:ccm->bbh", "CCM → BBH", exit_level(5), enter_level(4)),
+    movement("seg:ccm->bbh", "CCM → BBH", exit_level(5), enter_level(4),
+             via=[enter_level(26)]),
     # --- out of the Bowser 1 arena (its exit lands in the lobby) ----------
     movement("seg:bowser1->bob", "Bowser 1 → BoB",
              exit_level(30), enter_level(9)),
+    # Griffin's own route, and the live report that produced this row
+    # (2026-08-03): he clears Bowser 1, lands in the Lobby, re-enters BitDW
+    # and PAUSE EXITS back to the Lobby, then goes to WF. Same shape as
+    # `Bowser 2 → Upstairs` one arena later, and settled the same way -- "it
+    # IS the route", so running it the direct way records nothing.
+    #
+    # WHY IT HAD TO BE DECLARED. Entering BitDW is a foreign `level_changed`,
+    # which silently disarms a plain STRICT def; under the loose matching
+    # these movements carried until this branch it was invisible, so the
+    # movement survived the detour by accident and he saw it working. The
+    # strict flip made the same detour fatal, and silently: the card simply
+    # stopped being offered mid-route with no row and no notice. A route the
+    # runner really takes has to be in the definition, which is exactly what
+    # the strict path rule is for.
+    #
+    # The BitDW step PINS its source, for the reason the Bowser 2 row below
+    # states: LOSING the Bowser 1 fight is a single `level_changed 30 -> 17`,
+    # which would otherwise satisfy this def's start AND its first step on one
+    # event -- the unfireable trap.
+    #
+    # OWED, and named rather than swept in blind (his call, 2026-08-03: "just
+    # WF for now"): the other five Bowser 1 exits -- BoB, CCM, SSL, DDD, BitFS
+    # -- are the same class if he pause-exits through BitDW on those too. SSL,
+    # DDD and BitFS already declare a Basement step, so their route is stated;
+    # BoB and CCM are plain and would break identically.
     movement("seg:bowser1->wf", "Bowser 1 → WF",
-             exit_level(30), enter_level(24)),
+             exit_level(30), enter_level(24),
+             via=[enter_level(17, frm=6),
+                  enter_level(6, frm=17, to_subarea=LOBBY)]),
     movement("seg:bowser1->ccm", "Bowser 1 → CCM",
              exit_level(30), enter_level(5)),
     movement("seg:bowser1->ssl", "Bowser 1 → SSL",
-             exit_level(30), enter_level(8)),
+             exit_level(30), enter_level(8),
+             via=[enter_area(BASEMENT)]),
     movement("seg:bowser1->ddd", "Bowser 1 → DDD (Crackslide)",
-             exit_level(30), enter_level(23)),
+             exit_level(30), enter_level(23),
+             via=[enter_area(BASEMENT)]),
     movement("seg:bowser1->bitfs", "Bowser 1 → BitFS (SBLJ / DDD Skip)",
-             exit_level(30), enter_level(19)),
+             exit_level(30), enter_level(19),
+             via=[enter_area(BASEMENT)]),
     # --- courtyard (BBH exits to level 26, not to the castle interior) ----
     # Load-bearing under loose matching too (2026-07-28, Task 19): removing
     # this waypoint makes tests/test_defaults_corpus.py's own-walk test fail
@@ -113,12 +145,23 @@ MOVEMENTS = [
     # of match_mode, and area_enter(level=6, area=BASEMENT)'s precondition
     # only fires from level 6. BBH's exit lands at level 26 (the courtyard),
     # so a plain end trigger is simply unfireable from the arm position; the
-    # waypoint's level_enter(6) has no `from`, so it fires from anywhere but
-    # its own destination and gets the arm past the courtyard.
+    # waypoint's level_enter(6) fires from anywhere but its own destination
+    # and gets the arm past the courtyard.
+    #
+    # It PINS the courtyard as its source since 2026-08-02, when every course
+    # gained its pause exit into the castle. Without that, a single
+    # `level_changed 4 -> 6` -- BBH's own pause exit -- satisfies both this
+    # def's start AND its first waypoint, and closures run before arming: the
+    # def would arm in the lobby still owing a waypoint that can now only fire
+    # if he leaves the castle and comes back. `tracking/lint.py`'s `unfireable`
+    # rule names that trap and was what caught it.
     movement("seg:bbh->basement", "BBH → Basement",
-             exit_level(4), enter_area(BASEMENT), via=[enter_level(6)]),
+             exit_level(4), enter_area(BASEMENT),
+             via=[enter_level(6, frm=26, to_subarea=LOBBY)]),
     movement("seg:bbh->ddd", "BBH → DDD",
-             exit_level(4), enter_level(23)),
+             exit_level(4), enter_level(23),
+             via=[enter_level(6, frm=26, to_subarea=LOBBY),
+                  enter_area(BASEMENT)]),
     # --- basement ---------------------------------------------------------
     movement("seg:mips1->ssl", "MIPS (1st) → SSL",
              grab_star(0, 3), enter_level(8)),
@@ -128,14 +171,26 @@ MOVEMENTS = [
     movement("seg:lll->ddd", "LLL → DDD", exit_level(22), enter_level(23)),
     movement("seg:hmc->lll", "HMC → LLL", exit_level(7), enter_level(22)),
     movement("seg:hmc->ddd", "HMC → DDD", exit_level(7), enter_level(23)),
+    # A TRICK, and its shortest path is NOT the route being practised: you
+    # re-enter HMC and pause-exit, which lands in the Lobby and skips the
+    # Basement -> Lobby walk. Griffin's rule for which course gets re-entered
+    # (2026-08-02): "it's usually the starting stage (or in the case of bowser
+    # stages, it's the actual bowser course, not the bowser fight)."
     movement("seg:hmc->rr", "HMC → RR (re-entry, pause exit)",
-             exit_level(7), enter_level(15)),
+             exit_level(7), enter_level(15),
+             via=[enter_level(7, frm=6),
+                  enter_level(6, frm=7, to_subarea=LOBBY),
+                  enter_area(UPSTAIRS)]),
     movement("seg:mips2->hmc", "MIPS (2nd) → HMC",
              grab_star(0, 4), enter_level(7)),
+    # VCUtM opens off the castle GROUNDS, not the basement MIPS is grabbed
+    # in, so the grounds are a step of this route rather than scenery.
     movement("seg:mips2->vcutm", "MIPS (2nd) → VCUtM",
-             grab_star(0, 4), enter_level(18)),
+             grab_star(0, 4), enter_level(18),
+             via=[enter_level(16)]),
     movement("seg:vcutm->ccm", "VCUtM → CCM",
-             exit_level(18), enter_level(5)),
+             exit_level(18), enter_level(5),
+             via=[enter_level(6, frm=16, to_subarea=LOBBY)]),
     # Started on the star that opens the sub until 2026-07-27, on the premise
     # that BitFS is entered DIRECTLY from DDD (23 -> 19) — which would make
     # `level_exit from=23` and `level_enter to=19` the same event, arming a def
@@ -158,15 +213,33 @@ MOVEMENTS = [
     # land in CASTLE_LEVELS, and SSL is not the castle, so that arm is refused.
     movement("seg:ddd->bitfs", "DDD → BitFS (sub)",
              exit_level(23), enter_level(19)),
+    # Re-enters BitFS -- level 19, the COURSE, never arena 33 -- and pause
+    # exits to the Lobby, skipping the Basement -> Lobby walk.
     movement("seg:ddd->wdw", "DDD → WDW (BitFS re-entry, pause exit)",
-             exit_level(23), enter_level(11)),
+             exit_level(23), enter_level(11),
+             via=[enter_level(19, frm=6),
+                  enter_level(6, frm=19, to_subarea=LOBBY),
+                  enter_area(UPSTAIRS)]),
     # --- out of the Bowser 2 arena (its exit lands in the basement) -------
     movement("seg:bowser2->ddd", "Bowser 2 → DDD",
              exit_level(33), enter_level(23)),
     movement("seg:bowser2->wdw", "Bowser 2 → WDW",
-             exit_level(33), enter_level(11)),
+             exit_level(33), enter_level(11),
+             via=[enter_area(LOBBY), enter_area(UPSTAIRS)]),
+    # Griffin's own dictation of this route (2026-08-02): "I go from Bowser
+    # two back into Bowser in the Fire Sea to the lobby, then to the
+    # upstairs." The arena exit lands in the Basement; BitFS; the pause exit
+    # puts him in the Lobby without walking there. Run the DIRECT way
+    # (basement -> lobby -> upstairs) this records NOTHING, which is the
+    # point: "That is a fixed path, and there are no other options."
+    #
+    # The BitFS step PINS its source. Losing the Bowser 2 fight is a single
+    # `level_changed 33 -> 19`, which would otherwise satisfy both this
+    # def's start and its first step -- the unfireable trap.
     movement("seg:bowser2->upstairs", "Bowser 2 → Upstairs",
-             exit_level(33), enter_area(UPSTAIRS)),
+             exit_level(33), enter_area(UPSTAIRS),
+             via=[enter_level(19, frm=6),
+                  enter_level(6, frm=19, to_subarea=LOBBY)]),
     # Real walk (Task 0017, live report): finish Bowser 2 -> back into BitFS
     # -> pause exit to the basement -> lobby -> upstairs -> BLJs -> BitS.
     # Every one of those steps would cancel a STRICT definition; a plain
@@ -186,13 +259,19 @@ MOVEMENTS = [
     # unreferenced) rather than deleted -- it was requested by name and its
     # shape is correct regardless of whether a route uses it.
     movement("seg:bowser2->bits", "Bowser 2 → BitS",
-             exit_level(33), enter_level(21)),
+             exit_level(33), enter_level(21),
+             via=[enter_level(19, frm=6),
+                  enter_level(6, frm=19, to_subarea=LOBBY),
+                  enter_area(UPSTAIRS)]),
     # --- upstairs ---------------------------------------------------------
     movement("seg:wdw->thi", "WDW → THI", exit_level(11), enter_level(13)),
     movement("seg:thi->ttm", "THI → TTM", exit_level(13), enter_level(36)),
     movement("seg:ttm->sl", "TTM → SL", exit_level(36), enter_level(10)),
+    # Re-enters SL and pause-exits, skipping the Upstairs -> Lobby walk.
     movement("seg:sl->basement", "SL → Basement (re-entry, pause exit)",
-             exit_level(10), enter_area(BASEMENT)),
+             exit_level(10), enter_area(BASEMENT),
+             via=[enter_level(10, frm=6),
+                  enter_level(6, frm=10, to_subarea=LOBBY)]),
     movement("seg:sl->rr", "SL → RR", exit_level(10), enter_level(15)),
     movement("seg:sl->wmotr", "SL → WMotR", exit_level(10), enter_level(31)),
     movement("seg:wmotr->ttc", "WMotR → TTC", exit_level(31), enter_level(14)),

@@ -287,9 +287,14 @@ export const CELEBRATIONS = {
   //
   // Being in sync with the bar means being a function of the same thing the
   // bar is a function of, so `--climb-reveal` is computed by the engine
-  // (ui/rankclimb.js) off the very same step and the very same eased progress.
-  // No registry entry can express that, because no beat knows where the bar
-  // has got to.
+  // (ui/rankclimb.js) off the very same step, from the very same start, on the
+  // very same curve. No registry entry can express that, because no beat knows
+  // where the bar has got to.
+  //
+  // The one thing it does NOT share is the bar's DURATION: a sweep's length
+  // scales with the distance it travels and legibility does not, so the line's
+  // clock carries a floor (`revealMinMs`). Identical whenever the step is
+  // longer than the floor, which is every climb big enough to see.
 
   // The landing. A short settle on the whole surface so a climb ENDS on
   // something rather than just stopping.

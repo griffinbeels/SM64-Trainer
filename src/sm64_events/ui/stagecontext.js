@@ -56,10 +56,33 @@ export const armedSegments = (t, view) =>
 // "ACTIVE SEGMENT" after a Usamune warp into Whomp's Fortress and then Hazy
 // Maze Cave. The server had already retired the TARGET both times — the card
 // was being held up by the pin alone, which is why it read "Recent".
+// TIGHTENED 2026-08-03, and the loosest clause was the bug: standing anywhere
+// with no course of its own — the castle, a hub, an arena — used to return TRUE
+// for everything, so a card could name a thing belonging to a course two rooms
+// away. Live report, standing in Castle Upstairs with only `BitS Entry` in the
+// selector: *"the 'active' card section (right now it says Bowser in the Fire
+// Sea) should never display anything other than any option that's currently
+// displayed in the segment / star selector above… if we leave a bowser stage,
+// we're no longer in the bowser stage, so it shouldn't be displayed as active."*
+//
+// "Transit" is still right about what it was written for — walking through the
+// castle must not drop a CASTLE MOVEMENT, which is how a card stays up while
+// you walk to its start. It was never right about a thing that lives in a
+// course you have left. So a place with no course keeps only things that also
+// have no course; a course keeps its own, as before.
+//
+// The ARMED exemption is unchanged and lives at the call site (`sec
+// .armed_detail || here(sec)` in practice.js): a running movement is visible
+// wherever it got to, and the selector agrees — every row appends
+// `armedExtraCells` for exactly that. So "the card shows only what the selector
+// shows" holds in both directions rather than by coincidence.
 export function practicedHere(section, t) {
-  const standingIn = t.stage && t.stage.course_id;
-  if (standingIn == null) return true;    // castle, hub, arena: transit
-  return section != null && section.course_id === standingIn;
+  if (!t.stage) return true;               // no live stage: unknown, allow
+  const standingIn = t.stage.course_id;
+  if (section == null) return false;
+  if (standingIn == null)                  // castle, hub, arena
+    return section.course_id == null;
+  return section.course_id === standingIn;
 }
 
 // Where the player is standing, as a mode id or null. Exported so that no
@@ -67,6 +90,28 @@ export function practicedHere(section, t) {
 // surface starts deciding for itself what counts as practicing, which is the
 // divergence above (tests/test_single_source.py owns that rule).
 export const practiceMode = (t) => (t.stage && t.stage.mode) || null;
+
+// WHICH selector surface is on screen — the empty state, a course's stars, a
+// Bowser row, an arena, one of the castle's three areas. The exchange in
+// stagebanner.js fades between two of these (live report 2026-08-02: "if there
+// previously were no options available, but I transition to a stage with
+// options, I would expect the animation to happen"), and it lives here for the
+// same reason `practiceMode` does: this is a judgement about the PLACE, and a
+// second file deciding what counts as a different place is how the two surfaces
+// came apart in the first place.
+//
+// It is deliberately COARSER than "the cells changed" — that question belongs to
+// the cells themselves (components/cellrow.js). The line between them is drawn
+// where the player would agree: the castle's three areas are three different
+// sets of movements, while a course's own subareas are the same seven stars, so
+// entering SSL's pyramid must not blink a row that is not changing.
+export function selectorSurfaceId(t) {
+  if (!hasPracticeContext(t)) return "nothing-here";
+  const stage = t.stage || {};
+  const mode = practiceMode(t);
+  return mode === "castle" ? `castle:${stage.area}`
+                           : `${mode}:${stage.level}`;
+}
 
 // Can a STAR be practiced where the player is standing? Narrower than
 // hasPracticeContext on purpose, and the distinction is the whole point.

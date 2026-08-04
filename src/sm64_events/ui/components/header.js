@@ -6,6 +6,8 @@ import { RANK_MODE_OPTIONS } from "./ranks.js";
 import { Icon } from "./icons.js";
 import { ContextSelect } from "./contextselect.js";
 import { RouteRankCard } from "./marelo.js";
+import { Modal } from "./modal.js";
+import { RUN_ACTIVE } from "../store.js";
 import { ICON_STYLES } from "./rankicon.js";
 import { useMareloTurn } from "../mareloturn.js";
 import { celebrationsEnabled, setCelebrationsEnabled,
@@ -15,7 +17,54 @@ const html = htm.bind(h);
 
 const CLOCK_OPTIONS = [["igt", "Usamune IGT"], ["rta", "Anchor → grab"]];
 
+// The route IS the rank scope, so changing it mid-run would re-rate a run
+// against a plan it is not following. `store.js::pickRoute` refuses and returns
+// RUN_ACTIVE rather than asking anything itself; the question belongs here,
+// where there is a shell to draw it in.
+//
+// His wording, and the button labels follow it exactly: *"they should be told
+// they can't because they have an active run. You're allowed to change it, just
+// that it will also stop their active run. The dialogue should warn them. you
+// can press ok if you want to change it and cancel your run."* So this is a
+// warning with a way through, never a refusal — and Cancel is the safe default,
+// since the destructive half is the one that throws away a run in progress.
+//
+// The shared `Modal` rather than `window.confirm`: a native dialog blocks the
+// event loop (the WS keeps queueing while the run it is asking about carries
+// on), cannot be styled, and is invisible to the responsive rig.
+function RunScopeWarning({ t, pending, onDone }) {
+  if (pending === undefined) return null;
+  const routeName = (t.routes || []).find((r) => r.id === pending);
+  const going = pending == null ? "Overall" : (routeName ? routeName.name : "another route");
+  return html`<${Modal} title="That will end your run"
+      onClose=${() => onDone(false)}
+      footer=${html`
+        <button onclick=${() => onDone(false)}>Keep running</button>
+        <button class="primary-button" onclick=${() => onDone(true)}>
+          Switch to ${going} and end the run
+        </button>`}>
+    <p>You have a run in progress. The route you are rating against is the route
+      you are running, so switching to <b>${going}</b> ends it.</p>
+    <p class="meta">Nothing you have already recorded is lost — the run itself
+      stops, and its splits stay in your history.</p>
+  <//>`;
+}
+
 export function Header({ t, settingsOpen, closeSettings }) {
+  // `undefined` = nothing pending. `null` is a real pick (Overall), which is
+  // why this is not a boolean — the same distinction store.js draws for a
+  // route intent.
+  const [pendingScope, setPendingScope] = useState(undefined);
+  const pickRouteOrWarn = (id) => {
+    if (t.pickRoute(id) === RUN_ACTIVE) setPendingScope(id);
+  };
+  const resolveScope = async (proceed) => {
+    const id = pendingScope;
+    setPendingScope(undefined);
+    if (!proceed) return;
+    await t.endRun();
+    t.pickRoute(id, { confirmed: true });
+  };
   const v = t.view;
   const [restarting, setRestarting] = useState(false);
   const [celebrateOn, setCelebrateOn] = useState(celebrationsEnabled());
@@ -112,7 +161,7 @@ export function Header({ t, settingsOpen, closeSettings }) {
              changed before then"). The celebration overlay reads the same
              hook, so the two can never disagree about whose turn it is. */""}
         <${RouteRankCard} marelo=${mareloTurn.marelo} routes=${t.routes}
-            activeRouteId=${t.activeRouteId} onPickRoute=${t.pickRoute}
+            activeRouteId=${t.activeRouteId} onPickRoute=${pickRouteOrWarn}
             identity=${`${mareloTurn.marelo ? mareloTurn.marelo.label : ""}|${v ? v.rank_mode : ""}`} />
       </div>
 
@@ -235,6 +284,10 @@ export function Header({ t, settingsOpen, closeSettings }) {
             <a href="/ui/tunelog.html" target="_blank" rel="noopener">Open the
               practice log tuning page</a> — dial the card's layout at two
             widths side by side, and save the result straight back into the code.
+            <br />
+            <a href="/ui/tuneselector.html" target="_blank" rel="noopener">Open the
+              selector exchange tuning page</a> — swap the row's cards, tune how
+            the old set leaves and the new set arrives, and save it into the code.
           </p>
           <label class="settings-field">
             <span>Dust-trick counts</span>
@@ -275,5 +328,10 @@ export function Header({ t, settingsOpen, closeSettings }) {
         </section>
       </aside>
     </div>`}
+    ${/* Mounted inside the header because that is where the control lives, and
+         the Modal shell portals itself out of the flow -- keeping it beside
+         the card it is about is what stops a second surface growing its own
+         copy of this question. */""}
+    <${RunScopeWarning} t=${t} pending=${pendingScope} onDone=${resolveScope} />
   </header>`;
 }

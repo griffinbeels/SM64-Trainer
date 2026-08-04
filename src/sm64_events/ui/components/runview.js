@@ -157,6 +157,15 @@ export function Run({ t }) {
     }
     localStorage.setItem("sm64.activeRoute", String(id)); setRouteId(id);
     try { await send("POST", "/api/run/start", { route_id: id }); } catch (e) { setErr(String(e)); }
+    // Arming a run SETS the rank scope (his ask, 2026-08-03: "if we trigger a
+    // Run, it should automatically change the overall MARELO rank mode to
+    // whatever route we're running"). Without it the practice page stays on
+    // Overall, so the route never narrows the selector and the run's own next
+    // split is not auto-selected — which is the shape the whole report started
+    // from. `confirmed: true` because starting the run IS the decision; the
+    // guard exists to stop a scope change from silently killing a run, not to
+    // stop a run from setting its own scope.
+    t.pickRoute(id, { confirmed: true });
     t.refreshRun();
   }
 

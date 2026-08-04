@@ -25,7 +25,8 @@ from sm64_events.tracking.lint import lint_definition
 from sm64_events.tracking.segments import (SegmentDef, clause_sentence,
                                            origin_taxonomy,
                                            validate_definition, vocab)
-from sm64_events.tracking.synthesize import clause_for, suggest_name, synthesize
+from sm64_events.tracking.synthesize import (clause_for, suggest_name,
+                                             synthesize, walked_steps)
 from sm64_events.tracking.views import (build_entity_ranks,
                                         build_entity_strategies,
                                         build_route_view, build_run_history,
@@ -703,9 +704,20 @@ def create_api_router(service) -> APIRouter:
                 "carry enough information to define a trigger from (for "
                 "example, a reset with no recorded place).")
         start_clause, end_clause = result
+        # `steps` (2026-08-03): every place actually walked between the two
+        # picked moments, so the recorder can propose the definition's ORDERED
+        # STEPS instead of only its two ends. The path was always in the
+        # journal; nothing was reading it, which is why a multi-step movement
+        # could not be made in the app at all. Each carries the sentence its
+        # clause renders as, through the same `clause_sentence` the two ends
+        # use — one voice for the whole definition, not a third renderer.
+        steps = [{**step, "sentence": clause_sentence(step["clause"])}
+                 for step in walked_steps(rows_by_id.values(),
+                                          start_row, end_row)]
         return {"start_clause": start_clause, "end_clause": end_clause,
                 "start_sentence": clause_sentence(start_clause),
                 "end_sentence": clause_sentence(end_clause),
+                "steps": steps,
                 "name": suggest_name(start_clause, end_clause)}
 
     @router.post("/segments/merge")

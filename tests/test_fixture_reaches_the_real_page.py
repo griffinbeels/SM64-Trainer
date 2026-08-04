@@ -310,7 +310,16 @@ def test_the_armed_segments_log_card_shows_its_own_step_progress(page):
     reviewer's own mutation proof on this branch: wrapping a shared call
     site in a `!seg &&` guard left every count-based check green), so a
     behavioural check on the DRAWN content is what actually proves neither
-    kind lost it."""
+    kind lost it.
+
+    2026-08-04 (main merge): `LogCard`'s own hand-rolled `.seg-waiting-step`
+    / `.seg-waiting-for` pair -- a third copy of markup main's merge gave a
+    shared component (`steptrack.js::StepTrack`) -- was replaced with the
+    same `<StepTrack>` the objective card renders. `.seg-waiting-for` no
+    longer exists anywhere: the "Waiting for X" sentence moved onto the
+    row's own `title` (a hover, same as the objective card's copy), and the
+    route itself is now visible as `.step-track .step-chip`s rather than
+    only named in prose."""
     log_card_rows = count(page, ".log-card .seg-waiting")
     assert log_card_rows == 1, (
         f"{log_card_rows} `.seg-waiting` row(s) inside a `.log-card`, "
@@ -321,15 +330,20 @@ def test_the_armed_segments_log_card_shows_its_own_step_progress(page):
         "const el = document.querySelector("
         "'.log-card .seg-waiting .seg-waiting-step');"
         "return el ? el.textContent : null")
-    waiting_text = page.evaluate(
-        "const el = document.querySelector("
-        "'.log-card .seg-waiting .seg-waiting-for');"
-        "return el ? el.textContent : null")
+    waiting_title = page.evaluate(
+        "const el = document.querySelector('.log-card .seg-waiting');"
+        "return el ? el.getAttribute('title') : null")
+    chip_count = count(page, ".log-card .seg-waiting .step-track .step-chip")
     assert step_text and re.search(r"Step\s*\d+\s*of\s*\d+", step_text), (
         f"seg-waiting-step reads {step_text!r} -- not the expected "
         '"Step N of M" shape')
-    assert waiting_text and waiting_text.strip().startswith("Waiting for"), (
-        f"seg-waiting-for reads {waiting_text!r}")
+    assert waiting_title and "Waiting for" in waiting_title, (
+        f"the log card's step row title reads {waiting_title!r} -- "
+        "StepTrack puts \"Waiting for …\" in its own title, not in visible "
+        "text any more")
+    assert chip_count >= 1, (
+        "no `.step-chip`s inside the log card's step track -- StepTrack "
+        "renders the whole route as chips, not just a counter")
     # The ACTIVE star in this fixture is an ordinary one (no armed_detail),
     # so its own objective card must show none of this -- a positive count
     # above paired with this zero is what makes both readable as real
