@@ -300,8 +300,16 @@ function Inspector() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || response.statusText);
       localStorage.removeItem(STORE_KEY);
+      // `written_css`/`css_path` are new (tuning_api.py's second door, spec
+      // practice-log-entity-cards): SAVE now also rewrites index.html's own
+      // `var(--log-x, <fallback>)` literals for whatever numeric tunables
+      // just moved, so the two stay in the same file's `git diff` instead of
+      // silently drifting the way `bcfda49` did. Said here too, not only in
+      // the log -- the whole point is that both files moving is now visible.
+      const cssNote = payload.written_css
+        ? ` and ${payload.written_css} fallback(s) into index.html` : "";
       setStatus({ kind: "ok",
-        text: `Saved ${payload.written} value(s) into logtuning.js. Reloading...` });
+        text: `Saved ${payload.written} value(s) into logtuning.js${cssNote}. Reloading...` });
       setTimeout(() => location.reload(), 700);
     } catch (error) {
       setStatus({ kind: "bad", text: String(error.message || error) });

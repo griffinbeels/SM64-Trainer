@@ -4333,7 +4333,7 @@
      tell a wing from a word). Neither rule lives on `.practice-card` or
      `.log-list-card` itself, so this section is what keeps it that way
      rather than adding one by accident. */
-  .log-list { display: flex; flex-direction: column; gap: var(--log-card-gap, 8px); margin-top: .2rem; }
+  .log-list { display: flex; flex-direction: column; gap: var(--log-card-gap, 2px); margin-top: .2rem; }
   .log-card {
     min-width: 0; border: 1px solid var(--border-soft); border-radius: 9px;
     background: rgba(9,22,36,.55);
@@ -4386,11 +4386,11 @@
   }
   .log-card-name { min-width: 0; display: flex; flex-direction: column; gap: .05rem; }
   .log-card-context {
-    color: var(--muted); font-size: var(--log-course-size, 11px); text-transform: uppercase;
+    color: var(--muted); font-size: var(--log-course-size, 8px); text-transform: uppercase;
     letter-spacing: .04em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   }
   .log-card-name b {
-    font-size: var(--log-name-size, 16px); font-weight: 700;
+    font-size: var(--log-name-size, 13px); font-weight: 700;
     overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   }
   /* identityAlign: "left" restates the flex row's own default start-
@@ -4409,8 +4409,8 @@
      `.rank-slot`. */
   .log-card-ranks {
     grid-area: ranks;
-    min-width: 0; max-width: var(--log-rank-width, 160px);
-    display: flex; gap: var(--log-rank-gap, 8px);
+    min-width: 0; max-width: var(--log-rank-width, 420px);
+    display: flex; gap: var(--log-rank-gap, 0px);
     align-self: stretch; justify-content: center;
   }
   .log-card-ranks .rank-progress-track { height: var(--log-rank-bar-height, 5px); }
@@ -4445,9 +4445,9 @@
      rather than as a different surface. `--log-body-gap` is the padding
      ABOVE the first row, under the divider. */
   .log-card-body {
-    padding: var(--log-body-gap, 10px) .7rem .6rem calc(.7rem + var(--log-body-indent, 24px));
+    padding: var(--log-body-gap, 4px) .7rem .6rem calc(.7rem + var(--log-body-indent, 50px));
     border-top: 1px solid var(--border-soft);
-    background: rgba(0, 0, 0, var(--log-body-tint, 0.18));
+    background: rgba(0, 0, 0, var(--log-body-tint, 0.16));
   }
   .log-card-body .attempt-table tr { height: var(--log-row-height, 40px); }
   .log-list-footer { display: flex; justify-content: center; margin-top: .3rem; }
@@ -4524,7 +4524,7 @@
   }
   .log-list-card.log-rankstyle-stacked.log-layout-oneline
       .log-card:not(.is-unassigned) .log-card-head {
-    grid-template-columns: minmax(0, var(--log-identity-width, 300px))
+    grid-template-columns: minmax(0, var(--log-identity-width, 245px))
       minmax(0, var(--log-stacked-rank-width, 200px)) auto auto;
   }
 
@@ -4549,8 +4549,8 @@
      0`. Truncating text at that point is the honest degrade; bleeding past
      the card is not. */
   .log-list-card.log-layout-oneline .log-card:not(.is-unassigned) .log-card-head {
-    grid-template-columns: minmax(0, var(--log-identity-width, 300px))
-      minmax(0, var(--log-rank-width, 160px)) auto auto;
+    grid-template-columns: minmax(0, var(--log-identity-width, 245px))
+      minmax(0, var(--log-rank-width, 420px)) auto auto;
     grid-template-areas: "identity ranks pb fold";
   }
   .log-list-card.log-layout-oneline .log-card-ranks { flex-direction: row; flex-wrap: wrap; align-items: center; }
