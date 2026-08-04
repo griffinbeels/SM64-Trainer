@@ -2173,3 +2173,111 @@ def test_a_star_grab_still_moves_a_STAR_target():
     p.feed(jev(1, "target_set", 0, {"course_id": 2, "star_id": 3}))
     p.feed(star(2, 900, course=2, star_id=0))
     assert p.target == ("star", 2, 0)
+
+
+# ---------------------------------------------------------------------------
+# AN ATTEMPT'S DURATION SPANS EVERY INVOLUNTARY RESTART (live report
+# 2026-08-03). Usamune restarts its overall counter at an in-level teleporter
+# and at a subarea load; neither is a retry, so the attempt runs straight
+# through. The closing event only ever reports the LAST leg, and the legs
+# before it are sitting in the involuntary anchors the attempt already passed.
+# "This is incorrect... We need to be able to time from the actual start time
+# of the course."
+# ---------------------------------------------------------------------------
+
+def involuntary(id, frame, igt_before, kind="teleport"):
+    return jev(id, "practice_reset", frame,
+               {"igt_frames_before": igt_before, "mario_acted": True,
+                "acted_tracking": True, kind: True})
+
+
+def test_a_reset_after_in_level_warps_is_timed_from_the_course_start():
+    # His CCM run verbatim, journal ids 23273-23287: entry at f363060, three
+    # bridge warps taking 194 / 130 / 160 frames, then a reset 268 frames
+    # later. The row read 0'08"93 (268f) for a run that took 0'25"06 (752f).
+    [row] = project([
+        jev(1, "level_changed", 363013, {"from": 6, "to": 5}),
+        jev(2, "practice_reset", 363060, {"igt_frames_before": 18,
+                                          "mario_acted": True}),
+        jev(3, "mario_acted", 363100, {}),
+        involuntary(4, 363256, 194),
+        involuntary(5, 363388, 130),
+        involuntary(6, 363550, 160),
+        jev(7, "practice_reset", 363818, {"igt_frames_before": 268,
+                                          "mario_acted": True}),
+    ])
+    assert row.outcome == "reset"
+    assert row.igt_frames == 194 + 130 + 160 + 268
+    assert row.rta_frames == 363818 - 363060
+
+
+def test_a_reset_inside_a_subarea_is_timed_from_the_course_start():
+    # The same defect the same way round, and it predates the teleporter: walk
+    # into the SSL pyramid 484 frames in (journal id 23253) and reset there,
+    # and the row used to report only the time since the pyramid door.
+    [row] = project([
+        jev(1, "level_changed", 255797, {"from": 24, "to": 8}),
+        jev(2, "practice_reset", 255845, {"igt_frames_before": 2665,
+                                          "mario_acted": True}),
+        jev(3, "mario_acted", 255900, {}),
+        involuntary(4, 256331, 484, kind="area_load"),
+        jev(5, "practice_reset", 256700, {"igt_frames_before": 369,
+                                          "mario_acted": True}),
+    ])
+    assert row.igt_frames == 484 + 369
+
+
+def test_a_death_after_an_in_level_warp_is_timed_the_same_way():
+    [row] = project([
+        jev(1, "level_changed", 363013, {"from": 6, "to": 5}),
+        jev(2, "practice_reset", 363060, {"igt_frames_before": 18,
+                                          "mario_acted": True}),
+        jev(3, "mario_acted", 363100, {}),
+        involuntary(4, 363256, 194),
+        jev(5, "death", 363500, {"igt_frames": 244, "cause": "fall"}),
+    ])
+    assert row.outcome == "death" and row.igt_frames == 194 + 244
+
+
+def test_a_star_time_is_never_inflated_by_the_carry():
+    """Usamune's result store already answers for the WHOLE star, so a grab
+    must not be summed with the legs — that would double-count them."""
+    [row] = project([
+        jev(1, "level_changed", 363013, {"from": 6, "to": 5}),
+        jev(2, "practice_reset", 363060, {"igt_frames_before": 18,
+                                          "mario_acted": True}),
+        jev(3, "mario_acted", 363100, {}),
+        involuntary(4, 363256, 194),
+        star(5, 363500, course=5, star_id=0, igt=440),
+    ])
+    assert row.outcome == "success" and row.igt_frames == 440
+
+
+def test_an_involuntary_anchor_that_opens_the_attempt_carries_nothing():
+    """Walk into a course and straight through a warp: the attempt begins
+    THERE, so there is no earlier leg to add."""
+    [row] = project([
+        jev(1, "level_changed", 363013, {"from": 6, "to": 5}),
+        involuntary(2, 363256, 194),
+        jev(3, "mario_acted", 363300, {}),
+        jev(4, "practice_reset", 363818, {"igt_frames_before": 268,
+                                          "mario_acted": True}),
+    ])
+    assert row.igt_frames == 268
+
+
+def test_the_carry_does_not_survive_the_attempt_that_earned_it():
+    [first, second] = project([
+        jev(1, "level_changed", 363013, {"from": 6, "to": 5}),
+        jev(2, "practice_reset", 363060, {"igt_frames_before": 18,
+                                          "mario_acted": True}),
+        jev(3, "mario_acted", 363100, {}),
+        involuntary(4, 363256, 194),
+        jev(5, "practice_reset", 363818, {"igt_frames_before": 268,
+                                          "mario_acted": True}),
+        jev(6, "mario_acted", 363900, {}),
+        jev(7, "practice_reset", 364200, {"igt_frames_before": 382,
+                                          "mario_acted": True}),
+    ])
+    assert first.igt_frames == 194 + 268
+    assert second.igt_frames == 382

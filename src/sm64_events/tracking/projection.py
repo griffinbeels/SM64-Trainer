@@ -562,6 +562,7 @@ class Projector:
         self._level: int | None = None   # gCurrLevelNum per level_changed; None = unknown (legacy journals)
         self._area: int | None = None    # gCurrAreaIndex per area_changed; None = unknown (legacy journals)
         self._open_castle = False        # open attempt was OPENED in a castle hub level; only meaningful while _open is set (the open site re-arms it)
+        self._open_carried_igt = 0       # Usamune frames this attempt ran BEFORE its counter last restarted; only meaningful while _open is set (see _with_carried_igt)
         self._rollouts_total = 0
         self._rollouts_dustless = 0
         self._jumps_total = 0
@@ -894,11 +895,18 @@ class Projector:
                     self._open = ev
                     self._open_acted = False
                     self._open_castle = self._level in CASTLE_LEVELS
+                    self._open_carried_igt = 0  # the attempt begins HERE
+                else:
+                    # Usamune's counter restarted, and this attempt is still
+                    # running — bank the leg it just forgot (_with_carried_igt).
+                    self._open_carried_igt += \
+                        ev.payload.get("igt_frames_before") or 0
                 return []
             closed = self._close_by_reset(ev)
             self._open = ev
             self._open_acted = False
             self._open_castle = self._level in CASTLE_LEVELS
+            self._open_carried_igt = 0
             return closed
         if ev.type == "star_collected":
             return self._close_by_grab(ev)
@@ -1099,6 +1107,30 @@ class Projector:
         return self._open is not None and self._open_castle
 
     # -- closers -------------------------------------------------------------
+    def _with_carried_igt(self, counter_frames: int | None) -> int | None:
+        """A counter reading, plus every leg the counter has already forgotten.
+
+        Usamune restarts its overall counter at an in-level teleporter and at
+        a subarea load. Neither is a retry — the attempt runs straight through
+        both — so a closing event that reads that counter reports only the
+        LAST leg. The earlier legs are not lost: each involuntary anchor this
+        attempt passed journaled its own pre-restart value, and `_dispatch`
+        banks them into `_open_carried_igt` as they go.
+
+        Live report 2026-08-03, three CCM bridge warps and a reset: the row
+        read 0'08"93 where the run had really taken 0'25"06 — "the mid-level
+        warp… should have no impact on the overall timer. We need to be able
+        to time from the actual start time of the course."
+
+        NOT applied to a star grab: that number comes from Usamune's own
+        result store, which already answers for the whole star, so summing it
+        with the legs would count them twice (pinned by
+        `test_a_star_time_is_never_inflated_by_the_carry`).
+        """
+        if counter_frames is None or self._open is None:
+            return counter_frames
+        return counter_frames + self._open_carried_igt
+
     def _close_by_reset(self, ev) -> list[Attempt]:
         if ev.payload.get("paused_frames_before", 0) >= PAUSE_DISCARD_FRAMES:
             # AFK: a long menu pause immediately before the reset — throw the
@@ -1117,7 +1149,8 @@ class Projector:
             self._open = None
             return []
         igt = ev.payload.get("igt_frames_before") if ev.type == "practice_reset" else None
-        return self._close(ev, outcome="reset", igt_frames=igt)
+        return self._close(ev, outcome="reset",
+                           igt_frames=self._with_carried_igt(igt))
 
     def _close_by_grab(self, ev) -> list[Attempt]:
         grabbed = (ev.payload["course_id"], ev.payload["star_id"])
@@ -1189,7 +1222,8 @@ class Projector:
             first=first, close=ev, outcome="death",
             outcome_detail=ev.payload.get("cause"),
             course_id=course_id, star_id=star_id,
-            igt_frames=ev.payload.get("igt_frames"), strat=strat)
+            igt_frames=self._with_carried_igt(ev.payload.get("igt_frames")),
+            strat=strat)
         self._open = None
         return [attempt]
 

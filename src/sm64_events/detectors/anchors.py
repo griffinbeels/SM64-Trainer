@@ -3,7 +3,13 @@
 
 practice_reset — Usamune level reset / level re-entry: the overall IGT
   drops to near zero while gGlobalTimer keeps running. Payload carries the
-  IGT the moment before the drop: that is the failed attempt's duration.
+  IGT the moment before the drop — ONE LEG of the attempt, not necessarily
+  the whole of it: the counter also restarts at a subarea load and at an
+  in-level teleporter, neither of which is a retry, so an attempt can span
+  several legs. `tracking/projection.py::_with_carried_igt` sums them (live
+  report 2026-08-03: three CCM bridge warps and a reset read 0'08"93 for a
+  run that took 0'25"06). This docstring claimed the field WAS the attempt's
+  duration until then, and that was true only while every restart was a retry.
   Drops from near the u16 ceiling are treated as wraparound, not resets —
   the cost is one missed anchor per ~36 min of continuous IGT, which merely
   merges two attempts.
