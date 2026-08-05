@@ -54,8 +54,22 @@ def test_legacy_segments_are_carried_forward_verbatim():
         {"type": "entrance_touched", "to": 23}]
     assert by_key["seg:bits-entry"]["end_triggers"] == [
         {"type": "entrance_touched", "to": 21}]
+    # Lakitu Skip was the CONTROL for the 2026-08-04 entrance sweep -- the one
+    # legacy row with no entrance to touch, because it enters the CASTLE
+    # rather than a course. Task 0026 moves it anyway, one level down: it
+    # ended on the castle LOAD where the community's split is Mario grabbing
+    # the DOOR, so we read 7"33 against their 6"13. Ordinal 1 because the
+    # front door is the first door of the run.
     assert by_key["seg:lakitu-skip"]["end_triggers"] == [
-        {"type": "level_enter", "to": 6}], "the castle has no entrance"
+        {"type": "moment_reached", "kind": "door_open",
+         "level": 16, "ordinal": 1}], "the split ends at the door"
+    # The START is untouched, and that is the half worth pinning: `spawned`
+    # already fires on the edge OUT of ACT_INTRO_CUTSCENE, which addresses.py
+    # calls the canonical Lakitu-skip timing start (live-verified
+    # 2026-06-12), so task 0026's "timer starts when mario can move around"
+    # was ALREADY satisfied. Moving it would shift a correct number.
+    assert by_key["seg:lakitu-skip"]["start_triggers"] == [
+        {"type": "spawned", "level": 16}]
     for key in ("seg:mips-clip", "seg:lakitu-skip", "seg:bits-entry",
                 "seg:bitdw-pipe", "seg:bitfs-pipe", "seg:bits-pipe",
                 "seg:bowser-1", "seg:bowser-2", "seg:bowser-3"):

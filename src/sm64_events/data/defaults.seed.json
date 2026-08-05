@@ -62,8 +62,10 @@
       ],
       "end_triggers": [
         {
-          "type": "level_enter",
-          "to": 6
+          "type": "moment_reached",
+          "kind": "door_open",
+          "level": 16,
+          "ordinal": 1
         }
       ],
       "waypoints": [],

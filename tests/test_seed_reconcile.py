@@ -155,10 +155,23 @@ def test_real_bundled_seed_does_not_alter_existing_segment_defs(tmp_path):
         # seeded row is exactly what is supposed to happen -- it is how the
         # fix reaches a live install at all. Everything else on the row must
         # still come out the other side untouched, which is this gate's point.
-        moved = {"seg:lblj": 17, "seg:mips-clip": 23, "seg:bits-entry": 21}
+        moved = {
+            "seg:lblj": [{"type": "entrance_touched", "to": 17}],
+            "seg:mips-clip": [{"type": "entrance_touched", "to": 23}],
+            "seg:bits-entry": [{"type": "entrance_touched", "to": 21}],
+            # LAKITU SKIP joins them 2026-08-05 (task 0026), for the same
+            # reason one level down: it ended on the castle LOAD and the
+            # community's split is Mario grabbing the door, so we read 7"33
+            # against their 6"13. It was the CONTROL for the 0081 sweep --
+            # the one legacy row with no entrance to touch, because it enters
+            # the castle rather than a course -- which is why it moves now
+            # and by a different mechanism.
+            "seg:lakitu-skip": [{"type": "moment_reached",
+                                 "kind": "door_open", "level": 16,
+                                 "ordinal": 1}],
+        }
         if key in moved:
-            assert after_row["end_triggers"] == [
-                {"type": "entrance_touched", "to": moved[key]}]
+            assert after_row["end_triggers"] == moved[key]
         else:
             assert after_row["end_triggers"] == before_row["end_triggers"]
         assert after_row["waypoints"] == before_row["waypoints"]
