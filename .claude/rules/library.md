@@ -82,29 +82,75 @@ correction the parser now makes unaided leaves no stamp, and a correction that
 still moves something must carry a written reason. Delete the rule and all 25
 become load-bearing at once — mutation-proved in both directions.
 
-## What phase 2 must know, since the spec is a local file
+## Phase 2 — the ladder fit, measured and settled 2026-08-05
 
-Phase 2 fits rank ladders from the sheet's distribution for targets the
-community publishes no standards for. Three things settled before it starts:
+The spec is a local file; this is the committed record.
 
-- **The fit is meant to work.** One global percentile per rank is the STARTING
-  model, not the answer; if it misses, bucket by target duration (the vetted
-  ladders demonstrably widen with length — Bronze is 1.219× Mario under 15s and
-  1.389× at 40–120s), fit per section, and weight by sample size. A residue
-  that survives all that comes back as a measurement to discuss, never as
-  loosely-fitted ladders and never as shipping nothing. User's ruling,
-  2026-08-04.
-- **Vetted standards are never touched**, only gaps filled. A test must assert
-  the intersection of fitted and vetted keys is empty.
-- **The hypothesis, measured on 8 hand-mapped rows and not yet on 320:** each
-  Daily Star cutoff sits at a stable PERCENTILE of that approach's community
-  distribution — Mario ≈ 4–8%, Grandmaster ≈ 18%, Master ≈ 33%, Diamond ≈ 54%,
-  Platinum ≈ 71%, Gold ≈ 86%, Silver ≈ 90%, Bronze ≈ 99%. A fixed ratio off the
-  Mario cutoff does NOT reproduce them (coefficient of variation stays above
-  0.69 at every exponent tried over 302 complete ladders).
-- **Clusters are real, rare and cycle-shaped**, and they feed the fitter rather
-  than only the display: a percentile-placed cutoff landing inside a valley
-  mints a rank band nobody can occupy, so it moves to the valley's slow edge.
-  Multi-modality counts are bandwidth artefacts (3–15%) and must not be quoted;
-  WHICH approaches surface is stable — Into the Igloo, Time stopped, Log
-  firsty, Navigating the Toxic Maze, the 100-coin red-coin runs.
+**A LADDER BELONGS TO A LIBRARY ROW, NOT TO AN ENTITY.** This is the design and
+it is the thing a session gets wrong: asked which *entities* would gain a
+ladder, the answer is ZERO — all 112 entities the sheet maps to already carry a
+vetted Daily Star ladder — and that reads as phase 2 having nothing to do. It
+is the wrong denominator. Every one of the ~631 library rows (509 approaches +
+122 subsections) has its own distribution and takes its own fitted ladder,
+whether or not we currently map it to anything. A Castle Movement row keeps its
+ladder in the library for however long it takes a segment to exist for it.
+User's correction, 2026-08-05: *"if we have an approach in the library, it
+should have rank standards derived and ready to go for adoption"*.
+
+**The model is the percentile, and it is now the DEFINITION rather than an
+approximation of Daily Star.** Fitted cutoffs sit at these percentiles of the
+row's own distribution, median over 204 vetted ladders matched to sheet
+approaches:
+
+| Mario | Grandmaster | Master | Diamond | Platinum | Gold | Silver | Bronze |
+|---|---|---|---|---|---|---|---|
+| 6.7 | 21.7 | 45.0 | 65.2 | 80.4 | 89.3 | 94.0 | 98.2 |
+
+**It cannot reproduce a vetted ladder tier-for-tier, and that is structural
+rather than fixable.** Held out, a fitted ladder gives a real recorded time the
+same tier 39–42% of the time and lands within ONE tier 75–78%. The reason: the
+median gap between adjacent tiers in the vetted ladders is **2.72%** — only
+1.32% between Mario and Grandmaster, 1.88% to Master — while the model's median
+time error is 1.5–2%. The error is the size of a tier, so no model fitted from
+20–150 community times can resolve them. Do not re-litigate this by trying
+another model form: bucketing by duration (2.04% vs 2.07%), scaling by the
+distribution's spread (2.22%) and a canonical shape off the sheet best (which
+collapses to 23% same-tier) were all measured and none helped. The user's
+ruling on that measurement was to **adopt the percentiles as the definition**
+and label a fitted ladder as sheet-derived, never as vetted.
+
+**Fitted ladders GRADE for real** (user, 2026-08-05) — a sheet-derived ladder
+becomes the real ladder wherever the community publishes none. Vetted Daily
+Star ladders are still never touched, and that invariant is best kept
+STRUCTURAL (a separate file the vetted store falls back to) rather than by a
+test over one merged file.
+
+**Error scales with sample size**, which is what a feasibility floor should be
+set from: 20–49 entries → 4.19% median error, 50–149 → 1.94%, 150+ → 1.46%.
+The user explicitly DECLINED an accuracy floor; a floor may only exist because
+a distribution is too small to define eight tiers at all.
+
+**Adoption, and the duplicate it would otherwise create.** Star approaches
+auto-adopt as strategies so they are in the picker with a ladder ready;
+subsections do NOT (they would clutter the segment list) and wait for the user;
+Castle Movements wait for a segment definition. Auto-adoption must dedupe,
+because the sheet's "Mario Wings to the Sky" and our vetted "Skyjump" are one
+strategy under two names — match a vetted ladder to a sheet approach by how
+close its Mario cutoff is to the approach's sheet best, which paired 204 at a
+median 0.33s and is the same matcher the fit measurement uses. The vetted
+ladder wins on a match; only unmatched approaches are adopted (~35 today).
+
+**A row's OWN entity is what a ladder fits against** — see the Bowser and
+`+ 100c` note above, or star:16:0 gets a ladder built from pipe-inclusive
+times.
+
+**Clusters feed the fitter, not only the display**: a percentile-placed cutoff
+landing inside a valley mints a rank band nobody can occupy, so it moves to the
+valley's slow edge. Multi-modality COUNTS are bandwidth artefacts (3–15%) and
+must not be quoted; which approaches surface is stable — Into the Igloo, Time
+stopped, Log firsty, Navigating the Toxic Maze, the 100-coin red-coin runs.
+
+**The user will audit every approach and subsection himself eventually**, since
+validity often cannot be read off a name without playing the star. Build for
+that: the audit page is the surface, and a fitted ladder should be visible
+there beside the row it came from.
