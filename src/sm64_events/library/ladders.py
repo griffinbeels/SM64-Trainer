@@ -23,6 +23,8 @@ from 20-150 community times can resolve them. Bucketing by duration, scaling by
 the distribution's spread, and a canonical shape off the sheet best were all
 measured and none helped. Do not re-litigate it by trying a fourth form.
 """
+from sm64_events.core.timefmt import (attainable_cs, next_attainable_cs,
+                                      prev_attainable_cs)
 from sm64_events.ranks.classify import RANK_NAMES
 
 # Median position of each vetted cutoff inside its approach's own distribution,
@@ -62,43 +64,78 @@ def _valley_edge(times, cutoff):
     A cutoff sitting in a gap is arbitrary: everybody already recorded is on
     one side or the other, so moving it changes nobody's rank today. It decides
     the rank of a FUTURE time that lands in the gap, and it stops two adjacent
-    cutoffs sharing one gap, which would mint a tier nobody can occupy."""
+    cutoffs sharing one gap, which would mint a tier nobody can occupy.
+
+    The edge is the last DISPLAYABLE time before the slow cluster starts, so
+    the cluster's own members stay outside the tier."""
     span = VALLEY_FRACTION * times[len(times) // 2]
     for lower, upper in zip(times, times[1:]):
         if lower < cutoff < upper and (upper - lower) > span:
-            return float(upper) - 1
+            return prev_attainable_cs(upper)
     return None
 
 
-def fit_ladder(times_cs, percentiles=None) -> dict:
-    """{rank: seconds} for one row's sorted community times, or {} when the
-    row is too thin to say anything.
+# The derivation, as named steps. Every one is replaceable without touching
+# the others, which is the point: the model has already changed once (a fixed
+# ratio off the Mario cutoff, replaced by percentiles) and the user's standing
+# instruction is that changing it again must stay cheap.
+def place_at_percentiles(times, percentiles) -> dict:
+    """Step 1 — each rank lands at its percentile of this row's own times."""
+    return {rank: _at_percentile(times, percentiles[rank])
+            for rank in RANK_NAMES if rank in percentiles}
 
-    Cutoffs come out strictly increasing in whole centiseconds, because
-    `ranks/classify.py` compares DISPLAYED centiseconds and two tiers sharing a
-    cutoff is a tier no time can ever earn."""
+
+def avoid_valleys(times, raw: dict) -> dict:
+    """Step 2 — a cutoff inside a real observation gap moves to its edge."""
+    out = {}
+    for rank, cutoff in raw.items():
+        moved = _valley_edge(times, cutoff)
+        out[rank] = moved if moved is not None else cutoff
+    return out
+
+
+def make_attainable(raw: dict, quantise=attainable_cs, step=next_attainable_cs) -> dict:
+    """Step 3 — every cutoff becomes a time the timer can actually show, and
+    no two share one.
+
+    Usamune's clock is a frame counter, so only 30 of every 100 centisecond
+    values ever appear: 0, 3, 6, 10, 13, 16, 20, 23, 26, 30 … A ladder asking
+    for 15.01 asks for something nobody can hit, and 2,435 of this project's
+    4,656 derived cutoffs did exactly that before 2026-08-05.
+
+    Rounds UP, never down: a cutoff is a threshold you must beat, so rounding
+    down would quietly make a rank harder than the number it came from, and
+    rounding up biases every derived ladder gentle (user's ruling). Separating
+    two tiers steps to the next DISPLAYABLE time rather than adding one
+    centisecond, which would land straight back off the set."""
+    out, previous = {}, None
+    for rank in RANK_NAMES:
+        if rank not in raw:
+            continue
+        cutoff = quantise(int(round(raw[rank])))
+        if previous is not None and cutoff <= previous:
+            cutoff = step(previous)
+        out[rank] = cutoff
+        previous = cutoff
+    return out
+
+
+def fit_ladder(times_cs, percentiles=None, quantise=attainable_cs,
+               step=next_attainable_cs) -> dict:
+    """{rank: seconds} for one row's community times, or {} when the row is
+    too thin to say anything.
+
+    Three steps, each replaceable on its own: place at percentiles, move out
+    of observation valleys, make attainable. Pass `quantise=lambda cs: cs` and
+    `step=lambda cs: cs + 1` to derive a ladder for a clock that is not
+    Usamune's."""
     times = sorted(int(t) for t in times_cs)
     if len(times) < MIN_ENTRIES:
         return {}
-    percentiles = percentiles or LADDER_PERCENTILES
-
-    raw = {}
-    for rank in RANK_NAMES:
-        if rank not in percentiles:
-            continue
-        cutoff = _at_percentile(times, percentiles[rank])
-        moved = _valley_edge(times, cutoff)
-        raw[rank] = moved if moved is not None else cutoff
-
-    ordered = [rank for rank in RANK_NAMES if rank in raw]
-    out, previous = {}, None
-    for rank in ordered:
-        cutoff = int(round(raw[rank]))
-        if previous is not None and cutoff <= previous:
-            cutoff = previous + 1
-        out[rank] = cutoff
-        previous = cutoff
-    return {rank: round(cutoff / 100, 2) for rank, cutoff in out.items()}
+    raw = place_at_percentiles(times, percentiles or LADDER_PERCENTILES)
+    raw = avoid_valleys(times, raw)
+    return {rank: round(cutoff / 100, 2)
+            for rank, cutoff in make_attainable(raw, quantise, step).items()}
 
 
 def row_times(item):

@@ -2,109 +2,109 @@
  "entities": {
   "segment:10": {
    "BitS Battle (No 120 star file, US)": {
-    "Bronze": 50.49,
+    "Bronze": 50.46,
     "Diamond": 41.46,
-    "Gold": 43.25,
+    "Gold": 43.26,
     "Grandmaster": 38.93,
-    "Mario": 38.22,
-    "Master": 39.82,
+    "Mario": 38.23,
+    "Master": 39.83,
     "Platinum": 42.5,
     "Silver": 44.36
    },
    "Bowser in the Sky Battle (120 star file, US)": {
-    "Bronze": 49.09,
-    "Diamond": 41.81,
-    "Gold": 45.27,
-    "Grandmaster": 39.52,
-    "Mario": 38.67,
-    "Master": 40.61,
-    "Platinum": 44.15,
-    "Silver": 48.32
+    "Bronze": 49.1,
+    "Diamond": 41.83,
+    "Gold": 45.3,
+    "Grandmaster": 39.53,
+    "Mario": 38.7,
+    "Master": 40.63,
+    "Platinum": 44.16,
+    "Silver": 48.33
    }
   },
   "segment:6": {
    "Ultimate FS w/o speed slidekick": {
-    "Bronze": 34.95,
-    "Diamond": 33.74,
-    "Gold": 34.34,
+    "Bronze": 34.96,
+    "Diamond": 33.76,
+    "Gold": 34.36,
     "Grandmaster": 33.3,
     "Mario": 33.1,
     "Master": 33.5,
-    "Platinum": 34.19,
-    "Silver": 34.44
+    "Platinum": 34.2,
+    "Silver": 34.46
    }
   },
   "segment:7": {
    "Bowser in the Sky Course": {
-    "Bronze": 62.79,
+    "Bronze": 62.76,
     "Diamond": 43.26,
     "Gold": 50.86,
     "Grandmaster": 38.83,
     "Mario": 38.63,
-    "Master": 39.55,
-    "Platinum": 48.05,
-    "Silver": 56.11
+    "Master": 39.56,
+    "Platinum": 48.06,
+    "Silver": 56.13
    },
    "Manamo cycle + Ultimate cycle / TAS LJ": {
     "Bronze": 38.93,
     "Diamond": 37.7,
-    "Gold": 38.34,
-    "Grandmaster": 37.37,
-    "Mario": 37.18,
+    "Gold": 38.36,
+    "Grandmaster": 37.4,
+    "Mario": 37.2,
     "Master": 37.56,
     "Platinum": 38.16,
-    "Silver": 38.59
+    "Silver": 38.6
    },
    "TAS LJ + Ultimate cycle": {
-    "Bronze": 37.38,
-    "Diamond": 36.24,
-    "Gold": 36.67,
+    "Bronze": 37.4,
+    "Diamond": 36.26,
+    "Gold": 36.7,
     "Grandmaster": 35.76,
-    "Mario": 35.69,
+    "Mario": 35.7,
     "Master": 35.96,
-    "Platinum": 36.38,
-    "Silver": 36.84
+    "Platinum": 36.4,
+    "Silver": 36.86
    }
   },
   "segment:8": {
    "Bowser dance": {
-    "Bronze": 27.08,
-    "Diamond": 25.99,
-    "Gold": 26.45,
+    "Bronze": 27.1,
+    "Diamond": 26.0,
+    "Gold": 26.46,
     "Grandmaster": 25.2,
-    "Mario": 24.84,
+    "Mario": 24.86,
     "Master": 25.43,
     "Platinum": 26.2,
-    "Silver": 26.75
+    "Silver": 26.76
    },
    "Bowser dance w/o dive rollout": {
-    "Bronze": 26.15,
-    "Diamond": 25.54,
+    "Bronze": 26.16,
+    "Diamond": 25.56,
     "Gold": 26.06,
-    "Grandmaster": 25.24,
-    "Mario": 25.19,
-    "Master": 25.35,
-    "Platinum": 25.89,
-    "Silver": 26.12
+    "Grandmaster": 25.26,
+    "Mario": 25.2,
+    "Master": 25.36,
+    "Platinum": 25.9,
+    "Silver": 26.13
    },
    "Three-quarter spin": {
-    "Bronze": 26.69,
+    "Bronze": 26.7,
     "Diamond": 25.66,
-    "Gold": 26.17,
+    "Gold": 26.2,
     "Grandmaster": 25.36,
-    "Mario": 25.25,
-    "Master": 25.54,
+    "Mario": 25.26,
+    "Master": 25.56,
     "Platinum": 25.8,
     "Silver": 26.46
    }
   },
   "segment:9": {
    "Bowser in the Fire Sea Battle": {
-    "Bronze": 99.99,
+    "Bronze": 100.0,
     "Diamond": 33.13,
     "Gold": 33.5,
     "Grandmaster": 32.7,
-    "Mario": 32.47,
+    "Mario": 32.5,
     "Master": 32.9,
     "Platinum": 33.36,
     "Silver": 33.93
@@ -112,136 +112,136 @@
   },
   "star:10:0": {
    "Single jump strat": {
-    "Bronze": 14.52,
+    "Bronze": 14.5,
     "Diamond": 10.63,
     "Gold": 10.96,
     "Grandmaster": 10.3,
     "Mario": 10.16,
-    "Master": 10.44,
-    "Platinum": 10.78,
-    "Silver": 11.11
+    "Master": 10.46,
+    "Platinum": 10.8,
+    "Silver": 11.13
    },
    "Singlestar strat": {
-    "Bronze": 8.95,
+    "Bronze": 8.96,
     "Diamond": 8.7,
-    "Gold": 8.85,
+    "Gold": 8.86,
     "Grandmaster": 8.53,
-    "Mario": 8.39,
+    "Mario": 8.4,
     "Master": 8.63,
-    "Platinum": 8.71,
-    "Silver": 8.88
+    "Platinum": 8.73,
+    "Silver": 8.9
    }
   },
   "star:10:5": {
    "Igloo clip": {
-    "Bronze": 19.42,
-    "Diamond": 16.41,
+    "Bronze": 19.4,
+    "Diamond": 16.43,
     "Gold": 16.83,
     "Grandmaster": 15.96,
     "Mario": 15.86,
     "Master": 16.2,
-    "Platinum": 16.57,
-    "Silver": 18.29
+    "Platinum": 16.6,
+    "Silver": 18.26
    },
    "Igloo clip w/ phantaxx/saksdal inside": {
-    "Bronze": 16.65,
+    "Bronze": 16.66,
     "Diamond": 16.0,
-    "Gold": 16.27,
-    "Grandmaster": 15.74,
+    "Gold": 16.3,
+    "Grandmaster": 15.76,
     "Mario": 15.63,
     "Master": 15.96,
-    "Platinum": 16.22,
-    "Silver": 16.45
+    "Platinum": 16.23,
+    "Silver": 16.46
    }
   },
   "star:11:3": {
    "Break box first": {
-    "Bronze": 20.58,
+    "Bronze": 20.6,
     "Diamond": 18.53,
-    "Gold": 19.09,
+    "Gold": 19.1,
     "Grandmaster": 17.83,
-    "Mario": 17.45,
-    "Master": 18.19,
+    "Mario": 17.46,
+    "Master": 18.2,
     "Platinum": 18.8,
-    "Silver": 19.71
+    "Silver": 19.73
    }
   },
   "star:11:5": {
    "Clockwise strat": {
-    "Bronze": 48.99,
-    "Diamond": 41.62,
-    "Gold": 43.65,
-    "Grandmaster": 40.52,
+    "Bronze": 49.0,
+    "Diamond": 41.63,
+    "Gold": 43.66,
+    "Grandmaster": 40.53,
     "Mario": 39.96,
     "Master": 41.16,
     "Platinum": 42.2,
-    "Silver": 45.65
+    "Silver": 45.66
    }
   },
   "star:12:0": {
    "Log firsty, no edge water jump": {
-    "Bronze": 20.19,
+    "Bronze": 20.16,
     "Diamond": 17.0,
     "Gold": 18.3,
     "Grandmaster": 16.33,
-    "Mario": 15.97,
+    "Mario": 16.0,
     "Master": 16.73,
-    "Platinum": 18.19,
+    "Platinum": 18.16,
     "Silver": 18.73
    },
    "No edge water jump": {
-    "Bronze": 22.89,
-    "Diamond": 17.41,
-    "Gold": 19.49,
+    "Bronze": 22.86,
+    "Diamond": 17.43,
+    "Gold": 19.46,
     "Grandmaster": 16.76,
-    "Mario": 16.39,
-    "Master": 17.11,
+    "Mario": 16.4,
+    "Master": 17.13,
     "Platinum": 18.36,
-    "Silver": 19.78
+    "Silver": 19.8
    }
   },
   "star:12:1": {
    "Log firsty": {
     "Bronze": 46.7,
-    "Diamond": 35.64,
+    "Diamond": 35.66,
     "Gold": 43.7,
     "Grandmaster": 34.33,
-    "Mario": 34.07,
-    "Master": 35.18,
-    "Platinum": 43.69,
-    "Silver": 46.69
+    "Mario": 34.1,
+    "Master": 35.2,
+    "Platinum": 43.66,
+    "Silver": 46.66
    }
   },
   "star:12:2": {
    "SJ onto first mushroom, go right after #4": {
-    "Bronze": 30.47,
-    "Diamond": 25.61,
-    "Gold": 27.39,
-    "Grandmaster": 24.32,
+    "Bronze": 30.5,
+    "Diamond": 25.63,
+    "Gold": 27.4,
+    "Grandmaster": 24.33,
     "Mario": 24.0,
-    "Master": 24.92,
-    "Platinum": 26.34,
-    "Silver": 28.11
+    "Master": 24.93,
+    "Platinum": 26.36,
+    "Silver": 28.13
    }
   },
   "star:12:4": {
    "Log firsty, no edge water jump": {
-    "Bronze": 18.29,
-    "Diamond": 14.98,
-    "Gold": 16.39,
+    "Bronze": 18.26,
+    "Diamond": 15.0,
+    "Gold": 16.36,
     "Grandmaster": 14.36,
     "Mario": 14.1,
     "Master": 14.63,
-    "Platinum": 15.72,
-    "Silver": 16.77
+    "Platinum": 15.7,
+    "Silver": 16.8
    },
    "No edge water jump": {
-    "Bronze": 19.15,
+    "Bronze": 19.13,
     "Diamond": 15.73,
-    "Gold": 16.62,
+    "Gold": 16.63,
     "Grandmaster": 14.73,
     "Mario": 14.5,
-    "Master": 15.25,
+    "Master": 15.26,
     "Platinum": 16.36,
     "Silver": 16.86
    }
@@ -250,92 +250,92 @@
    "Left side clip w/ TJ dive beginning": {
     "Bronze": 19.26,
     "Diamond": 18.46,
-    "Gold": 18.81,
+    "Gold": 18.83,
     "Grandmaster": 18.16,
-    "Mario": 17.97,
-    "Master": 18.35,
+    "Mario": 18.0,
+    "Master": 18.36,
     "Platinum": 18.63,
-    "Silver": 19.02
+    "Silver": 19.03
    }
   },
   "star:13:2": {
    "w/ TJ dive beginning": {
-    "Bronze": 47.63,
-    "Diamond": 47.15,
+    "Bronze": 47.66,
+    "Diamond": 47.16,
     "Gold": 47.53,
-    "Grandmaster": 46.47,
-    "Mario": 46.01,
+    "Grandmaster": 46.5,
+    "Mario": 46.03,
     "Master": 47.06,
-    "Platinum": 47.29,
-    "Silver": 47.62
+    "Platinum": 47.3,
+    "Silver": 47.63
    }
   },
   "star:13:5": {
    "w/ TJ dive beginning": {
-    "Bronze": 43.58,
+    "Bronze": 43.6,
     "Diamond": 41.7,
-    "Gold": 41.92,
+    "Gold": 41.93,
     "Grandmaster": 41.43,
     "Mario": 41.33,
     "Master": 41.6,
-    "Platinum": 41.88,
+    "Platinum": 41.9,
     "Silver": 42.86
    }
   },
   "star:14:1": {
    "Rollout onto higher cog": {
-    "Bronze": 13.25,
+    "Bronze": 13.23,
     "Diamond": 11.76,
     "Gold": 11.9,
     "Grandmaster": 11.53,
     "Mario": 11.4,
-    "Master": 11.69,
+    "Master": 11.7,
     "Platinum": 11.83,
-    "Silver": 12.18
+    "Silver": 12.2
    }
   },
   "star:14:2": {
    "Time stopped": {
-    "Bronze": 26.19,
+    "Bronze": 26.16,
     "Diamond": 11.9,
     "Gold": 13.23,
     "Grandmaster": 10.66,
-    "Mario": 10.34,
+    "Mario": 10.36,
     "Master": 11.3,
-    "Platinum": 12.81,
+    "Platinum": 12.83,
     "Silver": 14.86
    }
   },
   "star:14:5": {
    "JD ending": {
-    "Bronze": 17.21,
-    "Diamond": 14.99,
+    "Bronze": 17.23,
+    "Diamond": 15.0,
     "Gold": 15.36,
-    "Grandmaster": 14.71,
+    "Grandmaster": 14.73,
     "Mario": 14.6,
     "Master": 14.93,
     "Platinum": 15.23,
     "Silver": 15.9
    },
    "Sideflip -> Wallkick + JD ending": {
-    "Bronze": 17.35,
+    "Bronze": 17.33,
     "Diamond": 14.93,
-    "Gold": 15.18,
+    "Gold": 15.2,
     "Grandmaster": 14.66,
     "Mario": 14.6,
-    "Master": 14.77,
-    "Platinum": 15.01,
-    "Silver": 15.55
+    "Master": 14.8,
+    "Platinum": 15.03,
+    "Silver": 15.56
    },
    "Usamune moving reds": {
     "Bronze": 15.76,
     "Diamond": 14.63,
-    "Gold": 14.89,
-    "Grandmaster": 14.37,
+    "Gold": 14.9,
+    "Grandmaster": 14.4,
     "Mario": 14.36,
     "Master": 14.53,
     "Platinum": 14.76,
-    "Silver": 15.28
+    "Silver": 15.3
    }
   },
   "star:15:0": {
@@ -350,106 +350,106 @@
     "Silver": 18.0
    },
    "Full WK -> Full SJ": {
-    "Bronze": 23.69,
-    "Diamond": 20.54,
-    "Gold": 21.52,
+    "Bronze": 23.66,
+    "Diamond": 20.56,
+    "Gold": 21.53,
     "Grandmaster": 19.56,
-    "Mario": 19.12,
+    "Mario": 19.13,
     "Master": 19.83,
-    "Platinum": 21.12,
+    "Platinum": 21.13,
     "Silver": 21.93
    }
   },
   "star:15:1": {
    "JD slide ending (PAUSE TIME INCLUDED)": {
-    "Bronze": 45.71,
-    "Diamond": 39.01,
-    "Gold": 41.41,
-    "Grandmaster": 36.99,
+    "Bronze": 45.7,
+    "Diamond": 39.03,
+    "Gold": 41.43,
+    "Grandmaster": 37.0,
     "Mario": 35.96,
     "Master": 37.9,
-    "Platinum": 40.89,
-    "Silver": 42.22
+    "Platinum": 40.9,
+    "Silver": 42.23
    },
    "The Big House in the Sky (PAUSE TIME INCLUDED)": {
-    "Bronze": 132.45,
+    "Bronze": 132.43,
     "Diamond": 45.4,
-    "Gold": 114.84,
+    "Gold": 114.86,
     "Grandmaster": 39.86,
     "Mario": 38.13,
     "Master": 42.36,
-    "Platinum": 53.05,
-    "Silver": 117.48
+    "Platinum": 53.06,
+    "Silver": 117.5
    },
    "Usamune (Dezanig) James (PAUSE TIME INCLUDED)": {
-    "Bronze": 49.61,
-    "Diamond": 43.68,
+    "Bronze": 49.63,
+    "Diamond": 43.7,
     "Gold": 48.63,
-    "Grandmaster": 38.22,
+    "Grandmaster": 38.2,
     "Mario": 35.83,
-    "Master": 39.58,
-    "Platinum": 48.62,
-    "Silver": 49.11
+    "Master": 39.6,
+    "Platinum": 48.6,
+    "Silver": 49.13
    }
   },
   "star:15:5": {
    "Assless w/ full DJ + DJ dive into cannon": {
-    "Bronze": 33.75,
-    "Diamond": 29.47,
-    "Gold": 29.92,
-    "Grandmaster": 28.75,
-    "Mario": 28.59,
+    "Bronze": 33.73,
+    "Diamond": 29.5,
+    "Gold": 29.93,
+    "Grandmaster": 28.76,
+    "Mario": 28.6,
     "Master": 29.1,
-    "Platinum": 29.68,
-    "Silver": 30.09
+    "Platinum": 29.7,
+    "Silver": 30.1
    },
    "Assless w/ full DJ + SF dive into cannon": {
-    "Bronze": 34.52,
-    "Diamond": 30.87,
-    "Gold": 31.72,
-    "Grandmaster": 29.52,
+    "Bronze": 34.5,
+    "Diamond": 30.9,
+    "Gold": 31.73,
+    "Grandmaster": 29.53,
     "Mario": 29.1,
-    "Master": 29.95,
-    "Platinum": 31.39,
-    "Silver": 32.41
+    "Master": 29.96,
+    "Platinum": 31.4,
+    "Silver": 32.43
    },
    "Full WK -> Full SJ + DJ dive into cannon": {
     "Bronze": 36.5,
-    "Diamond": 34.28,
+    "Diamond": 34.3,
     "Gold": 35.76,
-    "Grandmaster": 32.55,
-    "Mario": 32.37,
-    "Master": 33.67,
-    "Platinum": 35.21,
+    "Grandmaster": 32.56,
+    "Mario": 32.4,
+    "Master": 33.7,
+    "Platinum": 35.23,
     "Silver": 36.13
    },
    "Left sideflip + DJ dive into cannon": {
     "Bronze": 37.03,
-    "Diamond": 34.51,
+    "Diamond": 34.53,
     "Gold": 36.23,
-    "Grandmaster": 33.17,
-    "Mario": 32.07,
-    "Master": 33.57,
-    "Platinum": 35.78,
+    "Grandmaster": 33.2,
+    "Mario": 32.1,
+    "Master": 33.6,
+    "Platinum": 35.8,
     "Silver": 36.56
    },
    "Left sideflip + SF dive into cannon": {
-    "Bronze": 40.59,
-    "Diamond": 35.07,
-    "Gold": 36.78,
+    "Bronze": 40.56,
+    "Diamond": 35.1,
+    "Gold": 36.8,
     "Grandmaster": 33.16,
     "Mario": 32.73,
-    "Master": 33.88,
-    "Platinum": 35.98,
-    "Silver": 37.35
+    "Master": 33.9,
+    "Platinum": 36.0,
+    "Silver": 37.36
    }
   },
   "star:1:0": {
    "Left side strat": {
-    "Bronze": 51.85,
-    "Diamond": 43.95,
-    "Gold": 44.52,
-    "Grandmaster": 43.15,
+    "Bronze": 51.83,
+    "Diamond": 43.96,
+    "Gold": 44.53,
+    "Grandmaster": 43.16,
     "Mario": 42.93,
     "Master": 43.73,
     "Platinum": 44.23,
@@ -458,103 +458,103 @@
   },
   "star:1:2": {
    "Slope slide strat, no camera glitch": {
-    "Bronze": 21.58,
+    "Bronze": 21.6,
     "Diamond": 19.6,
-    "Gold": 20.88,
+    "Gold": 20.9,
     "Grandmaster": 18.96,
-    "Mario": 18.84,
+    "Mario": 18.86,
     "Master": 19.26,
-    "Platinum": 19.81,
+    "Platinum": 19.83,
     "Silver": 21.3
    }
   },
   "star:1:4": {
    "No camera glitch": {
-    "Bronze": 34.71,
-    "Diamond": 32.12,
-    "Gold": 33.51,
+    "Bronze": 34.73,
+    "Diamond": 32.13,
+    "Gold": 33.53,
     "Grandmaster": 31.0,
     "Mario": 30.73,
     "Master": 31.63,
-    "Platinum": 32.77,
-    "Silver": 34.18
+    "Platinum": 32.8,
+    "Silver": 34.2
    },
    "Slope slide strat, no camera glitch": {
     "Bronze": 39.26,
-    "Diamond": 30.75,
-    "Gold": 33.28,
-    "Grandmaster": 29.95,
+    "Diamond": 30.76,
+    "Gold": 33.3,
+    "Grandmaster": 29.96,
     "Mario": 29.6,
-    "Master": 30.31,
-    "Platinum": 31.12,
-    "Silver": 39.25
+    "Master": 30.33,
+    "Platinum": 31.13,
+    "Silver": 39.23
    }
   },
   "star:1:5": {
    "Slide + Backflip clip": {
-    "Bronze": 12.28,
+    "Bronze": 12.3,
     "Diamond": 11.96,
-    "Gold": 12.22,
+    "Gold": 12.23,
     "Grandmaster": 11.86,
     "Mario": 11.76,
     "Master": 11.93,
     "Platinum": 12.06,
-    "Silver": 12.23
+    "Silver": 12.26
    }
   },
   "star:20:0": {
    "Left side strat (Intermediate strat)": {
     "Bronze": 22.6,
-    "Diamond": 21.22,
-    "Gold": 22.08,
-    "Grandmaster": 20.51,
+    "Diamond": 21.23,
+    "Gold": 22.1,
+    "Grandmaster": 20.53,
     "Mario": 20.33,
-    "Master": 20.98,
+    "Master": 21.0,
     "Platinum": 21.5,
-    "Silver": 22.34
+    "Silver": 22.36
    }
   },
   "star:21:0": {
    "Direct rollout on the switch": {
-    "Bronze": 26.84,
+    "Bronze": 26.86,
     "Diamond": 20.36,
-    "Gold": 21.78,
+    "Gold": 21.8,
     "Grandmaster": 19.6,
     "Mario": 19.26,
     "Master": 19.96,
-    "Platinum": 21.04,
+    "Platinum": 21.06,
     "Silver": 22.2
    }
   },
   "star:22:0": {
    "No slope clip (Half cycle)": {
     "Bronze": 32.23,
-    "Diamond": 30.82,
-    "Gold": 31.71,
+    "Diamond": 30.83,
+    "Gold": 31.73,
     "Grandmaster": 30.06,
-    "Mario": 29.72,
+    "Mario": 29.73,
     "Master": 30.5,
     "Platinum": 31.53,
-    "Silver": 31.94
+    "Silver": 31.96
    }
   },
   "star:23:0": {
    "Stored angle": {
-    "Bronze": 62.09,
+    "Bronze": 62.1,
     "Diamond": 59.6,
-    "Gold": 60.89,
-    "Grandmaster": 57.28,
-    "Mario": 56.18,
-    "Master": 58.38,
-    "Platinum": 60.51,
-    "Silver": 61.75
+    "Gold": 60.9,
+    "Grandmaster": 57.3,
+    "Mario": 56.2,
+    "Master": 58.4,
+    "Platinum": 60.53,
+    "Silver": 61.76
    }
   },
   "star:2:2": {
    "Single jump ending, no speedkick": {
     "Bronze": 10.26,
     "Diamond": 9.76,
-    "Gold": 9.94,
+    "Gold": 9.96,
     "Grandmaster": 9.53,
     "Mario": 9.43,
     "Master": 9.66,
@@ -564,284 +564,284 @@
   },
   "star:3:0": {
    "Punch ending": {
-    "Bronze": 48.31,
-    "Diamond": 44.31,
-    "Gold": 47.71,
-    "Grandmaster": 41.75,
+    "Bronze": 48.33,
+    "Diamond": 44.33,
+    "Gold": 47.73,
+    "Grandmaster": 41.76,
     "Mario": 41.43,
-    "Master": 42.62,
-    "Platinum": 46.67,
-    "Silver": 47.97
+    "Master": 42.63,
+    "Platinum": 46.7,
+    "Silver": 48.0
    }
   },
   "star:3:4": {
    "saksdal walk": {
-    "Bronze": 15.55,
-    "Diamond": 14.17,
+    "Bronze": 15.53,
+    "Diamond": 14.2,
     "Gold": 14.93,
     "Grandmaster": 13.36,
-    "Mario": 13.21,
-    "Master": 13.68,
-    "Platinum": 14.49,
+    "Mario": 13.23,
+    "Master": 13.7,
+    "Platinum": 14.5,
     "Silver": 14.96
    }
   },
   "star:4:4": {
    "Slide -> SJ beginning": {
-    "Bronze": 36.52,
-    "Diamond": 35.59,
-    "Gold": 36.07,
+    "Bronze": 36.53,
+    "Diamond": 35.6,
+    "Gold": 36.1,
     "Grandmaster": 35.5,
     "Mario": 35.43,
-    "Master": 35.51,
+    "Master": 35.53,
     "Platinum": 35.83,
-    "Silver": 36.34
+    "Silver": 36.36
    }
   },
   "star:5:0": {
    "First + Final door skip": {
-    "Bronze": 54.79,
+    "Bronze": 54.76,
     "Diamond": 49.5,
     "Gold": 49.9,
     "Grandmaster": 48.93,
-    "Mario": 48.68,
+    "Mario": 48.7,
     "Master": 49.33,
     "Platinum": 49.7,
-    "Silver": 49.92
+    "Silver": 49.93
    }
   },
   "star:5:5": {
    "DJ kick box break strat": {
     "Bronze": 26.93,
-    "Diamond": 26.76,
-    "Gold": 26.81,
+    "Diamond": 26.8,
+    "Gold": 26.86,
     "Grandmaster": 26.6,
-    "Mario": 26.54,
-    "Master": 26.74,
-    "Platinum": 26.8,
-    "Silver": 26.84
+    "Mario": 26.56,
+    "Master": 26.76,
+    "Platinum": 26.83,
+    "Silver": 26.9
    }
   },
   "star:6:0": {
    "Sign clip strat w/ BD (PAUSE TIME INCLUDED)": {
-    "Bronze": 14.54,
-    "Diamond": 13.44,
-    "Gold": 14.42,
-    "Grandmaster": 12.91,
-    "Mario": 12.88,
-    "Master": 13.14,
+    "Bronze": 14.56,
+    "Diamond": 13.46,
+    "Gold": 14.43,
+    "Grandmaster": 12.93,
+    "Mario": 12.9,
+    "Master": 13.16,
     "Platinum": 14.33,
-    "Silver": 14.48
+    "Silver": 14.5
    }
   },
   "star:6:2": {
    "Full wallkick strat": {
     "Bronze": 26.7,
-    "Diamond": 25.65,
-    "Gold": 26.15,
+    "Diamond": 25.66,
+    "Gold": 26.16,
     "Grandmaster": 25.23,
     "Mario": 25.03,
     "Master": 25.4,
     "Platinum": 25.86,
-    "Silver": 26.37
+    "Silver": 26.4
    }
   },
   "star:6:3": {
    "Instant clip": {
-    "Bronze": 28.35,
+    "Bronze": 28.33,
     "Diamond": 24.46,
-    "Gold": 25.29,
+    "Gold": 25.3,
     "Grandmaster": 23.8,
     "Mario": 23.43,
-    "Master": 24.04,
+    "Master": 24.06,
     "Platinum": 25.16,
-    "Silver": 26.79
+    "Silver": 26.76
    },
    "Navigating the Toxic Maze": {
-    "Bronze": 39.88,
-    "Diamond": 27.61,
+    "Bronze": 39.9,
+    "Diamond": 27.63,
     "Gold": 34.26,
     "Grandmaster": 25.6,
-    "Mario": 24.81,
-    "Master": 26.17,
+    "Mario": 24.83,
+    "Master": 26.2,
     "Platinum": 32.26,
-    "Silver": 38.69
+    "Silver": 38.66
    }
   },
   "star:6:5": {
    "C-Up slide start (Right side)": {
-    "Bronze": 19.12,
+    "Bronze": 19.1,
     "Diamond": 14.9,
     "Gold": 15.13,
-    "Grandmaster": 14.67,
+    "Grandmaster": 14.7,
     "Mario": 14.5,
     "Master": 14.83,
-    "Platinum": 15.02,
-    "Silver": 15.34
+    "Platinum": 15.03,
+    "Silver": 15.36
    }
   },
   "star:7:4": {
    "No speed preservation": {
     "Bronze": 20.9,
-    "Diamond": 18.52,
-    "Gold": 20.29,
+    "Diamond": 18.53,
+    "Gold": 20.26,
     "Grandmaster": 17.96,
-    "Mario": 17.79,
-    "Master": 18.34,
-    "Platinum": 18.61,
-    "Silver": 20.48
+    "Mario": 17.8,
+    "Master": 18.36,
+    "Platinum": 18.63,
+    "Silver": 20.5
    },
    "Pole skip ending": {
-    "Bronze": 19.89,
+    "Bronze": 19.86,
     "Diamond": 17.93,
     "Gold": 18.66,
     "Grandmaster": 17.6,
-    "Mario": 17.05,
-    "Master": 17.78,
-    "Platinum": 18.15,
-    "Silver": 18.79
+    "Mario": 17.06,
+    "Master": 17.8,
+    "Platinum": 18.16,
+    "Silver": 18.8
    },
    "Pole skip ending, no speed preservation": {
-    "Bronze": 18.18,
-    "Diamond": 17.72,
-    "Gold": 18.01,
-    "Grandmaster": 17.48,
+    "Bronze": 18.2,
+    "Diamond": 17.73,
+    "Gold": 18.03,
+    "Grandmaster": 17.5,
     "Mario": 17.26,
-    "Master": 17.58,
-    "Platinum": 17.85,
-    "Silver": 18.05
+    "Master": 17.6,
+    "Platinum": 17.86,
+    "Silver": 18.06
    }
   },
   "star:8:0": {
-   "Speed single jump -> Dive": {
-    "Bronze": 16.86,
-    "Diamond": 16.36,
-    "Gold": 16.6,
-    "Grandmaster": 16.13,
-    "Mario": 16.06,
-    "Master": 16.23,
-    "Platinum": 16.43,
-    "Silver": 16.65
-   },
    "Speed single jump x2": {
-    "Bronze": 16.77,
+    "Bronze": 16.8,
     "Diamond": 16.23,
     "Gold": 16.46,
     "Grandmaster": 15.96,
-    "Mario": 15.89,
+    "Mario": 15.9,
     "Master": 16.06,
     "Platinum": 16.33,
     "Silver": 16.53
+   },
+   "Walk up the left side of the pillar": {
+    "Bronze": 21.0,
+    "Diamond": 16.56,
+    "Gold": 16.83,
+    "Grandmaster": 16.06,
+    "Mario": 15.83,
+    "Master": 16.36,
+    "Platinum": 16.73,
+    "Silver": 16.93
    }
   },
   "star:8:4": {
    "Free Flying for 8 Red Coins": {
-    "Bronze": 89.22,
-    "Diamond": 54.47,
-    "Gold": 65.42,
+    "Bronze": 89.2,
+    "Diamond": 54.5,
+    "Gold": 65.43,
     "Grandmaster": 49.93,
-    "Mario": 48.55,
+    "Mario": 48.56,
     "Master": 53.03,
-    "Platinum": 58.49,
-    "Silver": 68.65
+    "Platinum": 58.5,
+    "Silver": 68.66
    },
    "Z slide after the pond red": {
-    "Bronze": 50.32,
+    "Bronze": 50.33,
     "Diamond": 46.26,
     "Gold": 48.63,
     "Grandmaster": 44.8,
-    "Mario": 43.54,
+    "Mario": 43.56,
     "Master": 45.6,
-    "Platinum": 47.17,
+    "Platinum": 47.2,
     "Silver": 48.83
    },
    "Z slide, no speed jump before cap box": {
-    "Bronze": 51.81,
-    "Diamond": 46.72,
-    "Gold": 49.32,
+    "Bronze": 51.83,
+    "Diamond": 46.73,
+    "Gold": 49.33,
     "Grandmaster": 45.0,
     "Mario": 44.2,
     "Master": 45.9,
-    "Platinum": 47.72,
-    "Silver": 51.69
+    "Platinum": 47.73,
+    "Silver": 51.66
    }
   },
   "star:8:5": {
    "Pyramid Puzzle": {
-    "Bronze": 75.29,
-    "Diamond": 32.65,
-    "Gold": 35.48,
-    "Grandmaster": 29.64,
-    "Mario": 28.11,
-    "Master": 31.21,
-    "Platinum": 34.17,
-    "Silver": 38.42
+    "Bronze": 75.26,
+    "Diamond": 32.66,
+    "Gold": 35.5,
+    "Grandmaster": 29.66,
+    "Mario": 28.13,
+    "Master": 31.23,
+    "Platinum": 34.2,
+    "Silver": 38.4
    },
    "Single jump on the small hill": {
-    "Bronze": 30.68,
+    "Bronze": 30.7,
     "Diamond": 28.76,
-    "Gold": 30.24,
-    "Grandmaster": 27.28,
+    "Gold": 30.26,
+    "Grandmaster": 27.3,
     "Mario": 26.8,
     "Master": 27.6,
-    "Platinum": 29.67,
-    "Silver": 30.55
+    "Platinum": 29.7,
+    "Silver": 30.56
    },
    "Tama pless": {
-    "Bronze": 28.09,
+    "Bronze": 28.1,
     "Diamond": 26.2,
     "Gold": 26.86,
     "Grandmaster": 25.66,
     "Mario": 25.3,
     "Master": 25.96,
     "Platinum": 26.53,
-    "Silver": 27.61
+    "Silver": 27.63
    }
   },
   "star:9:0": {
    "Chip clip w/ punch + Front sub": {
-    "Bronze": 38.95,
+    "Bronze": 38.93,
     "Diamond": 32.7,
     "Gold": 33.46,
-    "Grandmaster": 32.02,
-    "Mario": 31.61,
+    "Grandmaster": 32.03,
+    "Mario": 31.63,
     "Master": 32.4,
     "Platinum": 33.16,
-    "Silver": 34.68
+    "Silver": 34.7
    }
   },
   "star:9:3": {
    "Chip clip w/ punch": {
-    "Bronze": 55.29,
+    "Bronze": 55.26,
     "Diamond": 35.46,
-    "Gold": 37.04,
+    "Gold": 37.06,
     "Grandmaster": 34.73,
     "Mario": 34.5,
     "Master": 35.23,
-    "Platinum": 36.08,
-    "Silver": 39.59
+    "Platinum": 36.1,
+    "Silver": 39.56
    },
    "[N64 REAL TIME] w/ sub": {
-    "Bronze": 47.9,
-    "Diamond": 36.15,
-    "Gold": 47.88,
-    "Grandmaster": 35.69,
+    "Bronze": 47.93,
+    "Diamond": 36.16,
+    "Gold": 47.86,
+    "Grandmaster": 35.7,
     "Mario": 35.46,
-    "Master": 35.92,
+    "Master": 35.93,
     "Platinum": 36.76,
-    "Silver": 47.89
+    "Silver": 47.9
    }
   },
   "star:9:5": {
    "Chip clip w/ punch": {
-    "Bronze": 43.95,
-    "Diamond": 41.74,
-    "Gold": 42.38,
-    "Grandmaster": 41.22,
+    "Bronze": 43.96,
+    "Diamond": 41.76,
+    "Gold": 42.4,
+    "Grandmaster": 41.23,
     "Mario": 41.1,
-    "Master": 41.47,
-    "Platinum": 41.94,
-    "Silver": 42.84
+    "Master": 41.5,
+    "Platinum": 41.96,
+    "Silver": 42.86
    }
   }
  },

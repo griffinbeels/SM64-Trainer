@@ -213,3 +213,22 @@ def test_the_ladder_model_is_recorded_with_the_data(payload):
     assert model["percentiles"]["Mario"] == 6.7
     assert model["percentiles"]["Bronze"] == 98.2
     assert model["fitted_rows"] >= 550
+
+
+def test_every_fitted_cutoff_is_a_time_usamune_can_show(payload):
+    """Usamune's clock is a frame counter, so only 30 of every 100 centisecond
+    values ever appear: 0, 3, 6, 10, 13, 16, 20, 23, 26, 30 …
+
+    2,435 of 4,656 derived cutoffs asked for a time nobody could hit until
+    2026-08-05. The community's own vetted ladders land on this set (2,508 of
+    2,509 — the exception, WF's OG Master at 8.85, is a typo upstream), so
+    ours must too or the two sources are not talking about the same clock."""
+    from sm64_events.core.timefmt import GAME_FPS
+    displayable = {(f % GAME_FPS) * 100 // GAME_FPS for f in range(GAME_FPS)}
+    unhittable = [(t["label"], item["name"], rank, seconds)
+                  for t in payload["targets"]
+                  for item in t["approaches"] + t["subsections"]
+                  if item.get("ladder")
+                  for rank, seconds in item["ladder"].items()
+                  if int(round(seconds * 100)) % 100 not in displayable]
+    assert unhittable == [], unhittable[:5]

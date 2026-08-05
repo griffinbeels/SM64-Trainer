@@ -33,11 +33,45 @@ def test_the_fastest_tier_is_near_the_fastest_times():
 
 
 def test_the_model_reproduces_its_own_percentiles():
+    from sm64_events.core.timefmt import attainable_cs
     times = _spread(1000, 2000, 1001)      # one value per 0.01s, exactly linear
     ladder = ladders.fit_ladder(times)
     for rank, percent in ladders.LADDER_PERCENTILES.items():
-        expected = 1000 + (2000 - 1000) * percent / 100
-        assert abs(ladder[rank] * 100 - expected) <= 1, (rank, ladder[rank])
+        raw = 1000 + (2000 - 1000) * percent / 100
+        # The percentile decides the cutoff and the timer decides which times
+        # exist, so the answer is the first DISPLAYABLE time at or after it --
+        # never the raw number, which is usually unhittable.
+        assert int(round(ladder[rank] * 100)) == attainable_cs(int(round(raw)))
+
+
+def test_every_cutoff_is_a_time_the_timer_can_actually_show():
+    from sm64_events.core.timefmt import GAME_FPS
+    displayable = {(f % GAME_FPS) * 100 // GAME_FPS for f in range(GAME_FPS)}
+    for low, high in ((1000, 2000), (517, 1013), (12345, 19999)):
+        ladder = ladders.fit_ladder(_spread(low, high, 200))
+        for rank, seconds in ladder.items():
+            assert int(round(seconds * 100)) % 100 in displayable, (rank, seconds)
+
+
+def test_quantising_only_ever_rounds_a_cutoff_UP():
+    """A cutoff is a threshold you must beat, so rounding down would quietly
+    make a rank harder than the number it was derived from. Up biases the
+    ladder gentle, which is the user's ruling (2026-08-05)."""
+    times = _spread(1000, 2000, 1001)
+    ladder = ladders.fit_ladder(times)
+    for rank, percent in ladders.LADDER_PERCENTILES.items():
+        raw = 1000 + (2000 - 1000) * percent / 100
+        assert ladder[rank] * 100 >= raw - 0.5
+
+
+def test_the_quantiser_is_replaceable():
+    """The model has already changed once; changing it again must stay cheap."""
+    times = _spread(1000, 2000, 200)
+    raw = ladders.fit_ladder(times, quantise=lambda cs: cs,
+                             step=lambda cs: cs + 1)
+    quantised = ladders.fit_ladder(times)
+    assert raw != quantised
+    assert all(quantised[r] >= raw[r] for r in raw)
 
 
 def test_a_cutoff_inside_a_real_gap_moves_to_its_slow_edge():
