@@ -129,6 +129,11 @@ export const TUNABLES = {
     min: 3, max: 40, step: 1, unit: "%",
     why: "A SHARE of the row's own width — same normalizing rule as Identity/Rank column width above. This is the PB TAG's own share (it sits right-aligned inside it, so a share wider than the tag itself just becomes breathing room on its left); the fold chevron beside it stays its own fixed ~30px column, untouched by any of these three shares — small enough at every supported card width that folding it into a combined 'PB + chevron' share was not worth restructuring the row's markup to express.",
   },
+  pbWidth: {
+    group: "Result", label: "PB minimum width", value: 100,
+    min: 40, max: 200, step: 2, unit: "px",
+    why: "The floor under the PB TAG's own box (not the grid track's share, which stays a free-floating percentage) -- restored 2026-08-05, same reasoning the original 92px min-width existed for before the percent-columns round deleted it: without a constant here, the pb TRACK's `auto` minimum reads straight off the tag's own TEXT, and \"no PB yet\" is shorter than a formatted time, so the strategy selector two columns over walked left and right by row depending on what each row's PB happened to say (\"the strategy selector position was in the same spot regardless of whether the user has a PB or not\"). Giving the TAG a constant floor makes its min-content contribution to the track constant too, which is what makes every row's columns land at the same x -- the grid track's own `minmax(auto, …)` shape is untouched, so a genuinely long PB string still grows the track exactly as it does today.",
+  },
   pbSize: {
     group: "Result", label: "PB text size", value: 13,
     min: 9, max: 28, step: 1, unit: "px",

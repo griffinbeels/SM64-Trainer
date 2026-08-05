@@ -4842,20 +4842,31 @@
   .log-card-head .pbtag {
     grid-area: pb; justify-self: end;
     font-size: var(--log-pb-size, 13px);
-    /* No `min-width` here since the percent-columns round (2026-08-04, spec
-       practice-log-entity-cards): the old `--log-pb-width` guaranteed this
-       tag a fixed 92px so the chevron beside it never jumped as the saved
-       time's digit count changed. In `oneLine` that job now belongs to the
-       `pb` grid TRACK itself (`--log-pb-percent` on the grid-template-
-       columns rule below) -- this tag is `justify-self: end` (never
-       stretched), so it still renders at its own content width, but that
-       width is now read against a track sized as a share of the CARD
-       rather than a bare literal, and the fold chevron beside it is its own
-       fixed ~30px `auto` column regardless (see that rule's own comment).
-       `twoLine`/`stacked` never had fold adjacent to this tag in the first
-       place (their `grid-template-areas` never put `pb` and `fold` on the
-       same row), so the jitter this min-width existed to prevent was never
-       reachable there -- nothing to preserve for those two layouts. */
+    /* RESTORED 2026-08-05, and the regression the percent-columns round
+       (2026-08-04) introduced by removing this is a SHARED COLUMN GRID one,
+       not the backward-bleed BUG 1 already documented above: "the strategy
+       selector position was in the same spot regardless of whether the user
+       has a PB or not" (his screenshot: rows reading a formatted time put the
+       selector at one x, rows reading "no PB yet" put it noticeably further
+       right). `.log-card-head` is a SEPARATE grid per card, not a subgrid
+       shared down the list, so nothing forces two rows' columns to agree --
+       the only thing that DOES is every row computing the identical track
+       widths, which needs every row's PB TRACK minimum to be the same
+       number. The `pb` track below already reads `minmax(auto, …)`
+       DELIBERATELY (its own comment explains why `0` was wrong: it disables
+       grid's automatic-minimum-size protection entirely) -- `auto` means
+       "this track's floor is whatever is inside it," and without a min-width
+       HERE that is the PB TAG'S OWN TEXT, which is shorter for "no PB yet"
+       than for a saved time. Giving the tag a constant floor makes its
+       min-content contribution to the track constant too, so `auto` reads
+       the SAME number on every row regardless of what that row's PB says --
+       the track's own shape (a share of the card, still free to grow past
+       this floor for a genuinely long PB string) is untouched. This is a
+       DIFFERENT number from the deleted 92px: `--log-pb-width` is a fresh
+       logtuning.js row (default 100px, "Result" group), tuned against a
+       render carrying every PB length in play (a short time, a long one,
+       "no PB yet"), not a restatement of the old constant. */
+    min-width: var(--log-pb-width, 100px);
     /* Pushes the PB tag away from the rank column -- 0 by default (byte-
        identical), a real gap once a wide rank display (Stacked included)
        leaves the two crowded together. */
