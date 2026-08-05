@@ -32,7 +32,7 @@ from pathlib import Path
 import uvicorn
 
 from sm64_events.core.events import Event
-from sm64_events.core.paths import (bundled_defaults_seed, bundled_rank_standards,
+from sm64_events.core.paths import (bundled_defaults_seed, bundled_rank_standards, bundled_sheet_ladders,
                                     rank_standards_path)
 from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.app import create_app
@@ -523,7 +523,8 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
     # sweep run made exactly that mistake and under-reported the one card it
     # was built to measure (2026-07-28), which is the failure mode
     # .claude/rules/ui-core.md warns reads as a broken builder.
-    ranks = RankStandards(rank_standards_path(), bundled_rank_standards())
+    ranks = RankStandards(rank_standards_path(), bundled_rank_standards(),
+                          bundled_sheet_ladders())
     ranks.load()
     service = TrackerService(database, broadcaster, ranks=ranks)
     poller = Poller(_OfflineMemory(), [], service)

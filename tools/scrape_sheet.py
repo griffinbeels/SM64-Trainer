@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from sm64_events.library.audit import load_overrides           # noqa: E402
+from sm64_events.library.adopt import adoptable, summary        # noqa: E402
 from sm64_events.library.build import build, coverage          # noqa: E402
 from sm64_events.library.ladders import fit_payload            # noqa: E402
 from sm64_events.library.mapping import UNMAPPED_EXPECTED      # noqa: E402
@@ -35,6 +36,13 @@ SHEET_ID = "1J20aivGnvLlAuyRIMMclIFUmrkHXUzgcDmYa31gdtCI"
 # has no readable line diff either way.
 OUT = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
        / "data" / "sheet_library.seed.json.gz")
+# Its OWN file, never merged into rank_standards.seed.json: that is what makes
+# "a fitted ladder cannot overwrite a vetted one" structural instead of a rule
+# somebody has to remember.
+LADDERS_OUT = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
+               / "data" / "sheet_ladders.seed.json")
+VETTED = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
+          / "data" / "rank_standards.seed.json")
 
 
 def export_url(fmt: str = "xlsx") -> str:
@@ -85,6 +93,21 @@ def main() -> None:
     with gzip.GzipFile(OUT, "wb", compresslevel=9, mtime=0) as out:
         out.write(json.dumps(payload, indent=1, ensure_ascii=False).encode("utf-8"))
 
+    vetted_seed = json.loads(VETTED.read_text(encoding="utf-8"))
+    vetted = {ek: {s: l for s, l in e.get("strategies", {}).items() if l}
+              for ek, e in vetted_seed["entities"].items()}
+    # Entities whose strategy names are variant-qualified; a bare name cannot
+    # identify a ladder there, so nothing is adopted onto them.
+    qualified = {ek for ek, e in vetted_seed["entities"].items()
+                 if e.get("exit_variants")}
+    adopted = adoptable(payload, vetted, qualified)
+    LADDERS_OUT.write_text(json.dumps(
+        {"version": 1, "source": "sheet",
+         "sheet_revision": payload["sheet_revision"],
+         "model": payload["ladder_model"]["percentiles"],
+         "entities": adopted}, indent=1, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8", newline="")
+
     cov = coverage(payload)
     size_mb = OUT.stat().st_size / 1_000_000
     print(f"wrote {OUT} ({size_mb:.1f} MB)")
@@ -110,6 +133,10 @@ def main() -> None:
     print(f"  {cov['approaches']} approaches, {cov['subsections']} subsections, "
           f"{cov['entries']} entries, {cov['videos']} videos, "
           f"{cov['runners']} runners")
+    adopt_stats = summary(adopted, payload)
+    print(f"  wrote {LADDERS_OUT.name}: {adopt_stats['strategies']} strategies "
+          f"across {adopt_stats['entities']} entities that no vetted ladder "
+          f"already describes")
     drift = payload.get("styling_drift") or []
     if drift:
         print(f"  {len(drift)} rows where the sheet's BOLD disagrees with the "

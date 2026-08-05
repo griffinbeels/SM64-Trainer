@@ -70,7 +70,7 @@ def match_vetted(vetted: dict, approaches: list) -> dict:
     return out
 
 
-def adoptable(payload: dict, vetted_by_entity: dict) -> dict:
+def adoptable(payload: dict, vetted_by_entity: dict, qualified: set = ()) -> dict:
     """{entity_key: {strategy name: fitted ladder}} for approaches that are
     genuinely new — a star we practice, an approach with a ladder, and no
     vetted strategy already describing it.
@@ -83,6 +83,14 @@ def adoptable(payload: dict, vetted_by_entity: dict) -> dict:
         entity = target.get("entity_key")
         if not entity:
             continue                       # Castle Movements wait for a segment
+        if entity in qualified:
+            # A 100-coin star's strategies are VARIANT-QUALIFIED ("100c + Race
+            # · Open") because CCM publishes two exit-star variants that both
+            # define "Standard" AND "Open", so a bare name cannot identify a
+            # ladder there. Adopting "100 coin star Xcam" unqualified breaks
+            # that invariant, and the sheet row does not say which exit star it
+            # ran -- so these wait rather than guess.
+            continue
         approaches = target["approaches"]
         matched = match_vetted(vetted_by_entity.get(entity, {}), approaches)
         for index, approach in enumerate(approaches):

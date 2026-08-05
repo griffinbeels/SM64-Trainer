@@ -166,6 +166,17 @@ def bundled_defaults_seed() -> Path | None:
     return cand if cand.exists() else None
 
 
+def bundled_sheet_ladders() -> Path | None:
+    """Ladders derived from the Ultimate Sheet. Its own file, never merged into
+    rank_standards.seed.json, so a fitted ladder structurally cannot overwrite
+    a vetted one. Mirrors bundled_rank_standards() exactly."""
+    if is_frozen():
+        cand = Path(getattr(sys, "_MEIPASS", "")) / "sheet_ladders.seed.json"
+        return cand if cand.exists() else None
+    cand = Path(__file__).resolve().parent.parent / "data" / "sheet_ladders.seed.json"
+    return cand if cand.exists() else None
+
+
 def install_root() -> Path:
     """Directory containing the running executable — the onedir install root
     when frozen (SM64Trainer.exe + _internal\\ live here). The updater and the
