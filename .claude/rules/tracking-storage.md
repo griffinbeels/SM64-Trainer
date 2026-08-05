@@ -395,6 +395,42 @@ Recording nothing beats recording a wrong time — but it looks like a bug the
 first time it is seen, and the open question about how often a REAL entry
 misses its touch is in the detectors rule.
 
+## A failure only names what he chose, and winning ends everything
+
+Two rulings, 2026-08-05. Full reasoning in the two docstrings named below;
+this is the map.
+
+**A reset nobody chose is Unassigned** — *"we shouldn't misattribute resets
+without explicit assignment or detection (by the player completing a valid
+attempt)."* Entering HMC arms HMC→DDD, HMC→RR and MIPS Clip together; he went
+to DDD with nothing selected, and HMC→RR grew a practice card off a later
+reset. `projection.py::_untargeted_failure_for_segment` generalises the
+Bowser-only `_untargeted_ambient_failure` to EVERY def: a non-success closure
+records only when `self.target` names it. Arming is untouched — every def
+still runs and still records its SUCCESS, and the failed span still lands in
+Unassigned. His "literally only 1 option" clause needs no rule of its own: a
+lone option is auto-selected (`loneRouteOption`, `ArenaRow`), which writes the
+target. Written as a separate "only movement in flight" carve-out first, it
+let his exact row through — the siblings all resolve BEFORE it does.
+
+**Measured before shipping** via `tools/measure_unchosen_resets.py` (replays a
+journal under both rules and diffs): 351 / 314 / 8 rows removed across the
+three journals, all resets, zero successes, zero hand-labelled rows, zero
+saved PBs. That tool's own trap, worth reading before writing another like it:
+its first version called a row "labelled" if the attempt had a `strat_tag` and
+reported 7 of 8 destroyed — but every seeded movement carries
+`default_strat = "Standard"`, so it was counting the DEFAULT. A human
+labelling a row is a journal event (`strat_overrides`).
+
+**Winning the game leaves nothing running** — *"at the end of the game... there
+should be absolutely no segments still running (the game is literally over)."*
+`segments.py::feed` ends by silently cancelling every still-armed def on
+`key_grabbed` with `which == "grand"` (already journalled, so no new memory
+read, and retroactive on replay). LAST in `feed` so Bowser 3's own success
+still records; SILENT via `_cancel_topologically` on that helper's own grounds.
+The staleness predates the endgame — a loose movement whose end never fires
+stays armed indefinitely — and that is pinned as its own precondition test.
+
 ## A pause exit is not a retry
 
 `SegmentEngine._arrived_by_a_real_move`, gating the anchor branch of BOTH armed

@@ -2518,3 +2518,160 @@ def test_the_recovered_destination_reaches_the_matcher():
     wins = [a for a in attempts if a.segment_id == 9 and a.outcome == "success"]
     assert len(wins) == 1
     assert wins[0].rta_frames == 400, "timed to the TOUCH, not the load"
+
+
+# -- the general rule: a reset nobody chose is Unassigned -----------------
+#
+# Griffin, 2026-08-05, doing MIPS Clip with nothing selected: "if I reset BUT
+# HAVEN'T EXPLICITLY SELECTED ANYTHING (or if it's not autoselected as a
+# result of COMPLETING THE SEGMENT SUCCESSFULLY), then a reset should always
+# be unassigned... Unless there is literally only 1 option, or unless the user
+# has selected it / it visually shows as selected in the star/segment picker,
+# then it should NEVER have a reset attributed... we should still be tracking
+# the possibility of completion, but we shouldn't misattribute resets without
+# explicit assignment."
+#
+# Entering Hazy Maze Cave arms HMC->DDD, HMC->RR and MIPS Clip together -- he
+# cannot have chosen among them, because he chose nothing -- and one reset
+# closed all three, so "HMC -> RR (re-entry, pause exit)" grew a practice card
+# off a run he never did. This generalises the Bowser-only suppression above
+# to every definition; measured before shipping across all three real
+# journals (tools/measure_unchosen_resets.py): 351 / 314 / 8 rows removed,
+# every one a reset, zero successes, zero hand-labelled rows, zero saved PBs.
+
+
+def _hmc_movement(def_id, name, to_level):
+    """One of the several castle movements a single HMC entry arms."""
+    from sm64_events.tracking.segments import SegmentDef
+    return SegmentDef(
+        id=def_id, name=name, enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 7}],
+        end_triggers=[{"type": "level_enter", "to": to_level}],
+        waypoints=[], guards=[], match_mode="loose")
+
+
+AMBIGUOUS = [_hmc_movement(301, "HMC -> DDD", 23),
+             _hmc_movement(302, "HMC -> RR", 15)]
+
+# His run, as the journal actually records it: enter HMC (both arm), reset
+# once, leave to DDD (301 succeeds, 302 stays armed because he never went to
+# RR), then reset again -- and THAT is where 302's phantom row came from. The
+# reset does not close a loose movement, so the fixture has to reach the
+# closure the way play does, or it asserts on a row that never existed.
+HIS_RUN = [
+    jev(1, "level_changed", 900, {"from": 6, "to": 7}),
+    jev(2, "practice_reset", 1400, {"igt_frames_before": 500, "mario_acted": True}),
+    jev(3, "level_changed", 2000, {"from": 7, "to": 23}),
+    jev(4, "practice_reset", 2400, {"igt_frames_before": 900, "mario_acted": True}),
+    jev(5, "level_changed", 3000, {"from": 23, "to": 6}),
+    jev(6, "game_reset", 3400, {}),
+]
+
+
+def test_the_movement_he_never_chose_claims_no_failure_row():
+    """HMC -> RR must not grow a card off a run he never did."""
+    attempts = project(HIS_RUN, segments=AMBIGUOUS)
+    strays = [(a.id, a.segment_id, a.outcome) for a in attempts
+              if a.segment_id == 302]
+    assert not strays, f"HMC -> RR claimed a failure nobody chose: {strays}"
+
+
+def test_the_one_he_completed_still_records_its_success():
+    """"We should still be tracking the possibility of completion." Arming is
+    untouched -- every def still runs and still records its SUCCESS, which is
+    also what makes it the target for everything after it."""
+    attempts = project(HIS_RUN, segments=AMBIGUOUS)
+    done = [a for a in attempts if a.segment_id == 301 and a.outcome == "success"]
+    assert done, (
+        "completing a movement he never explicitly picked did not record: "
+        f"{[(a.id, a.segment_id, a.outcome) for a in attempts]}")
+
+
+def test_the_span_is_not_lost_only_its_misattribution():
+    """He asked for these to be UNASSIGNED, not deleted."""
+    attempts = project(HIS_RUN, segments=AMBIGUOUS)
+    assert any(a.segment_id is None and a.outcome != "success"
+               for a in attempts), (
+        "the failed span vanished entirely instead of landing in Unassigned: "
+        f"{[(a.id, a.segment_id, a.outcome) for a in attempts]}")
+
+
+def test_the_one_he_chose_still_records_its_failure():
+    """The target is the signal, and it is the same one the picker shows --
+    including when the app auto-picks a lone option, which is how his
+    "literally only 1 option" clause is honoured without a second rule."""
+    events = list(HIS_RUN)
+    events.insert(1, jev(7, "target_set", 950,
+                         {"kind": "segment", "segment_id": 302}))
+    attempts = project(events, segments=AMBIGUOUS)
+    assert any(a.segment_id == 302 and a.outcome != "success"
+               for a in attempts), (
+        "the movement he explicitly picked lost its failure row: "
+        f"{[(a.id, a.segment_id, a.outcome) for a in attempts]}")
+
+
+# -- winning the game stops everything that was still running --------------
+#
+# Griffin, 2026-08-05, on the credits screen with a live "CCM -> BBH" timer
+# still ticking: "at the end of the game (i.e., after grabbing the final star
+# and finishing the Bowser 3 segment), there should be absolutely no segments
+# still running (the game is literally over), so seeing CCM -> BBH is a bug.
+# It also seems to persist to new areas of the map?"
+#
+# The staleness is real and predates the endgame: a loose movement whose end
+# it never reaches stays armed indefinitely, which is what the first
+# assertion below pins so the fixture cannot quietly stop being about
+# anything. `key_grabbed` with which="grand" is the game's own ending (the
+# grand star never fires star_collected, so key.py stamps this instead) and
+# is already journalled -- no new memory read, and it applies retroactively
+# on replay like every other projection rule.
+
+
+def _stale_movement():
+    """CCM -> BBH: armed by entering CCM, ended only by entering BBH."""
+    from sm64_events.tracking.segments import SegmentDef
+    return SegmentDef(
+        id=401, name="CCM -> BBH", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 5}],
+        end_triggers=[{"type": "level_enter", "to": 4}],
+        waypoints=[], guards=[], match_mode="loose")
+
+
+def _through_the_endgame():
+    return [jev(1, "level_changed", 900, {"from": 6, "to": 5}),    # arms it
+            jev(2, "level_changed", 1200, {"from": 5, "to": 21})]  # BitS, not BBH
+
+
+def test_a_movement_survives_leaving_its_own_course():
+    """The PRECONDITION, pinned: without this the test below would pass on a
+    definition that had already disarmed for unrelated reasons."""
+    p = Projector(segments=[_stale_movement()])
+    for ev in _through_the_endgame():
+        p.feed(ev)
+    assert p.armed_segment_ids() == {401}, (
+        "the fixture never reaches a stale armed movement, so it cannot be "
+        "measuring what happens when the game ends")
+
+
+def test_the_grand_star_leaves_nothing_running():
+    p = Projector(segments=[_stale_movement()])
+    for ev in _through_the_endgame():
+        p.feed(ev)
+    p.feed(jev(3, "key_grabbed", 1500,
+               {"level": 34, "which": "grand", "igt_frames": 1306}))
+    assert p.armed_segment_ids() == set(), (
+        "a segment is still running after the game was won: "
+        f"{p.armed_segment_ids()}")
+
+
+def test_the_game_ending_banks_no_failure_rows():
+    """Silent, like every other topological cancel: "a movement that never
+    happened must not bank a failure" -- and one interrupted by WINNING did
+    not happen either."""
+    p = Projector(segments=[_stale_movement()])
+    for ev in _through_the_endgame():
+        p.feed(ev)
+    closed = p.feed(jev(3, "key_grabbed", 1500,
+                        {"level": 34, "which": "grand", "igt_frames": 1306}))
+    strays = [(a.segment_id, a.outcome) for a in closed if a.segment_id == 401]
+    assert not strays, f"winning the game banked a phantom failure: {strays}"

@@ -871,8 +871,8 @@ class Projector:
                 self._last_star_attempted = hc
                 continue
             if (hc is None and seg_def is not None
-                    and arms_ambiently(seg_def.start_triggers)
-                    and self._untargeted_ambient_failure(a.segment_id, a.outcome)):
+                    and self._untargeted_failure_for_segment(
+                        a.segment_id, a.outcome)):
                 # Caveat 20's sibling suppression: Bowser's seg:reds->pipe:*
                 # and seg:<abbrev>-pipe never reattribute (hc is None for
                 # both), so it is THIS def's own row — recorded honestly
@@ -1523,6 +1523,60 @@ class Projector:
         d = self._segments.definition(segment_id)
         return (d is not None and arms_ambiently(d.start_triggers)
                and hundred_coin_entity(d.start_triggers, d.waypoints) is None)
+
+    def _untargeted_failure_for_segment(self, segment_id: int,
+                                        outcome: str) -> bool:
+        """True when this segment's own closing FAILURE row must not be kept.
+
+        Generalises `_untargeted_ambient_failure` (below) from the Bowser
+        family to EVERY definition, on Griffin's own general statement of the
+        rule (2026-08-05):
+
+            "if I reset BUT HAVEN'T EXPLICITLY SELECTED ANYTHING (or if it's
+            not autoselected as a result of COMPLETING THE SEGMENT
+            SUCCESSFULLY), then a reset should always be unassigned. Unless
+            there is literally only 1 option, or unless the user has selected
+            it / it visually shows as selected in the star/segment picker,
+            then it should NEVER have a reset attributed... we should still be
+            tracking the possibility of completion, but we shouldn't
+            misattribute resets without explicit assignment or detection (by
+            the player completing a valid attempt)."
+
+        The case that produced it: doing MIPS Clip with nothing selected.
+        Entering Hazy Maze Cave arms HMC->DDD, HMC->RR and MIPS Clip together
+        — the player cannot have chosen among them, because he chose nothing —
+        and a reset closed all three, so "HMC -> RR (re-entry, pause exit)"
+        grew a practice card off a run he never did and never picked.
+
+        TWO ways a failure still records, and each is an existing signal
+        rather than a new one. Note what is NOT among them: a separate "was
+        this the only movement in flight" carve-out for his "literally only 1
+        option" clause. It was written, measured, and removed -- a lone option
+        is AUTO-SELECTED (`loneRouteOption`, `ArenaRow`), which writes the
+        target, so signal 1 already covers it; and as a standing rule it
+        defeated the fix, because the definitions armed alongside HMC->RR all
+        resolve BEFORE it does, leaving it looking like the only candidate at
+        the moment it closes -- which is exactly the row he reported.
+
+        1. `self.target` names this def — he picked it, or the app auto-picked
+           it somewhere he can see (`loneRouteOption`, `ArenaRow`), which is
+           exactly what "visually shows as selected in the picker" means.
+        2. The outcome is a SUCCESS, never gated here at all. Completing the
+           run IS the evidence, targeted or not — the same half
+           `_untargeted_failure` states for the 100-coin star, and the
+           mechanism behind his "or if it's not autoselected as a result of
+           COMPLETING THE SEGMENT SUCCESSFULLY": a segment success already
+           auto-follows the target onto itself, so the completion he means
+           becomes signal 1 for everything after it, through the door every
+           other completion already uses.
+
+        WHAT THIS DELIBERATELY DOES NOT CHANGE: arming. "We should still be
+        tracking the possibility of completion" — every def still arms, still
+        runs its matcher, and still records its SUCCESS. Only the failure ROW
+        is dropped, and the span is not lost: `_close`/`_close_by_death`
+        record it under Unassigned, which is where he said it belongs.
+        """
+        return outcome != "success" and self.target != ("segment", segment_id)
 
     def _untargeted_ambient_failure(self, segment_id: int, outcome: str) -> bool:
         """True when `feed()`'s `seg_closed` loop must NOT record THIS
