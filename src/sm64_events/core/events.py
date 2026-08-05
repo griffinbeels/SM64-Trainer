@@ -19,6 +19,18 @@ SCHEMA_VERSION = 1
 # `Attempt.timed_by` are what let a display say so.
 IGT_BEARING_EVENT_TYPES = frozenset({
     "star_collected", "key_grabbed", "warp_entered", "death"})
+# `moment_reached` CARRIES an `igt_frames` (detectors/moment.py) and is
+# deliberately NOT in that set, which asks a different question: "would a
+# delta-timed attempt closing on this have been better off with Usamune's
+# number", i.e. should the caveat mark it OLD CLOCK. For a moment the answer
+# is usually no. `SegmentEngine._close` only believes a closing event's IGT
+# when Usamune's counter was zeroed on the very frame the segment armed, and a
+# moment-ended segment often arms somewhere else entirely -- Lakitu Skip arms
+# on `spawned`, ~52 frames after the savestate load that zeroed the counter
+# (measured over his own journal, 2026-08-05: 51-55 frames across 7 runs). Its
+# delta is therefore how that segment is measured, permanently and correctly,
+# exactly like a movement closing on a `level_changed` -- and marking it would
+# put a warning on every subsection of that shape.
 
 
 @dataclass(frozen=True)

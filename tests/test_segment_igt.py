@@ -22,7 +22,9 @@ from sm64_events.core.paths import bundled_defaults_seed
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.core.timefmt import format_igt
 from sm64_events.main import build_detectors
-from sm64_events.memory.addresses import (ACT_DISAPPEARED, ACT_PUSHING_DOOR,
+from sm64_events.memory.addresses import (ACT_DISAPPEARED,
+                                          ACT_INTRO_CUTSCENE,
+                                          ACT_PUSHING_DOOR,
                                           ACT_STAR_DANCE_EXIT)
 from sm64_events.storage.db import EventRow
 from sm64_events.tracking.projection import project
@@ -315,3 +317,123 @@ def test_only_a_closing_event_that_could_have_carried_igt_is_comparable():
     # A `level_changed` closure is delta for a reason that will never change,
     # so it is NOT marked however old it is.
     assert "level_changed" not in IGT_BEARING_EVENT_TYPES
+
+
+# --- a moment carries Usamune's number too (live report 2026-08-05) ---------
+#
+# Lakitu Skip ends on `moment_reached door_open` since his ruling that day, and
+# a moment was the one boundary type carrying no time: it was absent from
+# IGT_BEARING_EVENT_TYPES, so `_close` fell through to the `global_timer`
+# delta. That is the number he was shown, and it is not the number on screen:
+#
+#   "in Usamune, that's the timer it actually displays upon opening the door"
+#   -- with the emulator reading 0'07"76 as he took hold of it, and
+#   "I would expect the timer to stop on door entry and the practice log entry
+#    to display for the DOOR timing"
+#
+# This matters far more than for the pipe family: EVERY subsection begins and
+# ends on a moment (that is what the type is for), so a delta-timed moment
+# would have been the clock for the entire feature.
+
+LAKITU_LEVEL = 16                   # Castle Grounds
+SPAWN_FRAME = 1000                  # the frame the intro cutscene ends
+COUNTER_AT_DOOR = 233               # Usamune's counter as he takes the door
+DOOR_FRAME = SPAWN_FRAME + COUNTER_AT_DOOR
+DOOR_DISPLAY = COUNTER_AT_DOOR + 1  # counter + IgtClock.DISPLAY_TICK
+
+
+def seeded_lakitu_def() -> SegmentDef:
+    """The SHIPPED Lakitu Skip, so this cannot pass against a corpus row that
+    has stopped ending at the door."""
+    seed = json.loads(bundled_defaults_seed().read_text(encoding="utf-8"))
+    row = next(s for s in seed["segments"] if s["seed_key"] == "seg:lakitu-skip")
+    assert row["end_triggers"][0]["type"] == "moment_reached", (
+        "Lakitu Skip no longer ends on a moment -- this file is measuring "
+        "something else")
+    return SegmentDef(id=7, name=row["name"], enabled=True,
+                      start_triggers=row["start_triggers"],
+                      end_triggers=row["end_triggers"],
+                      guards=row["guards"], waypoints=row["waypoints"],
+                      match_mode=row.get("match_mode", "strict"))
+
+
+def a_lakitu_run(door_frame=DOOR_FRAME, per_frame=None):
+    """Spawn onto the grounds out of the intro cutscene, walk, take the door.
+
+    `spawned` fires on the edge OUT of ACT_INTRO_CUTSCENE -- addresses.py calls
+    that "the canonical Lakitu-skip timing start", live-verified 2026-06-12 --
+    and Usamune's counter zeroes on the same load, so the counter reads
+    frame - SPAWN_FRAME throughout.
+    """
+    per_frame = per_frame or {}
+
+    def one(frame, **kwargs):
+        return snap(frame, max(frame - SPAWN_FRAME, 0), level=LAKITU_LEVEL,
+                    **{**kwargs, **per_frame.get(frame, {})})
+
+    frames = [one(f, action=ACT_INTRO_CUTSCENE)
+              for f in range(SPAWN_FRAME - 30, SPAWN_FRAME)]
+    frames += [one(f) for f in range(SPAWN_FRAME, door_frame)]
+    # Two frames INSIDE the door action: the moment is the entry EDGE, so a
+    # single frame would leave nothing for the next assertion to prove is not
+    # a second moment.
+    frames += [one(door_frame, action=ACT_PUSHING_DOOR),
+               one(door_frame + 1, action=ACT_PUSHING_DOOR)]
+    return frames
+
+
+def test_the_door_carries_the_number_usamune_shows():
+    rows = journal(a_lakitu_run())
+    [moment] = [r for r in rows if r.type == "moment_reached"]
+    assert moment.frame == DOOR_FRAME, "the moment is the entry EDGE"
+    assert moment.payload["kind"] == "door_open"
+    assert moment.payload["igt_frames"] == DOOR_DISPLAY
+
+
+def test_lakitu_still_measures_from_the_spawn_not_from_the_load():
+    """The number CARRIED is not automatically the number TAKEN, and here that
+    distinction is the whole gap between his two requests.
+
+    Usamune's counter zeroes on the savestate LOAD; Lakitu Skip arms on
+    `spawned`, when Mario becomes controllable. Measured over his own journal
+    2026-08-05, seven runs: 51-55 frames apart, ~1.7 s of fade. So the
+    on-screen number at the door is ~1.7 s HIGHER than the spawn-to-door time,
+    and taking it verbatim would re-open task 0026's complaint from the other
+    side -- that one was "it reads 7.33 where the community reads 6.13".
+
+    `_close` already refuses it, and correctly: a closing event's IGT is
+    believed only when Usamune's counter was zeroed on the very frame the
+    segment armed. This pins that a moment carrying a number did not quietly
+    change which number Lakitu banks.
+    """
+    attempt = one_success(journal(a_lakitu_run()), seeded_lakitu_def())
+    assert attempt.closed_by == "moment_reached"
+    assert attempt.timed_by == "delta"
+    assert attempt.rta_frames == DOOR_FRAME - SPAWN_FRAME
+
+
+def test_a_subsection_armed_ON_the_zeroing_event_does_take_usamunes_number():
+    """The case a carried IGT exists for, and the shape most subsections have:
+    armed by the very anchor that zeroed the counter, so the counter measures
+    exactly this segment and the door banks what the screen shows."""
+    from_anchor = SegmentDef(
+        id=8, name="Grounds door", enabled=True,
+        start_triggers=[{"type": "attempt_anchor", "level": LAKITU_LEVEL}],
+        end_triggers=[{"type": "moment_reached", "kind": "door_open"}],
+        guards=[], waypoints=[], match_mode="loose")
+    # The counter drops to 0 at SPAWN_FRAME, which is what the anchor detector
+    # reads as a practice reset -- so the arm and the zero are one frame.
+    frames = [snap(f, 600 + (f - (SPAWN_FRAME - 30)), level=LAKITU_LEVEL)
+              for f in range(SPAWN_FRAME - 30, SPAWN_FRAME)]
+    frames += [snap(f, f - SPAWN_FRAME, level=LAKITU_LEVEL)
+               for f in range(SPAWN_FRAME, DOOR_FRAME)]
+    frames += [snap(DOOR_FRAME, COUNTER_AT_DOOR, level=LAKITU_LEVEL,
+                    action=ACT_PUSHING_DOOR),
+               snap(DOOR_FRAME + 1, COUNTER_AT_DOOR + 1, level=LAKITU_LEVEL,
+                    action=ACT_PUSHING_DOOR)]
+    rows = journal(frames)
+    assert any(r.type == "practice_reset" for r in rows), (
+        "the fixture produced no anchor, so the claim is unreachable")
+    attempt = one_success(rows, from_anchor)
+    assert attempt.timed_by == "igt"
+    assert attempt.rta_frames == DOOR_DISPLAY

@@ -48,6 +48,8 @@ from dataclasses import dataclass
 
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
+from sm64_events.core.timefmt import format_igt
+from sm64_events.detectors.igt_clock import IgtClock
 from sm64_events.memory import addresses as A
 
 
@@ -73,6 +75,9 @@ class MomentDetector:
     def __init__(self, target_active: Callable[[], bool] = lambda: True):
         self._target_active = target_active
         self._counts: dict[str, int] = {}
+        # A moment CARRIES USAMUNE'S OWN NUMBER, through the shared clock that
+        # star_grab, key and warp already read -- see `_emit`.
+        self._clock = IgtClock()
 
     def reset(self) -> None:
         """A new attempt opened: ordinals count from here.
@@ -99,9 +104,32 @@ class MomentDetector:
         return events
 
     def _emit(self, kind: str, curr: GameSnapshot) -> Event:
+        """One moment, stamped with Usamune's own number at that frame.
+
+        WHY IT CARRIES A TIME AT ALL. A segment closing on a moment used to be
+        timed by `close.frame - arm.start_frame`, the `global_timer` delta --
+        which is wrong for two independent reasons neither of which is a
+        constant (the arm frame is where a 60 Hz poll caught a 30 Hz counter
+        drop, and the delta counts paused frames), and is not the number on
+        screen. Live report 2026-08-05: Usamune read **0'07"76** as he opened
+        the castle door, and his expectation is exactly that — *"I would
+        expect the timer to stop on door entry and the practice log entry to
+        display for the DOOR timing"*.
+
+        The touch frame IS the observed edge frame, for the same reason
+        `warp.py` states: a moment is the frame Mario ENTERED the action, so
+        there is no action-timer backdating to be had and the event's own
+        `frame` and the frame the reading is taken at are one number.
+
+        `igt` rides along pre-formatted, matching every other IGT-bearing
+        event's payload, so a consumer never re-derives the display form.
+        """
         self._counts[kind] = self._counts.get(kind, 0) + 1
+        igt_frames, source = self._clock.igt_at(curr.global_timer, curr)
         return Event(type="moment_reached", frame=curr.global_timer,
                      timestamp_utc=curr.wall_time_utc,
                      payload={"kind": kind, "ordinal": self._counts[kind],
                               "level": curr.curr_level, "area": curr.curr_area,
-                              "action": curr.mario_action})
+                              "action": curr.mario_action,
+                              "igt_frames": igt_frames, "igt_source": source,
+                              "igt": format_igt(igt_frames)})
