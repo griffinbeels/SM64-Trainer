@@ -91,24 +91,34 @@ def test_no_stylesheet_rule_reorders_the_practice_page_cards():
     assert offenders == [], f"CSS `order` on practice-page cards: {offenders}"
 
 
-def test_the_auto_open_slot_asks_whether_the_active_entity_has_played():
-    """`live.activeKey ?? frozen.topKey` is the exact regression.
+def test_the_auto_open_slot_is_resolved_against_the_rendered_list():
+    """The slot may only be chosen from cards that are actually drawn.
 
-    The nullish fallback reads as "the active card leads, else the newest",
-    which is right about ORDER and wrong about the slot: it hands the slot to
-    an entity with nothing recorded, which is the one thing the rule forbids.
-    Mutation-prove by restoring the `??` form -- this goes red, and the three
-    `played_keys` tests in test_ui_practice_log.py stay green, which is
-    precisely why the composition needs its own guard.
+    It was resolved in practice.js against the UNFILTERED view, and the two
+    lists genuinely disagree: a Bowser course's reds star and its pipe segment
+    tie on `last_activity` (measured on his live session -- both 1414), stars
+    sort first, and `applyRedsPipeExclusivity` renders whichever half his
+    star/pipe toggle names. So the slot named the star while the log drew the
+    segment, and every card sat closed.
+
+    Mutation-prove by resolving it in practice.js again and passing `topKey`
+    down: this goes red, and every pure-rule test stays green -- which is the
+    whole reason a "who decides" guard has to exist beside them.
     """
-    source = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
-    slot = re.search(r"^\s*const topKey = .*$", source, re.M)
-    assert slot, "the topKey derivation is gone — renamed?"
-    assert "activeHasPlayed" in slot.group(0), (
-        f"the slot no longer consults the eligibility rule: {slot.group(0)!r}")
-    assert "playedKeys" in source, (
-        "practice.js never reads the frozen playedKeys — the slot cannot be "
-        "asking whether the active entity has recorded anything")
+    practice = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
+    assert "playedKeys=${frozen.playedKeys}" in practice, (
+        "the page must hand PracticeLog the frozen candidate LIST, not a "
+        "pre-resolved key")
+    assert "topKey" not in practice.replace("topKey:", ""), (
+        "the page must not resolve the auto-open slot -- only PracticeLog "
+        "knows which cards survive membership and Reds/Pipe exclusivity")
+
+    log = strip_comments((UI / "components" / "practicelog.js")
+                         .read_text(encoding="utf-8"))
+    assert re.search(r"const topKey = autoOpenKey\(sections, activeKey, "
+                     r"playedKeys\)", log), (
+        "PracticeLog must resolve the slot from `sections` -- its own rendered "
+        "list -- and nothing else")
 
 
 def _tops(page):

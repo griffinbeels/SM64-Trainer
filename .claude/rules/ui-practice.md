@@ -184,14 +184,34 @@ If there are no attempts yet, it's closed by default. If there are attempts,
 then it's autoopened."* The eligibility question is exported now —
 `hasRecordedAttempts` / `playedEntityKeys` — and **both** callers ask it: the
 recency winner (`topEntityKey`) and the active one (`activeHasPlayed` in
-practice.js). `playedKeys` rides the same `useHeldWhileCelebrating` snapshot
-as `topKey`, for the same reason: attempt data on `v` is live even mid-climb,
-and a card popping open under a running celebration is the takeover that hold
-exists to delay. **Leading the list is still unconditional** — an entity he
-just chose leads with nothing in it; it is only the OPEN slot that it has to
-earn. Pinned by `tests/test_ui_practice_log.py` (the shared rule) and
-`tests/test_practice_page_order.py` (the composition, mutation-proved by
-restoring the `??`).
+practice.js). **Leading the list is still unconditional** — an entity he just
+chose leads with nothing in it; it is only the OPEN slot that it has to earn.
+
+**And the slot is resolved inside `PracticeLog`, against the list it actually
+renders.** It was resolved in `practice.js` against the unfiltered view for
+one round, and the two lists genuinely disagree: a Bowser course's reds star
+and its pipe segment TIE on `last_activity` (measured on his live session —
+both 1414), stars sort before segments, and `applyRedsPipeExclusivity` draws
+whichever half his star/pipe toggle names. So the slot named the star while
+the log drew the segment, `isCardOpen` matched nothing, and every card sat
+closed — with every test of the rule itself green, because a key naming an
+unrendered card is indistinguishable from "nothing qualifies". The page hands
+down the frozen CANDIDATE LIST (`playedKeys`, riding the same
+`useHeldWhileCelebrating` snapshot as `stage`/`target`, since attempt data on
+`v` is live even mid-climb) and `autoOpenKey(sections, activeKey, playedKeys)`
+picks from it.
+
+**Falling back is a feature, not a default.** When the newly-active entity is
+empty the slot does not go dark — it stays on the most recently played card
+still on screen. *"When we're moving between courses / segments of the game, I
+want to still see the thing I just accomplished (until I've now accomplished
+the next star/segment)... we shouldn't close the last thing until we've
+started a new one (with a valid practice log entry)."* Walking into Bowser 1
+selects it and its empty card stays shut, while the reds run he just finished
+stays open until Bowser 1's own first row lands. Pinned by
+`tests/test_ui_practice_log.py` (the rule, node-driven, three mutations) and
+`tests/test_practice_page_order.py` (who decides — mutation-proved by
+resolving it in the page again).
 
 **The practice log leads the page, in the DOM, at every width.** *"When I
 select an actual route, it incorrectly moves the practice log to be BELOW the

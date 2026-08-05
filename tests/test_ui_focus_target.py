@@ -165,87 +165,67 @@ def test_the_freeze_wiring_guard_can_still_fail():
         r"newestAttemptId: newestJournalId\(t\.view\)(?:,[^}]*)?\s*\}\)", two_freezes)
 
 
-def test_the_top_key_is_frozen_alongside_its_siblings():
-    """`topKey` (auto-open-newest, 2026-08-04) is a FOURTH signal riding the
-    same hold, for the same reason `newestAttemptId` was added to it above:
-    `topEntityKey(t.view)` is a live re-sort of `t.view`'s own sections, not
-    frozen by the hold on its own, so a card closing underneath a running
-    celebration (an unrelated attempt landing elsewhere mid-climb, changing
-    which entity is newest) is exactly the regression this test exists to
-    catch -- the `.claude/rules/ui-climb.md` case this task's own brief named.
+def test_the_played_keys_are_frozen_alongside_their_siblings():
+    """The auto-open slot's INPUT rides the same hold as `target`/`stage`.
 
-    Reuses the SAME positive regex `test_the_newest_attempt_id_is_frozen_
-    alongside_its_siblings` proved above (its trailing `(?:,[^}]*)?` is what
-    makes room for this field in the first place) -- this test only adds the
-    checks specific to `topKey` itself: it is inside that one call.
+    `playedEntityKeys(t.view)` is a live re-read of every section's attempt
+    list, so without the freeze an attempt landing anywhere mid-climb can
+    move the slot -- a card opening or folding shut underneath a running rank
+    animation is the takeover `useHeldWhileCelebrating` exists to delay
+    (`.claude/rules/ui-climb.md`).
 
-    CORRECTED (2026-08-05, active-leads round): the caller no longer hands
-    `PracticeLog` `frozen.topKey` directly -- the auto-open slot now follows
-    the ACTIVE entity first (`ui/components/practicelog.js`'s `orderedSections`
-    puts it at the top of the list regardless of recency, and A1's own design
-    already defined the auto-open slot as "whichever card is at the top", so
-    the slot has to move with it or a card nobody touched would sit open one
-    row under a closed, freshly-active one). `live.activeKey` needs no freeze
-    of its own -- it is already derived from `frozen.stage`/`frozen.target`,
-    so it cannot move mid-celebration -- and `frozen.topKey` survives as the
-    FALLBACK for when nothing is active at all, which is the one branch that
-    still needs the freeze this test guards."""
+    HISTORY, because the shape of this guard changed twice in one day and the
+    reasons are not interchangeable. It was written for `topKey`
+    (`topEntityKey(t.view)`, auto-open-newest, 2026-08-04). The active-leads
+    round made the page prefer the ACTIVE entity; the round after that made
+    the active entity earn the slot by having recorded something. Then the
+    page stopped deciding at all: the slot has to be resolved against the
+    RENDERED list, which only `PracticeLog` knows (a Bowser reds star and its
+    pipe segment tie on `last_activity`, and exclusivity draws one of them --
+    so a slot chosen from the unfiltered view named a card that was not on
+    screen, and nothing opened). What survives all three is this file's actual
+    subject: whatever the decision reads, it reads a FROZEN value.
+
+    Reuses the same positive regex `test_the_newest_attempt_id_is_frozen_
+    alongside_its_siblings` proved above; its trailing `(?:,[^}]*)?` is what
+    makes room for a field like this one.
+    """
     practice = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
     assert re.search(
         r"useHeldWhileCelebrating\(\{\s*"
         r"target:[^,]+,\s*stage: t\.stage,\s*"
         r"armedOrder: t\.armedOrder, lastPinnedSeg: t\.lastPinnedSeg,\s*"
         r"newestAttemptId: newestJournalId\(t\.view\),\s*"
-        r"topKey: topEntityKey\(t\.view\)(?:,[^}]*)?\s*\}\)", practice), (
-        "topKey must be frozen in the SAME useHeldWhileCelebrating call as "
-        "its siblings -- a second, separate freeze (or none at all) lets an "
-        "unrelated attempt landing elsewhere move the auto-open slot WHILE a "
-        "rank on screen is still climbing")
-    # `playedKeys` (2026-08-05) rides the same call for the same reason, and
-    # is checked separately rather than by extending the regex above: this
-    # test's subject is `topKey`, and a positional pattern naming every
-    # frozen field is what made adding one a red build in the first place.
-    assert re.search(
-        r"useHeldWhileCelebrating\(\{[^}]*playedKeys: playedEntityKeys\("
-        r"t\.view\)", practice), (
-        "playedKeys must be frozen alongside topKey -- the auto-open slot asks "
-        "it whether the ACTIVE entity has recorded anything, and a live read "
-        "there lets an attempt landing mid-climb pop that card open")
-    assert re.search(
-        r"const topKey = activeHasPlayed \? live\.activeKey : frozen\.topKey;",
+        r"playedKeys: playedEntityKeys\(t\.view\)(?:,[^}]*)?\s*\}\)",
         practice), (
-        "the auto-open slot must prefer the ACTIVE entity *that has recorded "
-        "something* and fall back to the FROZEN recency value -- this was "
-        "`live.activeKey ?? frozen.topKey` until 2026-08-05, which handed the "
-        "slot to an entity with nothing in it (whether the right entity wins "
-        "is tests/test_practice_page_order.py's subject; what THIS file owns "
-        "is that both inputs are frozen)")
-    assert "topKey=${topKey}" in practice, (
-        "PracticeLog's own topKey prop must read the active-or-frozen "
-        "derived value, not frozen.topKey directly (that would strand the "
-        "active-leads card closed) or a live topEntityKey(t.view) call")
-    assert not re.search(r"topKey=\$\{topEntityKey\(t\.view\)\}", practice), (
-        "PracticeLog must not be handed a live topEntityKey(t.view) call -- "
-        "that is exactly the regression this test exists to catch")
-    assert not re.search(r"topKey=\$\{frozen\.topKey\}", practice), (
-        "PracticeLog must not be handed frozen.topKey directly any more -- "
-        "the active entity has to be able to win the slot too")
+        "playedKeys must be frozen in the SAME useHeldWhileCelebrating call "
+        "as its siblings -- a second, separate freeze (or none at all) lets "
+        "an attempt landing elsewhere move the auto-open slot WHILE a rank on "
+        "screen is still climbing")
+    assert "playedKeys=${frozen.playedKeys}" in practice, (
+        "PracticeLog must be handed the FROZEN list, not a live "
+        "playedEntityKeys(t.view) call")
+    assert not re.search(r"playedKeys=\$\{playedEntityKeys\(t\.view\)\}",
+                         practice), (
+        "PracticeLog must not be handed a live playedEntityKeys(t.view) call "
+        "-- that is exactly the regression this test exists to catch")
+    assert "topKey" not in practice.replace("topKey:", ""), (
+        "the page must not resolve the auto-open slot itself any more -- "
+        "PracticeLog owns that decision, because only it knows which cards "
+        "are rendered (autoOpenKey, practicelog.js)")
 
 
-def test_the_top_key_freeze_guard_can_still_fail():
+def test_the_played_keys_freeze_guard_can_still_fail():
     """Same probe-both-directions rule as the sibling guard above."""
     comment_only = strip_comments(
         "// newestAttemptId: newestJournalId(t.view),\n"
-        "// topKey: topEntityKey(t.view) })\n"
-        "// const topKey = activeHasPlayed ? live.activeKey : frozen.topKey;\n"
-        "// topKey=${topKey}\n")
+        "// playedKeys: playedEntityKeys(t.view) })\n"
+        "// playedKeys=${frozen.playedKeys}\n")
     assert not re.search(
         r"newestAttemptId: newestJournalId\(t\.view\),\s*"
-        r"topKey: topEntityKey\(t\.view\)(?:,[^}]*)?\s*\}\)", comment_only)
-    assert not re.search(
-        r"const topKey = activeHasPlayed \? live\.activeKey : frozen\.topKey;",
+        r"playedKeys: playedEntityKeys\(t\.view\)(?:,[^}]*)?\s*\}\)",
         comment_only)
-    assert "topKey=${topKey}" not in comment_only
+    assert "playedKeys=${frozen.playedKeys}" not in comment_only
 
     # A live read handed straight to PracticeLog, alongside a genuine but
     # SEPARATE freeze -- the finding this guards against is specifically the
@@ -254,16 +234,16 @@ def test_the_top_key_freeze_guard_can_still_fail():
     live_leak = (
         "const frozen = useHeldWhileCelebrating({ target, stage, armedOrder, "
         "lastPinnedSeg, newestAttemptId: newestJournalId(t.view), "
-        "topKey: topEntityKey(t.view) });\n"
-        "<PracticeLog topKey=${topEntityKey(t.view)} />\n")
+        "playedKeys: playedEntityKeys(t.view) });\n"
+        "<PracticeLog playedKeys=${playedEntityKeys(t.view)} />\n")
     assert re.search(  # the freeze call itself is still well-formed...
         r"newestAttemptId: newestJournalId\(t\.view\),\s*"
-        r"topKey: topEntityKey\(t\.view\)(?:,[^}]*)?\s*\}\)", live_leak)
-    assert not re.search(
-        r"const topKey = activeHasPlayed \? live\.activeKey : frozen\.topKey;",
-        live_leak), (
+        r"playedKeys: playedEntityKeys\(t\.view\)(?:,[^}]*)?\s*\}\)",
+        live_leak)
+    assert "playedKeys=${frozen.playedKeys}" not in live_leak, (
         "the mutation itself must actually read as a leak, or this probe "
         "proves nothing")
-    assert re.search(r"topKey=\$\{topEntityKey\(t\.view\)\}", live_leak), (
+    assert re.search(r"playedKeys=\$\{playedEntityKeys\(t\.view\)\}",
+                     live_leak), (
         "the mutation itself must actually read as a leak, or this probe "
         "proves nothing")

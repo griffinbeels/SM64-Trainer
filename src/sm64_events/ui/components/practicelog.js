@@ -244,6 +244,47 @@ export function topEntityKey(view) {
  * Pure, so node drives it directly (tests/test_ui_practice_log.py), the same
  * reason `orderedSections` above is.
  */
+// WHICH CARD HOLDS THE ONE AUTO-OPEN SLOT, decided against the list actually
+// ON SCREEN. Pure; `sections` is the RENDERED list (post-membership,
+// post-Reds/Pipe exclusivity), `playedKeys` is `playedEntityKeys(view)` in
+// recency order, frozen by the caller's celebration hold.
+//
+// Two rules, in order:
+//
+// 1. The ACTIVE entity takes the slot once it has recorded something.
+// 2. Otherwise the slot STAYS on the most recently played card still on
+//    screen -- it does not go dark. Griffin, 2026-08-05: "when we're moving
+//    between courses / segments of the game, I want to still see the thing I
+//    just accomplished (until I've now accomplished the next star/segment)...
+//    we shouldn't close the last thing until we've started a new one (with a
+//    valid practice log entry)." Walking into Bowser 1 selects it, and its
+//    empty card correctly does not open (the rule above) -- but the reds run
+//    he just finished should not close in the same instant, and it now keeps
+//    the slot until Bowser 1's own first row lands, at which point rule 1
+//    hands it over.
+//
+// READING THE RENDERED LIST IS THE LOAD-BEARING PART, not a tidy-up. This was
+// resolved in practice.js against the UNFILTERED view, and the two lists
+// genuinely disagree: a Bowser course's reds star and its pipe segment tie on
+// `last_activity` (measured on his live session -- both 1414), stars sort
+// before segments, and `applyRedsPipeExclusivity` renders whichever half his
+// star/pipe toggle names. So the slot named the STAR while the log drew the
+// SEGMENT, `isCardOpen` matched nothing, and every card sat closed -- which is
+// exactly the screenshot that opened this round. A key that names no rendered
+// card is indistinguishable from "nothing qualifies", which is why it survived
+// a rule whose own tests were all green.
+export function autoOpenKey(sections, activeKey = null, playedKeys = []) {
+  const rendered = sections || [];
+  if (activeKey != null) {
+    const active = rendered.find((sec) => entityKey(sec) === activeKey);
+    if (active && hasRecordedAttempts(active)) return activeKey;
+  }
+  for (const key of playedKeys || []) {
+    if (rendered.some((sec) => entityKey(sec) === key)) return key;
+  }
+  return null;
+}
+
 export function isCardOpen(overrides, topKey, key) {
   const manual = (overrides || {})[key];
   if (manual != null) return manual === "open";
@@ -643,14 +684,18 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
  * (`hasEarnedACard`, above -- "if we leave without practicing anything, its
  * card should disappear from the list").
  *
- * `topKey` names the entity the system's ONE auto-open slot follows (see
- * `isCardOpen` above) -- the caller's own `topEntityKey(v)`, taken through
- * whatever celebration hold freezes `activeKey`/`focusKey`/etc, so a running
- * climb is never interrupted by an unrelated card folding shut underneath it
- * (`.claude/rules/ui-climb.md`; `practice.js` freezes it alongside `target`/
- * `stage`/`newestAttemptId`). A DIFFERENT signal from `focusKey`/`activeKey`:
- * the newest thing PRACTICED is routinely not the thing currently SELECTED or
- * ACTIVE (this component's own comment on `activeKey`, below).
+ * `playedKeys` is every entity that has recorded something, newest first
+ * (`playedEntityKeys(v)`), taken through whatever celebration hold freezes
+ * `activeKey`/`focusKey`/etc, so a running climb is never interrupted by a
+ * card folding shut underneath it (`.claude/rules/ui-climb.md`; `practice.js`
+ * freezes it alongside `target`/`stage`/`newestAttemptId`). This component
+ * turns it into the ONE auto-open slot itself, via `autoOpenKey` against its
+ * own rendered `sections` -- the caller cannot do that, because the caller
+ * does not know which cards survive membership and Reds/Pipe exclusivity, and
+ * a slot naming an unrendered card silently opens nothing at all. A DIFFERENT
+ * signal from `focusKey`/`activeKey`: the newest thing PRACTICED is routinely
+ * not the thing currently SELECTED or ACTIVE (this component's own comment on
+ * `activeKey`, below).
  *
  * `enforceMembership` (default true) gates `hasEarnedACard`/
  * `applyRedsPipeExclusivity` -- both ask "did the SERVER publish this section
@@ -669,7 +714,7 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
  */
 export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
                               clearFocus, focusKey, onSelect, activeKey = null,
-                              topKey = null, openTargetPicker = null,
+                              playedKeys = [], openTargetPicker = null,
                               openSegment = null, enforceMembership = true }) {
   const [shown, setShown] = useState(CARDS_PER_PAGE);
   // Per-entity fold overrides -- ONLY what the user has touched himself, in
@@ -786,6 +831,10 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
     if (idx === -1) return;                // not a classified entity (unassigned)
     setShown((current) => (idx >= current ? idx + 1 : current));
   }, [focusKey]);
+  // Resolved HERE, never handed down pre-decided: `sections` is the list
+  // the user is looking at, and `autoOpenKey`'s own comment records what it
+  // cost to learn that those are two different lists.
+  const topKey = autoOpenKey(sections, activeKey, playedKeys);
   const page = sections.slice(0, shown);
   return html`<section class="practice-card log-list-card ${logClasses}"
       style=${logVars} ref=${pageRef}>

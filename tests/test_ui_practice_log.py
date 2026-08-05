@@ -616,3 +616,72 @@ def test_the_slot_moves_the_moment_a_first_attempt_lands():
     played = star("played", 5)
     view = {"stars": [fresh, played], "segments": [], "unassigned": []}
     assert top_key(view) == "star:22:3"
+
+
+# ---- autoOpenKey: which RENDERED card holds the one open slot -------------
+#
+# 2026-08-05, the round after the eligibility rule. Two claims, and the second
+# is the one that produced a live bug: the slot is chosen from the list the
+# user is LOOKING at, and it does not go dark when the newly-active entity is
+# empty -- the thing he just finished keeps it. Griffin: "when we're moving
+# between courses / segments of the game, I want to still see the thing I just
+# accomplished (until I've now accomplished the next star/segment)... we
+# shouldn't close the last thing until we've started a new one (with a valid
+# practice log entry)."
+
+def _auto_open_source() -> str:
+    log_source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
+    return "\n".join([_entity_key_source(),
+                        _played_keys_source(),
+                        _extract(log_source, "autoOpenKey")])
+
+
+def auto_open(sections, active_key, played):
+    script = (_auto_open_source() + "\n"
+              f"console.log(JSON.stringify(autoOpenKey("
+              f"{json.dumps(sections)}, {json.dumps(active_key)}, "
+              f"{json.dumps(played)})));")
+    result = subprocess.run(["node", "--input-type=module", "-"],
+                            input=script, capture_output=True, text=True,
+                            timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_the_active_entity_takes_the_slot_once_it_has_recorded_something():
+    played = star("played", 5, course_id=1, star_id=1)
+    active = star("active", 99, course_id=2, star_id=2)
+    assert auto_open([active, played], "star:2:2",
+                     ["star:2:2", "star:1:1"]) == "star:2:2"
+
+
+def test_an_empty_active_entity_leaves_the_slot_where_it_was():
+    """The reported behaviour: walking into Bowser 1 must not close the reds
+    run he just finished. The empty active card leads the list and stays
+    shut; the last thing he actually played keeps the open slot."""
+    just_done = star("done", 50, course_id=1, star_id=1)
+    fresh = star("fresh", 99, course_id=2, star_id=2, attempts=0)
+    assert auto_open([fresh, just_done], "star:2:2", ["star:1:1"]) == "star:1:1"
+
+
+def test_the_handover_happens_on_the_new_entity_s_first_row():
+    """...UNTIL the user adds an entry for the new area, whether reset or
+    valid entry. One row is the whole trigger -- `_rows` produces resets."""
+    just_done = star("done", 50, course_id=1, star_id=1)
+    fresh = star("fresh", 99, course_id=2, star_id=2, attempts=1)
+    assert auto_open([fresh, just_done], "star:2:2",
+                     ["star:2:2", "star:1:1"]) == "star:2:2"
+
+
+def test_a_played_key_that_is_not_rendered_is_skipped_not_returned():
+    """THE BUG. A Bowser reds star and its pipe segment tie on activity and
+    the star sorts first, so `playedKeys` leads with the star -- while the
+    log renders only the pipe. Returning the star opened nothing at all."""
+    pipe = segment("pipe", 1414, segment_id=67)
+    rendered = [pipe]
+    assert auto_open(rendered, None, ["star:16:0", "segment:67"]) == "segment:67"
+
+
+def test_nothing_played_and_nothing_active_leaves_every_card_closed():
+    fresh = star("fresh", 99, course_id=2, star_id=2, attempts=0)
+    assert auto_open([fresh], "star:2:2", []) is None

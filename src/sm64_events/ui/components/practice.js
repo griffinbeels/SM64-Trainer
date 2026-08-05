@@ -16,8 +16,7 @@ import { entityKey, sectionClock } from "../entitysection.js";
 import { EntityAnalysis, EntityDrawer } from "./entitydetail.js";
 import { comparator, useGraphPick, SORT_OPTIONS } from "./attemptlog.js";
 import { liveSnapshot, resolveFocus, newestJournalId } from "../focustarget.js";
-import { orderedSections, playedEntityKeys, PracticeLog,
-        topEntityKey } from "./practicelog.js";
+import { orderedSections, playedEntityKeys, PracticeLog } from "./practicelog.js";
 
 const html = htm.bind(h);
 
@@ -200,7 +199,6 @@ export function Practice({ t, openCompare, openSegment }) {
     target: (t.view && t.view.target) || null, stage: t.stage,
     armedOrder: t.armedOrder, lastPinnedSeg: t.lastPinnedSeg,
     newestAttemptId: newestJournalId(t.view),
-    topKey: topEntityKey(t.view),
     playedKeys: playedEntityKeys(t.view) });
   const v = t.view && { ...t.view, target: frozen.target };
 
@@ -398,39 +396,21 @@ export function Practice({ t, openCompare, openSegment }) {
     ? orderedSections(v).find((sec) => entityKey(sec) === focusKey) || null
     : null;
   const selectFocus = (key) => setManualFocus({ key, at: live });
-  // The auto-open slot follows the active entity, same "top of the list"
-  // rule `orderedSections` now applies inside PracticeLog -- A1's own design
-  // already defined the slot as "whichever card is at the top" (`topEntityKey`
-  // WAS that definition), so a reorder that changes what leads the list has
-  // to move the slot with it or a card he never touched would sit open one
-  // row below a closed, freshly-active one. `live.activeKey` needs no freeze
-  // of its own here: it is already derived from `frozen.stage`/`frozen.target`
-  // (the `activeStar`/`primarySeg` computation above), so it cannot move
-  // mid-celebration any more than `target`/`stage` themselves can. Only the
-  // FALLBACK -- no active entity at all -- still needs `frozen.topKey`
-  // (computed pre-freeze from live, unfrozen `t.view`, above): recency over
-  // that view's own attempt data is NOT frozen by this hold, so without the
-  // frozen value an unrelated attempt landing elsewhere during a celebration
-  // could still steal the slot, exactly the regression `useHeldWhileCelebrating`
-  // exists to prevent.
+  // THE AUTO-OPEN SLOT IS NOT DECIDED HERE. `PracticeLog` resolves it from
+  // `playedKeys` against its OWN rendered list (`autoOpenKey`, practicelog.js)
+  // -- this page cannot, because it does not know which cards survive
+  // membership and Reds/Pipe exclusivity, and a slot naming an unrendered
+  // card opens nothing while looking exactly like "nothing qualifies". That
+  // was a real, shipped bug: the reds STAR and its pipe SEGMENT tie on
+  // `last_activity`, so the slot named the half the log had filtered out and
+  // every card sat closed.
   //
-  // ...AND IT ONLY TAKES THE SLOT ONCE IT HAS RECORDED SOMETHING. This was
-  // `live.activeKey ?? frozen.topKey` until 2026-08-05, which made the active
-  // entity the slot holder UNCONDITIONALLY -- so the empty-card rule
-  // `topEntityKey` states (and its own comment insists on) was applied to the
-  // fallback only, and the one card that rule is most about, the one he had
-  // just selected, sailed straight past it. Griffin, three screenshots, three
-  // stages: "it should NOT be autoopening the card yet, because I don't have
-  // any entries... If there are no attempts yet, it's closed by default. If
-  // there are attempts, then it's autoopened."
-  //
-  // `frozen.playedKeys` rather than a live read for the same reason
-  // `frozen.topKey` is frozen: attempt data on `v` is live even mid-climb, and
-  // a card flipping open underneath a running celebration is the takeover
-  // `useHeldWhileCelebrating` exists to delay.
-  const activeHasPlayed = live.activeKey != null
-    && frozen.playedKeys.includes(live.activeKey);
-  const topKey = activeHasPlayed ? live.activeKey : frozen.topKey;
+  // What stays here is the FREEZE. `playedKeys` rides the celebration hold
+  // (the `useHeldWhileCelebrating` call above) because attempt data on `v` is
+  // live even mid-climb, and a card flipping open or shut underneath a
+  // running rank climb is exactly the takeover that hold exists to delay.
+  // `live.activeKey` needs no freeze of its own -- it already derives from
+  // `frozen.stage`/`frozen.target`, so it cannot move mid-celebration either.
   // The rows useGraphPick checks membership against -- the same default
   // filter every log card applies (cleared/abandoned hidden, resets per the
   // shared toggle). Computed here, at page level, because the trend graph
@@ -480,7 +460,7 @@ export function Practice({ t, openCompare, openSegment }) {
       openCompare=${openCompare} focus=${focus} pick=${pick}
       clearFocus=${clearFocus} openSegment=${openSegment}
       focusKey=${focusKey} onSelect=${selectFocus}
-      activeKey=${live.activeKey} topKey=${topKey}
+      activeKey=${live.activeKey} playedKeys=${frozen.playedKeys}
       openTargetPicker=${openTargetPicker} />
 
     <${EntityAnalysis} sec=${focusedSec} t=${held} onPick=${pick}

@@ -42,7 +42,7 @@
 import { h, render } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { PracticeLog, topEntityKey } from "/ui/components/practicelog.js";
+import { PracticeLog, playedEntityKeys } from "/ui/components/practicelog.js";
 import { entityKey } from "/ui/entitysection.js";
 import { TUNABLES, CHOICES, DEFAULTS, GROUPS, setLogTuning, encodeTuning,
          decodeTuning, changedFromDefault, withDefaults } from "/ui/logtuning.js";
@@ -286,7 +286,7 @@ function Pane({ label, width, view, t, ui, tuningKey }) {
           freshIds=${new Set()} openCompare=${null}
           focus=${null} clearFocus=${() => {}} pick=${() => {}}
           focusKey=${null} onSelect=${() => {}}
-          activeKey=${ACTIVE_KEY} topKey=${topEntityKey(view)}
+          activeKey=${ACTIVE_KEY} playedKeys=${playedEntityKeys(view)}
           enforceMembership=${false} />
       </div>
     </div>
