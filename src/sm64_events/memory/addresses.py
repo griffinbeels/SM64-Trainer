@@ -207,6 +207,31 @@ PENDING_WARP_OP = 0x8033B252  # s16 sDelayedWarpOp; 0 = no warp pending
 WARP_OP_WARP_FLOOR = 0x13  # void-out: resolves to the death node (or game
                            # over at 0 lives) unless the level has node 0xF3
 
+# The WARP DESTINATION (level_update.c `struct WarpDest sWarpDest`), same
+# FORCE_BSS block as PENDING_WARP_OP and pinned by the same walk:
+#   struct WarpDest { u8 type; u8 levelNum; u8 areaIdx; u8 nodeId; s32 arg; }
+#
+# LIVE-VERIFIED 2026-08-05 over 15 consecutive castle entries
+# (tools/probe_warp_block.py), and it OVERTURNS the belief the held emit was
+# built on. A painting or portal writes this struct AT OR BEFORE the frame
+# Mario's action becomes ACT_DISAPPEARED: on all 13 painting/portal touches the
+# level id here already named where he ended up, 76-78 frames before the level
+# byte moved, and it was demonstrably not stale — 12 of the 13 differed from the
+# destination of the warp immediately before. Only a PIPE (BitDW, BitFS) is a
+# genuinely delayed warp: there PENDING_WARP_OP pulses 0x04 one to two frames
+# after the touch, counts a 20-frame timer down, and only then is this struct
+# written — 3 frames before the level byte moves.
+#
+# So `type != 0` alone is NOT a freshness test: it survives a completed painting
+# warp (read live while standing idle in DDD after entering it). Freshness is
+# WHETHER THE STRUCT WAS JUST WRITTEN, which detectors/warp.py tests by watching
+# all four bytes change; the two pipe touches are exactly the negative cases
+# that prove it, both reading a stale castle destination at the touch frame.
+WARP_DEST_TYPE = 0x8033B248   # u8 WARP_TYPE_*; 0 = NOT_WARPING
+WARP_DEST_LEVEL = 0x8033B249  # u8 destination LEVEL id (not a course id)
+WARP_DEST_AREA = 0x8033B24A   # u8 destination area
+WARP_DEST_NODE = 0x8033B24B   # u8 destination warp node (0x0A = main entry)
+
 # Level-EXIT cutscene actions — Mario is FLUNG out of a level and has no
 # control (decomp include/sm64.h, the contiguous 0x1926-0x192D block). These
 # are involuntary exactly as DEATH_ACTIONS are, and AnchorDetector excludes

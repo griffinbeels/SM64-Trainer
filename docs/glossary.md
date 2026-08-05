@@ -288,8 +288,9 @@ pipe — so a [[segment]] measured to the load counts the fade as travelling.
 The trainer ends a movement at the touch instead.
 
 - **Lives** — the warp detector (`src/sm64_events/detectors/warp.py`)
-- **Not** — the moment its [[event]] arrives. A touch cannot name where it
-  leads, so the [[detector]] holds the [[event]] until the game says.
+- **Not** — the moment the course loads. A painting or portal records where it
+  leads as Mario touches it, so the [[detector]] publishes on that same
+  [[frame]]; only a pipe makes it wait.
 
 ### Death
 

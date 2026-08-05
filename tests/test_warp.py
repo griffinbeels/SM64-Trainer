@@ -21,9 +21,9 @@ def snap(**overrides) -> GameSnapshot:
 
 def land(detector, during, to=23, after=77):
     """Drive the RELEASE half of a touch: the level edge that finally names
-    where the entrance led. The touch itself carries no destination (decomp:
-    sWarpDest is written 77 frames later), so every emit in this file needs
-    one of these."""
+    where the entrance led. Snapshots here leave sWarpDest at its zero default,
+    which reads as "no destination written", so every case built on this helper
+    exercises the BACKSTOP path rather than the touch-frame publish."""
     return detector.process(
         during,
         snap(global_timer=during.global_timer + after,
@@ -44,11 +44,74 @@ def test_edge_into_warp_action_emits_warp_entered():
     assert events[0].payload["action"] == ACT_DISAPPEARED
 
 
-def test_the_touch_is_held_until_the_destination_is_known():
-    """The touch cannot name where it leads: decomp `level_trigger_warp()`
-    writes nothing to sWarpDest, which `initiate_delayed_warp()` fills 77
-    frames later, immediately before the level unloads. So the event is HELD
-    and published back-dated once the level edge answers the question."""
+def dest(type_=1, level=23, area=1, node=10):
+    """sWarpDest's four bytes, as a snapshot kwargs fragment."""
+    return dict(warp_dest_type=type_, warp_dest_level=level,
+                warp_dest_area=area, warp_dest_node=node)
+
+
+def test_a_painting_touch_publishes_on_the_touch_frame_itself():
+    """No wait at all for the case he reported. Live, 2026-08-05: a painting
+    or portal writes sWarpDest at or before the frame Mario's action becomes
+    ACT_DISAPPEARED, so the destination is already there to be read -- 13 of 13
+    castle entries, 76-78 frames before the level byte moved."""
+    detector = WarpDetector()
+    before = snap(global_timer=2000, curr_level=6, **dest(level=6, node=31))
+    detector.process(snap(global_timer=1999, curr_level=6,
+                          **dest(level=6, node=31)), before)
+    [event] = detector.process(
+        before,
+        snap(global_timer=2001, curr_level=6, mario_action=ACT_DISAPPEARED,
+             **dest(level=23)))
+    assert event.payload["to"] == 23, "the portal named DDD at the touch"
+    assert event.frame == 2001
+
+
+def test_a_pipe_touch_waits_out_its_stale_destination():
+    """The negative case that proves the freshness test, and the reason
+    `type != 0` cannot be the test on its own -- it survives a COMPLETED
+    painting warp. A pipe is the one genuinely delayed warp: sWarpDest still
+    holds the previous destination at the touch and is written 20 frames
+    later, when sDelayedWarpOp's timer runs out."""
+    detector = WarpDetector()
+    stale = dict(curr_level=6, **dest(level=6, node=31))
+    detector.process(snap(global_timer=1999, **stale),
+                     snap(global_timer=2000, **stale))
+    assert detector.process(
+        snap(global_timer=2000, **stale),
+        snap(global_timer=2001, mario_action=ACT_DISAPPEARED, **stale)) == [], \
+        "a destination written before the touch is somebody else's"
+    for offset in range(2, 21):
+        assert detector.process(
+            snap(global_timer=2000 + offset - 1, mario_action=ACT_DISAPPEARED,
+                 **stale),
+            snap(global_timer=2000 + offset, mario_action=ACT_DISAPPEARED,
+                 pending_warp_op=0x04, **stale)) == [], f"published at +{offset}"
+    [event] = detector.process(
+        snap(global_timer=2020, mario_action=ACT_DISAPPEARED,
+             pending_warp_op=0x04, **stale),
+        snap(global_timer=2021, curr_level=6, mario_action=ACT_DISAPPEARED,
+             **dest(level=17)))
+    assert event.payload["to"] == 17
+    assert event.frame == 2001, "back-dated to the touch, not the write"
+
+
+def test_the_first_destination_seen_is_never_treated_as_fresh():
+    """A detector built mid-session inherits whatever warp preceded it. That
+    value is unstamped on purpose: unstamped means hold, and holding is the
+    direction that cannot publish a wrong destination."""
+    detector = WarpDetector()
+    live = dict(curr_level=6, **dest(level=23))
+    assert detector.process(
+        snap(global_timer=2000, **live),
+        snap(global_timer=2001, mario_action=ACT_DISAPPEARED, **live)) == []
+
+
+def test_the_level_edge_still_answers_when_the_struct_never_does():
+    """The backstop, unchanged. Whatever the destination struct does or does
+    not say, a level edge names where the touch led and publishes it
+    back-dated. Nothing that fired before the freshness test may stop
+    firing."""
     detector = WarpDetector()
     assert detector.process(snap(global_timer=2000),
                             snap(global_timer=2001,
