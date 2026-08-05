@@ -215,7 +215,6 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   // `rows` includes the picked attempt.
   const pbPick = (attemptId) => { onSelect(ek); pick(attemptId); };
   const broken = isSegment(sec) && sec.broken;
-  const running = isSegment(sec) ? t.armedSegs.has(sec.segment_id) : !!sec.armed_detail;
   // Which of the layout matrix's two ladder-count cells this card falls
   // into (index.html's "Layout matrix" CSS section) -- the SAME predicate
   // that decides whether the second `<RankBanner>` below renders at all, so
@@ -272,15 +271,23 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
               enabled=${nameOverflow === "shrinkToFit"} />
           </span>
         </button>
-        ${/* The active-target card's Ready/Running state, folded into the log
-             now that the card it lived on is gone (spec practice-log-entity-
-             cards, amendment A8): "the log's own highlight on the active
-             card... whatever we're CURRENTLY practicing should be
-             highlighted... to make it abundantly clear." Rendered ONLY on
-             the active card -- a Ready/Running word on every other card
-             would claim a state that is not true of it. */""}
-        ${active && html`<span class="log-card-state ${running ? "is-running" : ""}">
-            <${Icon} name="clock" size=${11} />${" "}${running ? "Running" : "Ready"}</span>`}
+        ${/* SUPERSEDED (2026-08-04, one-line-heads round): the Ready/Running
+             word that used to sit here is DELETED, not merely hidden --
+             Griffin: "we should remove the 'ACTIVE' indicator (the card is
+             already highlighted so it's obvious it's active)". This word
+             was itself only one round old, added as the replacement for the
+             deleted Active Target card's own live-state chip (amendment
+             A8) -- his ruling now is that the gold `.log-card-active`
+             border already carries that meaning on its own, the same thing
+             he said the day it was added ("this is already covered by the
+             most recent entry in the practice log being highlighted"), so
+             this is removing an over-implementation rather than reversing a
+             decision. For an ARMED entity specifically, nothing legible was
+             lost: `<${StepTrack}>` below renders unconditionally off
+             `sec.armed_detail` (never gated on `active`), so "Step X of N ·
+             <place>" already told the running story in more detail than the
+             bare word "Running" ever did -- confirmed by reading the render,
+             not assumed. */""}
         ${/* The strategy NAME becomes the same picker the (now-deleted)
              Active Target card used (amendment A2: "replace the strategy
              name in the card with the same exact drop down we use for
@@ -297,7 +304,23 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
              still needs the control to SET one, not just to display one
              already chosen. Deleted definitions have nothing left to write
              a strategy onto (SegmentSection's own rule, entitysection.js's
-             `entityIdentity` covers only a live def). */""}
+             `entityIdentity` covers only a live def).
+
+             SITS BESIDE THE IDENTITY DISPLAY now, not stacked under it
+             (this round, 2026-08-04) -- Griffin: "we should move the
+             selector to the right of the identity display. As a result,
+             this should also reduce the entire height of the card, because
+             we can fit it on one line -- they should all match the size of
+             the unassigned card." `.log-card-identity` switched from a flex
+             COLUMN (icon+name, then this picker, stacked into up to three
+             rows) to a flex ROW: this picker is simply that div's second
+             child now, in the SAME grid area identity already owned, so no
+             new grid track was needed and nothing here can steal width from
+             the ranks column. With the state word above gone too, the
+             identity area is back to exactly one row of content -- the
+             icon's own height -- which is what lets the head settle back to
+             the same 60px `min-height` floor the unassigned card's head has
+             always rendered at (icon-size 40px + head padding 10px * 2). */""}
         ${broken
           ? html`<span class="log-card-strat">Definition deleted</span>`
           : html`<span class="log-card-strat-picker">

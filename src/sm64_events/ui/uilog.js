@@ -52,12 +52,21 @@ export function readSelector(root) {
 // EVERY currently-ACTIVE `.log-card` on the page in ONE record, in DOM order
 // -- typically zero or one (repointed from the deleted `.objective-card`,
 // amendment A8: the Active Target card is gone, and the log's own card now
-// carries the SAME per-card facts -- name, live strategy, Ready/Running
-// state, mid-movement step -- that card used to). The LIST is still the
-// observation, not one record per card: a card losing its `.log-card-active`
-// highlight is exactly the kind of thing a report is about, and one-record-
-// per-card could only express that as an absence, which is not something an
-// append-only log can write down.
+// carries the SAME per-card facts -- name, live strategy, mid-movement step
+// -- that card used to). The LIST is still the observation, not one record
+// per card: a card losing its `.log-card-active` highlight is exactly the
+// kind of thing a report is about, and one-record-per-card could only
+// express that as an absence, which is not something an append-only log can
+// write down.
+//
+// No `state` field any more (one-line-heads round, 2026-08-04): the
+// Ready/Running word this used to read off `.log-card-state` is deleted from
+// the card itself -- the gold `.log-card-active` highlight already says
+// "this is what you're practicing", and StepTrack's own `.seg-waiting` row
+// (still read below) already answers "running", in more detail, for an armed
+// entity. Reading a class nothing renders any more is exactly the SILENT
+// FALLBACK this module's own header warns about, so the field goes with it
+// rather than being left to report empty forever.
 export function readTargets(root) {
   return {
     surface: "target",
@@ -66,7 +75,6 @@ export function readTargets(root) {
       name: text(card.querySelector(".log-card-name")),
       strat: text(card.querySelector(".log-card-strat-picker select")
                   || card.querySelector(".log-card-strat")),
-      state: text(card.querySelector(".log-card-state")),
       step: text(card.querySelector(".seg-waiting")),
     })),
   };

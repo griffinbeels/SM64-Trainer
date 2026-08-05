@@ -4700,12 +4700,28 @@
      one "identity" grid area, so this wrapper drops into all of them with no
      further CSS -- same mechanism `.log-card-select` used before, just one
      level up. */
+  /* One-line-heads round (2026-08-04): a flex ROW, not a column -- the
+     strategy picker sits BESIDE the icon+name button now instead of stacked
+     beneath it (Griffin: "move the selector to the right of the identity
+     display... this should also reduce the entire height of the card").
+     Both children (`.log-card-select` below, `.log-card-strat-picker`/
+     `.log-card-strat` near the bottom of this file) are this div's own flex
+     items -- the picker lives INSIDE whichever grid track "identity" already
+     owns in every layout/placement combination, so no `grid-template-areas`
+     anywhere in this section needed a new named area for it, and it can
+     never draw from the ranks or PB tracks. */
   .log-card-identity {
     grid-area: identity;
-    min-width: 0; display: flex; flex-direction: column; gap: .1rem;
+    min-width: 0; display: flex; flex-direction: row; align-items: center; gap: .5rem;
   }
   .log-card-select {
-    min-width: 0; display: flex; align-items: center; gap: var(--log-identity-gap, 10px);
+    /* `flex: 1 1 auto` -- the identity row's other item
+       (`.log-card-strat-picker`/`.log-card-strat`) carries a fixed
+       flex-basis, so THIS is the one that actually stretches into whatever
+       room a wide card offers, and the one that gives up space first as the
+       row narrows (a bigger flex-basis loses proportionally more under
+       flex-shrink) -- the name ellipsises before the picker gets crowded. */
+    min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: var(--log-identity-gap, 10px);
     padding: 0; border: 0; border-radius: 6px; background: none;
     color: inherit; font: inherit; text-align: left; cursor: pointer;
     /* Same shape as `.log-card` above: one declaration here, `:hover` sets
@@ -5656,8 +5672,13 @@
      chosen, so it no longer waits on the placement cell at all. This class
      survives for the one text-only case a picker cannot cover: a deleted
      segment definition has nowhere left to write a strategy, so LogCard
-     falls back to this plain "Definition deleted" label in its place. */
+     falls back to this plain "Definition deleted" label in its place.
+     `flex: 0 1 <width>` (one-line-heads round, 2026-08-04) -- this text sits
+     in the identity row's SECOND flex slot now, the same one the real
+     picker below occupies; both share one width so the two never jump
+     sideways depending on whether a definition is broken. */
   .log-card-strat {
+    flex: 0 1 var(--log-strat-picker-width, 130px); min-width: 0;
     display: block; color: var(--muted); font-size: 9px; text-transform: uppercase;
     letter-spacing: .03em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   }
@@ -5672,8 +5693,17 @@
      handling is needed here. A click inside it never reaches the card's own
      "select this card" button: they are SIBLINGS now (the wrapper this rule
      targets, `.log-card-identity` above), not nested, so there is nothing
-     for a click to bubble into. */
-  .log-card-strat-picker { display: block; min-width: 0; }
+     for a click to bubble into.
+
+     `flex: 0 1 var(--log-strat-picker-width, …)` (one-line-heads round,
+     2026-08-04) -- a fixed-ish flex-basis, own `min-width: 0` so it can
+     still shrink at the identity floor rather than forcing an overflow,
+     `flex-grow: 0` so it never balloons to fill a wide card the way
+     `.log-card-select` (grow: 1) does. */
+  .log-card-strat-picker {
+    flex: 0 1 var(--log-strat-picker-width, 130px); min-width: 0;
+    display: block;
+  }
   .log-card-strat-picker select {
     width: 100%; min-width: 0; max-width: 100%;
     font-size: 10px; padding: 1px 1.3rem 1px 2px; border: 0; border-radius: 4px;
@@ -5687,25 +5717,38 @@
   }
   .log-card-strat-picker select:hover { background: #16283e; color: var(--text); }
   .log-card-strat-picker select:focus-visible { outline: 2px solid #78b9ff; outline-offset: 1px; }
-  /* The Ready/Running word, shown only on the one card `active` names
-     (amendment A8). Same icon+word shape `.objective-live-state` used to
-     draw on the deleted card, condensed into the identity column instead of
-     its own metrics row -- there is no spare row here, and this card is
-     never fixed-height the way that one was. */
-  .log-card-state {
-    display: flex; align-items: center; gap: .25rem;
-    color: var(--muted); font-size: 10px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: .03em;
-  }
-  .log-card-state.is-running { color: var(--green); }
   /* The head's own grid, minus the "ranks" track -- identity takes what
      ranks used to own, so the freed space is never a blank gap. `oneLine`
      is the shipped `collapsedLayout` and the only one whose row genuinely
      splits three ways; `twoLine`/`stacked` just lose the "ranks" grid row
-     outright, since nothing draws into it any more. */
+     outright, since nothing draws into it any more.
+
+     BUG (found by this round, one-line-heads, 2026-08-04): the identity
+     track here was a bare `1fr` against pb's own `var(--log-pb-percent,
+     8fr)` -- an 8x SMALLER flex weight than pb's, the exact opposite of
+     "identity takes what ranks used to own". A `fr` value is a WEIGHT among
+     the row's simultaneously-flexible tracks, not an absolute claim, so this
+     handed roughly 8/9 of every card's leftover width to the pb TRACK (never
+     to the PB TAG itself -- it is `justify-self: end` and never stretches,
+     so the extra width was invisible padding) while identity sat pinned at
+     its own 220px floor regardless of the card's real width -- measured live
+     at 850/900/1920px alike, all three landed on an identical 220px identity
+     column. Invisible before this round because nothing else shared that
+     column with the name; `nameOverflow: shrinkToFit` silently absorbed it
+     by shrinking the font instead of the box ever growing. Adding the
+     strategy picker into this same column is what exposed it --
+     `tests/test_log_card_name_fits.py` went from clean to 91/97 names
+     overflowing at EVERY tested width, not just the narrow ones, which is
+     the tell that the column itself was starved rather than merely tight.
+     `90fr` mirrors the two shares identity absorbed (identityPercent 20 +
+     ranksPercent 70, this file's own shipped defaults) as a single literal
+     weight -- `fr` values cannot be summed inside `calc()`, so this is a
+     plain number rather than a live derivation of the two tunables, same as
+     `1fr` already was; it only needs to stay clearly dominant over pb's own
+     8fr, not track either tunable exactly. */
   .log-list-card.log-layout-oneline .log-card.log-card-ranks-in-body:not(.is-unassigned) .log-card-head {
     grid-template-columns:
-      minmax(var(--log-identity-floor, 220px), 1fr)
+      minmax(var(--log-identity-floor, 220px), 90fr)
       minmax(auto, var(--log-pb-percent, 8fr))
       auto;
     grid-template-areas: "identity pb fold";

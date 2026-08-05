@@ -80,6 +80,11 @@ export const TUNABLES = {
     min: 140, max: 400, step: 4, unit: "px",
     why: "The hard minimum the identity column holds at ANY width, however small its own share above is dialed — a pure percentage shrinks toward zero at the app's 850px supported floor long before a share this small could hold a real name. Measured, not guessed: the widest of 97 corpus star names needs 248px at the shipped 13px name size (tests/test_log_card_name_fits.py's own corpus). Raise this if Name size grows past its shipped default; it was measured at that size, not derived from it.",
   },
+  stratPickerWidth: {
+    group: "Identity", label: "Strategy picker width", value: 130,
+    min: 70, max: 220, step: 5, unit: "px",
+    why: "The active-strategy dropdown that now sits beside the identity display instead of stacked under it (one-line-heads round, 2026-08-04 — \"move the selector to the right of the identity display\"). Lives INSIDE the identity column's own share rather than a grid track of its own, so it can never take room from the ranks/PB columns; `.log-card-select` (the icon+name button) has the identity row's other flex slot and gives up space to this one first as the card narrows.",
+  },
 
   // ---- Ranks: the strategy + star/segment rank display --------------------
   ranksPercent: {
