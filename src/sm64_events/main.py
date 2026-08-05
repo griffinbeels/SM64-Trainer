@@ -21,6 +21,7 @@ from sm64_events.detectors.dust import DustTrickDetector
 from sm64_events.detectors.key import KeyGrabDetector
 from sm64_events.detectors.level import LevelChangeDetector
 from sm64_events.detectors.lifecycle import GameResetDetector
+from sm64_events.detectors.moment import MomentDetector
 from sm64_events.detectors.spawn import SpawnDetector
 from sm64_events.detectors.stage import StageChangeDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
@@ -58,7 +59,7 @@ def _bootstrap_cleanup_arg(argv=None) -> "str | None":
     return None
 
 
-def build_detectors() -> list:
+def build_detectors(target_active=None) -> list:
     """THE detector chain, in THE order. Extracted from build() 2026-07-31 so
     a test can drive the real one end to end (tests/test_segment_igt.py plays
     snapshots through this list and projects what comes out) — a test that
@@ -119,11 +120,28 @@ def build_detectors() -> list:
     emit whatever this order says.  Pinned by
     tests/test_reset_during_star_grab.py, mutation-proved by moving this
     detector back to the end.
+
+    ## MomentDetector's position, and its argument
+
+    A moment (`door_open`, `textbox`) is emitted on the frame it HAPPENED, so
+    unlike the two leaders it describes the present and must not jump ahead of
+    them — behind star_grab and warp, and otherwise wherever the stateless
+    edges sit.
+
+    `target_active` is the task-0087 gate: "these should ONLY be tracked when
+    we explicitly select / autoselect a star or segment". It defaults to None
+    (permissive) so `build_detectors()` keeps working for every existing
+    caller and for the tests that drive the real chain end to end; `build()`
+    below injects the predicate that reads the live target, which is the only
+    place that knows the service.
     """
+    moments = (MomentDetector() if target_active is None
+               else MomentDetector(target_active=target_active))
     detectors = [StarGrabDetector(), WarpDetector(), GameResetDetector(),
                  LevelChangeDetector(), AreaChangeDetector(),
                  StageChangeDetector(), AnchorDetector(), DeathDetector(),
-                 DustTrickDetector(), KeyGrabDetector(), SpawnDetector()]
+                 DustTrickDetector(), KeyGrabDetector(), SpawnDetector(),
+                 moments]
     return detectors
 
 
@@ -265,7 +283,10 @@ def build():
             builder=CompilationBuilder(extractor=replay.extractor, codec=codec,
                                        fps=replay_cfg.fps),
             out_dir=compilations_dir())
-    detectors = build_detectors()
+    # Moments are journaled only while something is being practiced (task
+    # 0087). Read as a callable rather than a snapshot: a target set mid
+    # session must start recording without a restart.
+    detectors = build_detectors(target_active=lambda: service.target is not None)
     if replay is not None:
         # Poll-thread tap (emits no events): tells the recorder the player
         # is providing input so the buffer pauses while idle (activity.py).

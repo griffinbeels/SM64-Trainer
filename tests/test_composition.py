@@ -27,6 +27,40 @@ def test_detector_order_is_load_bearing():
     assert positions == sorted(positions)
 
 
+def test_the_moment_detector_runs_behind_the_held_emitters():
+    # A moment is emitted on the frame it HAPPENED, so it is not a held
+    # event and must not jump ahead of one. The two held emitters publish
+    # the past; everything describing the present follows them.
+    wired = [type(detector).__name__ for detector in build_detectors()]
+    assert wired.index("MomentDetector") > wired.index("StarGrabDetector")
+    assert wired.index("MomentDetector") > wired.index("WarpDetector")
+
+
+def test_the_moment_detector_takes_the_live_target_predicate():
+    """build_detectors() with no argument stays permissive so every existing
+    caller (and every test that drives the real chain) keeps working; the
+    composition root is where the real gate is injected."""
+    from sm64_events.main import build_detectors as build
+
+    permissive = next(d for d in build()
+                      if type(d).__name__ == "MomentDetector")
+    assert permissive._target_active() is True
+
+    gated = next(d for d in build(target_active=lambda: False)
+                 if type(d).__name__ == "MomentDetector")
+    assert gated._target_active() is False
+
+
+def test_the_composition_root_gates_moments_on_a_real_target():
+    """The predicate main passes must read the SERVICE's live target, not a
+    constant -- a moment journaled with no target selected is the volume
+    the task-0087 rule exists to prevent."""
+    src = (Path(sm64_events.__file__).parent / "main.py").read_text(
+        encoding="utf-8")
+    assert "build_detectors(target_active=" in src
+    assert "service.target" in src
+
+
 def test_stage_detector_is_wired():
     src = (Path(sm64_events.__file__).parent / "main.py").read_text(encoding="utf-8")
     # rindex skips the alphabetical import line in favour of the last
