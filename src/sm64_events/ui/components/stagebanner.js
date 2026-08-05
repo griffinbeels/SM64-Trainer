@@ -51,6 +51,7 @@ import { armedSegments, hasPracticeContext, hasStandardsFor,
          selectorSurfaceId } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
 import { handIsEmpty, loneRouteOption } from "../loneoption.js";
+import { isExpanded, visibleEntities } from "../subsections.js";
 import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
 import { caveatOf, cellBadge } from "./marks.js";
@@ -821,15 +822,37 @@ function SegmentRow({ t, v, stage }) {
     v, lone, `seg:${stage.level}:${stage.area}:${lone ? lone.segment_id : ""}`,
     () => pickSegmentTarget(t, lone, { quiet: true }));
 
-  const segs = inRoute.length ? inRoute : here;   // never empty the row
+  const offered = inRoute.length ? inRoute : here;   // never empty the row
+
+  // PROGRESSIVE DISCLOSURE (Griffin, 2026-08-05). Selecting something hides
+  // the other top-level options and expands into that thing's subsections;
+  // with nothing selected, a subsection is never loose in the row. The rule
+  // itself lives in ../subsections.js so node can drive it directly -- see
+  // tests/test_ui_subsections.py.
+  //
+  // Keyed by ENTITY KEY, the same "segment:<id>" string the server stamps as
+  // `parent` and the same one sheet-library's mapper emits, so the row and
+  // the definition can never disagree about what owns what.
+  const tgt = v.target || {};
+  const activeKey = tgt.kind === "segment" && tgt.segment_id != null
+    ? `segment:${tgt.segment_id}`
+    : (tgt.course_id != null && tgt.star_id != null
+        ? `star:${tgt.course_id}:${tgt.star_id}` : null);
+  const keyed = offered.map(
+    (s) => ({ ...s, key: `segment:${s.segment_id}` }));
+  const segs = visibleEntities(keyed, activeKey);
+  const expanded = isExpanded(keyed, activeKey);
+
   const extras = armedExtraCells(
     t, v, new Set(segs.map((s) => s.segment_id)), setPicking);
   if (!segs.length && !extras.length) return html`<${StagePlaceholder} t=${t} />`;
 
-  return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
+  return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}${expanded ? " selector-expanded" : ""}">
     <div class="shead"><b>Castle ${CASTLE_AREA_NAMES[stage.area]}</b>
-      <span class="meta">tap a segment to practice</span>
-      
+      <span class="meta">${expanded
+        ? "tap the parent again to go back"
+        : "tap a segment to practice"}</span>
+
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
     <${CellRow} class="starrow segcells">

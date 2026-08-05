@@ -1585,6 +1585,12 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "segment_targets": [
             {"segment_id": d.id, "name": d.name, "enabled": d.enabled,
              "start_areas": areas, "start_levels": levels,
+             # The entity this is a SUBSECTION of, or None (task 0087). The
+             # SELECTOR reads this payload, not the sections, so the field is
+             # needed in both places -- a subsection missing it here would
+             # simply sit loose in the row beside its own parent, which is
+             # the crowding progressive disclosure exists to prevent.
+             "parent": d.parent,
              # True for the seg:reds->pipe:<abbrev> half of a Bowser Reds
              # pairing -- the discriminator stagebanner.js needs to tell it
              # apart from the legacy exclusive "no reds" pipe-only segment,
