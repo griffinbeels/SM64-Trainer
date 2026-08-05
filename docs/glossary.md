@@ -384,10 +384,13 @@ pill]], the [[scope]] control, and your [[rank]]s across everything.
 
 The row of [[practice cell]]s across the top of the [[Practice tab]], showing
 what you can practice where you currently stand. Clicking a cell sets your
-[[target]].
+[[target]]. Picking something that owns [[subsection]]s EXPANDS the row into
+that family — the parent and its [[subsection]]s, nothing else — and tapping the
+parent again returns the full row.
 
 - **Lives** — the quick-select row
-  (`src/sm64_events/ui/components/stagebanner.js`)
+  (`src/sm64_events/ui/components/stagebanner.js`), whose disclosure rule is
+  its own module (`src/sm64_events/ui/subsections.js`)
 
 ### Practice cell
 

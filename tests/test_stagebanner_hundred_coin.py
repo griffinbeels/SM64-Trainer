@@ -91,12 +91,24 @@ def test_hundred_coin_star_gets_no_extra_cell():
     """armedExtraCells' shownIds no longer special-cases anything for this
     row -- the 100-coin engine is excluded from segment_targets server-side
     (views.py), so armedSegments(t, v) can never surface it here regardless
-    of what this row passes."""
+    of what this row passes.
+
+    Pinned as "names no segment of its own", not as a literal argument: the
+    row passed `new Set()` until 2026-08-05, when progressive disclosure gave
+    it real segment cells (a star's subsections) that the extras must not
+    draw twice. That is the ordinary dedupe every other row already does, and
+    it is not a special case -- what would be one is this argument naming a
+    star slot, a course, or the 100-coin family."""
     source = strip_comments(BANNER.read_text(encoding="utf-8"))
     body = _function_body("StarRow", source)
     call = re.search(r"armedExtraCells\(t, v,(.*?),\s*setPicking", body, re.S)
     assert call, "StarRow no longer calls armedExtraCells"
-    assert call.group(1).strip() == "new Set()"
+    argument = call.group(1).strip()
+    for special in ("100", "hundred", "star_id", "slot", "=== 6", "== 6"):
+        assert special not in argument, (
+            f"StarRow's extra-cell filter names {special!r} -- it must be "
+            "derived from what the row already drew, never from which star "
+            "this is")
 
 
 def test_the_guards_can_still_fail():

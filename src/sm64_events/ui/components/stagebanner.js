@@ -51,7 +51,7 @@ import { armedSegments, hasPracticeContext, hasStandardsFor,
          selectorSurfaceId } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
 import { handIsEmpty, loneRouteOption } from "../loneoption.js";
-import { isExpanded, visibleEntities } from "../subsections.js";
+import { familyRoot, isExpanded, visibleEntities } from "../subsections.js";
 import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
 import { caveatOf, cellBadge } from "./marks.js";
@@ -225,6 +225,19 @@ function writeBowserFamily(level, family) {
 const segKey = (s) => `segment:${s.segment_id}`;
 const starKey = (courseId, slot) => `star:${courseId}:${slot}`;
 
+// The active target as an ENTITY KEY -- the same `segment:<id>` /
+// `star:<c>:<s>` string the server stamps as `parent` and sheet-library's
+// mapper emits, so the row and the definition can never disagree about what
+// owns what. One helper because BOTH rows with progressive disclosure need
+// it, and two hand-built copies of a key format is how they would drift.
+const targetEntityKey = (v) => {
+  const tgt = (v || {}).target || {};
+  if (tgt.kind === "segment" && tgt.segment_id != null)
+    return `segment:${tgt.segment_id}`;
+  return tgt.course_id != null && tgt.star_id != null
+    ? starKey(tgt.course_id, tgt.star_id) : null;
+};
+
 // Row-level icon-picking state (the ✎ on any cell) is iconpicker.js's
 // useIconPicking, shared with the Rank tab's coverage tiles since 2026-07-26.
 
@@ -297,14 +310,20 @@ function useLoneRouteOption(v, lone, key, commit) {
 // reason. `onPicked` fires after a successful explicit pick so a caller can
 // remember "the user chose THIS family" (Bowser's own writeBowserFamily);
 // every other caller omits it and nothing changes for them.
-function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked }) {
+// `onPickOverride` replaces the WRITE, and exists for exactly one gesture:
+// the expanded family's own root cell folds the row back instead of
+// re-posting the target it already holds (see `useFamilyView`).
+function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked,
+                              onPickOverride, subsection = false }) {
   const tgt = ((t.view || {}).target) || {};
   async function pick() {
+    if (onPickOverride) return onPickOverride();
     await pickSegmentTarget(t, s);
     if (onPicked) onPicked();
   }
   return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
     active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
+    subsection=${subsection}
     iconSrc=${entityIconSrc(t, segKey(s))}
     rank=${s.rank} hasStandards=${hasStandardsFor(t.view, segKey(s))}
     caveat=${s.caveat}
@@ -334,6 +353,35 @@ const armedExtraCells = (t, v, shownIds, setPicking, keep = () => true) =>
 // every armed segment, and the castle rows still offer them. Invisible in one
 // course row is not invisible.
 const startsInLevel = (level) => (s) => (s.start_levels || []).includes(level);
+
+// PROGRESSIVE DISCLOSURE, and the way BACK out of it -- the wiring shared by
+// the star row and the castle segment row (rule 11: one implementation, not
+// two that drift). The RULE is ../subsections.js; this is state.
+//
+// The rule hides every other top-level option while a family is expanded, so
+// without a fold there is no gesture that returns the row to the full list:
+// pick a star with subsections and the course's other six are gone for good.
+// The header has promised "tap the parent again to go back" since the day it
+// shipped, and nothing implemented it.
+//
+// Keyed on the family ROOT, so picking something outside the family clears
+// the fold by construction rather than through an effect. `toggleFamily` is
+// null unless the ROOT is what is selected -- tapping a parent you are not
+// practicing means "practice this", the same as any other cell.
+function useFamilyView(keyed, activeKey) {
+  const [foldedRoot, setFoldedRoot] = useState(null);
+  const root = familyRoot(keyed, activeKey);
+  const hasFamily = isExpanded(keyed, activeKey);
+  const folded = root != null && foldedRoot === root;
+  const shownKey = folded ? null : activeKey;
+  return {
+    segs: visibleEntities(keyed, shownKey),
+    expanded: isExpanded(keyed, shownKey),
+    familyRootKey: root,
+    toggleFamily: hasFamily && root === activeKey
+      ? () => setFoldedRoot(folded ? null : root) : null,
+  };
+}
 
 function StarRow({ t, v, stage }) {
   const [fold, toggleFold] = useCollapsed("selector");
@@ -382,17 +430,46 @@ function StarRow({ t, v, stage }) {
   const lone = loneRouteOption(routeStars, shown);
   useLoneRouteOption(v, lone, `star:${stage.course_id}:${lone ? lone.i : ""}`,
                      () => pick(lone.i, { quiet: true }));
+
+  // A STAR'S SUBSECTIONS BELONG HERE (task 0087, and the case Griffin named
+  // first: "sometimes we want to practice only a small portion of a star").
+  // This row drew nothing but stars until 2026-08-05, so the whole primary
+  // use case had no selector path at all -- the castle row was the only one
+  // wired, and a course's stars are not in it. A subsection of a star is an
+  // ordinary segment that starts in this level, so it is offered here on the
+  // same terms an armed one already was.
+  const subsections = (v.segment_targets || [])
+    .filter((s) => s.enabled && s.parent != null
+                   && startsInLevel(stage.level)(s));
+  const keyed = [
+    ...shown.map(({ name, i }) => ({ key: starKey(stage.course_id, i),
+                                     parent: null, star: i, name })),
+    ...subsections.map((s) => ({ key: segKey(s), parent: s.parent, seg: s })),
+  ];
+  const { segs, expanded, familyRootKey, toggleFamily } =
+    useFamilyView(keyed, targetEntityKey(v));
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
-  return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
+  const shownSegIds = new Set(
+    segs.filter((e) => e.seg).map((e) => e.seg.segment_id));
+
+  return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}${expanded ? " selector-expanded" : ""}">
     <div class="shead"><b>${course.name}</b>
-      <span class="meta">${routeStars
-        ? html`showing this route's stars · tap to practice`
-        : "tap a star to practice"}</span>
+      <span class="meta">${expanded
+        ? "tap the star again to go back"
+        : (routeStars
+            ? html`showing this route's stars · tap to practice`
+            : "tap a star to practice")}</span>
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
     <${CellRow} class="starrow">
-      ${shown.map(({ name, i }) => {
+      ${segs.map((entity) => {
+        if (entity.seg) {
+          return html`<${StandardSegmentCell} key=${`seg:${entity.seg.segment_id}`}
+            t=${t} s=${entity.seg} setPicking=${setPicking}
+            subsection=${entity.parent != null} />`;
+        }
+        const i = entity.star;
         return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
           key=${`${stage.course_id}:${i}`}
           active=${tgt.kind !== "segment"
@@ -401,12 +478,14 @@ function StarRow({ t, v, stage }) {
           fallbackSlot=${i}
           rank=${rankFor(i)} hasStandards=${hasStandardsFor(v, starKey(stage.course_id, i))}
           caveat=${caveatFor(i)}
-          name=${name}
+          name=${entity.name}
           sub=${stratSub(lastStratFor(i))}
-          onPick=${() => pick(i)}
+          onPick=${toggleFamily && entity.key === familyRootKey
+            ? toggleFamily : () => pick(i)}
           onEdit=${() => setPicking(iconIdentityForKey(starKey(stage.course_id, i)))} />`;
       })}
-      ${armedExtraCells(t, v, new Set(), setPicking, startsInLevel(stage.level))}
+      ${armedExtraCells(t, v, shownSegIds, setPicking,
+                        startsInLevel(stage.level))}
     <//>
     ${pickerModal}
   </section>`;
@@ -830,18 +909,11 @@ function SegmentRow({ t, v, stage }) {
   // itself lives in ../subsections.js so node can drive it directly -- see
   // tests/test_ui_subsections.py.
   //
-  // Keyed by ENTITY KEY, the same "segment:<id>" string the server stamps as
-  // `parent` and the same one sheet-library's mapper emits, so the row and
-  // the definition can never disagree about what owns what.
-  const tgt = v.target || {};
-  const activeKey = tgt.kind === "segment" && tgt.segment_id != null
-    ? `segment:${tgt.segment_id}`
-    : (tgt.course_id != null && tgt.star_id != null
-        ? `star:${tgt.course_id}:${tgt.star_id}` : null);
-  const keyed = offered.map(
-    (s) => ({ ...s, key: `segment:${s.segment_id}` }));
-  const segs = visibleEntities(keyed, activeKey);
-  const expanded = isExpanded(keyed, activeKey);
+  // Keyed by ENTITY KEY (`targetEntityKey` above), and the fold shared with
+  // the star row through `useFamilyView` -- rule 11, one implementation.
+  const keyed = offered.map((s) => ({ ...s, key: segKey(s) }));
+  const { segs, expanded, familyRootKey, toggleFamily } =
+    useFamilyView(keyed, targetEntityKey(v));
 
   const extras = armedExtraCells(
     t, v, new Set(segs.map((s) => s.segment_id)), setPicking);
@@ -857,7 +929,10 @@ function SegmentRow({ t, v, stage }) {
         label="the course selector" /></div>
     <${CellRow} class="starrow segcells">
       ${segs.map((s) => html`<${StandardSegmentCell}
-        key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
+        key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking}
+        subsection=${s.parent != null}
+        onPickOverride=${toggleFamily && s.key === familyRootKey
+          ? toggleFamily : null} />`)}
       ${extras}
     <//>
     ${pickerModal}

@@ -432,6 +432,53 @@ def _seed_editor_fixtures(base: str) -> None:
              {"name": f"Editor Fixture {suffix}", **_EDITOR_FIXTURE_DEFINITION})
 
 
+# A PARENT and its two SUBSECTIONS, all starting in the fixture's own level,
+# so the selector's progressive disclosure has something to disclose. Nothing
+# in the shipped corpus carries a `parent`, so before this the expanded row
+# was unreachable by every instrument -- and the two defects in `28ef261`
+# (a blank moment dropdown, a subarea selector that meant nothing) are what
+# that costs: both invisible to every assertion, both obvious on sight.
+#
+# Parented to FIXTURE_STAR, deliberately: "sometimes we want to practice only
+# a small portion of a star" is the case Griffin named first, and the STAR row
+# is the one that had no disclosure wiring at all until 2026-08-05.
+#
+# `moment_reached` starts them, which is also what makes them practicable
+# HERE: `segments.start_levels` reads a moment's own `level`, so these three
+# surface in the Whomp's Fortress row and nowhere else.
+def _subsection_definition(ordinal: int) -> dict:
+    return {
+        "start_triggers": [{"type": "moment_reached", "kind": "door_open",
+                            "level": FIXTURE_LEVEL, "ordinal": ordinal}],
+        "end_triggers": [{"type": "star_grabbed", "course": FIXTURE_COURSE,
+                          "star": FIXTURE_STAR}],
+        "guards": [], "enabled": True, "waypoints": [], "match_mode": "loose",
+    }
+
+
+def _seed_subsections(base: str) -> None:
+    """POST a parent movement in the fixture's level plus two subsections of
+    the fixture STAR -- the state `visibleEntities` expands into."""
+    import urllib.error
+    import urllib.request
+
+    def post(path: str, payload: dict) -> dict:
+        request = urllib.request.Request(
+            f"{base}{path}", data=json.dumps(payload).encode(), method="POST",
+            headers={"Content-Type": "application/json"})
+        try:
+            return json.loads(urllib.request.urlopen(request, timeout=10).read())
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(
+                f"fixture could not POST {path}: {error.code} "
+                f"{error.read()[:200]!r}") from error
+
+    star_key = f"star:{FIXTURE_COURSE}:{FIXTURE_STAR}"
+    for ordinal, name in enumerate(("Tower Climb", "Owl Drop"), start=1):
+        post("/api/segments", {"name": name, "parent": star_key,
+                               **_subsection_definition(ordinal)})
+
+
 def _free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -445,6 +492,7 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
               target: tuple[int, int] | None = None,
               arm_segment: int | None = None,
               seed_editor_fixtures: bool = False,
+              seed_subsections: bool = False,
               reconcile_full_corpus: bool = False,
               bowser_stage: tuple[int, int] | None = None):
     """Yield the base URL of an offline instance; stop it on the way out.
@@ -477,6 +525,10 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
     backtest, split, merge) have never been rendered by any gate, because
     reaching them needs a definition on disk to open, which no earlier
     fixture state provided.
+
+    `seed_subsections` additionally POSTs two subsections of the fixture STAR
+    (see `_seed_subsections`) -- the only way to reach the selector's EXPANDED
+    state, since nothing in the shipped corpus carries a `parent`.
 
     `reconcile_full_corpus` additionally applies the bundled 84-segment
     default corpus (`tracking/defaults.reconcile_defaults` against `data/
@@ -564,6 +616,8 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
                 _arm_segment(base, service, segment_id=arm_segment)
             if seed_editor_fixtures:
                 _seed_editor_fixtures(base)
+            if seed_subsections:
+                _seed_subsections(base)
             course, level = stage or (FIXTURE_COURSE, FIXTURE_LEVEL)
             seed_practice(service, course_id=course, level=level,
                           star_id=(target or (0, FIXTURE_STAR))[1],

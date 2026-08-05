@@ -56,6 +56,27 @@
   .starcell:hover { background: #20242b; }
   .starcell:focus-visible { outline: 2px solid #6fa8ff; outline-offset: 2px; }
   .starcell.active-star { border-color: #e0c36a; background: #211f14; }
+  /* PROGRESSIVE DISCLOSURE (task 0087). While a row is expanded it shows ONE
+     parent and its subsections, and without a treatment those read as three
+     peer options -- correct and unexplained, which this project treats as a
+     defect rather than a nicety. `.selector-expanded` was on the section from
+     the day the feature shipped and styled NOWHERE, so the expanded row was
+     pixel-identical to an ordinary one.
+     The children share a faint tray, which is what a horizontal row has
+     instead of the indent a vertical list would use ("any time we have child
+     rows that imply a parent/child relationship, we should indent the child
+     one level", 2026-07-25). A pseudo-element divider was tried first and
+     dropped: it paints outside the cell it belongs to, which is a real
+     `decoration` defect rather than a styling choice. The gold active
+     highlight still wins over the tray -- which one you are PRACTICING
+     outranks which ones are children. Both directions animate off the one
+     `transition` on `.starcell` above; `:hover` sets values only, never its
+     own transition. */
+  .selector-expanded .starcell.subsection-cell {
+    background: #131b26; border-color: #223247; }
+  .selector-expanded .starcell.subsection-cell:hover { background: #18202c; }
+  .selector-expanded .starcell.subsection-cell.active-star {
+    border-color: #e0c36a; background: #211f14; }
   /* Round 2 (2026-07-30): a segment cell used to ALSO carry its own
      `.armed` green highlight for "the timer is running now", which fought
      this gold one whenever a segment was both armed and targeted -- the

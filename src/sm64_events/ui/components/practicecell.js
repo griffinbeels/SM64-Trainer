@@ -77,7 +77,7 @@ export function PracticeCell({ active, iconSrc, fallbackSlot = 0,
                               rank, hasStandards = false, strat, name, sub,
                               title, dimIdle = false,
                               rankBadge = false, onPick, onEdit,
-                              caveat = null }) {
+                              caveat = null, subsection = false }) {
   const mark = caveatOf(caveat);
   // Unranked but RANKABLE draws the ladder floor rather than a bare "-",
   // so it reads as "bottom of the ladder" instead of "not a thing that
@@ -119,7 +119,7 @@ export function PracticeCell({ active, iconSrc, fallbackSlot = 0,
     ? (strat ? `${capName(rank.rank)} · best on ${strat}` : capName(rank.rank))
     : null;
   return html`<button
-      class="starcell ${active ? "active-star" : ""}"
+      class="starcell ${active ? "active-star" : ""} ${subsection ? "subsection-cell" : ""}"
       title=${title || name} onclick=${onPick}>
     <span class="starholder">
       <img class="starimg ${isGenericArt(iconSrc) ? "" : "courseicon"} ${dimIdle && !active ? "dim" : ""}"

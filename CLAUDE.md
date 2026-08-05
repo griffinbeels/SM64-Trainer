@@ -32,6 +32,8 @@ uv run python tools/what_happened.py --list          # which journal is live: re
 uv run pytest tests/test_responsive.py -q            # render every breakpoint; report layout defects (no PJ64 needed)
 uv run python tools/check_glossary.py                # docs/glossary.md's own gate: closure, active voice, live Lives paths
 uv run python tools/contact_sheet.py .objective-card # one surface at 1500/1200/900/850, in one image -- LOOK at it
+uv run python tools/contact_sheet.py --subsections    # the SELECTOR EXPANDED into a star's subsections (--folded for the way back); no shipped definition has a parent, so this is the only fixture that can draw it
+uv run pytest tests/test_responsive_subsections.py -q # that state's own sweep + the two reach assertions
 uv run python tools/mark_sheet.py                    # the caveat badge on both surfaces, side by side (the PICK is made: corner badge, 2026-08-01)
 uv run python tools/measure_objective_card.py        # re-measure the fixed card heights against real content
 uv run python tools/topology_map.py                  # DRAW the world graph the segment matcher judges moves against -- LOOK at it, a wrong edge is invisible to every test

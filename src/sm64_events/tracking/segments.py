@@ -1035,7 +1035,13 @@ def arm_level(trig: dict) -> int | None:
     lambdas. Shared by views.py's quick-select banner helpers and the
     projector's segment-target retirement (2026-07-23)."""
     kind = trig.get("type")
-    if kind in ("area_enter", "attempt_anchor", "spawned"):
+    # `moment_reached` places exactly like `area_enter`: a moment names where
+    # it HAPPENS, and Mario is standing there when it fires. Missing until
+    # 2026-08-05, which made every subsection started by a moment invisible in
+    # every selector row -- the row filters on this, so a definition it cannot
+    # place is a definition nobody can pick. Same reason `step_node` has its
+    # own branch for the type.
+    if kind in ("area_enter", "attempt_anchor", "spawned", "moment_reached"):
         return trig.get("level")
     if kind in ("level_enter", "level_exit"):
         return trig.get("to")   # level_exit: Mario ends up at the DESTINATION
@@ -1172,7 +1178,7 @@ def start_areas(start_triggers: list) -> list:
     subarea (that is what keeps LBLJ out of Upstairs). Derived from the trigger
     param NAMES (stable across the matcher), so this stays decoupled from the
     registry above:
-      area_enter / attempt_anchor : (level, area)
+      area_enter / attempt_anchor / moment_reached : (level, area)
       level_enter / level_exit    : (to, to_subarea)   [to_subarea exists once
           the subarea-trigger work lands; until then .get() returns None and the
           row contributes nothing — forward-safe]
@@ -1186,7 +1192,7 @@ def start_areas(start_triggers: list) -> list:
     out: list = []
     for trig in start_triggers:
         kind = trig.get("type")
-        if kind in ("area_enter", "attempt_anchor"):
+        if kind in ("area_enter", "attempt_anchor", "moment_reached"):
             level, area = trig.get("level"), trig.get("area")
         elif kind in ("level_enter", "level_exit"):
             level, area = trig.get("to"), trig.get("to_subarea")

@@ -74,8 +74,43 @@ def test_selecting_a_castle_movement_works_identically():
         "segment:12", "segment:91"]
 
 
-def test_selecting_something_with_no_subsections_draws_just_it():
-    assert keys(call("visibleEntities", CORPUS, "segment:13")) == ["segment:13"]
+def test_selecting_something_with_no_subsections_leaves_the_row_alone():
+    """No children, no expansion. Hiding the other options is only worth doing
+    when there is something to hide them FOR -- and the first version of this
+    rule collapsed a whole course's row down to the one ordinary star you had
+    just picked, with no gesture anywhere that brought the other six back."""
+    assert keys(call("visibleEntities", CORPUS, "segment:13")) == [
+        "star:2:1", "segment:12", "segment:13"]
+
+
+# -- the family, not the selection --------------------------------------------
+
+def test_selecting_a_subsection_keeps_its_parent_and_its_siblings():
+    """The dead end this rule exists to avoid, reached by using the feature
+    correctly: practice one subsection and the row would collapse to that one
+    cell, with no way back to the parent or to the others."""
+    siblings = CORPUS + [{"key": "segment:93", "parent": "star:2:1"}]
+    assert keys(call("visibleEntities", siblings, "segment:90")) == [
+        "star:2:1", "segment:90", "segment:93"]
+
+
+def test_a_selected_subsection_still_reads_as_expanded():
+    assert call("isExpanded", CORPUS, "segment:90") is True
+
+
+def test_the_family_root_of_a_top_level_entity_is_itself():
+    assert call("familyRoot", CORPUS, "star:2:1") == "star:2:1"
+    assert call("familyRoot", CORPUS, None) is None
+
+
+def test_the_family_root_of_a_subsection_is_its_parent():
+    assert call("familyRoot", CORPUS, "segment:90") == "star:2:1"
+
+
+def test_an_off_list_key_is_its_own_root():
+    """We cannot read a parent off an entity we do not have, and this is what
+    keeps the two off-list fallbacks below working."""
+    assert call("familyRoot", CORPUS, "star:9:9") == "star:9:9"
 
 
 # -- one level deep -----------------------------------------------------------
