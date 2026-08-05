@@ -83,16 +83,6 @@ def test_pickcast_excludes_by_name_not_by_file():
         "stem allows two different files of the same character side by side")
 
 
-def _sections(source: str) -> dict[str, str]:
-    """The bodies of the practice-card builders that own an empty panel."""
-    bodies = {}
-    for name in ("StarSection", "SegmentSection", "EmptyPractice"):
-        match = re.search(rf"^function {name}\(.*?^}}", source, re.S | re.M)
-        assert match, f"{name} not found in practice.js — did it get renamed?"
-        bodies[name] = strip_comments(match.group(0))
-    return bodies
-
-
 def test_the_page_level_analysis_card_guards_the_trend_graph():
     """Progress returns "" for a section with no plottable points, so the
     caller has to ask the SAME question to put something there instead —
@@ -161,27 +151,27 @@ def test_the_shared_log_card_has_an_empty_state():
         "(and its empty state) is a page-level surface (practicelog.js) now")
 
 
-def test_the_no_target_screen_explains_its_remaining_empty_card():
-    """EmptyPractice is the screen the user actually asked about — nothing
-    selected. Until task 6 it filled BOTH an empty analysis card and an
-    empty unassigned-attempts log at once, each with its own EmptyState.
+def test_the_no_target_screens_pieces_still_explain_themselves():
+    """"Nothing selected" used to be `EmptyPractice`'s job -- an empty
+    analysis card and an empty unassigned-attempts log at once, each with
+    its own EmptyState. Task 6 (2026-08-03) already moved both OUT of it:
+    the analysis half became the PAGE-LEVEL EntityAnalysis, which explains a
+    null focus on every empty screen (see the analysis-card test above); the
+    unassigned log became practicelog.js's own UnassignedLogCard, which
+    explains an empty log through AttemptLogEmpty exactly like every other
+    log card (see the LogCard test above).
 
-    2026-08-03 (task 6): both of those moved OUT of EmptyPractice. The
-    analysis half is the PAGE-LEVEL EntityAnalysis, which explains a null
-    focus on every empty screen now, not just this one (see the analysis-card
-    test above); the unassigned log is practicelog.js's own UnassignedLogCard,
-    which explains an empty log through AttemptLogEmpty exactly like every
-    other log card (see the LogCard test above). EmptyPractice keeps only the
-    objective-empty card, whose own copy ("Nothing to practice here" /
-    "Waiting for a target") already explains it without a component -- so the
-    property worth asserting here is that nothing was silently dropped: each
-    half explains itself at its NEW address, and EmptyPractice itself needs
-    none of its own any more."""
-    body = _sections(PRACTICE_JS.read_text(encoding="utf-8"))["EmptyPractice"]
-    assert "<${EmptyState}" not in body, (
-        "EmptyPractice should render only the empty objective card now -- "
-        "its analysis and log halves both moved to page-level/shared "
-        "surfaces in task 6")
+    SUPERSEDED 2026-08-04 (amendment A8, spec practice-log-entity-cards):
+    `EmptyPractice` itself -- the last thing it still owned, an empty
+    objective card saying "Nothing to practice here" / "Waiting for a
+    target" -- is deleted along with the rest of the Active Target card.
+    With no active entity there is simply no `.log-card-active` card and no
+    third empty-shell surface standing in for it; "nothing selected" is
+    explained entirely by the two pieces that already moved out. What is
+    left to assert is that both of them still explain themselves -- the
+    same property this test always checked, at their sole remaining
+    addresses now that there is no third place for either to have been
+    copied back into."""
     log_source = strip_comments(PRACTICELOG_JS.read_text(encoding="utf-8"))
     unassigned = re.search(r"^function UnassignedLogCard\(.*?^\}", log_source,
                             re.S | re.M)
@@ -189,6 +179,14 @@ def test_the_no_target_screen_explains_its_remaining_empty_card():
     assert "<${AttemptLogEmpty}" in unassigned.group(0), (
         "the unassigned bucket must explain an empty log the same way "
         "every other log card does")
+    entitydetail = strip_comments(ENTITYDETAIL_JS.read_text(encoding="utf-8"))
+    analysis = re.search(r"^export function EntityAnalysis\(.*?^}", entitydetail,
+                          re.S | re.M)
+    assert analysis, "EntityAnalysis not found in entitydetail.js"
+    assert "Nothing selected to practice" in analysis.group(0), (
+        "EntityAnalysis no longer explains a null focus -- with the Active "
+        "Target card gone this is the ONLY surface that tells the player "
+        "nothing is selected")
 
 
 def test_the_timeline_says_something_when_it_has_no_strip():

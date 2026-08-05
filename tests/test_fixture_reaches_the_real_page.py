@@ -44,7 +44,14 @@ from uilab_project import (PROJECT, STORIES,  # noqa: E402
                            BOWSER_COURSE, BOWSER_LEVEL)
 from ui_fixture import serve_ui, FIXTURE_COURSE, FIXTURE_LEVEL  # noqa: E402
 
-PRIMARY = ".practice-detail-grid.is-primary "
+# Re-pointed 2026-08-04 (amendment A8, spec practice-log-entity-cards): the
+# Active Target card (`.practice-detail-grid.is-primary`) is deleted -- the
+# entity actually being practised is now the `.log-card` carrying
+# `.log-card-active` (LogCard's own highlight, ui/components/practicelog.js).
+# Every test below that used to scope to the primary objective card now scopes
+# to that card instead -- same "which card is the crowded/interesting one"
+# question, new address.
+PRIMARY = ".log-card.log-card-active "
 
 # By NAME, not index (tests/test_ui_collapse_story.py's own rule: a reordered
 # list shifted these two apart once and the probe started asserting the wrong
@@ -96,7 +103,7 @@ def test_the_bowser_reds_pipe_pairing_renders_its_family_naming():
                  enter_level=BOWSER_LEVEL) as base, \
             get_driver().launch() as opened:
         opened.goto(f"{base}/ui/index.html")
-        opened.wait_for(".objective-card")
+        opened.wait_for(".log-list-card")
         opened.wait_ms(300)
         names = opened.evaluate(
             "return Array.from(document.querySelectorAll('.log-card-name'))"
@@ -130,7 +137,7 @@ def test_the_star_kind_armed_detail_renders():
     with serve_ui(arm_hundred_coin=(FIXTURE_COURSE, FIXTURE_LEVEL)) as base, \
             get_driver().launch() as opened:
         opened.goto(f"{base}/ui/index.html")
-        opened.wait_for(".objective-card")
+        opened.wait_for(".log-list-card")
         opened.wait_ms(300)
         rows = opened.count(".log-card .seg-waiting")
         assert rows == 1, (
@@ -144,12 +151,13 @@ def test_the_star_kind_armed_detail_renders():
         assert step_text and re.search(r"Step\s*\d+\s*of\s*\d+", step_text), (
             f"seg-waiting-step reads {step_text!r} -- not the expected "
             '"Step N of M" shape')
-        # The ORDINARY star sharing this course (the default target) must
-        # carry none of this -- a positive count above paired with this zero
-        # is what makes both readable as real signal (same pairing
+        # The ORDINARY star sharing this course (the default target, so the
+        # ACTIVE `.log-card`) must carry none of this -- a positive count
+        # above paired with this zero is what makes both readable as real
+        # signal (same pairing
         # test_the_armed_segments_log_card_shows_its_own_step_progress uses
         # for the segment side).
-        assert opened.count(".objective-card .seg-waiting") == 0
+        assert opened.count(".log-card.log-card-active .seg-waiting") == 0
 
 
 # Two viewports, not one: 1500x1000 (comfortably wide, side-by-side rank
@@ -196,14 +204,19 @@ def count(page, selector) -> int:
 
 
 def test_the_active_target_card_is_populated_not_the_empty_state(page):
-    """`.objective-empty` is what renders with no stage — "Nothing to practice
-    here". A sweep of that card measures an empty box and calls the page
-    clean."""
-    assert count(page, PRIMARY + ".objective-card") == 1
-    assert count(page, PRIMARY + ".objective-empty") == 0, (
-        "the fixture is standing nowhere — the Active Target card is its EMPTY "
-        "variant, and every layout number taken from it is about a card the "
-        "user never sees. serve_ui() must publish a stage_changed first.")
+    """The Active Target card and its `.objective-empty` variant are both
+    deleted (amendment A8, spec practice-log-entity-cards) -- there is no
+    more empty-shell substitute for "the fixture is standing nowhere". What
+    survives the same question: does exactly ONE `.log-card` carry the
+    `.log-card-active` highlight at all? If the fixture stood nowhere (no
+    `stage_changed`/`target` published), no entity would ever resolve as
+    `live.activeKey` and no card would ever wear the class -- a sweep of a
+    page with nothing highlighted would otherwise call it clean."""
+    assert count(page, ".log-card.log-card-active") == 1, (
+        "no `.log-card` (or more than one) carries `.log-card-active` -- the "
+        "fixture may be standing nowhere, so every layout number taken from "
+        "\"the active card\" is about a card that does not exist. "
+        "serve_ui() must publish a stage_changed and a target first.")
 
 
 def test_both_rank_banners_render(page):
@@ -345,17 +358,21 @@ def test_the_armed_segments_log_card_shows_its_own_step_progress(page):
         "no `.step-chip`s inside the log card's step track -- StepTrack "
         "renders the whole route as chips, not just a counter")
     # The ACTIVE star in this fixture is an ordinary one (no armed_detail),
-    # so its own objective card must show none of this -- a positive count
-    # above paired with this zero is what makes both readable as real
-    # signal rather than one vacuous side of a tautology.
-    assert count(page, ".objective-card .seg-waiting") == 0
+    # so its own `.log-card-active` card must show none of this -- a
+    # positive count above paired with this zero is what makes both readable
+    # as real signal rather than one vacuous side of a tautology.
+    assert count(page, ".log-card.log-card-active .seg-waiting") == 0
 
 
 def test_the_pb_tag_and_strategy_picker_are_present(page):
-    """Both are columns of the metrics grid. Missing either changes the whole
-    row's geometry, which is what the rank-wash bugs were measured against."""
+    """Both are columns of the card head. Missing either changes the whole
+    row's geometry, which is what the rank-wash bugs were measured against.
+    The strategy picker is `.log-card-strat-picker` now (amendment A2, spec
+    practice-log-entity-cards) -- the card head's strategy NAME became the
+    same interactive dropdown the deleted Active Target card used, replacing
+    `.objective-strategy select`."""
     assert count(page, PRIMARY + ".pbtag") == 1
-    assert count(page, PRIMARY + ".objective-strategy select") == 1
+    assert count(page, PRIMARY + ".log-card-strat-picker select") == 1
 
 
 def test_the_star_row_has_stars_in_it(page):
@@ -367,8 +384,16 @@ def test_the_star_row_has_stars_in_it(page):
 def test_the_collapse_toggles_exist(page):
     """The collapsed page is a declared story. With no toggles that story
     silently degrades into a second copy of the expanded one — a whole layout
-    the user asked to be held to, measured zero times."""
-    assert count(page, ".card-collapse") >= 3
+    the user asked to be held to, measured zero times.
+
+    Was >= 3 (the selector row, the objective card, and the analysis card).
+    The Active Target card is deleted (amendment A8, spec practice-log-
+    entity-cards) — `LogCard`'s own fold is a SEPARATE mechanism
+    (`.log-card-fold`, not `.card-collapse`; see uilab_project.py's own
+    comment on the two), so the objective card's `.card-collapse` instance is
+    gone rather than relocated. >= 2 (the selector row, the analysis card) is
+    the honest count now."""
+    assert count(page, ".card-collapse") >= 2
 
 
 def test_the_practice_log_and_analysis_cards_are_on_the_page(page):
@@ -632,7 +657,7 @@ def test_the_page_story_returns_to_practice_after_the_segments_tab(page):
     reloads between viewports or stories."""
     reach(page, "recorder-review")
     reach(page, "page")
-    assert count(page, PRIMARY + ".objective-card") == 1
+    assert count(page, ".log-card.log-card-active") == 1
     # >=1, not ==1: the mobile bottom-bar nav ALSO renders a "Practice" item
     # (hidden by CSS at this viewport, still present in the DOM), so a wide
     # viewport genuinely has two.

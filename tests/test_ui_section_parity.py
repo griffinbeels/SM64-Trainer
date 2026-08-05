@@ -1,19 +1,25 @@
 # tests/test_ui_section_parity.py
 """Star and segment practice cards must offer the SAME features.
 
-Why this exists: the two cards are hand-written siblings (StarSection /
+Why this exists: the two cards used to be hand-written siblings (StarSection /
 SegmentSection in ui/components/practice.js) — deliberately not one
 generalized component, because their data differs (IGT vs RTA-only, links,
-broken-definition handling).  The cost of that choice is that a feature added
-to one silently misses the other: the strategy picker shipped on stars in
+broken-definition handling). The cost of that choice was that a feature added
+to one silently missed the other: the strategy picker shipped on stars in
 v1 and was still missing from segments months later (user-reported
 2026-07-23, "the active segment card has no strat dropdown").
 
-This test makes the omission loud.  It compares the set of sub-components
-each card renders; any new asymmetry fails until it is either fixed or
-recorded in ONLY_IN_* with a reason.  Prop-level differences are out of
-scope — this catches the whole-feature-missing class, which is the one that
-actually happened.
+SUPERSEDED 2026-08-04 (amendment A8, spec practice-log-entity-cards): the
+Active Target card StarSection/SegmentSection built is deleted, and rule 11
+stopped being a test-enforced agreement between two hand-written functions —
+`LogCard` (ui/components/practicelog.js) is now the ONE component either kind
+renders through, so the "feature shipped on one, missing from the other"
+failure mode this file exists to catch can no longer happen BETWEEN two card
+implementations (there is only one). What is still worth pinning: that the
+one shared card actually carries the features rule 11 promises for every
+entity that reaches it — a hardcoded "Star"/kind-gated conditional inside
+`LogCard` itself could still silently drop something for one kind, which is
+the shape the tests below check for.
 """
 import re
 from pathlib import Path
@@ -31,25 +37,14 @@ PRACTICELOG_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
 VIEWS_PY = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
             / "tracking" / "views.py")
 
-# Deliberate, reviewed differences. Empty means "the cards are at parity".
-# Adding an entry is a decision: write WHY the other card doesn't want it.
-ONLY_IN_STAR: dict[str, str] = {}
-ONLY_IN_SEGMENT: dict[str, str] = {}
-
-
-def _body(source: str, name: str) -> str:
-    """The text of a top-level `function <name>(...) { ... }` declaration."""
-    match = re.search(rf"^function {name}\(.*?^}}", source, re.S | re.M)
-    assert match, f"{name} not found in practice.js — did it get renamed?"
-    return match.group(0)
 
 
 def _exported_body(source: str, name: str) -> str:
     """The text of a top-level `export function <name>(...) { ... }`
-    declaration -- entitydetail.js's shared components are exported, unlike
-    practice.js's own section builders."""
+    declaration -- entitydetail.js's and practicelog.js's shared components
+    are exported, unlike practice.js's own page-level wiring."""
     match = re.search(rf"^export function {name}\(.*?^}}", source, re.S | re.M)
-    assert match, f"{name} not found in entitydetail.js — did it get renamed?"
+    assert match, f"{name} not found — did it get renamed?"
     return match.group(0)
 
 
@@ -58,29 +53,23 @@ def _components(body: str) -> set[str]:
     return set(re.findall(r"<\$\{(\w+)\}", body))
 
 
-def test_star_and_segment_cards_render_the_same_components():
-    source = PRACTICE_JS.read_text(encoding="utf-8")
-    star = _components(_body(source, "StarSection"))
-    segment = _components(_body(source, "SegmentSection"))
-    assert star, "StarSection renders no components — parser broke"
-    missing_from_segment = star - segment - set(ONLY_IN_STAR)
-    missing_from_star = segment - star - set(ONLY_IN_SEGMENT)
-    assert not missing_from_segment, (
-        "SegmentSection is missing components StarSection has: "
-        f"{sorted(missing_from_segment)}. Add them to the segment card, or "
-        "record the reason in ONLY_IN_STAR.")
-    assert not missing_from_star, (
-        "StarSection is missing components SegmentSection has: "
-        f"{sorted(missing_from_star)}. Add them to the star card, or "
-        "record the reason in ONLY_IN_SEGMENT.")
-
-
-def test_both_cards_offer_a_strategy_picker():
-    """The specific regression that motivated this file (2026-07-23)."""
-    source = PRACTICE_JS.read_text(encoding="utf-8")
-    for name in ("StarSection", "SegmentSection"):
-        assert "StratPicker" in _components(_body(source, name)), \
-            f"{name} lost its strategy picker"
+def test_the_shared_log_card_offers_a_strategy_picker():
+    """The specific regression that motivated this file (2026-07-23): a
+    strategy picker shipped on stars and stayed missing from segments for
+    months. That can no longer happen BETWEEN two card implementations --
+    `LogCard` (practicelog.js) is the one function either kind renders
+    through (amendment A8, spec practice-log-entity-cards) -- so what this
+    now pins is that the shared card still carries the picker at all, and
+    that it is not hidden behind a kind-gated conditional (`isSegment(sec)`
+    branches on the "Definition deleted" fallback only, never on whether the
+    picker itself renders)."""
+    source = strip_comments(PRACTICELOG_JS.read_text(encoding="utf-8"))
+    log_card = _exported_body(source, "LogCard")
+    assert "StratPicker" in _components(log_card), \
+        "LogCard lost its strategy picker"
+    assert not re.search(r"isSegment\(sec\)[^\n]*&&[^\n]*StratPicker", log_card), (
+        "the strategy picker is gated on isSegment(sec) -- it must render "
+        "for both kinds, not just one")
 
 
 def test_the_page_level_drawer_still_offers_a_failure_compilation():
@@ -151,20 +140,23 @@ def test_two_rank_banners_are_rendered_for_both_kinds():
     cards now ask for, rather than two literals that could drift apart if a
     section were ever miscopied. That is a strengthening of this test's
     original concern, not a loosening of it: `entityNoun` is single-sourced
-    off `sec.kind`, so a hardcoded lie is no longer even expressible here."""
-    source = PRACTICE_JS.read_text(encoding="utf-8")
-    for name in ("StarSection", "SegmentSection"):
-        body = _body(source, name)
-        assert body.count("<${RankBanner}") >= 2, \
-            f"{name} does not render both the strategy and entity rank banners"
-        assert "bannerLabel(sec, entityNoun(sec))" in body, \
-            (f"{name}'s strategy banner must take its kicker from "
-             "bannerLabel(sec, entityNoun(sec)) -- a hardcoded "
-             '"Strategy" cannot say "Strategy · Segment" on the merged card')
-        assert "label=${entityNoun(sec)}" in body, \
-            (f"{name}'s entity rank banner must be labelled with "
-             "entityNoun(sec) -- the kicker names the entity this half "
-             "grades, and RankBanner renders on both kinds")
+    off `sec.kind`, so a hardcoded lie is no longer even expressible here.
+
+    2026-08-04 (amendment A8): StarSection/SegmentSection are deleted --
+    `LogCard` (practicelog.js) is the one function either kind renders
+    through, so there is one body to check rather than two to compare."""
+    source = strip_comments(PRACTICELOG_JS.read_text(encoding="utf-8"))
+    body = _exported_body(source, "LogCard")
+    assert body.count("<${RankBanner}") >= 2, \
+        "LogCard does not render both the strategy and entity rank banners"
+    assert "bannerLabel(sec, entityNoun(sec))" in body, \
+        ("LogCard's strategy banner must take its kicker from "
+         "bannerLabel(sec, entityNoun(sec)) -- a hardcoded "
+         '"Strategy" cannot say "Strategy · Segment" on the merged card')
+    assert "label=${entityNoun(sec)}" in body, \
+        ("LogCard's entity rank banner must be labelled with "
+         "entityNoun(sec) -- the kicker names the entity this half "
+         "grades, and RankBanner renders on both kinds")
 
 
 def test_both_section_builders_emit_entity_rank():
@@ -282,29 +274,23 @@ def test_the_practice_index_is_gone_and_the_log_replaced_it():
     assert "practice-index" not in practice
 
 
-def test_the_active_cards_shrank_to_the_objective_alone():
-    """StarSection and SegmentSection used to carry the analysis card, the
-    attempts log and the drawer inline; task 6 leaves them holding only the
-    objective card. A behavioural check rather than a component-name scan --
-    the structural warning this branch has repeated at every step: a source
-    count that matches a shared component's call site cannot see a kind-gated
-    conditional wrapped around it (a reviewer proved this on task 4's own
-    StatChipsRow, silently dropped for segments with every count-based guard
-    still green). So this asserts on the SHAPE of what remains -- exactly one
-    `<section class="practice-card ...">` per card, wrapped in exactly one
-    `.practice-detail-grid` -- rather than counting a component name that
-    could be reintroduced behind a per-kind guard with every count unchanged."""
-    source = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
-    for name in ("StarSection", "SegmentSection"):
-        body = _body(source, name)
-        assert body.count('class="practice-detail-grid') == 1, (
-            f"{name} must wrap exactly one grid")
-        assert body.count("practice-card") == 1, (
-            f"{name} renders more than one practice-card -- the analysis "
-            "card, attempts log or drawer regrew inside it")
-        assert "attempts-card" not in body, (
-            f"{name} still builds its own attempts-log card")
-        assert "EntityAnalysis" not in body and "EntityDrawer" not in body, (
-            f"{name} still calls the shared analysis card or drawer itself "
-            "-- both are page-level surfaces now, following the FOCUSED "
-            "entity rather than whichever section is active")
+def test_the_log_card_never_regrows_its_own_analysis_or_drawer():
+    """StarSection and SegmentSection are deleted along with the Active
+    Target card (amendment A8, spec practice-log-entity-cards) -- the analysis
+    card and the detail drawer are page-level surfaces now, following the
+    FOCUSED entity rather than whichever card is open. A behavioural check
+    rather than a component-name scan -- the structural warning this branch
+    has repeated at every step: a source count that matches a shared
+    component's call site cannot see a kind-gated conditional wrapped around
+    it (a reviewer proved this on task 4's own StatChipsRow, silently dropped
+    for segments with every count-based guard still green). So this asserts
+    on the SHAPE of what `LogCard` may never regrow: its own attempts-log
+    card wrapper, or a direct call to the shared analysis card or drawer."""
+    source = strip_comments(PRACTICELOG_JS.read_text(encoding="utf-8"))
+    body = _exported_body(source, "LogCard")
+    assert "attempts-card" not in body, (
+        "LogCard still builds its own attempts-log card wrapper")
+    assert "EntityAnalysis" not in body and "EntityDrawer" not in body, (
+        "LogCard calls the shared analysis card or drawer itself -- both "
+        "are page-level surfaces, following the FOCUSED entity rather than "
+        "whichever card is open")

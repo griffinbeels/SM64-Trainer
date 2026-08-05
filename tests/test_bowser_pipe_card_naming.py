@@ -21,23 +21,30 @@ itself and the Pipe-mode card both already spelled out the family.
 
 practice.js's StarSection/SegmentSection answered all of this by hand until
 the 2026-08-03 practice-log-entity-cards refactor moved the derivation into
-`ui/entitysection.js::displayName` (StarSection/SegmentSection now call it
+`ui/entitysection.js::displayName` (StarSection/SegmentSection called it
 instead of composing familyName/familyCourseName/noRedsCourse/starDisplayName
 inline -- see tests/test_ui_entity_section.py for the module's own behavioral
 coverage of every scenario named above). These tests now assert the SHAPE of
-that hand-off rather than the retired inline expressions: practice.js must
-still call `displayName`/`entityKey` (never re-derive a family suffix
-itself), and entitysection.js must still route through familyLabel
-(../redsfamily.js) for the two family voices.
+that hand-off rather than the retired inline expressions.
 
-practice.js is not import-free (it pulls in preact/htm), so -- same approach
-as the sibling stagebanner.js source-scan test files -- the practice.js half
-of these assertions are SOURCE-SCAN against the stripped-comment text.
-entitysection.js IS import-free, so its half is driven the same way
-test_ui_entity_section.py drives it (a source-scan here too, since the
-concern is which composer a branch calls, not what it returns -- the return
-value is already pinned behaviorally by that other file). The backend half
-(the views.py fields the heading reads) is tested directly in
+SUPERSEDED 2026-08-04 (amendment A8, spec practice-log-entity-cards):
+StarSection/SegmentSection are deleted along with the Active Target card --
+`displayName`'s one remaining caller is `LogCard` (ui/components/
+practicelog.js), the shared card either kind now renders through. The
+assertions below moved with it: `LogCard` must still call `displayName`/
+`entityKey` (never re-derive a family suffix itself), and entitysection.js
+must still route through familyLabel (../redsfamily.js) for the two family
+voices.
+
+practicelog.js is not import-free (it pulls in preact/htm), so -- same
+approach as the sibling stagebanner.js source-scan test files -- the
+practicelog.js half of these assertions are SOURCE-SCAN against the
+stripped-comment text. entitysection.js IS import-free, so its half is
+driven the same way test_ui_entity_section.py drives it (a source-scan here
+too, since the concern is which composer a branch calls, not what it
+returns -- the return value is already pinned behaviorally by that other
+file). The backend half (the views.py fields the heading reads) is tested
+directly in
 tests/test_views.py::test_pipe_segment_carries_the_paired_stars_own_display_names
 and test_legacy_no_reds_segment_is_flagged_for_the_pinned_cards_naming.
 """
@@ -46,23 +53,16 @@ from pathlib import Path
 
 from source_scan import strip_comments
 
-PRACTICE_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
-               / "ui" / "components" / "practice.js")
+PRACTICELOG_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
+                  / "ui" / "components" / "practicelog.js")
 ENTITYSECTION_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
                     / "ui" / "entitysection.js")
 
 
-def _segment_section_body() -> str:
-    source = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
-    match = re.search(r"^function SegmentSection\(.*?^}", source, re.S | re.M)
-    assert match, "SegmentSection not found in practice.js"
-    return match.group(0)
-
-
-def _star_section_body() -> str:
-    source = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
-    match = re.search(r"^function StarSection\(.*?^}", source, re.S | re.M)
-    assert match, "StarSection not found in practice.js"
+def _log_card_body() -> str:
+    source = strip_comments(PRACTICELOG_JS.read_text(encoding="utf-8"))
+    match = re.search(r"^export function LogCard\(.*?^}", source, re.S | re.M)
+    assert match, "LogCard not found in practicelog.js"
     return match.group(0)
 
 
@@ -77,24 +77,25 @@ def test_the_pipe_segments_card_borrows_the_stars_family_voice():
     the SAME guard views.py stamps pipe_star_course_name/pipe_star_name
     with. familyLabel (../redsfamily.js) is the ONE composer, called from
     entitysection.js -- see tests/test_single_source.py for the guard
-    banning a second one. Neither section may name `familyLabel` itself any
-    more -- a second inline composer in practice.js would be exactly that
+    banning a second one. LogCard may not name `familyLabel` itself any
+    more -- a second inline composer in practicelog.js would be exactly that
     same second door."""
-    practice_src = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
-    assert "entitysection.js" in practice_src, (
-        "practice.js no longer imports the shared kind-dispatch module")
-    assert "familyLabel" not in practice_src, (
-        "practice.js composes a family suffix itself again -- that is "
+    practicelog_src = strip_comments(PRACTICELOG_JS.read_text(encoding="utf-8"))
+    assert "entitysection.js" in practicelog_src, (
+        "practicelog.js no longer imports the shared kind-dispatch module")
+    assert "familyLabel" not in practicelog_src, (
+        "practicelog.js composes a family suffix itself again -- that is "
         "entitysection.js's job, and a second composer is the exact bug "
         "rule 11 exists to stop")
-    body = _segment_section_body()
+    body = _log_card_body()
     assert re.search(r"displayName\(sec,\s*"
                       r"\(t\.view\.catalog \|\| \{\}\)\.courses \|\| \[\]\)",
                       body), (
-        "SegmentSection no longer asks displayName for its heading text")
-    assert "<h2>${named.name}</h2>" in body, (
-        "the card heading no longer renders displayName's resolved name")
-    assert '<span class="objective-context">${named.context}</span>' in body, (
+        "LogCard no longer asks displayName for its heading text")
+    assert "text=${named.name}" in body, (
+        "the card heading no longer renders displayName's resolved name "
+        "(ShrinkToFitName's own text prop)")
+    assert '<span class="log-card-context">${named.context}</span>' in body, (
         "the context chip no longer renders displayName's resolved context")
     entitysection = _entitysection_source()
     assert re.search(
@@ -120,9 +121,9 @@ def test_the_legacy_no_reds_card_also_reads_no_reds():
     card as well as the cell" -- the reds->pipe fix's missing half. Gated on
     `sec.is_no_reds_pipe` (views.py), the sibling flag to pipe_star_entity;
     the course context resolves off `sec.course_id` through the session's
-    own `catalog.courses`, threaded into entitysection.js by practice.js
-    rather than a second server-side course-name field for a fact the
-    client already has."""
+    own `catalog.courses`, threaded into entitysection.js by LogCard rather
+    than a second server-side course-name field for a fact the client
+    already has."""
     entitysection = _entitysection_source()
     assert re.search(
         r"if \(sec\.is_no_reds_pipe\)\s*\{\s*"
@@ -133,11 +134,11 @@ def test_the_legacy_no_reds_card_also_reads_no_reds():
     assert 'if (course) return { name: "No Reds", courseName: course.name };' \
         in entitysection, (
         "the literal 'No Reds' display name is gone from entitysection.js")
-    for body in (_star_section_body(), _segment_section_body()):
-        assert re.search(r"\(t\.view\.catalog \|\| \{\}\)\.courses \|\| \[\]",
-                          body), (
-            "the section no longer passes the session's catalog.courses "
-            "into displayName")
+    body = _log_card_body()
+    assert re.search(r"\(t\.view\.catalog \|\| \{\}\)\.courses \|\| \[\]",
+                      body), (
+        "LogCard no longer passes the session's catalog.courses into "
+        "displayName")
 
 
 def test_the_reds_stars_own_card_also_reads_star_or_pipe():
@@ -149,14 +150,15 @@ def test_the_reds_stars_own_card_also_reads_star_or_pipe():
     ALREADY on every star section (views.py, non-null only for a Bowser
     course's star 0) -- no new server field, and familyLabel is the SAME
     composer the Pipe half and the cell's own toggle call, now applied
-    inside entitysection.js::displayName rather than practice.js."""
-    body = _star_section_body()
+    inside entitysection.js::displayName rather than a section builder."""
+    body = _log_card_body()
     assert re.search(r"displayName\(sec,\s*"
                       r"\(t\.view\.catalog \|\| \{\}\)\.courses \|\| \[\]\)",
                       body), (
-        "StarSection no longer asks displayName for its heading text")
-    assert "<h2>${named.name}</h2>" in body, (
-        "the star card heading no longer renders displayName's resolved name")
+        "LogCard no longer asks displayName for its heading text")
+    assert "text=${named.name}" in body, (
+        "the card heading no longer renders displayName's resolved name "
+        "(ShrinkToFitName's own text prop)")
     entitysection = _entitysection_source()
     assert re.search(
         r"name: sec\.pipe_segment_id != null\s*"

@@ -234,3 +234,78 @@ def test_the_unassigned_card_starts_closed():
     assert match.group("initial") == "false", (
         "the unassigned bucket must start CLOSED -- it is noise tucked away "
         "at the bottom, and only a click of his opens it")
+
+
+# ---- the log's own row reaches the active-strategy reclassification path ---
+#
+# `tracking/service.py::set_attempt_strat` already does what Griffin asked for
+# (2026-07-24): reclassifying an entity's NEWEST non-cleared attempt also
+# moves that entity's ACTIVE strategy, on the theory that "my last run was
+# actually strat X" means X is what is being practised now. That rule is
+# server-side and pre-dates this round -- nothing here re-implements it. What
+# this round changed is where the row doing the reclassifying LIVES: every
+# attempt is now inside a `LogCard` (practicelog.js) rather than a per-kind
+# section, so the thing worth proving is that the WIRING still reaches the
+# server rule, not that the rule itself works.
+ATTEMPTLOG_JS = UI / "components" / "attemptlog.js"
+
+
+def test_the_log_cards_open_attempt_table_carries_its_own_entity():
+    """`AttemptRow`'s strategy picker only reclassifies THIS attempt against
+    THIS entity's own strategies/identity when it has `sec` -- drop the prop
+    and every row falls back to the plain, non-reclassifiable
+    `<span>${a.strat_tag || "no strategy"}</span>` branch
+    (attemptlog.js::AttemptTable), which would make a log card's own
+    top-row-reclassify-the-active-strategy path silently unreachable while
+    every other guard in this file stays green (the exact shape a reviewer
+    already caught once on this branch, StatChipsRow silently dropped for
+    segments)."""
+    log_source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
+    assert re.search(
+        r"<\$\{AttemptTable\}\s+attempts=\$\{sec\.attempts\}\s+rows=\$\{shown\}"
+        r"\s+t=\$\{t\}\s*\n\s*focus=\$\{selected \? focus : null\}"
+        r"\s+clearFocus=\$\{clearFocus\}\s*\n\s*freshIds=\$\{freshIds\}"
+        r"\s+openCompare=\$\{openCompare\}\s+sec=\$\{sec\}", log_source), (
+        "LogCard's <AttemptTable> call no longer passes sec=${sec} -- the "
+        "attempt rows it renders would lose their entity, and the top row's "
+        "own strategy picker could no longer reclassify anything")
+
+
+def test_the_reclassify_wiring_guard_can_still_fail():
+    """Probed in both directions, per the norm in ui-core.md: a comment
+    mentioning the shape, or the prop simply missing, must not satisfy the
+    positive regex above."""
+    comment_only = strip_comments(
+        "// <${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}\n"
+        "// focus=${selected ? focus : null} clearFocus=${clearFocus}\n"
+        "// freshIds=${freshIds} openCompare=${openCompare} sec=${sec} />\n")
+    dropped_prop = (
+        "<${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}\n"
+        "focus=${selected ? focus : null} clearFocus=${clearFocus}\n"
+        "freshIds=${freshIds} openCompare=${openCompare} />\n")
+    pattern = (r"<\$\{AttemptTable\}\s+attempts=\$\{sec\.attempts\}\s+rows=\$\{shown\}"
+               r"\s+t=\$\{t\}\s*\n\s*focus=\$\{selected \? focus : null\}"
+               r"\s+clearFocus=\$\{clearFocus\}\s*\n\s*freshIds=\$\{freshIds\}"
+               r"\s+openCompare=\$\{openCompare\}\s+sec=\$\{sec\}")
+    assert not re.search(pattern, comment_only)
+    assert not re.search(pattern, dropped_prop)
+
+
+def test_the_attempt_row_still_posts_a_reclassification_to_the_server_rule():
+    """The other half of the same chain, in attemptlog.js -- unchanged by
+    this round, and pinned here anyway because it is the other link a future
+    edit could quietly cut. `POST /api/attempts/{id}/strat` is
+    `tracking/service.py::set_attempt_strat`'s own route
+    (`server/api.py`); this only proves the CLIENT still calls it from a row
+    that has an entity, never the server-side newest-row rule itself."""
+    attemptlog_source = strip_comments(ATTEMPTLOG_JS.read_text(encoding="utf-8"))
+    assert re.search(
+        r'send\("POST", `/api/attempts/\$\{a\.id\}/strat`,\s*'
+        r"\{\s*strat_tag:\s*tag\s*\}\)", attemptlog_source), (
+        "AttemptRow's strategy picker no longer posts to "
+        "/api/attempts/{id}/strat -- reclassifying a row from inside a "
+        "LogCard would no longer reach set_attempt_strat's newest-row rule")
+    assert re.search(r"\$\{sec\s*\n?\s*\?\s*html`<\$\{StratPicker\}", attemptlog_source), (
+        "AttemptRow no longer gates its strategy picker on having a `sec` -- "
+        "a row rendered with none would silently fall back to plain, "
+        "unreclassifiable text")

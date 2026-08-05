@@ -54,7 +54,7 @@ def test_the_glossary_defines_the_words_we_say_every_session():
     rows = {r.term.lower() for r in _mod.parse((REPO_ROOT / "docs" / "glossary.md").read_text(encoding="utf-8"))}
     for spoken in (
         "target", "star", "segment", "attempt", "strategy", "personal best",
-        "rank", "standard", "marelo", "selector", "objective card", "caveat",
+        "rank", "standard", "marelo", "selector", "practice log", "caveat",
         "journal", "projector", "detector",
     ):
         assert spoken in rows, f"'{spoken}' is a word we say every session and has no row"
