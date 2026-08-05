@@ -1,3 +1,5 @@
+import pytest
+
 from sm64_events.storage.db import EventRow
 from sm64_events.tracking.projection import (
     Projector, cleared_ids, project, replay, strat_overrides)
@@ -1904,6 +1906,162 @@ def test_a_grab_does_not_move_the_target_off_a_plain_armed_segment():
                 {"course_id": 9, "star_id": 2, "igt_frames": 500}))
     assert 77 in p.armed_segment_ids()      # unaffected: still armed either way
     assert p.target == ("segment", 77)      # and the pick he made stands
+
+
+# -- Bowser ambient-arm asymmetry: reds star / reds->pipe / no-reds pipe --
+#
+# A Bowser course offers THREE mutually-exclusive things to practice, and
+# entering the stage arms the two SEGMENT ones (seg:reds->pipe:<abbrev> and
+# the legacy seg:<abbrev>-pipe) simultaneously with no choice from the
+# player (segments.arms_ambiently). Griffin's ruling (2026-08-04): "See if
+# the user has selected anything in the stage before. If so, we track
+# that... If the user hasn't tracked anything... we cannot assume... Resets
+# should be unattributed, because we could be doing any of those 3
+# options." This is caveat 20 (projection.py) -- the same asymmetry as the
+# 100-coin star's own reverse asymmetry directly above, generalized from
+# ONE reattributed identity to TWO independently-recording ones.
+
+def _legacy_pipe_segment_def():
+    """The real seg:<abbrev>-pipe shape (tools/corpus_legacy.py): EXCLUSIVE
+    mode, no waypoints -- cancels silently on any star/key grab that isn't
+    its own end trigger, which is what stops it from also recording once
+    the reds star has actually been grabbed."""
+    from sm64_events.tracking.segments import SegmentDef
+    return SegmentDef(
+        id=202, name="BitDW Pipe Entry", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": 17},
+                        {"type": "attempt_anchor", "level": 17}],
+        end_triggers=[{"type": "warp_entered", "level": 17}],
+        waypoints=[], guards=[], match_mode="exclusive")
+
+
+@pytest.mark.parametrize("outcome", sorted(Projector._ENGINE_MIRRORED_OUTCOMES))
+def test_bowser_untargeted_failure_records_only_the_unassigned_row(outcome):
+    """Live report 2026-08-04, applied to Bowser's own ambient pair (his rule
+    quoted above): nothing selected, so a failure names none of the three."""
+    events = [
+        jev(1, "level_changed", 900, {"from": 6, "to": 17}),
+        # NOTE: no target_set anywhere in this test -- that is the point.
+        jev(2, "practice_reset", 1400, {"igt_frames_before": 500, "mario_acted": True}),
+    ]
+    closer = {
+        "reset": jev(3, "practice_reset", 1800,
+                     {"igt_frames_before": 900, "mario_acted": True}),
+        "hard_reset": jev(3, "game_reset", 1800, {}),
+        "death": jev(3, "death", 1800, {"igt_frames": 900, "cause": "fall"}),
+    }[outcome]
+    attempts = project(events + [closer],
+                       segments=[_reds_pipe_segment_def(), _legacy_pipe_segment_def()])
+    assert attempts, f"no {outcome} recorded at all -- the fixture never ran"
+    assert all(a.segment_id is None and a.course_id is None and a.star_id is None
+               for a in attempts), (
+        f"a phantom segment/star row survived an untargeted {outcome}: "
+        f"{[(a.id, a.segment_id, a.course_id, a.star_id, a.outcome) for a in attempts]}")
+    assert any(a.outcome == outcome for a in attempts)
+
+
+@pytest.mark.parametrize("outcome", sorted(Projector._ENGINE_MIRRORED_OUTCOMES))
+def test_every_mirrored_outcome_suppresses_the_bowser_sibling_and_plain_row(outcome):
+    """The MECHANISM against this bug recurring on the Bowser family too,
+    mirroring test_every_mirrored_outcome_is_actually_suppressed above --
+    `_ambient_family_records_this_too` must be consulted at EVERY closer
+    that can record a failure (`_close` for reset/hard_reset,
+    `_close_by_death` for death), or a future outcome ships as a vacuous
+    guard the same way "death" once did for the 100-coin star
+    (6f97b51/543d18d, `_close_by_death` calling `_build` directly).
+
+    Targets the reds->pipe segment specifically: its own row must be the
+    ONLY one recorded, whichever outcome closes it -- no Unassigned row
+    from the plain attempt, no row from its armed sibling (the legacy
+    no-reds pipe entry).
+    """
+    events = [
+        jev(1, "level_changed", 900, {"from": 6, "to": 17}),
+        jev(2, "target_set", 950, {"kind": "segment", "segment_id": 201}),
+        jev(3, "practice_reset", 1400, {"igt_frames_before": 500, "mario_acted": True}),
+    ]
+    closer = {
+        "reset": jev(4, "practice_reset", 1800,
+                     {"igt_frames_before": 900, "mario_acted": True}),
+        "hard_reset": jev(4, "game_reset", 1800, {}),
+        "death": jev(4, "death", 1800, {"igt_frames": 900, "cause": "fall"}),
+    }[outcome]
+    attempts = project(events + [closer],
+                       segments=[_reds_pipe_segment_def(), _legacy_pipe_segment_def()])
+    assert attempts, f"no {outcome} recorded at all -- the fixture never ran"
+    assert all(a.segment_id == 201 for a in attempts), (
+        f"a phantom Unassigned or sibling-segment row survived an armed, "
+        f"targeted {outcome}: "
+        f"{[(a.id, a.segment_id, a.course_id, a.outcome) for a in attempts]}")
+    assert any(a.outcome == outcome for a in attempts)
+
+
+def test_bowser_failure_targeted_on_legacy_pipe_suppresses_the_sibling():
+    """Symmetric to the reds->pipe case above: targeting the OTHER of the
+    two ambient segments keeps only ITS row, not the reds->pipe one."""
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 6, "to": 17}),
+        jev(2, "target_set", 950, {"kind": "segment", "segment_id": 202}),
+        jev(3, "practice_reset", 1400, {"igt_frames_before": 500, "mario_acted": True}),
+        jev(4, "practice_reset", 1800, {"igt_frames_before": 900, "mario_acted": True}),
+    ], segments=[_reds_pipe_segment_def(), _legacy_pipe_segment_def()])
+    assert attempts, "no reset recorded at all -- the fixture never ran"
+    assert all(a.segment_id == 202 for a in attempts), [
+        (a.id, a.segment_id, a.course_id, a.outcome) for a in attempts]
+
+
+def test_bowser_failure_targeted_on_the_reds_star_suppresses_both_segments():
+    """The THIRD option: targeting the star itself (grade the grab alone)
+    keeps only the plain star row -- neither ambient segment, which never
+    reattribute to a star at all (unlike the 100-coin family), may record
+    while a star target names this exact course's Reds star."""
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 6, "to": 17}),
+        jev(2, "target_set", 950, {"kind": "star", "course_id": 16, "star_id": 0}),
+        jev(3, "practice_reset", 1400, {"igt_frames_before": 500, "mario_acted": True}),
+        jev(4, "practice_reset", 1800, {"igt_frames_before": 900, "mario_acted": True}),
+    ], segments=[_reds_pipe_segment_def(), _legacy_pipe_segment_def()])
+    assert attempts, "no reset recorded at all -- the fixture never ran"
+    assert all(a.segment_id is None and a.course_id == 16 and a.star_id == 0
+               for a in attempts), [
+        (a.id, a.segment_id, a.course_id, a.star_id, a.outcome) for a in attempts]
+
+
+def test_bowser_untargeted_success_on_reds_to_pipe_still_attributes():
+    """The other half of the asymmetry -- my own extension of Griffin's
+    100-coin ruling for consistency, since he did not restate it for
+    Bowser: completing the reds->pipe run IS the evidence, targeted or
+    not, so its SUCCESS reattributes even with nothing ever selected. The
+    legacy no-reds sibling cancels silently on the reds grab (exclusive
+    mode) and so never gets a competing row of its own."""
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 6, "to": 17}),
+        star(2, 1200, course=16, star_id=0, igt=400),   # grabs the reds star
+        jev(3, "warp_entered", 1600, {"level": 17}),    # reaches the pipe
+    ], segments=[_reds_pipe_segment_def(), _legacy_pipe_segment_def()])
+    seg_rows = [a for a in attempts if a.segment_id == 201]
+    assert seg_rows and seg_rows[-1].outcome == "success", [
+        (a.id, a.segment_id, a.outcome) for a in attempts]
+    assert not any(a.segment_id == 202 for a in attempts), \
+        "the untouched no-reds sibling must not also record a row"
+
+
+def test_leaving_bowser_still_records_the_abandoned_run_untargeted():
+    """Mirrors test_leaving_the_course_still_records_the_abandoned_run for
+    the 100-coin star: a foreign level_changed cancels both ambient defs
+    SILENTLY (no row -- segments.py's own major-action/off-route rules),
+    so the plain `abandoned` attempt is the only evidence the visit
+    happened. `_ENGINE_MIRRORED_OUTCOMES` omits `abandoned`, so neither of
+    my new gates may suppress it."""
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 6, "to": 17}),
+        jev(2, "practice_reset", 1200, {"igt_frames_before": 300, "mario_acted": True}),
+        jev(3, "level_changed", 1600, {"from": 17, "to": 6}),
+    ], segments=[_reds_pipe_segment_def(), _legacy_pipe_segment_def()])
+    assert any(a.outcome == "abandoned" and a.segment_id is None
+               and a.course_id is None and a.star_id is None
+               for a in attempts), [
+        (a.id, a.segment_id, a.course_id, a.outcome) for a in attempts]
 
 
 def test_star_success_with_no_clock_at_all_is_not_flagged():
