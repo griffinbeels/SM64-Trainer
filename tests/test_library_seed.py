@@ -49,6 +49,31 @@ def test_every_audit_key_is_unique(payload):
         [k for k in rows if rows.count(k) > 1][:5]
 
 
+def test_no_correction_is_load_bearing_without_a_reason(payload):
+    """A saved correction the parser now makes UNAIDED leaves no stamp; one
+    that still moves a row is stamped `overridden`.
+
+    That distinction is the point of this whole file. His 25 corrections on
+    2026-08-05 were one rule ("… star Xcam" times a star grab), and encoding
+    the rule is what stops the 26th arriving. A stamped row is therefore a
+    question -- should this be a rule? -- and it must at least carry a written
+    reason, the same by-row exemption shape `KNOWN_NON_TARGETS` uses."""
+    overrides = json.loads(
+        (SEED.parent / "library_overrides.json").read_text(encoding="utf-8"))["rows"]
+    from sm64_events.library.audit import row_key
+    unexplained = []
+    for target in payload["targets"]:
+        for item in target["approaches"] + target["subsections"]:
+            if not item.get("overridden"):
+                continue
+            key = row_key(target, item["name"], item["ids"])
+            if not (overrides.get(key) or {}).get("reason"):
+                unexplained.append(key)
+    assert unexplained == [], (
+        "these corrections still move a row and say nothing about why -- "
+        f"encode the rule or write the reason: {unexplained}")
+
+
 def test_every_star_xcam_row_is_an_approach(payload):
     """A "… star Xcam" row times a STAR GRAB, so it is a whole-target time for
     the star its target maps to -- not a part of one. All 25 were wrong until

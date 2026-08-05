@@ -72,6 +72,16 @@ The general shape, which cost a wrong step in the plan: **a mutation that two
 guards both catch proves neither of them.** To prove guard N has teeth, disable
 every OTHER guard in the same mutant.
 
+The same trap in a second form, found 2026-08-05: deleting the `star Xcam`
+rule left `test_every_star_xcam_row_is_an_approach` GREEN, because that test
+reads the shipped snapshot and the snapshot had the human's overrides applied
+to it. A test over the ARTIFACT cannot guard the RULE that produced it. What
+closes it is `test_no_correction_is_load_bearing_without_a_reason`:
+`apply_overrides` stamps `overridden` only on rows it actually MOVED, so a
+correction the parser now makes unaided leaves no stamp, and a correction that
+still moves something must carry a written reason. Delete the rule and all 25
+become load-bearing at once — mutation-proved in both directions.
+
 ## What phase 2 must know, since the spec is a local file
 
 Phase 2 fits rank ladders from the sheet's distribution for targets the

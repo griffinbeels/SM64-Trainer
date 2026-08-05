@@ -144,6 +144,13 @@ def apply_overrides(payload: dict, overrides: dict) -> dict:
             if wanted == "approach":
                 target["subsections"].remove(item)
                 moved_up.append(item)
+        # Only rows that actually MOVED are stamped, so the stamp answers
+        # "was this override load-bearing", not "did somebody save one". A
+        # correction the parser now makes unaided leaves no stamp at all --
+        # which is how `tests/test_library_seed.py` can tell a rule we encoded
+        # from a one-off we merely patched.
+        for item in moved_up + moved_down:
+            item["overridden"] = True
         target["approaches"].extend(moved_up)
         target["subsections"].extend(moved_down)
         for item in target["approaches"] + target["subsections"]:
