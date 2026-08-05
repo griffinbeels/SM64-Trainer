@@ -75,7 +75,7 @@ from collections.abc import Callable
 from sm64_events.core.timefmt import format_igt
 from sm64_events.detectors.moment import MOMENTS
 from sm64_events.memory.addresses import (CASTLE_AREA_NAMES, LEVEL_NAMES,
-                                          course_name, star_name)
+                                          course_name, star_name, warp_word)
 
 
 def _level_name(level_id) -> str:
@@ -117,10 +117,25 @@ def _star_collected(payload: dict) -> str | None:
 
 
 def _warp_entered(payload: dict) -> str | None:
+    """Three different things wear this one event type, and the row has to
+    say WHICH -- a player reading his own history recognises the thing he
+    touched, not the event we named it after.
+
+    Live report 2026-08-05, hunting his own BOB warp in the recorder's list:
+    every row read "Entered the pipe", so *"I don't see anything about warps
+    here? I guess it's 'Entered the pipe in Bob-omb Battlefield'?"* -- correct,
+    and unrecognisable. `warp_word` carries his own rule (pipe in a Bowser
+    stage, warp everywhere else); `to` is the third case and the most specific,
+    since a course ENTRANCE is named by where it leads rather than by what it
+    looks like."""
     level = payload.get("level")
     if level is None:
         return None
-    return f"Entered the pipe in {_level_name(level)}"
+    destination = payload.get("to")
+    if destination is not None:
+        return (f"Touched the {_level_name(destination)} entrance in "
+                f"{_level_name(level)}")
+    return f"Entered a {warp_word(level)} in {_level_name(level)}"
 
 
 # detectors/key.py's FIGHT_END_LEVELS values -> the human-facing object of

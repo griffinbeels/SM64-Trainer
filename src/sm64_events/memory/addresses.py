@@ -670,6 +670,21 @@ CASTLE_REGION_NODES = (
 BOWSER_STAGE_LEVELS = frozenset({17, 19, 21, BOWSER_1_ARENA,
                                  BOWSER_2_ARENA, BOWSER_3_ARENA})
 
+# WHAT THE PLAYER CALLS THE THING HE JUST TOUCHED. One event covers all of
+# them (`warp_entered`), and calling every one a pipe made the row he needed
+# unrecognisable -- live report 2026-08-05, reading his own BOB warp back:
+# *"it's a warp not a pipe, but maybe they're the same thing internally -- in
+# bowser levels it's a pipe, in every other level it's a warp"*. Exactly his
+# rule, and exactly these three courses: the thing that ends a Bowser stage is
+# a pipe, and every other in-level teleporter in the game is a warp. The
+# ARENAS are not here -- a fight ends on a key, never on a warp.
+PIPE_LEVELS = frozenset({LEVEL_BITDW, LEVEL_BITFS, LEVEL_BITS})
+
+
+def warp_word(level: int | None) -> str:
+    """"pipe" or "warp", for the level Mario is standing in."""
+    return "pipe" if level in PIPE_LEVELS else "warp"
+
 # Where a course-0 (castle secret) star is GRABBED, for segments that start on
 # one. MIPS runs in the basement, both catches. The Toad stars are DELIBERATELY
 # ABSENT: their per-star locations are not established anywhere in this

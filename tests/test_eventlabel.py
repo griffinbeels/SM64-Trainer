@@ -34,9 +34,27 @@ def test_labels_read_like_the_thing_that_happened():
                             "star_name": "Board Bowser's Sub"})) \
         == "Grabbed Board Bowser's Sub in Dire, Dire Docks"
     assert label_event(jev(3, "warp_entered", 0, {"level": 17, "area": 1})) \
-        == "Entered the pipe in Bowser in the Dark World"
+        == "Entered a pipe in Bowser in the Dark World"
     assert label_event(jev(4, "area_changed", 0, {"to": 3})) \
         == "Moved into the Basement"
+
+
+def test_a_warp_is_called_a_warp_outside_a_bowser_stage():
+    """One event type, three things, and calling every one of them a pipe made
+    the row he needed unrecognisable -- live report 2026-08-05, reading his own
+    Bob-omb Battlefield warp back out of the recorder's list: "it's a warp not
+    a pipe... in bowser levels it's a pipe, in every other level it's a warp"."""
+    assert label_event(jev(6, "warp_entered", 0, {"level": 9, "area": 1})) \
+        == "Entered a warp in Bob-omb Battlefield"
+
+
+def test_a_course_entrance_is_named_by_where_it_leads():
+    """The most specific of the three, and the one a player identifies by its
+    DESTINATION rather than by what it looks like: the basement alone hosts
+    five entrances, so "a warp in Castle Inside" names none of them."""
+    assert label_event(jev(7, "warp_entered", 0,
+                           {"level": 6, "area": 3, "to": 23})) \
+        == "Touched the Dire, Dire Docks entrance in Castle Inside"
 
 
 def test_noise_events_are_not_offered_as_boundaries():

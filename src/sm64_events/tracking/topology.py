@@ -100,17 +100,19 @@ def hops(from_key: str | None, to_key: str | None) -> int | None:
     return None
 
 
-def entrance_level(destination: int | None) -> int | None:
-    """The LEVEL holding the entrance that leads to `destination` -- where
-    Mario is standing when he touches its painting, portal, hole or pipe.
+def entrance_node(destination: int | None) -> str | None:
+    """The world NODE holding the entrance that leads to `destination` -- the
+    exact place Mario stands when he touches its painting, portal, hole or
+    pipe, castle SUBAREA included.
 
     THE one door for that derivation (task 0081): the corpus authors entrance
-    clauses through it and `segments.fires_from` checks arm positions against
-    it, so the builder and the shipped corpus cannot disagree about where an
-    entrance lives. Read off the world graph, never a hand table -- BBH is
-    entered from the courtyard and VCUtM from the grounds, so a list would have
-    been wrong on the day it was written and would drift again the first time
-    an edge is corrected.
+    clauses through it, `segments.fires_from` checks arm positions against it,
+    and `segments.arm_level`/`start_areas` place a definition that STARTS on
+    one -- so the builder, the shipped corpus and the selector cannot disagree
+    about where an entrance lives. Read off the world graph, never a hand
+    table -- BBH is entered from the courtyard and VCUtM from the grounds, so
+    a list would have been wrong on the day it was written and would drift
+    again the first time an edge is corrected.
 
     Four destinations carry a second predecessor that is not castle-side
     (BitDW from the Bowser 1 arena, BitFS from Bowser 2, BitS from Bowser 3,
@@ -118,6 +120,11 @@ def entrance_level(destination: int | None) -> int | None:
     it is unique for all 23 destinations the corpus uses. None when the
     destination is unknown or nothing castle-side reaches it -- the caller
     treats that as "no constraint", the codebase's unknown-means-yes rule.
+
+    The SUBAREA half exists because the castle quick-select row filters on
+    `(level, area)` pairs: `entrance_level` alone answers "Castle Inside" for
+    all five basement entrances and all the lobby ones alike, which is not a
+    row the selector can offer from.
     """
     if destination is None:
         return None
@@ -128,6 +135,19 @@ def entrance_level(destination: int | None) -> int | None:
                if node in region
                and any(tuple(step) == (destination, None)
                        for step in destinations)}
-    if len(sources) != 1:
+    return next(iter(sources)) if len(sources) == 1 else None
+
+
+def entrance_level(destination: int | None) -> int | None:
+    """The LEVEL holding that entrance. `entrance_node` without its subarea,
+    derived rather than computed a second way."""
+    node = entrance_node(destination)
+    return int(node.partition(":")[0]) if node else None
+
+
+def node_area(node_key_string: str | None) -> int | None:
+    """The castle subarea a node names, or None for a node with no subarea."""
+    if not node_key_string:
         return None
-    return int(next(iter(sources)).partition(":")[0])
+    _, _, area = node_key_string.partition(":")
+    return int(area) if area else None

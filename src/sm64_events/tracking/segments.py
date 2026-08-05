@@ -1043,6 +1043,17 @@ def arm_level(trig: dict) -> int | None:
     # own branch for the type.
     if kind in ("area_enter", "attempt_anchor", "spawned", "moment_reached"):
         return trig.get("level")
+    # `entrance_touched` is the SAME SHAPE, and Griffin named it as one on
+    # 2026-08-05: "the event for entering a course warp, not actually warping
+    # into it... probably a pretty overarching theme in these types of
+    # segments". Its `to` is where the entrance LEADS, and Mario does not
+    # arrive for 77 frames -- so the arm level is where the ENTRANCE lives,
+    # which is the one derivation `topology.entrance_level` owns (the same
+    # door `fires_from` already checks arm positions against). Reading `to`
+    # here instead would place the definition in a course the player is not
+    # standing in yet.
+    if kind == "entrance_touched":
+        return topology.entrance_level(trig.get("to"))
     if kind in ("level_enter", "level_exit"):
         return trig.get("to")   # level_exit: Mario ends up at the DESTINATION
     return None
@@ -1196,6 +1207,16 @@ def start_areas(start_triggers: list) -> list:
             level, area = trig.get("level"), trig.get("area")
         elif kind in ("level_enter", "level_exit"):
             level, area = trig.get("to"), trig.get("to_subarea")
+        elif kind == "entrance_touched":
+            # Derived, never asked for: an entrance clause carries only where
+            # it LEADS, and the place Mario touches it from is the world
+            # graph's answer (`topology.entrance_node` -- the same door
+            # `arm_level` and `fires_from` use). The subarea is the whole
+            # point here: the level alone says "Castle Inside" for every
+            # basement and lobby entrance alike, which no row can filter on.
+            node = topology.entrance_node(trig.get("to"))
+            level = topology.entrance_level(trig.get("to"))
+            area = topology.node_area(node)
         else:
             continue
         if level is not None and area is not None and [level, area] not in out:
