@@ -144,13 +144,18 @@ document.querySelectorAll('.log-card-fold[aria-expanded="false"]')
   .forEach((b) => b.click());
 """)
 # `.log-card-fold` (Task 7) is a SEPARATE mechanism from `.card-collapse`
-# above -- LogCard's own fold is local component state, opened by default,
+# above -- LogCard's own fold is PracticeLog's own state (auto-open-newest,
+# 2026-08-04: only the newest entity's card opens on the system's own
+# initiative, everything else defaults closed until a click says otherwise),
 # never the shared `useCollapsed`/localStorage class -- so the two `.is-
 # collapsed`/`.is-closed` layouts need their own selector even though both
-# read `aria-expanded` the same way. Before this, no story ever toggled a
-# log card's fold, so its `.is-closed` layout was completely unswept: this is
-# the fix, not a new Story, since reaching it needs no new page state, only
-# a control this sweep already knows how to drive by the same attribute.
+# read `aria-expanded` the same way. `_EXPAND_ALL`/`_COLLAPSE_ALL` reach their
+# state by clicking whatever is currently open/closed rather than assuming a
+# starting point, so neither depends on what a fresh page happens to default
+# to. Before this, no story ever toggled a log card's fold, so its
+# `.is-closed` layout was completely unswept: this is the fix, not a new
+# Story, since reaching it needs no new page state, only a control this sweep
+# already knows how to drive by the same attribute.
 _COLLAPSE_ALL = """
 document.querySelectorAll('.card-collapse[aria-expanded="true"]')
   .forEach((b) => b.click());

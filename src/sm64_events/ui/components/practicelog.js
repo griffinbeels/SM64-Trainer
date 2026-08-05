@@ -35,10 +35,14 @@ import { logTuning, logTuningVars, logTuningClasses, rankPlacementFor,
 
 const html = htm.bind(h);
 
-// How many entity cards render before "Show 5 more". Every shown card is
-// OPEN by default (Griffin: "The drop down should always be opened by
-// default"), so an uncapped lifetime-scope view would render every entity in
-// the journal expanded.
+// How many entity cards render before "Show 5 more". Superseded rule, kept
+// legible rather than deleted outright: every shown card used to be OPEN by
+// default (Griffin, at the time: "The drop down should always be opened by
+// default"). With nine entities that read as a very long page -- the reason
+// this whole condensed-card redesign happened at all -- and his later,
+// narrower rule replaces it: only the ONE newest card opens on the system's
+// own initiative (see `isCardOpen` below). An uncapped lifetime-scope view
+// therefore renders every entity COLLAPSED but one, not expanded.
 const CARDS_PER_PAGE = 5;
 
 /**
@@ -56,12 +60,53 @@ export function orderedSections(view) {
     .sort((a, b) => (b.last_activity ?? -1) - (a.last_activity ?? -1));
 }
 
+/**
+ * The entity key of the TOP card -- the newest thing practiced, and the one
+ * the system's single auto-open slot always points at (Griffin, 2026-08-04:
+ * "We should automatically keep open the last entry in the system... the top
+ * entry is the newest one, and it's auto-opened by default"). Null once
+ * `view` has nothing classified in it yet (the unassigned bucket is not an
+ * entity and is never eligible -- UnassignedLogCard's own comment).
+ */
+export function topEntityKey(view) {
+  if (!view) return null;
+  const sections = orderedSections(view);
+  return sections.length ? entityKey(sections[0]) : null;
+}
+
+/**
+ * Whether ONE card should be open, absent a forced reveal (`forceOpen`,
+ * below). Two facts, in order:
+ *
+ *   1. has the user EVER touched this card's own fold himself? His choice
+ *      always wins, in whichever direction, and outlives every later change
+ *      of which entity is newest -- "arriving entries must never close" a
+ *      card he opened, and a card he closed "stays closed... not on the next
+ *      view refresh, not on a re-render."
+ *   2. failing that, does this entity currently hold the system's ONE
+ *      auto-open slot -- is it the top of the recency-ordered list?
+ *
+ * `overrides` maps entityKey -> "open" | "closed", and is expected to live
+ * ABOVE any one card's own mount lifetime (`PracticeLog`'s own state, not
+ * `LogCard`'s) -- a card that falls off the page's pagination and later
+ * returns must not forget a manual choice just because its component
+ * unmounted in between.
+ *
+ * Pure, so node drives it directly (tests/test_ui_practice_log.py), the same
+ * reason `orderedSections` above is.
+ */
+export function isCardOpen(overrides, topKey, key) {
+  const manual = (overrides || {})[key];
+  if (manual != null) return manual === "open";
+  return topKey != null && key === topKey;
+}
+
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, selected, onSelect, forceOpen,
+                          open, onSetOpen,
                           active = false,
                           nameOverflow = "ellipsis", rankIconSize = 24,
                           rankPlacement = "head", nextStepMode = "classic" }) {
-  const [open, setOpen] = useState(true);
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
   // `forceOpen` exists for exactly one moment (Task 6 brief, Step 1): "so a
@@ -81,8 +126,31 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   // way exactly the instant a scroll target might not exist yet. Once
   // synced, `open` is the only thing `isOpen` reads, so the fold button
   // keeps working for the rest of the time this card is selected.
+  //
+  // `open`/`onSetOpen` moved UP to `PracticeLog` (auto-open-newest, 2026-08-04)
+  // -- a card's fold is no longer this component's own `useState`, because the
+  // system's one auto-open slot has to keep pointing at whichever entity is
+  // newest even while THIS card is unmounted (paginated away, then revealed
+  // again by "Show 5 more"). `onSetOpen(true)` here writes into that lifted
+  // map exactly the way a genuine chevron click below does -- from this
+  // card's own point of view nothing changed, it still just "stays open."
+  //
+  // Gated on `focus` too, added the SAME round: `forceOpen` alone
+  // (`ek === focusKey`) goes true whenever this entity merely becomes the
+  // ACTIVE one -- which happens from gameplay alone (a new star target, a
+  // segment arming), no click involved -- not only from clicking this card's
+  // own header. Before this line existed, that silently reopened a card the
+  // user had just closed himself the moment the game made it active again,
+  // proven live: closing a card, then letting an unrelated segment arm and
+  // become the focus, reopened it with no gesture of his own -- exactly what
+  // "a card he closed stays closed... not on the next view refresh" forbids.
+  // `focus` genuinely non-null is what tells a real PICK (a PbTag/graph-dot
+  // click, which always sets it) apart from a mere focus drift: a pick is the
+  // one case this nudge exists FOR ("so a pick on a collapsed card has a
+  // scroll target to find"), and it still fires with no override at all --
+  // `isCardOpen` never sees a pick, only the plain click this effect makes.
   useEffect(() => {
-    if (forceOpen) setOpen(true);
+    if (forceOpen && focus) onSetOpen(true);
   }, [forceOpen, focus && focus.nonce]);
   const ek = entityKey(sec);
   const clock = sectionClock(sec, t.clock);
@@ -185,7 +253,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
       ${!inBody && ranksBlock}
       <${PbTag} pb=${sectionPb(sec, t.clock)} mode=${clock} rows=${rows}
         pick=${null} t=${t} />
-      <button type="button" class="log-card-fold" onclick=${() => setOpen(!isOpen)}
+      <button type="button" class="log-card-fold" onclick=${() => onSetOpen(!isOpen)}
           aria-expanded=${isOpen ? "true" : "false"}
           title=${`${isOpen ? "Collapse" : "Expand"} ${named.name}'s attempts`}>
         <${Icon} name="chevron" size=${18} />
@@ -309,10 +377,31 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
  * there, and only display it when the user's actively practicing that
  * star"). LogCard resolves its own `active` from this and hands it to
  * RankBanner as `showNext` -- ranks.js itself never reaches for the store.
+ *
+ * `topKey` names the entity the system's ONE auto-open slot follows (see
+ * `isCardOpen` above) -- the caller's own `topEntityKey(v)`, taken through
+ * whatever celebration hold freezes `activeKey`/`focusKey`/etc, so a running
+ * climb is never interrupted by an unrelated card folding shut underneath it
+ * (`.claude/rules/ui-climb.md`; `practice.js` freezes it alongside `target`/
+ * `stage`/`newestAttemptId`). A DIFFERENT signal from `focusKey`/`activeKey`:
+ * the newest thing PRACTICED is routinely not the thing currently SELECTED or
+ * ACTIVE (this component's own comment on `activeKey`, below).
  */
 export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
-                              clearFocus, focusKey, onSelect, activeKey = null }) {
+                              clearFocus, focusKey, onSelect, activeKey = null,
+                              topKey = null }) {
   const [shown, setShown] = useState(CARDS_PER_PAGE);
+  // Per-entity fold overrides -- ONLY what the user has touched himself, in
+  // either direction. Lives here rather than inside LogCard's own state
+  // (that WAS the bug this feature fixes: a card that falls off "Show 5
+  // more"'s own page and later returns must not forget a manual close/open
+  // just because its component unmounted in between). Absent an entry here,
+  // `isCardOpen` falls through to the auto-open rule -- this map is never
+  // written to for that case, so a plain top-of-list transition costs no
+  // state at all, just a different answer from the same pure function.
+  const [openOverrides, setOpenOverrides] = useState({});
+  const setCardOpen = (key, nextOpen) => setOpenOverrides(
+    (current) => ({ ...current, [key]: nextOpen ? "open" : "closed" }));
   // The tuning slot is read ONCE here, at the page-level wiring layer -- never
   // inside LogCard, and never per attempt-row render. What comes back is a
   // CSS custom-property style object plus a modifier-class string; every
@@ -430,6 +519,8 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
           focus=${focus} clearFocus=${clearFocus}
           selected=${ek === focusKey} onSelect=${onSelect}
           forceOpen=${ek === focusKey}
+          open=${isCardOpen(openOverrides, topKey, ek)}
+          onSetOpen=${(next) => setCardOpen(ek, next)}
           active=${activeKey != null && ek === activeKey}
           nameOverflow=${nameOverflow} rankIconSize=${rankIconSize}
           rankPlacement=${rankPlacement} nextStepMode=${nextStepMode} />`;

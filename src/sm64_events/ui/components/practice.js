@@ -24,7 +24,7 @@ import { comparator, useGraphPick, PbTag,
          bannerLabel, bannerHint, ranksAreAtFloor, showsEntityBanner,
          rankIdentity, SORT_OPTIONS } from "./attemptlog.js";
 import { liveSnapshot, resolveFocus, newestJournalId } from "../focustarget.js";
-import { orderedSections, PracticeLog } from "./practicelog.js";
+import { orderedSections, PracticeLog, topEntityKey } from "./practicelog.js";
 
 const html = htm.bind(h);
 
@@ -411,10 +411,21 @@ export function Practice({ t, openCompare, openSegment }) {
   // newestAttemptId changes on the next render while activeKey/stageKey stay
   // held, snapshotsAgree fails, and the browse pick drops WHILE the
   // celebration it should have waited for is still running.
+  //
+  // `topKey` (auto-open-newest, 2026-08-04) rides the SAME freeze for the
+  // identical reason: it is `t.view`'s own `stars`/`segments` re-sorted by
+  // `last_activity`, which is NOT frozen by this hold (only the selection is
+  // -- see the comment above), so an unrelated attempt landing elsewhere
+  // during a celebration would otherwise be free to change which card the
+  // practice log's own auto-open slot points at WHILE a rank is still
+  // climbing on screen -- exactly the "a card closing underneath a running
+  // celebration" regression this hold exists to prevent, one level removed
+  // from the target/stage it was written for.
   const frozen = useHeldWhileCelebrating({
     target: (t.view && t.view.target) || null, stage: t.stage,
     armedOrder: t.armedOrder, lastPinnedSeg: t.lastPinnedSeg,
-    newestAttemptId: newestJournalId(t.view) });
+    newestAttemptId: newestJournalId(t.view),
+    topKey: topEntityKey(t.view) });
   const v = t.view && { ...t.view, target: frozen.target };
 
   // `held` is `t` with the frozen SELECTION swapped in (and `view` carrying
@@ -685,7 +696,7 @@ export function Practice({ t, openCompare, openSegment }) {
     <${PracticeLog} v=${v} t=${held} ui=${ui} freshIds=${freshIds}
       openCompare=${openCompare} focus=${focus} clearFocus=${clearFocus}
       focusKey=${focusKey} onSelect=${selectFocus}
-      activeKey=${live.activeKey} />
+      activeKey=${live.activeKey} topKey=${frozen.topKey} />
 
     <${EntityDrawer} sec=${focusedSec} t=${held} />
 

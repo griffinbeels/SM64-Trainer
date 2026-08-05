@@ -27,19 +27,22 @@
 // changed `key`, the same commit-then-remount ordering tune.js's own
 // `play()` and tunemarelo.js's own `pickRoute()` already use.
 //
-// KNOWN GAP, written down rather than hidden: `LogCard` has no prop for its
-// initial open/closed state (that is local `useState(true)`), and this page
-// wants BOTH a real open card (to judge item 4, the indent/tint) and several
-// real closed ones side by side (to judge items 1-3, alignment). Rather than
-// adding a prop to `LogCard` for a demo-only need, this page drives the
-// REAL fold button after mount -- a genuine click on the real control, the
-// same gesture a player's mouse would make -- to close every card but the
-// first. That is why closing this page's cards on load is a script and not
-// a prop.
+// FORMER KNOWN GAP, closed by the auto-open-newest feature (2026-08-04):
+// `LogCard`'s open/closed state used to be its own local `useState(true)`,
+// with no prop this page could seed -- so it drove the REAL fold button
+// after mount (a genuine click, the same gesture a player's mouse would
+// make) to close every card but the first, purely to get a real open card
+// (item 4, the indent/tint) beside several real closed ones (items 1-3,
+// alignment). `PracticeLog` now decides open/closed itself from `topKey` --
+// the newest entity in the fixture's own `last_activity` order, same as the
+// real page -- so passing that prop reaches the identical demo state with no
+// script: the first section's `last_activity` (5) is the highest of any
+// fixture section (SECTIONS/SEGMENT_SECTIONS/MORE_SECTIONS all sit below
+// it), so it is `topEntityKey`'s own answer, not a coincidence pinned by hand.
 import { h, render } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { PracticeLog } from "/ui/components/practicelog.js";
+import { PracticeLog, topEntityKey } from "/ui/components/practicelog.js";
 import { entityKey } from "/ui/entitysection.js";
 import { TUNABLES, CHOICES, DEFAULTS, GROUPS, setLogTuning, encodeTuning,
          decodeTuning, changedFromDefault, withDefaults } from "/ui/logtuning.js";
@@ -210,30 +213,13 @@ function fixtureT() {
   };
 }
 
-// ---- Close every card but the first, for real ------------------------------
-//
-// A genuine click on the real `.log-card-fold` button -- see the header
-// comment for why this is a script rather than a prop on LogCard.
-function collapseAllButTheFirst(container) {
-  const folds = container.querySelectorAll(
-    ".log-card:not(.is-unassigned) .log-card-fold");
-  folds.forEach((button, index) => { if (index > 0) button.click(); });
-}
-
 function Pane({ label, width, view, t, ui, tuningKey }) {
-  const ref = useRef(null);
   const paneRef = useRef(null);
   // The label reports the width this pane ACTUALLY got, not the width it asked
   // for. A pane squeezed by a too-narrow window would otherwise keep announcing
   // the number it was declared with, which is the one lie this rig cannot
   // afford -- every judgement made here is a judgement about a container width.
   const [measured, setMeasured] = useState(null);
-  useEffect(() => {
-    if (!ref.current) return;
-    // One frame so LogCard's own mount-time `useState(true)` has already
-    // committed before this queries and clicks it.
-    requestAnimationFrame(() => { if (ref.current) collapseAllButTheFirst(ref.current); });
-  }, [tuningKey]);
   useEffect(() => {
     if (!paneRef.current || typeof ResizeObserver === "undefined") return undefined;
     const observer = new ResizeObserver(([entry]) =>
@@ -247,12 +233,12 @@ function Pane({ label, width, view, t, ui, tuningKey }) {
       shown !== width ? ` (asked for ${width})` : ""}</p>
     <div class="app-shell">
       <div class="sidebar"></div>
-      <div class="practice-page" ref=${ref}>
+      <div class="practice-page">
         <${PracticeLog} key=${tuningKey} v=${view} t=${t} ui=${ui}
           freshIds=${new Set()} openCompare=${null}
           focus=${null} clearFocus=${() => {}}
           focusKey=${null} onSelect=${() => {}}
-          activeKey=${ACTIVE_KEY} />
+          activeKey=${ACTIVE_KEY} topKey=${topEntityKey(view)} />
       </div>
     </div>
   </div>`;
@@ -338,10 +324,11 @@ function Inspector() {
         1494px and one at 854px (just above the app's 850px supported floor).
         Tune here; Save writes these values into${" "}
         <code>ui/logtuning.js</code>${" "}as the new shipped defaults.</p>
-      <p class="tune-note">Every card but the first in each pane is closed
-        with a real click on its own fold button after it mounts, so the
-        alignment items (1-3) can be judged across several closed cards at
-        once; the first card stays open, with attempts, for item 4.</p>
+      <p class="tune-note">Every card but the first in each pane defaults to
+        closed -- the log's own auto-open rule, given the fixture's own
+        recency order -- so the alignment items (1-3) can be judged across
+        several closed cards at once; the first card stays open, with
+        attempts, for item 4.</p>
 
       <${ControlGroups} groups=${GROUPS} rows=${{ ...CHOICES, ...TUNABLES }}
         values=${values} defaults=${DEFAULTS} onChange=${set} />
