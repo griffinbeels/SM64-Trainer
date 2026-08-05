@@ -1568,7 +1568,30 @@
     grid-area: name; justify-self: center; align-self: start;
     max-width: 72px; font-size: .68rem; text-align: center;
   }
-  .rank-banner-stacked .rank-progress-track { grid-area: bar; align-self: center; }
+  /* Live report 2026-08-04: "rank standard displays show a line in the
+     middle of the render (you can see that the gradient is bisected in the
+     middle)... I would expect the background gradient to be unbroken. This
+     also didn't happen in the tuning tool." At the ladder FLOOR (no time
+     recorded, or -- rarer -- any other division whose fill happens to land
+     at 0) the fill `<i>` inside this track can draw as narrow as 0% wide,
+     and this track's own near-opaque background (`rgba(4,13,23,.72)`,
+     tuned so a COLOURED FILL reads clearly against it) is what remained
+     visible: a flat dark bar sitting in the geometric MIDDLE of
+     `.rank-banner::before`'s wash, between the icon row and the name row.
+     Row layout never shows this -- there the SAME track sits at the
+     banner's own BOTTOM EDGE, where a dark strip reads as trim rather than
+     a seam (left untouched here, on purpose: it "has always looked right",
+     his words, and objective-card/header/Rank-tab all still use it). Only
+     the two GRID layouts put "bar" in the vertical middle of the box, so
+     only they need the fix -- `background: transparent` lets the wash
+     paint straight through when there is nothing filled, and costs the
+     FILL nothing: `caps.js::barFill` anchors every graded (non-floor) rank
+     at >=50% width of solid `--climb-color`, which reads clearly against
+     the wash's own translucent tint (max 34%) regardless of what used to
+     sit behind the empty remainder. */
+  .rank-banner-stacked .rank-progress-track {
+    grid-area: bar; align-self: center; background: transparent;
+  }
   /* Still opts into the SAME `--climb-reveal` fade `.rank-banner-next`
      always has (above) -- this rule only repositions it, nothing here
      touches opacity. */
@@ -1602,7 +1625,12 @@
   .rank-banner-column .rank-banner-name {
     grid-area: name; text-align: center; font-size: .68rem; max-width: 96px;
   }
-  .rank-banner-column .rank-progress-track { grid-area: bar; width: 96px; }
+  /* Same "the bar sits in the wash's own vertical middle here" reasoning as
+     `.rank-banner-stacked` above -- see its own comment for the report and
+     the fix. */
+  .rank-banner-column .rank-progress-track {
+    grid-area: bar; width: 96px; background: transparent;
+  }
   .rank-banner-column .rank-banner-kicker { grid-area: kicker; text-align: center; }
   /* MARELO header bar. It used to sit right-aligned on a 44px row of its own
      UNDER the context grid, because .context-bar's 4-column template is
@@ -5037,12 +5065,19 @@
       max-width: var(--log-stacked-name-width, 72px); font-size: .68rem;
       text-align: center;
     }
+    /* Live report 2026-08-04: the wash bisected by a dark line at the
+       ladder floor -- see the generic `.rank-banner-stacked .rank-progress-
+       track` rule's own comment (above, "Layout matrix" section) for the
+       report and the fix. Same reasoning, reached here through the log
+       card's OWN ancestor classes rather than the `layout` prop. */
     :is(
         .log-list-card.log-rankstyle-wide-two-stacked .log-card.log-card-two-ladder,
         .log-list-card.log-rankstyle-wide-one-stacked .log-card.log-card-one-ladder,
         .log-list-card.log-rankstyle-wide-two-stackedrow .log-card.log-card-two-ladder,
         .log-list-card.log-rankstyle-wide-one-stackedrow .log-card.log-card-one-ladder
-      ) .log-card-ranks .rank-progress-track { grid-area: bar; align-self: center; }
+      ) .log-card-ranks .rank-progress-track {
+      grid-area: bar; align-self: center; background: transparent;
+    }
     :is(
         .log-list-card.log-rankstyle-wide-two-stacked .log-card.log-card-two-ladder,
         .log-list-card.log-rankstyle-wide-one-stacked .log-card.log-card-one-ladder,
@@ -5110,12 +5145,16 @@
       max-width: var(--log-stacked-name-width, 72px); font-size: .68rem;
       text-align: center;
     }
+    /* Same fix as the wide cell above -- see the generic
+       `.rank-banner-stacked .rank-progress-track` rule's own comment. */
     :is(
         .log-list-card.log-rankstyle-narrow-two-stacked .log-card.log-card-two-ladder,
         .log-list-card.log-rankstyle-narrow-one-stacked .log-card.log-card-one-ladder,
         .log-list-card.log-rankstyle-narrow-two-stackedrow .log-card.log-card-two-ladder,
         .log-list-card.log-rankstyle-narrow-one-stackedrow .log-card.log-card-one-ladder
-      ) .log-card-ranks .rank-progress-track { grid-area: bar; align-self: center; }
+      ) .log-card-ranks .rank-progress-track {
+      grid-area: bar; align-self: center; background: transparent;
+    }
     :is(
         .log-list-card.log-rankstyle-narrow-two-stacked .log-card.log-card-two-ladder,
         .log-list-card.log-rankstyle-narrow-one-stacked .log-card.log-card-one-ladder,
@@ -5219,6 +5258,12 @@
       /* Same reasoning as the name above: fills the grown widget rather
          than a second independent fixed width. */
       width: 100%;
+      /* Live report 2026-08-04: the wash bisected by a dark line at the
+         ladder floor -- see the generic `.rank-banner-stacked
+         .rank-progress-track` rule's own comment ("Layout matrix" section
+         above) for the report and the fix. Column puts "bar" in the box's
+         own vertical middle too, same as Stacked. */
+      background: transparent;
     }
     :is(
         .log-list-card.log-rankstyle-wide-two-column .log-card.log-card-two-ladder,
@@ -5286,6 +5331,9 @@
       /* Same reasoning as the name above: fills the grown widget rather
          than a second independent fixed width. */
       width: 100%;
+      /* Same fix as the wide cell above -- see the generic
+         `.rank-banner-stacked .rank-progress-track` rule's own comment. */
+      background: transparent;
     }
     :is(
         .log-list-card.log-rankstyle-narrow-two-column .log-card.log-card-two-ladder,

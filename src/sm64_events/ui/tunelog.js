@@ -112,7 +112,33 @@ const SECTIONS = [
           rta: { display: "0'23\"90", attempt_id: 1, caveat: null } },
     last_activity: 5,
   },
-  // 2. ONE combined banner (`one_ladder: true`) -- the strategy ladder IS
+  // 2. Ladder FLOOR -- a strategy is picked, but no PB has landed on it yet,
+  //    so `sec.rank.reason` is "unranked" (never "no_strat", item 4's own
+  //    case below): both banners draw Capless V, empty bar (ranks.js's own
+  //    `atFloor`), the ordinary state for a target the player just set and
+  //    has not yet run. Missing from this fixture entirely until live report
+  //    2026-08-04: "rank standard displays show a line in the middle of the
+  //    render... This also didn't happen in the tuning tool" -- every card
+  //    here was graded (see GRADED, above), so the one state that shows a
+  //    dark line bisecting the wash in Column/Stacked (the fill has nothing
+  //    to cover) had never been rendered by this rig. Sits right after the
+  //    OPEN card and right before a graded one on purpose, so the floor and
+  //    a graded card are visible side by side without scrolling or clicking
+  //    "Show 5 more".
+  {
+    course_id: 5, star_id: 1,
+    course_name: "Big Boo's Haunt", star_name: "Go on a Ghost Hunt",
+    pipe_segment_id: null, attempts: [],
+    strategies: ["Standard"], last_strat: "Standard", default_strat: null,
+    rank: { rank: null, division: null, fill: 0, next_tier: null,
+            next_division: null, next_gap_cs: null, mode: "pb", basis: null,
+            reason: "unranked" },
+    entity_rank: null, one_ladder: false, armed_detail: null,
+    pb: { igt: { display: null, attempt_id: null, caveat: null },
+          rta: { display: null, attempt_id: null, caveat: null } },
+    last_activity: 4.5,
+  },
+  // 3. ONE combined banner (`one_ladder: true`) -- the strategy ladder IS
   //    the star's own best-possible ladder.
   {
     course_id: 3, star_id: 1,
@@ -125,9 +151,11 @@ const SECTIONS = [
           rta: { display: "1'04\"90", attempt_id: null, caveat: null } },
     last_activity: 4,
   },
-  // 3. NO rank at all -- the void item 4's brief calls out ("— pick a strat
+  // 4. NO rank at all -- the void item 4's brief calls out ("— pick a strat
   //    to see your rank"). No strategy picked yet, so `sec.rank.reason` is
-  //    "no_strat" rather than a graded value.
+  //    "no_strat" rather than a graded value. A DIFFERENT state from item 2
+  //    above (the floor): no ladder to sit at the bottom of, so ranks.js
+  //    renders the sentinel sentence with no track at all, never Capless V.
   {
     course_id: 9, star_id: 3,
     course_name: "Lethal Lava Land",
@@ -145,7 +173,7 @@ const SECTIONS = [
 ];
 
 const SEGMENT_SECTIONS = [
-  // 4. A segment card -- rule 11 parity: the same LogCard, the same
+  // 5. A segment card -- rule 11 parity: the same LogCard, the same
   //    RankBanner, a different `kind`.
   {
     kind: "segment", segment_id: 12, name: "DDD → BITFS",
@@ -160,7 +188,7 @@ const SEGMENT_SECTIONS = [
 ];
 
 const MORE_SECTIONS = [
-  // 5. A short name, contrasting item 3's longest one above -- if identity
+  // 6. A short name, contrasting item 3's longest one above -- if identity
   //    alignment is working, this card's icon sits at the SAME x as every
   //    other card's despite the wildly different rank/name widths.
   {
