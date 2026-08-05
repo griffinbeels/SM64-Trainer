@@ -122,7 +122,7 @@ def test_the_newest_attempt_id_is_frozen_alongside_its_siblings():
         r"useHeldWhileCelebrating\(\{\s*"
         r"target:[^,]+,\s*stage: t\.stage,\s*"
         r"armedOrder: t\.armedOrder, lastPinnedSeg: t\.lastPinnedSeg,\s*"
-        r"newestAttemptId: newestJournalId\(t\.view\)\s*\}\)", practice), (
+        r"newestAttemptId: newestJournalId\(t\.view\)(?:,[^}]*)?\s*\}\)", practice), (
         "newestAttemptId must be frozen in the SAME useHeldWhileCelebrating "
         "call as target/stage/armedOrder/lastPinnedSeg -- a second, separate "
         "freeze (or none at all) lets it disagree with its siblings the "
@@ -148,7 +148,7 @@ def test_the_freeze_wiring_guard_can_still_fail():
         r"useHeldWhileCelebrating\(\{\s*"
         r"target:[^,]+,\s*stage: t\.stage,\s*"
         r"armedOrder: t\.armedOrder, lastPinnedSeg: t\.lastPinnedSeg,\s*"
-        r"newestAttemptId: newestJournalId\(t\.view\)\s*\}\)", comment_only)
+        r"newestAttemptId: newestJournalId\(t\.view\)(?:,[^}]*)?\s*\}\)", comment_only)
     assert "newestAttemptId: frozen.newestAttemptId" not in comment_only
 
     # A second, SEPARATE freeze call (not one object, one hook) must not
@@ -162,4 +162,69 @@ def test_the_freeze_wiring_guard_can_still_fail():
         r"useHeldWhileCelebrating\(\{\s*"
         r"target:[^,]+,\s*stage: t\.stage,\s*"
         r"armedOrder: t\.armedOrder, lastPinnedSeg: t\.lastPinnedSeg,\s*"
-        r"newestAttemptId: newestJournalId\(t\.view\)\s*\}\)", two_freezes)
+        r"newestAttemptId: newestJournalId\(t\.view\)(?:,[^}]*)?\s*\}\)", two_freezes)
+
+
+def test_the_top_key_is_frozen_alongside_its_siblings():
+    """`topKey` (auto-open-newest, 2026-08-04) is a FOURTH signal riding the
+    same hold, for the same reason `newestAttemptId` was added to it above:
+    `topEntityKey(t.view)` is a live re-sort of `t.view`'s own sections, not
+    frozen by the hold on its own, so a card closing underneath a running
+    celebration (an unrelated attempt landing elsewhere mid-climb, changing
+    which entity is newest) is exactly the regression this test exists to
+    catch -- the `.claude/rules/ui-climb.md` case this task's own brief named.
+
+    Reuses the SAME positive regex `test_the_newest_attempt_id_is_frozen_
+    alongside_its_siblings` proved above (its trailing `(?:,[^}]*)?` is what
+    makes room for this field in the first place) -- this test only adds the
+    checks specific to `topKey` itself: it is inside that one call, and the
+    caller of `PracticeLog` reads the FROZEN value, never a second live
+    call."""
+    practice = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
+    assert re.search(
+        r"useHeldWhileCelebrating\(\{\s*"
+        r"target:[^,]+,\s*stage: t\.stage,\s*"
+        r"armedOrder: t\.armedOrder, lastPinnedSeg: t\.lastPinnedSeg,\s*"
+        r"newestAttemptId: newestJournalId\(t\.view\),\s*"
+        r"topKey: topEntityKey\(t\.view\)\s*\}\)", practice), (
+        "topKey must be frozen in the SAME useHeldWhileCelebrating call as "
+        "its siblings -- a second, separate freeze (or none at all) lets an "
+        "unrelated attempt landing elsewhere move the auto-open slot WHILE a "
+        "rank on screen is still climbing")
+    assert "topKey=${frozen.topKey}" in practice, (
+        "PracticeLog's own topKey prop must read the FROZEN value "
+        "(frozen.topKey), not a live topEntityKey(t.view) call")
+    assert not re.search(r"topKey=\$\{topEntityKey\(t\.view\)\}", practice), (
+        "PracticeLog must not be handed a live topEntityKey(t.view) call -- "
+        "that is exactly the regression this test exists to catch")
+
+
+def test_the_top_key_freeze_guard_can_still_fail():
+    """Same probe-both-directions rule as the sibling guard above."""
+    comment_only = strip_comments(
+        "// newestAttemptId: newestJournalId(t.view),\n"
+        "// topKey: topEntityKey(t.view) })\n"
+        "// topKey=${frozen.topKey}\n")
+    assert not re.search(
+        r"newestAttemptId: newestJournalId\(t\.view\),\s*"
+        r"topKey: topEntityKey\(t\.view\)\s*\}\)", comment_only)
+    assert "topKey=${frozen.topKey}" not in comment_only
+
+    # A live read handed straight to PracticeLog, alongside a genuine but
+    # SEPARATE freeze -- the finding this guards against is specifically the
+    # PROP wiring at the call site, not merely that a frozen value exists
+    # somewhere in the file.
+    live_leak = (
+        "const frozen = useHeldWhileCelebrating({ target, stage, armedOrder, "
+        "lastPinnedSeg, newestAttemptId: newestJournalId(t.view), "
+        "topKey: topEntityKey(t.view) });\n"
+        "<PracticeLog topKey=${topEntityKey(t.view)} />\n")
+    assert re.search(  # the freeze call itself is still well-formed...
+        r"newestAttemptId: newestJournalId\(t\.view\),\s*"
+        r"topKey: topEntityKey\(t\.view\)\s*\}\)", live_leak)
+    assert "topKey=${frozen.topKey}" not in live_leak, (
+        "the mutation itself must actually read as a leak, or this probe "
+        "proves nothing")
+    assert re.search(r"topKey=\$\{topEntityKey\(t\.view\)\}", live_leak), (
+        "the mutation itself must actually read as a leak, or this probe "
+        "proves nothing")
