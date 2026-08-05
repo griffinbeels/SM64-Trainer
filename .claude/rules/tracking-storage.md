@@ -310,6 +310,63 @@ real wall-clock order, in both "newest first" and "oldest first" (the actual
 `comparator`/`EntityDetail` sort expressions were executed directly against
 this data via node, not just reasoned about).
 
+## A movement ends at the entrance, not at the course load
+
+**Task 0081, 2026-08-04.** 55 definitions — MIPS Clip, LBLJ, BitS Entry and all
+52 castle movements that ended on entering a course — now end on the ENTRANCE
+TOUCH, 77 frames earlier (23 at a pipe). Lakitu Skip is the control and is
+untouched: it ends by entering the CASTLE, which has no entrance. The detector
+half, and the decomp fact that forced a held emit, are in
+`.claude/rules/memory-detectors.md`.
+
+**`step_node` is the part that could have failed silently, and it is the whole
+of Griffin's constraint** (*"our topological logic is already working as
+expected and fine — this should NOT break that. We need to be careful to
+maintain the same functionality regarding legitimacy of segments / going
+between steps of a segment"*). It answered None for `warp_entered`, and None
+means UNCONSTRAINED — so re-pointing the corpus onto a place-less clause would
+have switched the wrong-turn cancel off for every castle movement at once, with
+nothing going red. A `warp_entered` carrying `to` now resolves to the
+DESTINATION node, exactly as the `level_enter` it replaced: from the basement
+DDD is 1 hop, from the lobby 2, Rule 2 fires unchanged. A destination-free
+clause (the three legacy pipe defs) still answers None and stays unconstrained.
+
+**`projection.warp_destinations` is the FOURTH pre-pass**, beside
+`cleared_ids`, `strat_overrides` and `time_corrections`, and it is not
+optional. Every touch written before 2026-08-04 carries no `to`, and both
+obvious readings were measured over the real journal rather than argued:
+refusing such a row VANISHES 54 of 106 recorded segment successes on the next
+replay; waving it through FABRICATES 105, because a basement touch toward HMC
+closes a DDD-pinned definition. The destination was never missing from the
+JOURNAL, only from the row — the level edge that follows names it, which is
+what the live detector now waits for — so replay recovers it the same way,
+derived and never written back, bounded by the same `HOLD_CAP_FRAMES`.
+
+**Measured 2026-08-04** by `tools/measure_entrance_sweep.py`, which replays each
+journal under the old corpus and the new one and diffs both:
+
+| | repo checkout | worktree |
+|---|---|---|
+| events | 21,383 | 391 |
+| cancels before / after / differing | 7 / 7 / **0** | 0 / 0 / **0** |
+| `declared_nodes` differing (84 defs) | **0** | **0** |
+| successes | 106 → 99 | 0 → 0 |
+| fabricated | **0** | 0 |
+| re-timed | 47, by **23..77 frames**, nothing outside | 0 |
+
+The re-timed distribution is the strongest available evidence the pairing is
+right: the two measured fade constants and no third number. The 7 lost are read
+back one at a time in the tool's own output — two predate the warp detector
+entirely (2026-06-11) and five have no touch recorded at all, so nothing in the
+change could have matched them.
+
+**A Usamune menu warp no longer completes a movement**, deliberately: it
+fabricates the edge, so there is no collision to detect. A movement is the
+travelling, and a warp that skips it used to bank a meaningless number.
+Recording nothing beats recording a wrong time — but it looks like a bug the
+first time it is seen, and the open question about how often a REAL entry
+misses its touch is in the detectors rule.
+
 ## A pause exit is not a retry
 
 `SegmentEngine._arrived_by_a_real_move`, gating the anchor branch of BOTH armed
