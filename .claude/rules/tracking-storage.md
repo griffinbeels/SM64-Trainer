@@ -318,8 +318,8 @@ this data via node, not just reasoned about).
 52 castle movements that ended on entering a course — now end on the ENTRANCE
 TOUCH, 77 frames earlier (23 at a pipe). Lakitu Skip is the control and is
 untouched: it ends by entering the CASTLE, which has no entrance. The detector
-half, and the decomp fact that forced a held emit, are in
-`.claude/rules/memory-detectors.md`.
+half, and the live trace that removed the hold a painting used to sit through,
+are in `.claude/rules/memory-detectors.md`.
 
 **TWO conditions read the one `warp_entered` event, and the difference is one
 sentence** (live report 2026-08-05, with screenshots: *"it's super confusing

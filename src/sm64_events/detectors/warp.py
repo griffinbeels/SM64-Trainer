@@ -1,5 +1,6 @@
 """warp_entered: the ENTRANCE TOUCH — the frame Mario collides with a
-painting, portal, hole or pipe — held until it knows where it leads.
+painting, portal, hole or pipe — published the moment the game has written
+where it leads, which for a painting is the touch frame itself.
 
 The community-comparable moment for a movement or a pipe-entry segment. The
 level edge that follows adds a constant fade: measured over 140 castle entries
@@ -8,31 +9,47 @@ in the repo journal, **77 frames** for a painting/portal (range 76-77) and
 reports the travelling plus the fade — on `SSL → LLL` the fade is 60% of the
 recorded time.
 
-## Why the event is HELD (2026-08-04, task 0081)
+## The destination is readable AT THE TOUCH — live round, 2026-08-05
 
-The touch cannot name its own destination, and this is a fact about the game
-rather than a gap in our reads. decomp `src/game/level_update.c` (fetched
-2026-08-04): `level_trigger_warp()` sets `sDelayedWarpOp`, `sDelayedWarpTimer`
-and `sSourceWarpNodeId` and writes NOTHING to `sWarpDest`. That struct is
-filled 77 frames later by `initiate_delayed_warp()` -> `initiate_warp()`,
-immediately before the level unloads. So reading `sWarpDest` at the touch
-returns the PREVIOUS warp's destination — stale and entirely plausible, the
-worst failure shape available.
+For one day this detector WITHHELD the event until the level byte moved, on
+the belief that the touch could not name its own destination. That belief came
+from reading decomp rather than from watching RAM, and it cost 2.57 s of dead
+air between hitting the DDD portal and the practice-log row appearing — which
+is what he reported, three rounds running, and then ruled on: *"we should never
+be injecting that much artificial waiting into the system… if I can see the
+timer on my screen, we should be able to detect it as well."*
 
-The destination matters because the castle basement alone hosts five exits
-(HMC, LLL, SSL, DDD, BitFS): an end condition reading only "a warp in the
-castle" would let walking into HMC record a false MIPS Clip success.
+`tools/probe_warp_block.py`, 15 consecutive castle entries, is what settled it
+(the numbers and the address walk are in addresses.py beside `WARP_DEST_TYPE`):
 
-Hence a HELD EMIT, the same shape `StarGrabDetector` uses for the x-cam:
-record the touch, publish it back-dated once an edge answers the question.
-`frame` and the IGT are the TOUCH's, always — reading the clock at release
-would measure the fade, which is exactly the bug the 2026-07-31 pipe fix
-removed. Because a released event describes the PAST, this detector runs
-BEFORE `LevelChangeDetector` in `main.build_detectors` (see its docstring);
-journaling them the other way round lets the level change close the attempt
-the touch belonged to, and one movement records as two.
+  * a PAINTING or PORTAL writes `sWarpDest` at or before the frame Mario's
+    action becomes ACT_DISAPPEARED. 13 of 13 already named the destination at
+    the touch, 76-78 frames early, and 12 of those differed from the previous
+    warp's destination — so it is a real write, not a stale read.
+  * a PIPE is the one genuinely delayed warp: `sDelayedWarpOp` pulses 0x04 a
+    frame or two after the touch, counts 20 frames down, and only then is
+    `sWarpDest` written — 3 frames before the level byte moves. Both pipe
+    touches read a STALE castle destination at the touch frame.
 
-RELEASE, in the order checked:
+Those two pipes are why `type != 0` cannot be the test on its own: it also
+survives a COMPLETED painting warp (read live standing idle in DDD). Freshness
+is therefore "was the struct just written" — all four bytes watched for a
+change, with the two stale pipe reads as the negative cases that prove it.
+
+The destination matters at all because the castle basement alone hosts five
+exits (HMC, LLL, SSL, DDD, BitFS): an end condition reading only "a warp in
+the castle" would let walking into HMC record a false MIPS Clip success.
+
+`frame` and the IGT are the TOUCH's, always — reading the clock at a later
+release would measure the fade, which is exactly the bug the 2026-07-31 pipe
+fix removed. Because a released event may describe the PAST, this detector
+runs BEFORE `LevelChangeDetector` in `main.build_detectors` (see its
+docstring); journaling them the other way round lets the level change close
+the attempt the touch belonged to, and one movement records as two.
+
+PUBLISH, in the order checked:
+  * the destination struct was just written -> `to` = its level. This is the
+    touch frame itself for a painting, and touch+20 for a pipe;
   * a level edge -> `to` = the new level;
   * an area edge -> `to` = the (unchanged) level, an in-level warp;
   * `global_timer` jumping backward (console reset) -> `to` = None;
@@ -41,28 +58,28 @@ RELEASE, in the order checked:
     ACT_TELEPORT_FADE_OUT), which relocates Mario inside his own area and so
     produces no edge to wait for at all.
 
-The last two bounds are why nothing that fired before this change can stop
+The last four bounds are why nothing that fired before this change can stop
 firing: a hold with no clock is how an event disappears. `to` is therefore
 `int | None` — the level Mario ended up in, or None when the warp kept him
 where he was or was aborted.
 
-## `pending_warp_op` CANNOT release this early — live round, 2026-08-05
-
-A grace window on that flag looked like the precise way to resolve a
-teleporter promptly, and it published `to: None` on every real painting entry
-instead. The game clears `sDelayedWarpOp` when the delayed warp INITIATES —
-`sDelayedWarpTimer` is 20 — and there are ~57 more frames of fade before the
-level byte moves. **The flag goes quiet in the MIDDLE of the wait, not at the
-end of it.** His journal, ids 25415 and 25371: touch at frame 2519145,
-`level_changed 6 -> 23` at 2519222, exactly 77 frames apart, and the event
-published "destination unknown" around frame 30 of that — so MIPS Clip kept
-timing to the DDD load, which is the whole thing this was built to stop.
+`pending_warp_op` is NOT one of the bounds, and the failed attempt to make it
+one is why the list above ends at a struct write rather than a flag. The game
+clears `sDelayedWarpOp` when the delayed warp INITIATES, ~57 frames before the
+level byte moves — **the flag goes quiet in the MIDDLE of the wait, not at the
+end of it** — so a grace window on it published `to: None` on every real
+painting entry (his journal, ids 25415 and 25371).
 
 HOLD_CAP_FRAMES 240 is measured with headroom rather than chosen: the observed
-fades are 77 frames for a painting/portal (range 76-77 over 140 entries) and 23
-for a pipe, so this is 3x the slower one. It bounds only the case where NO edge
-ever arrives, and nothing consumes a teleporter's touch, so latency there costs
-nothing while a too-short bound costs the destination.
+fades are 77 frames for a painting/portal and 23 for a pipe, so this is 3x the
+slower one. It bounds only the case where NO edge ever arrives, and nothing
+consumes a teleporter's touch, so latency there costs nothing while a
+too-short bound costs the destination.
+
+FRESH_WINDOW_FRAMES 4 is slack for the poller, not for the game: the write and
+the action edge land on the same game frame, but the poll runs at ~120 Hz over
+a 30 fps game and a stalled read can miss one. Widening it trades toward
+believing a stale struct, so it stays at single digits.
 
 igt: the touch carries Usamune's IGT from the SHARED clock
 (detectors/igt_clock.py), exactly like a star or key grab, so a segment
@@ -92,19 +109,50 @@ from sm64_events.detectors.igt_clock import IgtClock
 from sm64_events.memory.addresses import WARP_ENTRY_ACTIONS
 
 
+def _destination(snapshot: GameSnapshot) -> tuple[int, int, int, int]:
+    return (snapshot.warp_dest_type, snapshot.warp_dest_level,
+            snapshot.warp_dest_area, snapshot.warp_dest_node)
+
+
 class WarpDetector:
     HOLD_CAP_FRAMES = 240
+    FRESH_WINDOW_FRAMES = 4
 
     def __init__(self):
         self._clock = IgtClock()
         self._held: dict | None = None
+        self._dest: tuple[int, int, int, int] | None = None
+        self._dest_written_at: int | None = None
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         if self._clock.empty():
             self._clock.observe(prev)
+        self._watch_destination(curr)
         events = self._release(prev, curr) + self._touch(prev, curr)
         self._clock.observe(curr)
         return events
+
+    def _watch_destination(self, curr: GameSnapshot) -> None:
+        """Stamp the frame `sWarpDest` last changed — the freshness test.
+
+        The FIRST value seen is deliberately not stamped: a detector built
+        mid-session would otherwise read whatever warp preceded it as one that
+        had just been written, and publish a stale destination on the very
+        first touch. Unstamped means "hold", which is the safe direction.
+        """
+        dest = _destination(curr)
+        if self._dest is None:
+            self._dest = dest
+            return
+        if dest != self._dest:
+            self._dest = dest
+            self._dest_written_at = curr.global_timer
+
+    def _destination_is_live(self, curr: GameSnapshot) -> bool:
+        return (curr.warp_dest_type != 0
+                and self._dest_written_at is not None
+                and 0 <= curr.global_timer - self._dest_written_at
+                <= self.FRESH_WINDOW_FRAMES)
 
     def _touch(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         entered = (curr.mario_action in WARP_ENTRY_ACTIONS
@@ -121,12 +169,16 @@ class WarpDetector:
                       "area": curr.curr_area, "action": curr.mario_action,
                       "igt_frames": igt_frames, "igt_source": source,
                       "wall_time_utc": curr.wall_time_utc}
+        if self._destination_is_live(curr):
+            return self._publish(curr.warp_dest_level)
         return []
 
     def _release(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         held = self._held
         if held is None:
             return []
+        if self._destination_is_live(curr):
+            return self._publish(curr.warp_dest_level)
         if curr.curr_level != prev.curr_level:
             return self._publish(curr.curr_level)
         if curr.curr_area != prev.curr_area:

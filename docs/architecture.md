@@ -1220,14 +1220,17 @@ along with minimizing levels of indirection. The measurement is
 the knowledge base rather than here because the practice is cross-project, and
 it REPORTS rather than gating.
 
-**Headline: this codebase is not systemically shallow.** 27,837 lines behind
-687 public names — 40.5 lines each — and 41 public names that only forward, 6.0%
+**Headline: this codebase is not systemically shallow.** 27,954 lines behind
+687 public names — 40.7 lines each — and 41 public names that only forward, 6.0%
 of the surface. The scan was run before designing any refactor, and it is the
 reason there is no refactor: the expected big restructuring did not exist.
-(Re-measured after task 0084's anchor fix, and again after the entrance-touch
-condition and task 0086's empty-session purge: the pass-through count has not
-moved once across all three, and the extra lines are the evidence their
-docstrings now carry.)
+(Re-measured after task 0084's anchor fix, after the entrance-touch condition
+and task 0086's empty-session purge, and again after the touch-frame
+destination read plus the target-precedence fix: **the pass-through count and
+the public-name count have not moved once across all four**, and the extra
+lines are the evidence their docstrings now carry. `detectors/warp.py` doubled
+in size to 200 lines with its public surface unchanged at two, which is what
+deepening on evidence looks like from the outside.)
 
 What the number cannot see, and it matters more than what it can: this measures
 SURFACE, not information leakage. A module can score well here and still make

@@ -867,6 +867,32 @@ def test_segment_completing_into_the_hub_still_follows_onto_the_segment():
     assert p.target == ("segment", 8)
 
 
+def test_his_pick_keeps_the_slot_when_one_event_finishes_two_segments():
+    """Live report 2026-08-05: *"It seems like we somehow deselect MIPS and
+    then trigger a different split?? All i know is that MIPs should remain
+    selected because that's what I'm practicing!"*
+
+    The DDD portal touch closes MIPS Clip and HMC -> DDD on the SAME event, and
+    the auto-follow ran once per closure, so whichever finished LAST took the
+    slot. Replaying his own journal moved the target `MIPS Clip` ->
+    `HMC -> DDD` on that frame. A convenience default may fill an empty hand;
+    it may not take something out of one."""
+    from sm64_events.tracking.segments import SegmentDef
+    common = dict(start_triggers=[{"type": "level_enter", "to": 8}],
+                  end_triggers=[{"type": "level_enter", "to": 6}], guards=[])
+    picked = SegmentDef(id=41, name="his pick", enabled=True, **common)
+    other = SegmentDef(id=42, name="the other one", enabled=True, **common)
+    p = Projector(segments=[picked, other])
+    p.feed(jev(1, "level_changed", 500, {"from": 6, "to": 8}))     # both arm
+    p.feed(jev(2, "target_set", 0, {"kind": "segment", "segment_id": 41}))
+    assert p.target == ("segment", 41)
+    # Ends into the HUB, so caveat 12's course-change retirement stays out of
+    # it -- the question here is only which of the two closures wins the slot.
+    closed = p.feed(jev(3, "level_changed", 2000, {"from": 8, "to": 6}))
+    assert {a.segment_id for a in closed if a.outcome == "success"} == {41, 42}
+    assert p.target == ("segment", 41), "his pick, not whichever closed last"
+
+
 def test_mips_segment_records_attempt_but_leaves_nothing_active():
     # The user's exact report: MIPS is run in the basement and COMPLETES by
     # entering DDD (level 23 = course 9). The segment attempt is recorded with

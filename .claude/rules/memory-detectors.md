@@ -29,7 +29,7 @@ paths:
 | Level-change detection | `detectors/level.py` — stateful: remembers last EMITTED level, journals establishing/corrective events (from may equal to) so projection-side level tracking never runs stale; closes open attempts as abandoned |
 | Dust tricks (dustless rollouts/jumps) | `detectors/dust.py` — TRICKS registry (one row per trick); docstring carries the decomp-verified landing-frame timing model; counts attach to attempts via projection.py |
 | Stage detection (quick-select banner context) | `detectors/stage.py` — broadcast-only `stage_changed {course_id, level, area, mode}` where `mode` ∈ stars (main course 1-15) / bowser_course (BitDW/BitFS/BitS = lvl 17/19/21 → course 16/17/18; reds star + no-reds pipe segment) / arena (Bowser 1/2/3 = lvl 30/33/34; single fight) / castle (Castle Inside subarea) / None; keys on the resolved CONTEXT so a BitDW→BitFS course swap and a lobby↔upstairs subarea switch both re-emit (offered targets differ); reuses `course_for_level` (addresses.py) |
-| area_changed / warp_entered / key_grabbed / spawned | `detectors/area.py` · `detectors/warp.py` · `detectors/key.py` · `detectors/spawn.py` — segment-primitive facts; area mirrors level.py's last-EMITTED discipline + stamps `from_transient` (source area not dwelt-in — every castle entry transits the lobby, so course exits read from=1 like a real lobby walk; area_enter's "coming from" rejects transients); key detector guards star_grab from misattributing Bowser keys AND carries Usamune IGT (via igt_clock) on fight-end grabs so a segment ending on the grand star matches Usamune's time, not a wall-frame delta. **warp.py carries it too since 2026-07-31** (live report: BitDW "No Reds" read 0'35"90, Usamune 0'35"96), so it is no longer stateless — it owns an `IgtClock` and observes every tick like key.py. The touch frame IS the observed edge frame: `ACT_DISAPPEARED` counts down `actionArg`, not `actionTimer` (decomp `act_disappeared`), so there is no action-timer backdating to be had the way star_grab/key have it. A pipe writes no Usamune RESULT, so the source is always `counter`; a star grabbed earlier in the same run leaves a stale result behind and `IgtClock._result_is_fresh` is what keeps it out (pinned by test_warp.py, not by an argument about how long a star dance takes). WHY the delta was wrong, and when the payload igt may be believed: `tracking/segments.py`'s rta_frames clause — the arithmetic and the 626-sample measurement live there. **warp.py became a HELD EMIT 2026-08-04 (task 0081) and moved to SECOND in the chain** — full detail below: [The entrance touch cannot name where it leads](#the-entrance-touch-cannot-name-where-it-leads) |
+| area_changed / warp_entered / key_grabbed / spawned | `detectors/area.py` · `detectors/warp.py` · `detectors/key.py` · `detectors/spawn.py` — segment-primitive facts; area mirrors level.py's last-EMITTED discipline + stamps `from_transient` (source area not dwelt-in — every castle entry transits the lobby, so course exits read from=1 like a real lobby walk; area_enter's "coming from" rejects transients); key detector guards star_grab from misattributing Bowser keys AND carries Usamune IGT (via igt_clock) on fight-end grabs so a segment ending on the grand star matches Usamune's time, not a wall-frame delta. **warp.py carries it too since 2026-07-31** (live report: BitDW "No Reds" read 0'35"90, Usamune 0'35"96), so it is no longer stateless — it owns an `IgtClock` and observes every tick like key.py. The touch frame IS the observed edge frame: `ACT_DISAPPEARED` counts down `actionArg`, not `actionTimer` (decomp `act_disappeared`), so there is no action-timer backdating to be had the way star_grab/key have it. A pipe writes no Usamune RESULT, so the source is always `counter`; a star grabbed earlier in the same run leaves a stale result behind and `IgtClock._result_is_fresh` is what keeps it out (pinned by test_warp.py, not by an argument about how long a star dance takes). WHY the delta was wrong, and when the payload igt may be believed: `tracking/segments.py`'s rta_frames clause — the arithmetic and the 626-sample measurement live there. **warp.py became a HELD EMIT 2026-08-04 (task 0081) and moved to SECOND in the chain; since 2026-08-05 the hold is skipped entirely for a painting or portal, whose destination is already written at the touch frame** — full detail below: [The entrance touch names where it leads, on its own frame](#the-entrance-touch-names-where-it-leads-on-its-own-frame) |
 
 
 ## Star timing — the x-cam, the settle wait, and the evidence for both
@@ -224,48 +224,69 @@ itself). It appears **0 times in those 875 grabs**, and the correction watch
 still covers it. That watch is unchanged and still runs to
 `RESULT_SETTLE_FRAMES`; it simply no longer bounds any publish.
 
-## The entrance touch cannot name where it leads
+## The entrance touch names where it leads, on its own frame
 
-**Task 0081, 2026-08-04.** `warp_entered` is the ENTRANCE TOUCH — the frame
-Mario collides with a painting, portal, hole or pipe. Measured over 140 castle
-entries in the repo journal, the level load follows it by a constant **77
-frames** for a painting/portal (range 76-77) and **23** for a pipe (23-23). So
-a movement measured to the LOAD banks the fade as travelling; on `SSL → LLL`
-that fade is 60% of the recorded time.
+**Task 0081, 2026-08-04; corrected by measurement 2026-08-05.** `warp_entered`
+is the ENTRANCE TOUCH — the frame Mario collides with a painting, portal, hole
+or pipe. Measured over 140 castle entries in the repo journal, the level load
+follows it by a constant **77 frames** for a painting/portal (range 76-77) and
+**23** for a pipe (23-23). So a movement measured to the LOAD banks the fade as
+travelling; on `SSL → LLL` that fade is 60% of the recorded time.
 
-**The destination is unknowable at the touch frame, from any address.** decomp
-`src/game/level_update.c` (fetched 2026-08-04): `level_trigger_warp()` sets
-`sDelayedWarpOp` / `sDelayedWarpTimer` / `sSourceWarpNodeId` and writes NOTHING
-to `sWarpDest`. That struct is filled 77 frames later by
-`initiate_delayed_warp()` → `initiate_warp()`, immediately before the level
-unloads. Reading it at the touch returns the PREVIOUS warp's destination —
-stale and entirely plausible. **Do not re-derive this by hunting the address.**
+**This section said the opposite for one day, and that is the lesson.** It read
+"the destination is unknowable at the touch frame, from any address… **do not
+re-derive this by hunting the address**" — reasoned from decomp, never watched
+in RAM, and written down with an instruction not to check it. It cost three
+rounds of live reports, because the event was withheld until the level byte
+moved and the practice-log row therefore landed **2.9 s** after the portal (the
+journal and `data/ui_log.jsonl` split that: 2.57 s of hold, 0.33 s of websocket
+and render). His ruling, 2026-08-05: *"we should never be injecting that much
+artificial waiting into the system… if I can see the timer on my screen, we
+should be able to detect it as well; if you can't yet, you haven't found the
+right instrumentation."*
 
-It matters because the castle basement alone hosts five exits (HMC, LLL, SSL,
-DDD, BitFS): an end condition reading only "a warp in the castle" lets walking
-into HMC record a false MIPS Clip.
+**`tools/probe_warp_block.py`** is that instrumentation — a read-only trace of
+the whole warp block around each touch, safe to run beside a live session. 15
+consecutive castle entries settled it:
 
-So the event is **HELD** and published back-dated, the same shape
-`StarGrabDetector` uses for the x-cam. `frame` and the igt trio stay the
-TOUCH's. Release: a level edge (`to` = the new level) → an area edge (`to` =
-the unchanged level) → two bounds that guarantee nothing that fired before this
-can stop firing, each publishing `to: None` — a backward `global_timer`
-(console reset) and `HOLD_CAP_FRAMES` 240, which is also what covers an
-in-level teleporter (it relocates Mario inside his own area, so no edge ever
-arrives).
+* a **painting or portal** writes `sWarpDest` at or before the ACT_DISAPPEARED
+  frame. 13 of 13 named the destination at the touch, and 12 of those differed
+  from the previous warp's destination — a real write, not a stale read;
+* a **pipe** is the one genuinely delayed warp: `sDelayedWarpOp` pulses 0x04 a
+  frame or two in, counts 20 frames down, and `sWarpDest` is written then —
+  3 frames before the level byte moves. Both pipes read a STALE castle
+  destination at the touch.
 
-**`pending_warp_op` CANNOT release this early, and believing it could cost a
-live round (2026-08-05).** A grace window on that flag looked like the precise
+So `type != 0` is NOT a freshness test on its own: it also survives a completed
+painting warp (read live standing idle in DDD). The detector watches all four
+bytes of the struct and treats it as live only if it CHANGED within
+`FRESH_WINDOW_FRAMES` (4, slack for the poller, not for the game); the two
+pipes are the negative cases that prove it, and the first value seen after
+start-up is deliberately unstamped, because unstamped means hold.
+
+The destination matters at all because the castle basement alone hosts five
+exits (HMC, LLL, SSL, DDD, BitFS): an end condition reading only "a warp in the
+castle" lets walking into HMC record a false MIPS Clip.
+
+Publish order: the struct was just written (`to` = its level — the touch frame
+for a painting, touch+20 for a pipe) → a level edge (`to` = the new level) → an
+area edge (`to` = the unchanged level) → two bounds that guarantee nothing that
+fired before this can stop firing, each publishing `to: None` — a backward
+`global_timer` (console reset) and `HOLD_CAP_FRAMES` 240, which is also what
+covers an in-level teleporter (it relocates Mario inside his own area, so no
+edge ever arrives). `frame` and the igt trio stay the TOUCH's however late the
+publish lands.
+
+**`pending_warp_op` is not one of those bounds, and believing it could be cost
+a live round (2026-08-05).** A grace window on that flag looked like the precise
 way to resolve a teleporter promptly and published `to: None` on every real
-painting entry instead — so MIPS Clip kept timing to the DDD load, which is
-the whole thing the change exists to stop. The game clears `sDelayedWarpOp`
-when the delayed warp **initiates** (`sDelayedWarpTimer` is 20) and ~57 more
-frames of fade follow before the level byte moves: **the flag goes quiet in
-the MIDDLE of the wait, not at the end of it.** His journal, ids 25415/25371 —
-touch at 2519145, `level_changed 6 → 23` at 2519222, exactly 77 frames apart,
-and the event published around frame 30 of that. The regression test drives
-that real shape (high 20, quiet 57, edge at 77) and asserts silence on every
-frame of it.
+painting entry instead. The game clears `sDelayedWarpOp` when the delayed warp
+**initiates** and ~57 more frames of fade follow before the level byte moves:
+**the flag goes quiet in the MIDDLE of the wait, not at the end of it.** His
+journal, ids 25415/25371 — touch at 2519145, `level_changed 6 → 23` at 2519222,
+exactly 77 frames apart, and the event published around frame 30 of that. The
+regression test drives that real shape (high 20, quiet 57, edge at 77) and
+asserts silence on every frame of it.
 
 **It moved to SECOND in `main.build_detectors`, behind star_grab only.** On the
 release tick one poll carries a touch that happened 77 frames ago and the level
