@@ -132,4 +132,27 @@ class MomentDetector:
                               "level": curr.curr_level, "area": curr.curr_area,
                               "action": curr.mario_action,
                               "igt_frames": igt_frames, "igt_source": source,
-                              "igt": format_igt(igt_frames)})
+                              "igt": format_igt(igt_frames),
+                              # INERT EVIDENCE for the one-frame question
+                              # (live report 2026-08-05: Usamune 6"70 where we
+                              # banked 6"66; 6"50/6"46; 6"63/6"60 -- three
+                              # samples, every one EXACTLY one game frame and
+                              # no variance at all).
+                              #
+                              # Two hypotheses, and these two fields separate
+                              # them from the JOURNAL after a single door, so
+                              # no probe has to exist:
+                              #   (A) our poll caught the action a frame late
+                              #       -- then `action_timer` reads >= 1 here,
+                              #       and the fix back-dates, which moves the
+                              #       number the WRONG way;
+                              #   (B) he reads the frame the door visibly
+                              #       moves, one after the byte flips -- then
+                              #       `action_timer` reads 0 and `counter` + 2
+                              #       is what is on his screen.
+                              # Reading the code cannot separate them: this
+                              # same clock call was live-calibrated at a PIPE
+                              # and matched exactly, but a pipe stops the
+                              # clock and a door does not.
+                              "action_timer": curr.mario_action_timer,
+                              "counter": curr.igt_overall})
