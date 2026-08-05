@@ -751,7 +751,11 @@ def test_reset_segment_restores_seed_and_clears_dirty(tmp_path):
     assert row["start_triggers"] == [
         {"type": "level_enter", "to": 6, "from": 16},
         {"type": "attempt_anchor", "level": 6, "area": 1}]
-    assert row["end_triggers"] == [{"type": "level_enter", "to": 17}]
+    # Moved 2026-08-04 (task 0081): LBLJ ends on the ENTRANCE TOUCH, 23 frames
+    # before BitDW loads. Reset-to-default restores what SHIPS, so this
+    # assertion follows the corpus by design rather than pinning history.
+    assert row["end_triggers"] == [
+        {"type": "warp_entered", "level": 6, "to": 17}]
 
 
 def test_reset_user_created_segment_raises(tmp_path):

@@ -46,8 +46,8 @@ already false for three of them by the time this comment was written -- a
 docstring is not a test, so nothing failed while it drifted.
 """
 from corpus_vocab import (BOWSER_FIGHTS, CASTLE_MOVEMENT, STANDARD_STRAT,
-                          TRICKS, UPSTAIRS, anchor, enter_area, enter_level,
-                          enter_warp, exit_level, grab_key, spawn)
+                          TRICKS, UPSTAIRS, anchor, enter_area, enter_entrance,
+                          enter_level, enter_warp, exit_level, grab_key, spawn)
 
 
 def _seg(seed_key, name, start, end, category, match_mode=None,
@@ -65,14 +65,14 @@ def _seg(seed_key, name, start, end, category, match_mode=None,
 SEGMENTS = [
     _seg("seg:lblj", "LBLJ",
          [enter_level(6, frm=16), anchor(6, area=1)],
-         [enter_level(17)], TRICKS, default_strat=STANDARD_STRAT),
+         [enter_entrance(17)], TRICKS, default_strat=STANDARD_STRAT),
     _seg("seg:mips-clip", "MIPS Clip",
-         [exit_level(7, to=6)], [enter_level(23)], TRICKS,
+         [exit_level(7, to=6)], [enter_entrance(23)], TRICKS,
          default_strat=STANDARD_STRAT),
     _seg("seg:lakitu-skip", "Lakitu Skip",
          [spawn(16)], [enter_level(6)], TRICKS, default_strat=STANDARD_STRAT),
     _seg("seg:bits-entry", "BitS Entry",
-         [enter_area(UPSTAIRS)], [enter_level(21)], CASTLE_MOVEMENT,
+         [enter_area(UPSTAIRS)], [enter_entrance(21)], CASTLE_MOVEMENT,
          default_strat=STANDARD_STRAT),
     # BitDW/BitFS/BitS Pipe Entry: 2-4 real competing strategies each in the
     # standards (Standard/Framewalk; Pole Glitch/Ultimate/BLJ/Zero Cycle;

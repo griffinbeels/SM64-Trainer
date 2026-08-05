@@ -4283,8 +4283,11 @@ def test_one_exit_arms_several_movements_and_walking_prunes_them():
     assert len(e.armed_ids()) == 5
     _walk(e, 10, 2000, 6, 3)                       # lobby -> basement
     assert e.armed_ids() == {ssl_id}
-    closed, _ = e.feed(jev(20, "level_changed", 3000, {"from": 6, "to": 8}),
-                       ctx(level=8, prev_level=6))
+    # Closes on the ENTRANCE TOUCH since 2026-08-04 (task 0081) -- the frame
+    # he collides with the SSL painting, 77 before the level loads.
+    closed, _ = e.feed(jev(20, "warp_entered", 3000,
+                           {"level": 6, "area": 3, "to": 8}),
+                       ctx(level=6, prev_level=6, area=3))
     assert [a.outcome for a in closed] == ["success"]
 
 

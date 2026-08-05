@@ -149,7 +149,18 @@ def test_real_bundled_seed_does_not_alter_existing_segment_defs(tmp_path):
         assert after_row["name"] == before_row["name"]
         assert after_row["enabled"] == before_row["enabled"]
         assert after_row["start_triggers"] == before_row["start_triggers"]
-        assert after_row["end_triggers"] == before_row["end_triggers"]
+        # END triggers are the ONE field the 2026-08-04 sweep moves (task
+        # 0081): three of these ten now end on the ENTRANCE TOUCH rather than
+        # the course load, and reconcile carrying that into an untouched
+        # seeded row is exactly what is supposed to happen -- it is how the
+        # fix reaches a live install at all. Everything else on the row must
+        # still come out the other side untouched, which is this gate's point.
+        moved = {"seg:lblj": 17, "seg:mips-clip": 23, "seg:bits-entry": 21}
+        if key in moved:
+            assert after_row["end_triggers"] == [
+                {"type": "warp_entered", "level": 6, "to": moved[key]}]
+        else:
+            assert after_row["end_triggers"] == before_row["end_triggers"]
         assert after_row["waypoints"] == before_row["waypoints"]
         assert after_row["guards"] == before_row["guards"]
         assert after_row["seed_dirty"] == 0

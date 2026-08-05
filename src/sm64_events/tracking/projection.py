@@ -445,6 +445,50 @@ def time_corrections(events) -> dict[int, dict]:
     return out
 
 
+def warp_destinations(events) -> dict[int, int]:
+    """journal id of a `warp_entered` with NO destination -> the level it led
+    to, recovered from the journal itself.
+
+    The FOURTH pre-pass, and it exists because the entrance touch became an
+    end condition (task 0081, 2026-08-04) while every row written before that
+    day carries no `to`. Both of the obvious readings of such a row are wrong,
+    and each was measured over the real journal rather than argued about:
+
+      * refuse it, and a pinned end can never match a historical touch -- 54
+        of 106 recorded segment successes simply VANISH on the next replay;
+      * wave it through, and a historical touch satisfies ANY pinned
+        destination -- 105 successes are FABRICATED, because a basement touch
+        toward HMC closes a DDD-pinned definition.
+
+    The destination was never missing from the JOURNAL, only from the row: the
+    level edge that follows names it, which is exactly what the live detector
+    now waits for. So this recovers it the same way, and the recovered value
+    is DERIVED at replay time and never written back -- the journal stays the
+    record of what the game did.
+
+    Paired forward to the next real level edge within `HOLD_CAP_FRAMES`, the
+    same bound the detector holds a live touch for. A touch with no such edge
+    keeps no destination (an in-level teleporter, or an aborted fade), which is
+    what the live detector publishes as `to: None` for the same case.
+    """
+    from sm64_events.detectors.warp import WarpDetector
+    out: dict[int, int] = {}
+    pending: list = []
+    for ev in events:
+        if ev.type == "warp_entered":
+            if "to" not in ev.payload:
+                pending.append(ev)
+        elif ev.type == "level_changed":
+            payload = ev.payload
+            if payload.get("from") == payload.get("to"):
+                continue            # establishing/corrective, not a crossing
+            for touch in pending:
+                if ev.frame - touch.frame < WarpDetector.HOLD_CAP_FRAMES:
+                    out[touch.id] = payload["to"]
+            pending = []
+    return out
+
+
 class _CorrectedRow:
     """One journal row seen with a revised payload. The single seam a time
     correction needs: everything downstream reads the row exactly as it always
@@ -468,6 +512,7 @@ class Projector:
                  strat_overrides: dict[int, str | None] | None = None,
                  origin_overrides: dict | None = None,
                  time_corrections: dict[int, dict] | None = None,
+                 warp_destinations: dict[int, int] | None = None,
                  hundred_coin_strat=None):
         # ((course_id, star_id), exit_star, current_strat) -> the 100-coin
         # strategy this run belongs to, or None for "keep what is remembered"
@@ -488,6 +533,11 @@ class Projector:
         # one, which is where this dict comes from.
         self._time_corrections = (time_corrections
                                   if time_corrections is not None else {})
+        # warp_entered journal id -> the level it led to, for the rows written
+        # before detectors/warp.py stamped one (task 0081). Empty on the LIVE
+        # path, where every touch carries its own destination.
+        self._warp_destinations = (warp_destinations
+                                   if warp_destinations is not None else {})
         # ("star", course_id, star_id) | ("segment", segment_id) | None
         self.target: tuple | None = None
         # (course_id, star_id) of the active star most recently retired BY
@@ -697,6 +747,15 @@ class Projector:
             fix = self._time_corrections.get(ev.id)
             if fix:
                 ev = _CorrectedRow(ev, {**ev.payload, **fix})
+        # The destination a pre-2026-08-04 touch never recorded, recovered
+        # from the level edge that followed it. Folded in HERE for the same
+        # reason the correction above is: the matcher, the attempt and every
+        # payload reader downstream then see one shape and none of them has to
+        # know that some rows predate the key.
+        elif ev.type == "warp_entered" and "to" not in ev.payload:
+            recovered = self._warp_destinations.get(ev.id)
+            if recovered is not None:
+                ev = _CorrectedRow(ev, {**ev.payload, "to": recovered})
         prev_level = self._level  # _dispatch may move it (level_changed)
         self._pending_target_retire = None   # transient, one event only
         # Snapshotted BEFORE _dispatch (which runs _close_by_grab for a
@@ -1440,6 +1499,7 @@ def replay(events, segments=None, time_filters=None, origin_overrides=None,
                      strat_overrides=strat_overrides(events),
                      origin_overrides=origin_overrides,
                      time_corrections=time_corrections(events),
+                     warp_destinations=warp_destinations(events),
                      hundred_coin_strat=hundred_coin_strat)
     attempts: list[Attempt] = []
     for ev in events:
