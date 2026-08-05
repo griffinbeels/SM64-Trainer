@@ -4563,10 +4563,11 @@ def test_historical_anchor_without_the_teleport_key_closes():
 
 def test_a_touch_clause_scopes_to_its_destination():
     """The castle basement alone hosts five exits (HMC, LLL, SSL, DDD,
-    BitFS). A clause reading only "a warp in the castle" would let walking
-    into HMC record a false MIPS Clip success."""
-    clause = {"type": "warp_entered", "level": 6, "to": 23}
-    spec = segments_module.TRIGGERS["warp_entered"]
+    BitFS). A condition reading only "a warp in the castle" would let walking
+    into HMC record a false MIPS Clip success -- which is why the entrance
+    condition names its DESTINATION and nothing else."""
+    clause = {"type": "entrance_touched", "to": 23}
+    spec = segments_module.TRIGGERS["entrance_touched"]
     ctx = MatchContext(level=6, prev_level=6, num_stars=0, area=3)
     to_ddd = jev(1, "warp_entered", 1000, {"level": 6, "area": 3, "to": 23})
     to_hmc = jev(2, "warp_entered", 1000, {"level": 6, "area": 3, "to": 7})
@@ -4590,11 +4591,11 @@ def test_a_touch_clause_without_a_destination_still_matches_anything():
 
 def test_a_pinned_touch_clause_ignores_a_historical_payload():
     """Forward-only, in the conservative direction: a journal row written
-    before 2026-08-04 carries no destination, so it can satisfy only the
-    destination-free clause. An old journal must not start matching something
-    new on replay."""
-    clause = {"type": "warp_entered", "level": 6, "to": 23}
-    spec = segments_module.TRIGGERS["warp_entered"]
+    before 2026-08-04 carries no destination, so an entrance condition cannot
+    match it unless projection.warp_destinations recovered one. An old journal
+    must not start matching something new on replay."""
+    clause = {"type": "entrance_touched", "to": 23}
+    spec = segments_module.TRIGGERS["entrance_touched"]
     ctx = MatchContext(level=6, prev_level=6, num_stars=0, area=3)
     historical = jev(1, "warp_entered", 1000, {"level": 6, "area": 3})
     assert spec.match(clause, historical, ctx) is False
@@ -4610,6 +4611,6 @@ def test_a_touch_step_names_the_place_it_leads_to():
     silently exempt from the topological cancel a level_enter-ended one obeys
     -- re-pointing 56 movements onto such a clause would switch the wrong-turn
     rule off for the entire castle corpus with nothing going red."""
-    assert segments_module.step_node({"type": "warp_entered", "level": 6, "to": 23}) \
+    assert segments_module.step_node({"type": "entrance_touched", "to": 23}) \
         == segments_module.step_node({"type": "level_enter", "to": 23})
     assert segments_module.step_node({"type": "warp_entered", "level": 6}) is None

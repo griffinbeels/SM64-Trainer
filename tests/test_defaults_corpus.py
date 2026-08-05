@@ -120,11 +120,11 @@ def clause_node(clause: dict) -> tuple:
     if kind == "level_enter":
         return (clause["to"], None) if clause["to"] != LEVEL_CASTLE_INSIDE \
             else (LEVEL_CASTLE_INSIDE, 1)
-    if kind == "warp_entered":
-        # An ENTRANCE TOUCH fires 77 frames before Mario arrives (23 at a
-        # pipe), but the walk it ends is the walk to the DESTINATION -- the
-        # same node the level_enter it replaced resolved to, which is also
-        # what segments.step_node answers for it.
+    if kind == "entrance_touched":
+        # The touch fires 77 frames before Mario arrives (23 at a pipe), but
+        # the walk it ends is the walk to the DESTINATION -- the same node the
+        # level_enter it replaced resolved to, which is also what
+        # segments.step_node answers for it.
         return (clause["to"], None)
     if kind == "level_exit":
         return exit_node(clause["from"])
@@ -179,6 +179,8 @@ class _Walker:
                 # the world model rather than off the definition being
                 # checked, which is this file's whole point.
                 if nxt[0] not in CASTLE_REGION_LEVELS:
+                    # Still journaled as `warp_entered`: ONE event, two
+                    # conditions reading it (segments.TRIGGERS).
                     self._add("warp_entered",
                               {"level": self.at[0], "area": self.at[1] or 1,
                                "action": ACT_DISAPPEARED, "to": nxt[0],

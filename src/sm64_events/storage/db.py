@@ -441,6 +441,42 @@ MIGRATIONS = [
     """
     ALTER TABLE attempts ADD COLUMN timed_at TEXT;
     """,
+    # v21 — a seeded definition the human has EDITED is frozen against every
+    # corpus refresh (`seed_dirty=1` blocks reconcile's update branch), so the
+    # 2026-08-04 entrance sweep reached 55 shipped rows and stopped at his own
+    # MIPS Clip and LBLJ. Live report the next morning: "timer still triggers
+    # for MIPS CLIP upon actually entering DDD... it was still set up to use
+    # entering DDD as the finish condition."
+    #
+    # This rewrites the END CLAUSE ONLY and leaves `seed_dirty` exactly as it
+    # found it, which is the whole difference from v17. Clearing the flag was
+    # right there (the rows were stranded by a retired feature, not by a
+    # choice) and is WRONG here: both of his rows carry real edits beside the
+    # end trigger -- MIPS Clip's start now pins the basement subarea, which is
+    # better than what ships -- and reconcile would discard them. A repair may
+    # fix the thing it is about; it may not spend the user's own work doing it.
+    #
+    # Guarded by SHAPE rather than by a list of keys, so it also catches the
+    # intermediate `warp_entered`+`to` form that shipped for one afternoon on
+    # 2026-08-04 and any row a hand edit left on the old shape: seeded rows
+    # only, exactly one end clause, naming a destination that is not the castle
+    # interior/grounds/courtyard (Lakitu Skip really does end on entering level
+    # 6, and there is no entrance to the castle to touch). A destination-free
+    # `warp_entered` -- the three legacy pipe entries -- has a NULL `to` and is
+    # excluded by that same test. Idempotent: after it runs, no row matches.
+    """
+    UPDATE segment_defs
+       SET end_triggers = json_array(
+             json_object('type', 'entrance_touched',
+                         'to', json_extract(end_triggers, '$[0].to')))
+     WHERE seed_key IS NOT NULL
+       AND json_valid(end_triggers)
+       AND json_array_length(end_triggers) = 1
+       AND json_extract(end_triggers, '$[0].type') IN ('level_enter',
+                                                       'warp_entered')
+       AND json_extract(end_triggers, '$[0].to') IS NOT NULL
+       AND json_extract(end_triggers, '$[0].to') NOT IN (6, 16, 26);
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",

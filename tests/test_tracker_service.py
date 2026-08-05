@@ -235,7 +235,9 @@ def test_undo_pb_segment_is_kind_aware(tmp_path):
     star_aid = next(a.id for a in db.attempts() if a.segment_id is None)
     asyncio.run(svc.save_pb(star_aid, "rta"))
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
-    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    asyncio.run(svc.publish(ev("warp_entered", 1085,
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
     seg_aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
     asyncio.run(svc.save_pb(seg_aid, "rta"))
     out = asyncio.run(svc.undo_pb(seg_aid, "rta"))
@@ -302,7 +304,9 @@ def test_wipe_segment_lifetime_spares_star_data(tmp_path):
     lblj = seed_id(db, "LBLJ")
     success(svc, 500)                             # star attempt
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
-    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    asyncio.run(svc.publish(ev("warp_entered", 1085,
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
     seg_aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
     asyncio.run(svc.save_pb(seg_aid, "rta"))
     asyncio.run(svc.wipe_data("segment", segment_id=lblj, scope="lifetime"))
@@ -315,7 +319,9 @@ def test_wipe_star_spares_segment_data(tmp_path):
     db, svc, _ = make_rec(tmp_path)
     lblj = seed_id(db, "LBLJ")
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
-    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    asyncio.run(svc.publish(ev("warp_entered", 1085,
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
     success(svc, 2000)
     asyncio.run(svc.wipe_data("star", course_id=2, star_id=2, scope="lifetime"))
     assert any(a.segment_id == lblj for a in db.attempts())   # segment survives
@@ -754,8 +760,7 @@ def test_reset_segment_restores_seed_and_clears_dirty(tmp_path):
     # Moved 2026-08-04 (task 0081): LBLJ ends on the ENTRANCE TOUCH, 23 frames
     # before BitDW loads. Reset-to-default restores what SHIPS, so this
     # assertion follows the corpus by design rather than pinning history.
-    assert row["end_triggers"] == [
-        {"type": "warp_entered", "level": 6, "to": 17}]
+    assert row["end_triggers"] == [{"type": "entrance_touched", "to": 17}]
 
 
 def test_reset_user_created_segment_raises(tmp_path):
@@ -1060,7 +1065,9 @@ def test_segment_attempt_completed_carries_segment_fields(tmp_path):
     lblj = seed_id(db, "LBLJ")
     # seeded LBLJ: arms on grounds(16)->castle(6), ends on ->BitDW(17)
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
-    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    asyncio.run(svc.publish(ev("warp_entered", 1085,
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
     done = [e for e in sent if e.type == "attempt_completed"
             and e.payload.get("kind") == "segment"]
     assert done and done[0].payload["segment_id"] == lblj
@@ -1154,7 +1161,9 @@ def test_save_pb_segment_requires_rta_and_inserts_segment_row(tmp_path):
     db, svc, sent = make_rec(tmp_path)
     lblj = seed_id(db, "LBLJ")
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
-    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    asyncio.run(svc.publish(ev("warp_entered", 1085,
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
     aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
     with pytest.raises(ValueError):
         asyncio.run(svc.save_pb(aid, "igt"))    # segments are RTA-only
@@ -1923,7 +1932,9 @@ def test_set_attempt_strat_reclassifies_segment_attempt_and_registers(tmp_path):
     db, svc = make(tmp_path)
     lblj = seed_id(db, "LBLJ")
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
-    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    asyncio.run(svc.publish(ev("warp_entered", 1085,
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
     seg_aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
     asyncio.run(svc.set_attempt_strat(seg_aid, "no bljs"))
     reclassified = next(a for a in db.attempts() if a.id == seg_aid)

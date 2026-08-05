@@ -218,6 +218,9 @@ TRIGGER_JOURNAL_TYPES: dict[str, frozenset[str]] = {
     "level_exit": frozenset({"level_changed"}),
     "area_enter": frozenset({"area_changed"}),
     "warp_entered": frozenset({"warp_entered"}),
+    # Two conditions, ONE journal event: `warp_entered` names where you are,
+    # `entrance_touched` names where the entrance leads (task 0081).
+    "entrance_touched": frozenset({"warp_entered"}),
     "key_grabbed": frozenset({"key_grabbed"}),
     "star_grabbed": frozenset({"star_collected"}),
     "spawned": frozenset({"spawned"}),

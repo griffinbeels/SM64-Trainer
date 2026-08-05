@@ -259,7 +259,12 @@ def test_migration_v4_seeds_ten_segment_definitions(tmp_path):
     assert lblj["start_triggers"] == [
         {"type": "level_enter", "to": 6, "from": 16},
         {"type": "attempt_anchor", "level": 6, "area": 1}]
-    assert lblj["end_triggers"] == [{"type": "level_enter", "to": 17}]
+    # v4 seeds `level_enter to=17` and v21 repairs it on the way
+    # through: LBLJ ends on the ENTRANCE TOUCH since 2026-08-04 (task
+    # 0081), so a FRESH db lands on the repaired shape too. Reading
+    # the post-migration state is the point -- v4's own literal is
+    # not what any db ever runs with.
+    assert lblj["end_triggers"] == [{"type": "entrance_touched", "to": 17}]
 
 
 def test_fresh_db_seeds_bowser3_ending_on_key_grabbed(tmp_path):

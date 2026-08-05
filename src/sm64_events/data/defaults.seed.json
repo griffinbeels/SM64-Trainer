@@ -19,8 +19,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 17
         }
       ],
@@ -42,8 +41,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 23
         }
       ],
@@ -86,8 +84,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 21
         }
       ],
@@ -258,8 +255,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 9
         }
       ],
@@ -285,8 +281,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 24
         }
       ],
@@ -312,8 +307,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 27
         }
       ],
@@ -339,8 +333,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 5
         }
       ],
@@ -393,8 +386,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 24
         }
       ],
@@ -420,8 +412,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 27
         }
       ],
@@ -447,8 +438,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 5
         }
       ],
@@ -474,8 +464,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 20
         }
       ],
@@ -501,8 +490,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 17
         }
       ],
@@ -528,8 +516,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 8
         }
       ],
@@ -563,8 +550,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 12
         }
       ],
@@ -590,8 +576,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 27
         }
       ],
@@ -617,8 +602,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 29
         }
       ],
@@ -644,8 +628,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 27
         }
       ],
@@ -671,8 +654,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 17
         }
       ],
@@ -698,8 +680,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 17
         }
       ],
@@ -725,8 +706,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 9
         }
       ],
@@ -752,8 +732,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 17
         }
       ],
@@ -779,8 +758,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 26,
+          "type": "entrance_touched",
           "to": 4
         }
       ],
@@ -813,8 +791,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 9
         }
       ],
@@ -840,8 +817,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 24
         }
       ],
@@ -883,8 +859,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 5
         }
       ],
@@ -910,8 +885,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 8
         }
       ],
@@ -945,8 +919,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 23
         }
       ],
@@ -980,8 +953,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 19
         }
       ],
@@ -1051,8 +1023,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 23
         }
       ],
@@ -1095,8 +1066,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 8
         }
       ],
@@ -1122,8 +1092,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 22
         }
       ],
@@ -1149,8 +1118,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 7
         }
       ],
@@ -1176,8 +1144,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 7
         }
       ],
@@ -1203,8 +1170,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 23
         }
       ],
@@ -1230,8 +1196,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 22
         }
       ],
@@ -1257,8 +1222,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 23
         }
       ],
@@ -1284,8 +1248,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 15
         }
       ],
@@ -1335,8 +1298,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 7
         }
       ],
@@ -1363,8 +1325,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 16,
+          "type": "entrance_touched",
           "to": 18
         }
       ],
@@ -1397,8 +1358,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 5
         }
       ],
@@ -1433,8 +1393,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 19
         }
       ],
@@ -1460,8 +1419,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 11
         }
       ],
@@ -1510,8 +1468,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 23
         }
       ],
@@ -1537,8 +1494,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 11
         }
       ],
@@ -1622,8 +1578,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 21
         }
       ],
@@ -1672,8 +1627,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 13
         }
       ],
@@ -1699,8 +1653,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 36
         }
       ],
@@ -1726,8 +1679,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 10
         }
       ],
@@ -1796,8 +1748,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 15
         }
       ],
@@ -1823,8 +1774,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 31
         }
       ],
@@ -1850,8 +1800,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 14
         }
       ],
@@ -1877,8 +1826,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 14
         }
       ],
@@ -1904,8 +1852,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 15
         }
       ],
@@ -1931,8 +1878,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 21
         }
       ],
@@ -1958,8 +1904,7 @@
       ],
       "end_triggers": [
         {
-          "type": "warp_entered",
-          "level": 6,
+          "type": "entrance_touched",
           "to": 21
         }
       ],

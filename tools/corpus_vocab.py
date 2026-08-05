@@ -125,32 +125,20 @@ def enter_entrance(level):
     """The ENTRANCE TOUCH that leads to `level` -- the frame Mario collides
     with its painting, portal, hole or pipe, 77 frames (23 at a pipe) before
     the level loads. A movement ends HERE rather than on the load, so its
-    recorded time is the travelling and not the fade (task 0081, 2026-08-04).
+    recorded time is the travelling and not the fade (task 0081).
 
-    The entrance's own level is DERIVED from the world graph, never listed:
-    BBH is entered from the courtyard and VCUtM from the grounds, so a hand
-    table would be wrong twice over and would drift again the first time an
-    edge is corrected. Four destinations carry a second predecessor that is
-    not castle-side (BitDW from the Bowser 1 arena, BitFS from Bowser 2, BitS
-    from Bowser 3, HMC from CotMC) -- the castle REGION node is the one a
-    player walks from, and it is unique for all 23 destinations the corpus
-    uses. Anything else raises rather than guessing, because a silently wrong
-    entrance level makes a movement unfireable and nothing else would say so.
+    ONE clause param, because the entrance's own level is DERIVED
+    (`topology.entrance_level`, the same door `segments.fires_from` checks arm
+    positions against) rather than authored. Asking for it was the live
+    complaint of 2026-08-05: three controls on one row, the middle one
+    demanding you already know the DDD portal lives in the castle interior.
     """
-    from sm64_events.memory.addresses import (CASTLE_REGION_NODES,
-                                              world_connections)
-    from sm64_events.tracking import topology
-    region = {topology.node_for(lvl, area) for lvl, area in CASTLE_REGION_NODES}
-    sources = sorted(
-        node for node, destinations in world_connections().items()
-        if node in region and any(tuple(d) == (level, None)
-                                  for d in destinations))
-    if len(sources) != 1:
+    from sm64_events.tracking.topology import entrance_level
+    if entrance_level(level) is None:
         raise AssertionError(
-            f"level {level} has {len(sources)} castle-side entrances "
-            f"({sources}); the world graph or this rule is wrong")
-    return {"type": "warp_entered", "level": int(sources[0].split(":")[0]),
-            "to": level}
+            f"level {level} has no single castle-side entrance; the world "
+            f"graph or this call is wrong")
+    return {"type": "entrance_touched", "to": level}
 
 
 def grab_key(level):

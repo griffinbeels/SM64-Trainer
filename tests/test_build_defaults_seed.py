@@ -47,13 +47,13 @@ def test_legacy_segments_are_carried_forward_verbatim():
         {"type": "level_enter", "to": 6, "from": 16},
         {"type": "attempt_anchor", "level": 6, "area": 1}]
     assert lblj["end_triggers"] == [
-        {"type": "warp_entered", "level": 6, "to": 17}]
+        {"type": "entrance_touched", "to": 17}]
     assert lblj["guards"] == [] and lblj["waypoints"] == []
     assert lblj["category"] == "Tricks"
     assert by_key["seg:mips-clip"]["end_triggers"] == [
-        {"type": "warp_entered", "level": 6, "to": 23}]
+        {"type": "entrance_touched", "to": 23}]
     assert by_key["seg:bits-entry"]["end_triggers"] == [
-        {"type": "warp_entered", "level": 6, "to": 21}]
+        {"type": "entrance_touched", "to": 21}]
     assert by_key["seg:lakitu-skip"]["end_triggers"] == [
         {"type": "level_enter", "to": 6}], "the castle has no entrance"
     for key in ("seg:mips-clip", "seg:lakitu-skip", "seg:bits-entry",
@@ -192,13 +192,18 @@ def test_every_entrance_resolves_to_exactly_one_castle_side_node():
     predecessor that is not castle-side (BitDW from the Bowser 1 arena, BitFS
     from Bowser 2, BitS from Bowser 3, HMC from CotMC); the castle region node
     is the answer, and it is unique for all of them."""
+    from sm64_events.tracking.topology import entrance_level
+
     from corpus_vocab import enter_entrance
     for destination, expected_level in [(23, 6), (24, 6), (4, 26), (18, 16),
                                         (17, 6), (19, 6), (21, 6), (7, 6),
                                         (31, 6), (36, 6), (20, 6), (29, 6)]:
+        # The clause names ONE thing -- where the entrance leads. Its own
+        # level is derived, and that derivation is the single door the
+        # matcher's arm-position gate checks against too.
         assert enter_entrance(destination) == {
-            "type": "warp_entered", "level": expected_level,
-            "to": destination}, destination
+            "type": "entrance_touched", "to": destination}, destination
+        assert entrance_level(destination) == expected_level, destination
 
 
 def test_an_entrance_the_world_graph_does_not_know_raises():
@@ -207,7 +212,7 @@ def test_an_entrance_the_world_graph_does_not_know_raises():
     import pytest
 
     from corpus_vocab import enter_entrance
-    with pytest.raises(AssertionError, match="castle-side entrances"):
+    with pytest.raises(AssertionError, match="castle-side entrance"):
         enter_entrance(6)
 
 

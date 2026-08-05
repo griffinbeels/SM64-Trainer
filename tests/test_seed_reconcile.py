@@ -158,7 +158,7 @@ def test_real_bundled_seed_does_not_alter_existing_segment_defs(tmp_path):
         moved = {"seg:lblj": 17, "seg:mips-clip": 23, "seg:bits-entry": 21}
         if key in moved:
             assert after_row["end_triggers"] == [
-                {"type": "warp_entered", "level": 6, "to": moved[key]}]
+                {"type": "entrance_touched", "to": moved[key]}]
         else:
             assert after_row["end_triggers"] == before_row["end_triggers"]
         assert after_row["waypoints"] == before_row["waypoints"]

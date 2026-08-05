@@ -171,6 +171,17 @@ def _grab_star_src(c: dict) -> str:
 
 
 def _enter_warp_src(c: dict) -> str:
+    # `warp_entered` carrying a destination is the SUPERSEDED shape that
+    # shipped for one afternoon on 2026-08-04, before the condition split into
+    # "where you are" (this one) and "where the entrance leads"
+    # (entrance_touched). Printing it as enter_warp would silently drop the
+    # destination and round-trip into a DIFFERENT definition, so it refuses --
+    # migration v21 rewrites any such row in place at the next db open.
+    if c.get("to") is not None:
+        raise NotExpressible(
+            f"warp_entered carrying to={c['to']} is the superseded shape; "
+            f"use enter_entrance({c['to']}) -- migration v21 repairs stored "
+            f"rows automatically")
     return f"enter_warp({c['level']})"
 
 
@@ -191,12 +202,18 @@ def _spawn_src(c: dict) -> str:
     return f"spawn({c['level']})"
 
 
+def _enter_entrance_src(c: dict) -> str:
+    _require(c, ("to",), "enter_entrance")
+    return f"enter_entrance({c['to']})"
+
+
 _CLAUSE_BUILDERS = {
     "level_exit": _exit_level_src,
     "level_enter": _enter_level_src,
     "area_enter": _enter_area_src,
     "star_grabbed": _grab_star_src,
     "warp_entered": _enter_warp_src,
+    "entrance_touched": _enter_entrance_src,
     "key_grabbed": _grab_key_src,
     "attempt_anchor": _anchor_src,
     "spawned": _spawn_src,
