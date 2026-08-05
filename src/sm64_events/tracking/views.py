@@ -14,6 +14,18 @@ Contract (the UI builds against ALL of this):
 - The practice target's section is ALWAYS present, even with zero scoped
   attempts — the UI pins it as the active block (star AND segment kinds).
   ARMED segments are pinned the same way: active now => section present.
+  **Exception, 2026-08-05: an AMBIENTLY-arming def (segments.arms_ambiently —
+  the 100-coin star's own engine, seg:reds->pipe:*, the legacy pipe-entry
+  trio) is exempt from "armed alone is enough."** Its arm is mere
+  course/subarea presence, not a deliberate action, so a mere-armed-and-
+  unchosen instance gets NO section — the same "not evidence of a deliberate
+  attempt" premise `tracking/projection.py`'s `_untargeted_failure`/
+  `_untargeted_ambient_failure` apply to the ROW those same engines would
+  otherwise duplicate. It still gets one the instant it IS the live target
+  (the ordinary target-pin rule above), checked per definition, never per
+  course — two ambient defs can arm off the same course entry with only one
+  of them chosen (live report: 8 Red Coins (Pipe) selected beside an unchosen,
+  still-visible "No Reds" card in the same Bowser stage).
 - Sections carry `markers_by_strat` (spec §3) and `progress` (spec §4,
   scoped successes grouped per session).
 - Segment sections (`segments` key) mirror star sections but are RTA-only
@@ -1097,7 +1109,13 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # first match per star, same as the retired _hundred_coin_redirect did.
     hundred_coin_ids: set[int] = set()
     hundred_coin_engine_for_star: dict[tuple[int, int], object] = {}
+    # {id: SegmentDef}, built here (moved UP from beside the segment-section
+    # loop below, single source now) because the armed-segments loop a few
+    # lines down needs a def's own start_triggers to ask arms_ambiently --
+    # the very question that loop exists to answer.
+    seg_defs: dict[int, object] = {}
     for d in service.segment_defs:
+        seg_defs[d.id] = d
         hc = hundred_coin_entity(d.start_triggers, d.waypoints)
         if hc is None:
             continue
@@ -1161,7 +1179,15 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
 
     # the practice target ALWAYS gets a section (spec §5), whichever kind:
     # setting a target immediately surfaces its lifetime history, PB, and
-    # markers. Fresh targets have no recency entry (-1) and sort last.
+    # markers. Fresh targets have no recency entry (-1) and sort last. This
+    # branch is ALSO, since 2026-08-05, the ONLY way an ambiently-arming def
+    # (below) or the 100-coin star's own engine gets a section with zero
+    # attempts -- it is the live-target check, the exact "has he chosen this"
+    # signal projection.py's `_untargeted_failure`/`_untargeted_ambient_
+    # failure` read for the sibling ROW fix, generalised to a segment identity
+    # per THIS entity rather than per course (his correction, live report
+    # 2026-08-05: a course with one chosen ambient def beside an unchosen one
+    # -- 8 Red Coins (Pipe) picked, No Reds not -- must keep exactly one).
     if service.target and service.target[0] == "star" \
             and service.target[1:] not in seen:
         seen[service.target[1:]] = None
@@ -1182,16 +1208,34 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         # course -- excluded here so it never grows a segment section of
         # its own; its arm state instead backs the STAR section's
         # armed_detail (the star loop below, via hundred_coin_engine_for_star).
-        if sid not in hundred_coin_ids:
-            seen_segs.setdefault(sid, None)
-    # Same "armed is active now" philosophy, for the 100-coin star's OWN
-    # section (spec 2026-07-28-multi-step-segments): a HUNDRED_COIN_EXIT
-    # engine arming must surface star 6's card even with zero attempts yet
-    # (the arm's own progress/waiting-for is the reason the card is showing
-    # at all), exactly as an armed segment surfaces its own section above.
-    for (course_id, star_id), hc_def in hundred_coin_engine_for_star.items():
-        if hc_def.id in armed:
-            seen.setdefault((course_id, star_id), None)
+        if sid in hundred_coin_ids:
+            continue
+        d = seg_defs.get(sid)
+        # An AMBIENT arm -- mere course/subarea presence, not a deliberate
+        # action (segments.arms_ambiently: seg:reds->pipe:* and the legacy
+        # pipe-entry trio, the only other family besides the 100-coin star's
+        # own engine that shares this idiom) -- must not manufacture a card
+        # any more than the sibling projection.py fix lets it manufacture a
+        # phantom ROW. Live report 2026-08-05: an empty "100 Coins" card
+        # appeared from walking into a course with nothing selected ("an
+        # entity nobody chose should not get a card either"), and its Bowser
+        # sibling in the SAME course as a def he HAD chosen ("the No Reds
+        # card appeared immediately, but shouldn't because pipe was
+        # selected") -- proving the grain has to be per-DEFINITION, not per
+        # course: two defs can arm off the identical course entry and only
+        # one may be his. An ambiently-armed def he DID choose still gets its
+        # card and its live timer, through the target branch just above --
+        # the identical `service.target` signal read here, not a second
+        # answer to "did he choose this".
+        if d is not None and arms_ambiently(d.start_triggers):
+            continue
+        seen_segs.setdefault(sid, None)
+    # NOT "armed is active now" for the 100-coin star's own section (deleted
+    # 2026-08-05, same live report as above): its HUNDRED_COIN_EXIT engine
+    # arms on the identical mere-course-entry idiom as the ambient segments
+    # just excluded, so mirroring the armed-segment rule here would
+    # manufacture the same unchosen card. A player who chose star 6 already
+    # has a section from the star half of the target branch above.
 
     scoped_set = set(scoped)
     igt_of = lambda a: a.igt_frames
@@ -1320,7 +1364,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # attempts, stats, timeline and progress all force the rta clock
     # whatever the view clock. "armed" reads the LIVE projector so a plain
     # view refresh self-heals the UI's armed badge after missed notices.
-    seg_defs = {d.id: d for d in service.segment_defs}
+    # seg_defs itself is built earlier now (beside hundred_coin_ids), since
+    # the armed-segments loop above needs it too -- single source, not a
+    # second lookup keyed the same way.
     # db rows carry category/seed_key (SegmentDef, the dataclass seg_defs
     # holds, does not) — a separate lookup keyed the same as seg_defs so
     # each section can stamp its category/seeded without a second db read.

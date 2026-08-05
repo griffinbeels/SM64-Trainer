@@ -25,8 +25,10 @@ becomes an assertion here, and every future one should be added the same day.
 None of these check LAYOUT — that is the sweep's job. They check that the thing
 whose layout is being swept is on the page at all.
 """
+import json
 import re
 import sys
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -42,7 +44,8 @@ if _MISSING:
 from uilab.driver import get_driver          # noqa: E402
 from uilab_project import (PROJECT, STORIES,  # noqa: E402
                            BOWSER_COURSE, BOWSER_LEVEL)
-from ui_fixture import serve_ui, FIXTURE_COURSE, FIXTURE_LEVEL  # noqa: E402
+from ui_fixture import (serve_ui, FIXTURE_COURSE, FIXTURE_LEVEL,  # noqa: E402
+                        _seed_target, _target_segment)
 
 # Re-pointed 2026-08-04 (amendment A8, spec practice-log-entity-cards): the
 # Active Target card (`.practice-detail-grid.is-primary`) is deleted -- the
@@ -92,11 +95,24 @@ def test_the_bowser_reds_pipe_pairing_renders_its_family_naming():
 
     `enter_level=17` arms whatever real definitions key off entering BitDW
     (both the legacy `seg:bitdw-pipe` and the corpus `seg:reds->pipe:bitdw`,
-    once `reconcile_full_corpus` has loaded it) and leaves them armed --
-    `pipe_star_entity`/`pipe_segment_id` are structural (derived from the
-    segment ROW existing, not from any attempt), so a bare section is
-    enough. `target=(BOWSER_COURSE, 0)` gives the Reds star its own section
-    too, the same way."""
+    once `reconcile_full_corpus` has loaded it) and leaves them armed.
+    `pipe_star_entity`/`pipe_segment_id` (the naming payload) are structural
+    -- derived from the segment ROW existing, not from any attempt or arm
+    state -- so the Reds STAR's own card carries "(Star)" the instant it has
+    a section at all, which `target=(BOWSER_COURSE, 0)` gives it.
+
+    **The PIPE segment's own card is different (2026-08-05): arming alone no
+    longer publishes one** (`.claude/rules/hundred-coin.md`, "one CARD, only
+    when the entity is the target" -- an unchosen ambiently-arming def must
+    not manufacture a card). So its "(Pipe)" naming is proven the same way a
+    real player reaches it -- by making it the live target, via the exact
+    `POST /api/target` `_target_segment` uses -- rather than by merely
+    entering the level and leaving it armed. This is a SECOND phase in the
+    same render, not a second fixture: the star's own card (and its "(Star)"
+    naming) does not depend on the segment ever having a section, so
+    re-targeting onto the segment afterward proves both paths without
+    needing them visible simultaneously, which the new rule no longer
+    permits for an entity nobody has chosen."""
     with serve_ui(reconcile_full_corpus=True,
                  stage=(BOWSER_COURSE, BOWSER_LEVEL),
                  target=(BOWSER_COURSE, 0),
@@ -105,18 +121,31 @@ def test_the_bowser_reds_pipe_pairing_renders_its_family_naming():
         opened.goto(f"{base}/ui/index.html")
         opened.wait_for(".log-list-card")
         opened.wait_ms(300)
-        names = opened.evaluate(
-            "return Array.from(document.querySelectorAll('.log-card-name'))"
-            ".map(el => el.textContent)")
-        assert any("(Pipe)" in name for name in names), (
-            f"no log card reads \"…(Pipe)\" -- names were {names!r}. Either "
-            "the reds->pipe segment never armed (check ui_fixture.py's "
-            "enter_level) or views.py's pipe_star_entity stopped resolving "
-            "it (tracking-storage.md's _reds_pipe_segments)")
+
+        def card_names():
+            return opened.evaluate(
+                "return Array.from(document.querySelectorAll('.log-card-name'))"
+                ".map(el => el.textContent)")
+
+        names = card_names()
         assert any("(Star)" in name for name in names), (
             f"no log card reads \"…(Star)\" -- names were {names!r}. The "
             "Reds star's own section needs pipe_segment_id set, which "
-            "requires the SAME segment above to have loaded.")
+            "requires the paired seg:reds->pipe:<abbrev> row to exist "
+            "(reconcile_full_corpus).")
+
+        segments = json.loads(urllib.request.urlopen(
+            f"{base}/api/segments", timeout=10).read())
+        pipe = next(s for s in segments
+                   if (s.get("seed_key") or "") == "seg:reds->pipe:bitdw")
+        _target_segment(base, pipe["id"])
+        opened.wait_ms(300)
+        names = card_names()
+        assert any("(Pipe)" in name for name in names), (
+            f"no log card reads \"…(Pipe)\" after targeting the reds->pipe "
+            f"segment -- names were {names!r}. Either it never armed (check "
+            "ui_fixture.py's enter_level) or views.py's pipe_star_entity "
+            "stopped resolving it (tracking-storage.md's _reds_pipe_segments)")
 
 
 def test_the_star_kind_armed_detail_renders():
@@ -133,17 +162,35 @@ def test_the_star_kind_armed_detail_renders():
     `arm_hundred_coin` posts a synthetic def matching the pattern
     `hundred_coin_entity` looks for (a `star_grabbed(star=6, course=…)`
     WAYPOINT) and arms it, coexisting with the ordinary star target
-    `serve_ui` seeds by default on the same course."""
+    `serve_ui` seeds by default on the same course.
+
+    **The 100-coin star's own card is TARGETED here too (2026-08-05):
+    arming its engine alone no longer publishes one** (`.claude/rules/
+    hundred-coin.md`, "one CARD, only when the entity is the target" --
+    walking into a 100-coin course with nothing chosen must not manufacture
+    an empty card, and this synthetic engine arms the identical ambient
+    way). `_seed_target(base, FIXTURE_COURSE, 6, with_pb=False)` is the same
+    real `POST /api/target` a player's click sends -- star 6 has no rank
+    standards in the bundled seed, so `with_pb=False` skips the strat/PB
+    half `_seed_target` otherwise does for a graded star. This retargets
+    away from the ordinary star `serve_ui` seeded by default, which keeps
+    its own card regardless (it has real seeded ATTEMPTS, not merely a
+    target) -- so the positive/negative pairing below is identified by
+    NAME now rather than by `.log-card-active`, since that class moved
+    with the target."""
     with serve_ui(arm_hundred_coin=(FIXTURE_COURSE, FIXTURE_LEVEL)) as base, \
             get_driver().launch() as opened:
         opened.goto(f"{base}/ui/index.html")
         opened.wait_for(".log-list-card")
         opened.wait_ms(300)
+        _seed_target(base, FIXTURE_COURSE, 6, with_pb=False)
+        opened.wait_ms(300)
         rows = opened.count(".log-card .seg-waiting")
         assert rows == 1, (
             f"{rows} `.seg-waiting` row(s) inside a `.log-card`, expected 1 "
-            "(the synthetic 100-coin engine) -- either it never armed or "
-            "LogCard stopped drawing armed_detail for a star")
+            "(the synthetic 100-coin engine) -- either it never armed, was "
+            "never targeted, or LogCard stopped drawing armed_detail for a "
+            "star")
         step_text = opened.evaluate(
             "const el = document.querySelector("
             "'.log-card .seg-waiting .seg-waiting-step');"
@@ -151,13 +198,26 @@ def test_the_star_kind_armed_detail_renders():
         assert step_text and re.search(r"Step\s*\d+\s*of\s*\d+", step_text), (
             f"seg-waiting-step reads {step_text!r} -- not the expected "
             '"Step N of M" shape')
-        # The ORDINARY star sharing this course (the default target, so the
-        # ACTIVE `.log-card`) must carry none of this -- a positive count
-        # above paired with this zero is what makes both readable as real
-        # signal (same pairing
+        # The ORDINARY star sharing this course (no longer the active
+        # target, but still on the page via its own seeded attempts) must
+        # carry none of this -- a positive count above paired with this
+        # zero is what makes both readable as real signal (same pairing
         # test_the_armed_segments_log_card_shows_its_own_step_progress uses
-        # for the segment side).
-        assert opened.count(".log-card.log-card-active .seg-waiting") == 0
+        # for the segment side). Identified by NAME, not `.log-card-active`
+        # -- the 100-coin star's own card wears that class now.
+        scoped = opened.evaluate(
+            "const cards = Array.from(document.querySelectorAll('.log-card'));"
+            "const hundredCoin = cards.find(c => "
+            "  c.querySelector('.log-card-name')?.textContent.includes('100 Coins'));"
+            "const other = cards.find(c => c !== hundredCoin "
+            "  && c.querySelector('.seg-waiting'));"
+            "return {hundredCoinHasIt: !!hundredCoin?.querySelector('.seg-waiting'),"
+            "        anotherCardHasIt: !!other};")
+        assert scoped["hundredCoinHasIt"] is True, (
+            "the .seg-waiting row is not inside the '100 Coins' card")
+        assert scoped["anotherCardHasIt"] is False, (
+            "a NON-100-coin card also carries .seg-waiting -- armed_detail "
+            "leaked onto the wrong star's card")
 
 
 # Two viewports, not one: 1500x1000 (comfortably wide, side-by-side rank
