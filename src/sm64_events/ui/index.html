@@ -4613,7 +4613,21 @@
     align-items: center; gap: .65rem;
     padding: var(--log-head-pad-y, 10px) var(--log-head-pad-x, 14px);
   }
-  .log-card.is-unassigned .log-card-head { grid-template-columns: minmax(0,1fr) auto; }
+  /* NAMED AREAS, not just columns -- and that is the whole bug this replaced
+     (live report 2026-08-04: "the unassigned entry card is ~double height
+     compared to the normal card height"). `.log-card-fold` carries
+     `grid-area: fold`, and a named grid-area with NO matching
+     `grid-template-areas` does not fall back to auto-placement: the name
+     resolves to implicit lines, so the button was placed on a whole new
+     implicit ROW under the label instead of beside it. Two rows, double
+     height, and nothing overflowed or truncated -- so every DOM probe read
+     the card as perfectly healthy. Declaring the area is the fix; the
+     two-column track list alone never could be. */
+  .log-card.is-unassigned .log-card-head {
+    grid-template-columns: minmax(0,1fr) auto;
+    grid-template-areas: "identity fold";
+  }
+  .log-card.is-unassigned .log-card-name { grid-area: identity; }
   .log-card-select {
     grid-area: identity;
     min-width: 0; display: flex; align-items: center; gap: var(--log-identity-gap, 10px);
