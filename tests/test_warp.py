@@ -64,30 +64,57 @@ def test_the_touch_is_held_until_the_destination_is_known():
     assert events[0].frame == 2001, "back-dated to the touch, not the release"
 
 
+def test_the_pending_warp_flag_clearing_does_NOT_end_the_wait():
+    """THE live bug, 2026-08-05. A grace window on pending_warp_op looked like
+    the precise way to resolve an in-level teleporter promptly, and it
+    published `to: None` on every real painting entry instead: the game clears
+    sDelayedWarpOp when the delayed warp INITIATES (sDelayedWarpTimer = 20),
+    and ~57 more frames of fade follow before the level byte moves. His
+    journal, ids 25415/25371: touch at 2519145, level edge at 2519222, exactly
+    77 frames -- and MIPS Clip kept timing to the DDD load."""
+    detector = WarpDetector()
+    during = snap(global_timer=2000, curr_level=6, pending_warp_op=0x06,
+                  mario_action=ACT_DISAPPEARED)
+    detector.process(snap(global_timer=1999, curr_level=6), during)
+    # the flag goes quiet 20 frames in, as the real game does
+    for offset in range(1, 77):
+        events = detector.process(
+            snap(global_timer=2000 + offset - 1, curr_level=6,
+                 mario_action=ACT_DISAPPEARED,
+                 pending_warp_op=0x06 if offset <= 20 else 0),
+            snap(global_timer=2000 + offset, curr_level=6,
+                 mario_action=ACT_DISAPPEARED,
+                 pending_warp_op=0x06 if offset <= 20 else 0))
+        assert events == [], f"published early at +{offset}"
+    [event] = detector.process(
+        snap(global_timer=2076, curr_level=6, mario_action=ACT_DISAPPEARED),
+        snap(global_timer=2077, curr_level=23, mario_action=ACT_DISAPPEARED))
+    assert event.payload["to"] == 23
+    assert event.frame == 2000
+
+
 def test_a_destination_free_touch_is_still_journaled():
     """Nothing that fired before the hold may stop firing. An in-level
     teleporter (CCM broken bridge, WDW corners) relocates Mario inside his own
-    area, so no level or area edge ever comes -- pending_warp_op returning to
-    0 plus the grace window is what releases it, and the honest destination is
-    None."""
+    area, so no level or area edge ever comes -- the hold cap is what releases
+    it, and the honest destination is None."""
     detector = WarpDetector()
     detector.process(snap(global_timer=2000, curr_level=5),
                      snap(global_timer=2001, curr_level=5,
-                          mario_action=ACT_TELEPORT_FADE_OUT,
-                          pending_warp_op=0x06))
+                          mario_action=ACT_TELEPORT_FADE_OUT))
     events = []
-    for offset in range(2, 40):
+    for offset in range(2, 400):
         events = detector.process(
             snap(global_timer=2000 + offset - 1, curr_level=5,
-                 mario_action=ACT_TELEPORT_FADE_OUT, pending_warp_op=0),
+                 mario_action=ACT_TELEPORT_FADE_OUT),
             snap(global_timer=2000 + offset, curr_level=5,
-                 mario_action=ACT_TELEPORT_FADE_OUT, pending_warp_op=0))
+                 mario_action=ACT_TELEPORT_FADE_OUT))
         if events:
             break
     assert len(events) == 1
     assert events[0].payload["to"] is None
     assert events[0].frame == 2001
-    assert offset <= WarpDetector.TELEPORT_GRACE_FRAMES + 2
+    assert offset <= WarpDetector.HOLD_CAP_FRAMES + 1
 
 
 def test_a_held_touch_is_never_lost_to_a_stalled_warp():
@@ -98,7 +125,7 @@ def test_a_held_touch_is_never_lost_to_a_stalled_warp():
                      snap(global_timer=2001, mario_action=ACT_DISAPPEARED,
                           pending_warp_op=0x08))
     events = []
-    for offset in range(2, 400):
+    for offset in range(2, 600):
         events = detector.process(
             snap(global_timer=2000 + offset - 1, mario_action=ACT_DISAPPEARED,
                  pending_warp_op=0x08),

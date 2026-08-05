@@ -308,7 +308,9 @@ Usamune restarting the game or loading a save state. A reset closes whatever
 
 One sitting of practice. Sessions group [[attempt]]s for the [[practice log]]
 and for scoping a [[progress graph]]; you can reopen one and keep appending to
-it.
+it. A sitting that recorded no [[attempt]] was not a session, so the trainer
+forgets it at the next startup — its [[journal]] rows stay, because they can
+still govern other sessions' [[attempt]]s.
 
 - **Lives** — the tracker service (`src/sm64_events/tracking/service.py`)
 

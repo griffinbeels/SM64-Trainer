@@ -572,6 +572,36 @@ class Database:
             self._conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
             self._conn.commit()
 
+    def delete_empty_sessions(self, keep_session_id: int) -> list[int]:
+        """Drop the session ROWS that hold no attempt, and return their ids.
+        `keep_session_id` is the live session, which is always empty at boot.
+
+        The journal slice STAYS, and that is the whole design. A session can
+        bank no attempt of its own and still hold events that govern OTHER
+        sessions' attempts — a clear, a strat reclassification, a prune
+        verdict. Measured over the live journal (2026-08-04): cutting the
+        events of every 0-attempt session RESURRECTS 2,167 pruned attempts
+        (233 of them successes) and rewrites the star/strategy of 13 more.
+        So this deletes only the row, which nothing derived reads —
+        `projection.replay` never opens this table, and `views` looks a
+        session up only for attempts that exist.
+
+        Safe to leave the events pointing at a missing row because `sessions`
+        is AUTOINCREMENT: a purged id is retired for good and can never be
+        handed to a future session.
+
+        Reads the `attempts` CACHE, so callers must have projected first."""
+        with self._lock:
+            doomed = [r["id"] for r in self._conn.execute(
+                "SELECT id FROM sessions WHERE id<>?"
+                " AND id NOT IN (SELECT DISTINCT session_id FROM attempts)",
+                (keep_session_id,)).fetchall()]
+            if doomed:
+                self._conn.executemany("DELETE FROM sessions WHERE id=?",
+                                       [(sid,) for sid in doomed])
+                self._conn.commit()
+            return doomed
+
     # -- attempts (derived cache) -------------------------------------------
     def _attempt_params(self, a: Attempt) -> tuple:
         return (a.id, a.session_id, a.course_id, a.star_id, a.strat_tag,

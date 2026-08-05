@@ -2221,3 +2221,58 @@ def test_a_segment_is_never_marked_grab_timed(tmp_path):
                   rta_frames=500, started_utc="", ended_utc="", cleared=False,
                   cleared_reason=None, segment_id=7)
     assert "grab_timed" not in caveats_for({"strat_tag": "Standard"}, seg)
+
+
+# -- the startup purge of sessions that recorded nothing -----------------------
+
+def test_startup_purges_a_session_that_recorded_nothing(tmp_path):
+    """A sitting with no attempts was not a sitting. The purge runs at the
+    END of start(), after the unlabelled-attempt prune, because the prune is
+    itself able to empty a session."""
+    db = Database(tmp_path / "t.db")
+    svc = TrackerService(db, Broadcaster())
+    asyncio.run(svc.start())                       # session 1: nothing happens
+    svc2 = TrackerService(db, Broadcaster())
+    asyncio.run(svc2.start())                      # session 2: purges session 1
+    assert [s["id"] for s in db.sessions()] == [svc2.session_id]
+    assert svc2.session_id not in {1}
+
+
+def test_startup_keeps_a_session_that_banked_an_attempt(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("strat_set", 1, {"course_id": 2, "star_id": 2,
+                                                "strat_tag": "fast"})))
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350)))
+    first = svc.session_id
+    svc2 = TrackerService(db, Broadcaster())
+    asyncio.run(svc2.start())
+    assert {s["id"] for s in db.sessions()} == {first, svc2.session_id}
+
+
+def test_startup_purge_leaves_the_purged_sessions_events_in_the_journal(tmp_path):
+    """Its events still govern the sessions around it — a clear, a strat
+    change or a prune verdict recorded in a session that banked nothing is
+    still a compensating event replay must see."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("target_set", 1, {"course_id": 2, "star_id": 2})))
+    empty = svc.session_id
+    svc2 = TrackerService(db, Broadcaster())
+    asyncio.run(svc2.start())
+    assert [s["id"] for s in db.sessions()] == [svc2.session_id]
+    assert "target_set" in {e.type for e in db.events() if e.session_id == empty}
+
+
+def test_startup_purges_a_session_the_prune_just_emptied(tmp_path):
+    """The unlabelled-attempt prune deletes rows, so a session that had
+    attempts when start() began can have none by the time it ends. Ordering
+    the purge before the prune leaves that row behind on every restart."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350)))           # no strategy: unlabelled
+    unlabelled = svc.session_id
+    assert [a.session_id for a in db.attempts()] == [unlabelled]
+    svc2 = TrackerService(db, Broadcaster())
+    asyncio.run(svc2.start())
+    assert db.attempts() == []
+    assert [s["id"] for s in db.sessions()] == [svc2.session_id]
