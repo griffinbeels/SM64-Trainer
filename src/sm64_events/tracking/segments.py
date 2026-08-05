@@ -639,11 +639,40 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and (p.get("from") is None
                      or (ev.payload["from"] == p["from"]
                          and not ev.payload.get("from_transient", False)))),
-    TriggerType("warp_entered", "You enter a warp/pipe", "Enter the pipe",
-                {"level": {"kind": "level", "required": True}},
-                "in {level}",
+    # The ENTRANCE TOUCH: the frame Mario collides with a painting, portal,
+    # hole or pipe, 77 frames (23 at a pipe) before the destination loads.
+    #
+    # `to` is the destination level, OPTIONAL and unknown-means-yes: the three
+    # legacy pipe definitions carry `warp_entered level=6` with no destination
+    # and keep matching byte-for-byte. It exists because the castle basement
+    # alone hosts five exits (HMC, LLL, SSL, DDD, BitFS), so a
+    # destination-free end condition would let walking into HMC record a false
+    # MIPS Clip success. A payload without the key (every historical row --
+    # detectors/warp.py only began stamping it 2026-08-04) reads as None and
+    # so satisfies only a destination-free clause, which is the conservative
+    # direction: an old journal cannot start matching something new.
+    #
+    # The CARD voice deliberately says TOUCH rather than "Enter": a
+    # `level_enter` clause for the same course renders "Enter Dire, Dire
+    # Docks", and the builder would otherwise offer two conditions with the
+    # same words meaning moments 77 frames apart.
+    TriggerType("warp_entered", "You touch a warp/painting/pipe",
+                "Touch",
+                {"level": {"kind": "level", "required": True},
+                 "to": {"kind": "level", "required": False,
+                        "flow": _DEST_FLOW}},
+                "in {level} going to {to}",
                 lambda p, ev, ctx: ev.type == "warp_entered"
-                and ev.payload["level"] == p["level"],
+                and ev.payload["level"] == p["level"]
+                and (p.get("to") is None
+                     or ev.payload.get("to") == p["to"]),
+                card_template="the {to} entrance",
+                card_fallbacks={"to": "pipe"},
+                # chip_label is reached ONLY by a clause naming no place
+                # (card_step_labels prefers node_short_label), which after
+                # 2026-08-04 means exactly the three legacy pipe defs -- so
+                # "Pipe" is still the right noun for every case that gets
+                # here. A pinned touch chips as its destination ("DDD").
                 chip_label="Pipe"),
     TriggerType("key_grabbed", "You grab a Bowser key / grand star",
                 "Grab the key",
@@ -926,9 +955,11 @@ def arm_level(trig: dict) -> int | None:
 # A type with no branch here, or a branch whose param the clause leaves unset,
 # answers None = "this step names no place" — UNCONSTRAINED, the codebase's
 # unknown-means-yes convention. That is what exempts every Bowser fight
-# (key_grabbed), every pipe entry (warp_entered), every star-ending step and
-# every unpinned `level_exit` from the topological rules, rather than a list of
-# special cases somebody would have to maintain.
+# (key_grabbed), every star-ending step and every unpinned `level_exit` from
+# the topological rules, rather than a list of special cases somebody would
+# have to maintain. A `warp_entered` clause was in that list until 2026-08-04
+# and is now only there when it names no destination (the three legacy pipe
+# defs) — see its branch below.
 #
 # NOTE a `level_enter to=6` step with no `to_subarea` resolves to the bare "6",
 # which is NOT a node in WORLD_EDGES_* (the interior is keyed by subarea), so
@@ -941,6 +972,22 @@ def step_node(clause: dict) -> str | None:
         return topology.node_for(clause.get("to"), clause.get("to_subarea"))
     if kind == "area_enter":
         return topology.node_for(clause.get("level"), clause.get("area"))
+    if kind == "warp_entered":
+        # An ENTRANCE TOUCH fires 77 frames before Mario arrives, so he is
+        # still in the castle when it does -- but the node this STEP leads to
+        # is the destination, and that is what the hop-distance rule measures.
+        # A touch clause therefore resolves exactly as the `level_enter` it
+        # replaced on 56 movements (2026-08-04, task 0081): standing in the
+        # basement DDD is 1 hop, wander to the lobby and it is 2, so Rule 2
+        # fires unchanged.
+        #
+        # Getting this wrong would have been SILENT and total: None means
+        # unconstrained, so re-pointing the whole castle corpus onto a
+        # place-less clause would have switched the topological cancel off for
+        # every movement at once with nothing going red. A destination-free
+        # clause (the three legacy pipe defs) still answers None and stays
+        # unconstrained exactly as it always has.
+        return topology.node_for(clause.get("to"), None)
     return None
 
 

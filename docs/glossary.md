@@ -280,6 +280,17 @@ x-cam starts rather than when the game finishes writing its own result.
 - **Lives** — the star-grab detector
   (`src/sm64_events/detectors/star_grab.py`)
 
+### Entrance touch
+
+The [[frame]] Mario collides with the painting, portal, hole or pipe that
+leads into a course. The game loads that course 77 [[frame]]s later — 23 at a
+pipe — so a [[segment]] measured to the load counts the fade as travelling.
+The trainer ends a movement at the touch instead.
+
+- **Lives** — the warp detector (`src/sm64_events/detectors/warp.py`)
+- **Not** — the moment its [[event]] arrives. A touch cannot name where it
+  leads, so the [[detector]] holds the [[event]] until the game says.
+
 ### Death
 
 Mario dying, which closes the open [[attempt]] with a losing [[outcome]].
