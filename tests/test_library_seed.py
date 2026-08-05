@@ -163,3 +163,50 @@ def test_every_subsection_beats_the_target_it_belongs_to(payload):
             assert subsection["best_cs"] < max(bests), (
                 f"{target['label']} / {subsection['name']}: "
                 f"{subsection['best_cs']} cs against {max(bests)} cs")
+
+
+def test_every_fitted_ladder_is_usable(payload):
+    """Strictly increasing in whole centiseconds, and covering the tiers.
+
+    `ranks/classify.py` compares DISPLAYED centiseconds, so two tiers sharing a
+    cutoff is a tier no time can ever earn."""
+    from sm64_events.ranks.classify import RANK_NAMES
+    checked = 0
+    for target in payload["targets"]:
+        for item in target["approaches"] + target["subsections"]:
+            ladder = item.get("ladder")
+            if not ladder:
+                continue
+            checked += 1
+            cutoffs = [int(round(ladder[r] * 100)) for r in RANK_NAMES if r in ladder]
+            assert cutoffs == sorted(cutoffs), (target["label"], item["name"])
+            assert len(cutoffs) == len(set(cutoffs)), (target["label"], item["name"])
+            assert len(cutoffs) >= 8, (target["label"], item["name"], len(cutoffs))
+    assert checked >= 550, checked
+
+
+def test_a_row_with_enough_times_always_has_a_ladder(payload):
+    """The only reason to lack one is being under the feasibility floor. An
+    accuracy floor was explicitly declined (user, 2026-08-05)."""
+    from sm64_events.library.ladders import MIN_ENTRIES
+    missing = [(t["label"], i["name"], len(i["entries"]))
+               for t in payload["targets"]
+               for i in t["approaches"] + t["subsections"]
+               if not i.get("ladder") and len(i["entries"]) >= MIN_ENTRIES]
+    assert missing == [], missing
+
+
+def test_castle_movements_carry_ladders_despite_having_no_entity(payload):
+    """The whole point of fitting the ROW rather than the entity: a movement
+    keeps its ladder until a segment exists for it."""
+    fitted = [i for t in payload["targets"] if t["miss_reason"] == "castle_movement"
+              for i in t["approaches"] if i.get("ladder")]
+    assert len(fitted) >= 80, len(fitted)
+
+
+def test_the_ladder_model_is_recorded_with_the_data(payload):
+    model = payload["ladder_model"]
+    assert model["source"] == "sheet"
+    assert model["percentiles"]["Mario"] == 6.7
+    assert model["percentiles"]["Bronze"] == 98.2
+    assert model["fitted_rows"] >= 550

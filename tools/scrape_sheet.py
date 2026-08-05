@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from sm64_events.library.audit import load_overrides           # noqa: E402
 from sm64_events.library.build import build, coverage          # noqa: E402
+from sm64_events.library.ladders import fit_payload            # noqa: E402
 from sm64_events.library.mapping import UNMAPPED_EXPECTED      # noqa: E402
 
 OVERRIDES = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
@@ -73,6 +74,10 @@ def main() -> None:
     data = args.source.read_bytes() if args.source else fetch()
     overrides = load_overrides(OVERRIDES)
     payload = build(data, fetched_at=utc_now(), overrides=overrides)
+    # Fitted AFTER the corrections, because a row the audit moved between
+    # approaches and subsections keeps its own times either way, but a row the
+    # audit re-pointed at another entity must be fitted as what it now is.
+    fit_payload(payload)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     # mtime=0 so re-running with no sheet change produces byte-identical output
     # and an empty git diff, rather than a 0.4 MB blob whose only change is a
@@ -99,6 +104,9 @@ def main() -> None:
     print(f"  sheet revision {payload['sheet_revision']}")
     print(f"  {cov['targets']} targets, {cov['mapped']} mapped onto "
           f"{cov['entities']} entities, {cov['unmapped']} unmapped")
+    model = payload["ladder_model"]
+    print(f"  fitted ladders on {model['fitted_rows']} rows "
+          f"({model['rows_too_thin']} too thin, under {model['min_entries']} times)")
     print(f"  {cov['approaches']} approaches, {cov['subsections']} subsections, "
           f"{cov['entries']} entries, {cov['videos']} videos, "
           f"{cov['runners']} runners")
