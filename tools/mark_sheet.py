@@ -33,10 +33,12 @@ drawing its own copy of any of those would be judging something the app does
 not ship. Same technique as tools/hat_sheet.py, which this is modelled on.
 
 What it deliberately does NOT do: mount the practice card's own fixed-height
-chrome. `.objective-card` is welded into practice.js behind a live store, so
-only its `.objective-metrics` row (the row the mark actually lands in) is
-reproduced here. Once a treatment is picked, confirm it in the real card with
-`uv run python tools/contact_sheet.py .objective-card` — that one boots the
+chrome. `.objective-card` was welded into practice.js behind a live store
+(and is gone from the real page since amendment A8, spec practice-log-entity-
+cards — the mark's PB-tag home is a `.log-card` now), so only the metrics
+row's own shape (the row the mark actually lands in) is reproduced here.
+Once a treatment is picked, confirm it in the real card with
+`uv run python tools/contact_sheet.py .log-card` — that one boots the
 real app and is the only thing that can answer "does it still fit at 850px".
 
 Run: uv run python tools/mark_sheet.py

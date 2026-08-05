@@ -136,7 +136,7 @@ _EXPAND_ALL = _script("""
 const practiceBtn = document.querySelector('button.nav-item[title="Practice"]');
 if (practiceBtn && practiceBtn.getAttribute('aria-current') !== 'page') {
   practiceBtn.click();
-  await waitFor(() => !!document.querySelector('.objective-card, .objective-empty'));
+  await waitFor(() => !!document.querySelector('.log-list-card'));
 }
 document.querySelectorAll('.card-collapse[aria-expanded="false"]')
   .forEach((b) => b.click());
@@ -266,8 +266,19 @@ while (stepIndex() >= 0 && stepIndex() < {target_step} && guard < 5) {{
 
 STORIES = [
     Story(name="page", at="", setup=_EXPAND_ALL),
-    Story(name="active-target", at=".objective-card",
-          skip_if="!document.querySelector('.objective-card')"),
+    # Re-pointed 2026-08-04 (amendment A8, spec practice-log-entity-cards):
+    # the Active Target card is DELETED -- ".objective-card" never renders on
+    # the real practice page any more, so `skip_if` here would have started
+    # returning true on EVERY run, forever, the exact "a skip's stated reason
+    # is a claim" trap this file's own history has already fallen into twice
+    # (see the "armed-segment" and "practice-log" stories' comments below).
+    # The entity actually being practised now gets the SAME highlight this
+    # story exists to probe (`.log-card-active`, LogCard's own class), so
+    # this is a repoint rather than a deletion -- the crowded content this
+    # story was written for (rank banners + PB + fold, all in one head row)
+    # still exists, just inside the log's own card.
+    Story(name="active-target", at=".log-card.log-card-active",
+          skip_if="!document.querySelector('.log-card.log-card-active')"),
     # Re-pointed 2026-08-03 (final whole-branch review, spec practice-log-
     # entity-cards): `.seg-waiting` moved off `.objective-card` entirely once
     # the practice index was deleted (Task 6) -- an armed-but-untargeted
@@ -334,9 +345,13 @@ PROJECT = Project(
     page_path="/ui/index.html",
     # The shell paints before the session view lands, and a sweep that starts
     # measuring at that moment reports a page with none of its content on it --
-    # and calls it clean. `.objective-card` exists only once the view has
-    # rendered, so it is the honest "ready" signal.
-    ready_selector=".objective-card",
+    # and calls it clean. Re-pointed from the deleted `.objective-card`
+    # (amendment A8, spec practice-log-entity-cards) to `.log-list-card` --
+    # `PracticeLog` renders that wrapper unconditionally the moment `v`
+    # exists (practice.js's early "still loading" return is the only gate),
+    # so it exists only once the view has genuinely rendered, same honesty
+    # the old selector had.
+    ready_selector=".log-list-card",
     stylesheet=REPO / "src" / "sm64_events" / "ui" / "index.html",
     shell_selectors=SHELL_SELECTORS,
     never_truncate=NEVER_TRUNCATE,

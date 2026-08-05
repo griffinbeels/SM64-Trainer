@@ -599,8 +599,13 @@ margin, which has no derivable geometry.
 **A measured constant is only as good as the state the fixture reached.**
 `--objective-card-narrow` was measured honestly and was 39px short at every
 width in its band, because at the time the fixture could only render the
-card's "Nothing to practice here" state. Re-measure after any change to what a
-fixed-height card can contain: `uv run python tools/measure_objective_card.py`.
+card's "Nothing to practice here" state. `tools/measure_objective_card.py` is
+deleted (amendment A8, spec practice-log-entity-cards) — the real practice
+page never renders `.objective-card` any more, so that tool's whole premise
+(a populated Active Target card reachable via `tools/ui_fixture.py`) is gone.
+The class and its CSS survive only because `ui/tune.js` still builds a
+REPLICA card out of them for the climb inspector; a future re-measure needs a
+tool built against that replica instead.
 
 **The supported minimum width is 850px** (user, 2026-07-29; height is
 unconstrained). One number, in two places that a test compares:

@@ -334,10 +334,9 @@ def _pad_log_with_more_entities(service) -> None:
 def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
     """Arm a real segment definition and leave it ARMED -- the only way to
     reach `sec.armed_detail` non-null (`.seg-waiting`, Task 6, spec
-    2026-07-28-multi-step-segments), which neither the responsive sweep nor
-    `tools/measure_objective_card.py` could reach before this (final review
-    of that spec, finding 2): both only ever seeded a STAR target, and
-    `.seg-waiting` renders only inside `SegmentSection`.
+    2026-07-28-multi-step-segments), which the responsive sweep could not
+    reach before this (final review of that spec, finding 2): it only ever
+    seeded a STAR target.
 
     Defaults to `FIXTURE_SEGMENT` (BitFS Pipe Entry, segment id 6) -- one of
     the ten legacy tricks baked directly into the schema MIGRATION itself
@@ -350,16 +349,15 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
     Does not touch the active target -- an armed segment gets its own SECTION
     regardless (`views.py`'s `seen_segs`: armed OR targeted OR has attempts),
     so this composes with whatever star target `serve_ui` already seeded
-    rather than replacing it. Getting a section is not the same as getting a
-    CARD, though: spec practice-log-entity-cards (2026-08-03) deleted the
-    practice index that used to give every section its own `.objective-card`,
-    and `Practice()` now suppresses every segment PIN while a star target is
-    active (`pinnedSegs = !inContext || starActive ? [] : ...`) -- so an
-    armed-but-not-targeted segment surfaces only as a `.log-card` in the
-    practice log, never as `.objective-card`. Pass `target_segment=segment_id`
-    to `serve_ui` (below) when the segment itself needs to BE that card --
-    retiring the star target is what puts its own `.seg-waiting` back on the
-    fixed-height card (e.g. `tools/measure_objective_card.py`).
+    rather than replacing it. Getting a section is not the same as getting the
+    `.log-card-active` highlight, though: `Practice()` suppresses every
+    segment PIN while a star target is active
+    (`pinnedSegs = !inContext || starActive ? [] : ...`) -- so an armed-but-
+    not-targeted segment surfaces only as an ORDINARY (non-active) `.log-card`
+    in the practice log. Pass `target_segment=segment_id` to `serve_ui`
+    (below) when the segment itself needs to BE the active one -- retiring
+    the star target is what puts its own `.seg-waiting` on a card carrying
+    `.log-card-active` too (amendment A8, spec practice-log-entity-cards).
 
     Real events through the real matcher, not a hand-built row, matching
     BitFS Pipe Entry's own shape (storage/db.py's v4 INSERT: start
@@ -428,11 +426,11 @@ def _target_segment(base: str, segment_id: int) -> None:
     """Make an already-armed segment the ACTIVE target, retiring whatever
     star `_seed_target` set.
 
-    Since the practice-log-entity-cards branch (2026-08-03), this is the ONLY
-    way to put a segment's own `.objective-card` on the page at all --
-    `Practice()` suppresses every segment pin while a star target is active,
-    so `_arm_segment` alone (which deliberately never touches the target) can
-    no longer reach that card; the armed segment shows up only as a
+    This is what puts the `.log-card-active` highlight (amendment A8, spec
+    practice-log-entity-cards) on the segment's own practice-log card instead
+    of the star's -- `Practice()` suppresses every segment pin while a star
+    target is active, so `_arm_segment` alone (which deliberately never
+    touches the target) leaves the segment as an ordinary, non-active
     `.log-card`. Retiring the star is the server's own rule (one active
     target, mutually exclusive kinds), and because the segment stays ARMED
     throughout, its section keeps `armed_detail` non-null through the swap --
@@ -654,17 +652,16 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
     `_arm_segment`) -- additive, not a replacement for `target`: an armed
     segment gets its own SECTION regardless of which kind is the active
     target, so a star target and an armed segment coexist on the same page.
-    It does NOT get its own `.objective-card` unless it is also the active
-    target (see `target_segment` below) -- `Practice()` suppresses every
-    segment pin while a star target is active, so an armed-but-untargeted
-    segment surfaces only as a `.log-card` in the practice log.
+    It does NOT carry the `.log-card-active` highlight unless it is also the
+    active target (see `target_segment` below) -- `Practice()` suppresses
+    every segment pin while a star target is active, so an armed-but-
+    untargeted segment surfaces only as an ordinary `.log-card`.
 
     `target_segment` additionally makes an armed segment the ACTIVE target
     (see `_target_segment`), retiring whatever star `target`/`_seed_target`
-    set. Pass the SAME id as `arm_segment` to reach the one state that still
-    puts two rank banners AND a `.seg-waiting` row on the SAME
-    `.objective-card` post practice-log-entity-cards (2026-08-03) --
-    `tools/measure_objective_card.py` is the caller this exists for.
+    set. Pass the SAME id as `arm_segment` to reach the one state that puts
+    two rank banners AND a `.seg-waiting` row on the SAME `.log-card`, the
+    one also carrying `.log-card-active`.
 
     `seed_editor_fixtures` additionally POSTs two saved, byte-identical
     segments purpose-built for opening in the Segments editor (see
