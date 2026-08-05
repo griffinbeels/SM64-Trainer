@@ -156,6 +156,23 @@ def spawn(level):
     return {"type": "spawned", "level": level}
 
 
+def moment(kind, level=None, area=None, ordinal=None):
+    """A mid-course boundary: a door opening, a textbox firing.
+
+    `kind` is a row in detectors/moment.py's MOMENTS registry, which is the
+    one place moments are named -- this helper never carries a list of its
+    own. `ordinal` unset means any occurrence.
+    """
+    clause = {"type": "moment_reached", "kind": kind}
+    if level is not None:
+        clause["level"] = level
+    if area is not None:
+        clause["area"] = area
+    if ordinal is not None:
+        clause["ordinal"] = ordinal
+    return clause
+
+
 # --- route steps -----------------------------------------------------------
 
 def star(course, star_id, label):

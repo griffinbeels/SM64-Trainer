@@ -202,6 +202,15 @@ def _spawn_src(c: dict) -> str:
     return f"spawn({c['level']})"
 
 
+def _moment_src(c: dict) -> str:
+    _require(c, ("kind",), "moment")
+    args = [repr(c["kind"])]
+    for name in ("level", "area", "ordinal"):
+        if c.get(name) is not None:
+            args.append(f"{name}={c[name]}")
+    return f"moment({', '.join(args)})"
+
+
 def _enter_entrance_src(c: dict) -> str:
     _require(c, ("to",), "enter_entrance")
     return f"enter_entrance({c['to']})"
@@ -217,6 +226,7 @@ _CLAUSE_BUILDERS = {
     "key_grabbed": _grab_key_src,
     "attempt_anchor": _anchor_src,
     "spawned": _spawn_src,
+    "moment_reached": _moment_src,
 }
 
 

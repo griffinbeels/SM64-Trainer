@@ -73,6 +73,7 @@ the labelled STREAM, deciding what to show, not what CAN be shown.
 from collections.abc import Callable
 
 from sm64_events.core.timefmt import format_igt
+from sm64_events.detectors.moment import MOMENTS
 from sm64_events.memory.addresses import (CASTLE_AREA_NAMES, LEVEL_NAMES,
                                           course_name, star_name)
 
@@ -140,6 +141,29 @@ def _key_grabbed(payload: dict) -> str | None:
     return f"Grabbed {_KEY_WHICH_LABELS.get(which, 'a key')} in {_level_name(level)}"
 
 
+_MOMENT_LABELS = {m.kind: m.label for m in MOMENTS}
+
+
+def _moment_reached(payload: dict) -> str | None:
+    """"Open a door (#5) in Big Boo's Haunt" — the sentence the builder's
+    picker shows for a moment you can point at.
+
+    The ORDINAL is printed only past the first, because most subsections have
+    one unambiguous boundary and "#1" on every row is noise. Where it matters
+    it matters a lot: the fifth door in Big Boo's Haunt is a different pick
+    from the fourth, and the number is the only thing distinguishing them.
+    """
+    kind = payload.get("kind")
+    if kind is None:
+        return None
+    what = _MOMENT_LABELS.get(kind, kind)
+    where = _level_name(payload.get("level"))
+    ordinal = payload.get("ordinal")
+    if ordinal and ordinal > 1:
+        return f"{what} (#{ordinal}) in {where}"
+    return f"{what} in {where}"
+
+
 def _spawned(payload: dict) -> str | None:
     level = payload.get("level")
     if level is None:
@@ -180,6 +204,7 @@ _LABELERS: dict[str, Callable[[dict], str | None]] = {
     "warp_entered": _warp_entered,
     "key_grabbed": _key_grabbed,
     "spawned": _spawned,
+    "moment_reached": _moment_reached,
     "practice_reset": _practice_reset,
     "state_loaded": _state_loaded,
     "game_reset": _game_reset,
@@ -224,6 +249,7 @@ TRIGGER_JOURNAL_TYPES: dict[str, frozenset[str]] = {
     "key_grabbed": frozenset({"key_grabbed"}),
     "star_grabbed": frozenset({"star_collected"}),
     "spawned": frozenset({"spawned"}),
+    "moment_reached": frozenset({"moment_reached"}),
     "attempt_anchor": frozenset({"practice_reset", "state_loaded"}),
     "reset_game": frozenset({"game_reset"}),
 }

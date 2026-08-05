@@ -344,7 +344,14 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           region_for_node, star_count,
                                           star_name, world_connections,
                                           world_regions)
+from sm64_events.detectors.moment import MOMENTS
 from sm64_events.tracking import topology
+
+# The moment vocabulary, read as a SET for validation. detectors/moment.py's
+# MOMENTS is the registry; this file never names a kind of its own, so adding
+# one stays a single row over there.
+_MOMENT_KINDS = frozenset(m.kind for m in MOMENTS)
+_MOMENT_LABELS = {m.kind: m.label for m in MOMENTS}
 
 _ANCHOR_TYPES = ("practice_reset", "state_loaded")  # attempt-anchor events
 
@@ -707,6 +714,53 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 # but no specific star ("Grab a star in <course>").
                 card_template="{star} in {course}",
                 card_fallbacks={"star": "a star"}),
+    # THE SUBSECTION TRIGGER, and the only one in this registry that fires
+    # without Mario going anywhere -- every other type is a place change or a
+    # collection, which is why the journal was empty inside a course and a
+    # subsection could not be authored at all (task 0087).
+    #
+    # It names no kind of its own: `kind` is matched against the payload, so
+    # inventing a moment stays ONE ROW in detectors/moment.py's MOMENTS and
+    # never touches this file. That indirection is the user's requirement --
+    # "we need this to be flexible so that we allow for the invention and
+    # innovation of new sections as needed" (2026-08-05).
+    #
+    # `ordinal` unset means ANY occurrence, which is what a subsection with
+    # one unambiguous boundary wants; set, it is the Nth since the attempt
+    # opened. It exists for START triggers: waypoints already order everything
+    # after the arm, but "the 5th door in Big Boo's Haunt" is a start and a
+    # start has no arm to count from.
+    # CARD LABEL IS DELIBERATELY EMPTY, and it is the only type where that is
+    # right. Every other card_label is the verb ("Enter", "Grab") because the
+    # type fixes the verb and the params fill in the object. Here the VERB
+    # varies per moment and lives on the moment's own label ("Open a door",
+    # "Trigger a textbox"), so a type-level verb can only be prepended to a
+    # phrase that already has one -- "Reach Open a door" was the first draft.
+    # An empty label makes the card read "Open a door #5 in Big Boo's Haunt",
+    # the imperative step the card voice asks for. tests/test_segments.py's
+    # card-label containment check is vacuous for an empty string, so that
+    # test names this type explicitly and asserts the moment's own label leads
+    # the sentence instead -- the guard keeps its teeth rather than passing by
+    # accident.
+    TriggerType("moment_reached", "A moment happens", "",
+                {"kind": {"kind": "moment", "required": True},
+                 "ordinal": {"kind": "int", "required": False},
+                 "level": {"kind": "level", "required": False},
+                 "area": {"kind": "subarea", "required": False}},
+                "{kind} #{ordinal} in {level} {area}",
+                lambda p, ev, ctx: ev.type == "moment_reached"
+                and ev.payload.get("kind") == p["kind"]
+                and (p.get("ordinal") is None
+                     or ev.payload.get("ordinal") == p["ordinal"])
+                and (p.get("level") is None
+                     or ev.payload.get("level") == p["level"])
+                and (p.get("area") is None
+                     or ev.payload.get("area") == p["area"]),
+                # The one-line step track wants a thing, not a phrase; a
+                # moment clause names a place so node_short_label normally
+                # answers first, and this is the fallback for one that does
+                # not pin a level.
+                chip_label="Moment"),
     TriggerType("spawned", "You spawn into the game", "Spawn",
                 {"level": {"kind": "level", "required": False}},
                 "in {level}",
@@ -756,6 +810,11 @@ def _resolve_param(kind: str, value, clause: dict) -> str:
         course = clause.get("course")
         return star_name(course, value) if course is not None \
             else f"Star {value + 1}"
+    if kind == "moment":
+        # The moment's own label, never its wire key: detectors/moment.py
+        # owns the wording, so "Open a door" cannot drift from what the
+        # builder's dropdown and the timeline's sentence already say.
+        return _MOMENT_LABELS.get(value, str(value))
     return str(value)
 
 
@@ -988,6 +1047,15 @@ def step_node(clause: dict) -> str | None:
         # every movement at once with nothing going red. `warp_entered` keeps
         # answering None and stays unconstrained, as it always has.
         return topology.node_for(clause.get("to"), None)
+    if kind == "moment_reached":
+        # A moment names where it HAPPENS, so it places exactly like an
+        # area_enter. Answering None here would mean UNCONSTRAINED and would
+        # switch the topological wrong-turn cancel off for every subsection at
+        # once, with nothing going red -- the silent, total failure task 0081
+        # documents for `warp_entered`. A clause naming no level still answers
+        # None, which is the same "no constraint" every place-less clause
+        # already gives and is a real answer rather than a gap.
+        return topology.node_for(clause.get("level"), clause.get("area"))
     return None
 
 
@@ -1188,6 +1256,9 @@ _PRECONDITION_PARAM: dict[str, str] = {
     "key_grabbed": "level",
     "attempt_anchor": "level",
     "spawned": "level",
+    # A moment fires where Mario is standing, so its `level` is both where it
+    # happens and where it must be firable from.
+    "moment_reached": "level",
 }
 
 
@@ -1318,6 +1389,8 @@ _ORIGIN_PARAMS: dict[str, tuple[str, str | None]] = {
     "spawned": ("level", None),
     "warp_entered": ("level", None),
     "key_grabbed": ("level", None),
+    # A subsection is practiced where its first moment fires (task 0087).
+    "moment_reached": ("level", "area"),
 }
 
 ANYWHERE_LABEL = "Anywhere"
@@ -1807,7 +1880,20 @@ def _check_clause(clause: dict, registry: dict, what: str) -> None:
     for name, meta in spec.params.items():
         if meta["required"] and clause.get(name) is None:
             raise ValueError(f"{kind}: missing required param {name!r}")
-        if clause.get(name) is not None and not isinstance(clause[name], int):
+        if clause.get(name) is None:
+            continue
+        # Every param in this registry was an integer id until 2026-08-05, so
+        # this check simply demanded one. A MOMENT kind is a name out of
+        # detectors/moment.py's registry instead, so the check dispatches on
+        # the param's own declared kind. Deliberately narrow: one declared
+        # kind is exempted, and a string level is still the mistake it always
+        # was (pinned by test_moment_trigger.py).
+        if meta["kind"] == "moment":
+            if clause[name] not in _MOMENT_KINDS:
+                raise ValueError(
+                    f"{kind}: unknown moment {clause[name]!r} — known moments "
+                    f"are {sorted(_MOMENT_KINDS)}")
+        elif not isinstance(clause[name], int):
             raise ValueError(f"{kind}: param {name!r} must be an integer")
     extras = set(clause) - {"type"} - set(spec.params)
     if extras:
@@ -1945,6 +2031,11 @@ def vocab() -> dict:
         # position 0 stays loose.
         "match_modes": [MATCH_MODES["loose"], MATCH_MODES["strict"],
                         MATCH_MODES["exclusive"]],
+        # The moment vocabulary a `moment_reached` clause's `kind` selects
+        # from. Served rather than hard-coded in the builder for the same
+        # reason levels and courses are: detectors/moment.py owns the list,
+        # and a new moment must reach the dropdown without a JS edit.
+        "moments": [{"key": m.kind, "label": m.label} for m in MOMENTS],
         "levels": {str(k): v for k, v in sorted(LEVEL_NAMES.items())},
         "castle_areas": {str(k): v for k, v in CASTLE_AREA_NAMES.items()},
         "courses": {str(k): v for k, v in COURSE_NAMES.items()},

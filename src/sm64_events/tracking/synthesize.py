@@ -111,6 +111,30 @@ def _star_collected_params(payload: dict) -> dict | None:
     return {"course": course_id, "star": star_id}
 
 
+def _moment_params(payload: dict) -> dict | None:
+    """A moment you pointed at -> the clause that requires it.
+
+    The ORDINAL is carried through DELIBERATELY. A recorded moment means the
+    Nth one the player actually did, and dropping it would silently re-point
+    a synthesized subsection at the FIRST occurrence instead of theirs -- the
+    difference between "from the 5th door in Big Boo's Haunt" and "from the
+    first door", which is the whole reason ordinals exist.
+
+    `level` is likewise pinned rather than left open: a moment synthesized
+    from real play happened somewhere, and an unpinned clause answers None
+    from step_node, which means UNCONSTRAINED to the topological cancel.
+    """
+    kind = payload.get("kind")
+    if kind is None:
+        return None
+    params = {"kind": kind}
+    if payload.get("level") is not None:
+        params["level"] = payload["level"]
+    if payload.get("ordinal"):
+        params["ordinal"] = payload["ordinal"]
+    return params
+
+
 def _level_field_params(payload: dict) -> dict | None:
     # warp_entered / key_grabbed / spawned all pin the SAME single field --
     # TRIGGERS gives each of them exactly one param, named "level".
@@ -158,6 +182,8 @@ _SYNTH_PARAMS: dict[str, dict] = {
                      "build": _star_collected_params},
     "spawned": {"journal_type": "spawned", "role": None,
                 "build": _level_field_params},
+    "moment_reached": {"journal_type": "moment_reached", "role": None,
+                       "build": _moment_params},
     "reset_game": {"journal_type": "game_reset", "role": None,
                    "build": _no_params},
 }

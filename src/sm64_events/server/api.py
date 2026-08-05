@@ -401,7 +401,7 @@ def _http(e: Exception) -> HTTPException:
 # type the corpus doesn't back.
 _TIMELINE_STEP_TYPES = frozenset(
     {"level_changed", "star_collected", "warp_entered", "key_grabbed",
-     "area_changed"})
+     "area_changed", "moment_reached"})
 
 
 def _is_default_timeline_row(row) -> bool:

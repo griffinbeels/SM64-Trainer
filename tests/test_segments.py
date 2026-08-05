@@ -7,6 +7,7 @@ import pytest
 from sm64_events.memory.addresses import COURSE_NAMES, LEVEL_NAMES
 from sm64_events.storage.db import EventRow
 from sm64_events.tracking import segments as segments_module
+from sm64_events.detectors.moment import MOMENTS
 from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
                                            arms_ambiently,
                                            card_step_labels,
@@ -140,7 +141,11 @@ def test_every_trigger_template_resolves_cleanly():
     waiting_for_sentence; deleted Task 7, 2026-07-28, alongside that
     function -- spec.template's own placeholder names are still checked
     below since it is card_template's fallback and so still load-bearing.)"""
-    kind_samples = {"level": 6, "subarea": 1, "course": 1, "star": 0}
+    kind_samples = {"level": 6, "subarea": 1, "course": 1, "star": 0,
+                    # a moment kind is a NAME out of the registry, not
+                    # an id -- read from MOMENTS so removing a moment
+                    # can never leave this probe pointing at a ghost.
+                    "int": 3, "moment": MOMENTS[0].kind}
     for spec in TRIGGERS.values():
         card_named = set(re.findall(r"\{(\w+)\}", spec.card_template or spec.template))
         assert card_named <= set(spec.params), \
@@ -154,7 +159,19 @@ def test_every_trigger_template_resolves_cleanly():
         card_sentence = card_waiting_for_sentence(d, 0)
         assert "{" not in card_sentence and "}" not in card_sentence, \
             f"{spec.key}: leftover template token in card phrasing {card_sentence!r}"
-        assert spec.card_label in card_sentence
+        if spec.card_label:
+            assert spec.card_label in card_sentence
+        else:
+            # `moment_reached` carries an EMPTY card_label on purpose (its
+            # verb varies per moment and rides the moment's own label), and
+            # `"" in anything` is vacuously true -- which would let this
+            # guard pass while the phrasing rotted. Assert the thing the
+            # empty label delegates to instead, so the check keeps teeth.
+            assert spec.key == "moment_reached", \
+                f"{spec.key}: empty card_label with no documented reason"
+            assert card_sentence.startswith(MOMENTS[0].label), \
+                f"{spec.key}: card phrasing {card_sentence!r} does not lead " \
+                "with the moment's own label"
 
 
 def test_every_card_fallback_param_resolves_cleanly_when_unset():
@@ -166,7 +183,11 @@ def test_every_card_fallback_param_resolves_cleanly_when_unset():
     assert the fallback text appears with no leftover token. Runs for every
     TriggerType that declares a fallback today (just star_grabbed), so a
     future type gets the same coverage for free rather than a bespoke test."""
-    kind_samples = {"level": 6, "subarea": 1, "course": 1, "star": 0}
+    kind_samples = {"level": 6, "subarea": 1, "course": 1, "star": 0,
+                    # a moment kind is a NAME out of the registry, not
+                    # an id -- read from MOMENTS so removing a moment
+                    # can never leave this probe pointing at a ghost.
+                    "int": 3, "moment": MOMENTS[0].kind}
     fallback_specs = [s for s in TRIGGERS.values() if s.card_fallbacks]
     assert fallback_specs, "no TriggerType declares card_fallbacks -- update this probe"
     for spec in fallback_specs:

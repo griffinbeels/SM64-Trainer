@@ -125,6 +125,9 @@ def test_every_labellable_type_produces_a_clean_sentence():
         jev(36, "practice_reset", 0, {"igt_frames_before": 900}),
         jev(37, "state_loaded", 0, {"igt_frames_restored": 450}),
         jev(38, "game_reset", 0, {}),
+        jev(39, "moment_reached", 0, {"kind": "door_open", "ordinal": 5,
+                                      "level": 4, "area": 1,
+                                      "action": 0x00001320}),
     ]
     assert {r.type for r in rows} == set(LABELLABLE_TYPES)
     for row in rows:
