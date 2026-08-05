@@ -25,7 +25,7 @@ BOWSER_COURSES = ((16, 5, 8), (17, 6, 9), (18, 7, 10))
 # The 100-coin star is star 6 on every main course (addresses.star_count).
 HUNDRED_COIN_STAR = 6
 
-UNMAPPED_EXPECTED = frozenset({"stage_rta", "castle_movement", "not_a_target"})
+UNMAPPED_EXPECTED = frozenset({"route", "castle_movement", "not_a_target"})
 
 _NUMBERED = re.compile(r"^\s*(\d{1,2})\.\s")
 _STAGE_RTA = re.compile(r"\bRTA\b")
@@ -110,7 +110,11 @@ KNOWN_NON_TARGETS = {
 
 def miss_reason(section: str, label: str, group: str = "") -> str:
     if _STAGE_RTA.search(label or "") and section_course(section) is not None:
-        return "stage_rta"
+        # A stage RTA spans many stars in a chosen order, which is a ROUTE in
+        # this project's vocabulary rather than a way of doing one star. Its
+        # sibling rows are different star ORDERS, not different approaches to
+        # one target (user, 2026-08-05).
+        return "route"
     if (group or section or "").startswith("Castle Movements"):
         return "castle_movement"
     if (section, _PARENTHETICAL.sub("", label or "").strip()) in KNOWN_NON_TARGETS:

@@ -26,7 +26,7 @@ TARGET_CATEGORIES = (
     "star",             # a star we practice; carries an entity key
     "segment",          # a segment we model; carries an entity key
     "castle_movement",  # a movement the sheet times and we do not model
-    "stage_rta",        # a whole-course run, not a target here
+    "route",            # spans many stars in a chosen order -- a stage RTA
     "subsection",       # not a target at all -- part of the target above it
     "not_a_target",     # something real that we will never practice
 )
@@ -99,7 +99,8 @@ def save_overrides(path, overrides: dict) -> None:
             if not isinstance(value, dict):
                 continue
             kept = {k: v for k, v in value.items()
-                    if k in ("category", "entity_key", "kind", "reason", "reviewed") and v not in (None, "")}
+                    if k in ("category", "entity_key", "kind", "reason")
+                    and v not in (None, "")}
             if kept:
                 clean[scope][key] = kept
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -113,7 +114,14 @@ def apply_overrides(payload: dict, overrides: dict) -> dict:
 
     Row kinds move BETWEEN a target's two lists rather than being stamped in
     place, so a consumer that only reads `approaches` cannot see a row the
-    audit demoted -- the whole point of the correction."""
+    audit demoted -- the whole point of the correction.
+
+    A row may also carry its OWN entity, because one sheet target can hold
+    rows belonging to two of ours: under "Bowser in the Dark World Red Coins"
+    the `Red coin star Xcam` rows are the 8-red-coin STAR, while the longer
+    parent rows include the travel to the pipe and belong to the pipe segment
+    (user, 2026-08-05). A row with no entity of its own inherits its target's,
+    so the common case stays silent."""
     targets = overrides.get("targets") or {}
     rows = overrides.get("rows") or {}
     for target in payload["targets"]:
@@ -138,6 +146,11 @@ def apply_overrides(payload: dict, overrides: dict) -> dict:
                 moved_up.append(item)
         target["approaches"].extend(moved_up)
         target["subsections"].extend(moved_down)
+        for item in target["approaches"] + target["subsections"]:
+            own = (rows.get(row_key(target, item["name"], item["ids"])) or {}
+                   ).get("entity_key")
+            if own:
+                item["entity_key"] = own
     return payload
 
 
@@ -150,7 +163,14 @@ def _row_view(target, item, kind, basis, overrides):
                       if basis and item["best_cs"] else None),
             "entries": len(entries),
             "videos": sum(1 for e in entries if e["video"]),
+            # Up to three examples, because a sheet link dies without warning
+            # -- privated, deleted, purged from the host. Coverage inside a row
+            # is near total, so a dead link is a nuisance rather than a hole
+            # (user, 2026-08-05), but offering exactly one makes it look like
+            # the library has nothing.
+            "videos_sample": [e["video"] for e in entries if e["video"]][:3],
             "video": next((e["video"] for e in entries if e["video"]), None),
+            "entity_key": item.get("entity_key"),
             "override": (overrides.get("rows") or {}).get(key)}
 
 

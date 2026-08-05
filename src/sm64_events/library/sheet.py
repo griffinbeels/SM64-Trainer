@@ -64,6 +64,16 @@ SUBHEADER_MARK = "★"
 # subsections reach 0.940 with a median of 0.507. 0.70 sits in the gap.
 SUBSECTION_VETO_RATIO = 0.70
 
+# "100 coin star Xcam", "Red coin star Xcam": the x-cam of a STAR GRAB, which
+# is a whole-target time for the star the target maps to -- not a part of it.
+# These carry the union of several approaches' ids ("[1|2]"), so the id rule
+# calls them subsections, and 25 of them were wrong until the human corrected
+# every one by hand (2026-08-05). The pattern matches those 25 exactly and
+# nothing else: every OTHER Xcam row on the sheet times a door, a text box or
+# an entry ("Whomp text Xcam", "Attic door Xcam", "Cannon entry Xcam"), which
+# genuinely are parts. Named vocabulary rather than styling, so unlike bold it
+# cannot drift without the row changing meaning.
+_STAR_XCAM = re.compile(r"\bstar Xcam\b", re.I)
 _ROW = re.compile(r"^\s*\[([\d|]+)\]\s*(.+?)\s*$")
 _TIME = re.compile(r"^(?:(\d{1,2}):)?(\d{1,3})\.(\d{2})$")
 _VERSION = re.compile(r"\((JP|US)\)\s*$", re.I)
@@ -127,6 +137,9 @@ def _classify(ids, seen, grey, best_cs, basis_cs, exempt, label, row) -> str:
     """One row's kind. `basis_cs` is the best of the approaches this row's own
     ids name, falling back to the target's best approach so far when the row
     introduces an id nobody has timed yet."""
+    if _STAR_XCAM.search(label):
+        # A star grab IS the target, however many approaches share the row.
+        return "approach"
     if ids <= seen:
         return "subsection"                          # definitive, one-way
     kind = "subsection" if grey else "approach"

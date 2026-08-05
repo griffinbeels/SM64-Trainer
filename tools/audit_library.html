@@ -101,6 +101,8 @@ const fmt = cs => cs == null ? "—"
 const effCat = t => (OV.targets[t.key]||{}).category ?? t.computed.category;
 const effEnt = t => (OV.targets[t.key]||{}).entity_key ?? t.computed.entity_key;
 const effKind = r => (OV.rows[r.key]||{}).kind ?? r.kind;
+// A row with no entity of its own belongs to whatever its target belongs to.
+const effRowEnt = (t, r) => (OV.rows[r.key]||{}).entity_key ?? r.entity_key ?? "";
 const changed = t => !!OV.targets[t.key] || t.rows.some(r => !!OV.rows[r.key]);
 
 function markDirty(){
@@ -116,9 +118,11 @@ function setTarget(t, field, value){
   markDirty(); paintCard(t);
 }
 
-function setRow(t, r, kind){
-  if (kind === r.kind) delete OV.rows[r.key];
-  else OV.rows[r.key] = {...(OV.rows[r.key]||{}), kind};
+function setRow(t, r, field, value){
+  const cur = {...(OV.rows[r.key]||{})};
+  const base = field === "kind" ? r.kind : (r.entity_key || "");
+  if (value === base || value === "") delete cur[field]; else cur[field] = value;
+  if (Object.keys(cur).length) OV.rows[r.key] = cur; else delete OV.rows[r.key];
   markDirty(); paintCard(t);
 }
 
@@ -143,6 +147,7 @@ function paintCard(t){
     row.className = kind === "subsection" ? "sub" : "";
     if (r.near) row.classList.add("flag");
     row.querySelector(".kind").value = kind;
+    row.querySelector(".rowent").value = effRowEnt(t, r);
   }
 }
 
@@ -189,7 +194,7 @@ function card(t){
   const table = document.createElement("table");
   table.innerHTML = `<thead><tr><th>row</th><th>ids</th><th class="num">best</th>
     <th class="num">vs basis</th><th class="num">times</th><th class="num">videos</th>
-    <th>example</th><th>is a</th></tr></thead>`;
+    <th>examples</th><th>is a</th><th>belongs to</th></tr></thead>`;
   const body = document.createElement("tbody");
   for (const r of t.rows) {
     const tr = document.createElement("tr");
@@ -199,7 +204,7 @@ function card(t){
       (effKind(r) === "subsection" && r.ratio > 0.85) ? "high" : "";
     tr.innerHTML = `<td class="rn"></td><td class="sec"></td>
       <td class="num"></td><td class="num ratio ${ratioClass}"></td>
-      <td class="num"></td><td class="num"></td><td class="ex"></td><td></td>`;
+      <td class="num"></td><td class="num"></td><td class="ex"></td><td></td><td></td>`;
     const cells = tr.children;
     cells[0].textContent = r.name;
     cells[1].textContent = "[" + r.ids.join("|") + "]";
@@ -207,17 +212,31 @@ function card(t){
     cells[3].textContent = r.ratio == null ? "—" : r.ratio.toFixed(2);
     cells[4].textContent = r.entries;
     cells[5].textContent = r.videos;
-    if (r.video) {
-      const a = document.createElement("a");
-      a.href = r.video; a.target = "_blank"; a.rel = "noreferrer";
-      a.textContent = "watch";
-      cells[6].appendChild(a);
+    // Several links, because sheet videos go private or get deleted without
+    // warning; one dead link should not read as "no example exists".
+    const samples = r.videos_sample && r.videos_sample.length ? r.videos_sample
+                  : (r.video ? [r.video] : []);
+    if (samples.length) {
+      samples.forEach((url, i) => {
+        const a = document.createElement("a");
+        a.href = url; a.target = "_blank"; a.rel = "noreferrer";
+        a.textContent = i === 0 ? "watch" : String(i + 1);
+        cells[6].appendChild(a);
+        cells[6].appendChild(document.createTextNode(" "));
+      });
     } else cells[6].textContent = "—";
     const sel = document.createElement("select");
     sel.className = "kind";
     for (const k of DATA.row_kinds) sel.appendChild(option(k, k, k === effKind(r)));
-    sel.onchange = () => setRow(t, r, sel.value);
+    sel.onchange = () => setRow(t, r, "kind", sel.value);
     cells[7].appendChild(sel);
+    const rowEnt = document.createElement("select");
+    rowEnt.className = "rowent";
+    rowEnt.appendChild(option("", "— same as target —", !effRowEnt(t, r)));
+    for (const e of DATA.entities)
+      rowEnt.appendChild(option(e.key, e.name, e.key === effRowEnt(t, r)));
+    rowEnt.onchange = () => setRow(t, r, "entity_key", rowEnt.value);
+    cells[8].appendChild(rowEnt);
     body.appendChild(tr);
   }
   table.appendChild(body);

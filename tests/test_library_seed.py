@@ -49,6 +49,27 @@ def test_every_audit_key_is_unique(payload):
         [k for k in rows if rows.count(k) > 1][:5]
 
 
+def test_every_star_xcam_row_is_an_approach(payload):
+    """A "… star Xcam" row times a STAR GRAB, so it is a whole-target time for
+    the star its target maps to -- not a part of one. All 25 were wrong until
+    the human corrected each by hand (2026-08-05); the rule now makes them
+    unaided, and this is what goes red if it regresses."""
+    subsections = [(t["label"], s["name"]) for t in payload["targets"]
+                   for s in t["subsections"] if "star xcam" in s["name"].lower()]
+    assert subsections == [], subsections
+    approaches = [a for t in payload["targets"] for a in t["approaches"]
+                  if "star xcam" in a["name"].lower()]
+    assert len(approaches) >= 25, len(approaches)
+
+
+def test_ordinary_xcam_rows_are_still_subsections(payload):
+    """The rule is "star Xcam", not "Xcam" -- a door or a text box is a part.
+    Without this the previous test passes for the wrong reason."""
+    parts = [s["name"] for t in payload["targets"] for s in t["subsections"]
+             if "xcam" in s["name"].lower()]
+    assert len(parts) >= 15, parts
+
+
 def test_no_unreviewed_unknown_targets(payload):
     unknown = [f"{t['section']} | {t['label']}" for t in payload["targets"]
                if t["entity_key"] is None and t["miss_reason"] == "unknown"]

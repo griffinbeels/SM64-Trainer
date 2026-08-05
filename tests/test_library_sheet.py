@@ -132,6 +132,30 @@ def test_a_grey_row_that_is_slower_than_its_target_also_raises():
         sheet.read_rows(data)
 
 
+def test_a_star_xcam_row_is_an_approach_despite_reusing_ids():
+    # "100 coin star Xcam" and "Red coin star Xcam" carry the UNION of several
+    # approaches' ids, so the one-way id rule called all 25 of them
+    # subsections. They time a STAR GRAB, which is a whole-target time for the
+    # star the target maps to (user corrected every one by hand, 2026-08-05).
+    data = _rows([
+        ("[1] Red Coins on the Floating Isle + 100c (JP)", True, BLACK, "57.00", {}),
+        (" [2] Red Coins on the Floating Isle + 100c (US)", False, BLACK, "56.70", {}),
+        ("[1|2] 100 coin star Xcam", False, GREY, "51.80", {}),
+    ])
+    assert [r.kind for r in sheet.read_rows(data)] == [
+        "approach", "approach", "approach"]
+
+
+def test_an_ordinary_xcam_row_is_still_a_subsection():
+    # Every OTHER Xcam row on the sheet times a door, a text box or an entry,
+    # and those genuinely are parts. The rule is "star Xcam", not "Xcam".
+    data = _rows([
+        ("[1] Chip off Whomp's Block (JP)", True, BLACK, "29.76", {}),
+        ("[1] Whomp text Xcam (JP)", False, GREY, "9.83", {}),
+    ])
+    assert [r.kind for r in sheet.read_rows(data)] == ["approach", "subsection"]
+
+
 def test_a_legitimately_faster_approach_is_not_vetoed():
     # Every real alternate strategy is faster than the one before it; the
     # slowest non-RTA approach row on the live sheet sits at 0.770 of its

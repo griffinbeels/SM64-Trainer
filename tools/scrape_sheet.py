@@ -50,6 +50,20 @@ def utc_now() -> str:
             .isoformat().replace("+00:00", "Z"))
 
 
+def _redundant(data: bytes, overrides: dict) -> int:
+    """How many saved corrections the parser would now make by itself."""
+    from sm64_events.library.audit import row_key
+    plain = build(data, fetched_at="")
+    kinds = {}
+    for target in plain["targets"]:
+        for item in target["approaches"]:
+            kinds[row_key(target, item["name"], item["ids"])] = "approach"
+        for item in target["subsections"]:
+            kinds[row_key(target, item["name"], item["ids"])] = "subsection"
+    return sum(1 for key, verdict in overrides["rows"].items()
+               if verdict.get("kind") and kinds.get(key) == verdict["kind"])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--from", dest="source", type=Path,
@@ -74,6 +88,14 @@ def main() -> None:
         print(f"  applied {applied} audit corrections from "
               f"{OVERRIDES.name} ({len(overrides['targets'])} targets, "
               f"{len(overrides['rows'])} rows)")
+        redundant = _redundant(data, overrides)
+        if redundant:
+            # A correction the parser now makes on its own says the CLASS was
+            # fixed rather than the instance patched. Reported, never deleted:
+            # it is a human's ruling, and it is the thing that goes red if the
+            # rule ever regresses.
+            print(f"  {redundant} of them the parser now produces unaided "
+                  f"-- the rule behind them is in the code, not just the file")
     print(f"  sheet revision {payload['sheet_revision']}")
     print(f"  {cov['targets']} targets, {cov['mapped']} mapped onto "
           f"{cov['entities']} entities, {cov['unmapped']} unmapped")

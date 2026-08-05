@@ -63,8 +63,13 @@ def test_expected_misses_carry_their_reason():
     assert mapping.map_target(
         "1. Bob-omb Battlefield",
         "BoB RTA (RTA strat, Fadeout, w/ cannon cutscene)") is None
+    # A stage RTA spans many stars in a chosen ORDER, which is a route in this
+    # project's vocabulary rather than a way of doing one star -- its sibling
+    # rows pick a different series of stars, not a different strategy (user,
+    # 2026-08-05).
     assert mapping.miss_reason("1. Bob-omb Battlefield",
-                               "BoB RTA (RTA strat, Fadeout)") == "stage_rta"
+                               "BoB RTA (RTA strat, Fadeout)") == "route"
+    assert "route" in mapping.UNMAPPED_EXPECTED
 
 
 def test_castle_movements_are_recognised_through_their_group():
