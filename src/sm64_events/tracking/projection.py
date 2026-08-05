@@ -816,9 +816,10 @@ class Projector:
         for a in seg_closed:
             # The 100-coin star IS this segment when its def's own sequence
             # includes grabbing that course's 100-coin star (spec 2026-07-28-
-            # multi-step-segments, hundred_coin_entity): EVERY outcome —
-            # success, death, hard_reset — attributes to the star entity
-            # (course_id/star_id, segment_id cleared), not the segment. The
+            # multi-step-segments, hundred_coin_entity): a closed attempt
+            # attributes to the star entity (course_id/star_id, segment_id
+            # cleared), not the segment, WHEN `_untargeted_failure` says the
+            # asymmetry allows it (see that method's own docstring). The
             # segment stops existing as a visible practiced thing at all,
             # only as the timing engine. Reattribute BEFORE strat/cleared/
             # auto_ignored so every downstream rule (validity bounds, strat
@@ -828,6 +829,24 @@ class Projector:
             seg_def = self._segments.definition(a.segment_id)
             hc = (hundred_coin_entity(seg_def.start_triggers, seg_def.waypoints)
                  if seg_def is not None else None)
+            if hc is not None and self._untargeted_failure(hc, a.outcome):
+                # ONE reset, ONE row — the untargeted half `_close`'s own
+                # suppression (`_engine_records_this_too`) never covered,
+                # because THAT guard's very first line bails out whenever
+                # nothing is targeted (`star_tgt is None -> False`), which is
+                # correct for `_close` (it must still record the plain
+                # Unassigned attempt in that case) but left THIS loop
+                # relabelling the very same span into a second, phantom
+                # "100 Coins" row with no time at all — live report
+                # 2026-08-04: "one reset records two attempts — one correctly
+                # in Unassigned, one phantom row on the 100-coin star."
+                # Measured: 1 matching pair in this worktree's own journal,
+                # 107 more across his real practice history, none labelled,
+                # none a saved PB. Still counts as the physical attempt
+                # happening (caveat 15) even though nothing records a row
+                # for it here.
+                self._last_star_attempted = hc
+                continue
             if hc is not None:
                 # A segment's own igt_frames is always None -- segments are
                 # RTA-only by design (views.py: "segments have no igt
@@ -1400,6 +1419,28 @@ class Projector:
             return False
         return any(self._hundred_coin_engine_ids.get(seg_id) == star_tgt
                    for seg_id in self._segments.armed_ids())
+
+    def _untargeted_failure(self, hc: tuple[int, int], outcome: str) -> bool:
+        """True when `feed()`'s `seg_closed` loop must NOT reattribute this
+        closed engine attempt to the (course, 6) star `hc` names.
+
+        RULE 11 ASYMMETRY, Griffin's own words (2026-08-04): "Untargeted 100
+        coin run that successfully completed... should trigger the strategy
+        and always be attributed" — completing the run IS the evidence you
+        were practicing it, targeted or not, so a `success` is NEVER gated
+        here. A FAILURE (reset/hard_reset/death) with the star not targeted
+        carries no such evidence: `_close`/`_close_by_death` already
+        recorded the plain Unassigned attempt for this identical span
+        (`_engine_records_this_too` is this exact condition, read from the
+        OTHER side — it suppresses THEM only when a star IS targeted), so
+        reattributing here too duplicated it into a second, unlabelled
+        "100 Coins" row with no time at all — the bug both prior fixes
+        (6f97b51, 543d18d) left standing, because both were built and tested
+        only against the explicitly-targeted case (every test in
+        `tests/test_hundred_coin.py`'s "one reset, one row" section calls
+        `service.set_target(2, 6, …)` first).
+        """
+        return outcome != "success" and self._star_target() != hc
 
     def _build(self, first, close, outcome, outcome_detail, course_id, star_id,
                igt_frames, strat) -> Attempt:

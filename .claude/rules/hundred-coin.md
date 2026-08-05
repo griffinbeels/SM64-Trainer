@@ -125,6 +125,77 @@ with a surviving twin for the same span and entity (so zero data loss), nothing
 added and nothing else changed; the installed exe loses none, which is expected
 — it predates the 100-coin standards that made this reachable at all.
 
+#### …and one row, ONLY when the star is the target — the REVERSE asymmetry
+
+Live report 2026-08-04: *"one reset records two attempts — one correctly in
+Unassigned, one phantom row on the 100-coin star."* He walked into WF,
+selected nothing, and reset. The two fixes above both added the SAME guard
+(`_engine_records_this_too`) to `_close`/`_close_by_death`, and both were
+built and tested only against the case where the 100-coin star was
+**explicitly targeted** first (every existing "one reset, one row" test called
+`service.set_target(2, 6, …)`). That guard's own first line — `if star_tgt is
+None: return False` — exists precisely to LET `_close` record the plain
+Unassigned attempt whenever nothing is targeted; it was never asked to stop
+the OTHER producer, `feed()`'s `seg_closed` loop, from unconditionally
+reattributing that same span to the star anyway.
+
+His rule, and it is asymmetric on purpose: *"Untargeted 100 coin run that
+successfully completed (we grab the 100 coin star + exit star) should trigger
+the strategy and always be attributed."* Combined with the earlier rule this
+whole section proves ("resets with nothing explicitly selected… should be
+classified as unassigned"), a **SUCCESS always reattributes, targeted or
+not** — completing the run IS the evidence — while a **FAILURE reattributes
+only when the star IS the active target**; an untargeted failure is not
+evidence of a deliberate 100-coin attempt, and reattributing it duplicated
+the plain Unassigned row `_close` had already correctly recorded.
+
+`Projector._untargeted_failure(hc, outcome)` is the new gate, consulted at
+the reattribution site in `feed()`'s `seg_closed` loop — `_engine_records_this
+_too`'s condition read from the OTHER side (`outcome != "success" and
+self._star_target() != hc`). When it fires, the physical fact still updates
+(`_last_star_attempted`, caveat 15) but no row is appended — `_close` already
+recorded the real one, or (rarely) recorded nothing at all because its own,
+UNRELATED `_open_is_castle()` rule had already discarded that span (an
+attempt opened while Mario stood in a castle hub is never a star attempt,
+regardless of where it closes) — in that specific case the fix leaves NO
+row rather than a mislabelled one, which is the correct call: neither
+producer considered that span a real attempt.
+
+**Measured against both real journals, replayed with the fix versus the same
+replay with `_untargeted_failure` forced to always return `False` (the exact
+pre-fix behaviour, mutation-proved to reproduce it) — never the live file, a
+`sqlite3.Connection.backup` snapshot both times:**
+
+| | worktree | installed exe |
+|---|---|---|
+| phantom rows removed | **19** | **868** |
+| — paired with a literal Unassigned row (the diagnosis's own count) | 1 | 107 |
+| — paired with a row attributed to a DIFFERENT star practiced in the same course | 16 | 796 |
+| — no surviving partner at all (producer 1 had already discarded its own span via the unrelated castle rule) | 2 | 65 |
+| removed rows referenced by a saved PB | 0 | 0 |
+| removed rows carrying a strat_tag | 18 (see below) | 0 |
+| success rows | 15 → 15, byte-identical | 854 → 854, byte-identical |
+| every other attempt id (not removed) | byte-identical, 0 differing | byte-identical, 0 differing |
+| new rows added | 0 | 0 |
+
+**The true blast radius is larger than the diagnosis's own 108-row estimate**,
+because that measurement searched only for a phantom row paired with a
+literal Unassigned row — it did not search for the same phantom paired with a
+row attributed to a DIFFERENT star practiced in the same course (the ambient
+100-coin engine arms on mere course entry, regardless of what is actually
+targeted), which turns out to be the large majority of the real total. Both
+shapes are the identical mechanism and the identical rule ("the star not
+targeted"), just two different things `_close` legitimately records instead
+of Unassigned.
+
+The 18 worktree rows carrying a `strat_tag` ("100c + Secrets · Standard") are
+**not a counter-example**: that is a REMEMBERED strategy from an earlier
+explicit pick of the 100-coin star, riding along on a phantom row created
+later while a DIFFERENT star was the live target — never a deliberate label
+of that specific reset, and never a PB. The installed exe (his real practice
+history, which never happened to have the 100-coin star actively targeted at
+a reset or death) shows the cleaner case: all 868 removed rows are
+unlabelled, none cleared, none PB-referenced.
 
 ## The 100-coin star IS the segment
 

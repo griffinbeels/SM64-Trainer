@@ -1677,11 +1677,16 @@ def test_hundred_coin_strat_tag_comes_from_the_star_not_the_segment():
 def test_hundred_coin_engine_death_also_attributes_to_the_star():
     # decision #3: what happens with no exit star. death is a hard fail
     # WITH a row (_feed_waypoint precedence, unchanged by this change) and
-    # must attribute the same way a success does.
+    # must attribute the same way a success does -- WHEN TARGETED. A death
+    # with nothing targeted is the reverse asymmetry (2026-08-04,
+    # Projector._untargeted_failure): it stays the plain Unassigned attempt
+    # instead, see tests/test_hundred_coin.py's "one reset, one row -- the
+    # REVERSE asymmetry" section for that half.
     attempts = project([
-        jev(1, "level_changed", 900, {"from": 16, "to": 24}),
-        star(2, 1000, course=2, star_id=6, igt=1000),
-        jev(3, "death", 1100, {"cause": "fell", "igt_frames": 1267}),
+        jev(1, "target_set", 500, {"kind": "star", "course_id": 2, "star_id": 6}),
+        jev(2, "level_changed", 900, {"from": 16, "to": 24}),
+        star(3, 1000, course=2, star_id=6, igt=1000),
+        jev(4, "death", 1100, {"cause": "fell", "igt_frames": 1267}),
     ], segments=[_hc_def()])
     hundred = [a for a in attempts if a.course_id == 2 and a.star_id == 6]
     assert len(hundred) == 1
