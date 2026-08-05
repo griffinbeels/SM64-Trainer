@@ -30,16 +30,32 @@ def test_generated_seed_is_lf_only():
 def test_legacy_segments_are_carried_forward_verbatim():
     """The ten pre-existing seeded defs keep their exact triggers: reconcile
     overwrites untouched seeded rows, so a drifted trigger here would silently
-    rewrite a live user's segments on the next startup."""
+    rewrite a live user's segments on the next startup.
+
+    That is exactly why the end triggers moved DELIBERATELY on 2026-08-04
+    (task 0081) and this test moved with them. LBLJ, MIPS Clip and BitS Entry
+    now end on the ENTRANCE TOUCH rather than the course load -- the frame
+    Mario collides with the entrance, 77 frames (23 at a pipe) earlier -- so
+    the recorded time is the travelling and not the painting fade. Lakitu
+    Skip's end is unchanged and is the control: it ends by entering the CASTLE,
+    which has no entrance to touch.
+    """
     seed = build_seed.build()
     by_key = {s["seed_key"]: s for s in seed["segments"]}
     lblj = by_key["seg:lblj"]
     assert lblj["start_triggers"] == [
         {"type": "level_enter", "to": 6, "from": 16},
         {"type": "attempt_anchor", "level": 6, "area": 1}]
-    assert lblj["end_triggers"] == [{"type": "level_enter", "to": 17}]
+    assert lblj["end_triggers"] == [
+        {"type": "entrance_touched", "to": 17}]
     assert lblj["guards"] == [] and lblj["waypoints"] == []
     assert lblj["category"] == "Tricks"
+    assert by_key["seg:mips-clip"]["end_triggers"] == [
+        {"type": "entrance_touched", "to": 23}]
+    assert by_key["seg:bits-entry"]["end_triggers"] == [
+        {"type": "entrance_touched", "to": 21}]
+    assert by_key["seg:lakitu-skip"]["end_triggers"] == [
+        {"type": "level_enter", "to": 6}], "the castle has no entrance"
     for key in ("seg:mips-clip", "seg:lakitu-skip", "seg:bits-entry",
                 "seg:bitdw-pipe", "seg:bitfs-pipe", "seg:bits-pipe",
                 "seg:bowser-1", "seg:bowser-2", "seg:bowser-3"):
@@ -167,3 +183,73 @@ def test_every_movement_defaults_to_the_standard_strategy():
                         "seg:bowser-3"}
     assert [s["seed_key"] for s in non_movements
             if s["seed_key"] in ambiguous_legacy and s.get("default_strat")] == []
+
+
+def test_every_entrance_resolves_to_exactly_one_castle_side_node():
+    """The entrance level is derived from the world graph, never hand-listed.
+    BBH is entered from the courtyard and VCUtM from the grounds, so a hand
+    table would be wrong twice over. Four destinations carry a second
+    predecessor that is not castle-side (BitDW from the Bowser 1 arena, BitFS
+    from Bowser 2, BitS from Bowser 3, HMC from CotMC); the castle region node
+    is the answer, and it is unique for all of them."""
+    from sm64_events.tracking.topology import entrance_level
+
+    from corpus_vocab import enter_entrance
+    for destination, expected_level in [(23, 6), (24, 6), (4, 26), (18, 16),
+                                        (17, 6), (19, 6), (21, 6), (7, 6),
+                                        (31, 6), (36, 6), (20, 6), (29, 6)]:
+        # The clause names ONE thing -- where the entrance leads. Its own
+        # level is derived, and that derivation is the single door the
+        # matcher's arm-position gate checks against too.
+        assert enter_entrance(destination) == {
+            "type": "entrance_touched", "to": destination}, destination
+        assert entrance_level(destination) == expected_level, destination
+
+
+def test_an_entrance_the_world_graph_does_not_know_raises():
+    """A silently wrong entrance level makes a movement unfireable and nothing
+    else would say so, so the derivation refuses rather than guessing."""
+    import pytest
+
+    from corpus_vocab import enter_entrance
+    with pytest.raises(AssertionError, match="castle-side entrance"):
+        enter_entrance(6)
+
+
+def test_the_build_refuses_a_definition_that_ends_on_a_course_LOAD():
+    """The deliverable is the check that FAILS, not the principle. A movement
+    is the travelling; `level_enter` fires 77 frames after the travelling
+    stopped, so ending there banks the painting fade as movement -- and the
+    mistake is invisible afterwards, because the row still matches, still
+    records, and is simply 2.6 s slow forever.
+
+    The gate lives at the BUILD rather than in `movement()`/`_seg()` because
+    `tools/corpus_from_db.py` calls those to reconstruct corpus source from a
+    LIVE db, and must be able to print a pre-sweep definition faithfully. So
+    the policy belongs to what SHIPS, not to the row shape."""
+    import pytest
+
+    from corpus_vocab import enter_entrance, enter_level, refuse_a_course_load
+    with pytest.raises(AssertionError, match="entrance touch"):
+        refuse_a_course_load("seg:test", [enter_level(24)])
+    refuse_a_course_load("seg:test", [enter_entrance(24)])
+
+
+def test_the_shipped_corpus_has_no_definition_ending_on_a_course_LOAD():
+    """The same rule, asserted over what actually ships -- so a row added to
+    a corpus module the build guard somehow misses still fails here."""
+    from sm64_events.memory.addresses import CASTLE_REGION_LEVELS
+    seed = build_seed.build()
+    offenders = [s["seed_key"] for s in seed["segments"]
+                 for c in s["end_triggers"]
+                 if c.get("type") == "level_enter"
+                 and c.get("to") not in CASTLE_REGION_LEVELS]
+    assert offenders == []
+
+
+def test_a_segment_ending_inside_the_castle_is_untouched_by_that_rule():
+    """The castle has no entrance to touch. Lakitu Skip really does end on
+    `level_enter to=6` and must keep working."""
+    from corpus_vocab import enter_level, movement, spawn
+    assert movement("seg:test", "test", spawn(16),
+                    enter_level(6))["end"]["to"] == 6

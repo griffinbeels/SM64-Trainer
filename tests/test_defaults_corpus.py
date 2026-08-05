@@ -15,7 +15,10 @@ from collections import deque
 from dataclasses import dataclass
 
 from sm64_events.core.paths import bundled_defaults_seed
-from sm64_events.memory.addresses import (COURSE_BY_LEVEL,
+from sm64_events.core.timefmt import format_igt
+from sm64_events.memory.addresses import (ACT_DISAPPEARED,
+                                          CASTLE_REGION_LEVELS,
+                                          COURSE_BY_LEVEL,
                                           LEVEL_CASTLE_INSIDE,
                                           WORLD_EDGES_ONE_WAY,
                                           WORLD_EDGES_TWO_WAY,
@@ -117,6 +120,12 @@ def clause_node(clause: dict) -> tuple:
     if kind == "level_enter":
         return (clause["to"], None) if clause["to"] != LEVEL_CASTLE_INSIDE \
             else (LEVEL_CASTLE_INSIDE, 1)
+    if kind == "entrance_touched":
+        # The touch fires 77 frames before Mario arrives (23 at a pipe), but
+        # the walk it ends is the walk to the DESTINATION -- the same node the
+        # level_enter it replaced resolved to, which is also what
+        # segments.step_node answers for it.
+        return (clause["to"], None)
     if kind == "level_exit":
         return exit_node(clause["from"])
     if kind == "area_enter":
@@ -162,6 +171,21 @@ class _Walker:
     def hop(self, target: tuple) -> None:
         for nxt in path(self.at, target)[1:]:
             if nxt[0] != self.at[0]:
+                # A crossing INTO a course, secret level, Bowser stage or
+                # arena goes through an ENTRANCE Mario touches -- a painting,
+                # portal, hole or pipe -- 77 frames earlier, 23 at a pipe. A
+                # crossing OUT into the castle does not: an exit is a cutscene
+                # or a door. The discriminator is the DESTINATION, read off
+                # the world model rather than off the definition being
+                # checked, which is this file's whole point.
+                if nxt[0] not in CASTLE_REGION_LEVELS:
+                    # Still journaled as `warp_entered`: ONE event, two
+                    # conditions reading it (segments.TRIGGERS).
+                    self._add("warp_entered",
+                              {"level": self.at[0], "area": self.at[1] or 1,
+                               "action": ACT_DISAPPEARED, "to": nxt[0],
+                               "igt_frames": 0, "igt": format_igt(0),
+                               "igt_source": "counter"})
                 self._add("level_changed", {"from": self.at[0], "to": nxt[0]})
                 self.at = nxt
                 # detectors/area.py establishes the destination area on the

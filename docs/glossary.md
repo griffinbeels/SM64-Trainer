@@ -75,7 +75,9 @@ leaving the area.
 
 The moment that opens an [[attempt]] — a practice [[reset]] or a state load. The
 [[projector]] discards an anchor you never moved after, so an idle [[reset]]
-never counts against your [[failure rate]].
+never counts against your [[failure rate]]. The move the anchor INTERRUPTED
+belongs to the [[attempt]] it ended, so the anchor holds that action back until
+you leave it.
 
 - **Lives** — the anchor detector (`src/sm64_events/detectors/anchors.py`)
 
@@ -278,6 +280,17 @@ x-cam starts rather than when the game finishes writing its own result.
 - **Lives** — the star-grab detector
   (`src/sm64_events/detectors/star_grab.py`)
 
+### Entrance touch
+
+The [[frame]] Mario collides with the painting, portal, hole or pipe that
+leads into a course. The game loads that course 77 [[frame]]s later — 23 at a
+pipe — so a [[segment]] measured to the load counts the fade as travelling.
+The trainer ends a movement at the touch instead.
+
+- **Lives** — the warp detector (`src/sm64_events/detectors/warp.py`)
+- **Not** — the moment its [[event]] arrives. A touch cannot name where it
+  leads, so the [[detector]] holds the [[event]] until the game says.
+
 ### Death
 
 Mario dying, which closes the open [[attempt]] with a losing [[outcome]].
@@ -295,7 +308,9 @@ Usamune restarting the game or loading a save state. A reset closes whatever
 
 One sitting of practice. Sessions group [[attempt]]s for the [[practice log]]
 and for scoping a [[progress graph]]; you can reopen one and keep appending to
-it.
+it. A sitting that recorded no [[attempt]] was not a session, so the trainer
+forgets it at the next startup — its [[journal]] rows stay, because they can
+still govern other sessions' [[attempt]]s.
 
 - **Lives** — the tracker service (`src/sm64_events/tracking/service.py`)
 

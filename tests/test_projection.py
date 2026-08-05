@@ -2281,3 +2281,77 @@ def test_the_carry_does_not_survive_the_attempt_that_earned_it():
     ])
     assert first.igt_frames == 194 + 268
     assert second.igt_frames == 382
+
+
+# --- the entrance touch's missing destination (task 0081) -------------------
+
+def test_a_historical_touch_recovers_its_destination_from_the_level_edge():
+    """Every warp_entered written before 2026-08-04 carries no `to`, because
+    the detector could not know one (decomp: sWarpDest is filled 77 frames
+    after the touch). The journal still knows: the level edge that follows
+    names it, which is exactly what the live detector now waits for."""
+    from sm64_events.tracking.projection import warp_destinations
+    events = [
+        jev(1, "warp_entered", 1000, {"level": 6, "area": 3}),
+        jev(2, "level_changed", 1077, {"from": 6, "to": 23}),
+    ]
+    assert warp_destinations(events) == {1: 23}
+
+
+def test_a_touch_that_already_names_its_destination_is_left_alone():
+    """Forward rows are authoritative; the pre-pass must never second-guess
+    one, or a teleporter's honest `to: None` would be overwritten by the next
+    level change that happens along."""
+    from sm64_events.tracking.projection import warp_destinations
+    events = [
+        jev(1, "warp_entered", 1000, {"level": 6, "area": 3, "to": None}),
+        jev(2, "level_changed", 1077, {"from": 6, "to": 23}),
+    ]
+    assert warp_destinations(events) == {}
+
+
+def test_a_historical_touch_with_no_level_edge_recovers_nothing():
+    """An in-level teleporter or an aborted fade. Bounded by the same
+    HOLD_CAP_FRAMES the live detector holds a touch for, so a touch and a
+    level change minutes apart are never paired."""
+    from sm64_events.detectors.warp import WarpDetector
+    from sm64_events.tracking.projection import warp_destinations
+    far = 1000 + WarpDetector.HOLD_CAP_FRAMES + 1
+    assert warp_destinations([
+        jev(1, "warp_entered", 1000, {"level": 5, "area": 1}),
+        jev(2, "level_changed", far, {"from": 5, "to": 23}),
+    ]) == {}
+
+
+def test_an_establishing_level_row_is_not_a_crossing():
+    """detectors/level.py journals establishing/corrective rows with from ==
+    to. Pairing a touch with one would stamp the level Mario was ALREADY in."""
+    from sm64_events.tracking.projection import warp_destinations
+    assert warp_destinations([
+        jev(1, "warp_entered", 1000, {"level": 6, "area": 3}),
+        jev(2, "level_changed", 1010, {"from": 6, "to": 6}),
+        jev(3, "level_changed", 1077, {"from": 6, "to": 23}),
+    ]) == {1: 23}
+
+
+def test_the_recovered_destination_reaches_the_matcher():
+    """End to end: a pinned touch clause closes a segment on a HISTORICAL row.
+    Without the pre-pass this records nothing -- measured over the real
+    journal, 54 of 106 segment successes vanish."""
+    from sm64_events.tracking.segments import SegmentDef
+    ddd = SegmentDef(
+        id=9, name="MIPS Clip", enabled=True,
+        start_triggers=[{"type": "level_exit", "from": 7, "to": 6}],
+        end_triggers=[{"type": "warp_entered", "level": 6, "to": 23}],
+        waypoints=[], guards=[], match_mode="strict")
+    events = [
+        jev(1, "level_changed", 1000, {"from": 7, "to": 6, "from_area": 1}),
+        jev(2, "area_changed", 1000, {"level": 6, "from": 1, "to": 3,
+                                      "from_transient": True}),
+        jev(3, "warp_entered", 1400, {"level": 6, "area": 3}),
+        jev(4, "level_changed", 1477, {"from": 6, "to": 23}),
+    ]
+    attempts, _ = replay(events, segments=[ddd])
+    wins = [a for a in attempts if a.segment_id == 9 and a.outcome == "success"]
+    assert len(wins) == 1
+    assert wins[0].rta_frames == 400, "timed to the TOUCH, not the load"

@@ -36,6 +36,8 @@ uv run python tools/mark_sheet.py                    # the caveat badge on both 
 uv run python tools/topology_map.py                  # DRAW the world graph the segment matcher judges moves against -- LOOK at it, a wrong edge is invisible to every test
 uv run python tools/why_cancelled.py             # WHY did that movement stop being ACTIVE -- replays the session and names the rule + hop counts per cancel (stamps the frame the MOVE happened on, not the one it was judged on)
 uv run python tools/measure_topology_cancels.py       # score those topological rules against the real journal: how many completed runs would they have destroyed?
+uv run python tools/measure_entrance_sweep.py         # replay both journals under the old corpus and the new one: did the topological rules move? (they must not) and which recorded rows did
+uv run python tools/measure_reset_stubs.py            # how often a reset's own interrupted action was re-read onto the NEXT attempt (exact), and how fast the reload's spawn ends the hold
 ```
 
 **Supported window size: 850px wide minimum, any height** (2026-07-29). One

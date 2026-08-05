@@ -235,7 +235,9 @@ def test_undo_pb_segment_is_kind_aware(tmp_path):
     star_aid = next(a.id for a in db.attempts() if a.segment_id is None)
     asyncio.run(svc.save_pb(star_aid, "rta"))
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
-    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    asyncio.run(svc.publish(ev("warp_entered", 1085,
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
     seg_aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
     asyncio.run(svc.save_pb(seg_aid, "rta"))
     out = asyncio.run(svc.undo_pb(seg_aid, "rta"))
@@ -302,7 +304,9 @@ def test_wipe_segment_lifetime_spares_star_data(tmp_path):
     lblj = seed_id(db, "LBLJ")
     success(svc, 500)                             # star attempt
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
-    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    asyncio.run(svc.publish(ev("warp_entered", 1085,
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
     seg_aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
     asyncio.run(svc.save_pb(seg_aid, "rta"))
     asyncio.run(svc.wipe_data("segment", segment_id=lblj, scope="lifetime"))
@@ -315,7 +319,9 @@ def test_wipe_star_spares_segment_data(tmp_path):
     db, svc, _ = make_rec(tmp_path)
     lblj = seed_id(db, "LBLJ")
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
-    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    asyncio.run(svc.publish(ev("warp_entered", 1085,
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
     success(svc, 2000)
     asyncio.run(svc.wipe_data("star", course_id=2, star_id=2, scope="lifetime"))
     assert any(a.segment_id == lblj for a in db.attempts())   # segment survives
@@ -751,7 +757,10 @@ def test_reset_segment_restores_seed_and_clears_dirty(tmp_path):
     assert row["start_triggers"] == [
         {"type": "level_enter", "to": 6, "from": 16},
         {"type": "attempt_anchor", "level": 6, "area": 1}]
-    assert row["end_triggers"] == [{"type": "level_enter", "to": 17}]
+    # Moved 2026-08-04 (task 0081): LBLJ ends on the ENTRANCE TOUCH, 23 frames
+    # before BitDW loads. Reset-to-default restores what SHIPS, so this
+    # assertion follows the corpus by design rather than pinning history.
+    assert row["end_triggers"] == [{"type": "entrance_touched", "to": 17}]
 
 
 def test_reset_user_created_segment_raises(tmp_path):
@@ -1056,7 +1065,9 @@ def test_segment_attempt_completed_carries_segment_fields(tmp_path):
     lblj = seed_id(db, "LBLJ")
     # seeded LBLJ: arms on grounds(16)->castle(6), ends on ->BitDW(17)
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
-    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    asyncio.run(svc.publish(ev("warp_entered", 1085,
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
     done = [e for e in sent if e.type == "attempt_completed"
             and e.payload.get("kind") == "segment"]
     assert done and done[0].payload["segment_id"] == lblj
@@ -1150,7 +1161,9 @@ def test_save_pb_segment_requires_rta_and_inserts_segment_row(tmp_path):
     db, svc, sent = make_rec(tmp_path)
     lblj = seed_id(db, "LBLJ")
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
-    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    asyncio.run(svc.publish(ev("warp_entered", 1085,
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
     aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
     with pytest.raises(ValueError):
         asyncio.run(svc.save_pb(aid, "igt"))    # segments are RTA-only
@@ -1919,7 +1932,9 @@ def test_set_attempt_strat_reclassifies_segment_attempt_and_registers(tmp_path):
     db, svc = make(tmp_path)
     lblj = seed_id(db, "LBLJ")
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
-    asyncio.run(svc.publish(ev("level_changed", 1085, {"from": 6, "to": 17})))
+    asyncio.run(svc.publish(ev("warp_entered", 1085,
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
     seg_aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
     asyncio.run(svc.set_attempt_strat(seg_aid, "no bljs"))
     reclassified = next(a for a in db.attempts() if a.id == seg_aid)
@@ -2217,3 +2232,58 @@ def test_a_segment_is_never_marked_grab_timed(tmp_path):
                   rta_frames=500, started_utc="", ended_utc="", cleared=False,
                   cleared_reason=None, segment_id=7)
     assert "grab_timed" not in caveats_for({"strat_tag": "Standard"}, seg)
+
+
+# -- the startup purge of sessions that recorded nothing -----------------------
+
+def test_startup_purges_a_session_that_recorded_nothing(tmp_path):
+    """A sitting with no attempts was not a sitting. The purge runs at the
+    END of start(), after the unlabelled-attempt prune, because the prune is
+    itself able to empty a session."""
+    db = Database(tmp_path / "t.db")
+    svc = TrackerService(db, Broadcaster())
+    asyncio.run(svc.start())                       # session 1: nothing happens
+    svc2 = TrackerService(db, Broadcaster())
+    asyncio.run(svc2.start())                      # session 2: purges session 1
+    assert [s["id"] for s in db.sessions()] == [svc2.session_id]
+    assert svc2.session_id not in {1}
+
+
+def test_startup_keeps_a_session_that_banked_an_attempt(tmp_path):
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("strat_set", 1, {"course_id": 2, "star_id": 2,
+                                                "strat_tag": "fast"})))
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350)))
+    first = svc.session_id
+    svc2 = TrackerService(db, Broadcaster())
+    asyncio.run(svc2.start())
+    assert {s["id"] for s in db.sessions()} == {first, svc2.session_id}
+
+
+def test_startup_purge_leaves_the_purged_sessions_events_in_the_journal(tmp_path):
+    """Its events still govern the sessions around it — a clear, a strat
+    change or a prune verdict recorded in a session that banked nothing is
+    still a compensating event replay must see."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("target_set", 1, {"course_id": 2, "star_id": 2})))
+    empty = svc.session_id
+    svc2 = TrackerService(db, Broadcaster())
+    asyncio.run(svc2.start())
+    assert [s["id"] for s in db.sessions()] == [svc2.session_id]
+    assert "target_set" in {e.type for e in db.events() if e.session_id == empty}
+
+
+def test_startup_purges_a_session_the_prune_just_emptied(tmp_path):
+    """The unlabelled-attempt prune deletes rows, so a session that had
+    attempts when start() began can have none by the time it ends. Ordering
+    the purge before the prune leaves that row behind on every restart."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350)))           # no strategy: unlabelled
+    unlabelled = svc.session_id
+    assert [a.session_id for a in db.attempts()] == [unlabelled]
+    svc2 = TrackerService(db, Broadcaster())
+    asyncio.run(svc2.start())
+    assert db.attempts() == []
+    assert [s["id"] for s in db.sessions()] == [svc2.session_id]

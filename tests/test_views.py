@@ -635,11 +635,16 @@ def lvl(frame, from_, to):
 
 
 def lblj_success(svc, t0=1000, rta=85):
-    """Arm the seeded LBLJ segment (16->6) and close it (6->17) `rta`
-    frames later. Side effect (seed shape): the closing 6->17 edge also
-    arms BitDW Pipe Entry."""
+    """Arm the seeded LBLJ segment (16->6) and close it `rta` frames later on
+    the ENTRANCE TOUCH -- the frame Mario hits the BitDW hole, 23 frames
+    before the level loads (task 0081, 2026-08-04). The level edge still
+    follows, because it does in the game and because it is what arms BitDW
+    Pipe Entry (side effect of the seed shape, relied on below)."""
     asyncio.run(svc.publish(lvl(t0, 16, 6)))
-    asyncio.run(svc.publish(lvl(t0 + rta, 6, 17)))
+    asyncio.run(svc.publish(ev("warp_entered", t0 + rta,
+                               {"level": 6, "area": 1, "to": 17,
+                                "igt_frames": rta, "igt_source": "counter"})))
+    asyncio.run(svc.publish(lvl(t0 + rta + 23, 6, 17)))
 
 
 def seg_section(view, seg_id):
@@ -712,7 +717,8 @@ def test_segment_section_armed_flag_tracks_live_projector(tmp_path):
     asyncio.run(svc.publish(lvl(1000, 16, 6)))          # arms LBLJ
     view = build_session_view(db, svc, clock="igt")
     assert seg_section(view, 1)["armed"] is True
-    asyncio.run(svc.publish(lvl(1085, 6, 17)))          # closes it
+    asyncio.run(svc.publish(ev("warp_entered", 1085,                # closes it
+                               {"level": 6, "area": 1, "to": 17})))
     view2 = build_session_view(db, svc, clock="igt")
     sec = seg_section(view2, 1)
     assert sec["armed"] is False
@@ -738,14 +744,18 @@ def test_segment_section_armed_detail_reports_progress_and_waiting_for(tmp_path)
     assert detail["progress"] == 0 and detail["total"] == 0
     assert detail["start_frame"] == 1000
     assert detail["deadline_frame"] is None             # strict: no budget
-    assert detail["waiting_for"] == "Enter Bowser in the Dark World"
+    # Card voice moved with the condition (task 0081): the load reads "Enter
+    # Bowser in the Dark World", the TOUCH reads this -- deliberately
+    # different words, so the builder cannot offer two rows that look alike.
+    assert detail["waiting_for"] == "Touch the Bowser in the Dark World entrance"
     # 2026-08-03: the WHOLE route ships beside the one step you are on, and
     # `progress` indexes straight into it -- so a step list one shorter than
     # the counter above it would leave the last chip unreachable, which is
     # the shape a client-side re-derivation would get wrong.
     assert detail["steps"] == ["BitDW"]
     assert len(detail["steps"]) == detail["total"] + 1
-    asyncio.run(svc.publish(lvl(1085, 6, 17)))          # closes it
+    asyncio.run(svc.publish(ev("warp_entered", 1085,    # closes it
+                               {"level": 6, "area": 1, "to": 17})))
     view2 = build_session_view(db, svc, clock="igt")
     assert seg_section(view2, 1)["armed_detail"] is None
 
@@ -763,7 +773,9 @@ def test_segment_section_arms_ambiently_flag(tmp_path):
                           {"type": "attempt_anchor", "level": 17}],
         "end_triggers": [{"type": "warp_entered", "level": 17}]}))
     asyncio.run(svc.publish(lvl(1000, 16, 6)))          # arms LBLJ (id 1)
-    asyncio.run(svc.publish(lvl(1000, 6, 17)))          # arms the pipe stand-in
+    asyncio.run(svc.publish(ev("warp_entered", 1085,    # closes LBLJ
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(lvl(1108, 6, 17)))          # arms the pipe stand-in
     view = build_session_view(db, svc, clock="igt")
     assert seg_section(view, 1)["arms_ambiently"] is False
     assert seg_section(view, pipe_id)["arms_ambiently"] is True
@@ -774,10 +786,14 @@ def test_segment_sections_order_by_journal_recency_not_raw_id(tmp_path):
     # raw-sorts above a lower one; recency must compare journal_id(...).
     db, svc = make(tmp_path)
     asyncio.run(svc.publish(lvl(1000, 7, 6)))     # arms MIPS Clip (def 2)
-    asyncio.run(svc.publish(lvl(1100, 6, 23)))    # MIPS success
+    asyncio.run(svc.publish(ev("warp_entered", 1100,          # MIPS success
+                               {"level": 6, "area": 3, "to": 23})))
+    asyncio.run(svc.publish(lvl(1177, 6, 23)))
     asyncio.run(svc.publish(lvl(1200, 23, 16)))
     asyncio.run(svc.publish(lvl(1300, 16, 6)))    # arms LBLJ (def 1)
-    asyncio.run(svc.publish(lvl(1400, 6, 17)))    # LBLJ success — newest
+    asyncio.run(svc.publish(ev("warp_entered", 1400,   # LBLJ success — newest
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(lvl(1423, 6, 17)))
     view = build_session_view(db, svc, clock="igt")
     # the closing 6->17 edge also ARMS BitDW Pipe Entry (def 5): its pinned
     # fresh section (no attempts, recency -1) sorts last.

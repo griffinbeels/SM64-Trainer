@@ -259,7 +259,12 @@ def test_migration_v4_seeds_ten_segment_definitions(tmp_path):
     assert lblj["start_triggers"] == [
         {"type": "level_enter", "to": 6, "from": 16},
         {"type": "attempt_anchor", "level": 6, "area": 1}]
-    assert lblj["end_triggers"] == [{"type": "level_enter", "to": 17}]
+    # v4 seeds `level_enter to=17` and v21 repairs it on the way
+    # through: LBLJ ends on the ENTRANCE TOUCH since 2026-08-04 (task
+    # 0081), so a FRESH db lands on the repaired shape too. Reading
+    # the post-migration state is the point -- v4's own literal is
+    # not what any db ever runs with.
+    assert lblj["end_triggers"] == [{"type": "entrance_touched", "to": 17}]
 
 
 def test_fresh_db_seeds_bowser3_ending_on_key_grabbed(tmp_path):
@@ -1093,3 +1098,61 @@ def test_v18_never_overwrites_a_real_strat_tag(tmp_path):
         "SELECT strat_tag FROM attempts WHERE segment_id=?", (seg_id,)).fetchone()
     assert pb["strat_tag"] == "Blindfolded"
     assert attempt["strat_tag"] == "Blindfolded"
+
+
+# -- empty-session purge ------------------------------------------------------
+
+def _one_attempt(session_id: int, cleared: bool = False, attempt_id: int = 10):
+    from sm64_events.tracking.projection import Attempt
+    return Attempt(id=attempt_id, session_id=session_id, course_id=2, star_id=2,
+                   strat_tag="fast", anchor_type="practice_reset",
+                   anchor_frame=500, outcome="success", outcome_detail=None,
+                   igt_frames=350, rta_frames=357,
+                   started_utc="2026-06-10T12:00:00Z",
+                   ended_utc="2026-06-10T12:00:12Z", cleared=cleared,
+                   cleared_reason="auto: too fast" if cleared else None)
+
+
+def test_delete_empty_sessions_drops_only_the_ones_with_no_attempts(tmp_path):
+    db = make_db(tmp_path)
+    practiced = db.insert_session("2026-06-10T12:00:00Z")
+    empty = db.insert_session("2026-06-10T13:00:00Z")
+    active = db.insert_session("2026-06-10T14:00:00Z")
+    db.replace_attempts([_one_attempt(practiced)])
+    assert db.delete_empty_sessions(active) == [empty]
+    assert {s["id"] for s in db.sessions()} == {practiced, active}
+
+
+def test_delete_empty_sessions_keeps_the_journal_slice(tmp_path):
+    """The ROW goes, the events stay. Deleting a purged session's events
+    would rewrite the replay of the sessions AROUND it (an attempts_pruned
+    or attempt_cleared event recorded in a session that itself banked
+    nothing still governs other sessions' attempts)."""
+    db = make_db(tmp_path)
+    empty = db.insert_session("2026-06-10T13:00:00Z")
+    active = db.insert_session("2026-06-10T14:00:00Z")
+    db.append_event(empty, seq=1, event=ev("level_changed", 900))
+    db.replace_attempts([])
+    assert db.delete_empty_sessions(active) == [empty]
+    assert [e.session_id for e in db.events()] == [empty]
+
+
+def test_delete_empty_sessions_spares_a_session_holding_a_cleared_attempt(tmp_path):
+    """Cleared is not empty — an ignored attempt is still something he did,
+    and it is one Restore click from counting again."""
+    db = make_db(tmp_path)
+    ignored = db.insert_session("2026-06-10T12:00:00Z")
+    active = db.insert_session("2026-06-10T14:00:00Z")
+    db.replace_attempts([_one_attempt(ignored, cleared=True)])
+    assert db.delete_empty_sessions(active) == []
+
+
+def test_delete_empty_sessions_never_reuses_a_purged_id(tmp_path):
+    """AUTOINCREMENT, not plain rowid: the events left behind keep pointing
+    at a number no future session can be handed."""
+    db = make_db(tmp_path)
+    empty = db.insert_session("2026-06-10T13:00:00Z")
+    active = db.insert_session("2026-06-10T14:00:00Z")
+    db.replace_attempts([])
+    db.delete_empty_sessions(active)
+    assert db.insert_session("2026-06-10T15:00:00Z") > active > empty

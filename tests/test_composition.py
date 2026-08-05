@@ -14,8 +14,14 @@ def test_detector_order_is_load_bearing():
     # the reset holding the attempt the grab belongs to (live report
     # 2026-08-01; the behaviour itself is pinned by
     # tests/test_reset_during_star_grab.py, this is only the wiring).
-    order = ["StarGrabDetector", "GameResetDetector", "LevelChangeDetector",
-             "AnchorDetector", "DeathDetector"]
+    # WarpDetector joins it 2026-08-04 (task 0081) for the same reason: it
+    # HOLDS the entrance touch until a level or area edge names where the
+    # entrance led, so a released touch describes a frame 77 in the past. Ahead
+    # of LevelChangeDetector it closes the movement it belongs to; behind it,
+    # the level change closes that attempt first and one movement records as
+    # two.
+    order = ["StarGrabDetector", "WarpDetector", "GameResetDetector",
+             "LevelChangeDetector", "AnchorDetector", "DeathDetector"]
     wired = [type(detector).__name__ for detector in build_detectors()]
     positions = [wired.index(name) for name in order]
     assert positions == sorted(positions)
