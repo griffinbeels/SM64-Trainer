@@ -417,6 +417,24 @@ replaces a stale local copy.
 | `GET /api/library/runner/{name}` | One runner's whole sheet — every entry they hold, with the target, the approach, the time, the video and that row's ladder. |
 | `POST /api/library/refresh` | Fetch the live spreadsheet, re-derive the library, and keep it **only if it is newer** than what we already have; `{applied: false, reason}` otherwise, which is a normal outcome rather than a failure. Runs in a worker thread — it downloads ~5.6 MB and re-fits 631 ladders, and the poller shares this process. **503** when the sheet cannot be reached, carrying the reason, because "refresh did nothing" and "refresh could not reach Google" are otherwise indistinguishable. |
 
+### Adopting a row onto a segment you built
+
+A star approach adopts itself — the sheet row names the star, so those ladders
+ship. A movement cannot: the sheet's Castle Movements are finer than our
+segments (113 rows against 63) and its subsections have no segment at all. So
+you build the segment and point a row at it, rather than the app inventing 113
+segments nobody asked for. The assignment is yours, lives beside your own
+settings, and is keyed by the row's stable name so a sheet refresh keeps it.
+
+| Route | Purpose |
+|---|---|
+| `GET /api/library/adoptions` | `{rows: {row key: entity key}, ladders: {entity: {strategy: ladder}}}` — what you have assigned, and the ladders those assignments produce. |
+| `POST /api/library/adopt` `{row_key, entity_key}` | Assign one library row to an entity, giving it that row's community-derived ladder. The strategy is named after the approach, except where the approach is named after its target (a movement usually is) — then it lands as `Standard` rather than stuttering. **409** when the row has no rank standards, the entity names its strategies by exit-star variant, or a community-vetted strategy of that name already exists; each refusal carries its reason, because an assignment that silently does nothing is indistinguishable from one that worked until a rank fails to appear. **400** on a missing field. |
+| `POST /api/library/unadopt` `{row_key}` | Remove the assignment, and the strategy with it. |
+
+These routes are mounted only when the server has a standards store to merge
+into; a broadcast-only second instance still serves every read route above.
+
 Rank ladders derived from this data are served through the ordinary standards
 surface rather than here — see **Ranks & standards** above. They live in their
 own file and are merged only on read, so a sheet-derived ladder can never

@@ -159,6 +159,17 @@ class RankStandards:
             return dict(vetted)
         return {**fitted, **vetted}
 
+    def apply_sheet_ladders(self, mapping: dict) -> None:
+        """Merge user-assigned library ladders into the sheet-derived layer.
+
+        Same layer as the bundled ones on purpose: both are sheet-derived, both
+        lose to a vetted ladder, and neither can ever be written into the
+        user's standards file. Called again whenever an assignment changes, so
+        it REPLACES what it added last time rather than accumulating."""
+        self._load_sheet()
+        for entity, strategies in (mapping or {}).items():
+            self._sheet.setdefault(entity, {}).update(strategies)
+
     def is_fitted(self, ek, strat) -> bool:
         """Whether this ladder came from the sheet rather than the community's
         vetted standards -- what a surface needs to say so."""

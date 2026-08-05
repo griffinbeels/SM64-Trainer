@@ -171,6 +171,12 @@ def sheet_library_path() -> Path:
     return data_root() / "data" / "sheet_library.json.gz"
 
 
+def library_adoptions_path() -> Path:
+    """Which library rows the USER assigned to segments they built. Theirs, not
+    the community's -- library_overrides.json is the other thing."""
+    return data_root() / "data" / "library_adoptions.json"
+
+
 def bundled_sheet_library() -> Path | None:
     """The library snapshot shipped with the release. Mirrors
     bundled_rank_standards() exactly."""

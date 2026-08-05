@@ -371,7 +371,21 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     library = LibraryStore(sheet_library_path(), bundled_sheet_library())
     library.load()
     app.state.library = library
-    app.include_router(create_library_router(library))
+    # Adoptions bind a library row to a segment the USER built, so they need
+    # the standards store to merge into. Without one (a broadcast-only second
+    # instance) the read routes still mount and the adopt routes do not.
+    adoptions = None
+    standards = getattr(service, "ranks", None)
+    if standards is not None and hasattr(standards, "apply_sheet_ladders"):
+        from sm64_events.core.paths import library_adoptions_path
+        from sm64_events.library.adoptions import Adoptions
+        qualified = {ek for ek in standards.graded_entities()
+                     if standards.exit_variants(ek)}
+        adoptions = Adoptions(library_adoptions_path(), library, standards,
+                              qualified)
+        adoptions.load()
+        app.state.library_adoptions = adoptions
+    app.include_router(create_library_router(library, adoptions=adoptions))
     if service is not None:
         app.include_router(create_api_router(service))
         from sm64_events.server.ranks_api import create_ranks_router
