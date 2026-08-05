@@ -21,8 +21,32 @@ state_loaded — savestate / Usamune section-state load: gGlobalTimer jumps
 Both anchor payloads carry mario_acted: whether Mario entered any non-passive
   action since the last anchor. The tracking layer discards reset-closures of
   attempts where the player never acted (no-op reset spam, per user feedback).
-  The action transition ON the anchor tick itself is swallowed — it belongs
-  to the warp/spawn, not to either attempt.
+  The action the anchor INTERRUPTED is swallowed — it belongs to the warp/spawn,
+  not to either attempt.
+
+  **Swallowing the anchor's POLL is not the same as swallowing the action, and
+  the difference is what task 0084 was** (live report: "warping to the beginning
+  of a course inside a subarea results in an extra reset… this is a really
+  common problem within subareas"). Two things stretch the interrupted action
+  past the anchor's own poll: a 60 Hz poll reads the SAME game frame twice, and
+  the reload a reset triggers does not reach Mario's action byte for another
+  frame or two. Either way the next poll re-read the very action the anchor had
+  just swallowed and marked the FRESH attempt as acted — so the menu warp that
+  followed banked a second reset row for an attempt nobody made.
+
+  Measured over both journals, the gap from an anchor to the first mario_acted
+  after it: **2,130 at zero frames, 484 at one, 35 across the whole 2-6 band,
+  2,370 at 7+.** A lingering byte and real play, with nothing in between. Zero
+  frames is not a heuristic at all — global_timer IS the game's frame counter,
+  so a second poll of the same value cannot have seen a new action.
+
+  `_anchor_action` is therefore the ACTION INSTANCE, not a frame window: an
+  anchor latches the action Mario is holding, and the first poll that reads
+  anything else clears the latch for good. Walking again after the reload is
+  walking again; the reload's own spawn is what clears it. Every place that
+  starts an anchor period latches, including `_update_pause_streak`'s console
+  reset, because "nothing from before the boot survives" says the same thing
+  about the action byte as it does about the activity flag.
 
 Both anchor payloads also carry action: curr.mario_action at the tick the
   anchor was detected, AND prev_action: prev.mario_action (the action on
@@ -179,7 +203,9 @@ Pause-warp anchor (live feedback 2026-06-12): a menu warp executed straight
 
 mario_acted event: emitted once per anchor period at Mario's first
   non-passive action, so the tracking layer can judge activity for closures
-  that are NOT anchors (death/abandon/hard reset). Anchors additionally carry
+  that are NOT anchors (death/abandon/hard reset). Carries the ACTION, inert,
+  since 2026-08-04 — see the emit site for what not carrying it cost.
+  Anchors additionally carry
   acted_tracking: true so old journals (no such events) keep legacy semantics.
   Death actions are involuntary and never count as activity (a same-tick
   mario_acted would defeat the unacted-death discard); involuntary knockback
@@ -228,6 +254,9 @@ class AnchorDetector:
     def __init__(self):
         self._acted = False
         self._acted_reported = False
+        # The action the last anchor INTERRUPTED, held back until Mario leaves
+        # it — see the docstring's measurement. None once he has.
+        self._anchor_action: int | None = None
         self._pause_streak = 0
         self._last_door_frame: int | None = None
         self._last_dialog_frame: int | None = None  # last tick Mario was in a textbox/intro-cutscene action
@@ -325,26 +354,43 @@ class AnchorDetector:
                              if self._last_dialog_frame is not None else None})
             self._acted = False
             self._acted_reported = False
+            self._anchor_action = curr.mario_action
             self._pause_streak = 0
             self._save_menu_seen = False
             return []
         if events:
-            # the action transition ON the anchor tick is swallowed — it
-            # belongs to the warp/spawn, not to either attempt
+            # the action the anchor INTERRUPTED is swallowed — it belongs to
+            # the warp/spawn, not to either attempt. Held by IDENTITY rather
+            # than for this poll: the byte outlives the poll and often the
+            # frame, which is the whole of task 0084 (docstring).
             self._acted = False
             self._acted_reported = False
+            self._anchor_action = curr.mario_action
             self._pause_streak = 0
             self._save_menu_seen = False  # consumed by this anchor (the reload reset)
             return events
         self._update_pause_streak(prev, curr)
-        if (curr.mario_action not in PASSIVE_ACTIONS
+        if self._anchor_action is not None \
+                and curr.mario_action != self._anchor_action:
+            self._anchor_action = None  # Mario left it: he owns what he does now
+        if (self._anchor_action is None
+                and curr.mario_action not in PASSIVE_ACTIONS
                 and curr.mario_action not in DEATH_ACTIONS
                 and curr.mario_action not in LEVEL_EXIT_ACTIONS):
             self._acted = True
             if not self._acted_reported:
                 self._acted_reported = True
+                # `action` is INERT and exists to make the NEXT round of this
+                # measurable: the journal records when Mario first acted and
+                # never WHAT he was doing, so an action id repeated after the
+                # reload's spawn is indistinguishable from the anchor's own
+                # lingering byte AFTER THE FACT. Task 0084 could measure its
+                # own population exactly (a poll of the same global_timer
+                # cannot have seen a new action) and could NOT measure what
+                # the old detector would have done a hundred frames later.
                 return [Event(type="mario_acted", frame=curr.global_timer,
-                              timestamp_utc=curr.wall_time_utc, payload={})]
+                              timestamp_utc=curr.wall_time_utc,
+                              payload={"action": curr.mario_action})]
         return []
 
     def _update_pause_streak(self, prev: GameSnapshot, curr: GameSnapshot) -> None:
@@ -354,6 +400,7 @@ class AnchorDetector:
             self._pause_streak = 0
             self._acted = False
             self._acted_reported = False
+            self._anchor_action = curr.mario_action
             self._save_menu_seen = False
         elif curr.igt_overall != prev.igt_overall:
             self._pause_streak = 0   # game logic is running

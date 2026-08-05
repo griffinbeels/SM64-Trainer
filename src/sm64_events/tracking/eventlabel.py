@@ -9,8 +9,8 @@ the timeline (a later task) filters `None` rows out entirely rather than
 rendering them.
 
 The journal carries 30+ distinct event types and most of them are per-tick
-telemetry (`rollout`, `jump`, `mario_acted` — empty payload, fired on every
-first non-passive action) or derived bookkeeping (`attempt_completed`,
+telemetry (`rollout`, `jump`, `mario_acted` — fired on every first non-passive
+action, carrying only the inert action id) or derived bookkeeping (`attempt_completed`,
 `target_changed`, `session_started`) that nobody would ever call "the step I
 just did". `label_event` only recognizes the types this module's sibling
 registry (`tracking/segments.py::TRIGGERS`) can actually turn into a segment

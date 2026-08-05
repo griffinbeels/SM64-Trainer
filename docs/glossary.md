@@ -75,7 +75,9 @@ leaving the area.
 
 The moment that opens an [[attempt]] — a practice [[reset]] or a state load. The
 [[projector]] discards an anchor you never moved after, so an idle [[reset]]
-never counts against your [[failure rate]].
+never counts against your [[failure rate]]. The move the anchor INTERRUPTED
+belongs to the [[attempt]] it ended, so the anchor holds that action back until
+you leave it.
 
 - **Lives** — the anchor detector (`src/sm64_events/detectors/anchors.py`)
 
