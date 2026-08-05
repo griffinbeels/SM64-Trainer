@@ -29,6 +29,36 @@ before it goes away. Phases 2 (fitted ladders), 3 (serving + refresh), 4
 | Where the sheet is fetched from | `library/source.py` — one place, because the tool and the server both need it now |
 | Refreshing the bundled snapshot | `tools/scrape_sheet.py` — and **READ the `unknown:` list it prints**; that list is the deliverable, because a target we cannot name looks identical to a target the sheet does not have. `--from <file.xlsx>` re-derives offline. Output is gzipped with `mtime=0`: 4.51 MB of JSON becomes 0.42 MB for 7 ms of load (26 ms against 19 ms), the exe ships it as-is, and an unchanged sheet produces a byte-identical file |
 
+## "Subsection" is the `subsection-tracking` branch's word, not ours
+
+This zone calls a sheet row a **subsection** and will keep doing so, but the
+NOUN belongs to `subsection-tracking`, whose definition is the better one and
+is the one in `docs/glossary.md`:
+
+> A piece of a [[star]] or of a [[segment]], practiced on its own — the climb
+> rather than the whole star. A subsection IS a segment, and names the target
+> it belongs to, so it carries its own personal best, its own ladder and its
+> own rows in the practice log.
+
+That branch also owns **moment** (`detectors/moment.py`) — something Mario
+does that a subsection can start or end on, read off his own action byte
+rather than off where he stands, which is why a subsection can begin and end
+inside one course. This zone had briefly written a competing `### Subsection`
+row about sheet rows; it was removed on 2026-08-05 rather than merged, at the
+user's ruling, because two definitions of one noun is exactly what the
+glossary exists to prevent.
+
+The two fit together, and that is the point rather than a compromise: the
+sheet's 122 subsection rows ARE subsections in their sense — pieces of a star
+practiced on their own — and each already carries a fitted ladder off real
+community times. Adoption is the join.
+
+**Do not build moment detection, live moment feeds, or subsection triggers
+here.** That work is theirs, is further along, and touches
+`tracking/segments.py`, `tracking/eventlabel.py`, `tracking/synthesize.py`,
+`server/api.py` and `main.py` — all of which this branch also touches, so
+whichever lands second reconciles.
+
 ## Owed to phase 5: every standard links to its own examples
 
 User's ask, 2026-08-05, recorded before it is built. Each row of the

@@ -340,14 +340,6 @@ it. Adopting an approach mints a [[strategy]] you can practice.
 - **Not** — a [[strategy]]. You practice a [[strategy]] and hold a [[personal
   best]] on it; an approach is only what the community wrote down.
 
-### Subsection
-
-A stretch inside a [[target]] that the [[Ultimate Sheet]] times separately — a
-warp fadeout, the boss fight after a warp. A subsection never becomes a
-[[strategy]]; adopting one proposes a [[segment]] you define.
-
-- **Lives** — the sheet reader (`src/sm64_events/library/sheet.py`)
-
 ### Entry
 
 One [[runner]]'s recorded time for one [[approach]], and the video they linked
