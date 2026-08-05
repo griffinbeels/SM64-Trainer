@@ -74,15 +74,32 @@ def running_counter(frame):
     return 600 + (frame - 900) if frame <= ZERO_FRAME else frame - ZERO_FRAME
 
 
+# A pipe LEADS somewhere, and since 2026-08-04 the detector needs that to be
+# in the fixture: the touch is HELD until a level or area edge names the
+# destination, because it cannot name its own (decomp -- see detectors/
+# warp.py). The run therefore keeps polling through the fade and lands. The
+# recorded time must be unchanged by any of it: the IGT is the TOUCH's.
+FADE_FRAMES = 23                    # measured pipe fade; painting/portal is 77
+LANDING_LEVEL = 30                  # the Bowser 1 arena, past the BitDW pipe
+
+
 def a_run(counter=running_counter, pipe_frame=PIPE_FRAME, level=17,
-          per_frame=None):
-    """Snapshots from frame 900 up to and including the pipe touch.
-    `per_frame` maps a frame to extra snap() kwargs for mid-run detours."""
+          per_frame=None, landing=LANDING_LEVEL):
+    """Snapshots from frame 900 through the pipe touch and the fade that
+    follows it, ending on the frame the destination loads. `per_frame` maps a
+    frame to extra snap() kwargs for mid-run detours; `landing=None` stops at
+    the touch, for the cases that are about a run which never arrives."""
     per_frame = per_frame or {}
     frames = [snap(f, counter(f), level=level, **per_frame.get(f, {}))
               for f in range(900, pipe_frame)]
     frames.append(snap(pipe_frame, counter(pipe_frame), level=level,
                        action=ACT_DISAPPEARED))
+    if landing is not None:
+        frames.extend(
+            snap(pipe_frame + offset, counter(pipe_frame + offset),
+                 level=level if offset < FADE_FRAMES else landing,
+                 action=ACT_DISAPPEARED)
+            for offset in range(1, FADE_FRAMES + 1))
     return frames
 
 

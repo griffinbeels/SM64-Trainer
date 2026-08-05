@@ -72,9 +72,20 @@ def build_detectors() -> list:
     area follows level (same establishing discipline); key/spawn are stateless
     edges — key_grabbed and star_collected cannot co-emit on the same level
     (star_grab.py guards KEY_GRAB_LEVELS directly), so their relative order is
-    informational only.  Warp is no longer stateless (it carries an IgtClock
-    of its own since 2026-07-31), but it still emits on a pure action edge, so
-    its position is informational for the same reason.
+    informational only.
+
+    Warp's position stopped being informational on 2026-08-04 (task 0081) and
+    it now sits SECOND, for the same reason star_grab is first.  It HOLDS the
+    entrance touch until a level or area edge names the destination, because
+    the touch cannot name its own: decomp `level_trigger_warp` writes nothing
+    to sWarpDest, which `initiate_delayed_warp` fills 77 frames later,
+    immediately before the level unloads.  So on the release tick ONE poll
+    carries a touch that happened 77 frames ago AND the level change happening
+    now.  A held event describes the past and is published before anything
+    describing the present, or the level change closes the attempt the touch
+    belongs to and one movement records as two.  It has carried an IgtClock of
+    its own since 2026-07-31 and is now stateful for this second reason too.
+
     area_changed reads CURR_AREA (gCurrAreaIndex, live-pinned 2026-06-12);
     castle areas: 1=lobby, 2=upstairs, 3=basement — see addresses.py.
 
@@ -109,10 +120,10 @@ def build_detectors() -> list:
     tests/test_reset_during_star_grab.py, mutation-proved by moving this
     detector back to the end.
     """
-    detectors = [StarGrabDetector(), GameResetDetector(), LevelChangeDetector(),
-                 AreaChangeDetector(), StageChangeDetector(), AnchorDetector(),
-                 DeathDetector(), DustTrickDetector(), WarpDetector(),
-                 KeyGrabDetector(), SpawnDetector()]
+    detectors = [StarGrabDetector(), WarpDetector(), GameResetDetector(),
+                 LevelChangeDetector(), AreaChangeDetector(),
+                 StageChangeDetector(), AnchorDetector(), DeathDetector(),
+                 DustTrickDetector(), KeyGrabDetector(), SpawnDetector()]
     return detectors
 
 
