@@ -267,6 +267,42 @@ def test_migration_v4_seeds_ten_segment_definitions(tmp_path):
     assert lblj["end_triggers"] == [{"type": "entrance_touched", "to": 17}]
 
 
+def test_migration_v23_moves_a_frozen_lakitu_skip_to_the_door(tmp_path):
+    """His instruction, 2026-08-05: "Lakitu should be determined by 'move it to
+    the door' (when Mario touches the door)."
+
+    The corpus already ends it on the door; a row he has EDITED carries
+    `seed_dirty=1`, which blocks reconcile's update branch permanently, so
+    only a migration reaches it. v4 seeds the old `level_enter to=6` shape and
+    v23 repairs it on the way through, exactly as v21 does for LBLJ above --
+    so a FRESH db lands on the repaired shape too, and reading the
+    post-migration state is the point.
+    """
+    db = make_db(tmp_path)
+    lakitu = next(d for d in db.segment_defs() if d["name"] == "Lakitu Skip")
+    assert lakitu["end_triggers"] == [
+        {"type": "moment_reached", "kind": "door_open",
+         "level": 16, "ordinal": 1}]
+
+
+def test_migration_v23_does_not_spend_his_own_edits(tmp_path):
+    """The v21 rule, applied again: a repair may fix the thing it is about, it
+    may NOT clear `seed_dirty` on the way past. Clearing it would hand the row
+    back to reconcile, which would then discard every OTHER edit he made to
+    it -- and this row is frozen precisely because he edited it."""
+    db = make_db(tmp_path)
+    lakitu = next(d for d in db.segment_defs() if d["name"] == "Lakitu Skip")
+    other = next(d for d in db.segment_defs() if d["name"] == "LBLJ")
+    # A fresh db has never been edited, so both read clean -- what this pins
+    # is that v23 does not TOUCH the flag, which a fresh db can only show by
+    # the repaired row being no different from an unrepaired one.
+    assert lakitu["seed_dirty"] == other["seed_dirty"]
+    # And it left the start alone. `spawned` in level 16 is the canonical
+    # Lakitu-skip timing start (addresses.py, live-verified 2026-06-12); the
+    # plan that said this had to move was corrected before it shipped.
+    assert lakitu["start_triggers"] == [{"type": "spawned", "level": 16}]
+
+
 def test_fresh_db_seeds_bowser3_ending_on_key_grabbed(tmp_path):
     # Regression: the ORIGINAL v4 seed (commit c9a03cd) ended Bowser 3 on
     # star_grabbed, which the grand star can NEVER fire (it enters

@@ -491,6 +491,45 @@ MIGRATIONS = [
     """
     ALTER TABLE segment_defs ADD COLUMN parent TEXT;
     """,
+    # v23 — Lakitu Skip ends at the DOOR, on his instruction: "Lakitu should be
+    # determined by 'move it to the door' (when Mario touches the door)"
+    # (2026-08-05). The corpus already says so (c9262be); his own row is
+    # `seed_dirty=1`, so reconcile can never reach it and it keeps timing the
+    # castle LOAD — 7"33 where the community reads 6"13, which is task 0026's
+    # whole complaint.
+    #
+    # "TOUCHES" IS THE RIGHT WORD AND IT IS WHAT THE MOMENT MEASURES, checked
+    # rather than assumed: `door_open` fires on the entry EDGE into
+    # `addresses.DOOR_ACTIONS`, whose first two members are ACT_PULLING_DOOR
+    # and ACT_PUSHING_DOOR — the frame Mario takes hold of the door, not the
+    # frame the animation finishes.
+    #
+    # WHAT IT COSTS, measured before he decided and accepted by him: his 11
+    # recorded Lakitu successes read 0 after this. `moment_reached` postdates
+    # his entire journal, so no replay can produce one and nothing can be
+    # backfilled. Leaving the row frozen was the alternative and he ruled
+    # against it.
+    #
+    # Same discipline as v21, whose exclusion list (`to NOT IN (6, 16, 26)`)
+    # is exactly what kept it away from this row: rewrite the END CLAUSE ONLY
+    # and leave `seed_dirty` as found. A repair may fix the thing it is about;
+    # it may not spend the user's own work doing it.
+    #
+    # Guarded on the seed_key AND the old shape, because here the identity IS
+    # one definition rather than a shape 55 rows share — and shape alone would
+    # match every other seeded row that legitimately ends on entering the
+    # castle interior. Idempotent: after it runs, no row matches.
+    """
+    UPDATE segment_defs
+       SET end_triggers = json_array(
+             json_object('type', 'moment_reached', 'kind', 'door_open',
+                         'level', 16, 'ordinal', 1))
+     WHERE seed_key = 'seg:lakitu-skip'
+       AND json_valid(end_triggers)
+       AND json_array_length(end_triggers) = 1
+       AND json_extract(end_triggers, '$[0].type') = 'level_enter'
+       AND json_extract(end_triggers, '$[0].to') = 6;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
