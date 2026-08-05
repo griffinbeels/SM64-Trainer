@@ -320,6 +320,33 @@ untouched: it ends by entering the CASTLE, which has no entrance. The detector
 half, and the decomp fact that forced a held emit, are in
 `.claude/rules/memory-detectors.md`.
 
+**TWO conditions read the one `warp_entered` event, and the difference is one
+sentence** (live report 2026-08-05, with screenshots: *"it's super confusing
+how to get the condition to work… Like, a specific option for triggering the
+warp into the course"*). `warp_entered {level}` names where you ARE — the three
+legacy pipe entries. `entrance_touched {to}` names where the entrance LEADS —
+the other 55. The combined form put three controls on one row and the middle
+one demanded you already know the DDD portal lives in the castle interior,
+which is a fact about our world graph rather than about the game.
+
+**`topology.entrance_level(to)` is THE door for that derivation** — the corpus
+authoring helper and `segments.fires_from`'s arm-position gate both go through
+it, so the builder and the shipped corpus cannot disagree about where an
+entrance lives. A new condition also needs a row in three per-type registries,
+and each has a completeness test that says so: `eventlabel.
+TRIGGER_JOURNAL_TYPES`, `synthesize._SYNTH_PARAMS`, `corpus_from_db.
+_CLAUSE_BUILDERS`.
+
+**Migration v21 repairs a definition the human EDITED**, which the sweep could
+not reach (`seed_dirty=1` blocks reconcile permanently). It rewrites the END
+CLAUSE ONLY and leaves `seed_dirty` exactly as found — the difference from v17,
+and deliberate: both of his frozen rows carry real edits beside the end trigger
+(MIPS Clip's start pins the basement subarea, which is better than what ships),
+and reconcile would discard them. **A repair may fix the thing it is about; it
+may not spend the user's own work doing it.** Guarded by SHAPE rather than by
+seed_key, so it also catches the intermediate `warp_entered`+`to` form that
+shipped for one afternoon; idempotent.
+
 **`step_node` is the part that could have failed silently, and it is the whole
 of Griffin's constraint** (*"our topological logic is already working as
 expected and fine — this should NOT break that. We need to be careful to

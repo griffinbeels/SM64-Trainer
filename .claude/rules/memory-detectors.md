@@ -247,12 +247,24 @@ into HMC record a false MIPS Clip.
 So the event is **HELD** and published back-dated, the same shape
 `StarGrabDetector` uses for the x-cam. `frame` and the igt trio stay the
 TOUCH's. Release: a level edge (`to` = the new level) → an area edge (`to` =
-the unchanged level) → three bounds that guarantee nothing that fired before
-this can stop firing, each publishing `to: None` — a backward `global_timer`
-(console reset), `HOLD_CAP_FRAMES` 120 (aborted fade), and `pending_warp_op`
-clearing for `TELEPORT_GRACE_FRAMES` 10 with no edge at all (an in-level
-teleporter, 16 such events in the repo journal, every one
-`ACT_TELEPORT_FADE_OUT`). Both constants mutation-proved.
+the unchanged level) → two bounds that guarantee nothing that fired before this
+can stop firing, each publishing `to: None` — a backward `global_timer`
+(console reset) and `HOLD_CAP_FRAMES` 240, which is also what covers an
+in-level teleporter (it relocates Mario inside his own area, so no edge ever
+arrives).
+
+**`pending_warp_op` CANNOT release this early, and believing it could cost a
+live round (2026-08-05).** A grace window on that flag looked like the precise
+way to resolve a teleporter promptly and published `to: None` on every real
+painting entry instead — so MIPS Clip kept timing to the DDD load, which is
+the whole thing the change exists to stop. The game clears `sDelayedWarpOp`
+when the delayed warp **initiates** (`sDelayedWarpTimer` is 20) and ~57 more
+frames of fade follow before the level byte moves: **the flag goes quiet in
+the MIDDLE of the wait, not at the end of it.** His journal, ids 25415/25371 —
+touch at 2519145, `level_changed 6 → 23` at 2519222, exactly 77 frames apart,
+and the event published around frame 30 of that. The regression test drives
+that real shape (high 20, quiet 57, edge at 77) and asserts silence on every
+frame of it.
 
 **It moved to SECOND in `main.build_detectors`, behind star_grab only.** On the
 release tick one poll carries a touch that happened 77 frames ago and the level
