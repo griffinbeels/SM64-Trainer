@@ -237,6 +237,18 @@ function fixtureT() {
     view: { catalog: { courses: [] }, icon_overrides: {}, segment_targets: [],
             rank_mode: "pb" },
     segments: [], courseIcons: {}, starIcons: "course", vocab: {},
+    // LogCard's own Ready/Running highlight (amendment A8, spec practice-
+    // log-entity-cards) reads `t.armedSegs.has(sec.segment_id)` for every
+    // segment card UNCONDITIONALLY, mirroring store.js's own real shape
+    // (`armedSegs` is always a real Set there, never absent) -- an empty Set
+    // here is the honest "nothing is armed in this fixture" answer, not a
+    // stand-in. Without it this page rendered NOTHING: an uncaught
+    // `t.armedSegs.has is not a function` on the very first segment card
+    // killed the whole Preact tree before paint, which is a render-time
+    // regression this demo's own "the real component, not a lookalike"
+    // premise exists to catch immediately, not a client of it to route
+    // around.
+    armedSegs: new Set(),
     refresh() {},
   };
 }
@@ -264,7 +276,7 @@ function Pane({ label, width, view, t, ui, tuningKey }) {
       <div class="practice-page">
         <${PracticeLog} key=${tuningKey} v=${view} t=${t} ui=${ui}
           freshIds=${new Set()} openCompare=${null}
-          focus=${null} clearFocus=${() => {}}
+          focus=${null} clearFocus=${() => {}} pick=${() => {}}
           focusKey=${null} onSelect=${() => {}}
           activeKey=${ACTIVE_KEY} topKey=${topEntityKey(view)} />
       </div>

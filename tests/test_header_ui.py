@@ -117,16 +117,26 @@ def test_the_rank_mode_card_is_not_also_called_rank():
     assert 'id="rankmode-select"' in body and "/api/ranks/mode" in body
 
 
-def test_the_picker_is_triggered_from_the_active_target_card():
+def test_the_picker_is_triggered_from_the_practice_logs_header_row():
+    """Was triggered from the Active Target card's own eyebrow (star card,
+    segment card, no-target card, all via `ObjectiveEyebrow`). Amendment A9
+    (spec practice-log-entity-cards, 2026-08-04) deleted that card and gave
+    the picker's trigger a new, single home: a small chip in the practice
+    log's own heading row, beside Stats/Sort/Hide resets -- "keeping it ready
+    for later", not competing for attention with the quick-select row."""
     body = strip_comments(PRACTICE_JS)
     assert "useTargetPicker" in body
     # ONE instance for the page: mounting the dialog's state inside every card
-    # in the practice index would pay for ~30 copies of a fetch effect.
+    # would pay for ~30 copies of a fetch effect.
     assert body.count("useTargetPicker(t)") == 1
-    # Star card, segment card and the no-target card all open the same dialog
-    # from the same place (rule 11 parity + the empty state needs it most).
-    assert body.count("<${ObjectiveEyebrow}") == 3
-    assert ".objective-pick" in strip_comments(INDEX_HTML)
+    # The dialog's OPEN function reaches the practice log as a prop, not a
+    # second useTargetPicker call.
+    assert "openTargetPicker=${openTargetPicker}" in body
+    log_body = strip_comments(
+        (UI / "components" / "practicelog.js").read_text(encoding="utf-8"))
+    assert log_body.count("openTargetPicker &&") == 1, (
+        "PracticeLog's heading must render exactly one target-picker trigger")
+    assert 'class="chip chip-button"' in log_body
 
 
 def test_target_picker_is_the_icon_modal():

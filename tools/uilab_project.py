@@ -47,23 +47,24 @@ SHELL_SELECTORS = (
 
 # Elements carrying irreducible information: a defect if they ellipsise.
 #
-# `.objective-name h2` is the star (or segment) being practised -- the one
-# thing on that card that says WHAT you are doing, and it ellipsised mid-word
-# at 850 and 900px ("Fall onto the Cag...", 2026-07-29). Note this catches only
-# the star the FIXTURE seeds; the whole corpus is measured against the real
-# column by tests/test_objective_name_fits.py, which is what actually holds the
-# floor. Both, because they fail differently: this one catches a layout change
-# on any page state, that one catches a name nobody thought about.
-#
-# `.log-card-name b` and `.rank-banner-name` joined this list 2026-08-03
-# (final whole-branch review, item 1) -- the practice log's own entity name
-# and rank name, which ellipsised on `.log-card-head` below an 858-866px
+# `.log-card-name b` and `.rank-banner-name` -- the practice log's own entity
+# name and rank name, which ellipsised on `.log-card-head` below an 858-866px
 # container (index.html's own measured comment, above the `@container
-# (max-width: 900px)` reflow). Same pairing as the objective card: this row
-# catches a layout regression on any seeded page state, and
-# tests/test_log_card_name_fits.py catches a real name nobody thought about.
+# (max-width: 900px)` reflow). This row catches a layout regression on any
+# seeded page state; the whole corpus is measured against the real column by
+# tests/test_log_card_name_fits.py, which is what catches a real name nobody
+# thought about. Both, because they fail differently.
+#
+# `.objective-name h2` -- the Active Target card's own version of this same
+# concern -- was here until amendment A8 (spec practice-log-entity-cards,
+# 2026-08-04) deleted that card; `.objective-name h2` never renders on the
+# page this rig measures any more (it survives only inside ui/tune.js's climb-
+# inspector replica, which PROJECT does not exercise), and its own corpus
+# check (test_objective_name_fits.py) is deleted with it -- a direct
+# duplicate of test_log_card_name_fits.py's own method once both cards shared
+# nothing left to test differently.
 NEVER_TRUNCATE = (".rank-banner-kicker", ".context-label", ".nav-item span",
-                  ".field-label", ".objective-name h2", ".log-card-name b",
+                  ".field-label", ".log-card-name b",
                   ".rank-banner-name")
 
 # States worth measuring. The Practice page renders EMPTY-state placeholders

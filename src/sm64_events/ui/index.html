@@ -5677,7 +5677,13 @@
   .log-card-strat-picker select {
     width: 100%; min-width: 0; max-width: 100%;
     font-size: 10px; padding: 1px 1.3rem 1px 2px; border: 0; border-radius: 4px;
-    background: transparent; color: var(--muted);
+    /* NEVER `transparent` here (ui-core.md's dropdown rule,
+       tests/test_ui_dropdown_theming.py) -- Chromium themes a select's OWN
+       popup off its computed background, so a transparent one gets a white
+       list. `#0d1928` is the same opaque navy `option { background-color }`
+       already paints the popup itself, so the closed control reads as part
+       of the dark card while still being a real, non-transparent colour. */
+    background: #0d1928; color: var(--muted);
   }
   .log-card-strat-picker select:hover { background: #16283e; color: var(--text); }
   .log-card-strat-picker select:focus-visible { outline: 2px solid #78b9ff; outline-offset: 1px; }

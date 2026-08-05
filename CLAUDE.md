@@ -270,7 +270,7 @@ Contract changes land on main first, then dependent work fans out. Merge with
      A defect probe answers "is something broken"; it cannot answer "does this
      component draw itself the same way in both layouts"
      (`test_rank_banner_continuity.py`) or "does the widest value in the corpus
-     fit" (`test_objective_name_fits.py`). Both of those were user-reported
+     fit" (`test_log_card_name_fits.py`). Both of those were user-reported
      bugs that no probe could have caught, in either direction.
   Prove any new guard by mutation — put the bug back, watch it go red, revert.
   A guard nobody has seen fail is green forever
