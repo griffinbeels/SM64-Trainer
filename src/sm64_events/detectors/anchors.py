@@ -35,7 +35,7 @@ Both anchor payloads carry mario_acted: whether Mario entered any non-passive
   followed banked a second reset row for an attempt nobody made.
 
   Measured over both journals, the gap from an anchor to the first mario_acted
-  after it: **2,130 at zero frames, 484 at one, 35 across the whole 2-6 band,
+  after it: **2,130 at zero frames, 484 at one, 46 across the whole 2-6 band,
   2,370 at 7+.** A lingering byte and real play, with nothing in between. Zero
   frames is not a heuristic at all — global_timer IS the game's frame counter,
   so a second poll of the same value cannot have seen a new action.

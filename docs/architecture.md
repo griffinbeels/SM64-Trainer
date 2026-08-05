@@ -1220,10 +1220,13 @@ along with minimizing levels of indirection. The measurement is
 the knowledge base rather than here because the practice is cross-project, and
 it REPORTS rather than gating.
 
-**Headline: this codebase is not systemically shallow.** 27,442 lines behind
-684 public names — 40.1 lines each — and 41 public names that only forward, 6.0%
+**Headline: this codebase is not systemically shallow.** 27,586 lines behind
+684 public names — 40.3 lines each — and 41 public names that only forward, 6.0%
 of the surface. The scan was run before designing any refactor, and it is the
 reason there is no refactor: the expected big restructuring did not exist.
+(Re-measured after task 0084's anchor fix: the public count and the
+pass-throughs did not move at all, and the extra lines are the evidence its
+docstring now carries.)
 
 What the number cannot see, and it matters more than what it can: this measures
 SURFACE, not information leakage. A module can score well here and still make
