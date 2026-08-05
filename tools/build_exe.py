@@ -75,6 +75,13 @@ def app_args(ffmpeg: "str | None") -> list[str]:
         # (reconcile_defaults safely no-ops on a missing seed).
         "--add-data",
         f"{REPO / 'src' / 'sm64_events' / 'data' / 'defaults.seed.json'}{SEP}.",
+        # Ladders derived from the Ultimate Sheet (bundled_sheet_ladders() in
+        # core/paths.py). Without this entry the 75 sheet-derived strategies
+        # work perfectly from source and vanish from the released exe, which is
+        # a silent failure: the helper simply returns None and the store falls
+        # back to vetted ladders alone.
+        "--add-data",
+        f"{REPO / 'src' / 'sm64_events' / 'data' / 'sheet_ladders.seed.json'}{SEP}.",
     ]
     for pkg in COLLECT:
         argv += ["--collect-all", pkg]
