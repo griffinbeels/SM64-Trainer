@@ -287,6 +287,11 @@ def build():
     # 0087). Read as a callable rather than a snapshot: a target set mid
     # session must start recording without a restart.
     detectors = build_detectors(target_active=lambda: service.target is not None)
+    # An ordinal means "the Nth since this attempt opened", so the counter
+    # restarts when one does. The service sees every event and the detector
+    # sees only snapshots, so this is the one place that can join them.
+    service.on_attempt_boundary = next(
+        d for d in detectors if isinstance(d, MomentDetector)).reset
     if replay is not None:
         # Poll-thread tap (emits no events): tells the recorder the player
         # is providing input so the buffer pauses while idle (activity.py).

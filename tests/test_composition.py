@@ -202,3 +202,35 @@ def test_build_wires_replay_endpoints(monkeypatch, tmp_path):
     paths = {r.path for r in app.routes}
     assert "/api/replay/status" in paths
     assert "/api/replay/clips/{name}" in paths
+
+
+def test_build_joins_the_boundary_hook_to_the_moment_detector(monkeypatch):
+    """An ordinal means "the Nth since this attempt opened". The service sees
+    every event and the detector sees only snapshots, so if build() does not
+    join them the counter never restarts -- and a subsection pinned to an
+    ordinal matches the first run and never again.
+
+    Driven through the REAL build() rather than a source scan, for the same
+    reason the frame-heartbeat test above is: a scan passes on a line that
+    has been commented out, moved into a branch that never runs, or wired to
+    a different detector instance than the poller got."""
+    main_mod = _stubbed_main(monkeypatch)
+    captured = {}
+    real_poller = main_mod.Poller
+
+    def spy(memory, detectors, sink, **kw):
+        captured["detectors"] = detectors
+        captured["sink"] = sink
+        return real_poller(memory, detectors, sink, **kw)
+
+    monkeypatch.setattr(main_mod, "Poller", spy)
+    main_mod.build()
+
+    hook = captured["sink"].on_attempt_boundary
+    assert hook is not None, "the service was built with no boundary hook"
+    wired = [d for d in captured["detectors"]
+             if type(d).__name__ == "MomentDetector"]
+    assert len(wired) == 1
+    # The hook must be THAT detector's reset -- not another instance's, which
+    # would leave the running counter untouched while looking correct.
+    assert hook.__self__ is wired[0]

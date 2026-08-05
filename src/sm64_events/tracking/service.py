@@ -198,8 +198,30 @@ class TrackerService:
         # session that had rows when this method began.
         await self._purge_empty_sessions()
 
+    # An attempt boundary opened: whatever is counting per-attempt state
+    # starts again. Wired by main.build() to MomentDetector.reset, and None
+    # everywhere else (every test fixture and several tools build a service
+    # with no detector chain at all, so an unwired hook must be inert).
+    #
+    # A CALLBACK rather than the service reaching into a detector: the
+    # composition root is the only place that holds both, exactly as it is
+    # for the poller's on_frame heartbeat.
+    on_attempt_boundary = None
+
     async def publish(self, event: Event) -> None:
         seq = await self.broadcaster.publish(event)
+        # BEFORE the db/session guards below, deliberately. A broadcast-only
+        # instance still runs the full detector chain, and ordinals that only
+        # restart on the instance holding the lock would be a difference
+        # between two servers watching one game.
+        #
+        # game_reset is absent on purpose: it restarts gGlobalTimer, and every
+        # detector already self-heals on a backward clock (the base contract).
+        # An L-reset or a savestate load does NOT move that clock, which is
+        # why these two need saying.
+        if (event.type in ("practice_reset", "state_loaded")
+                and self.on_attempt_boundary is not None):
+            self.on_attempt_boundary()
         if event.type == "stage_changed":
             # Live presentation signal: cache for the session view's initial
             # load and NEVER journal it (recomputable from curr_level; a
