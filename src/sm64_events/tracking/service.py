@@ -809,7 +809,8 @@ class TrackerService:
                                     enabled=d.get("enabled", True),
                                     waypoints=d.get("waypoints", []),
                                     category=d.get("category"),
-                                    match_mode=d.get("match_mode", "loose"))
+                                    match_mode=d.get("match_mode", "loose"),
+                                    parent=d.get("parent"))
         await self._segments_changed()
         return sid
 
@@ -825,7 +826,8 @@ class TrackerService:
         db.update_segment_def(segment_id, **{
             k: d[k] for k in ("name", "enabled", "start_triggers",
                               "end_triggers", "waypoints", "guards",
-                              "category", "match_mode") if k in d})
+                              "category", "match_mode",
+                              "parent") if k in d})
         if current.get("seed_key"):
             # a user edit to a seeded row protects it from reconcile's
             # refresh (tracking/defaults.py) until reset_segment clears the
@@ -902,7 +904,8 @@ class TrackerService:
             d["name"], d["start_triggers"], d["end_triggers"], d["guards"],
             _iso(_now()), enabled=d["enabled"], waypoints=d["waypoints"],
             default_strat=d.get("default_strat"),
-            match_mode=d.get("match_mode", "loose"))
+            match_mode=d.get("match_mode", "loose"),
+            parent=d.get("parent"))
 
     async def split_segment(self, segment_id: int, mid: list,
                             names: tuple[str, str]) -> tuple[int, int]:

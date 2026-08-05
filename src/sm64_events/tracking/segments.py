@@ -493,6 +493,28 @@ class SegmentDef:
     # "loose" by db.insert_segment_def — an authoring default, not a claim
     # about existing data.
     match_mode: str = "strict"
+    # The entity this is a SUBSECTION of, or None for a top-level segment --
+    # which is every definition that existed before 2026-08-05 (task 0087).
+    # Defaulted for the same reason waypoints/default_strat/match_mode are: a
+    # non-default field would TypeError every existing construction.
+    #
+    # THIS ONE FIELD is the whole difference between a segment and a
+    # subsection. Everything a subsection needs -- attempts, personal bests,
+    # strategies, ladders, ranks, the practice log, the builder, the matcher
+    # -- already exists and is kind-dispatched between stars and segments
+    # (rule 11), so a third KIND would fan out across roughly twenty files and
+    # buy nothing. The selector filters on this for progressive disclosure,
+    # and a castle MOVEMENT owns subsections through the identical field
+    # ("segment:<id>"), which is why that case needs no mechanism of its own.
+    #
+    # The key format is the one sheet-library's mapping module already emits
+    # ("star:<course>:<slot>" / "segment:<id>"), so a subsection this tooling
+    # creates is directly mappable from the community sheet with no bridge on
+    # either side.
+    parent: str | None = None
+
+
+_PARENT_KEY = re.compile(r"^(?:star:\d+:\d+|segment:\d+)$")
 
 
 @dataclass(frozen=True)
@@ -1986,6 +2008,12 @@ def validate_definition(d: dict) -> None:
         # strategy" everywhere while still suppressing the blank option in
         # the picker, leaving no way to express either.
         raise ValueError("default_strat must be a non-empty string or absent")
+    parent = d.get("parent")
+    if parent is not None and (not isinstance(parent, str)
+                               or not _PARENT_KEY.match(parent)):
+        raise ValueError(
+            "parent must be a star or segment key like 'star:2:1' or "
+            f"'segment:7', got {parent!r}")
     mode = d.get("match_mode", "strict")
     if mode not in MATCH_MODES:
         raise ValueError(

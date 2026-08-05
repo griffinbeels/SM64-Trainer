@@ -73,7 +73,8 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
                     # Item 0); "strict" until then, matching the column
                     # default and every existing row rather than the insert
                     # function's own now-gone "loose" default.
-                    match_mode=srow.get("match_mode", "strict"))
+                    match_mode=srow.get("match_mode", "strict"),
+                    parent=srow.get("parent"))
             else:
                 key_to_id[key] = existing["id"]
                 if not existing["seed_dirty"]:
@@ -89,7 +90,8 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
                         # Same reasoning as the insert branch above: an
                         # ALREADY-installed, untouched row must also pick up a
                         # later seed conversion, not just a fresh install.
-                        match_mode=srow.get("match_mode", "strict"))
+                        match_mode=srow.get("match_mode", "strict"),
+                        parent=srow.get("parent"))
         except _SEED_ERRORS as exc:
             problems.append(f"segment {key}: {exc}")
     route_by_key = {r["seed_key"]: r for r in db.routes() if r.get("seed_key")}

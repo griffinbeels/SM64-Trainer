@@ -214,6 +214,9 @@ class SegmentBody(BaseModel):
     waypoints: list = []
     category: str | None = None
     match_mode: str = "loose"
+    # The entity this is a SUBSECTION of; None (the default) = a top-level
+    # segment, which is what every definition was before task 0087.
+    parent: str | None = None
 
 
 class SegmentPatch(BaseModel):
@@ -233,6 +236,10 @@ class SegmentPatch(BaseModel):
     category: str | None = None
     # None = untouched, exactly like waypoints above.
     match_mode: str | None = None
+    # None = untouched. There is deliberately NO way to clear a parent
+    # through this patch shape: promoting a subsection back to a top-level
+    # segment changes what it IS, and nothing in the builder asks for it.
+    parent: str | None = None
 
 
 class SegmentSplitBody(BaseModel):

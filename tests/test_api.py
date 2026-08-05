@@ -1165,6 +1165,11 @@ _SEGMENT_FIELD_SAMPLES = {
     "end_triggers": [{"type": "level_enter", "to": 6}],
     "guards": [], "enabled": False, "waypoints": [],
     "category": "Cat", "match_mode": "strict",
+    # A subsection's parent entity (task 0087). Must be a WELL-FORMED key --
+    # validate_definition rejects anything else, so a placeholder string here
+    # would fail the write for the wrong reason and read as this guard
+    # working when it was not.
+    "parent": "segment:7",
 }
 
 

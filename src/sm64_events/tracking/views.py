@@ -1420,6 +1420,12 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # 2026-07-24-segment-default-strat). Stars carry no such key —
             # the documented rule 11 asymmetry.
             "default_strat": meta.get("default_strat"),
+            # The entity this is a SUBSECTION of, or None for a top-level
+            # segment (task 0087). Stamped rather than derived client-side
+            # for the same reason `course_id` is: the selector asks "what has
+            # this target as its parent" on every render, and a second
+            # derivation in JS is how two surfaces start disagreeing.
+            "parent": meta.get("parent"),
             # igt present-as-None: same shape-stability rule as the target
             # payload — UI code reading sec.pb.igt gets null, not undefined.
             "pb": {"igt": None,
