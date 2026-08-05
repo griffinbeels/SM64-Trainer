@@ -73,9 +73,39 @@ def test_already_seen_ids_win_even_against_black_font():
     # subsection whatever the styling says.
     data = _rows([
         ("[1] Big Bob-omb on the Summit", True, BLACK, "43.63", {}),
-        ("[1] Warp fadeout", False, BLACK, "15.90", {}),
+        (" [2] Left side strat", False, BLACK, "42.90", {}),
+        ("[2] Warp fadeout", False, BLACK, "15.90", {}),
     ])
-    assert [r.kind for r in sheet.read_rows(data)] == ["approach", "subsection"]
+    assert [r.kind for r in sheet.read_rows(data)] == [
+        "approach", "approach", "subsection"]
+
+
+def test_a_target_opens_where_the_id_lineage_RESTARTS_not_where_bold_is():
+    # The sheet unbolted all nine of CCM's target rows between two revisions
+    # on 2026-08-05 while changing no row, no id and no grey font. Bold as the
+    # authority silently lost nine targets; the restart rule keeps them.
+    data = _rows([
+        ("[1] CCM RTA (RTA strat, Fadeout)", False, BLACK, "4:44.66", {}),
+        (" [2] CCM RTA (Any strat, Star-Grab)", False, BLACK, "4:36.37", {}),
+        ("[1] Slip Slidin' Away", False, BLACK, "24.50", {}),
+        (" [2] No ice bridge clip", False, BLACK, "24.93", {}),
+    ])
+    rows = sheet.read_rows(data)
+    assert [r.opens_target for r in rows] == [True, False, True, False]
+    assert [r.bold for r in rows] == [False] * 4      # the drift is visible
+
+
+def test_a_grey_row_reusing_id_1_does_not_open_a_target():
+    # WF's "[1] Whomp text Xcam" is a subsection that reuses lineage 1. The
+    # grey veto is what stops the restart rule opening a target on it.
+    data = _rows([
+        ("[1] Chip off Whomp's Block (JP)", True, BLACK, "29.76", {}),
+        ("[1] Whomp text Xcam (JP)", False, GREY, "9.83", {}),
+        (" [2] Chip off Whomp's Block (US)", False, BLACK, "28.80", {}),
+    ])
+    rows = sheet.read_rows(data)
+    assert [r.opens_target for r in rows] == [True, False, False]
+    assert [r.kind for r in rows] == ["approach", "subsection", "approach"]
 
 
 def test_font_and_time_disagreement_raises_naming_the_row():

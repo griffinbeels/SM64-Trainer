@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sheet Library Audit</title>
+<style>
+  :root{
+    --bg:#0b1020; --panel:#141b33; --panel2:#1b2444; --line:#2a3560;
+    --ink:#e8ecff; --dim:#93a0cc; --gold:#f2c14e; --good:#5fd08a;
+    --warn:#ffb454; --bad:#ff7a7a; --accent:#7aa2ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.5 "Segoe UI",system-ui,sans-serif}
+  header{position:sticky;top:0;z-index:10;background:rgba(11,16,32,.96);
+         border-bottom:1px solid var(--line);backdrop-filter:blur(6px)}
+  .bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+       padding:12px 18px;max-width:1180px;margin:0 auto}
+  h1{font-size:16px;margin:0;letter-spacing:.3px}
+  h1 span{color:var(--gold)}
+  .meta{color:var(--dim);font-size:12px}
+  .grow{flex:1}
+  input,select,button{font:inherit;color:var(--ink);background:var(--panel2);
+       border:1px solid var(--line);border-radius:7px;padding:6px 9px}
+  input:focus,select:focus{outline:2px solid var(--accent);outline-offset:1px}
+  button{cursor:pointer;transition:background .15s ease,border-color .15s ease}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--gold);color:#2a2000;border-color:var(--gold);
+       font-weight:600}
+  button.primary[disabled]{background:var(--panel2);color:var(--dim);
+       border-color:var(--line);cursor:default;font-weight:400}
+  main{max-width:1180px;margin:0 auto;padding:18px}
+  .group{color:var(--dim);font-size:12px;text-transform:uppercase;
+       letter-spacing:.8px;margin:22px 0 8px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;
+       padding:12px 14px;margin-bottom:10px;transition:border-color .15s ease}
+  .card.changed{border-color:var(--gold)}
+  .card.hidden{display:none}
+  .top{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .label{font-weight:600;font-size:15px}
+  .sec{color:var(--dim);font-size:12px}
+  .chip{font-size:11px;padding:2px 8px;border-radius:999px;
+       border:1px solid var(--line);color:var(--dim);white-space:nowrap}
+  .chip.near{border-color:var(--warn);color:var(--warn)}
+  .chip.shared{border-color:var(--accent);color:var(--accent)}
+  .chip.unmapped{border-color:var(--bad);color:var(--bad)}
+  .chip.audited{border-color:var(--good);color:var(--good)}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
+  th{text-align:left;color:var(--dim);font-weight:500;font-size:11px;
+     text-transform:uppercase;letter-spacing:.6px;padding:4px 6px}
+  td{padding:5px 6px;border-top:1px solid var(--line);vertical-align:middle}
+  tr.sub td{color:var(--dim)}
+  tr.flag td{background:rgba(255,180,84,.08)}
+  .num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+  .ratio.low{color:var(--warn)}
+  .ratio.high{color:var(--bad)}
+  a{color:var(--accent)}
+  .kind{padding:3px 7px;font-size:12px}
+  .empty{color:var(--dim);padding:40px;text-align:center}
+  .reason{width:100%;margin-top:8px}
+  .legend{color:var(--dim);font-size:12px;padding:0 18px 12px;
+       max-width:1180px;margin:0 auto}
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>Sheet Library <span>Audit</span></h1>
+    <span class="meta" id="meta"></span>
+    <span class="grow"></span>
+    <input id="q" placeholder="search label, section, row…" size="26">
+    <select id="cat"><option value="">every category</option></select>
+    <select id="flag">
+      <option value="">every row</option>
+      <option value="near-veto">near the veto floor</option>
+      <option value="near-ceiling">near the part/whole ceiling</option>
+      <option value="shared-entity">shares an entity</option>
+      <option value="styling-drift">the sheet unbolded it</option>
+      <option value="unmapped">unmapped</option>
+      <option value="changed">I changed it</option>
+    </select>
+    <button id="save" class="primary" disabled>Saved</button>
+  </div>
+  <div class="legend" id="legend"></div>
+</header>
+<main id="list"></main>
+<script>
+const DATA = __PAYLOAD__;
+const OV = {targets:{}, rows:{}};
+for (const t of DATA.targets) {
+  if (t.override) OV.targets[t.key] = {...t.override};
+  for (const r of t.rows) if (r.override) OV.rows[r.key] = {...r.override};
+}
+let dirty = false;
+
+const fmt = cs => cs == null ? "—"
+  : (cs >= 6000 ? Math.floor(cs/6000) + ":" + String(Math.floor(cs%6000/100)).padStart(2,"0")
+     : String(Math.floor(cs/100))) + "." + String(cs%100).padStart(2,"0");
+
+const effCat = t => (OV.targets[t.key]||{}).category ?? t.computed.category;
+const effEnt = t => (OV.targets[t.key]||{}).entity_key ?? t.computed.entity_key;
+const effKind = r => (OV.rows[r.key]||{}).kind ?? r.kind;
+const changed = t => !!OV.targets[t.key] || t.rows.some(r => !!OV.rows[r.key]);
+
+function markDirty(){
+  dirty = true;
+  const b = document.getElementById("save");
+  b.disabled = false; b.textContent = "Save corrections";
+}
+
+function setTarget(t, field, value){
+  const cur = OV.targets[t.key] || {};
+  if (value === "" || value == null) delete cur[field]; else cur[field] = value;
+  if (Object.keys(cur).length) OV.targets[t.key] = cur; else delete OV.targets[t.key];
+  markDirty(); paintCard(t);
+}
+
+function setRow(t, r, kind){
+  if (kind === r.kind) delete OV.rows[r.key];
+  else OV.rows[r.key] = {...(OV.rows[r.key]||{}), kind};
+  markDirty(); paintCard(t);
+}
+
+function option(value, text, selected){
+  const o = document.createElement("option");
+  o.value = value; o.textContent = text; o.selected = selected;
+  return o;
+}
+
+const cards = new Map();
+
+function paintCard(t){
+  const el = cards.get(t.key);
+  el.classList.toggle("changed", changed(t));
+  el.querySelector(".auditedChip").hidden = !changed(t);
+  const ent = el.querySelector(".ent");
+  const cat = effCat(t);
+  ent.hidden = !(cat === "star" || cat === "segment");
+  for (const r of t.rows) {
+    const row = el.querySelector(`[data-row="${CSS.escape(r.key)}"]`);
+    const kind = effKind(r);
+    row.className = kind === "subsection" ? "sub" : "";
+    if (r.near) row.classList.add("flag");
+    row.querySelector(".kind").value = kind;
+  }
+}
+
+function card(t){
+  const el = document.createElement("div");
+  el.className = "card";
+  const top = document.createElement("div");
+  top.className = "top";
+  top.innerHTML = `<span class="label"></span><span class="sec"></span>`;
+  top.querySelector(".label").textContent = t.label;
+  top.querySelector(".sec").textContent = t.section === t.group ? t.section
+                                        : `${t.group} › ${t.section}`;
+  for (const f of t.flags) {
+    const c = document.createElement("span");
+    c.className = "chip " + (f.startsWith("near") ? "near"
+                          : f === "shared-entity" ? "shared"
+                          : f === "styling-drift" ? "near" : "unmapped");
+    c.textContent = f.replace(/-/g," ");
+    top.appendChild(c);
+  }
+  const auditedChip = document.createElement("span");
+  auditedChip.className = "chip audited auditedChip";
+  auditedChip.textContent = "corrected";
+  auditedChip.hidden = true;
+  top.appendChild(auditedChip);
+
+  const spacer = document.createElement("span"); spacer.className = "grow";
+  top.appendChild(spacer);
+
+  const cat = document.createElement("select");
+  for (const c of DATA.categories) cat.appendChild(option(c, c.replace(/_/g," "), c === effCat(t)));
+  cat.onchange = () => setTarget(t, "category", cat.value === t.computed.category ? "" : cat.value);
+  top.appendChild(cat);
+
+  const ent = document.createElement("select");
+  ent.className = "ent";
+  ent.appendChild(option("", "— no entity —", !effEnt(t)));
+  for (const e of DATA.entities) ent.appendChild(option(e.key, e.name, e.key === effEnt(t)));
+  ent.onchange = () => setTarget(t, "entity_key",
+      ent.value === (t.computed.entity_key || "") ? "" : ent.value);
+  top.appendChild(ent);
+  el.appendChild(top);
+
+  const table = document.createElement("table");
+  table.innerHTML = `<thead><tr><th>row</th><th>ids</th><th class="num">best</th>
+    <th class="num">vs basis</th><th class="num">times</th><th class="num">videos</th>
+    <th>example</th><th>is a</th></tr></thead>`;
+  const body = document.createElement("tbody");
+  for (const r of t.rows) {
+    const tr = document.createElement("tr");
+    tr.dataset.row = r.key;
+    const ratioClass = r.ratio == null ? "" :
+      (effKind(r) === "approach" && r.ratio < 0.85) ? "low" :
+      (effKind(r) === "subsection" && r.ratio > 0.85) ? "high" : "";
+    tr.innerHTML = `<td class="rn"></td><td class="sec"></td>
+      <td class="num"></td><td class="num ratio ${ratioClass}"></td>
+      <td class="num"></td><td class="num"></td><td class="ex"></td><td></td>`;
+    const cells = tr.children;
+    cells[0].textContent = r.name;
+    cells[1].textContent = "[" + r.ids.join("|") + "]";
+    cells[2].textContent = fmt(r.best_cs);
+    cells[3].textContent = r.ratio == null ? "—" : r.ratio.toFixed(2);
+    cells[4].textContent = r.entries;
+    cells[5].textContent = r.videos;
+    if (r.video) {
+      const a = document.createElement("a");
+      a.href = r.video; a.target = "_blank"; a.rel = "noreferrer";
+      a.textContent = "watch";
+      cells[6].appendChild(a);
+    } else cells[6].textContent = "—";
+    const sel = document.createElement("select");
+    sel.className = "kind";
+    for (const k of DATA.row_kinds) sel.appendChild(option(k, k, k === effKind(r)));
+    sel.onchange = () => setRow(t, r, sel.value);
+    cells[7].appendChild(sel);
+    body.appendChild(tr);
+  }
+  table.appendChild(body);
+  el.appendChild(table);
+  cards.set(t.key, el);
+  return el;
+}
+
+function render(){
+  const list = document.getElementById("list");
+  list.textContent = "";
+  let group = null;
+  for (const t of DATA.targets) {
+    if (t.group !== group) {
+      group = t.group;
+      const h = document.createElement("div");
+      h.className = "group"; h.textContent = group || "(no group)";
+      list.appendChild(h);
+    }
+    list.appendChild(card(t));
+    paintCard(t);
+  }
+  filter();
+}
+
+function filter(){
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const cat = document.getElementById("cat").value;
+  const flag = document.getElementById("flag").value;
+  let shown = 0;
+  for (const t of DATA.targets) {
+    const hay = (t.label + " " + t.section + " " + t.group + " " +
+                 t.rows.map(r => r.name).join(" ")).toLowerCase();
+    let ok = (!q || hay.includes(q)) && (!cat || effCat(t) === cat);
+    if (ok && flag) ok = flag === "changed" ? changed(t) : t.flags.includes(flag);
+    cards.get(t.key).classList.toggle("hidden", !ok);
+    if (ok) shown++;
+  }
+  for (const h of document.querySelectorAll(".group")) {
+    let node = h.nextElementSibling, any = false;
+    while (node && node.classList.contains("card")) {
+      if (!node.classList.contains("hidden")) { any = true; break; }
+      node = node.nextElementSibling;
+    }
+    h.style.display = any ? "" : "none";
+  }
+  document.getElementById("meta").textContent =
+    `${shown} of ${DATA.targets.length} targets · sheet ${DATA.sheet_revision}`;
+}
+
+document.getElementById("save").onclick = async () => {
+  const b = document.getElementById("save");
+  b.disabled = true; b.textContent = "Saving…";
+  try {
+    const res = await fetch("/save", {method:"POST",
+      headers:{"content-type":"application/json"}, body: JSON.stringify(OV)});
+    if (!res.ok) throw new Error(await res.text());
+    const out = await res.json();
+    b.textContent = `Saved ${out.targets + out.rows} corrections`;
+    dirty = false;
+  } catch (err) {
+    b.disabled = false; b.textContent = "Save failed — retry";
+    console.error(err);
+  }
+};
+addEventListener("beforeunload", e => { if (dirty) e.preventDefault(); });
+
+const catSel = document.getElementById("cat");
+for (const c of DATA.categories) catSel.appendChild(option(c, c.replace(/_/g," "), false));
+for (const id of ["q","cat","flag"]) document.getElementById(id).oninput = filter;
+document.getElementById("legend").textContent =
+  "vs basis = this row's best against the best of the rows before it (approaches) " +
+  "or against its target's slowest approach (subsections). The parser refuses an " +
+  "approach below 0.70 and a subsection above 1.00; anything shown in amber or red " +
+  "is inside the margin where a human should look.";
+render();
+</script>
+</body>
+</html>

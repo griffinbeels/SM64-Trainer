@@ -19,8 +19,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from sm64_events.library.audit import load_overrides           # noqa: E402
 from sm64_events.library.build import build, coverage          # noqa: E402
 from sm64_events.library.mapping import UNMAPPED_EXPECTED      # noqa: E402
+
+OVERRIDES = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
+             / "data" / "library_overrides.json")
 
 SHEET_ID = "1J20aivGnvLlAuyRIMMclIFUmrkHXUzgcDmYa31gdtCI"
 # Gzipped, and measured rather than assumed: 4.51 MB of JSON compresses to
@@ -53,7 +57,8 @@ def main() -> None:
     args = parser.parse_args()
 
     data = args.source.read_bytes() if args.source else fetch()
-    payload = build(data, fetched_at=utc_now())
+    overrides = load_overrides(OVERRIDES)
+    payload = build(data, fetched_at=utc_now(), overrides=overrides)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     # mtime=0 so re-running with no sheet change produces byte-identical output
     # and an empty git diff, rather than a 0.4 MB blob whose only change is a
@@ -64,12 +69,23 @@ def main() -> None:
     cov = coverage(payload)
     size_mb = OUT.stat().st_size / 1_000_000
     print(f"wrote {OUT} ({size_mb:.1f} MB)")
+    applied = len(overrides["targets"]) + len(overrides["rows"])
+    if applied:
+        print(f"  applied {applied} audit corrections from "
+              f"{OVERRIDES.name} ({len(overrides['targets'])} targets, "
+              f"{len(overrides['rows'])} rows)")
     print(f"  sheet revision {payload['sheet_revision']}")
     print(f"  {cov['targets']} targets, {cov['mapped']} mapped onto "
           f"{cov['entities']} entities, {cov['unmapped']} unmapped")
     print(f"  {cov['approaches']} approaches, {cov['subsections']} subsections, "
           f"{cov['entries']} entries, {cov['videos']} videos, "
           f"{cov['runners']} runners")
+    drift = payload.get("styling_drift") or []
+    if drift:
+        print(f"  {len(drift)} rows where the sheet's BOLD disagrees with the "
+              f"structural boundary (reported, not fatal):")
+        for row in drift[:10]:
+            print(f"    row {row['row']}: {row['label'][:52]}")
     for reason, count in sorted(cov["by_reason"].items()):
         flag = "" if reason in UNMAPPED_EXPECTED else "   <-- REVIEW"
         print(f"  unmapped/{reason}: {count}{flag}")

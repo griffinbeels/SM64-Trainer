@@ -74,7 +74,7 @@ def _pack_approaches(rows) -> list:
     return out
 
 
-def build(data: bytes, fetched_at: str) -> dict:
+def build(data: bytes, fetched_at: str, overrides: dict | None = None) -> dict:
     rows = read_rows(data)
     runners = sorted({runner for row in rows for runner in row.entries})
     targets, current = [], None
@@ -84,6 +84,10 @@ def build(data: bytes, fetched_at: str) -> dict:
             key = map_target(row.section, label)
             current = {"entity_key": key, "group": row.group,
                        "section": row.section, "label": label,
+                       # BBH opens TWO targets called "Go on a Ghost Hunt",
+                       # one per ROM version, so the version is part of a
+                       # target's identity rather than decoration.
+                       "version": row.version,
                        "miss_reason": (None if key else
                                        miss_reason(row.section, label, row.group)),
                        "_approach_rows": [], "subsections": []}
@@ -99,11 +103,31 @@ def build(data: bytes, fetched_at: str) -> dict:
                  "entries": _entries(row)})
     for target in targets:
         target["approaches"] = _pack_approaches(target.pop("_approach_rows"))
-    return {"schema_version": SCHEMA_VERSION,
-            "sheet_revision": log_revision(data),
-            "fetched_at": fetched_at,
-            "runners": runners,
-            "targets": targets}
+    payload = {"schema_version": SCHEMA_VERSION,
+               "sheet_revision": log_revision(data),
+               "fetched_at": fetched_at,
+               "runners": runners,
+               # Where the sheet's own bold disagrees with the structural
+               # boundary. Reported rather than raised: the sheet legitimately
+               # restyles (nine CCM rows lost bold overnight on 2026-08-05),
+               # and a silent divergence is how nine targets would vanish.
+               # `label` is version-STRIPPED, matching how a target is named
+               # in `targets` -- the raw row label would miss every drifted
+               # target whose name carries a (JP)/(US) suffix.
+               "styling_drift": [
+                   {"row": row.row, "section": row.section,
+                    "label": _base_name(row.label),
+                    "opens_target": row.opens_target, "bold": row.bold}
+                   for row in rows if row.opens_target != row.bold],
+               "targets": targets}
+    if overrides:
+        # The human's audit outranks our classification, and it is applied
+        # HERE rather than at read time so every consumer -- the snapshot, the
+        # server, phase 2's fitter -- sees one corrected payload instead of
+        # each having to remember to apply it.
+        from sm64_events.library.audit import apply_overrides
+        payload = apply_overrides(payload, overrides)
+    return payload
 
 
 def _items(target):

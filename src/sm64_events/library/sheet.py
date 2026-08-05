@@ -31,10 +31,18 @@ a subsection. Those six rows are the entire reason a naive ratio test fails.
 When the ids do not settle it and the other two disagree, we RAISE naming the
 row rather than pick a winner.
 
-Column A's BOLD marks where a new target begins. Its FILL does not: the fill
-alternates between two greens as banding and only 38 of the 252 target rows
-carry a header fill, so reading the boundary off the fill is wrong in a way
-that looks right.
+A new target begins where the id lineage RESTARTS -- a non-grey row that either
+opens a section or re-introduces `[1]` on its own after 1 has been used. Bold
+used to be the boundary here and is now only a cross-check, because the sheet
+moved under us: between 2026-08-04T22:14 and 2026-08-05T09:15 someone unbolded
+all nine of Cool Cool Mountain's target rows, with every row, every id and all
+147 grey fonts untouched. Bold-as-authority silently lost nine targets and
+their approaches; the structural rule reproduces all 252 on BOTH revisions,
+agreeing with bold exactly on the day bold was still complete.
+
+Column A's FILL was never the boundary either: it alternates between two greens
+as banding and only 38 of the 252 target rows carry a header fill, so reading
+the boundary off the fill is wrong in a way that looks right.
 """
 import re
 from dataclasses import dataclass, field
@@ -84,6 +92,9 @@ class SheetRow:
     ideal_cs: int | None
     fill_rate: float | None
     entries: dict = field(default_factory=dict)
+    # What the sheet's own styling claims, kept only so a drift between it and
+    # the structural boundary is visible instead of silent.
+    bold: bool = False
 
 
 def parse_time(text: str) -> int | None:
@@ -144,7 +155,7 @@ def read_rows(data: bytes) -> list:
     # only the innermost loses the outer context entirely, which is what tells
     # a mapper that 113 rows are movements rather than unrecognised stars.
     out, group, section, seen, best_by_id = [], "", "", set(), {}
-    target_best, target_label = None, ""
+    target_best, target_label, in_section = None, "", False
 
     def text(row, col):
         cell = cells.get((row, col))
@@ -160,16 +171,22 @@ def read_rows(data: bytes) -> list:
             if not section.startswith(SUBHEADER_MARK):
                 group = section
             seen, best_by_id = set(), {}
-            target_best, target_label = None, ""
+            target_best, target_label, in_section = None, "", False
             continue
         ids = frozenset(match.group(1).split("|"))
         label = match.group(2)
         best_cs = parse_time(text(row, 2))
-        if head.bold:
+        grey = head.font_rgb == GREY_FONT
+        # The lineage restart, not the styling. A grey row is never a boundary
+        # however its ids read, which is what stops WF's `[1] Whomp text Xcam`
+        # -- a subsection reusing id 1 -- from opening a target of its own.
+        opens = not grey and (not in_section or (ids == {"1"} and "1" in seen))
+        in_section = True
+        if opens:
             seen, best_by_id = set(), {}
             target_best, target_label = None, label
         own = [best_by_id[i] for i in ids if best_by_id.get(i) is not None]
-        kind = _classify(ids, seen, head.font_rgb == GREY_FONT, best_cs,
+        kind = _classify(ids, seen, grey, best_cs,
                          min(own) if own else target_best,
                          bool(_STAGE_RTA.search(target_label)), label, row)
 
@@ -185,7 +202,7 @@ def read_rows(data: bytes) -> list:
         version = _VERSION.search(label)
         out.append(SheetRow(
             row=row, group=group, section=section, label=label, ids=ids, kind=kind,
-            opens_target=bool(head.bold),
+            opens_target=opens, bold=bool(head.bold),
             version=version.group(1).lower() if version else None,
             best_cs=best_cs, best_runner=text(row, 3).strip(),
             ideal_cs=parse_time(text(row, 4)),

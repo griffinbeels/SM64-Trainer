@@ -32,6 +32,23 @@ def test_schema_and_revision_present(payload):
     assert payload["sheet_revision"] >= "2026-08-04T20:14:25"
 
 
+def test_every_audit_key_is_unique(payload):
+    """An override is stored under a key. Two targets or two rows sharing one
+    means a human's correction silently rules on both -- which is the exact
+    failure the audit exists to catch, arriving inside the audit itself. BBH
+    opens two targets called "Go on a Ghost Hunt" (one per ROM version) and 19
+    targets repeat a row name, so this is a live hazard rather than a
+    hypothetical one."""
+    from sm64_events.library.audit import row_key, target_key
+    keys = [target_key(t) for t in payload["targets"]]
+    assert len(keys) == len(set(keys)), \
+        [k for k in keys if keys.count(k) > 1][:5]
+    rows = [row_key(t, item["name"], item["ids"]) for t in payload["targets"]
+            for item in t["approaches"] + t["subsections"]]
+    assert len(rows) == len(set(rows)), \
+        [k for k in rows if rows.count(k) > 1][:5]
+
+
 def test_no_unreviewed_unknown_targets(payload):
     unknown = [f"{t['section']} | {t['label']}" for t in payload["targets"]
                if t["entity_key"] is None and t["miss_reason"] == "unknown"]
