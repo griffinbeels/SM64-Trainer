@@ -52,6 +52,27 @@ than [[in-game time]].
 - **Lives** — the trigger vocabulary and matcher
   (`src/sm64_events/tracking/segments.py`) → the segment builder
 
+### Subsection
+
+A piece of a [[star]] or of a [[segment]], practiced on its own — the climb
+rather than the whole [[star]]. A subsection IS a [[segment]], and names the
+[[target]] it belongs to, so it carries its own [[personal best]], its own
+[[ladder]] and its own rows in the [[practice log]].
+
+- **Lives** — the trigger vocabulary and matcher
+  (`src/sm64_events/tracking/segments.py`) → the [[selector]]
+- **Not** — a [[route step]]. A [[route step]] names [[target]]s to complete in
+  order; a subsection is one [[target]].
+
+### Moment
+
+Something Mario does that a [[subsection]] can start or end on — opening a
+door, triggering a textbox. The [[detector]] reads Mario's own action rather
+than where he stands, which is why a [[subsection]] begins and ends inside one
+course where every other trigger needs him to travel.
+
+- **Lives** — the moment registry (`src/sm64_events/detectors/moment.py`)
+
 ### Attempt
 
 One try at a [[target]], from the [[anchor]] that opens it to the [[outcome]]
@@ -73,7 +94,7 @@ leaving the area.
 
 ### Anchor
 
-The moment that opens an [[attempt]] — a practice [[reset]] or a state load. The
+What opens an [[attempt]] — a practice [[reset]] or a state load. The
 [[projector]] discards an anchor you never moved after, so an idle [[reset]]
 never counts against your [[failure rate]]. The move the anchor INTERRUPTED
 belongs to the [[attempt]] it ended, so the anchor holds that action back until
@@ -274,7 +295,7 @@ restarted before trusting any difference between them.
 ### X-cam
 
 The camera cut Super Mario 64 plays when you touch a [[star]]. The community
-times a grab at that moment, so the trainer publishes a [[star]] time when the
+times a grab there, so the trainer publishes a [[star]] time when the
 x-cam starts rather than when the game finishes writing its own result.
 
 - **Lives** — the star-grab detector
@@ -288,7 +309,7 @@ pipe — so a [[segment]] measured to the load counts the fade as travelling.
 The trainer ends a movement at the touch instead.
 
 - **Lives** — the warp detector (`src/sm64_events/detectors/warp.py`)
-- **Not** — the moment its [[event]] arrives. A touch cannot name where it
+- **Not** — when its [[event]] arrives. A touch cannot name where it
   leads, so the [[detector]] holds the [[event]] until the game says.
 
 ### Death
