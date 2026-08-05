@@ -59,8 +59,11 @@ def test_subsections_are_kept_apart_from_approaches():
 
 def test_entries_carry_the_runner_time_and_video():
     target = build.build(_workbook(BOB), fetched_at="x")["targets"][0]
-    assert target["approaches"][0]["entries"] == [
-        {"runner": "Kally", "time_cs": 4380, "video": "https://youtu.be/z"}]
+    entry, = target["approaches"][0]["entries"]
+    # Pin the fields this test owns; `version` is the fitter's and is pinned
+    # in tests/test_library_ladders.py.
+    assert entry["runner"] == "Kally" and entry["time_cs"] == 4380
+    assert entry["video"] == "https://youtu.be/z"
 
 
 def test_two_rows_of_the_same_version_do_not_merge():

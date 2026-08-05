@@ -82,3 +82,38 @@ def test_refitting_is_idempotent():
     first = ladders.fit_payload(payload)["targets"][0]["approaches"][0]["ladder"]
     second = ladders.fit_payload(payload)["targets"][0]["approaches"][0]["ladder"]
     assert first == second
+
+
+def test_a_ladder_is_never_fitted_across_two_rom_versions():
+    # A (JP)/(US) pair merges into one approach holding both populations --
+    # JRB's stone pillar is 10.80 JP against 14.50 US -- and a ladder fitted
+    # across that pile spans a gap no single player can be on both sides of.
+    item = {"entries": [{"time_cs": 1080 + i, "version": "jp"} for i in range(40)]
+                       + [{"time_cs": 1450 + i, "version": "us"} for i in range(30)]}
+    times, version = ladders.row_times(item)
+    assert version == "us"
+    assert min(times) >= 1450
+
+
+def test_a_thin_us_population_does_not_discard_a_large_jp_one():
+    # US is preferred only when it clears the floor on its own; buying
+    # consistency by throwing 40 times away for 6 is not a trade worth making.
+    item = {"entries": [{"time_cs": 1080 + i, "version": "jp"} for i in range(40)]
+                       + [{"time_cs": 1450 + i, "version": "us"} for i in range(6)]}
+    times, version = ladders.row_times(item)
+    assert version == "jp" and len(times) == 40
+
+
+def test_an_unversioned_row_uses_everything():
+    item = {"entries": [{"time_cs": 1000 + i, "version": None} for i in range(20)]}
+    times, version = ladders.row_times(item)
+    assert version is None and len(times) == 20
+
+
+def test_fit_payload_records_which_population_each_ladder_describes():
+    payload = {"targets": [{"approaches": [
+        {"name": "a", "entries": [{"time_cs": 1450 + i, "version": "us"}
+                                  for i in range(30)]}], "subsections": []}]}
+    item = ladders.fit_payload(payload)["targets"][0]["approaches"][0]
+    assert item["ladder_version"] == "us"
+    assert item["ladder_samples"] == 30

@@ -30,7 +30,12 @@ def _base_name(label: str) -> str:
 
 
 def _entries(row) -> list:
-    return [{"runner": runner, "time_cs": centiseconds, "video": link}
+    # The ROM version rides on every entry, not just on the approach. A (JP)
+    # row and its (US) sibling merge into one approach but hold two genuinely
+    # different populations -- JRB's stone pillar is 10.80 JP against 14.50 US
+    # -- so anything fitting a ladder over the merged pile describes neither.
+    return [{"runner": runner, "time_cs": centiseconds, "video": link,
+             "version": row.version}
             for runner, (centiseconds, link) in sorted(row.entries.items())]
 
 

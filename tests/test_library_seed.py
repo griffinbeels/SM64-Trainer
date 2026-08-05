@@ -189,10 +189,13 @@ def test_a_row_with_enough_times_always_has_a_ladder(payload):
     """The only reason to lack one is being under the feasibility floor. An
     accuracy floor was explicitly declined (user, 2026-08-05)."""
     from sm64_events.library.ladders import MIN_ENTRIES
-    missing = [(t["label"], i["name"], len(i["entries"]))
+    # Against the population the ladder is FITTED over, not the raw entry
+    # count: a (JP)/(US) approach holds two populations and a ladder is never
+    # fitted across both.
+    missing = [(t["label"], i["name"], i.get("ladder_samples"))
                for t in payload["targets"]
                for i in t["approaches"] + t["subsections"]
-               if not i.get("ladder") and len(i["entries"]) >= MIN_ENTRIES]
+               if not i.get("ladder") and (i.get("ladder_samples") or 0) >= MIN_ENTRIES]
     assert missing == [], missing
 
 

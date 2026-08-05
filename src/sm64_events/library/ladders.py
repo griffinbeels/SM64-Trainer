@@ -101,8 +101,29 @@ def fit_ladder(times_cs, percentiles=None) -> dict:
     return {rank: round(cutoff / 100, 2) for rank, cutoff in out.items()}
 
 
-def row_times(item) -> list:
-    return sorted(entry["time_cs"] for entry in item["entries"])
+def row_times(item):
+    """(times, which ROM version they came from) — the population a ladder is
+    fitted over. NEVER a mix of two versions.
+
+    A (JP)/(US) pair merges into ONE approach carrying both populations, and on
+    JRB's stone pillar those are 10.80 and 14.50: a ladder fitted across that
+    pile spans a gap no single player can be on both sides of. US is preferred
+    because that is the convention `tools/scrape_ranks.py` applies to the
+    vetted ladders ("US where a US time exists, else JP") and the two sources
+    have to describe the same thing -- but only when US clears the floor on its
+    own, because discarding 39 JP times for 6 US ones buys consistency by
+    throwing the answer away."""
+    entries = item["entries"]
+    by_version = {}
+    for entry in entries:
+        by_version.setdefault(entry.get("version"), []).append(entry["time_cs"])
+    if len(by_version) > 1 or (by_version and None not in by_version):
+        preferred = by_version.get("us", [])
+        if len(preferred) >= MIN_ENTRIES:
+            return sorted(preferred), "us"
+        version, times = max(by_version.items(), key=lambda kv: len(kv[1]))
+        return sorted(times), version
+    return sorted(entry["time_cs"] for entry in entries), None
 
 
 def fit_payload(payload: dict) -> dict:
@@ -111,12 +132,19 @@ def fit_payload(payload: dict) -> dict:
     fitted = thin = 0
     for target in payload["targets"]:
         for item in target["approaches"] + target["subsections"]:
-            ladder = fit_ladder(row_times(item))
+            times, version = row_times(item)
+            ladder = fit_ladder(times)
             if ladder:
                 item["ladder"] = ladder
+                # Which population it describes, so a JP-fitted ladder never
+                # passes silently for a US one.
+                item["ladder_version"] = version
+                item["ladder_samples"] = len(times)
                 fitted += 1
             else:
                 item.pop("ladder", None)
+                item.pop("ladder_version", None)
+                item["ladder_samples"] = len(times)
                 thin += 1
     payload["ladder_model"] = {
         "percentiles": dict(LADDER_PERCENTILES),
