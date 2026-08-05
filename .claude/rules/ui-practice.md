@@ -169,6 +169,45 @@ correctly reads `null` for a genuinely-left, course-less target, "nothing
 selected to practice" falls out for free; no second exclusion was needed
 there.
 
+## Leading the list and holding the open slot are two different rules
+
+2026-08-05, later the same day, and both halves are corrections to the
+section above rather than additions to it.
+
+**A card only auto-opens once it has recorded something.** `topEntityKey`
+already said this and said it emphatically — and `practice.js` resolved the
+slot as `live.activeKey ?? frozen.topKey`, an unconditional override that
+never consulted it, so the one card the rule is most about (the one he had
+just selected) sailed straight past. Three screenshots, three stages: *"it
+should NOT be autoopening the card yet, because I don't have any entries...
+If there are no attempts yet, it's closed by default. If there are attempts,
+then it's autoopened."* The eligibility question is exported now —
+`hasRecordedAttempts` / `playedEntityKeys` — and **both** callers ask it: the
+recency winner (`topEntityKey`) and the active one (`activeHasPlayed` in
+practice.js). `playedKeys` rides the same `useHeldWhileCelebrating` snapshot
+as `topKey`, for the same reason: attempt data on `v` is live even mid-climb,
+and a card popping open under a running celebration is the takeover that hold
+exists to delay. **Leading the list is still unconditional** — an entity he
+just chose leads with nothing in it; it is only the OPEN slot that it has to
+earn. Pinned by `tests/test_ui_practice_log.py` (the shared rule) and
+`tests/test_practice_page_order.py` (the composition, mutation-proved by
+restoring the `??`).
+
+**The practice log leads the page, in the DOM, at every width.** *"When I
+select an actual route, it incorrectly moves the practice log to be BELOW the
+route focus info. The practice log should always stay at the top, under the
+quick select picker."* His hierarchy was already written down — "selector ->
+target -> practice log -> analysis (all the important information is
+hidden!!!!)" — but it lived as a `@container (max-width: 1060px)` `order`
+block, which cost twice: above 1060px the analysis card took the top of the
+page, and `.route-focus-card` was never in that block's list at all, so it
+defaulted to `order: 0` and outranked every card that had been given a number.
+Saying it in the DOM (practice.js: log, then analysis, then route focus, then
+drawer) says it once, for every width and every mode, and a card added later
+cannot silently land above the log. `tests/test_practice_page_order.py`
+forbids CSS `order` on any of the four and renders the route-active page,
+which is the state the report was actually about.
+
 ## The Reds/Pipe pair shows exactly one card
 
 Same round. *"If I have pipe selected, it shouldn't show the card for

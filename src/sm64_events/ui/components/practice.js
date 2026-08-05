@@ -16,7 +16,8 @@ import { entityKey, sectionClock } from "../entitysection.js";
 import { EntityAnalysis, EntityDrawer } from "./entitydetail.js";
 import { comparator, useGraphPick, SORT_OPTIONS } from "./attemptlog.js";
 import { liveSnapshot, resolveFocus, newestJournalId } from "../focustarget.js";
-import { orderedSections, PracticeLog, topEntityKey } from "./practicelog.js";
+import { orderedSections, playedEntityKeys, PracticeLog,
+        topEntityKey } from "./practicelog.js";
 
 const html = htm.bind(h);
 
@@ -199,7 +200,8 @@ export function Practice({ t, openCompare, openSegment }) {
     target: (t.view && t.view.target) || null, stage: t.stage,
     armedOrder: t.armedOrder, lastPinnedSeg: t.lastPinnedSeg,
     newestAttemptId: newestJournalId(t.view),
-    topKey: topEntityKey(t.view) });
+    topKey: topEntityKey(t.view),
+    playedKeys: playedEntityKeys(t.view) });
   const v = t.view && { ...t.view, target: frozen.target };
 
   // `held` is `t` with the frozen SELECTION swapped in (and `view` carrying
@@ -411,7 +413,24 @@ export function Practice({ t, openCompare, openSegment }) {
   // frozen value an unrelated attempt landing elsewhere during a celebration
   // could still steal the slot, exactly the regression `useHeldWhileCelebrating`
   // exists to prevent.
-  const topKey = live.activeKey ?? frozen.topKey;
+  //
+  // ...AND IT ONLY TAKES THE SLOT ONCE IT HAS RECORDED SOMETHING. This was
+  // `live.activeKey ?? frozen.topKey` until 2026-08-05, which made the active
+  // entity the slot holder UNCONDITIONALLY -- so the empty-card rule
+  // `topEntityKey` states (and its own comment insists on) was applied to the
+  // fallback only, and the one card that rule is most about, the one he had
+  // just selected, sailed straight past it. Griffin, three screenshots, three
+  // stages: "it should NOT be autoopening the card yet, because I don't have
+  // any entries... If there are no attempts yet, it's closed by default. If
+  // there are attempts, then it's autoopened."
+  //
+  // `frozen.playedKeys` rather than a live read for the same reason
+  // `frozen.topKey` is frozen: attempt data on `v` is live even mid-climb, and
+  // a card flipping open underneath a running celebration is the takeover
+  // `useHeldWhileCelebrating` exists to delay.
+  const activeHasPlayed = live.activeKey != null
+    && frozen.playedKeys.includes(live.activeKey);
+  const topKey = activeHasPlayed ? live.activeKey : frozen.topKey;
   // The rows useGraphPick checks membership against -- the same default
   // filter every log card applies (cleared/abandoned hidden, resets per the
   // shared toggle). Computed here, at page level, because the trend graph
@@ -446,6 +465,24 @@ export function Practice({ t, openCompare, openSegment }) {
   return html`<div class="practice-page" ref=${pageRef}>
     <${StageBanner} t=${held} freshIds=${freshIds} />
 
+    ${/* THE LOG COMES FIRST, at every width and in every mode.
+         Griffin, 2026-08-05: "when I select an actual route, it incorrectly
+         moves the practice log to be BELOW the route focus info. The
+         practice log should always stay at the top, under the quick select
+         picker."
+         This was already his stated hierarchy -- "selector -> target ->
+         practice log -> analysis (all the important information is
+         hidden!!!!)" -- but it lived as a `@container (max-width: 1060px)`
+         `order` block, so it held only when the pane was narrow, and never
+         covered the route-focus card at all. Saying it in the DOM says it
+         once, for every width and every mode, and let the CSS block go. */""}
+    <${PracticeLog} v=${v} t=${held} ui=${ui} freshIds=${freshIds}
+      openCompare=${openCompare} focus=${focus} pick=${pick}
+      clearFocus=${clearFocus} openSegment=${openSegment}
+      focusKey=${focusKey} onSelect=${selectFocus}
+      activeKey=${live.activeKey} topKey=${topKey}
+      openTargetPicker=${openTargetPicker} />
+
     <${EntityAnalysis} sec=${focusedSec} t=${held} onPick=${pick}
       manualPick=${manualFocus} />
 
@@ -467,13 +504,6 @@ export function Practice({ t, openCompare, openSegment }) {
          card's own PbTag now (practicelog.js); the target-picker TRIGGER
          moved into this heading row (amendment A9), the dialog itself
          mounted once at the bottom of this page exactly as before. */""}
-    <${PracticeLog} v=${v} t=${held} ui=${ui} freshIds=${freshIds}
-      openCompare=${openCompare} focus=${focus} pick=${pick}
-      clearFocus=${clearFocus} openSegment=${openSegment}
-      focusKey=${focusKey} onSelect=${selectFocus}
-      activeKey=${live.activeKey} topKey=${topKey}
-      openTargetPicker=${openTargetPicker} />
-
     <${EntityDrawer} sec=${focusedSec} t=${held} />
 
     ${targetPickerDialog}

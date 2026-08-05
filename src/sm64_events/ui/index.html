@@ -4526,18 +4526,19 @@
      points down, so collapsed is the rotated state. */
   .practice-card.is-collapsed .card-collapse { transform: rotate(-90deg); }
 
-  /* Stacked layouts: practice log above analysis.
-     The user's hierarchy is selector -> target -> practice log -> analysis
-     ("all the important information is hidden!!!!"). `.practice-page` is a
-     single-column grid at every width (Task 6 flattened it -- there is no
-     two-column arrangement to preserve any more), so `order` here purely
-     reorders these three cards vertically: DOM puts analysis before the
-     log before the drawer, and this puts the log first. */
-  @container (max-width: 1060px) {
-    .log-list-card { order: 1; }
-    .analysis-card { order: 2; }
-    .detail-drawer { order: 3; }
-  }
+  /* The practice log leads, and the DOM is what says so.
+     This was a `@container (max-width: 1060px)` block giving `.log-list-card`
+     order 1 and `.analysis-card` order 2 -- his hierarchy (selector ->
+     practice log -> analysis, "all the important information is hidden!!!!")
+     expressed as a NARROW-ONLY override of a DOM order that said the
+     opposite. Two costs, both real: above 1060px the analysis card took the
+     top of the page, and `.route-focus-card` was never in the list at all, so
+     picking a route pushed the log below a full route listing ("The practice
+     log should always stay at the top, under the quick select picker",
+     2026-08-05). Reordering the DOM (practice.js) says it once, for every
+     width and every mode, and a card added later cannot silently default to
+     order 0 and land above the log. `.detail-drawer` is last in the DOM too,
+     so its own `order: 3` had nothing left to do either. */
 
   /* ===================================================================
      Practice log entity cards (Task 7; re-tuned 2026-08-03, spec

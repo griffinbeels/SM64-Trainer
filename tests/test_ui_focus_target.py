@@ -196,14 +196,30 @@ def test_the_top_key_is_frozen_alongside_its_siblings():
         r"target:[^,]+,\s*stage: t\.stage,\s*"
         r"armedOrder: t\.armedOrder, lastPinnedSeg: t\.lastPinnedSeg,\s*"
         r"newestAttemptId: newestJournalId\(t\.view\),\s*"
-        r"topKey: topEntityKey\(t\.view\)\s*\}\)", practice), (
+        r"topKey: topEntityKey\(t\.view\)(?:,[^}]*)?\s*\}\)", practice), (
         "topKey must be frozen in the SAME useHeldWhileCelebrating call as "
         "its siblings -- a second, separate freeze (or none at all) lets an "
         "unrelated attempt landing elsewhere move the auto-open slot WHILE a "
         "rank on screen is still climbing")
-    assert re.search(r"const topKey = live\.activeKey \?\? frozen\.topKey;", practice), (
-        "the auto-open slot must prefer the ACTIVE entity and fall back to "
-        "the FROZEN recency value -- neither half alone is what shipped")
+    # `playedKeys` (2026-08-05) rides the same call for the same reason, and
+    # is checked separately rather than by extending the regex above: this
+    # test's subject is `topKey`, and a positional pattern naming every
+    # frozen field is what made adding one a red build in the first place.
+    assert re.search(
+        r"useHeldWhileCelebrating\(\{[^}]*playedKeys: playedEntityKeys\("
+        r"t\.view\)", practice), (
+        "playedKeys must be frozen alongside topKey -- the auto-open slot asks "
+        "it whether the ACTIVE entity has recorded anything, and a live read "
+        "there lets an attempt landing mid-climb pop that card open")
+    assert re.search(
+        r"const topKey = activeHasPlayed \? live\.activeKey : frozen\.topKey;",
+        practice), (
+        "the auto-open slot must prefer the ACTIVE entity *that has recorded "
+        "something* and fall back to the FROZEN recency value -- this was "
+        "`live.activeKey ?? frozen.topKey` until 2026-08-05, which handed the "
+        "slot to an entity with nothing in it (whether the right entity wins "
+        "is tests/test_practice_page_order.py's subject; what THIS file owns "
+        "is that both inputs are frozen)")
     assert "topKey=${topKey}" in practice, (
         "PracticeLog's own topKey prop must read the active-or-frozen "
         "derived value, not frozen.topKey directly (that would strand the "
@@ -221,12 +237,14 @@ def test_the_top_key_freeze_guard_can_still_fail():
     comment_only = strip_comments(
         "// newestAttemptId: newestJournalId(t.view),\n"
         "// topKey: topEntityKey(t.view) })\n"
-        "// const topKey = live.activeKey ?? frozen.topKey;\n"
+        "// const topKey = activeHasPlayed ? live.activeKey : frozen.topKey;\n"
         "// topKey=${topKey}\n")
     assert not re.search(
         r"newestAttemptId: newestJournalId\(t\.view\),\s*"
-        r"topKey: topEntityKey\(t\.view\)\s*\}\)", comment_only)
-    assert not re.search(r"const topKey = live\.activeKey \?\? frozen\.topKey;", comment_only)
+        r"topKey: topEntityKey\(t\.view\)(?:,[^}]*)?\s*\}\)", comment_only)
+    assert not re.search(
+        r"const topKey = activeHasPlayed \? live\.activeKey : frozen\.topKey;",
+        comment_only)
     assert "topKey=${topKey}" not in comment_only
 
     # A live read handed straight to PracticeLog, alongside a genuine but
@@ -240,8 +258,10 @@ def test_the_top_key_freeze_guard_can_still_fail():
         "<PracticeLog topKey=${topEntityKey(t.view)} />\n")
     assert re.search(  # the freeze call itself is still well-formed...
         r"newestAttemptId: newestJournalId\(t\.view\),\s*"
-        r"topKey: topEntityKey\(t\.view\)\s*\}\)", live_leak)
-    assert not re.search(r"const topKey = live\.activeKey \?\? frozen\.topKey;", live_leak), (
+        r"topKey: topEntityKey\(t\.view\)(?:,[^}]*)?\s*\}\)", live_leak)
+    assert not re.search(
+        r"const topKey = activeHasPlayed \? live\.activeKey : frozen\.topKey;",
+        live_leak), (
         "the mutation itself must actually read as a leak, or this probe "
         "proves nothing")
     assert re.search(r"topKey=\$\{topEntityKey\(t\.view\)\}", live_leak), (

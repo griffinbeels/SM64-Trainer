@@ -305,11 +305,72 @@ def _entity_key_source() -> str:
     return is_segment.group(0) + "\n" + _extract(source, "entityKey")
 
 
+def _played_keys_source() -> str:
+    """`hasRecordedAttempts` + `playedEntityKeys` -- the auto-open slot's own
+    eligibility rule, which `topEntityKey` is now a one-line consumer of."""
+    log_source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
+    has = re.search(r"^export const hasRecordedAttempts = .*?;$", log_source,
+                    re.M)
+    assert has, "hasRecordedAttempts not found in practicelog.js — renamed?"
+    return "\n".join([has.group(0),
+                     _extract(log_source, "playedEntityKeys")])
+
+
 def _top_entity_key_source() -> str:
     log_source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
     return "\n".join([_entity_key_source(),
+                     _extract(log_source, "orderedSections"),
+                     _played_keys_source(),
+                     _extract(log_source, "topEntityKey")])
+
+
+def played_keys(view):
+    log_source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
+    script = "\n".join([_entity_key_source(),
                        _extract(log_source, "orderedSections"),
-                       _extract(log_source, "topEntityKey")])
+                       _played_keys_source(),
+                       f"console.log(JSON.stringify(playedEntityKeys("
+                       f"{json.dumps(view)})));"])
+    result = subprocess.run(["node", "--input-type=module", "-"],
+                            input=script, capture_output=True, text=True,
+                            timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+# ---- the slot's eligibility rule, asked about ANY entity ------------------
+#
+# 2026-08-05. `topEntityKey` had carried this rule since earlier the same day
+# and stated it emphatically in its own comment -- and the card it is most
+# about, the one Griffin had just selected, sailed straight past it, because
+# practice.js resolved the slot as `live.activeKey ?? frozen.topKey`: an
+# UNCONDITIONAL override that never consulted the rule at all. Three
+# screenshots, three stages, one sentence: "If there are no attempts yet,
+# it's closed by default. If there are attempts, then it's autoopened."
+#
+# So the rule is exported as its own function and BOTH callers ask it. These
+# pin the shared half; test_practice_page_order.py pins the composition.
+
+def test_an_entity_with_nothing_recorded_is_not_eligible():
+    view = {"stars": [star("empty", 99, course_id=22, star_id=3, attempts=0)],
+            "segments": [], "unassigned": []}
+    assert played_keys(view) == []
+
+
+def test_one_recorded_row_is_enough():
+    """A RESET counts. He said "an attempt or reset", and a reset is the
+    ordinary first thing a practice card ever holds."""
+    view = {"stars": [star("one", 99, course_id=22, star_id=3, attempts=1)],
+            "segments": [], "unassigned": []}
+    assert played_keys(view) == ["star:22:3"]
+
+
+def test_eligibility_is_reported_in_recency_order_and_drops_the_empties():
+    view = {"stars": [star("mid", 50, course_id=1, star_id=1),
+                       star("empty", 99, course_id=2, star_id=2, attempts=0),
+                       star("old", 5, course_id=3, star_id=3)],
+            "segments": [], "unassigned": []}
+    assert played_keys(view) == ["star:1:1", "star:3:3"]
 
 
 def top_key(view):

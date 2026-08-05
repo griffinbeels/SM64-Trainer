@@ -179,6 +179,22 @@ export function applyRedsPipeExclusivity(sections, modeForCourse) {
  * `view` has nothing classified in it yet (the unassigned bucket is not an
  * entity and is never eligible -- UnassignedLogCard's own comment).
  */
+// Has this entity actually recorded anything in the current scope? THE one
+// question the auto-open slot turns on, exported because two callers ask it
+// about two different entities (the recency winner, below; the ACTIVE one, in
+// practice.js) and the first version of this rule was applied to only one of
+// them -- which is exactly how a card he had just selected kept auto-opening
+// with nothing in it after the rule below already said it must not.
+export const hasRecordedAttempts = (sec) => (sec.attempts || []).length > 0;
+
+// Every entity key that has recorded something, in recency order. Frozen
+// alongside the rest of the celebration snapshot (practice.js) so that
+// "does the active card qualify" cannot change its answer mid-climb.
+export function playedEntityKeys(view) {
+  if (!view) return [];
+  return orderedSections(view).filter(hasRecordedAttempts).map(entityKey);
+}
+
 export function topEntityKey(view) {
   if (!view) return null;
   // EMPTY ENTITIES ARE NOT ELIGIBLE for the auto-open slot, which is a
@@ -203,9 +219,8 @@ export function topEntityKey(view) {
   // purpose: the slot follows recency, and the active-leads hoist is a
   // PRESENTATION order. Passing the key here would make a freshly chosen
   // entity the slot holder again and undo exactly this rule.
-  const sections = orderedSections(view)
-    .filter((sec) => (sec.attempts || []).length > 0);
-  return sections.length ? entityKey(sections[0]) : null;
+  const played = playedEntityKeys(view);
+  return played.length ? played[0] : null;
 }
 
 /**
