@@ -133,3 +133,31 @@ def test_shared_entities_are_flagged():
     payload["targets"][1]["miss_reason"] = None
     view = audit.audit_view(payload, {"targets": {}, "rows": {}})
     assert all("shared-entity" in t["flags"] for t in view["targets"])
+
+
+def test_the_audit_view_carries_each_rows_ladder_and_the_model():
+    from sm64_events.library import ladders
+    payload = ladders.fit_payload(_payload())
+    view = audit.audit_view(payload, {"targets": {}, "rows": {}})
+    rows = {r["name"]: r for r in view["targets"][0]["rows"]}
+    # too few entries to place eight tiers -- but the row still reports its
+    # best, its entry count and its videos, because "few people have run this"
+    # is a fact about the community rather than a hole in the library.
+    thin = rows["Big Bob-omb on the Summit"]
+    assert thin["ladder"] is None
+    assert thin["best_cs"] == 4363 and thin["entries"] == 1 and thin["videos"] == 1
+    assert view["ladder_model"]["min_entries"] == ladders.MIN_ENTRIES
+    assert view["ranks"][0] == "Mario" and "Iron" not in view["ranks"]
+
+
+def test_a_row_with_enough_times_carries_a_ladder_into_the_view():
+    from sm64_events.library import ladders
+    payload = _payload()
+    payload["targets"][0]["approaches"][0]["entries"] = [
+        {"runner": f"r{i}", "time_cs": 4300 + i * 5, "video": None}
+        for i in range(40)]
+    view = audit.audit_view(ladders.fit_payload(payload),
+                            {"targets": {}, "rows": {}})
+    ladder = {r["name"]: r for r in view["targets"][0]["rows"]}[
+        "Big Bob-omb on the Summit"]["ladder"]
+    assert ladder and ladder["Mario"] < ladder["Bronze"]

@@ -178,6 +178,11 @@ def _row_view(target, item, kind, basis, overrides):
             "videos_sample": [e["video"] for e in entries if e["video"]][:3],
             "video": next((e["video"] for e in entries if e["video"]), None),
             "entity_key": item.get("entity_key"),
+            # The fitted ladder, and -- when there is none -- enough to say WHY
+            # on the row itself. A row with no ladder still shows its best and
+            # its examples, because "too few people have run this strategy" is
+            # a fact about the community rather than a hole in the library.
+            "ladder": item.get("ladder"),
             "override": (overrides.get("rows") or {}).get(key)}
 
 
@@ -231,9 +236,12 @@ def audit_view(payload: dict, overrides: dict, segment_names=None) -> dict:
             "entries": sum(row["entries"] for row in rows),
             "videos": sum(row["videos"] for row in rows),
             "rows": rows})
+    from sm64_events.ranks.classify import RANK_NAMES
     return {"sheet_revision": payload["sheet_revision"],
             "fetched_at": payload["fetched_at"],
             "categories": list(TARGET_CATEGORIES),
             "row_kinds": list(ROW_KINDS),
+            "ranks": [r for r in RANK_NAMES if r != "Iron"],
+            "ladder_model": payload.get("ladder_model") or {},
             "entities": entity_choices(segment_names),
             "targets": views}

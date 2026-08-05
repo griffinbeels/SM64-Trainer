@@ -58,6 +58,14 @@
   a{color:var(--accent)}
   .kind{padding:3px 7px;font-size:12px}
   .empty{color:var(--dim);padding:40px;text-align:center}
+  tr.ladder td{border-top:none;padding:0 6px 7px 6px}
+  .rungs{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+  .rung{display:inline-flex;gap:5px;align-items:baseline;font-size:11px;
+        padding:2px 7px;border-radius:6px;background:var(--panel2);
+        border:1px solid var(--line);font-variant-numeric:tabular-nums}
+  .rung b{font-weight:600;color:var(--dim);font-size:10px;letter-spacing:.4px}
+  .rung.top b{color:var(--gold)}
+  .noladder{font-size:12px;color:var(--dim);font-style:italic}
   .reason{width:100%;margin-top:8px}
   .legend{color:var(--dim);font-size:12px;padding:0 18px 12px;
        max-width:1180px;margin:0 auto}
@@ -77,6 +85,7 @@
       <option value="near-ceiling">near the part/whole ceiling</option>
       <option value="shared-entity">shares an entity</option>
       <option value="styling-drift">the sheet unbolded it</option>
+      <option value="no-ladder">a row with no rank standards</option>
       <option value="unmapped">unmapped</option>
       <option value="changed">I changed it</option>
     </select>
@@ -238,6 +247,40 @@ function card(t){
     rowEnt.onchange = () => setRow(t, r, "entity_key", rowEnt.value);
     cells[8].appendChild(rowEnt);
     body.appendChild(tr);
+
+    // The fitted ladder, on its own line so it never fights the table. A row
+    // WITHOUT one still shows everything else and says why in the same place
+    // -- an unexplained blank reads as a broken library rather than as a
+    // strategy too few people have run.
+    const lad = document.createElement("tr");
+    lad.className = "ladder";
+    const cell = document.createElement("td");
+    cell.colSpan = 9;
+    if (r.ladder) {
+      const strip = document.createElement("div");
+      strip.className = "rungs";
+      DATA.ranks.forEach((rank, i) => {
+        if (r.ladder[rank] == null) return;
+        const pill = document.createElement("span");
+        pill.className = "rung" + (i === 0 ? " top" : "");
+        pill.innerHTML = "<b></b><span></span>";
+        pill.children[0].textContent = rank.slice(0, 4).toUpperCase();
+        pill.children[1].textContent = fmt(Math.round(r.ladder[rank] * 100));
+        strip.appendChild(pill);
+      });
+      cell.appendChild(strip);
+    } else {
+      const note = document.createElement("div");
+      note.className = "noladder";
+      const need = (DATA.ladder_model || {}).min_entries || 10;
+      note.textContent = r.entries
+        ? `no rank standards — only ${r.entries} recorded ${r.entries === 1 ? "time" : "times"}, `
+          + `${need} needed to place eight tiers. The times and examples above are still real.`
+        : "no times recorded yet — nobody has entered this one.";
+      cell.appendChild(note);
+    }
+    lad.appendChild(cell);
+    body.appendChild(lad);
   }
   table.appendChild(body);
   el.appendChild(table);
@@ -271,7 +314,9 @@ function filter(){
     const hay = (t.label + " " + t.section + " " + t.group + " " +
                  t.rows.map(r => r.name).join(" ")).toLowerCase();
     let ok = (!q || hay.includes(q)) && (!cat || effCat(t) === cat);
-    if (ok && flag) ok = flag === "changed" ? changed(t) : t.flags.includes(flag);
+    if (ok && flag) ok = flag === "changed" ? changed(t)
+               : flag === "no-ladder" ? t.rows.some(r => !r.ladder)
+               : t.flags.includes(flag);
     cards.get(t.key).classList.toggle("hidden", !ok);
     if (ok) shown++;
   }
