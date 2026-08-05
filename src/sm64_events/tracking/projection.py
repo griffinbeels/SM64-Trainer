@@ -118,7 +118,14 @@ Caveats (hard-won — keep these current):
     auto-follow onto the segment either: it lands us in a fresh stage with no
     star picked, so the target clears to None (no active star AND no active
     segment). Segment successes that do not enter a stage (star grab, mid-
-    course, exit to hub) still auto-follow onto the segment. Retirement runs
+    course, exit to hub) still auto-follow onto the segment. **An explicit
+    pick outranks that auto-follow when ONE event finishes SEVERAL attempts**
+    (2026-08-05): the DDD portal touch closes MIPS Clip and HMC -> DDD
+    together, the assignment ran once per closure, and whichever closed LAST
+    took the slot from the segment he was practising — "MIPs should remain
+    selected because that's what I'm practicing!". Same rule `handIsEmpty`
+    states on the client: a convenience default may fill an empty hand, never
+    empty one. Retirement runs
     inside feed(), so replay rebuilds the same end-state target and service.
     _track auto-broadcasts target_changed. The UI reads this to highlight the
     active star XOR the active segment, never both (ui/components/practice.js);
@@ -813,6 +820,12 @@ class Projector:
                 and self._pending_target_retire not in self.armed_segment_ids()):
             self.target = None
         self._pending_target_retire = None
+        # Whose slot is it before this event finishes anything? The auto-follow
+        # below reads these; the reasoning is at its own branch.
+        held_pick = (self.target[1] if self.target
+                     and self.target[0] == "segment" else None)
+        pick_is_closing = (held_pick is not None
+                           and any(a.segment_id == held_pick for a in seg_closed))
         for a in seg_closed:
             # The 100-coin star IS this segment when its def's own sequence
             # includes grabbing that course's 100-coin star (spec 2026-07-28-
@@ -919,7 +932,22 @@ class Projector:
                 # IS, exactly as a plain star grab auto-follows.
                 entered_stage = (ev.type == "level_changed"
                                  and course_for_level(ev.payload["to"]) is not None)
-                if hc is not None:
+                # A convenience default may FILL an empty hand; it may not take
+                # something out of one (his rule, and the one `handIsEmpty`
+                # already states on the client). One event can close SEVERAL
+                # attempts — the DDD portal touch closes MIPS Clip and
+                # HMC -> DDD together — and this assignment used to run once
+                # per closure, so whichever happened to close LAST took the
+                # slot away from the segment he had picked and was practising:
+                # *"It seems like we somehow deselect MIPS and then trigger a
+                # different split?? All i know is that MIPs should remain
+                # selected because that's what I'm practicing!"* (2026-08-05,
+                # measured by replaying his journal — target moved
+                # `MIPS Clip` -> `HMC -> DDD` on the touch). His own pick wins
+                # over anything the same event finished.
+                if pick_is_closing and a.segment_id != held_pick:
+                    pass          # his pick closed here too; it keeps the slot
+                elif hc is not None:
                     self.target = None if entered_stage else ("star", *hc)
                 else:
                     self.target = None if entered_stage else ("segment", a.segment_id)
