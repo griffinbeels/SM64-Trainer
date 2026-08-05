@@ -2075,20 +2075,24 @@ def test_vocab_exposes_region_enum_and_conditional_subareas():
     the three level_enter/level_exit ones below are unchanged and are a
     different question.
 
-    This test asserted the opposite until then. The gates lived in the
-    vocabulary and never in the matcher, so all they ever did was stop
-    "entered the SSL pyramid" (level 8, area 2) being AUTHORED -- and
-    entering a subarea inside a course is one of the conditions a subsection
-    is built out of. Restoring either one makes that clause unexpressible
-    again while every matcher test keeps passing, which is why the absence is
-    pinned here rather than left as a silent property."""
+    Only the LEVEL enum went. It lived in the vocabulary and never in the
+    matcher, so all it ever did was stop "entered the SSL pyramid" (level 8)
+    being AUTHORED -- and entering a subarea inside a course is one of the
+    conditions a subsection is built out of.
+
+    The two `only_when` gates STAY, and briefly did not. Removing them made
+    the builder draw a subarea dropdown for every level, offering the castle
+    interior's own names -- "Lobby / Upstairs / Basement" for Shifting Sand
+    Land. Live report the same day, with a screenshot. So a course's LEVEL is
+    selectable and its subarea is not, because nothing names a course's own
+    areas; recording what you just did synthesizes those instead."""
     by_key = {t["key"]: t for t in vocab()["triggers"]}
     ae = by_key["area_enter"]["params"]
     assert "enum" not in ae["level"]
     assert ae["area"]["required"] is False
-    assert "only_when" not in ae["area"]
+    assert ae["area"]["only_when"] == {"param": "level", "equals": 6}
     assert ae["from"]["required"] is False
-    assert "only_when" not in ae["from"]
+    assert ae["from"]["only_when"] == {"param": "level", "equals": 6}
     le = by_key["level_enter"]["params"]
     assert le["to_subarea"]["only_when"] == {"param": "to", "equals": 6}
     assert le["from_subarea"]["only_when"] == {"param": "from", "equals": 6}

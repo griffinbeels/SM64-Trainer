@@ -115,6 +115,15 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange, t }) 
     // A 3-item list has nothing to group, so this stays a plain dropdown.
     return dropdown(Object.entries(vocab.castle_areas).filter(permitted),
                     "Any", "— pick subarea —");
+  if (schema.kind === "moment")
+    // The mid-course vocabulary (doors, textboxes), served by the server's
+    // own registry so a new moment reaches this dropdown with no JS edit.
+    // Without this branch the param fell through to a bare text input and
+    // rendered as an empty box labelled "kind" — the definition matched
+    // perfectly server-side while the editor could not show what it was set
+    // to (live report 2026-08-05, with a screenshot of exactly that).
+    return dropdown((vocab.moments || []).map((m) => [m.key, m.label]),
+                    "Any moment", "— pick a moment —");
   if (schema.kind === "course")
     // Grouped the same way, so a course picker and a level picker read alike.
     return html`<${EntityPicker} groups=${courseOptions(vocab)}

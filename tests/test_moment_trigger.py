@@ -148,9 +148,29 @@ def test_a_non_castle_subarea_is_expressible():
     level_param = S.TRIGGERS["area_enter"].params["level"]
     assert "enum" not in level_param, \
         "area_enter's level list is pinned to castle levels"
-    for name in ("area", "from"):
-        assert "only_when" not in S.TRIGGERS["area_enter"].params[name], \
-            f"area_enter's {name!r} selector only appears for the castle"
+
+
+def test_a_subarea_selector_never_shows_where_it_means_nothing():
+    """CORRECTED 2026-08-05 after a live report, and this test asserted the
+    opposite for a few hours.
+
+    Dropping `only_when` alongside the enum made the builder offer a subarea
+    dropdown for EVERY level -- and the only subarea names the vocabulary
+    has are the castle interior's, so picking Shifting Sand Land offered
+    "Lobby / Upstairs / Basement". Worse than not offering it, and squarely
+    the "I don't understand the builder" complaint this round is about.
+
+    Dropping the level ENUM is what makes an in-course subarea authorable at
+    all, and that stays. What is still NOT authorable by NAME is WHICH
+    subarea: nothing names a course's own areas. The record-what-I-just-did
+    path synthesizes those from real play instead, which is the path this
+    feature wants people on anyway.
+    """
+    for key, params in (("area_enter", ("area", "from")),
+                        ("moment_reached", ("area",))):
+        for name in params:
+            assert "only_when" in S.TRIGGERS[key].params[name], \
+                f"{key}.{name} would draw a castle dropdown for any level"
 
 
 def test_the_matcher_accepts_a_course_subarea_clause():

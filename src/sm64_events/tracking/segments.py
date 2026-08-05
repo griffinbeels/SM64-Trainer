@@ -671,8 +671,10 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
     # cancel keeps working, one resolution coarser.
     TriggerType("area_enter", "You enter area", "Enter",
                 {"level": {"kind": "level", "required": True},
-                 "area": {"kind": "subarea", "required": False},
-                 "from": {"kind": "subarea", "required": False}},
+                 "area": {"kind": "subarea", "required": False,
+                          "only_when": _only_castle("level")},
+                 "from": {"kind": "subarea", "required": False,
+                          "only_when": _only_castle("level")}},
                 "{level} {area} coming from {from}",
                 lambda p, ev, ctx: ev.type == "area_changed" and _real_edge(ev)
                 and ev.payload["level"] == p["level"]
@@ -780,7 +782,8 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 {"kind": {"kind": "moment", "required": True},
                  "ordinal": {"kind": "int", "required": False},
                  "level": {"kind": "level", "required": False},
-                 "area": {"kind": "subarea", "required": False}},
+                 "area": {"kind": "subarea", "required": False,
+                          "only_when": _only_castle("level")}},
                 "{kind} #{ordinal} in {level} {area}",
                 lambda p, ev, ctx: ev.type == "moment_reached"
                 and ev.payload.get("kind") == p["kind"]
