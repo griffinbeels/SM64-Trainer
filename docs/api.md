@@ -393,6 +393,35 @@ Import completion is not broadcast — the initiating client polls the job
 instead, since imports are a focused single-client action; `comparisons_changed`
 fires only from edits/deletes, so other clients pick up those.
 
+## Library — the Ultimate Star Spreadsheet
+
+A read-only browse over the community's Ultimate Star Spreadsheet: every
+documented approach to every star, its recorded times, its runners, and the
+videos they linked. Mounted unconditionally — it is reference data and needs no
+tracker service, so a broadcast-only second instance still serves it.
+
+Two copies of the snapshot exist, the one shipped with the release and whatever
+the user last refreshed, and **the newer SHEET revision wins in both
+directions**. That is answerable only because a snapshot carries the
+spreadsheet's own newest edit timestamp rather than the moment we fetched it, so
+a refresh survives a later app update built earlier, and a newer release still
+replaces a stale local copy.
+
+| Route | Purpose |
+|---|---|
+| `GET /api/library` | The browse index: every group (course, Castle Secret Stars, Bowser Courses, the Castle Movement sections) with its targets, each carrying counts rather than data — 252 targets summarised without shipping the 44,701 entries behind them. |
+| `GET /api/library/status` | `{sheet_revision, fetched_at, targets, runners, ladder_model, source}`. `source` says whether the loaded copy is `bundled` or `local`; `ladder_model` carries the percentiles a fitted ladder is derived at. |
+| `GET /api/library/target/{index}` | One target in full: its approaches and subsections, each with every recorded entry (runner, time, video) and its fitted ladder where the row has enough times. **404** past the end. |
+| `GET /api/library/entity/{entity_key}` | Every target mapped to one trainer entity (`star:1:6`, `segment:5`) — what a link from the objective card resolves. Several is normal: each `+ 100c` row is the same 100-coin star run a different way. An entity the community has never timed is a **200 with an empty list**, because "nobody has timed this" is an answer rather than an error. |
+| `GET /api/library/runners` | Every runner name, for a search box. |
+| `GET /api/library/runner/{name}` | One runner's whole sheet — every entry they hold, with the target, the approach, the time, the video and that row's ladder. |
+| `POST /api/library/refresh` | Fetch the live spreadsheet, re-derive the library, and keep it **only if it is newer** than what we already have; `{applied: false, reason}` otherwise, which is a normal outcome rather than a failure. Runs in a worker thread — it downloads ~5.6 MB and re-fits 631 ladders, and the poller shares this process. **503** when the sheet cannot be reached, carrying the reason, because "refresh did nothing" and "refresh could not reach Google" are otherwise indistinguishable. |
+
+Rank ladders derived from this data are served through the ordinary standards
+surface rather than here — see **Ranks & standards** above. They live in their
+own file and are merged only on read, so a sheet-derived ladder can never
+overwrite a community-vetted one.
+
 ## Climb tuning inspector (source checkouts only)
 
 `/ui/tune.html` is a Godot-Inspector-style rig for the rank-up climb: it renders

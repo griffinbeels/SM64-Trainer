@@ -82,6 +82,10 @@ def app_args(ffmpeg: "str | None") -> list[str]:
         # back to vetted ladders alone.
         "--add-data",
         f"{REPO / 'src' / 'sm64_events' / 'data' / 'sheet_ladders.seed.json'}{SEP}.",
+        # The library snapshot itself (bundled_sheet_library()). Same silent
+        # failure as above if omitted: the Library page simply has no data.
+        "--add-data",
+        f"{REPO / 'src' / 'sm64_events' / 'data' / 'sheet_library.seed.json.gz'}{SEP}.",
     ]
     for pkg in COLLECT:
         argv += ["--collect-all", pkg]

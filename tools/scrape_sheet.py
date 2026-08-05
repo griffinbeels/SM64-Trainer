@@ -14,7 +14,6 @@ import argparse
 import gzip
 import json
 import sys
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,11 +23,11 @@ from sm64_events.library.adopt import adoptable, summary        # noqa: E402
 from sm64_events.library.build import build, coverage          # noqa: E402
 from sm64_events.library.ladders import fit_payload            # noqa: E402
 from sm64_events.library.mapping import UNMAPPED_EXPECTED      # noqa: E402
+from sm64_events.library.source import export_url, fetch       # noqa: E402
 
 OVERRIDES = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
              / "data" / "library_overrides.json")
 
-SHEET_ID = "1J20aivGnvLlAuyRIMMclIFUmrkHXUzgcDmYa31gdtCI"
 # Gzipped, and measured rather than assumed: 4.51 MB of JSON compresses to
 # 0.42 MB and costs 7 ms more to load (26 ms against 19 ms). The exe ships
 # this file as-is, so that is a tenfold saving there for nothing a user could
@@ -43,15 +42,6 @@ LADDERS_OUT = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
                / "data" / "sheet_ladders.seed.json")
 VETTED = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
           / "data" / "rank_standards.seed.json")
-
-
-def export_url(fmt: str = "xlsx") -> str:
-    return f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format={fmt}"
-
-
-def fetch() -> bytes:
-    with urllib.request.urlopen(export_url(), timeout=180) as response:
-        return response.read()
 
 
 def utc_now() -> str:

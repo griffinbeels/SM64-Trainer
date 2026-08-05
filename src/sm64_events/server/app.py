@@ -361,6 +361,17 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     # source checkout, and it refuses itself when frozen.
     from sm64_events.server.tuning_api import create_tuning_router
     app.include_router(create_tuning_router())
+    # The Ultimate Sheet library. Mounted unconditionally and independent of
+    # the tracker service: it is community reference data, so it is worth
+    # having even in a broadcast-only second instance with no store of its own.
+    from sm64_events.core.paths import (bundled_sheet_library,
+                                        sheet_library_path)
+    from sm64_events.library.store import LibraryStore
+    from sm64_events.server.library_api import create_library_router
+    library = LibraryStore(sheet_library_path(), bundled_sheet_library())
+    library.load()
+    app.state.library = library
+    app.include_router(create_library_router(library))
     if service is not None:
         app.include_router(create_api_router(service))
         from sm64_events.server.ranks_api import create_ranks_router

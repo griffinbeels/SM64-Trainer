@@ -166,6 +166,22 @@ def bundled_defaults_seed() -> Path | None:
     return cand if cand.exists() else None
 
 
+def sheet_library_path() -> Path:
+    """The user's own refreshed library, beside their other data."""
+    return data_root() / "data" / "sheet_library.json.gz"
+
+
+def bundled_sheet_library() -> Path | None:
+    """The library snapshot shipped with the release. Mirrors
+    bundled_rank_standards() exactly."""
+    if is_frozen():
+        cand = Path(getattr(sys, "_MEIPASS", "")) / "sheet_library.seed.json.gz"
+        return cand if cand.exists() else None
+    cand = (Path(__file__).resolve().parent.parent / "data"
+            / "sheet_library.seed.json.gz")
+    return cand if cand.exists() else None
+
+
 def bundled_sheet_ladders() -> Path | None:
     """Ladders derived from the Ultimate Sheet. Its own file, never merged into
     rank_standards.seed.json, so a fitted ladder structurally cannot overwrite
