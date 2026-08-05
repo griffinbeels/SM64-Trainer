@@ -18,14 +18,15 @@
 import { h } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { displayName, entityKey, entityNoun, sectionClock, sectionPb }
-  from "../entitysection.js";
+import { displayName, entityIdentity, entityKey, entityNoun, isSegment,
+         sectionClock, sectionPb } from "../entitysection.js";
 import { entityIconSrc, fallbackToGenericStar, fallbackSlotForEntityKey }
   from "./entityicons.js";
 import { RankBanner } from "./ranks.js";
 import { Icon } from "./icons.js";
 import { ShrinkToFitName } from "./shrinkname.js";
 import { StepTrack } from "./steptrack.js";
+import { StratPicker } from "./stratpicker.js";
 import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
          ResetFilterToggle, StatMenuTrigger, comparator, bannerLabel,
          bannerHint, ranksAreAtFloor, showsEntityBanner, rankIdentity, PbTag }
@@ -44,6 +45,15 @@ const html = htm.bind(h);
 // own initiative (see `isCardOpen` below). An uncapped lifetime-scope view
 // therefore renders every entity COLLAPSED but one, not expanded.
 const CARDS_PER_PAGE = 5;
+
+// How many attempt rows one page of an OPEN card shows. Real pagination
+// (spec practice-log-entity-cards, amendment A8) -- "we should replace the
+// show more with the number of pages we have to scroll through, and when we
+// click on the PB, it would bring us to the correct page." Superseded the
+// old "Show 10 more" reveal, which grew a `visible` threshold rather than
+// moving a cursor -- two ways to decide what a card shows was exactly the
+// kind of divergence this branch has already paid for once.
+const ROWS_PER_PAGE = 10;
 
 /**
  * Both kinds merged, newest activity first.
@@ -102,13 +112,13 @@ export function isCardOpen(overrides, topKey, key) {
 }
 
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
-                          clearFocus, selected, onSelect, forceOpen,
-                          open, onSetOpen,
+                          clearFocus, pick, selected, onSelect, forceOpen,
+                          open, onSetOpen, openSegment,
                           active = false,
                           nameOverflow = "ellipsis", rankIconSize = 24,
                           rankPlacement = "head", nextStepMode = "classic" }) {
   const [showHidden, setShowHidden] = useState(false);
-  const [visible, setVisible] = useState(10);
+  const [page, setPage] = useState(0);
   // `forceOpen` exists for exactly one moment (Task 6 brief, Step 1): "so a
   // pick on a COLLAPSED card has a scroll target to find" -- it must win
   // just long enough to make the row exist, never permanently. Folding
@@ -163,28 +173,49 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
       && (a.outcome === "reset" || a.outcome === "hard_reset")))
     .slice()
     .sort(comparator(ui.sort, clock));
-  // A pick (the objective card's PbTag jump, or a trend-graph dot in
+  // A pick (this card's own PbTag jump, or a trend-graph dot in
   // EntityAnalysis) is resolved at PAGE level -- Practice's own
   // `useGraphPick`, over whichever entity is FOCUSED -- and that hook has no
-  // visibility into any card's own row pagination; it never did. Feeding it
-  // a page-level `visible`/`setVisible` widened a counter nothing renders
-  // from, which is exactly why a pick past the tenth row silently did
-  // nothing (found only by driving the mounted page past page one). THIS
-  // card owns the one `visible` that actually governs `shown` below, so it
-  // is the one that has to notice a focused pick landing outside its own
-  // current window and widen itself -- the same one-shot-nudge shape
+  // visibility into any card's own row PAGINATION; it never did. THIS card
+  // owns the one `page` that actually governs `shown` below, so it is the
+  // one that has to notice a focused pick landing outside its own current
+  // page and turn to the right one -- the same one-shot-nudge shape
   // `forceOpen` already uses above, keyed on the same `focus.nonce` so a
-  // repeat pick on an already-widened card still re-checks.
+  // repeat pick on an already-turned card still re-checks. Real pagination
+  // (spec practice-log-entity-cards, amendment A8) replaced the old
+  // "Show 10 more" reveal, which grew a `visible` threshold instead of
+  // moving a cursor -- a PB link has to land on a PAGE, not on a
+  // progressively-widened window, and the two mechanisms were never allowed
+  // to coexist (this branch has already paid once for two ways to decide
+  // what a card shows).
   useEffect(() => {
     if (!selected || !focus) return;
     const idx = rows.findIndex((a) => a.id === focus.id);
     if (idx === -1) return;               // not this card's attempt
-    setVisible((current) => (idx >= current
-      ? Math.ceil((idx + 1) / 10) * 10
-      : current));
+    setPage(Math.floor(idx / ROWS_PER_PAGE));
   }, [selected, focus && focus.nonce]);
-  const shown = rows.slice(0, visible);
+  const pageCount = Math.max(1, Math.ceil(rows.length / ROWS_PER_PAGE));
+  // Clamped rather than trusted outright: the row count can shrink out from
+  // under a stored page number (toggling "Hide resets", clearing an
+  // attempt), and a stale page past the new last one must fall back to the
+  // last real page rather than render nothing.
+  const currentPage = Math.min(page, pageCount - 1);
+  const shown = rows.slice(currentPage * ROWS_PER_PAGE,
+                           currentPage * ROWS_PER_PAGE + ROWS_PER_PAGE);
   const isOpen = open;
+  // The active card's own PB jumps to a row IN THIS SAME CARD -- select it
+  // (a no-op if it already is the focused entity) and hand the attempt id to
+  // the page-level pick, which retries once `focusedRows` -- and therefore
+  // this card's own `rows` -- actually reflect the newly-selected entity
+  // (`useGraphPick`'s own `pendingId` retry, attemptlog.js). Opening the
+  // card and turning to the right page both fall out of machinery that
+  // already exists for the trend-graph pick: `forceOpen` syncs `open` true
+  // the moment this card is both selected AND carries a landed `focus`
+  // (above), and the page-turn effect just above this one runs the instant
+  // `rows` includes the picked attempt.
+  const pbPick = (attemptId) => { onSelect(ek); pick(attemptId); };
+  const broken = isSegment(sec) && sec.broken;
+  const running = isSegment(sec) ? t.armedSegs.has(sec.segment_id) : !!sec.armed_detail;
   // Which of the layout matrix's two ladder-count cells this card falls
   // into (index.html's "Layout matrix" CSS section) -- the SAME predicate
   // that decides whether the second `<RankBanner>` below renders at all, so
@@ -223,58 +254,93 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
           nextStepMode=${nextStepMode} />`}
     </div>`;
   return html`<section class="log-card ${selected ? "is-selected" : ""}
+      ${active ? "log-card-active" : ""}
       ${isOpen ? "" : "is-closed"} ${twoLadder ? "log-card-two-ladder" : "log-card-one-ladder"}
       ${inBody ? "log-card-ranks-in-body" : ""}">
     ${/* The HEADING selects; the chevron opens. Two gestures, two targets,
          so browsing a card's graphs and folding it away never fight. */""}
     <div class="log-card-head">
-      <button type="button" class="log-card-select" onclick=${() => onSelect(ek)}
-          aria-pressed=${selected ? "true" : "false"}
-          title=${`Show ${named.name}'s timeline and trend above`}>
-        <img class="log-card-art" src=${entityIconSrc(t, ek)} alt=""
-          onerror=${(e) => fallbackToGenericStar(e, fallbackSlotForEntityKey(ek))} />
-        <span class="log-card-name">
-          <span class="log-card-context">${named.context}</span>
-          <${ShrinkToFitName} text=${named.name}
-            enabled=${nameOverflow === "shrinkToFit"} />
-          ${/* Ranks-in-body mode only: a collapsed card in this mode shows
-               NO rank display anywhere (it lives inside `.log-card-body`,
-               which only renders while open), so the strategy identity has
-               to live somewhere else or a card cannot be told apart from a
-               sibling on the same star/segment (Griffin: "we should also
-               display the strategy name used for this entry... each
-               strategy gets its own card"). Shown in BOTH open and closed
-               states for one consistent answer to "which strategy is this"
-               rather than one that appears and disappears with the fold. */""}
-          ${inBody && sec.last_strat
-            && html`<span class="log-card-strat">${sec.last_strat}</span>`}
-        </span>
-      </button>
+      <div class="log-card-identity">
+        <button type="button" class="log-card-select" onclick=${() => onSelect(ek)}
+            aria-pressed=${selected ? "true" : "false"}
+            title=${`Show ${named.name}'s timeline and trend above`}>
+          <img class="log-card-art" src=${entityIconSrc(t, ek)} alt=""
+            onerror=${(e) => fallbackToGenericStar(e, fallbackSlotForEntityKey(ek))} />
+          <span class="log-card-name">
+            <span class="log-card-context">${named.context}</span>
+            <${ShrinkToFitName} text=${named.name}
+              enabled=${nameOverflow === "shrinkToFit"} />
+          </span>
+        </button>
+        ${/* The active-target card's Ready/Running state, folded into the log
+             now that the card it lived on is gone (spec practice-log-entity-
+             cards, amendment A8): "the log's own highlight on the active
+             card... whatever we're CURRENTLY practicing should be
+             highlighted... to make it abundantly clear." Rendered ONLY on
+             the active card -- a Ready/Running word on every other card
+             would claim a state that is not true of it. */""}
+        ${active && html`<span class="log-card-state ${running ? "is-running" : ""}">
+            <${Icon} name="clock" size=${11} />${" "}${running ? "Running" : "Ready"}</span>`}
+        ${/* The strategy NAME becomes the same picker the (now-deleted)
+             Active Target card used (amendment A2: "replace the strategy
+             name in the card with the same exact drop down we use for
+             selecting the strategy... within each card, we would be able to
+             change the active strategy"). One card per entity, its attempts
+             labelled per strategy and graded on their own ladder -- the
+             head's rank follows whichever strategy is picked here, and a
+             switch fires the SAME rank-transition animation a legitimate
+             strategy change already does (rankIdentity below folds
+             `sec.last_strat` into the banner's identity, so this write is
+             not a special case for the climb). Unconditional, not gated on
+             `inBody`: even in head-placement mode the card needs a way to
+             change strategy, and an unset strategy (`sec.last_strat` null)
+             still needs the control to SET one, not just to display one
+             already chosen. Deleted definitions have nothing left to write
+             a strategy onto (SegmentSection's own rule, entitysection.js's
+             `entityIdentity` covers only a live def). */""}
+        ${broken
+          ? html`<span class="log-card-strat">Definition deleted</span>`
+          : html`<span class="log-card-strat-picker">
+              <${StratPicker} entity=${ek} identity=${entityIdentity(sec)}
+                  strategies=${sec.strategies} active=${sec.last_strat}
+                  groups=${sec.strategy_groups} allowBlank=${!sec.default_strat}
+                  onChanged=${t.refresh} /></span>`}
+      </div>
       ${!inBody && ranksBlock}
+      ${/* The PB is a real link now (amendment A8): "if the card is closed,
+           and I click that, it should open the card, and scroll allll the
+           way to that actual PB entry." `pbPick` selects this card (a no-op
+           if it already is the focused entity) and hands the id to the
+           page-level `pick` -- the SAME machinery `forceOpen`'s own effect
+           (above) and the page-turn effect (above) already exist for a
+           trend-graph dot; a PB link needs no second implementation of
+           "open + turn to the right page + scroll + flash". */""}
       <${PbTag} pb=${sectionPb(sec, t.clock)} mode=${clock} rows=${rows}
-        pick=${null} t=${t} />
+        pick=${pbPick} t=${t} />
       <button type="button" class="log-card-fold" onclick=${() => onSetOpen(!isOpen)}
           aria-expanded=${isOpen ? "true" : "false"}
           title=${`${isOpen ? "Collapse" : "Expand"} ${named.name}'s attempts`}>
         <${Icon} name="chevron" size=${18} />
       </button>
     </div>
-    ${/* The SAME shared component StarSection/SegmentSection render for their
-         own objective card (practice.js's `StepTrack`, steptrack.js), and the
-         same reason: `armed_detail` is SERVER truth, re-derived from the
-         journal on every view fetch, and it is NOT segment-only -- the
-         100-coin star carries it too, which is why both sections already
-         draw this identically. Before this task an armed-but-not-active
-         entity still got its own full objective-card (inside the now-deleted
-         practice index) and this row rode along for free; a `LogCard` is the
-         only surface such an entity gets now, so it is the one that has to
-         carry the row, or "is the system aware I'm mid-movement" silently
-         stops being answerable the moment that movement is not also the
-         active target. `StepTrack` renders nothing when `armed_detail` is
-         null -- true of every ordinary card. No `onEdit` here: that door is
-         the PINNED card's own affordance (practice.js), not every card this
-         entity happens to also appear as in the log. */""}
-    <${StepTrack} detail=${sec.armed_detail} />
+    ${/* The SAME component StarSection/SegmentSection used to render for
+         their own objective card (steptrack.js), and the same reason:
+         `armed_detail` is SERVER truth, re-derived from the journal on every
+         view fetch, and it is NOT segment-only -- the 100-coin star carries
+         it too. `LogCard` is the only surface any entity gets now, so it is
+         the one that carries the row for every card, or "is the system
+         aware I'm mid-movement" silently stops being answerable the moment
+         that movement is not also the active target. `StepTrack` renders
+         nothing when `armed_detail` is null -- true of every ordinary card.
+         `onEdit` -- the doorway into the definition -- is now gated on
+         `active` rather than on being a separate pinned card (the Active
+         Target card it used to be exclusive to is deleted, amendment A8):
+         only the entity actually being practised offers "edit this
+         movement", never a card that merely happens to also appear in the
+         log. */""}
+    <${StepTrack} detail=${sec.armed_detail}
+      onEdit=${active && openSegment && isSegment(sec) && !sec.broken
+        ? () => openSegment(sec.segment_id) : null} />
     ${isOpen && html`<div class="log-card-body">
       ${inBody && ranksBlock}
       ${rows.length
@@ -283,12 +349,26 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
             freshIds=${freshIds} openCompare=${openCompare} sec=${sec} />`
         : html`<${AttemptLogEmpty} hasAttempts=${sec.attempts.length > 0} />`}
       <div class="attempt-footer">
-        <div class="attempt-pagination">
-          ${rows.length > visible && html`<button class="quiet-button"
-              onclick=${() => setVisible(visible + 10)}>Show 10 more</button>`}
-          ${visible > 10 && html`<button class="quiet-button"
-              onclick=${() => setVisible(Math.max(10, visible - 10))}>Show fewer</button>`}
-        </div>
+        ${/* Real pagination (amendment A8), replacing "Show 10 more": "we
+             should replace the show more with the number of pages we have
+             to scroll through, and when we click on the PB, it would bring
+             us to the correct page... the best practice for this type of
+             pagination and easy navigation to the beginning / end of the
+             list." First/Prev/page-count/Next/Last -- the conventional
+             shape, rather than an invented one. Hidden entirely at one page,
+             same as the old buttons hid themselves when nothing more was
+             left to reveal. */""}
+        ${pageCount > 1 && html`<div class="attempt-pagination">
+          <button class="quiet-button" onclick=${() => setPage(0)}
+              disabled=${currentPage === 0} title="First page">« First</button>
+          <button class="quiet-button" onclick=${() => setPage(currentPage - 1)}
+              disabled=${currentPage === 0} title="Previous page">‹ Prev</button>
+          <span class="meta attempt-pagination-info">Page ${currentPage + 1} of ${pageCount}</span>
+          <button class="quiet-button" onclick=${() => setPage(currentPage + 1)}
+              disabled=${currentPage >= pageCount - 1} title="Next page">Next ›</button>
+          <button class="quiet-button" onclick=${() => setPage(pageCount - 1)}
+              disabled=${currentPage >= pageCount - 1} title="Last page">Last »</button>
+        </div>`}
         <div class="attempt-footer-tools">
           <${HideToggle} hidden=${hidden} showHidden=${showHidden}
             setShowHidden=${setShowHidden} />
@@ -403,9 +483,10 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
  * the newest thing PRACTICED is routinely not the thing currently SELECTED or
  * ACTIVE (this component's own comment on `activeKey`, below).
  */
-export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
+export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
                               clearFocus, focusKey, onSelect, activeKey = null,
-                              topKey = null }) {
+                              topKey = null, openTargetPicker = null,
+                              openSegment = null }) {
   const [shown, setShown] = useState(CARDS_PER_PAGE);
   // Per-entity fold overrides -- ONLY what the user has touched himself, in
   // either direction. Lives here rather than inside LogCard's own state
@@ -513,6 +594,24 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
         <${StatMenuTrigger} t=${t} />
         <${SortControl} ui=${ui} />
         <${ResetFilterToggle} ui=${ui} />
+        ${/* The target picker's TRIGGER, re-homed here now that the card it
+             used to live on (the Active Target card) is deleted (amendment
+             A9). Griffin retired the feature outright, then gave it a home
+             anyway: "I have literally never actually used this... I think we
+             should keep all the code for this feature, because I might want
+             to use it later... Let's move its trigger into the practice
+             log's header row, beside Stats and the sort control... I
+             probably won't use it, but for the purposes of keeping it ready
+             for later, we should keep it there." One modest chip, matching
+             Stats' own styling, at the quiet end of the row -- it must never
+             grow to compete with the quick-select row for attention, since
+             he does not practise by picking: he walks there in game and the
+             automation follows. */""}
+        ${openTargetPicker && html`<button type="button" class="chip chip-button"
+            onclick=${openTargetPicker}
+            title="Pick a star or segment to practice manually">
+          <${Icon} name="target" size=${14} />${" "}<span class="stat-menu-label">Target</span>
+        </button>`}
       </div>
     </div>
     <div class="log-list">
@@ -531,8 +630,8 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus,
         const rankPlacement = rankPlacementFor(tuning, { isNarrow, twoLadder });
         const nextStepMode = nextStepModeFor(tuning, { isNarrow, twoLadder });
         return html`<${LogCard} key=${ek} sec=${sec} t=${t} ui=${ui}
-          freshIds=${freshIds} openCompare=${openCompare}
-          focus=${focus} clearFocus=${clearFocus}
+          freshIds=${freshIds} openCompare=${openCompare} openSegment=${openSegment}
+          focus=${focus} clearFocus=${clearFocus} pick=${pick}
           selected=${ek === focusKey} onSelect=${onSelect}
           forceOpen=${ek === focusKey}
           open=${isCardOpen(openOverrides, topKey, ek)}

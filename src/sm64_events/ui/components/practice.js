@@ -8,21 +8,13 @@ import { useUiLog } from "../uilog.js";
 import { hasPracticeContext, justCompletedSegment,
         practicedHere, starPracticableHere, stageKey } from "../stagecontext.js";
 import { StageBanner } from "./stagebanner.js";
-import { RankBanner, rankColor } from "./ranks.js";
 import { useHeldWhileCelebrating } from "../rankclimb.js";
-import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
 import { RankIcon } from "./rankicon.js";
-import { StratPicker } from "./stratpicker.js";
-import { StepTrack } from "./steptrack.js";
 import { useTargetPicker } from "./targetpicker.js";
-import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
-import { displayName, entityKey, entityNoun, sectionClock, sectionPb }
-  from "../entitysection.js";
+import { entityKey, sectionClock } from "../entitysection.js";
 import { EntityAnalysis, EntityDrawer } from "./entitydetail.js";
-import { comparator, useGraphPick, PbTag,
-         bannerLabel, bannerHint, ranksAreAtFloor, showsEntityBanner,
-         rankIdentity, SORT_OPTIONS } from "./attemptlog.js";
+import { comparator, useGraphPick, SORT_OPTIONS } from "./attemptlog.js";
 import { liveSnapshot, resolveFocus, newestJournalId } from "../focustarget.js";
 import { orderedSections, PracticeLog, topEntityKey } from "./practicelog.js";
 
@@ -61,194 +53,6 @@ function useFreshAttemptIds(t) {
     }), 2600);
   }, [t.view]);
   return freshIds;
-}
-
-// Names the star/segment's fastest known strategy, next to the strategy
-// picker -- NOT inside the rank banner (round 4, 2026-07-25): on the
-// live-report card, "· fastest here: Sign Clip" and the next: target both
-// got clipped mid-word competing for the same line, and a tooltip on
-// truncated visible text still reads as a layout fault. This header area
-// puts the two strategy NAMES next to each other, which is the actual
-// comparison being made, in a wider row that isn't also carrying a medal,
-// a division, and a progress bar. Renders nothing when there's no fastest
-// strategy to name, or when it's the one already active (activeStrategyIsFastest).
-function StrategyFastestHint({ sec }) {
-  const fastest = sec.entity_rank && sec.entity_rank.fastest_strat;
-  if (!fastest || fastest === sec.last_strat) return null;
-  return html`<span class="objective-strategy-fastest"
-      title=${`fastest strategy here: ${fastest}`}>· fastest: ${fastest}</span>`;
-}
-
-// The objective card's symbol + eyebrow, which on the ACTIVE card double as
-// the target picker's trigger (the header's PRACTICE TARGET card owned that
-// job until 2026-07-26 — see targetpicker.js for why it moved here). Shared
-// by the star card, the segment card and the no-target card so all three open
-// the same dialog from the same place; `openPicker` absent renders exactly the
-// two plain spans that were there before.
-function ObjectiveEyebrow({ iconName, label, openPicker }) {
-  const inside = html`<span class="objective-symbol">
-      <${Icon} name=${iconName} size=${20} /></span>
-    <span class="eyebrow">${label}</span>`;
-  if (!openPicker) return inside;
-  return html`<button type="button" class="objective-pick" onclick=${openPicker}
-      title="Practice a different star, segment, or strategy">
-    ${inside}<${Icon} name="chevron" size=${14} />
-  </button>`;
-}
-
-// The objective card alone -- everything else this card used to carry
-// (analysis, attempts log, drawer) is a page-level surface now (Task 6),
-// following whichever entity the practice log has in FOCUS rather than
-// whichever one is ACTIVE. `rows`/`pick` are handed straight to PbTag and
-// used for nothing else: the graph-pick that reveals a row in the log now
-// lives in `Practice`, over the FOCUSED section's rows, because the active
-// card's own PB may not belong to the section currently in focus.
-function StarSection({ sec, t, pinned, openPicker, rows, pick }) {
-  const [foldTarget, toggleTarget] = useCollapsed("objective");
-  const ek = entityKey(sec);
-  const named = displayName(sec, (t.view.catalog || {}).courses || []);
-  const pb = sectionPb(sec, t.clock);
-  return html`<div class="practice-detail-grid ${pinned ? "is-primary" : ""}">
-    <section class="practice-card objective-card ${pinned ? "active-star" : ""} ${cardClass(foldTarget)}">
-      <div class="objective-heading">
-        <${ObjectiveEyebrow} iconName="target" openPicker=${openPicker}
-          label=${pinned ? "Active target" : "Star practice"} />
-        <div class="objective-name" title=${`${sec.course_name} · ${named.name}`}>
-          <span class="objective-context">${named.context}</span>
-          <h2>${named.name}</h2>
-        </div>
-        <div class="objective-strategy">
-          <span class="field-label">Strategy</span>
-          <${StratPicker} entity=${ek}
-              identity=${{ course_id: sec.course_id, star_id: sec.star_id }}
-              strategies=${sec.strategies} active=${sec.last_strat}
-              groups=${sec.strategy_groups}
-              onChanged=${t.refresh} />
-          <${StrategyFastestHint} sec=${sec} />
-        </div>
-        <${CollapseToggle} collapsed=${foldTarget} toggle=${toggleTarget}
-          label="the active target card" />
-      </div>
-      <div class="objective-metrics">
-          <div class="rank-slot">
-            <${RankBanner} label=${bannerLabel(sec, entityNoun(sec))}
-                hint=${bannerHint(sec, entityNoun(sec))} banner=${sec.rank}
-                atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${0}
-                replayKey=${sec.last_strat || ""}
-                identity=${rankIdentity(ek, "strategy", sec, t)} />
-            ${showsEntityBanner(sec) && html`<${RankBanner} label=${entityNoun(sec)} banner=${sec.entity_rank}
-                atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${1}
-                identity=${rankIdentity(ek, "entity", sec, t)} />`}
-          </div>
-        ${/* Same clock + word the segment card's live state uses. It was a
-             bare "○" glyph until 2026-07-26, which only became visible as an
-             asymmetry once the heading icon moved into ObjectiveEyebrow --
-             tests/test_ui_section_parity.py went red, correctly: the two
-             cards are meant to be siblings, and ONLY_IN_* staying empty is
-             the property worth keeping. An ordinary star has nothing to arm,
-             so its word stays constant -- except the 100-coin star (spec
-             2026-07-28-multi-step-segments), whose armed_detail is SERVER
-             truth (re-derived every view fetch, same reasoning the segment
-             card's pin logic already trusts it for) rather than the
-             client-pushed armedSegs set a segment_id would key into. */""}
-        <div class="objective-live-state ${sec.armed_detail ? "running" : ""}"
-            aria-label="Practice state">
-          <${Icon} name="clock" size=${17} /><span>${sec.armed_detail ? "Running" : "Ready"}</span>
-        </div>
-        <${PbTag} pb=${pb} mode=${t.clock} rows=${rows} pick=${pick} t=${t} />
-      </div>
-      ${/* Progress + what the 100-coin star's own engine is waiting for next
-           (spec 2026-07-28-multi-step-segments) -- the SAME row
-           SegmentSection renders below, shared markup and shared meaning:
-           null while idle (every star but 100 Coins, always), so this row
-           occupies zero height then. The user's own reason for keeping it:
-           "i like the idea of knowing for sure the system is aware of me
-           grabbing that first star, proven by it progressing to the next
-           step" -- it must survive the presentation change and read as the
-           STAR's own progress, not a segment's. */""}
-      ${/* No door here, and the reason is worth stating rather than
-           leaving as a gap (rule 11): these steps belong to the hidden
-           100-coin ENGINE definition, which views.py excludes from every
-           picker on purpose. Opening it in the editor would offer to edit
-           a definition the user is not allowed to target. */""}
-      <${StepTrack} detail=${sec.armed_detail} />
-    </section>
-  </div>`;
-}
-
-// Segment sibling of StarSection — deliberately NOT a generalization:
-// segments are RTA-only (igt is null everywhere) and have no links.
-// Everything else must stay at feature parity with the star card; the shared
-// pieces are components (StratPicker, PbTag, TimeFilterChip, …) so a feature
-// can't land on one card and miss the other, and
-// tests/test_ui_section_parity.py fails when it does.
-// Broken sections (definition deleted, history remains) render but drop the
-// timeline/marker editor and the strat picker — both key off the deleted
-// definition (POST /api/strat 404s for a segment that no longer exists).
-function SegmentSection({ sec, t, pinned, openPicker, rows, pick, openSegment }) {
-  const [foldTarget, toggleTarget] = useCollapsed("objective");
-  // armedSegs is the single live source: WS notices are instant, every view
-  // fetch reconciles it so it cannot stay stale — see store.js refresh().
-  const armed = t.armedSegs.has(sec.segment_id);
-  const tgt = (t.view && t.view.target) || {};
-  const isTarget = tgt.kind === "segment" && tgt.segment_id === sec.segment_id;
-  const pinTag = armed ? "Running" : isTarget ? "Ready" : "Recent";
-  const ek = entityKey(sec);
-  const named = displayName(sec, (t.view.catalog || {}).courses || []);
-  return html`<div class="practice-detail-grid ${pinned ? "is-primary" : ""}">
-    <section class="practice-card objective-card ${pinned ? "active-star" : ""} ${cardClass(foldTarget)}">
-      <div class="objective-heading">
-        <${ObjectiveEyebrow} iconName="segments" openPicker=${openPicker}
-          label=${pinned ? "Active segment" : "Segment practice"} />
-        <div class="objective-name" title=${named.name}>
-          <span class="objective-context">${named.context}</span>
-          <h2>${named.name}</h2>
-        </div>
-        <div class="objective-strategy">
-          <span class="field-label">Strategy</span>
-          ${!sec.broken
-            ? html`<${StratPicker} entity=${`segment:${sec.segment_id}`}
-                identity=${{ kind: "segment", segment_id: sec.segment_id }}
-                strategies=${sec.strategies} active=${sec.last_strat}
-                allowBlank=${!sec.default_strat}
-                onChanged=${t.refresh} />`
-            : html`<span class="meta">Definition deleted</span>`}
-          <${StrategyFastestHint} sec=${sec} />
-        </div>
-        <${CollapseToggle} collapsed=${foldTarget} toggle=${toggleTarget}
-          label="the active target card" />
-      </div>
-      <div class="objective-metrics">
-          <div class="rank-slot">
-            <${RankBanner} label=${bannerLabel(sec, entityNoun(sec))}
-                hint=${bannerHint(sec, entityNoun(sec))} banner=${sec.rank}
-                atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${0}
-                replayKey=${sec.last_strat || ""}
-                identity=${rankIdentity(ek, "strategy", sec, t)} />
-            ${showsEntityBanner(sec) && html`<${RankBanner} label=${entityNoun(sec)} banner=${sec.entity_rank}
-                atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${1}
-                identity=${rankIdentity(ek, "entity", sec, t)} />`}
-          </div>
-        <div class="objective-live-state ${armed ? "running" : ""}"
-            aria-label=${`Segment state: ${pinTag}`}>
-          <${Icon} name="clock" size=${17} /><span>${pinTag}</span>
-        </div>
-        <${PbTag} pb=${sectionPb(sec, t.clock)} mode="rta" rows=${rows} pick=${pick} t=${t} />
-      </div>
-      ${/* Progress + what a multi-step arm is waiting for next (Task 6,
-           spec 2026-07-28-multi-step-segments). sec.armed_detail is null
-           while idle, so this row occupies zero height then -- .objective-
-           card's third grid row is "auto" sized and simply collapses.
-           waiting_for is already card-facing (card_waiting_for_sentence,
-           tracking/segments.py) -- an imperative step like "Enter Shifting
-           Sand Land", never the builder's editor-voice sentence, which read
-           as broken English under this label ("Waiting for You enter level
-           Shifting Sand Land"). */""}
-      <${StepTrack} detail=${sec.armed_detail}
-        onEdit=${openSegment && !sec.broken
-          ? () => openSegment(sec.segment_id) : null} />
-    </section>
-  </div>`;
 }
 
 // --- Route Practice focus (Phase C) ---------------------------------------
@@ -313,43 +117,13 @@ function RouteFocus({ rv, t, ui, freshIds, openCompare }) {
   </div>`;
 }
 
-// The empty objective card alone -- the analysis half of "nothing selected"
-// is the page-level EntityAnalysis's own empty state (it renders whenever
-// `focusedSec` is null, which is exactly this state), and the unassigned
-// attempts that used to fill a log card here are the practice log's own
-// last card now (PracticeLog filters that bucket itself).
-function EmptyPractice({ openPicker, inContext }) {
-  // Two states, two remedies, and the caller owns the words (the emptystate
-  // rule): standing in a course with nothing chosen, the fix is choosing. On
-  // the game's main screen or a hub there is nothing here TO choose, and
-  // "pick one above" would be pointing at the banner's own placeholder.
-  return html`<div class="practice-detail-grid is-primary">
-    <section class="practice-card objective-card objective-empty">
-      <div class="objective-heading">
-        <${ObjectiveEyebrow} iconName="target" label="Active objective"
-          openPicker=${openPicker} />
-        <div class="objective-name">
-          <span class="objective-context">${inContext
-            ? "Waiting for a target" : "Nothing to practice here"}</span>
-          <h2>No active objective</h2>
-        </div>
-      </div>
-      <div class="objective-metrics">
-        <div class="rank-slot stable-empty compact">Rank —</div>
-        <div class="objective-live-state"><span class="live-state-icon">○</span><span>Idle</span></div>
-        <span class="pbtag">PB —</span>
-      </div>
-    </section>
-  </div>`;
-}
-
 export function Practice({ t, openCompare, openSegment }) {
   // Records what this page actually PAINTS — the selector's cells and every
-  // objective card — so a report about a cell that "was just there a couple
-  // frames ago" is readable afterwards instead of guessable from a
+  // practice-log card — so a report about a cell that "was just there a
+  // couple frames ago" is readable afterwards instead of guessable from a
   // screenshot (../uilog.js, core/uilog.py). ONE observer for the whole page
-  // deliberately: four banner row modes and three card types render here, and
-  // an observer per surface is four things to keep in step with the markup.
+  // deliberately: several banner row modes render here, and an observer per
+  // surface is several things to keep in step with the markup.
   const pageRef = useRef(null);
   useUiLog(pageRef);
   const stored = localStorage.getItem("sm64.sort");
@@ -646,12 +420,6 @@ export function Practice({ t, openCompare, openSegment }) {
   // that looks load-bearing and is not -- `LogCard` itself now notices a
   // focused pick outside its own window and widens itself (practicelog.js).
   const { focus, pick, clearFocus } = useGraphPick(focusedRows, Infinity, () => {});
-  // The active card's PB link jumps to a row in the LOG, which may not be
-  // the section currently in focus. Clearing the manual pick first is what
-  // makes the row reachable: `useGraphPick` already holds a pick whose
-  // attempt is not in `rows` yet and reveals it when a later render brings
-  // it in -- the same path the out-of-scope lifetime PB uses.
-  const pickFromActive = (attemptId) => { setManualFocus(null); pick(attemptId); };
 
   if (!v) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
       title=${t.connected ? "Preparing your practice view" : "Waiting for the trainer"}
@@ -661,24 +429,6 @@ export function Practice({ t, openCompare, openSegment }) {
 
   return html`<div class="practice-page" ref=${pageRef}>
     <${StageBanner} t=${held} freshIds=${freshIds} />
-
-    ${/* ONE picker for the page, not one per section: only the primary card
-         offers the trigger. Log cards (below) have no target-picker trigger
-         of their own -- browsing a card's history is not the same gesture as
-         picking a new target. */""}
-    ${activeStar
-      ? html`<${StarSection} key=${`${activeStar.course_id}:${activeStar.star_id}`}
-          sec=${activeStar} t=${held} pinned=${true}
-          openPicker=${openTargetPicker}
-          rows=${focusedRows} pick=${pickFromActive} />`
-      : primarySeg
-        ? html`<${SegmentSection} key=${`seg:${primarySeg.segment_id}`}
-            openSegment=${openSegment}
-            sec=${primarySeg} t=${held} pinned=${true}
-            openPicker=${openTargetPicker}
-            rows=${focusedRows} pick=${pickFromActive} />`
-        : html`<${EmptyPractice} openPicker=${openTargetPicker}
-            inContext=${inContext} />`}
 
     <${EntityAnalysis} sec=${focusedSec} t=${held} onPick=${pick}
       manualPick=${manualFocus} />
@@ -693,10 +443,20 @@ export function Practice({ t, openCompare, openSegment }) {
         freshIds=${freshIds} openCompare=${openCompare} />
     </section>`}
 
+    ${/* The Active Target card is gone (amendment A8 -- "the user can
+         already understand what star / segment is active, AND get all of
+         the relevant info inside the practice log now"). Its three jobs all
+         live here instead: Ready/Running is the log's own highlight on the
+         entity `activeKey` names (`active`, below); the PB jump is every
+         card's own PbTag now (practicelog.js); the target-picker TRIGGER
+         moved into this heading row (amendment A9), the dialog itself
+         mounted once at the bottom of this page exactly as before. */""}
     <${PracticeLog} v=${v} t=${held} ui=${ui} freshIds=${freshIds}
-      openCompare=${openCompare} focus=${focus} clearFocus=${clearFocus}
+      openCompare=${openCompare} focus=${focus} pick=${pick}
+      clearFocus=${clearFocus} openSegment=${openSegment}
       focusKey=${focusKey} onSelect=${selectFocus}
-      activeKey=${live.activeKey} topKey=${frozen.topKey} />
+      activeKey=${live.activeKey} topKey=${frozen.topKey}
+      openTargetPicker=${openTargetPicker} />
 
     <${EntityDrawer} sec=${focusedSec} t=${held} />
 

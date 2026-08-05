@@ -16,8 +16,8 @@
 //
 // It also means there are NO changes in the components being observed. That
 // is not incidental: an instrument that requires its subject to cooperate is
-// one more thing to keep in step, and the subject here is four banner row
-// modes and three objective cards.
+// one more thing to keep in step, and the subject here is several banner row
+// modes and the practice log's own entity cards.
 import { useEffect, useRef } from "preact/hooks";
 import { send } from "./api.js";
 import { takeMarks } from "./latency.js";
@@ -49,23 +49,24 @@ export function readSelector(root) {
   };
 }
 
-// EVERY `.objective-card` on the page in ONE record, in DOM order. There can
-// be several at once (an active star plus one or more pinned segments), and
-// the LIST is the observation — a card vanishing is exactly the kind of thing
-// being reported, and one-record-per-card could only express that as an
-// absence, which is not something an append-only log can write down.
-// The shape is uniform across all three card types (StarSection,
-// SegmentSection, EmptyPractice), which is why one reader covers them.
+// EVERY currently-ACTIVE `.log-card` on the page in ONE record, in DOM order
+// -- typically zero or one (repointed from the deleted `.objective-card`,
+// amendment A8: the Active Target card is gone, and the log's own card now
+// carries the SAME per-card facts -- name, live strategy, Ready/Running
+// state, mid-movement step -- that card used to). The LIST is still the
+// observation, not one record per card: a card losing its `.log-card-active`
+// highlight is exactly the kind of thing a report is about, and one-record-
+// per-card could only express that as an absence, which is not something an
+// append-only log can write down.
 export function readTargets(root) {
   return {
     surface: "target",
-    cards: Array.from(root.querySelectorAll(".objective-card")).map((card) => ({
-      label: text(card.querySelector(".objective-pick")),
-      context: text(card.querySelector(".objective-context")),
-      name: text(card.querySelector(".objective-name h2")),
-      strat: text(card.querySelector(".objective-strategy select")
-                  || card.querySelector(".objective-strategy")),
-      state: text(card.querySelector(".objective-live-state")),
+    cards: Array.from(root.querySelectorAll(".log-card.log-card-active")).map((card) => ({
+      context: text(card.querySelector(".log-card-context")),
+      name: text(card.querySelector(".log-card-name")),
+      strat: text(card.querySelector(".log-card-strat-picker select")
+                  || card.querySelector(".log-card-strat")),
+      state: text(card.querySelector(".log-card-state")),
       step: text(card.querySelector(".seg-waiting")),
     })),
   };

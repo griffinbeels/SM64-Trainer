@@ -26,6 +26,19 @@ export function entityKey(sec) {
 
 export const entityNoun = (sec) => (isSegment(sec) ? "Segment" : "Star");
 
+// The POST /api/strat identity for THIS entity's active strategy -- the same
+// shape StarSection/SegmentSection used to build by hand, one door now that
+// the practice log's own card head carries the live strategy picker
+// (spec practice-log-entity-cards, amendment A2). `entityKey(sec)` above is
+// the READ-side identity (a string other code compares/keys on); this is the
+// WRITE-side identity /api/strat actually wants, which is shaped differently
+// per kind and is not derivable from the string alone.
+export function entityIdentity(sec) {
+  return isSegment(sec)
+    ? { kind: "segment", segment_id: sec.segment_id }
+    : { course_id: sec.course_id, star_id: sec.star_id };
+}
+
 // Segments are RTA-only by design (igt is null everywhere on them), so the
 // view's clock applies to stars alone.
 export const sectionClock = (sec, clock) => (isSegment(sec) ? "rta" : clock);

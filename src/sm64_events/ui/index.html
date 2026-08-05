@@ -747,8 +747,17 @@
        So 347px stands, unmeasured against the two-banner card ON PURPOSE.
        If the supported floor ever drops below ~790px viewport, this number
        becomes live again and must be re-measured first.
-       Re-measure with:
-         uv run python tools/measure_objective_card.py  */
+
+       CARRIED CONCERN (2026-08-04, amendment A8): `tools/measure_objective_
+       card.py` is deleted along with it -- the real practice page never
+       renders `.objective-card` any more, so that tool's whole premise (a
+       populated Active Target card reachable via `tools/ui_fixture.py`) no
+       longer holds. This class and its CSS survive only because `ui/tune.js`
+       still builds a REPLICA card out of them for the climb inspector
+       (`.claude/rules/ui-climb.md`'s "KNOWN GAP" paragraph). A future
+       re-measure has no tool to run and would need one built against that
+       replica instead -- not done here, since the number this round would
+       need to re-derive it for (a narrower supported floor) has not moved. */
     --objective-card-narrow: 347px;
     --radius: 9px;
   }
@@ -2660,6 +2669,15 @@
   .quiet-button, .attempt-footer > button {
     min-height: 30px; border: 0; background: transparent; color: var(--muted);
   }
+  /* Real pagination (amendment A8) -- First/Prev/page-count/Next/Last,
+     replacing "Show 10 more". Flex row so the five pieces wrap together
+     rather than as five loose inline elements at a narrow card width;
+     `:disabled` dims a First/Prev at page one or a Next/Last at the last
+     page, which `.quiet-button` never needed before (nothing on it could
+     previously be disabled). */
+  .attempt-pagination { display: flex; align-items: center; gap: .3rem; flex-wrap: wrap; }
+  .attempt-pagination button:disabled { opacity: .35; cursor: default; }
+  .attempt-pagination-info { white-space: nowrap; }
   .detail-drawer { grid-column: 1 / -1; padding-block: 10px; }
   .detail-drawer summary {
     cursor: pointer; color: #d7e1ec; font-weight: 650;
@@ -4628,6 +4646,20 @@
   }
   .log-card.is-selected { border-color: #5d89b8; background: rgba(20,42,66,.55); }
   .log-card.is-unassigned { background: rgba(9,22,36,.3); }
+  /* The Ready/Running highlight the deleted Active Target card used to carry
+     alone (amendment A8: "whatever we're CURRENTLY practicing should be
+     highlighted in the practice log in this way to make it abundantly
+     clear"). Same gold `.active-star` accents the quick-select row's own
+     "this cell is what's active" cell already uses
+     (`.starcell.active-star`) -- one visual language for "active" across the
+     app, not a second one invented for this card. Declared explicitly for
+     the combined selected+active case (0,3,0) rather than relying on source
+     order against `.is-selected` (0,2,0): browsing a DIFFERENT card while
+     the active one keeps practising is the ordinary case, so both signals
+     must be able to show on two different cards, or on the same one,
+     without one silently winning by accident. */
+  .log-card.log-card-active { border-color: #e0c36a; background: rgba(224,195,106,.07); }
+  .log-card.log-card-active.is-selected { border-color: #e0c36a; background: rgba(20,42,66,.55); }
   /* identity (art+name) | ranks | PB | fold -- the same four things every
      other section's own heading carries, one row instead of a whole card.
      `min-height` derives from the icon size and the head's own vertical
@@ -4656,8 +4688,23 @@
     grid-template-areas: "identity fold";
   }
   .log-card.is-unassigned .log-card-name { grid-area: identity; }
-  .log-card-select {
+  /* Wraps the select-button row AND the strategy picker beneath it
+     (amendment A2 -- the card head's strategy NAME became the same picker
+     the deleted Active Target card used). `grid-area: identity` lived on
+     `.log-card-select` alone before this; it moves up here so a genuine
+     interactive `<select>` can sit BELOW the button as its sibling rather
+     than nested inside it -- a `<select>` is not valid content for a
+     `<button>`, and nesting them would also mean a click on the picker
+     bubbles into the card's own "select this card" gesture. Every layout
+     variant (oneLine/twoLine/stacked, ranks-in-head/-in-body) names exactly
+     one "identity" grid area, so this wrapper drops into all of them with no
+     further CSS -- same mechanism `.log-card-select` used before, just one
+     level up. */
+  .log-card-identity {
     grid-area: identity;
+    min-width: 0; display: flex; flex-direction: column; gap: .1rem;
+  }
+  .log-card-select {
     min-width: 0; display: flex; align-items: center; gap: var(--log-identity-gap, 10px);
     padding: 0; border: 0; border-radius: 6px; background: none;
     color: inherit; font: inherit; text-align: left; cursor: pointer;
@@ -5601,18 +5648,50 @@
     gap: var(--log-rank-gap, 13px);
     margin: 0 0 .6rem;
   }
-  /* The strategy name, printed only in "body" placement (LogCard's own
-     render -- `sec.last_strat`, the same value RankBanner's `replayKey`
-     already reads) so a COLLAPSED card in this mode -- which shows no rank
-     display at all, since it lives inside `.log-card-body` and that only
-     ever renders while open -- can still be told apart from a sibling card
-     on the same star/segment (Griffin: "each strategy gets its own card...
-     this is important"). Sits in the identity column, the one thing every
-     state of this mode still shows. */
+  /* SUPERSEDED (amendment A2): the strategy name used to be plain text here,
+     printed only in "body" placement so a collapsed card could still say
+     which strategy it was showing. It is a live `StratPicker` now (below,
+     `.log-card-strat-picker`), rendered UNCONDITIONALLY -- a picker has to
+     work whether or not a strategy is set yet, not just display one already
+     chosen, so it no longer waits on the placement cell at all. This class
+     survives for the one text-only case a picker cannot cover: a deleted
+     segment definition has nowhere left to write a strategy, so LogCard
+     falls back to this plain "Definition deleted" label in its place. */
   .log-card-strat {
     display: block; color: var(--muted); font-size: 9px; text-transform: uppercase;
     letter-spacing: .03em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   }
+  /* The live strategy picker itself -- same slot in the identity column the
+     plain-text label above used to occupy, now a real `<select>`
+     (`ui/components/stratpicker.js`, shared with every other strategy
+     control in the app: same dropdown, same "+ new strat…" modal, same
+     dropped-write recovery). Sized down from the global `select` rule's
+     default so it reads as a small identity-column label rather than a
+     full-size form control -- `select` already reserves its own
+     ellipsis/arrow lane (ui-core.md's dropdown rule), so no extra overflow
+     handling is needed here. A click inside it never reaches the card's own
+     "select this card" button: they are SIBLINGS now (the wrapper this rule
+     targets, `.log-card-identity` above), not nested, so there is nothing
+     for a click to bubble into. */
+  .log-card-strat-picker { display: block; min-width: 0; }
+  .log-card-strat-picker select {
+    width: 100%; min-width: 0; max-width: 100%;
+    font-size: 10px; padding: 1px 1.3rem 1px 2px; border: 0; border-radius: 4px;
+    background: transparent; color: var(--muted);
+  }
+  .log-card-strat-picker select:hover { background: #16283e; color: var(--text); }
+  .log-card-strat-picker select:focus-visible { outline: 2px solid #78b9ff; outline-offset: 1px; }
+  /* The Ready/Running word, shown only on the one card `active` names
+     (amendment A8). Same icon+word shape `.objective-live-state` used to
+     draw on the deleted card, condensed into the identity column instead of
+     its own metrics row -- there is no spare row here, and this card is
+     never fixed-height the way that one was. */
+  .log-card-state {
+    display: flex; align-items: center; gap: .25rem;
+    color: var(--muted); font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .03em;
+  }
+  .log-card-state.is-running { color: var(--green); }
   /* The head's own grid, minus the "ranks" track -- identity takes what
      ranks used to own, so the freed space is never a blank gap. `oneLine`
      is the shipped `collapsedLayout` and the only one whose row genuinely
