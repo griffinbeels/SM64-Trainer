@@ -227,6 +227,14 @@ function fixtureView() {
 // one asserted from a comment.
 const ACTIVE_KEY = entityKey(SECTIONS[0]);
 
+// PracticeLog's `enforceMembership` (2026-08-05, active-leads round) is
+// deliberately `false` below: it asks "did the SERVER publish this section
+// for a real reason" (a recorded attempt, or `ACTIVE_KEY` still standing
+// there), which is meaningless for a hand-built showcase where most cards
+// are zero-attempt ON PURPOSE (the floor state, the no-strat sentinel) and
+// only one can ever match `ACTIVE_KEY`. Passing the real default here would
+// silently delete most of this page's own fixture.
+
 // Minimal store slice `entityIconSrc`/`AttemptTable`/`RankBanner` need. Every
 // field falls back gracefully to "no art override, generic star" when
 // missing -- entityicons.js's own contract (`t || {}` at every call site) --
@@ -278,7 +286,8 @@ function Pane({ label, width, view, t, ui, tuningKey }) {
           freshIds=${new Set()} openCompare=${null}
           focus=${null} clearFocus=${() => {}} pick=${() => {}}
           focusKey=${null} onSelect=${() => {}}
-          activeKey=${ACTIVE_KEY} topKey=${topEntityKey(view)} />
+          activeKey=${ACTIVE_KEY} topKey=${topEntityKey(view)}
+          enforceMembership=${false} />
       </div>
     </div>
   </div>`;

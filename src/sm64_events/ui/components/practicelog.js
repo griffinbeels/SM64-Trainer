@@ -33,6 +33,7 @@ import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
   from "./attemptlog.js";
 import { logTuning, logTuningVars, logTuningClasses, rankPlacementFor,
          nextStepModeFor, NARROW_CONTAINER_PX } from "../logtuning.js";
+import { bowserModeFor } from "./stagebanner.js";
 
 const html = htm.bind(h);
 
@@ -56,18 +57,118 @@ const CARDS_PER_PAGE = 5;
 const ROWS_PER_PAGE = 10;
 
 /**
- * Both kinds merged, newest activity first.
+ * Both kinds merged, newest activity first -- except the entity currently
+ * being practiced, which always leads regardless of its own recency.
  *
  * `last_activity` is the SERVER's own journal-id stamp (views.py) and both
  * section lists arrive already sorted by it — this is the merge, not a
  * re-derivation. A section with no attempts in scope carries -1 and sorts
- * last, which is right: a target you set and have not run yet is not the
- * thing you were just doing.
+ * last: "a target you set and have not run yet is not the thing you were
+ * just doing" -- true of any OTHER freshly-set target, but not of THIS one.
+ *
+ * CORRECTED (2026-08-05): entering Bowser 1 with it the only segment
+ * available used to leave its card at the very bottom (recency -1) until an
+ * attempt landed, then jump it to the top. Griffin: "it should be at the top
+ * immediately (because it's the only star / segment available)." `activeKey`
+ * is the SAME "is this the entity he is doing right now" signal `LogCard`'s
+ * own `.log-card-active` gold border already reads (practice.js's
+ * `live.activeKey`, itself `activeStar`/`primarySeg` -- the target the
+ * player is standing in front of) -- reused, not reinvented, per the
+ * standing rule against a second answer to "did he choose this." With no
+ * active entity (or one not present in this view), the merge is byte-
+ * identical to before.
  */
-export function orderedSections(view) {
-  return [...(view.stars || []), ...(view.segments || [])]
+export function orderedSections(view, activeKey = null) {
+  const sorted = [...(view.stars || []), ...(view.segments || [])]
     .slice()
     .sort((a, b) => (b.last_activity ?? -1) - (a.last_activity ?? -1));
+  if (activeKey == null) return sorted;
+  const idx = sorted.findIndex((sec) => entityKey(sec) === activeKey);
+  if (idx <= 0) return sorted;          // not found, or already leading
+  const [active] = sorted.splice(idx, 1);
+  sorted.unshift(active);
+  return sorted;
+}
+
+/**
+ * Has a target-only, zero-attempt section EARNED a place in the log?
+ *
+ * Griffin: "If we leave without practicing anything, its card should
+ * disappear from the list (because we didn't even reset / practice
+ * anything)." The server's own rule keeps a section for the practice target
+ * unconditionally (views.py, "the practice target ALWAYS gets a section") --
+ * correct for what the SERVER can see (the target survives a hub on
+ * purpose, caveat 12), but it has no notion of "he has since walked away and
+ * touched nothing," which is a fact about the PLAYER's position and
+ * therefore a client-side question, the same one `ui/stagecontext.js`'s
+ * `practicedHere`/`starPracticableHere` already answer for the highlight on
+ * this very card (`active`, below) -- reused via `activeKey`, not
+ * reinvented.
+ *
+ * Three ways in, checked in order:
+ *   1. A real attempt landed in scope, ever -- unconditional. "A card that
+ *      recorded even one attempt stays" (the log is a record of what he DID,
+ *      not of what is merely selected).
+ *   2. It is still ARMED (`armed_detail` non-null, star or segment) -- the
+ *      standing "a RUNNING segment is never invisible" rule (2026-07-24),
+ *      checked independently of `activeKey` on purpose: several defs can arm
+ *      off one course entry with no single one of them "the" pick
+ *      (practice.js's own `ambiguousPins`), and none of them may vanish
+ *      merely because none is unambiguous.
+ *   3. It is the entity `activeKey` names AND it has a real course of its
+ *      own (`course_id != null`). The course_id guard is the one piece that
+ *      is NOT a restatement of `activeKey` -- measured live (a synthetic
+ *      TrackerService run, entering the Bowser 1 arena, auto-selecting its
+ *      fight, then leaving to the lobby with nothing grabbed): the fight
+ *      disarms correctly (the topological engine's own doing), but
+ *      `practicedHere`'s course-less bucket treats EVERY course-less place
+ *      (the castle, any hub, any OTHER arena) as "still here" for an
+ *      arena-originated entity -- so `activeKey` kept naming it long after
+ *      he had genuinely left the arena for the lobby, still with zero
+ *      attempts. A course-BEARING entity (an ordinary star, most castle
+ *      movements) has no such gap: `practicedHere` requires the player's
+ *      OWN course to match exactly, so `activeKey` alone already means "he
+ *      is standing right where this is practiced."
+ */
+export function hasEarnedACard(sec, activeKey) {
+  if (sec.attempts && sec.attempts.length > 0) return true;
+  if (sec.armed_detail != null) return true;
+  return sec.course_id != null && activeKey != null && entityKey(sec) === activeKey;
+}
+
+/**
+ * A Bowser course's Reds star and its paired reds->pipe segment are ONE run
+ * graded two ways, never two things practiced -- Griffin: "if I have pipe
+ * selected, it shouldn't show the card for (Star). If I have (Star)
+ * selected, and I grab the star, it shouldn't show the pipe card... if I
+ * enter the pipe, it should show the pipe card (and swap to pipe mode)."
+ *
+ * Only excludes when BOTH halves of a pair are present at once (a course
+ * he has only ever practiced one way keeps its one card regardless of what
+ * `modeForCourse` happens to answer for it, including the untouched
+ * "pipe" default -- there is nothing to resolve a conflict between). When
+ * both are present, the one matching `modeForCourse(sec.course_id)` wins;
+ * everything else, including every OTHER course's Bowser pair, passes
+ * through untouched.
+ *
+ * `modeForCourse` is injected rather than read from storage in here on
+ * purpose -- `stagebanner.js`'s `bowserModeFor` already owns that memory
+ * (keyed by LEVEL, not course_id) and this function stays a pure,
+ * node-testable transform of a `(sections, lookup)` pair, never a second
+ * reader of `localStorage`.
+ */
+export function applyRedsPipeExclusivity(sections, modeForCourse) {
+  if (!modeForCourse) return sections;
+  const byKey = new Map(sections.map((sec) => [entityKey(sec), sec]));
+  const exclude = new Set();
+  for (const sec of sections) {
+    if (isSegment(sec) || sec.pipe_segment_id == null) continue;
+    const pipeKey = `segment:${sec.pipe_segment_id}`;
+    if (!byKey.has(pipeKey)) continue;    // only one half present -- nothing to resolve
+    const mode = modeForCourse(sec.course_id);
+    exclude.add(mode === "pipe" ? entityKey(sec) : pipeKey);
+  }
+  return exclude.size ? sections.filter((sec) => !exclude.has(entityKey(sec))) : sections;
 }
 
 /**
@@ -491,11 +592,18 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
  * (practice.js's `activeStar`/`primarySeg`, the same signal `focustarget.js`
  * already reads as `live.activeKey`) -- separate from `focusKey`, which is
  * only ever a BROWSE pick and may point at a card the player left minutes
- * ago. It exists for exactly one thing: whether a card's rank banners show
+ * ago. THREE jobs now, all reusing this one signal rather than growing a
+ * second answer to "did he choose this": whether a card's rank banners show
  * their next-step line at all (Griffin: "hide the 'to level up' display
  * there, and only display it when the user's actively practicing that
- * star"). LogCard resolves its own `active` from this and hands it to
- * RankBanner as `showNext` -- ranks.js itself never reaches for the store.
+ * star" -- LogCard resolves its own `active` from this and hands it to
+ * RankBanner as `showNext`, ranks.js itself never reaching for the store);
+ * whether the active entity LEADS the card list regardless of its own
+ * recency (`orderedSections`, above -- "it should be at the top immediately,
+ * because it's the only star / segment available"); and whether a
+ * zero-attempt, target-only section has earned a place at all
+ * (`hasEarnedACard`, above -- "if we leave without practicing anything, its
+ * card should disappear from the list").
  *
  * `topKey` names the entity the system's ONE auto-open slot follows (see
  * `isCardOpen` above) -- the caller's own `topEntityKey(v)`, taken through
@@ -505,11 +613,26 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
  * `stage`/`newestAttemptId`). A DIFFERENT signal from `focusKey`/`activeKey`:
  * the newest thing PRACTICED is routinely not the thing currently SELECTED or
  * ACTIVE (this component's own comment on `activeKey`, below).
+ *
+ * `enforceMembership` (default true) gates `hasEarnedACard`/
+ * `applyRedsPipeExclusivity` -- both ask "did the SERVER publish this section
+ * for a real reason", which only means something for a genuine session view.
+ * `ui/tunelog.js`'s own inspector reuses this exact component for fidelity
+ * ("PracticeLog, and therefore the REAL LogCard") over a HAND-BUILT `view` of
+ * arbitrary rank states to judge side by side (a ladder floor, an unranked
+ * sentinel, two rank ladders at once) -- most of those cards carry zero
+ * attempts and match no real `activeKey` on purpose, because the fixture's
+ * whole point is showing states a real server would only ever publish one of
+ * at a time. Filtering that fixture by "did he earn this card" would silently
+ * delete most of the inspector's own showcase (caught by
+ * `tests/test_ui_rank_progress_track_log_card.py`, which drives the real
+ * page rather than asserting on props). The real app never passes this prop
+ * and keeps the enforced behaviour.
  */
 export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
                               clearFocus, focusKey, onSelect, activeKey = null,
                               topKey = null, openTargetPicker = null,
-                              openSegment = null }) {
+                              openSegment = null, enforceMembership = true }) {
   const [shown, setShown] = useState(CARDS_PER_PAGE);
   // Per-entity fold overrides -- ONLY what the user has touched himself, in
   // either direction. Lives here rather than inside LogCard's own state
@@ -584,7 +707,31 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   const tuning = logTuning();
   const nameOverflow = tuning.nameOverflow;
   const rankIconSize = tuning.rankIconSize;
-  const sections = orderedSections(v);
+  // The Reds/Pipe exclusivity check (below) needs a course -> LEVEL lookup:
+  // `stagebanner.js`'s `bowserModeFor` is keyed by level (a Bowser course's
+  // own `course_id` and its LEVEL are different numbers -- BitDW is course
+  // 16, level 17), and the log has no live "stage" to read the level off of
+  // for a course he is not currently standing in. Inverted from the SAME
+  // server-shipped `vocab.course_by_level` `entityicons.js`'s `iconContext`
+  // already reads for the identical reason (a segment's start level, off
+  // the same map) -- never a second hand-written course<->level table, which
+  // is exactly the kind of duplicated domain fact this project keeps paying
+  // for. Memoised on the vocab's own identity, which changes once per fetch.
+  const levelByCourse = useMemo(() => {
+    const courseByLevel = (t.vocab || {}).course_by_level || {};
+    const out = {};
+    for (const [level, course] of Object.entries(courseByLevel)) out[course] = Number(level);
+    return out;
+  }, [t.vocab]);
+  const modeForCourse = (courseId) => {
+    const level = levelByCourse[courseId];
+    return level != null ? bowserModeFor(level) : null;
+  };
+  const ordered = orderedSections(v, activeKey);
+  const sections = enforceMembership
+    ? applyRedsPipeExclusivity(
+        ordered.filter((sec) => hasEarnedACard(sec, activeKey)), modeForCourse)
+    : ordered;
   // The focused entity (the active target, by default, or a manual browse
   // pick) is not necessarily among the first CARDS_PER_PAGE cards -- recency
   // order is by `last_activity`, and the active target is routinely NOT the

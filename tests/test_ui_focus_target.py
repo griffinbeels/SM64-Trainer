@@ -177,9 +177,19 @@ def test_the_top_key_is_frozen_alongside_its_siblings():
     Reuses the SAME positive regex `test_the_newest_attempt_id_is_frozen_
     alongside_its_siblings` proved above (its trailing `(?:,[^}]*)?` is what
     makes room for this field in the first place) -- this test only adds the
-    checks specific to `topKey` itself: it is inside that one call, and the
-    caller of `PracticeLog` reads the FROZEN value, never a second live
-    call."""
+    checks specific to `topKey` itself: it is inside that one call.
+
+    CORRECTED (2026-08-05, active-leads round): the caller no longer hands
+    `PracticeLog` `frozen.topKey` directly -- the auto-open slot now follows
+    the ACTIVE entity first (`ui/components/practicelog.js`'s `orderedSections`
+    puts it at the top of the list regardless of recency, and A1's own design
+    already defined the auto-open slot as "whichever card is at the top", so
+    the slot has to move with it or a card nobody touched would sit open one
+    row under a closed, freshly-active one). `live.activeKey` needs no freeze
+    of its own -- it is already derived from `frozen.stage`/`frozen.target`,
+    so it cannot move mid-celebration -- and `frozen.topKey` survives as the
+    FALLBACK for when nothing is active at all, which is the one branch that
+    still needs the freeze this test guards."""
     practice = strip_comments(PRACTICE_JS.read_text(encoding="utf-8"))
     assert re.search(
         r"useHeldWhileCelebrating\(\{\s*"
@@ -191,12 +201,19 @@ def test_the_top_key_is_frozen_alongside_its_siblings():
         "its siblings -- a second, separate freeze (or none at all) lets an "
         "unrelated attempt landing elsewhere move the auto-open slot WHILE a "
         "rank on screen is still climbing")
-    assert "topKey=${frozen.topKey}" in practice, (
-        "PracticeLog's own topKey prop must read the FROZEN value "
-        "(frozen.topKey), not a live topEntityKey(t.view) call")
+    assert re.search(r"const topKey = live\.activeKey \?\? frozen\.topKey;", practice), (
+        "the auto-open slot must prefer the ACTIVE entity and fall back to "
+        "the FROZEN recency value -- neither half alone is what shipped")
+    assert "topKey=${topKey}" in practice, (
+        "PracticeLog's own topKey prop must read the active-or-frozen "
+        "derived value, not frozen.topKey directly (that would strand the "
+        "active-leads card closed) or a live topEntityKey(t.view) call")
     assert not re.search(r"topKey=\$\{topEntityKey\(t\.view\)\}", practice), (
         "PracticeLog must not be handed a live topEntityKey(t.view) call -- "
         "that is exactly the regression this test exists to catch")
+    assert not re.search(r"topKey=\$\{frozen\.topKey\}", practice), (
+        "PracticeLog must not be handed frozen.topKey directly any more -- "
+        "the active entity has to be able to win the slot too")
 
 
 def test_the_top_key_freeze_guard_can_still_fail():
@@ -204,11 +221,13 @@ def test_the_top_key_freeze_guard_can_still_fail():
     comment_only = strip_comments(
         "// newestAttemptId: newestJournalId(t.view),\n"
         "// topKey: topEntityKey(t.view) })\n"
-        "// topKey=${frozen.topKey}\n")
+        "// const topKey = live.activeKey ?? frozen.topKey;\n"
+        "// topKey=${topKey}\n")
     assert not re.search(
         r"newestAttemptId: newestJournalId\(t\.view\),\s*"
         r"topKey: topEntityKey\(t\.view\)\s*\}\)", comment_only)
-    assert "topKey=${frozen.topKey}" not in comment_only
+    assert not re.search(r"const topKey = live\.activeKey \?\? frozen\.topKey;", comment_only)
+    assert "topKey=${topKey}" not in comment_only
 
     # A live read handed straight to PracticeLog, alongside a genuine but
     # SEPARATE freeze -- the finding this guards against is specifically the
@@ -222,7 +241,7 @@ def test_the_top_key_freeze_guard_can_still_fail():
     assert re.search(  # the freeze call itself is still well-formed...
         r"newestAttemptId: newestJournalId\(t\.view\),\s*"
         r"topKey: topEntityKey\(t\.view\)\s*\}\)", live_leak)
-    assert "topKey=${frozen.topKey}" not in live_leak, (
+    assert not re.search(r"const topKey = live\.activeKey \?\? frozen\.topKey;", live_leak), (
         "the mutation itself must actually read as a leak, or this probe "
         "proves nothing")
     assert re.search(r"topKey=\$\{topEntityKey\(t\.view\)\}", live_leak), (

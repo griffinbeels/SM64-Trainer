@@ -71,10 +71,153 @@ verification norms — read both.
 | Whose history the analysis card and detail drawer draw (browse vs. active) | `ui/focustarget.js` — clicking a practice-log card puts the page-level analysis/drawer into a spring-loaded BROWSE mode for that entity, without moving the active target. `resolveFocus(manual, live)` compares a snapshot taken AT the click (`manual.at`) against the current one (`live`) on three keys — `activeKey` (the target moved), `stageKey` (added to `ui/stagecontext.js` this branch — the selector's own broadcast identity, so "warped/reset into a different place" is one string comparison), `newestAttemptId` (a new row landed anywhere) — and the manual pick wins only while all three still agree; any one changing releases it back to whatever is live. User's rule (2026-08-03): "the second we start playing again in LLL (via a reset / star grab), or through warping / basically anything that would trigger changing the star/segment selector, that new area or star or segment should take ownership of that card." Import-free, so `tests/test_ui_focus_target.py` drives it under node. `Practice()` reads its three signals off the FROZEN (celebration-held) snapshot, never live — a live read let an incidental attempt elsewhere drop a browse pick mid-celebration, exactly what the hold exists to prevent |
 | Attempt rows, sort/filter controls, the graph-pick reveal, rank-banner helpers | `ui/components/attemptlog.js` — `AttemptRow`/`AttemptTable`, `SortControl`/`ResetFilterToggle`/`HideToggle`, the shared `StatMenuTrigger`, the clickable `PbTag`, and the rank-banner helpers (`bannerLabel`/`bannerHint`/`ranksShareOneLadder`/`ranksAreAtFloor`/`showsEntityBanner`/`rankIdentity`) that decide whether one rank banner renders or two. Extracted out of `practice.js` (Task 5 of spec practice-log-entity-cards, 2026-08-03) purely to keep the import graph a DAG: `practicelog.js` needs this machinery and `practice.js` imports `practicelog.js`, so exporting it from `practice.js` would have closed the cycle `entitysection.js` ← `practice.js` ↔ `practicelog.js` — this project has already been burned once by an import cycle that passes `node --check` clean and only fails as an unrelated-looking `ReferenceError` on render. Moved verbatim, no behaviour change. `useGraphPick(rows, visible, setVisible)` is the progress-graph/PB-tag reveal (scroll, flash, auto-open a saved replay) — Task 6 made the CALL page-level (one instance in `Practice`, over whichever entity is FOCUSED) while the pagination it widens is now PER-CARD (`practicelog.js`'s `LogCard` notices a pick land outside its own window and widens itself); the `visible`/`setVisible` args `Practice` passes in are inert (`Infinity`/a no-op) for exactly that reason — read `LogCard` before changing either half, or a pick past the tenth row will silently do nothing again |
 | The analysis card and detail drawer — page-level, one copy each | `ui/components/entitydetail.js` — `EntityAnalysis` (attempt timeline + performance trend) and `EntityDrawer` (stat chips, standards ladder, failure compilation, wipe), plus `wipeSection`. Since Task 6 (spec practice-log-entity-cards, 2026-08-03) these are PAGE-LEVEL surfaces mounted once in `Practice`, following whichever entity `ui/focustarget.js` resolves as focused — `sec=${null}` renders `EntityAnalysis`'s own "nothing selected" empty state and makes `EntityDrawer` render nothing at all (no wipe button, no ladder, no failure list for an entity nobody has picked). They used to be two hand-written copies living inside `StarSection`/`SegmentSection`; a second copy now would not be mere duplication, since there is no longer a call site per kind for one to belong to. `EntityDrawer`'s `entity`/`family` props are deliberately NOT the section's own identity — a paired Bowser pipe segment grades its `StandardsPanel` against its STAR's ladder (`sec.pipe_star_entity`) and a paired reds star grades the reverse way (`family="Star"`) — preserved byte-for-byte from the two originals, both call sites' exact prop expressions |
-| The practice log — page-level, recency-ordered entity cards | `ui/components/practicelog.js` — `orderedSections(view)` (both kinds merged by `last_activity`, newest first; a section with none in scope sorts last), `LogCard` (one card per entity: art, the live strategy picker, both rank banners, the clickable PB tag, fold, the paginated attempt table, a `.seg-waiting` row for whatever is mid-progress), and `PracticeLog` (the page-level list, `CARDS_PER_PAGE=5`, the unassigned bucket unconditionally last, plus the target-picker trigger in its own heading row). Replaces the practice INDEX entirely (spec practice-log-entity-cards, 2026-08-03, task 0027: "The ONLY way for this segment to finish is by entering into BITFS, but by entering into BITFS, the DDD->BITFS segment disappears from the practice screen… we can never see how we performed"). `focusKey`/`onSelect` are how a card click becomes a browse pick (`ui/focustarget.js`, above); `forceOpen` and the per-card `page` turn exist so a graph-pick or PB-tag jump can reveal a row that is past BOTH the card's own pagination AND the page's own "Show 5 more" — each is a one-shot NUDGE keyed on `focus.nonce`, never a standing override, or the fold/pagination controls keep rendering while no longer responding the moment a pick lands (two extra bugs Task 6's own fix round found and fixed, beyond the findings that opened it). `UnassignedLogCard` is not an entity — no icon, no ladder, nothing for a click to select — and renders unconditionally after every entity card, never folded into the recency pagination (user: "should always appear at the bottom of the list, below any of the classified cards"). **Round 2026-08-04 (amendments A2/A8/A9) deleted the Active Target card** (`StarSection`/`SegmentSection`/`EmptyPractice`, formerly in practice.js) and folded its three jobs into `LogCard`: (1) the card head's strategy NAME is a real `<${StratPicker}>` now (`.log-card-strat-picker`), writing the entity's ACTIVE strategy via `entityIdentity(sec)` (entitysection.js) — unconditional, not gated on rank placement, since a picker has to work with no strategy set yet, not just display one already chosen; a broken segment definition falls back to the old plain-text `.log-card-strat` label ("Definition deleted"), the one case with nowhere left to write a strategy; (2) the card that `activeKey` names wears `.log-card-active` (gold border/tint, matching `.starcell.active-star`'s own accent) plus a `.log-card-state` "Ready"/"Running" word — `running` is `t.armedSegs.has(sec.segment_id)` for a segment, `!!sec.armed_detail` for a star; `StepTrack`'s `onEdit` doorway moved here too, gated on `active` (only the entity actually being practised offers "edit this movement", the same restriction the deleted pinned card enforced); (3) the PB tag's `pick` is the page-level `pick` (threaded `PracticeLog → LogCard`, no longer `null`) — `pbPick = (id) => { onSelect(ek); pick(id); }` reuses the SAME `forceOpen`/page-turn machinery a graph-pick already relies on, so "open the card + turn to the right page + scroll + flash" needed no new mechanism. Real PAGINATION replaced "Show 10 more" inside an open card: `page`/`ROWS_PER_PAGE=10`, First/Prev/Page-X-of-Y/Next/Last, clamped against the current row count so a stale page from a shrunk filter falls back to the last real page rather than rendering nothing — the reveal effect that used to grow `visible` now does `setPage(Math.floor(idx / ROWS_PER_PAGE))` instead, and the two mechanisms were never allowed to coexist. The target picker's TRIGGER (amendment A9) is a small `.chip.chip-button` in `PracticeLog`'s own heading row, beside `StatMenuTrigger`/`SortControl`/`ResetFilterToggle` — `openTargetPicker` threaded down from `Practice`'s own `useTargetPicker(t)` hook (unchanged; only the trigger's home moved, the dialog still mounts once at the page root) |
+| The practice log — page-level, recency-ordered entity cards | `ui/components/practicelog.js` — `orderedSections(view, activeKey)` (both kinds merged by `last_activity`, newest first, EXCEPT the entity `activeKey` names, which always leads regardless of its own recency — **full detail below: [The active entity leads, and a target-only card can now disappear](#the-active-entity-leads-and-a-target-only-card-can-now-disappear)**), `LogCard` (one card per entity: art, the live strategy picker, both rank banners, the clickable PB tag, fold, the paginated attempt table, a `.seg-waiting` row for whatever is mid-progress), and `PracticeLog` (the page-level list, `CARDS_PER_PAGE=5`, the unassigned bucket unconditionally last, plus the target-picker trigger in its own heading row). Replaces the practice INDEX entirely (spec practice-log-entity-cards, 2026-08-03, task 0027: "The ONLY way for this segment to finish is by entering into BITFS, but by entering into BITFS, the DDD->BITFS segment disappears from the practice screen… we can never see how we performed"). `focusKey`/`onSelect` are how a card click becomes a browse pick (`ui/focustarget.js`, above); `forceOpen` and the per-card `page` turn exist so a graph-pick or PB-tag jump can reveal a row that is past BOTH the card's own pagination AND the page's own "Show 5 more" — each is a one-shot NUDGE keyed on `focus.nonce`, never a standing override, or the fold/pagination controls keep rendering while no longer responding the moment a pick lands (two extra bugs Task 6's own fix round found and fixed, beyond the findings that opened it). `UnassignedLogCard` is not an entity — no icon, no ladder, nothing for a click to select — and renders unconditionally after every entity card, never folded into the recency pagination (user: "should always appear at the bottom of the list, below any of the classified cards"). **Round 2026-08-04 (amendments A2/A8/A9) deleted the Active Target card** (`StarSection`/`SegmentSection`/`EmptyPractice`, formerly in practice.js) and folded its three jobs into `LogCard`: (1) the card head's strategy NAME is a real `<${StratPicker}>` now (`.log-card-strat-picker`), writing the entity's ACTIVE strategy via `entityIdentity(sec)` (entitysection.js) — unconditional, not gated on rank placement, since a picker has to work with no strategy set yet, not just display one already chosen; a broken segment definition falls back to the old plain-text `.log-card-strat` label ("Definition deleted"), the one case with nowhere left to write a strategy; (2) the card that `activeKey` names wears `.log-card-active` (gold border/tint, matching `.starcell.active-star`'s own accent) plus a `.log-card-state` "Ready"/"Running" word — `running` is `t.armedSegs.has(sec.segment_id)` for a segment, `!!sec.armed_detail` for a star; `StepTrack`'s `onEdit` doorway moved here too, gated on `active` (only the entity actually being practised offers "edit this movement", the same restriction the deleted pinned card enforced); (3) the PB tag's `pick` is the page-level `pick` (threaded `PracticeLog → LogCard`, no longer `null`) — `pbPick = (id) => { onSelect(ek); pick(id); }` reuses the SAME `forceOpen`/page-turn machinery a graph-pick already relies on, so "open the card + turn to the right page + scroll + flash" needed no new mechanism. Real PAGINATION replaced "Show 10 more" inside an open card: `page`/`ROWS_PER_PAGE=10`, First/Prev/Page-X-of-Y/Next/Last, clamped against the current row count so a stale page from a shrunk filter falls back to the last real page rather than rendering nothing — the reveal effect that used to grow `visible` now does `setPage(Math.floor(idx / ROWS_PER_PAGE))` instead, and the two mechanisms were never allowed to coexist. The target picker's TRIGGER (amendment A9) is a small `.chip.chip-button` in `PracticeLog`'s own heading row, beside `StatMenuTrigger`/`SortControl`/`ResetFilterToggle` — `openTargetPicker` threaded down from `Practice`'s own `useTargetPicker(t)` hook (unchanged; only the trigger's home moved, the dialog still mounts once at the page root) |
 | Stat chips + the menu that chooses them | `ui/components/entitydetail.js` — `StatChipsRow({sec,t})` renders only the value chips (`sec.stats`, filtered by `t.showDust`/`DUST_STAT_KEYS`), inside `EntityDrawer` (moved here from practice.js, Task 4 of spec practice-log-entity-cards, 2026-08-03). The TRIGGER that opens `statmenu.js`'s `StatMenu` popover is `StatMenuTrigger({t})`, now defined in `ui/components/attemptlog.js` and called from exactly ONE place — `practicelog.js`'s `PracticeLog` heading (left of `SortControl`) — since Task 5 replaced the old per-section practice log with a single page-level one. Before that (2026-07-28 onward) it lived in the `.attempts-tools` row of THREE cards (`StarSection`/`SegmentSection`/`EmptyPractice`'s "Unassigned attempts"); none of those three renders an attempts log any more, so the old 1:1-per-card guarantee became a STRICTER one — `tests/test_ui_section_parity.py` now asserts exactly one `.attempts-tools` row and one `StatMenuTrigger` use on the whole page, defined nowhere but `attemptlog.js`. `StatMenuTrigger` is still `position: fixed`, anchored off its own `getBoundingClientRect()` — its original reason (escaping `.attempts-card`, a fixed-height 458px `overflow: hidden` box) no longer applies, since that class is gone and its new host (`.log-list-card`) is variable-height and does not clip; kept as-is rather than revisited, since converting back to a `position: relative` ancestor would need auditing the whole card |
 | Per-star event graph | `ui/components/timeline.js` (marker styles via `MARKERS` registry) |
 | Completion-time graph | `ui/components/progress.js` — per-star AND per-segment; gold = saved PBs; node click → `attemptlog.js`'s `useGraphPick` reveals + scrolls to the row (in whichever `LogCard` currently shows that entity, `ui/components/practicelog.js`), auto-opens saved replays — the SAME path the clickable PB tag uses (`PbTag`, so `sec.pb[mode]` carries `attempt_id` from views.py). `progressSessions`/`hasProgressPoints` are exported because the graph answers an empty section by returning `""`: a caller that wants an empty state THERE instead must agree exactly with the graph about which sections are empty, or one of the two renders nothing at all |
 | Active-strategy picker (star + segment) | `ui/components/stratpicker.js` — THE strat dropdown + "new strat…" modal for a practice card; owns the `POST /api/strat` write, the dropped-write alert, and the phantom-pick snap-back. ONE component for both kinds (`identity` = kind-dispatched body). Parity pinned by tests/test_ui_section_parity.py. Write target injectable (`submit` prop) — practice cards set the ACTIVE strat, attempt rows reclassify THAT attempt via `POST /api/attempts/{id}/strat` (`blankLabel`/`highlightUnset` tune the row variant). **`groups`** (optional) draws the list as `<optgroup>`s showing each strategy's LEAF under its exit-star variant's heading -- a 100-COIN star only, from the section's own `strategy_groups` (spec 2026-08-03-hundred-coin-exit-variants). Nothing here derives the grouping; the server ships it resolved. The `<option>` VALUE stays the full qualified name, since that is the identity the write posts, and a strategy the groups do not cover (a purged name on a historical attempt) is still listed loose -- same reason `active` always stays listed. `allowBlank=false` drops the "no strategy" option entirely; both call sites pass `!sec.default_strat`, so a seeded castle movement (default `"Standard"`) cannot be unset — the server enforces the same rule (projection caveat 17), and `purge_strategy` 409s on a segment's default so the list can't be emptied from the ranks side either |
 | Strategy-creation modal | `ui/components/stratmodal.js` — on a 100-COIN star it also asks which EXIT STAR the run ends on, from the `exit_star_options` it fetches itself (so neither call site has to know which entities have exit stars), and picking an ending the community does not rate MINTS a variant — the whole "define your own 100-coin route" path. `save` then uses the name the create POST RETURNS for every follow-up threshold/video PUT and for `onSaved`: the server qualifies it, and composing it here would be a second implementation of the rule. The duplicate check compares LEAVES within the chosen variant, from the server's own `strategy_groups`, for the same reason. Otherwise: name + full rank ladder (time + optional example video per rank) on the Modal shell; Save rides the existing ranks endpoints (create→PUT thresholds→PUT videos, idempotent re-Save); opened from the practice strat dropdown, the standards table's + Strategy, and the header target picker. Also carries the "Include in ranking" tick (round 7, 2026-07-25): reads `GET /api/marelo/exclusions` on open, writes `POST /api/marelo/exclude` LAST and only if the user actually touched it — an untouched box must never rewrite an exclusion set elsewhere, and a failure there must not strand the ladder this modal exists to create. Do NOT give it `.modal-field`: that class stretches its input to `width:100%` and turns a checkbox into a 36px square |
 | Per-star external links | `links.py` — Ukikipedia RTA-guide URLs + `xcams_url(entity_key)` (the xcams Daily Star page, identity-derived from the live-confirmed `…/home/history?star=<abbrev>_<id>` pattern; secret-star prefix VERIFY) |
+
+## The active entity leads, and a target-only card can now disappear
+
+2026-08-05, three live reports on top of the same day's ambient-arm fix.
+`ui/components/practicelog.js` gained two new pure functions and `orderedSections`
+grew a second parameter; `ui/components/practice.js` grew one derived `topKey`.
+
+**Ordering.** *"When I enter Bowser 1… it should be at the top immediately
+(because it's the only star / segment available)… This happens after I grab
+the key, but it should be at the top immediately."* `orderedSections`'s old
+comment was right about a target he merely SET and has not run yet — it just
+did not carve out the one he is standing in front of right now.
+`orderedSections(view, activeKey = null)` sorts by recency exactly as before,
+then hoists whichever section `activeKey` names to the front (a no-op if it
+is already there, or absent from this view). `activeKey` is not a new signal
+— it is `practice.js`'s existing `live.activeKey`, the same value that already
+drives `.log-card-active`'s gold border, threaded through the prop `PracticeLog`
+already received.
+
+**The auto-open slot moved with it.** A1's own design defined "the newest
+card auto-opens" as "whichever card is at the top of the list" — so once the
+list's own top can be the active entity rather than the most recent, the slot
+has to follow or a card he never touched would sit open one row under a
+closed, freshly-active one. `practice.js`: `const topKey = live.activeKey ??
+frozen.topKey;` — `live.activeKey` needs no freezing of its own (it already
+derives from `frozen.stage`/`frozen.target`, so it cannot move mid-celebration
+any more than those can); `frozen.topKey` (the pre-existing, still-frozen
+`topEntityKey(t.view)`) survives as the fallback for when nothing is active at
+all, which is the one branch still exposed to an unrelated attempt landing
+elsewhere during a climb. Pinned by `tests/test_ui_focus_target.py`'s
+`test_the_top_key_is_frozen_alongside_its_siblings`.
+
+**Membership.** *"If we leave without practicing anything, its card should
+disappear from the list (because we didn't even reset / practice anything)."*
+The server's own rule ("the practice target ALWAYS gets a section") is right
+about what IT can see — the target survives a hub on purpose (projection.py
+caveat 12) — and has no notion of "he has since walked away and touched
+nothing," which is a fact about the PLAYER's position and therefore belongs
+where every other "is he still here" question in this app already lives:
+client-side, in `ui/stagecontext.js`'s `practicedHere`/`starPracticableHere`
+(the exact signal `activeKey` is already built from). `hasEarnedACard(sec,
+activeKey)` keeps a section when — in order — it has a real recorded
+`attempt` (unconditional: "a card that recorded even one attempt stays"); OR
+it is still `armed_detail`-truthy (the standing "a RUNNING segment is never
+invisible" rule, 2026-07-24, checked independently of `activeKey` on purpose —
+several defs can arm off one course entry with none of them unambiguously
+"the" pick, `practice.js`'s own `ambiguousPins`, and none may vanish for lack
+of one); OR `activeKey` names it AND it has a real `course_id`.
+
+**That last clause's `course_id` guard is not decoration — it is the one
+finding this round measured rather than assumed.** A synthetic
+`TrackerService` run (no PJ64, a throwaway sqlite file) entered the Bowser 1
+arena, auto-selected its fight (`ArenaRow`'s own rule — "arriving in an arena
+IS the intent"), then left to the lobby with nothing grabbed:
+
+```
+armed after entering arena:        {8}
+armed after leaving to lobby:      set()      <- the topological engine's own doing
+target after leaving to lobby:     ('segment', 8)   <- still names it, unretired
+```
+
+The def disarms correctly on leaving (`_flush_move`'s own topological rules,
+`.claude/rules/tracking-storage.md`) — but `stagecontext.js`'s `practicedHere`
+answers "is he still here" by a COARSE bucket for a course-less-origin entity
+(an arena fight, a hub trick): *"a place with no course keeps only things
+that also have no course"* (its own 2026-08-03 tightening) — which means the
+castle, the lobby, and every OTHER arena all read as "the same course-less
+place" as the Bowser 1 arena itself. Re-published with a real `stage_changed`
+naming the lobby (course-less, `mode: "castle"`) rather than leaving the
+client's stage stale, `activeKey` STILL named the disarmed fight — confirmed
+by rendering the real app both ways (screenshots taken, not just asserted).
+A course-BEARING entity (an ordinary star, most castle movements) has no such
+gap: `practicedHere` requires an EXACT course match, so `activeKey` alone
+already means "he is standing right where this is practiced." `course_id ==
+null` is exactly how the ambiguous, arena-shaped population is stamped
+(views.py: an arena has no course of its own), so gating on it closes
+precisely the gap the measurement found and nothing wider. Pinned by
+`tests/test_ui_practice_log.py`'s `hasEarnedACard` suite, including the exact
+course-less-vs-course-bearing distinction, mutation-proved.
+
+**Two Bowser wrinkles this round did NOT need to solve.** The 2026-08-05
+ambient-arm fix (`.claude/rules/hundred-coin.md`) already stops an entity
+NOBODY chose from getting a card at all (armed alone, zero attempts, not the
+target) — this round is the next rung: an entity he DID choose, that has
+since stopped being chosen in any sense the app can still see. And the
+`.log-card-active` highlight, `EntityAnalysis`, and `EntityDrawer` all
+already read the SAME `activeKey`/`focusKey` machinery — once `activeKey`
+correctly reads `null` for a genuinely-left, course-less target, "nothing
+selected to practice" falls out for free; no second exclusion was needed
+there.
+
+## The Reds/Pipe pair shows exactly one card
+
+Same round. *"If I have pipe selected, it shouldn't show the card for
+(Star). If I have (Star) selected, and I grab the star, it shouldn't show the
+pipe card… if I enter the pipe, it should show the pipe card (and swap to
+pipe mode)."* A Bowser course's reds run is graded two ways — the grab alone,
+or the whole run to the pipe — and `_close_by_grab`'s own rule (caveat 12,
+`.claude/rules/tracking-storage.md`) means the star's own attempt is ALWAYS
+recorded regardless of which half he is grading, so both halves routinely
+carry real history at once. Before this round both would show simultaneously
+whenever both independently earned a card (one via real attempts, one via
+being the live target) — correct by each entity's own rule, and still two
+cards for one physically single run.
+
+**What already existed and only needed reading, not building**:
+`stagebanner.js`'s `bowserModeFor(level)` (exported already) is the star/pipe
+toggle's own memory, keyed by LEVEL and updated automatically on a fresh
+success (`justCompletedStar`/`justCompletedSegment`, round 2 of the original
+spec) — so "the mode swaps the moment he enters the pipe" needed no new
+detection logic, only a reader.
+
+**The one genuinely new piece**: `bowserModeFor` is keyed by LEVEL (17/19/21
+for BitDW/BitFS/BitS), while a star/segment section's own `course_id` is a
+DIFFERENT number (16/17/18) — the log has no live "stage" to read a level off
+of for a course the player is not currently standing in. `PracticeLog`
+inverts the server-shipped `vocab.course_by_level` (the SAME map
+`entityicons.js`'s `iconContext` already reads for an unrelated reason) into a
+`levelByCourse` lookup, memoised on the vocab's own identity — never a second
+hand-written course↔level table, which is exactly the kind of duplicated
+domain fact this project keeps paying for.
+
+**`applyRedsPipeExclusivity(sections, modeForCourse)`** (practicelog.js, pure,
+node-tested) only ever excludes when BOTH halves of a pair are independently
+present — a course he has only ever practiced one way keeps its one card
+regardless of what `modeForCourse` answers for it (including the untouched
+"pipe" default), since there is nothing to resolve a conflict between. When
+both are present, the one matching `modeForCourse(sec.course_id)` wins.
+Client-side by design, per the coordinator's own caution against a second
+answer to one question: the MODE is genuinely client-only preference state
+(localStorage, per level, no server equivalent and none needed), while card
+MEMBERSHIP is server-published truth the client is merely choosing how to
+DISPLAY — moving the mode itself to the server would require it to learn a
+client preference it has no other use for, at the cost of a write on every
+toggle and a second copy of `BOWSER_MODE_KEY`'s own storage.
+
+**Never touched**: the stage banner's own Reds/Pipe cell and its running-timer
+chip (his own explicit instruction — "the quick-select star row above it is
+NOT touched"), and no server-side attribution/projection changed at all —
+verified live: with the reds star grabbed for real AND the pipe segment
+targeted mid-run, the rendered log shows exactly one card ("8 Red Coins
+(Pipe)", 1 entity shown) while the stage banner's own "Running" chip for the
+pipe segment keeps ticking above it untouched.

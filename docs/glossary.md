@@ -413,11 +413,15 @@ The bar carrying your [[MARELO]] [[tier]] and [[division]] at the top of the
 
 ### Practice log
 
-The [[Practice tab]]'s history, newest first: one card per [[target]] you have
-practiced, each carrying its own [[personal best]], its [[strategy rank]] and
-[[entity rank]], its [[standards ladder]], its [[caveat mark]] and its own
-[[attempt]]s. It highlights the card for whatever you are practicing right
-now.
+The [[Practice tab]]'s history, newest first, EXCEPT the [[target]] you are
+practicing right now, which leads regardless of its own recency: one card per
+[[target]] you have earned one for (a recorded [[attempt]], or you still
+stand where you set it), each carrying its own [[personal best]], its
+[[strategy rank]] and [[entity rank]], its [[standards ladder]], its
+[[caveat mark]] and its own [[attempt]]s. It highlights the card for whatever
+you are practicing right now, and a Bowser course's Reds/Pipe pair never
+shows both halves at once — only the one matching how you are currently
+grading it.
 
 - **Lives** — the log
   (`src/sm64_events/ui/components/practicelog.js`)

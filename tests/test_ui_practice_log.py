@@ -72,6 +72,205 @@ def segment(id_, last_activity, segment_id=12):
             "last_activity": last_activity, "attempts": []}
 
 
+# ---- orderedSections(view, activeKey) -- the active-leads round ------------
+#
+# `orderedSections` reaches for the REAL `entityKey` (entitysection.js) the
+# moment `activeKey` is non-null -- the same "real function, comments
+# stripped" reason `_top_entity_key_source` below already includes it.
+
+def _ordered_sections_with_entity_key_source() -> str:
+    log_source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
+    return "\n".join([_entity_key_source_early(),
+                       _extract(log_source, "orderedSections")])
+
+
+def _entity_key_source_early() -> str:
+    source = strip_comments(ENTITY_SECTION_JS.read_text(encoding="utf-8"))
+    is_segment = re.search(r"^export const isSegment = .*?;$", source, re.M)
+    assert is_segment, "isSegment not found in entitysection.js — renamed?"
+    return is_segment.group(0) + "\n" + _extract(source, "entityKey")
+
+
+def ordered_active(view, active_key) -> list:
+    script = (_ordered_sections_with_entity_key_source() + "\n"
+              f"console.log(JSON.stringify(orderedSections("
+              f"{json.dumps(view)}, {json.dumps(active_key)}).map(s => s.id)));")
+    result = subprocess.run(["node", "--input-type=module", "-"],
+                            input=script, capture_output=True, text=True,
+                            timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_the_active_entity_leads_regardless_of_its_own_recency():
+    """Griffin: entering Bowser 1 with it the only segment available "should
+    be at the top immediately" -- before this, a freshly-selected target
+    (recency -1) sat at the very BOTTOM until an attempt landed."""
+    view = {"stars": [star("played", 100, course_id=2, star_id=4)],
+            "segments": [segment("fresh", -1, segment_id=8)]}
+    assert ordered_active(view, "segment:8") == ["fresh", "played"]
+
+
+def test_with_no_active_entity_the_order_is_byte_identical_to_before():
+    view = {"stars": [star("a", 100), star("c", 10)], "segments": []}
+    assert ordered_active(view, None) == ordered(view)
+
+
+def test_an_active_key_naming_nothing_in_this_view_changes_nothing():
+    """The active entity is routinely off in another course entirely --
+    `orderedSections` must not raise, and must not promote anything, just
+    because the key it was handed matches no section here."""
+    view = {"stars": [star("a", 100), star("c", 10)], "segments": []}
+    assert ordered_active(view, "star:99:9") == ["a", "c"]
+
+
+def test_the_already_leading_active_entity_is_a_no_op():
+    view = {"stars": [star("a", 100, course_id=2, star_id=4)], "segments": []}
+    assert ordered_active(view, "star:2:4") == ["a"]
+
+
+# ---- hasEarnedACard -- "if we leave without practicing anything" -----------
+
+def _has_earned_a_card_source() -> str:
+    log_source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
+    return "\n".join([_entity_key_source_early(),
+                       _extract(log_source, "hasEarnedACard")])
+
+
+def earned(sec, active_key) -> bool:
+    script = (_has_earned_a_card_source() + "\n"
+              f"console.log(JSON.stringify(hasEarnedACard("
+              f"{json.dumps(sec)}, {json.dumps(active_key)})));")
+    result = subprocess.run(["node", "--input-type=module", "-"],
+                            input=script, capture_output=True, text=True,
+                            timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def _sec(course_id=2, star_id=4, kind=None, segment_id=None,
+         attempts=None, armed_detail=None):
+    base = {"attempts": attempts or [], "armed_detail": armed_detail}
+    if kind == "segment":
+        base.update({"kind": "segment", "segment_id": segment_id,
+                     "course_id": course_id})
+    else:
+        base.update({"course_id": course_id, "star_id": star_id})
+    return base
+
+
+def test_a_target_only_star_the_player_is_standing_at_earns_its_card():
+    """The Piece A companion case: picked, zero attempts, still there."""
+    assert earned(_sec(course_id=2, star_id=4), "star:2:4") is True
+
+
+def test_a_target_only_star_the_player_has_left_earns_nothing():
+    """Griffin: "If we leave without practicing anything, its card should
+    disappear from the list." activeKey no longer names this entity once he
+    has left -- the same signal the card's own `.log-card-active` border
+    already reads."""
+    assert earned(_sec(course_id=2, star_id=4), None) is False
+    assert earned(_sec(course_id=2, star_id=4), "star:9:1") is False
+
+
+def test_any_real_attempt_earns_a_card_unconditionally():
+    assert earned(_sec(course_id=2, star_id=4, attempts=[{"id": 1}]), None) is True
+
+
+def test_a_still_armed_entity_earns_a_card_even_with_no_active_key():
+    """"A RUNNING segment is never invisible" (2026-07-24), independent of
+    `activeKey` on purpose: several defs can arm off one course entry with no
+    single one of them unambiguously "the" pick (practice.js's own
+    `ambiguousPins`), and none of them may vanish for lack of one."""
+    assert earned(_sec(kind="segment", segment_id=8, armed_detail={"progress": 0}),
+                  None) is True
+
+
+def test_a_course_less_target_the_player_has_left_earns_nothing_even_though_activekey_still_names_it():
+    """The measured gap: `stagecontext.js`'s `practicedHere` treats EVERY
+    course-less place (the castle, any hub, any OTHER arena) as "still here"
+    for an arena-originated entity, so `activeKey` alone kept naming a
+    disarmed Bowser fight long after the player had walked back to the
+    lobby (verified live against a synthetic TrackerService run: entering
+    the Bowser 1 arena, auto-selecting its fight, leaving to the lobby with
+    nothing grabbed -- the fight disarms correctly, but `activeKey` still
+    named it). `course_id == null` is exactly how such an entity is shaped;
+    a course-BEARING target has no such gap (`practicedHere` requires an
+    exact course match), which is the case the test above covers."""
+    course_less = _sec(kind="segment", segment_id=8, armed_detail=None)
+    course_less["course_id"] = None
+    assert earned(course_less, "segment:8") is False
+
+
+# ---- applyRedsPipeExclusivity -- one Bowser Reds run, one card -------------
+
+def _reds_pipe_source() -> str:
+    log_source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
+    return "\n".join([_entity_key_source_early(),
+                       _extract(log_source, "applyRedsPipeExclusivity")])
+
+
+def _reds_star(course_id=16, pipe_segment_id=5, last_activity=10):
+    return {"course_id": course_id, "star_id": 0,
+            "pipe_segment_id": pipe_segment_id, "last_activity": last_activity,
+            "attempts": [{"id": 1}]}
+
+
+def _pipe_segment(course_id=16, segment_id=5, last_activity=20):
+    return {"kind": "segment", "segment_id": segment_id, "course_id": course_id,
+            "pipe_segment_id": None, "last_activity": last_activity,
+            "attempts": [{"id": 2}]}
+
+
+def reds_pipe_visible(sections, mode_by_course) -> list:
+    lookup = json.dumps(mode_by_course)
+    script = (_reds_pipe_source() + "\n"
+              f"const modeByCourse = {lookup};\n"
+              "const modeForCourse = (courseId) => modeByCourse[String(courseId)] ?? null;\n"
+              f"console.log(JSON.stringify(applyRedsPipeExclusivity("
+              f"{json.dumps(sections)}, modeForCourse)"
+              ".map(s => s.kind === \"segment\" ? `segment:${s.segment_id}` "
+              "     : `star:${s.course_id}:${s.star_id}`)));")
+    result = subprocess.run(["node", "--input-type=module", "-"],
+                            input=script, capture_output=True, text=True,
+                            timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_pipe_mode_shows_only_the_pipe_card():
+    sections = [_reds_star(), _pipe_segment()]
+    assert reds_pipe_visible(sections, {"16": "pipe"}) == ["segment:5"]
+
+
+def test_star_mode_shows_only_the_star_card():
+    sections = [_reds_star(), _pipe_segment()]
+    assert reds_pipe_visible(sections, {"16": "star"}) == ["star:16:0"]
+
+
+def test_only_one_half_present_is_never_excluded():
+    """A course he has only ever practiced ONE way keeps its one card --
+    there is nothing to resolve a conflict between."""
+    assert reds_pipe_visible([_reds_star()], {"16": "pipe"}) == ["star:16:0"]
+    assert reds_pipe_visible([_pipe_segment()], {"16": "star"}) == ["segment:5"]
+
+
+def test_a_different_courses_pair_is_untouched():
+    """Excluding BitDW's own pair must never touch BitFS's."""
+    sections = [_reds_star(course_id=16, pipe_segment_id=5),
+                _pipe_segment(course_id=16, segment_id=5),
+                _reds_star(course_id=17, pipe_segment_id=6),
+                _pipe_segment(course_id=17, segment_id=6)]
+    result = reds_pipe_visible(sections, {"16": "pipe", "17": "star"})
+    assert set(result) == {"segment:5", "star:17:0"}
+
+
+def test_a_plain_star_with_no_pipe_pairing_is_never_touched():
+    plain = star("s", 5, course_id=13, star_id=2)
+    plain["pipe_segment_id"] = None
+    assert reds_pipe_visible([plain], {"13": "pipe"}) == ["star:13:2"]
+
+
 # ---- topEntityKey / isCardOpen -- the auto-open-newest feature -------------
 #
 # `topEntityKey` calls `entityKey` (entitysection.js), which practicelog.js
