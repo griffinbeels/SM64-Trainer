@@ -181,7 +181,30 @@ export function applyRedsPipeExclusivity(sections, modeForCourse) {
  */
 export function topEntityKey(view) {
   if (!view) return null;
-  const sections = orderedSections(view);
+  // EMPTY ENTITIES ARE NOT ELIGIBLE for the auto-open slot, which is a
+  // narrower rule than "the top card" and deliberately not the same question
+  // as which card LEADS the list.
+  //
+  // Griffin, 2026-08-05: "The preselected option should be closed by default
+  // because otherwise we're wasting space to tell the user they dont have
+  // anything practiced, which they already know. When we actually have an
+  // attempt or reset, then it autoopens."
+  //
+  // Selecting something puts its card FIRST (orderedSections' `activeKey`
+  // hoist, the active-leads round) -- but opening it there spends most of a
+  // screen on an empty state whose entire message is "nothing yet", which is
+  // the one thing he can already see from the card he just picked. So the
+  // slot skips a section with no attempts in scope, and the same entity
+  // claims it the moment its first row lands, because recording an attempt
+  // makes it the newest by activity too. No separate "now open it" trigger
+  // has to exist.
+  //
+  // Note this reads `orderedSections(view)` WITHOUT the active key on
+  // purpose: the slot follows recency, and the active-leads hoist is a
+  // PRESENTATION order. Passing the key here would make a freshly chosen
+  // entity the slot holder again and undo exactly this rule.
+  const sections = orderedSections(view)
+    .filter((sec) => (sec.attempts || []).length > 0);
   return sections.length ? entityKey(sections[0]) : null;
 }
 

@@ -62,14 +62,31 @@ def ordered(view) -> list:
     return json.loads(result.stdout)
 
 
-def star(id_, last_activity, course_id=13, star_id=1):
+def _rows(count, first_id=1):
+    """`count` stub attempt rows. Only their EXISTENCE matters to the
+    ordering and auto-open rules under test here."""
+    return [{"id": first_id + n, "journal_id": first_id + n,
+             "outcome": "reset"} for n in range(count)]
+
+
+def star(id_, last_activity, course_id=13, star_id=1, attempts=1):
+    """`attempts` defaults to ONE, not zero.
+
+    An entity with nothing recorded is the special case now -- it still
+    leads the list when chosen, but it cannot hold the auto-open slot
+    (topEntityKey's own comment). A helper defaulting to zero made every
+    unrelated ordering test silently exercise that special case, which is
+    how two of them came to encode the pre-2026-08-05 rule."""
     return {"id": id_, "course_id": course_id, "star_id": star_id,
-            "last_activity": last_activity, "attempts": []}
+            "last_activity": last_activity,
+            "attempts": _rows(attempts, first_id=100)}
 
 
-def segment(id_, last_activity, segment_id=12):
+def segment(id_, last_activity, segment_id=12, attempts=1):
+    """Same default and the same reason as `star` above."""
     return {"id": id_, "kind": "segment", "segment_id": segment_id,
-            "last_activity": last_activity, "attempts": []}
+            "last_activity": last_activity,
+            "attempts": _rows(attempts, first_id=200)}
 
 
 # ---- orderedSections(view, activeKey) -- the active-leads round ------------
@@ -508,3 +525,33 @@ def test_the_attempt_row_still_posts_a_reclassification_to_the_server_rule():
         "AttemptRow no longer gates its strategy picker on having a `sec` -- "
         "a row rendered with none would silently fall back to plain, "
         "unreclassifiable text")
+
+
+def test_an_entity_with_nothing_recorded_does_not_claim_the_auto_open_slot():
+    """Selecting something shows its card; it does not OPEN it.
+
+    Griffin, 2026-08-05: "The preselected option should be closed by default
+    because otherwise we're wasting space to tell the user they dont have
+    anything practiced, which they already know. When we actually have an
+    attempt or reset, then it autoopens."
+
+    Two facts this pins together, because they are easy to conflate: the
+    empty entity still LEADS the list (the active-leads rule), and it is
+    still not the auto-open slot. Only the second is tested here; the first
+    is orderedSections' own.
+    """
+    empty = star("fresh", 99, attempts=0)   # newest by activity, nothing run
+    played = star("played", 5)
+    view = {"stars": [empty, played], "segments": [], "unassigned": []}
+    assert top_key(view) == "star:13:1", (
+        "an entity with no attempts must not hold the auto-open slot -- its "
+        "open body is an empty state whose only message is 'nothing yet'")
+
+
+def test_the_slot_moves_the_moment_a_first_attempt_lands():
+    """The other half: no separate 'now open it' trigger has to exist,
+    because recording an attempt also makes that entity newest by activity."""
+    fresh = star("fresh", 99, course_id=22, star_id=3)
+    played = star("played", 5)
+    view = {"stars": [fresh, played], "segments": [], "unassigned": []}
+    assert top_key(view) == "star:22:3"
