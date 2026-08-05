@@ -134,3 +134,40 @@ def test_vocab_serves_every_moment_kind_with_its_label():
     served = S.vocab()["moments"]
     assert {row["key"] for row in served} == {m.kind for m in MOMENTS}
     assert all(row["label"] for row in served)
+
+
+# -- in-course subareas (task 0087: "entering a subarea within the level") ----
+
+def test_a_non_castle_subarea_is_expressible():
+    """SSL's pyramid interior is area 2 of level 8, and "entering a subarea
+    within the level" is one of the conditions subsections are built out of.
+    The MATCHER never had a castle restriction -- its lambda compares the
+    payload's level to the clause's -- but the VOCABULARY gated both the
+    level list and the subarea selectors, so the clause could not be
+    authored at all."""
+    level_param = S.TRIGGERS["area_enter"].params["level"]
+    assert "enum" not in level_param, \
+        "area_enter's level list is pinned to castle levels"
+    for name in ("area", "from"):
+        assert "only_when" not in S.TRIGGERS["area_enter"].params[name], \
+            f"area_enter's {name!r} selector only appears for the castle"
+
+
+def test_the_matcher_accepts_a_course_subarea_clause():
+    clause = {"type": "area_enter", "level": 8, "area": 2}
+    S.validate_definition(definition(start_triggers=[clause]))
+
+    class _AreaEv:
+        type = "area_changed"
+        payload = {"level": 8, "to": 2, "from": 1}
+
+    assert S.TRIGGERS["area_enter"].match(clause, _AreaEv(), None) is True
+
+
+def test_a_course_subarea_clause_places_for_the_topological_cancel():
+    """topology.node_for deliberately counts subareas only INSIDE the castle
+    interior -- courses have their own areas and the world graph does not
+    model them. So this resolves to the LEVEL node, which is a real answer
+    and not a gap: it keeps the wrong-turn rule working at level
+    granularity rather than switching it off."""
+    assert S.step_node({"type": "area_enter", "level": 8, "area": 2}) is not None

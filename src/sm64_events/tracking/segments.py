@@ -654,13 +654,25 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
     # exactly like a genuine lobby walk — from_transient (detectors/area.py)
     # is the discriminator. Legacy events without the key conservatively
     # match (None = unknown -> match, the codebase-wide convention).
+    # THE CASTLE GATES CAME OFF 2026-08-05 (task 0087). Both were in the
+    # VOCABULARY, never in the matcher -- the lambda below has only ever
+    # compared the payload's level to the clause's, and its `area` check is
+    # equally level-agnostic. What the gates prevented was AUTHORING: the
+    # level list was pinned to the castle regions and the two subarea
+    # selectors only appeared for the castle interior, so "entered the SSL
+    # pyramid" (level 8, area 2) and "left the LLL volcano" could not be
+    # expressed at all -- and "entering a subarea within the level" is one of
+    # the conditions subsections are actually built out of.
+    #
+    # `topology.node_for` still counts subareas only INSIDE the castle
+    # interior, deliberately and unchanged: courses have their own areas and
+    # the world graph does not model them, so such a clause places at LEVEL
+    # granularity. That is a real answer rather than a gap -- the wrong-turn
+    # cancel keeps working, one resolution coarser.
     TriggerType("area_enter", "You enter area", "Enter",
-                {"level": {"kind": "level", "required": True,
-                           "enum": list(CASTLE_REGION_LEVELS)},
-                 "area": {"kind": "subarea", "required": False,
-                          "only_when": _only_castle("level")},
-                 "from": {"kind": "subarea", "required": False,
-                          "only_when": _only_castle("level")}},
+                {"level": {"kind": "level", "required": True},
+                 "area": {"kind": "subarea", "required": False},
+                 "from": {"kind": "subarea", "required": False}},
                 "{level} {area} coming from {from}",
                 lambda p, ev, ctx: ev.type == "area_changed" and _real_edge(ev)
                 and ev.payload["level"] == p["level"]

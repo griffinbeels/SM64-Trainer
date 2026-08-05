@@ -2071,13 +2071,24 @@ def test_validate_rejects_area_enter_without_region():
 
 
 def test_vocab_exposes_region_enum_and_conditional_subareas():
+    """`area_enter` LOST both of its castle gates on 2026-08-05 (task 0087);
+    the three level_enter/level_exit ones below are unchanged and are a
+    different question.
+
+    This test asserted the opposite until then. The gates lived in the
+    vocabulary and never in the matcher, so all they ever did was stop
+    "entered the SSL pyramid" (level 8, area 2) being AUTHORED -- and
+    entering a subarea inside a course is one of the conditions a subsection
+    is built out of. Restoring either one makes that clause unexpressible
+    again while every matcher test keeps passing, which is why the absence is
+    pinned here rather than left as a silent property."""
     by_key = {t["key"]: t for t in vocab()["triggers"]}
     ae = by_key["area_enter"]["params"]
-    assert ae["level"]["enum"] == [6, 16, 26]
+    assert "enum" not in ae["level"]
     assert ae["area"]["required"] is False
-    assert ae["area"]["only_when"] == {"param": "level", "equals": 6}
+    assert "only_when" not in ae["area"]
     assert ae["from"]["required"] is False
-    assert ae["from"]["only_when"] == {"param": "level", "equals": 6}
+    assert "only_when" not in ae["from"]
     le = by_key["level_enter"]["params"]
     assert le["to_subarea"]["only_when"] == {"param": "to", "equals": 6}
     assert le["from_subarea"]["only_when"] == {"param": "from", "equals": 6}
