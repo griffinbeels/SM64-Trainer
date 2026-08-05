@@ -312,7 +312,23 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
 // above (it has no `last_activity` to sort by as a unit; it is one bucket,
 // not one entity).
 function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
-  const [open, setOpen] = useState(true);
+  // CLOSED unless he opens it, and it can never win the auto-open slot.
+  // Griffin, 2026-08-04: "the unassigned runs card should ALWAYS stay closed,
+  // unless the user opens it... This is because that information is noise and
+  // should be at the bottom of the screen, tucked away."
+  //
+  // Two halves, and only this one needed code. The ORDERING half already held
+  // by construction: `topEntityKey` reads `orderedSections`, which merges the
+  // view's stars and segments, and this bucket is neither -- it is
+  // `v.unassigned`, a flat attempt list with no `last_activity` of its own. So
+  // an unassigned reset being the newest thing that happened cannot promote
+  // this card, and the render above places it last unconditionally.
+  //
+  // Left as the card's OWN state rather than joining PracticeLog's override
+  // map: that map exists so a manual choice survives a card being paginated
+  // away and later revealed, and this card is outside the pagination entirely
+  // -- it renders after the slice, every time.
+  const [open, setOpen] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
   const [visible, setVisible] = useState(10);
   const unassigned = v.unassigned || [];

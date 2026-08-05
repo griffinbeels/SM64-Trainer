@@ -194,3 +194,43 @@ def test_a_displaced_top_card_closes_with_no_override_needed():
     slot, so it closes by falling through to the auto-open rule -- exactly
     as if it had never been touched."""
     assert is_open({}, "star:9:3", "star:2:4") is False
+
+
+def test_an_unassigned_reset_can_never_take_the_top_slot():
+    """The unassigned bucket is noise and stays at the bottom, closed.
+
+    Griffin, 2026-08-04: "the unassigned runs card should ALWAYS stay closed,
+    unless the user opens it. It should also ALWAYS stay at the bottom of the
+    list, even if an unassigned reset is the newest entry. This is because
+    that information is noise and should be at the bottom of the screen,
+    tucked away."
+
+    The ordering half holds by construction rather than by a rule anyone has
+    to remember: `topEntityKey` reads `orderedSections`, which merges the
+    view's stars and segments, and the bucket is neither -- it is a flat
+    attempt list with no `last_activity` of its own. This pins that, because
+    "by construction" stops being true the moment someone teaches
+    orderedSections about a third kind.
+    """
+    view = {"stars": [star("s", 10)], "segments": [],
+            "unassigned": [{"id": 99, "journal_id": 9999, "outcome": "reset"}]}
+    assert top_key(view) == "star:13:1", (
+        "an unassigned attempt, however recent, must not win the auto-open "
+        "slot -- it has no card of its own in the recency ordering")
+
+
+def test_the_unassigned_card_starts_closed():
+    """Its own default, and the one half of his rule that needed code.
+
+    Deliberately NOT a check that some option is set to a value -- this is the
+    component's shipped behaviour, not a tuning default, so pinning it here
+    does not collide with the "no test may assert a shipped default" rule.
+    """
+    source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
+    match = re.search(r"function UnassignedLogCard\([^)]*\)\s*\{\s*"
+                      r"const \[open, setOpen\] = useState\((?P<initial>\w+)\)",
+                      source)
+    assert match, "UnassignedLogCard no longer owns an `open` useState"
+    assert match.group("initial") == "false", (
+        "the unassigned bucket must start CLOSED -- it is noise tucked away "
+        "at the bottom, and only a click of his opens it")
