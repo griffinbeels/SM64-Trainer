@@ -25,6 +25,33 @@ before it goes away. Phases 2 (fitted ladders), 3 (serving + refresh), 4
 | Serving a fitted ladder to the ranker | `ranks/standards.py` over `data/sheet_ladders.seed.json`, its OWN file merged only on READ. That is what makes "a fitted ladder never overwrites a vetted one" STRUCTURAL rather than a rule a test must remember — nothing can write it into `self._data`, so `save()` cannot spill it. `ladders()` returns a merged COPY (vetted wins); the mutating paths take `_stored_ladders()`, because popping from a merge silently no-ops and the strategy returns next load. `is_fitted`/`fitted_strategies` are how a surface says which is which. 75 strategies across 47 entities today, and adopting them lowers MARELO by design: a new faster strategy makes an entity's best-possible ladder harder, which the user accepted knowingly (2026-08-05) |
 | Refreshing the bundled snapshot | `tools/scrape_sheet.py` — and **READ the `unknown:` list it prints**; that list is the deliverable, because a target we cannot name looks identical to a target the sheet does not have. `--from <file.xlsx>` re-derives offline. Output is gzipped with `mtime=0`: 4.51 MB of JSON becomes 0.42 MB for 7 ms of load (26 ms against 19 ms), the exe ships it as-is, and an unchanged sheet produces a byte-identical file |
 
+## Owed to phase 5: every standard links to its own examples
+
+User's ask, 2026-08-05, recorded before it is built. Each row of the
+[[standards ladder]] on the objective card should link into the Library and
+land on **the examples for that threshold specifically** — not the target's
+whole video list. "What are all the examples of achieving this rank?" for
+every tier, resolved as the entries whose time sits closest to that cutoff.
+
+Three things make it cheap, and one makes it a real design question:
+
+- The data is already there. Every [[entry]] in the library carries a time and
+  the video its [[runner]] linked, and a fitted [[ladder]] already sits on the
+  same row — so "the entries nearest this cutoff" is a slice of a list we
+  ship, not a new fetch.
+- It is the plural of something that exists. `classify.resolve_cutoff_videos`
+  already bands example clips into `{rank: url}`, ONE per tier, fastest first.
+  This is the same question asked for all of them, so the two must agree about
+  which entries belong to a cutoff or the card and the Library will disagree in
+  front of the user.
+- **Not every link resolves** — see below. A threshold whose single nearest
+  entry has been privated must not read as having no examples, which is the
+  argument for showing several rather than the closest one.
+- The open question is what "belongs to a threshold" means: entries between
+  this cutoff and the next faster one is the obvious reading, but a tier with
+  few entries then shows an empty list while the tier below it is crowded.
+  Decide it against the real distribution rather than in the abstract.
+
 ## Two facts about the data that are not bugs
 
 **A row can belong to a different entity than its target.** Under
