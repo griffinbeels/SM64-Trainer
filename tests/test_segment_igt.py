@@ -391,20 +391,23 @@ def test_the_door_carries_the_number_usamune_shows():
 
 
 def test_lakitu_still_measures_from_the_spawn_not_from_the_load():
-    """The number CARRIED is not automatically the number TAKEN, and here that
-    distinction is the whole gap between his two requests.
+    """The number CARRIED is not automatically the number TAKEN, and Lakitu is
+    the case where they differ in provenance and agree in value.
 
-    Usamune's counter zeroes on the savestate LOAD; Lakitu Skip arms on
-    `spawned`, when Mario becomes controllable. Measured over his own journal
-    2026-08-05, seven runs: 51-55 frames apart, ~1.7 s of fade. So the
-    on-screen number at the door is ~1.7 s HIGHER than the spawn-to-door time,
-    and taking it verbatim would re-open task 0026's complaint from the other
-    side -- that one was "it reads 7.33 where the community reads 6.13".
+    Lakitu arms on `spawned` and the reload's own `practice_reset` lands the
+    NEXT frame, so `_close`'s precondition (Usamune's counter zeroed on the
+    very frame the segment armed) misses by one and the delta stands.
 
-    `_close` already refuses it, and correctly: a closing event's IGT is
-    believed only when Usamune's counter was zeroed on the very frame the
-    segment armed. This pins that a moment carrying a number did not quietly
-    change which number Lakitu banks.
+    That costs nothing, measured live rather than argued: Usamune zeroes when
+    Mario becomes CONTROLLABLE, not when the savestate loads. His run of
+    2026-08-05 21:43:34 touched the door on frame 2308 carrying `igt_frames`
+    181, putting Usamune's zero at frame 2127 -- the spawn exactly, 52 frames
+    after the `state_loaded` at 2075. Both numbers are 181, and his practice
+    log read 0'06"03 beside an emulator reading 0'06"03.
+
+    So this pins that a moment carrying a number did not quietly change which
+    number Lakitu banks, and the fixture mirrors the live shape: the spawn IS
+    the counter's zero.
     """
     attempt = one_success(journal(a_lakitu_run()), seeded_lakitu_def())
     assert attempt.closed_by == "moment_reached"
