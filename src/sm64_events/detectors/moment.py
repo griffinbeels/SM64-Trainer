@@ -72,6 +72,37 @@ MOMENTS: tuple[Moment, ...] = (
 class MomentDetector:
     """Emits `moment_reached {kind, ordinal, level, area, action}`."""
 
+    # A DOOR'S DISPLAY LAG. Usamune's screen reads one game frame HIGHER than
+    # `IgtClock`'s counter path answers at a moment, so the number we banked
+    # was always a frame cheap -- his report, 2026-08-05: "the practice log
+    # consistently shows about one frame faster than the time in Usamune,
+    # every time (the practice log is wrong and should be slower)".
+    #
+    # MEASURED, 16 samples, ZERO variance: three screenshot pairs he read off
+    # the emulator (6"70/6"66, 6"50/6"46, 6"63/6"60) and then thirteen
+    # consecutive Lakitu runs, every one exactly one frame apart. Nothing here
+    # is inferred from a mechanism -- the OFFSET is what was measured, and
+    # that is what is encoded, the same standing this project gives
+    # `IgtClock.DISPLAY_TICK` itself.
+    #
+    # WHAT THE JOURNAL SAYS ABOUT THE MECHANISM, recorded because it is a real
+    # observation and not because it explains the sign: `action_timer` reads
+    # **1 on all 13**, so our poll never catches a door on its entry frame --
+    # it sees it on the next one. Three readings were checked and none of them
+    # accounts for the direction: the same clock call matched Usamune exactly
+    # at a PIPE (0'35"96, live 2026-07-31), a torn read between `mario_action`
+    # and `igt_overall` would put us one frame AHEAD, and action-timer
+    # backdating moves the frame EARLIER. So the mechanism is open and the
+    # measurement is not; do not "simplify" this away without re-measuring
+    # against the emulator, which is what the two inert payload fields below
+    # are kept for.
+    #
+    # A PIPE AND A STAR ARE DELIBERATELY UNTOUCHED. Both were calibrated
+    # against a display Usamune had STOPPED, and both match; a moment is read
+    # off a display that is still running, which is the one difference between
+    # the calibrations and may well be the whole of it.
+    DISPLAY_LAG_FRAMES = 1
+
     def __init__(self, target_active: Callable[[], bool] = lambda: True):
         self._target_active = target_active
         self._counts: dict[str, int] = {}
@@ -125,7 +156,8 @@ class MomentDetector:
         event's payload, so a consumer never re-derives the display form.
         """
         self._counts[kind] = self._counts.get(kind, 0) + 1
-        igt_frames, source = self._clock.igt_at(curr.global_timer, curr)
+        reading, source = self._clock.igt_at(curr.global_timer, curr)
+        igt_frames = reading + self.DISPLAY_LAG_FRAMES
         return Event(type="moment_reached", frame=curr.global_timer,
                      timestamp_utc=curr.wall_time_utc,
                      payload={"kind": kind, "ordinal": self._counts[kind],

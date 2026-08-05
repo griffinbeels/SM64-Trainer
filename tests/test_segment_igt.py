@@ -338,8 +338,14 @@ def test_only_a_closing_event_that_could_have_carried_igt_is_comparable():
 LAKITU_LEVEL = 16                   # Castle Grounds
 SPAWN_FRAME = 1000                  # the frame the intro cutscene ends
 COUNTER_AT_DOOR = 233               # Usamune's counter as he takes the door
-DOOR_FRAME = SPAWN_FRAME + COUNTER_AT_DOOR
-DOOR_DISPLAY = COUNTER_AT_DOOR + 1  # counter + IgtClock.DISPLAY_TICK
+# +1 because the counter drops the frame AFTER the spawn (see `counter`
+# below), so this is the frame whose counter reads COUNTER_AT_DOOR.
+DOOR_FRAME = SPAWN_FRAME + 1 + COUNTER_AT_DOOR
+# counter + IgtClock.DISPLAY_TICK + MomentDetector.DISPLAY_LAG_FRAMES.
+# The second term is the 16-sample offset his own runs measured -- see
+# that constant's own comment for why the mechanism is open and the
+# number is not.
+DOOR_DISPLAY = COUNTER_AT_DOOR + 2
 
 
 def seeded_lakitu_def() -> SegmentDef:
@@ -367,8 +373,25 @@ def a_lakitu_run(door_frame=DOOR_FRAME, per_frame=None):
     """
     per_frame = per_frame or {}
 
+    def counter(frame):
+        # A PREVIOUS run's time before the reload, then counting from the
+        # spawn. The DROP is what the anchor detector reads as the reload's
+        # own `practice_reset`, and in real play that anchor lands at spawn+1
+        # (31 of 31 of his runs) -- which is the whole point of seeding it:
+        # without it `_last_igt_zero_frame` is never set, and the segment
+        # could not take Usamune's number however correct that number was.
+        # The drop is one frame AFTER the action leaves the cutscene, which
+        # is the shape real play has: `spawned` at 2127, the reload's own
+        # `practice_reset` at 2128, in 31 of 31 of his runs. Putting them on
+        # the same frame is what made the earlier version of this fixture
+        # green with `IGT_ARM_SKEW_FRAMES` mutated to 0 -- a guard nobody had
+        # seen fail.
+        if frame <= SPAWN_FRAME:
+            return 600 + (frame - (SPAWN_FRAME - 30))
+        return frame - SPAWN_FRAME - 1
+
     def one(frame, **kwargs):
-        return snap(frame, max(frame - SPAWN_FRAME, 0), level=LAKITU_LEVEL,
+        return snap(frame, counter(frame), level=LAKITU_LEVEL,
                     **{**kwargs, **per_frame.get(frame, {})})
 
     frames = [one(f, action=ACT_INTRO_CUTSCENE)
@@ -390,29 +413,29 @@ def test_the_door_carries_the_number_usamune_shows():
     assert moment.payload["igt_frames"] == DOOR_DISPLAY
 
 
-def test_lakitu_still_measures_from_the_spawn_not_from_the_load():
-    """The number CARRIED is not automatically the number TAKEN, and Lakitu is
-    the case where they differ in provenance and agree in value.
+def test_lakitu_banks_usamunes_number_not_the_frame_delta():
+    """The report, end to end: "the practice log consistently shows about one
+    frame faster than the time in Usamune, every time".
 
-    Lakitu arms on `spawned` and the reload's own `practice_reset` lands the
-    NEXT frame, so `_close`'s precondition (Usamune's counter zeroed on the
-    very frame the segment armed) misses by one and the delta stands.
+    TWO things were wrong and only both together move the number he sees.
 
-    That costs nothing, measured live rather than argued: Usamune zeroes when
-    Mario becomes CONTROLLABLE, not when the savestate loads. His run of
-    2026-08-05 21:43:34 touched the door on frame 2308 carrying `igt_frames`
-    181, putting Usamune's zero at frame 2127 -- the spawn exactly, 52 frames
-    after the `state_loaded` at 2075. Both numbers are 181, and his practice
-    log read 0'06"03 beside an emulator reading 0'06"03.
+    (1) The moment read a frame low. 16 samples, zero variance -- three
+    screenshot pairs and then thirteen consecutive Lakitu runs, every one
+    exactly one frame apart. `MomentDetector.DISPLAY_LAG_FRAMES`.
 
-    So this pins that a moment carrying a number did not quietly change which
-    number Lakitu banks, and the fixture mirrors the live shape: the spawn IS
-    the counter's zero.
+    (2) The attempt was not taking the moment's number at all. Lakitu arms on
+    `spawned` and the reload's own `practice_reset` lands the NEXT frame, so
+    `_close`'s "the counter zeroed on the arm frame" test missed by one and
+    the delta stood -- and the delta equalled the OLD, low reading in 31 of
+    31 runs, which is exactly why fixing the moment alone changed nothing on
+    screen. `segments.IGT_ARM_SKEW_FRAMES`.
     """
     attempt = one_success(journal(a_lakitu_run()), seeded_lakitu_def())
     assert attempt.closed_by == "moment_reached"
-    assert attempt.timed_by == "delta"
-    assert attempt.rta_frames == DOOR_FRAME - SPAWN_FRAME
+    assert attempt.timed_by == "igt"
+    assert attempt.rta_frames == DOOR_DISPLAY
+    # And the delta it used to bank is a frame cheaper -- the whole report.
+    assert DOOR_FRAME - SPAWN_FRAME < DOOR_DISPLAY
 
 
 def test_a_subsection_armed_ON_the_zeroing_event_does_take_usamunes_number():

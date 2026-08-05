@@ -2503,6 +2503,13 @@ def _is_major_action(ev) -> bool:
             or (ev.type == "level_changed" and _real_edge(ev)))
 
 
+# How far a zeroing event may sit from an arm and still describe the SAME
+# load. One, measured: a savestate reload emits `spawned` then `practice_reset`
+# on consecutive frames (31 of 31 of his door runs), and the two are one event
+# as far as Usamune's counter is concerned.
+IGT_ARM_SKEW_FRAMES = 1
+
+
 def _zeroes_usamune_igt(ev) -> bool:
     """Did this event put Usamune's overall IGT counter back to zero?
 
@@ -3589,8 +3596,20 @@ class SegmentEngine:
         # segment does not begin at (a def armed mid-level, or a BBH door
         # crossed mid-run), and the wall-frame delta — which at least spans
         # the right two moments — is the honest fallback.
+        #
+        # WITHIN ONE FRAME, not exactly equal (2026-08-05). A savestate reload
+        # emits `spawned` and then its own `practice_reset` on CONSECUTIVE
+        # frames -- one load, two events -- so a definition armed by the spawn
+        # (Lakitu Skip, and every subsection that starts on becoming
+        # controllable) missed this test by exactly one and banked the delta
+        # forever. Measured over 31 of his door-ended runs: the anchor lands at
+        # arm+1 in 31 of 31, and Usamune's own derived zero sits ON the arm
+        # frame in all 31. One frame is the poll's own skew, not slack: a zero
+        # from a DIFFERENT load is hundreds of frames away, so nothing this
+        # rule exists to reject gets in.
         igt = ev.payload.get("igt_frames")
-        if igt is not None and self._last_igt_zero_frame == arm.start_frame:
+        if igt is not None and self._last_igt_zero_frame is not None and abs(
+                self._last_igt_zero_frame - arm.start_frame) <= IGT_ARM_SKEW_FRAMES:
             rta, timed_by = igt, "igt"
         else:
             # Which branch ran is itself a fact the display needs (ruling 6):
