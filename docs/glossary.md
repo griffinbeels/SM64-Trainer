@@ -73,6 +73,18 @@ course where every other trigger needs him to travel.
 
 - **Lives** — the moment registry (`src/sm64_events/detectors/moment.py`)
 
+### Entity
+
+The specific thing in the world a [[moment]] happened to — that door, that
+pole, that bob-omb. The game rebuilds its object list every time an area
+loads, so we name an entity by where it SPAWNED rather than by which slot of
+that list holds it: the slot changes and the spawn point does not.
+
+- **Lives** — the spawn-point offset in
+  `src/sm64_events/memory/addresses.py`, read by `tools/probe_objects.py`
+- **Not** — the count in a [[moment]]'s name. "The 5th door you opened" counts
+  doors; an entity IS the door, and the count is something it has.
+
 ### Attempt
 
 One try at a [[target]], from the [[anchor]] that opens it to the [[outcome]]

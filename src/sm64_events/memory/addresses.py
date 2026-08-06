@@ -83,6 +83,16 @@ OBJECT_POOL = 0x8033D488     # first slot (STROOP US ObjectStartAddress)
 OBJECT_SIZE = 0x260
 OBJECT_COUNT = 240
 OBJECT_BEHAVIOR = 0x20C      # u32 behavior-script pointer within a slot
+# WHICH door / pole / enemy this is: the object's SPAWN point, live-verified
+# 2026-08-05 over one ordinary session (tools/probe_objects.py). Nothing else
+# in the 0x260-byte slot survived both tests. The POOL SLOT does not: his three
+# castle-basement doors held slots 3/2/0, then 38/42/44 after a death exit, then
+# 3/2/0 again -- same three doors, and the count is a property of the pool, not
+# of the door. Nor does the CURRENT position (+0xA0): across 21 grabs of one
+# SSL bob-omb it took 14 values while this one took exactly 1. Two proofs, one
+# offset: 13 of 13 door captures keyed by (level, area, behaviour, home) matched
+# his own labels for HMC / moat / DDD across the reload.
+OBJECT_HOME_POS = 0x164      # Vec3f oHome (spawn x/y/z) within a slot
 
 # Mario actions entered the moment a star (or key) is grabbed — decomp sm64.h.
 ACT_STAR_DANCE_EXIT = 0x00001302               # live-verified 2026-06-10

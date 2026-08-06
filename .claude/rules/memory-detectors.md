@@ -17,7 +17,7 @@ paths:
 | Memory addresses, action IDs, course/star names, traps, world topology | `memory/addresses.py` — THE registry; richly commented, read it. `WORLD_EDGES_TWO_WAY`/`_ONE_WAY` + `world_connections()` = directed (level, subarea) reachability under normal movement (**corrected 2026-07-27**: the one-way `(23, 19)` "DDD sub bay → BitFS" edge was wrong — BitFS is entered from the BASEMENT, `23 → 6 (area 3) → 19`, live-captured twice; a wrong edge here is not cosmetic, it made the corpus's independent walker route DDD → BitFS in one hop and forced a movement onto a `star_grabbed` start) — drives the segment builder's dropdown filtering AND — since 2026-08-01 — the matcher's own topological cancel (`.claude/rules/tracking-storage.md`, [Topological validity]), so a wrong row here now silently kills real attempts; validation still stays permissive. **Corrected again 2026-08-02, by the human reading `tools/topology_map.py`** — the tool exists for exactly this, because a MISSING edge only makes the rules stricter somewhere he never walked and the journal scoring is blind to it. Each Bowser course↔arena pair is TWO-WAY (losing the fight returns you to the course), and `(34, upstairs)` is GONE: *"if you win in bowser 3 you beat the game; if you lose in bowser 3, you go back into bowser in the sky"*, so the Bowser 3 arena has no edge into the castle at all. Only the Bowser 1/2 key cutscenes remain one-way. `tests/test_defaults_corpus.py::test_exit_node_matches_the_castle_layout` pins all three; **Corrected a third time 2026-08-02, and this one was a MISSING row rather than a wrong one**: `(19, _LOBBY)` — leaving BitFS puts you in the LOBBY, not back in the basement you entered from, and that is a movement TRICK he routes on (*"the fastest path to getting to upstairs is actually to go Bowser 2 -> Basement -> Re-enter bowser in the fire sea -> Exit to lobby -> Upstairs"*). Measured over both journals on the SETTLED area: BitFS -> Lobby x11 vs Basement x1; BitDW -> Lobby x27 (already covered); BitS -> Upstairs x2 vs Lobby x1, left OUT deliberately because three observations cannot tell a trick from a mis-sample. What the missing row cost is the argument for measuring the table rather than reasoning about it: BitFS sat 3 hops from Upstairs where the basement sat 2, so Rule 2 read the fastest real route as walking away and silently killed `Bowser 2 -> Upstairs` the instant he entered the pipe. **Adding it also forced a fix in `world_regions()`**: one-way rows are walked as UNDIRECTED there, which was only ever right because every one-way row was an arena cutscene (an arena has no other castle link, so its exit IS its ownership). BitFS has a real two-way door from the basement, so one undirected pass moved it into the lobby region on gameflow order and renamed its library group. Two-way edges are walked FIRST now; a one-way EXIT only claims what is still unowned — an exit says where you come OUT, never where a place belongs. `world_regions()` BFSes those same edges from `CASTLE_REGION_NODES` (gameflow order) to answer "which castle region owns this place" for the segment-origin taxonomy — BBH→courtyard, VCUtM→grounds, CotMC→basement, each arena→its exit's region; `region_for_node` adds the one case the BFS can't answer (subarea-less castle interior → lobby, the transient-lobby rule). `CASTLE_SECRET_STAR_AREAS` is MIPS-only ON PURPOSE |
 | Endian decoding / typed reads | `memory/base.py` — the ONLY place that knows PJ64 byte order |
 | Process attach / RDRAM discovery | `memory/pj64.py` |
-| Object-pool decoding | `memory/objects.py` · test double: `memory/buffer.py`. **WHICH door/pole/enemy Mario touched is an OPEN hunt**: `tools/probe_objects.py` dumps the whole object every time a `gMarioState` pointer changes and `--report` differences the dumps — volatile offsets out (they moved within one two-frame window), constant offsets out (they name the KIND), and what remains taking several RECURRING values is the instance. Which `gMarioState` offsets even hold an object is discovered rather than asserted (a word that lands on a pool SLOT BOUNDARY), so nothing goes into this file until a candidate survives a reload. Pure core pinned by `tests/test_probe_objects.py`, four rules mutation-proved |
+| Object-pool decoding | `memory/objects.py` · test double: `memory/buffer.py`. **WHICH door/pole/enemy Mario touched — ANSWERED 2026-08-05, and the answer is the SPAWN POINT** (`OBJECT_HOME_POS` in addresses.py, whose comment carries the two proofs). `tools/probe_objects.py` dumps the whole object every time a `gMarioState` pointer changes and `--report` lists the distinct things touched; which `gMarioState` offsets hold an object is discovered rather than asserted (a word landing on a pool SLOT BOUNDARY — `+0x78`/`+0x7C`/`+0x80`/`+0x88` announced themselves). Pure core pinned by `tests/test_probe_objects.py`, six rules mutation-proved. Full detail: **[The spawn point is the identity](#the-spawn-point-is-the-identity)** below |
 | Fields sampled each tick | `core/snapshot.py` |
 | Event envelope / wire format | `core/events.py` |
 | Star-grab + IGT logic | `detectors/star_grab.py` — docstrings carry the domain rationale; IGT itself comes from the shared `detectors/igt_clock.py` (result→counter→reconstructed) which ALSO stamps key.py's grand star and warp.py's pipe — every displayed time routes through it, never a frame delta. **A star is timed at the X-CAM, not the grab, and Usamune's own result store — not our counter — is the number.** Both halves were live-measured on 2026-08-01 and neither is re-derivable by reading the code; the evidence, the four `STOP` values, the subarea-local counter, and the bracket on the settle wait are in **`## Star timing`** below. `key.py` is deliberately NOT changed: whether `STOP` moves the grand star's number is unmeasured, and `ACT_JUMBO_STAR_CUTSCENE` has no fall/dance pair to derive one from |
@@ -309,6 +309,43 @@ movements now record nothing). Depending on how wide the pause window is drawn
 the unexplained share is **between 2% and 21%**. Only a live sitting settles it:
 walk into the same painting several times and count. Until then, treat a
 movement that records nothing as possibly this rather than as a matcher bug.
+
+## The spawn point is the identity
+
+**Live-measured 2026-08-05 across one ordinary session of his, with his own
+labels as ground truth.** A moment used to be `kind + level + ORDINAL` —
+"the 5th door in the basement". The ordinal is a property of the POOL, not of
+the door, and this is the measurement that proves it.
+
+**The pool slot is not an identity.** His three castle-basement doors (HMC,
+the moat door, DDD) held slots 3/2/0. A death exit rebuilt the area and the
+same three doors came back as 38/42/44. He warped out and back and they were
+3/2/0 again. Same doors, three different "5th door you opened".
+
+**The live position is not one either.** Across 21 grabs of one SSL bob-omb the
+current position (`+0xA0`) took 14 distinct values — a respawning enemy is a
+genuinely different object each time.
+
+**`OBJECT_HOME_POS` (+0x164, Vec3f) is.** Keyed on `(level, area, behaviour,
+home)`, his 13 door captures collapsed onto exactly the three names he gave
+them, across the reload; the bob-omb's 88 grabs across **19 pool slots**
+collapsed onto one. Corroborating single words exist and are reported, but the
+spawn point is the one that held for both a stationary thing and a moving one.
+
+**Two limits, stated rather than discovered later.** An object the GAME creates
+mid-play never gets a home — Mario, a star popping out of a box, the spawn
+marker — so those read `(0, 0, 0)` and several of them collapse into one row;
+the report prints that caveat itself. And two areas of one level can host the
+same physical door at the same coordinates (the basement↔lobby warp door
+appears in both), which is why the area is part of the key and not decoration.
+
+**The two bugs that hid this for a round, because both look like a clean
+result.** Volatility judged across ALL captures let Mario's own object mark
+POSITION volatile, which discarded the only offset that worked. And the
+two-frame re-read that confirms an offset is stable lands on a REBUILT pool if
+the game reloaded inside the window, so the slot then holds whatever moved in
+and the object reads as having moved; the probe now drops that second read
+instead of scoring it.
 
 ## Recipes
 

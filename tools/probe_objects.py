@@ -1,30 +1,29 @@
 """READ-ONLY probe: WHICH specific door, pole or enemy did Mario just touch?
 
 The recorder can already say "Open a door (#2) in Castle Inside" -- a kind plus
-a count. What it cannot say is WHICH door. His ruling, 2026-08-05: the count is
-a property of the thing rather than its name -- "this specific door that
-happens to be the 5th one you open" -- so the identity has to come out of the
-GAME'S OWN OBJECT.
+a count. What it could not say is WHICH door. His ruling, 2026-08-05: the count
+is a property of the thing rather than its name -- "this specific door that
+happens to be the 5th one you open".
 
-This project does not guess an offset, so the probe does not test a hypothesis
-about where that identity lives. It DUMPS the whole object Mario is
-interacting with, every time the interaction changes, and the report finds the
-identity by DIFFERENCING what it caught:
+ANSWERED 2026-08-05 over one ordinary session: the identity is the object's
+SPAWN POINT (addresses.py::OBJECT_HOME_POS carries the evidence), and this tool
+now LISTS the distinct things he touched rather than hunting for the field that
+names them. It still dumps whole objects, because the differencing is what
+would show the key failing for a kind nobody has tried yet:
 
-  * an offset whose value moves between two consecutive frames is VOLATILE
-    (a timer, an animation counter) and can never be an identity;
-  * an offset holding ONE value across every capture of a behaviour names the
-    KIND, not the instance (the behaviour pointer is the known example);
-  * an offset taking SEVERAL values that each RECUR is the INSTANCE -- door A,
-    door B, door A again reads as [X, Y, X], and that is the shape to hunt;
-  * one that recurs ACROSS an epoch boundary (savestate load, level reload)
-    survives the thing he actually practices with.
+  * an offset that moved between two frames of one interaction is VOLATILE and
+    cannot name anything -- judged inside a behaviour, never across all of
+    them, or Mario's own object marks POSITION volatile and throws the answer
+    away (that bug hid this result for a round);
+  * an offset that stays put for one thing and differs between two of them
+    draws the same line the spawn point does, and the report names those;
+  * an object the GAME spawned mid-play has no spawn point at all (Mario, a
+    star popping out), so those collapse into one row and the report says so.
 
-Which gMarioState offsets even hold an object is not assumed either: every
-word of the struct's first 0xC0 bytes is checked each frame for a value that
-lands on an object-pool SLOT BOUNDARY, so the pointer fields announce
-themselves. The names in POINTER_HINTS are decomp's and are reading aids, not
-claims -- nothing here is promoted to addresses.py until this gate passes.
+Which gMarioState offsets even hold an object is discovered, not assumed: every
+word of the struct's first 0xC0 bytes is checked each frame for a value landing
+on an object-pool SLOT BOUNDARY, so the pointer fields announce themselves. The
+names in POINTER_HINTS are decomp's and are reading aids, not claims.
 
 Attaches read-only via ReadProcessMemory. Takes no instance lock and no
 recorder lock, so it is safe to run beside the live server while playing.
@@ -33,11 +32,9 @@ Usage:
     uv run python tools/probe_objects.py     # play; CTRL+C to stop
     uv run python tools/probe_objects.py --report
 
-What to do while it runs, in this order -- each step answers one question:
-  1. open ONE door, walk back, open the SAME door again     (does it recur?)
-  2. open a DIFFERENT door                                  (is it distinct?)
-  3. load a savestate, open the first door a third time     (does it survive?)
-  4. grab a pole or tree, stomp a goomba, pick up a bob-omb (other kinds)
+To re-check the key against a kind it has not met, play so that it sees the
+same thing twice with an area reload in between -- the report's verdict counts
+exactly that, because a name that outlives a pool rebuild is the whole claim.
 """
 from __future__ import annotations
 
@@ -110,60 +107,79 @@ def group_key(capture: dict) -> tuple[int, int, int]:
     return capture["level"], capture["area"], behaviour_of(capture)
 
 
-def identity_candidates(captures: list[dict], volatile: set[int]) -> list[dict]:
-    """Offsets that could NAME one of these objects, best first.
+def home_of(capture: dict) -> tuple[float, float, float]:
+    """The spawn point of the object this capture caught -- its IDENTITY."""
+    raw = bytes.fromhex(capture["obj"])[A.OBJECT_HOME_POS:A.OBJECT_HOME_POS + 12]
+    return struct.unpack(">fff", raw)
 
-    An identity must vary between instances and repeat when the same instance
-    comes back. Sorting by that second property first is deliberate: an offset
-    that recurs across an EPOCH survives the savestate loads he practices
-    with, which is the property a label has to have to be worth writing down.
+
+def entities(captures: list[dict]) -> list[dict]:
+    """The DISTINCT things these captures touched, most-touched first.
+
+    One row per real object, keyed on where it spawned. Addresses.py carries
+    the evidence for why that key and not the pool slot or the live position.
     """
-    per_offset: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    grouped: dict[tuple, list[dict]] = defaultdict(list)
     for capture in captures:
-        for index, value in enumerate(words(capture["obj"])):
-            offset = index * 4
-            if offset not in volatile:
-                per_offset[offset].append((value, capture["epoch"]))
+        grouped[home_of(capture)].append(capture)
+    rows = [{
+        "home": home,
+        "captures": mine,
+        "slots": sorted({capture["slot"] for capture in mine}),
+        "actions": sorted({capture["action_name"] for capture in mine}),
+        "epochs": sorted({capture["epoch"] for capture in mine}),
+    } for home, mine in grouped.items()]
+    rows.sort(key=lambda row: (-len(row["captures"]), row["home"]))
+    return rows
 
-    found = []
-    for offset, seen in per_offset.items():
-        values = [value for value, _ in seen]
-        distinct = set(values)
-        if len(distinct) < 2:
-            continue  # constant across every capture: that is the KIND
-        repeats = {value for value in distinct if values.count(value) > 1}
-        if not repeats:
-            continue  # never the same twice: a counter, or one-shot noise
-        cross_epoch = {value for value in repeats
-                       if len({epoch for got, epoch in seen if got == value}) > 1}
-        found.append({
-            "offset": offset,
-            "distinct": len(distinct),
-            "values": values,
-            "repeats": len(repeats),
-            "cross_epoch": len(cross_epoch),
-        })
-    found.sort(key=lambda row: (-row["cross_epoch"], -row["repeats"],
-                                row["distinct"], row["offset"]))
-    return found
+
+def corroborating_offsets(captures: list[dict], volatile: set[int]) -> list[int]:
+    """Offsets that split these captures EXACTLY the way the spawn point does.
+
+    The spawn point is three words wide, so a single-word field that draws the
+    same line is worth knowing about -- and an offset that draws a DIFFERENT
+    line is how we would find out the key had stopped working for a new kind.
+    """
+    truth = {}
+    for capture in captures:
+        truth.setdefault(home_of(capture), []).append(capture)
+    if len(truth) < 2:
+        return []
+    matching = []
+    for offset in range(0, A.OBJECT_SIZE, 4):
+        if offset in volatile:
+            continue
+        per_entity = [{words(capture["obj"])[offset // 4] for capture in mine}
+                      for mine in truth.values()]
+        if any(len(values) != 1 for values in per_entity):
+            continue  # moved while the object stayed the same
+        seen = [next(iter(values)) for values in per_entity]
+        if len(set(seen)) == len(seen):
+            matching.append(offset)
+    return matching
 
 
 def analyse(captures: list[dict]) -> dict:
-    volatile = volatile_offsets(captures)
     groups = []
     for key in sorted({group_key(capture) for capture in captures}):
         mine = [capture for capture in captures if group_key(capture) == key]
+        # PER GROUP, never across all captures: Mario's own object moves every
+        # frame, so one global mask marks POSITION volatile and throws away the
+        # only offset that turned out to name a door (2026-08-05, his session).
+        volatile = volatile_offsets(mine)
         groups.append({
             "level": key[0], "area": key[1], "behaviour": key[2],
             "captures": mine,
             "actions": sorted({capture["action_name"] for capture in mine}),
             "fields": sorted({capture["field"] for capture in mine}),
             "epochs": len({capture["epoch"] for capture in mine}),
-            "candidates": identity_candidates(mine, volatile),
+            "volatile": len(volatile),
+            "entities": entities(mine),
+            "corroborating": corroborating_offsets(mine, volatile),
         })
     return {
         "captures": len(captures),
-        "volatile": len(volatile),
+        "unusable": sum(1 for capture in captures if not capture["obj_next"]),
         "pointer_fields": sorted({capture["field"] for capture in captures}),
         "groups": groups,
     }
@@ -251,8 +267,15 @@ def watch(out_path: Path) -> int:
         previous_frame, previous_place = frame, place
 
         for due, slot, record in list(pending):
-            if frame >= due:
-                record["obj_next"] = mem.read_block(
+            # A reload REBUILDS the pool, so the same slot two frames later
+            # holds whatever moved in -- scored naively that reads as the object
+            # having MOVED, and it is how a door's own position looked volatile
+            # and got discarded (2026-08-05, his session). An empty second read
+            # contributes nothing instead of contributing a lie.
+            reloaded = ((record["level"], record["area"]) != place
+                        or frame < record["frame"])
+            if frame >= due or reloaded:
+                record["obj_next"] = "" if reloaded else mem.read_block(
                     slot_address(slot), A.OBJECT_SIZE).hex()
                 handle.write(json.dumps(record) + "\n")
                 handle.flush()
@@ -285,8 +308,8 @@ def report(path: Path) -> int:
         return 1
     found = analyse(captures)
 
-    print(f"\n{found['captures']} captures, {found['volatile']} volatile offsets "
-          f"of {WORD_COUNT * 4} bytes")
+    print(f"\n{found['captures']} captures, {found['unusable']} of them with no "
+          "second read (the game reloaded inside the window)")
     print("gMarioState offsets that held an object pointer: " + ", ".join(
         f"{offset:#04x} {POINTER_HINTS.get(offset, '')}".strip()
         for offset in found["pointer_fields"]))
@@ -294,36 +317,32 @@ def report(path: Path) -> int:
     for group in found["groups"]:
         print(f"\n=== level {group['level']} area {group['area']}  "
               f"behaviour {group['behaviour']:#010x}  "
-              f"{len(group['captures'])} captures over {group['epochs']} epoch(s)")
-        print("    actions: " + ", ".join(group["actions"]))
-        # The value columns below are in this order, so the legend is what makes
-        # [X, Y, X] readable as "the same door, a different one, that one again".
-        print("    captures: " + "  ".join(
-            f"frame {capture['frame']} e{capture['epoch']}"
-            for capture in group["captures"][:SHOWN]))
-        if not group["candidates"]:
-            print("    NO identity candidate: every stable offset is either"
-                  " constant (the kind) or never seen twice.")
-            continue
-        print(f"    {len(group['candidates'])} identity candidate(s), best first"
-              " -- read the value column for [X, Y, X]:")
-        for row in group["candidates"][:SHOWN]:
-            values = " ".join(f"{value:08x}" for value in row["values"][:SHOWN])
-            if len(row["values"]) > SHOWN:
-                values += " ..."
-            print(f"      +{row['offset']:#05x}  {row['distinct']} distinct, "
-                  f"{row['repeats']} recur, {row['cross_epoch']} across a reload"
-                  f"   {values}")
-            print(f"              {annotate(row['values'][0])}")
+              f"{len(group['entities'])} distinct thing(s), "
+              f"{len(group['captures'])} interaction(s): "
+              + ", ".join(group["actions"]))
+        for entity in group["entities"]:
+            home = ", ".join(f"{axis:.0f}" for axis in entity["home"])
+            print(f"    spawned at ({home})   touched {len(entity['captures'])}x"
+                  f"   pool slots {entity['slots']}"
+                  f"   {', '.join(entity['actions'])}")
+            if entity["home"] == (0.0, 0.0, 0.0):
+                # A level script writes a spawn point; something the GAME spawns
+                # mid-play (a star popping out, Mario himself) never gets one, so
+                # this key cannot tell two of those apart and says so out loud.
+                print("      ^ no spawn point: the game made this one at runtime,"
+                      " so several of them would collapse into this row")
+        if group["corroborating"]:
+            print("    single words that draw the same line: " + ", ".join(
+                f"+{offset:#05x}" for offset in group["corroborating"][:SHOWN]))
 
-    survivors = sum(1 for group in found["groups"]
-                    for row in group["candidates"] if row["cross_epoch"])
-    if survivors:
-        print(f"\nVERDICT: {survivors} candidate offset(s) named the same object "
-              "again after a reload.")
-    else:
-        print("\nVERDICT: nothing recurred across a reload -- either no reload "
-              "happened during capture, or no offset survives one.")
+    renamed = sum(1 for group in found["groups"] for entity in group["entities"]
+                  if len(entity["slots"]) > 1)
+    print(f"\nVERDICT: {renamed} thing(s) kept one name while the game moved them"
+          " to a different pool slot -- which is what the slot count could not do."
+          if renamed else
+          "\nVERDICT: nothing here outlived a pool rebuild, so this session cannot"
+          " tell an identity from a slot. Reload an area and touch the same thing"
+          " again.")
     return 0
 
 

@@ -24,7 +24,7 @@ uv run python -m sm64_events.main                    # run from repo root (data/
 uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM)
 uv run python tools/verify_death_clock.py            # live gate, ANSWERED 2026-08-01 (raw counter); re-run only to re-check
 uv run python tools/probe_warp_block.py              # live gate, ANSWERED 2026-08-05: a painting writes sWarpDest AT the touch, a pipe 20 frames later (read-only, safe beside a live session)
-uv run python tools/probe_objects.py                 # live gate, OPEN: dump the object Mario touches; --report differences the dumps to find WHICH door/pole/enemy it was (read-only, safe beside a live session)
+uv run python tools/probe_objects.py                 # live gate, ANSWERED 2026-08-05: WHICH door/pole/enemy is its SPAWN POINT, not its pool slot; --report lists the distinct things touched (read-only, safe beside a live session)
 uv run python tools/verify_star_stop.py              # live gate, ANSWERED 2026-08-01: the screen is Usamune's RESULT store once it SETTLES (10/10)
 uv run python tools/derive_xcam.py                   # live gate, ANSWERED + now the REGRESSION gate: scores what we journal against Usamune (just play; MIDAIR grabs are the ones that measure)
 uv run python tools/dev_cleanup.py                   # kill orphaned dev/harness servers (auto-runs at session start)
