@@ -772,15 +772,30 @@ function ArenaRow({ t, v, stage }) {
   // its target, its arm and its card before he had done anything at all.
   // A convenience default may fill an empty hand; it may not take something
   // out of one.
+  //
+  // NARROWED 2026-08-05: `tgt.kind === "segment"` declined whenever ANY
+  // segment was targeted, including one belonging to a different place
+  // entirely -- so walking into Bowser 3 still holding "No Reds" (BitS) left
+  // the arena's only fight unselected. Griffin: "if there's only one option,
+  // that's how it should look. Even if this is our first, second, third time
+  // visiting this place." The 2026-08-01 rule it protects is about a pick
+  // made FOR HERE ("Bowser 1 -> WF", which starts in this very arena), and
+  // `heldStartsHere` is that rule stated exactly: keep a held target this
+  // stage can actually run, override one it cannot. Same question
+  // `ui/stagecontext.js` answers for the pinned card, asked of the row's own
+  // `v.segment_targets` rather than a second source.
+  const heldStartsHere = tgt.kind === "segment" && (v.segment_targets || [])
+    .some((s) => s.segment_id === tgt.segment_id
+      && (s.start_areas || []).some((a) => a[0] === stage.level));
   useEffect(() => {
     if (!only) return;
-    if (tgt.kind === "segment") return;
+    if (heldStartsHere) return;
     (async () => {
       if (!only.enabled)
         await send("PUT", `/api/segments/${only.segment_id}`, { enabled: true });
       await requestTarget(t, { kind: "segment", segment_id: only.segment_id });
     })();
-  }, [stage.level, only && only.segment_id]);
+  }, [stage.level, only && only.segment_id, heldStartsHere]);
 
   const extras = armedExtraCells(
     t, v, new Set(fights.map((s) => s.segment_id)), setPicking);

@@ -4720,7 +4720,28 @@
      and only its FLOW changes here: no top margin (it is no longer a row of
      its own), and it never grows, so the name still takes the slack and
      ellipsises first exactly as it did before this moved. */
-  .log-card-identity .step-row { margin-top: 0; flex: 0 0 auto; }
+  .log-card-identity .step-row {
+    margin-top: 0; flex: 0 0 auto;
+    /* CENTRED, not baseline. `.step-row`'s own default is `baseline`, which
+       is right in the segment editor where it sits among plain text, and
+       wrong here: the chips, the name and the strategy picker are three
+       different heights, so aligning their TEXT baselines leaves the track
+       visibly riding high against everything else on the line (Griffin,
+       2026-08-05: "we should vertically center the text"). */
+    align-items: center;
+  }
+  /* The name hugs its own width when a step track shares the line, instead of
+     growing into the whole identity column and pushing the track to the far
+     side of it. Griffin: "the course identity button takes up most of the
+     header; we should reduce this to, say, 20%... and make sure the step
+     indicator is to the right of that." The COLUMN is already 20fr with a
+     measured floor (`--log-identity-floor`); what made it read as "most of
+     the header" is `.log-card-select`'s own `flex: 1 1 auto` filling it. It
+     still SHRINKS (flex-shrink stays 1), so the name ellipsises before
+     anything else gives way, exactly as that rule's own comment describes --
+     only the growing stops, and only on a card that has a track to sit
+     beside. */
+  .log-card-identity:has(.step-row) .log-card-select { flex: 0 1 auto; }
   /* WRAPS RATHER THAN ELLIPSISES, and that is the whole reason `flex-shrink`
      is 0 above. The chips carry `min-width: 0` and per-name ellipsis of their
      own, so a shrinkable track would quietly clip a place name instead of
