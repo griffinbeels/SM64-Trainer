@@ -4748,20 +4748,26 @@
      and only its FLOW changes here: no top margin (it is no longer a row of
      its own), and it never grows, so the name still takes the slack and
      ellipsises first exactly as it did before this moved. */
-  /* OWED, NOT DONE: the chip's own items are BASELINE-aligned, so the place
-     name rides visibly above "Step 1 of 1" on the same row -- reported
-     2026-08-06 ("'> BITDW' displayed way above the 'Step 1 of 1' text").
-     Measured: the step row's two children share a centre to the pixel, so the
-     offset is entirely INSIDE the chip, and `align-items: center` on
-     `.log-card-identity .step-chip` fixes it.
-     It is NOT applied because it costs something worse. Centring changes the
-     chip's width enough to tip the three longest seeded routes into a wrap at
-     900px and 850px, which `tests/test_step_track_fits.py::
-     test_every_seeded_route_stays_on_one_line` forbids -- isolated by
-     applying and removing exactly this one rule (11 passed without it, 2
-     failed with it). The real fix pins the marker's contribution to the
-     chip's width so alignment cannot change it, which is a change to
-     `.step-mark` and belongs with a re-measure of that gate. */
+  /* WAS "OWED, NOT DONE" -- re-measured 2026-08-06 and BOTH halves of that
+     note were wrong, so it is replaced rather than carried forward.
+     The claim was that the chip's place name rides visibly above
+     "Step 1 of 1" and that `align-items: center` on
+     `.log-card-identity .step-chip` fixes it at the cost of a wrap. On the
+     rendered page today the chip's own text sits 0.5px off the counter's at
+     1500px and at 900px, and centring closes that to 0.0px -- half a pixel is
+     not what he was looking at. What he WAS looking at is the offset this
+     rule's `align-self` now fixes: the whole track against the NAME, which
+     was 9.8px and is the report both notes were really about.
+     The stated blocker does not hold either, and it is worth knowing why
+     before anyone re-runs the experiment: `.step-track` never sets
+     `flex-wrap`, so its chips are `nowrap` and CANNOT be on two lines.
+     `test_every_seeded_route_stays_on_one_line` counts distinct chip `top`
+     values, which a cross-axis alignment change moves without any wrapping --
+     so centring turns EVERY two-step route red (34 of them, not "the three
+     longest"), and the gate's own message names a wrap that did not happen.
+     The gate is left alone -- it still catches a track that outgrows its row,
+     which is the failure that matters -- but read a failure from it as "the
+     chips stopped sharing a top", not as "the route wrapped". */
   /* THE PICKER TAKES THE SLACK, so a segment card puts it where a star card
      does: "the drop down for 'Standard' there should be all the way to the
      right, like for a star's card" (2026-08-06). `.log-card-select` gives up
@@ -4777,13 +4783,31 @@
   .log-card-identity .log-card-strat { margin-left: auto; }
   .log-card-identity .step-row {
     margin-top: 0; flex: 0 0 auto;
-    /* CENTRED, not baseline. `.step-row`'s own default is `baseline`, which
-       is right in the segment editor where it sits among plain text, and
-       wrong here: the chips, the name and the strategy picker are three
-       different heights, so aligning their TEXT baselines leaves the track
-       visibly riding high against everything else on the line (Griffin,
-       2026-08-05: "we should vertically center the text"). */
+    /* CENTRED INSIDE ITSELF, not baseline -- `.step-row`'s own default is
+       `baseline`, which is right in the segment editor where it sits among
+       plain text and wrong here: the counter and the chips are different
+       heights, so aligning their TEXT baselines left the track's own contents
+       ragged (Griffin, 2026-08-05: "we should vertically center the text").
+       Where the track sits AGAINST THE NAME is the separate question the
+       `align-self` pair below answers. */
     align-items: center;
+    /* ON THE NAME'S LINE, and this is why it is a baseline and not a centre.
+       The identity row centres its items, and `.log-card-select` is a
+       TWO-LINE block (the course eyebrow above the name), so its centre is
+       the gap BETWEEN those lines -- a track centred on the row is therefore
+       centred on nothing you can read. Measured before the change: the
+       counter's glyphs sat 9.8px above the name's, which is what Griffin
+       reported ("the step indicator should be moved downward to be in line
+       with the '100 Coins' here, which generally is the name of the star /
+       segment", 2026-08-06).
+       LAST baseline, not first: `.log-card-select`'s first baseline is the
+       eyebrow's, which is the line he is explicitly not asking for. Both
+       sides of the pair are required -- a lone `align-self: baseline` item
+       forms a baseline group of one and falls back to start alignment, which
+       parks the track at the top of the row instead. Cross-axis only, so no
+       chip's width moves and `tests/test_step_track_fits.py`'s wrap guard
+       measures exactly what it did before. */
+    align-self: last baseline;
   }
   /* The name hugs its own width when a step track shares the line, instead of
      growing into the whole identity column and pushing the track to the far
@@ -4796,7 +4820,14 @@
      anything else gives way, exactly as that rule's own comment describes --
      only the growing stops, and only on a card that has a track to sit
      beside. */
-  .log-card-identity:has(.step-row) .log-card-select { flex: 0 1 auto; }
+  /* `align-self` is the OTHER half of the pair described on `.step-row`
+     above: baseline alignment is a group property, so the name has to opt in
+     for the track's opt-in to mean anything. Scoped to a card that actually
+     has a track -- an ordinary card has nothing to align its name against and
+     keeps the row's plain centring. */
+  .log-card-identity:has(.step-row) .log-card-select {
+    flex: 0 1 auto; align-self: last baseline;
+  }
   /* WRAPS RATHER THAN ELLIPSISES, and that is the whole reason `flex-shrink`
      is 0 above. The chips carry `min-width: 0` and per-name ellipsis of their
      own, so a shrinkable track would quietly clip a place name instead of
@@ -4981,7 +5012,16 @@
      component state, not the shared useCollapsed class) reusing the same
      visual language rather than growing its own. */
   .log-card.is-closed .log-card-fold { transform: rotate(-90deg); }
-  .log-card .seg-waiting { padding: 0 .7rem .55rem; }
+  /* DELETED, not zeroed to taste: `padding: 0 .7rem .55rem` here dated from
+     when the step row was a row of its OWN beneath the card head and needed
+     the card's horizontal padding plus a gap under it. It moved onto the
+     identity line (see `.log-card-identity .step-row`), where
+     `.log-card-head`'s own padding already does both jobs -- so all that was
+     left was 8.8px of invisible slack UNDER the track and 11.2px of stolen
+     width on each side of it. The slack is what made an armed card 7px taller
+     than every other one the moment the track stopped being centred on the
+     row, which is how it was found; the stolen width came free with it and
+     `tests/test_step_track_fits.py` measures the wider row now. */
   /* Item 4: an open card's rows read as belonging to it -- extra LEFT
      padding (the RIGHT/bottom stay the card's own .7rem/.6rem, only the
      side facing the head's fold column grows) plus a black wash the same
