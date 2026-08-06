@@ -16,7 +16,7 @@ No defect probe can see this: nothing overflows a parent, nothing overlaps a
 sibling, and both the one-line and two-line cells measure as perfectly ordinary
 boxes. What is wrong is the relationship between a box's height and the ink
 inside it, which is why this is a contract test of its own — the same reason
-`test_objective_name_fits.py` exists one card further down.
+`test_log_card_name_fits.py` exists one card further down.
 """
 import json
 import sys

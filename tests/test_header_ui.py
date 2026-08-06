@@ -117,16 +117,26 @@ def test_the_rank_mode_card_is_not_also_called_rank():
     assert 'id="rankmode-select"' in body and "/api/ranks/mode" in body
 
 
-def test_the_picker_is_triggered_from_the_active_target_card():
+def test_the_picker_is_triggered_from_the_practice_logs_header_row():
+    """Was triggered from the Active Target card's own eyebrow (star card,
+    segment card, no-target card, all via `ObjectiveEyebrow`). Amendment A9
+    (spec practice-log-entity-cards, 2026-08-04) deleted that card and gave
+    the picker's trigger a new, single home: a small chip in the practice
+    log's own heading row, beside Stats/Sort/Hide resets -- "keeping it ready
+    for later", not competing for attention with the quick-select row."""
     body = strip_comments(PRACTICE_JS)
     assert "useTargetPicker" in body
     # ONE instance for the page: mounting the dialog's state inside every card
-    # in the practice index would pay for ~30 copies of a fetch effect.
+    # would pay for ~30 copies of a fetch effect.
     assert body.count("useTargetPicker(t)") == 1
-    # Star card, segment card and the no-target card all open the same dialog
-    # from the same place (rule 11 parity + the empty state needs it most).
-    assert body.count("<${ObjectiveEyebrow}") == 3
-    assert ".objective-pick" in strip_comments(INDEX_HTML)
+    # The dialog's OPEN function reaches the practice log as a prop, not a
+    # second useTargetPicker call.
+    assert "openTargetPicker=${openTargetPicker}" in body
+    log_body = strip_comments(
+        (UI / "components" / "practicelog.js").read_text(encoding="utf-8"))
+    assert log_body.count("openTargetPicker &&") == 1, (
+        "PracticeLog's heading must render exactly one target-picker trigger")
+    assert 'class="chip chip-button"' in log_body
 
 
 def test_target_picker_is_the_icon_modal():
@@ -244,8 +254,14 @@ def test_the_tuning_page_is_reachable_from_the_app_and_from_the_launcher():
         "the settings drawer no longer links to the overall rank-up tuning page"
     assert not re.search(r'href="https?://[^"]*tunemarelo\.html', code), \
         "the tunemarelo.html link must be origin-relative, never a hardcoded host/port"
+    # The practice-log card's own inspector (spec practice-log-entity-cards,
+    # 2026-08-03) needs the identical guarantee -- same failure, same fix.
+    assert 'href="/ui/tunelog.html"' in code, \
+        "the settings drawer no longer links to the practice-log tuning page"
+    assert not re.search(r'href="https?://[^"]*tunelog\.html', code), \
+        "the tunelog.html link must be origin-relative, never a hardcoded host/port"
     # And the selector exchange's inspector (live report 2026-08-02, the card set
-    # changing on screen). Third page, same guarantee: a capability he cannot
+    # changing on screen). Fourth page, same guarantee: a capability he cannot
     # reach from the entry point he actually uses is one that does not exist.
     assert 'href="/ui/tuneselector.html"' in code, \
         "the settings drawer no longer links to the selector exchange tuning page"
@@ -259,6 +275,8 @@ def test_the_tuning_page_is_reachable_from_the_app_and_from_the_launcher():
     assert "%SM64_PORT%/ui/tune.html" in launcher, \
         ("the launcher's URL must interpolate the port it actually chose -- a "
          "literal port there is the exact failure this test exists for")
+    assert "/ui/tunelog.html" in launcher and "%SM64_PORT%/ui/tunelog.html" in launcher, \
+        "run-test-server.bat must also print the practice-log tuning page, port interpolated"
     assert "%SM64_PORT%/ui/tuneselector.html" in launcher, \
         "run-test-server.bat must print the selector exchange page too"
 

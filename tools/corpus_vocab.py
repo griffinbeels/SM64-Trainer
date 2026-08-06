@@ -121,6 +121,26 @@ def enter_warp(level):
     return {"type": "warp_entered", "level": level}
 
 
+def enter_entrance(level):
+    """The ENTRANCE TOUCH that leads to `level` -- the frame Mario collides
+    with its painting, portal, hole or pipe, 77 frames (23 at a pipe) before
+    the level loads. A movement ends HERE rather than on the load, so its
+    recorded time is the travelling and not the fade (task 0081).
+
+    ONE clause param, because the entrance's own level is DERIVED
+    (`topology.entrance_level`, the same door `segments.fires_from` checks arm
+    positions against) rather than authored. Asking for it was the live
+    complaint of 2026-08-05: three controls on one row, the middle one
+    demanding you already know the DDD portal lives in the castle interior.
+    """
+    from sm64_events.tracking.topology import entrance_level
+    if entrance_level(level) is None:
+        raise AssertionError(
+            f"level {level} has no single castle-side entrance; the world "
+            f"graph or this call is wrong")
+    return {"type": "entrance_touched", "to": level}
+
+
 def grab_key(level):
     return {"type": "key_grabbed", "level": level}
 
@@ -224,6 +244,33 @@ def route(seed_key, name, category, steps, start_condition=None):
             "steps": group_visits(steps)}
 
 
+def refuse_a_course_load(seed_key, end):
+    """A segment that ENDS somewhere may not end on the course LOAD (task
+    0081, 2026-08-04). A movement or a trick is the travelling, and
+    `level_enter` fires 77 frames after the travelling stopped -- so ending
+    there banks the painting fade as if it were movement. `enter_entrance` is
+    the same moment a runner would call it.
+
+    This REFUSES rather than warning because the mistake is invisible
+    afterwards: the row still matches, still records, and is simply 2.6 s slow
+    forever. Called by both `movement()` and corpus_legacy's `_seg()`, so
+    there is one door rather than a rule each author has to remember.
+
+    Ending inside the CASTLE is untouched -- there is no entrance to touch
+    (Lakitu Skip ends on entering level 6, and an `enter_area` end never
+    reaches here at all).
+    """
+    from sm64_events.memory.addresses import CASTLE_REGION_LEVELS
+    for clause in (end if isinstance(end, list) else [end]):
+        if clause.get("type") == "level_enter" \
+                and clause.get("to") not in CASTLE_REGION_LEVELS:
+            raise AssertionError(
+                f"{seed_key}: ending on entering level {clause['to']} "
+                f"measures 77 frames of painting fade as travelling. Use "
+                f"enter_entrance({clause['to']}) -- the entrance touch -- "
+                f"rather than enter_level.")
+
+
 def movement(seed_key, name, start, end, via=(), match_mode=None):
     """A castle-movement segment. `via` is a FLAT list of clauses; each becomes
     a single-clause waypoint (no corpus movement needs an any-of waypoint).
@@ -233,7 +280,15 @@ def movement(seed_key, name, start, end, via=(), match_mode=None):
     DEFAULT_MOVEMENT_MATCH_MODE on every row that doesn't say otherwise. Pass
     an explicit value to override it for ONE movement; `corpus_from_db.py`
     prints this argument back out whenever a live def's mode differs from the
-    default, so the override round-trips instead of silently reconciling away."""
+    default, so the override round-trips instead of silently reconciling away.
+
+    A movement may NOT end on entering a course (task 0081, 2026-08-04) --
+    enforced by `refuse_a_course_load`, which `build_defaults_seed` calls over
+    every assembled row rather than this constructor calling it directly. The
+    difference matters: `tools/corpus_from_db.py` reconstructs corpus SOURCE
+    from a live db and must be able to print a pre-sweep definition faithfully,
+    so the authoring policy belongs to the build, not to the row shape.
+    """
     row = {"seed_key": seed_key, "name": name, "start": start,
            "via": list(via), "end": end}
     if match_mode is not None:

@@ -63,7 +63,7 @@ whichever lands second reconciles.
 ## Owed to phase 5: every standard links to its own examples
 
 User's ask, 2026-08-05, recorded before it is built. Each row of the
-[[standards ladder]] on the objective card should link into the Library and
+[[standards ladder]] on the [[practice log]] should link into the Library and
 land on **the examples for that threshold specifically** — not the target's
 whole video list. "What are all the examples of achieving this rank?" for
 every tier, resolved as the entries whose time sits closest to that cutoff.

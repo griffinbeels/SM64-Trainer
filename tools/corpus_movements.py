@@ -63,41 +63,42 @@ report that loose's transparency to level_changed left it reading RUNNING
 after the player had physically left the course -- see its own comment for
 the corrected reasoning."""
 from corpus_vocab import (BASEMENT, CASTLE_MOVEMENT, HUNDRED_COIN_EXIT, LOBBY,
-                          UPSTAIRS, anchor, enter_area, enter_level, enter_warp,
-                          exit_level, grab_star, mechanic, movement)
+                          UPSTAIRS, anchor, enter_area, enter_entrance,
+                          enter_level, enter_warp, exit_level, grab_star,
+                          mechanic, movement)
 
 MOVEMENTS = [
     # --- lobby ------------------------------------------------------------
     movement("seg:castle-entry->bob", "Castle Entrance → BoB",
-             enter_level(6, frm=16), enter_level(9)),
-    movement("seg:bob->wf", "BoB → WF", exit_level(9), enter_level(24)),
-    movement("seg:bob->pss", "BoB → PSS", exit_level(9), enter_level(27)),
-    movement("seg:bob->ccm", "BoB → CCM", exit_level(9), enter_level(5)),
+             enter_level(6, frm=16), enter_entrance(9)),
+    movement("seg:bob->wf", "BoB → WF", exit_level(9), enter_entrance(24)),
+    movement("seg:bob->pss", "BoB → PSS", exit_level(9), enter_entrance(27)),
+    movement("seg:bob->ccm", "BoB → CCM", exit_level(9), enter_entrance(5)),
     movement("seg:bob->basement", "BoB → Basement",
              exit_level(9), enter_area(BASEMENT)),
-    movement("seg:pss->wf", "PSS → WF", exit_level(27), enter_level(24)),
-    movement("seg:wf->pss", "WF → PSS", exit_level(24), enter_level(27)),
-    movement("seg:wf->ccm", "WF → CCM", exit_level(24), enter_level(5)),
+    movement("seg:pss->wf", "PSS → WF", exit_level(27), enter_entrance(24)),
+    movement("seg:wf->pss", "WF → PSS", exit_level(24), enter_entrance(27)),
+    movement("seg:wf->ccm", "WF → CCM", exit_level(24), enter_entrance(5)),
     movement("seg:wf->sa", "WF → Secret Aquarium",
-             exit_level(24), enter_level(20)),
-    movement("seg:wf->bitdw", "WF → BitDW", exit_level(24), enter_level(17)),
-    movement("seg:wf->ssl", "WF → SSL", exit_level(24), enter_level(8),
+             exit_level(24), enter_entrance(20)),
+    movement("seg:wf->bitdw", "WF → BitDW", exit_level(24), enter_entrance(17)),
+    movement("seg:wf->ssl", "WF → SSL", exit_level(24), enter_entrance(8),
              via=[enter_area(BASEMENT)]),
     movement("seg:sa->jrb", "Secret Aquarium → JRB",
-             exit_level(20), enter_level(12)),
-    movement("seg:jrb->pss", "JRB → PSS", exit_level(12), enter_level(27)),
-    movement("seg:pss->totwc", "PSS → TotWC", exit_level(27), enter_level(29)),
-    movement("seg:totwc->pss", "TotWC → PSS", exit_level(29), enter_level(27)),
+             exit_level(20), enter_entrance(12)),
+    movement("seg:jrb->pss", "JRB → PSS", exit_level(12), enter_entrance(27)),
+    movement("seg:pss->totwc", "PSS → TotWC", exit_level(27), enter_entrance(29)),
+    movement("seg:totwc->pss", "TotWC → PSS", exit_level(29), enter_entrance(27)),
     movement("seg:totwc->bitdw", "TotWC → BitDW",
-             exit_level(29), enter_level(17)),
-    movement("seg:pss->bitdw", "PSS → BitDW", exit_level(27), enter_level(17)),
-    movement("seg:pss->bob", "PSS → BoB", exit_level(27), enter_level(9)),
-    movement("seg:ccm->bitdw", "CCM → BitDW", exit_level(5), enter_level(17)),
-    movement("seg:ccm->bbh", "CCM → BBH", exit_level(5), enter_level(4),
+             exit_level(29), enter_entrance(17)),
+    movement("seg:pss->bitdw", "PSS → BitDW", exit_level(27), enter_entrance(17)),
+    movement("seg:pss->bob", "PSS → BoB", exit_level(27), enter_entrance(9)),
+    movement("seg:ccm->bitdw", "CCM → BitDW", exit_level(5), enter_entrance(17)),
+    movement("seg:ccm->bbh", "CCM → BBH", exit_level(5), enter_entrance(4),
              via=[enter_level(26)]),
     # --- out of the Bowser 1 arena (its exit lands in the lobby) ----------
     movement("seg:bowser1->bob", "Bowser 1 → BoB",
-             exit_level(30), enter_level(9)),
+             exit_level(30), enter_entrance(9)),
     # Griffin's own route, and the live report that produced this row
     # (2026-08-03): he clears Bowser 1, lands in the Lobby, re-enters BitDW
     # and PAUSE EXITS back to the Lobby, then goes to WF. Same shape as
@@ -124,19 +125,19 @@ MOVEMENTS = [
     # DDD and BitFS already declare a Basement step, so their route is stated;
     # BoB and CCM are plain and would break identically.
     movement("seg:bowser1->wf", "Bowser 1 → WF",
-             exit_level(30), enter_level(24),
+             exit_level(30), enter_entrance(24),
              via=[enter_level(17, frm=6),
                   enter_level(6, frm=17, to_subarea=LOBBY)]),
     movement("seg:bowser1->ccm", "Bowser 1 → CCM",
-             exit_level(30), enter_level(5)),
+             exit_level(30), enter_entrance(5)),
     movement("seg:bowser1->ssl", "Bowser 1 → SSL",
-             exit_level(30), enter_level(8),
+             exit_level(30), enter_entrance(8),
              via=[enter_area(BASEMENT)]),
     movement("seg:bowser1->ddd", "Bowser 1 → DDD (Crackslide)",
-             exit_level(30), enter_level(23),
+             exit_level(30), enter_entrance(23),
              via=[enter_area(BASEMENT)]),
     movement("seg:bowser1->bitfs", "Bowser 1 → BitFS (SBLJ / DDD Skip)",
-             exit_level(30), enter_level(19),
+             exit_level(30), enter_entrance(19),
              via=[enter_area(BASEMENT)]),
     # --- courtyard (BBH exits to level 26, not to the castle interior) ----
     # Load-bearing under loose matching too (2026-07-28, Task 19): removing
@@ -159,37 +160,37 @@ MOVEMENTS = [
              exit_level(4), enter_area(BASEMENT),
              via=[enter_level(6, frm=26, to_subarea=LOBBY)]),
     movement("seg:bbh->ddd", "BBH → DDD",
-             exit_level(4), enter_level(23),
+             exit_level(4), enter_entrance(23),
              via=[enter_level(6, frm=26, to_subarea=LOBBY),
                   enter_area(BASEMENT)]),
     # --- basement ---------------------------------------------------------
     movement("seg:mips1->ssl", "MIPS (1st) → SSL",
-             grab_star(0, 3), enter_level(8)),
-    movement("seg:ssl->lll", "SSL → LLL", exit_level(8), enter_level(22)),
-    movement("seg:ssl->hmc", "SSL → HMC", exit_level(8), enter_level(7)),
-    movement("seg:lll->hmc", "LLL → HMC", exit_level(22), enter_level(7)),
-    movement("seg:lll->ddd", "LLL → DDD", exit_level(22), enter_level(23)),
-    movement("seg:hmc->lll", "HMC → LLL", exit_level(7), enter_level(22)),
-    movement("seg:hmc->ddd", "HMC → DDD", exit_level(7), enter_level(23)),
+             grab_star(0, 3), enter_entrance(8)),
+    movement("seg:ssl->lll", "SSL → LLL", exit_level(8), enter_entrance(22)),
+    movement("seg:ssl->hmc", "SSL → HMC", exit_level(8), enter_entrance(7)),
+    movement("seg:lll->hmc", "LLL → HMC", exit_level(22), enter_entrance(7)),
+    movement("seg:lll->ddd", "LLL → DDD", exit_level(22), enter_entrance(23)),
+    movement("seg:hmc->lll", "HMC → LLL", exit_level(7), enter_entrance(22)),
+    movement("seg:hmc->ddd", "HMC → DDD", exit_level(7), enter_entrance(23)),
     # A TRICK, and its shortest path is NOT the route being practised: you
     # re-enter HMC and pause-exit, which lands in the Lobby and skips the
     # Basement -> Lobby walk. Griffin's rule for which course gets re-entered
     # (2026-08-02): "it's usually the starting stage (or in the case of bowser
     # stages, it's the actual bowser course, not the bowser fight)."
     movement("seg:hmc->rr", "HMC → RR (re-entry, pause exit)",
-             exit_level(7), enter_level(15),
+             exit_level(7), enter_entrance(15),
              via=[enter_level(7, frm=6),
                   enter_level(6, frm=7, to_subarea=LOBBY),
                   enter_area(UPSTAIRS)]),
     movement("seg:mips2->hmc", "MIPS (2nd) → HMC",
-             grab_star(0, 4), enter_level(7)),
+             grab_star(0, 4), enter_entrance(7)),
     # VCUtM opens off the castle GROUNDS, not the basement MIPS is grabbed
     # in, so the grounds are a step of this route rather than scenery.
     movement("seg:mips2->vcutm", "MIPS (2nd) → VCUtM",
-             grab_star(0, 4), enter_level(18),
+             grab_star(0, 4), enter_entrance(18),
              via=[enter_level(16)]),
     movement("seg:vcutm->ccm", "VCUtM → CCM",
-             exit_level(18), enter_level(5),
+             exit_level(18), enter_entrance(5),
              via=[enter_level(6, frm=16, to_subarea=LOBBY)]),
     # Started on the star that opens the sub until 2026-07-27, on the premise
     # that BitFS is entered DIRECTLY from DDD (23 -> 19) — which would make
@@ -212,19 +213,19 @@ MOVEMENTS = [
     # arm-position gate: an unpinned `level_exit` from a non-castle level must
     # land in CASTLE_LEVELS, and SSL is not the castle, so that arm is refused.
     movement("seg:ddd->bitfs", "DDD → BitFS (sub)",
-             exit_level(23), enter_level(19)),
+             exit_level(23), enter_entrance(19)),
     # Re-enters BitFS -- level 19, the COURSE, never arena 33 -- and pause
     # exits to the Lobby, skipping the Basement -> Lobby walk.
     movement("seg:ddd->wdw", "DDD → WDW (BitFS re-entry, pause exit)",
-             exit_level(23), enter_level(11),
+             exit_level(23), enter_entrance(11),
              via=[enter_level(19, frm=6),
                   enter_level(6, frm=19, to_subarea=LOBBY),
                   enter_area(UPSTAIRS)]),
     # --- out of the Bowser 2 arena (its exit lands in the basement) -------
     movement("seg:bowser2->ddd", "Bowser 2 → DDD",
-             exit_level(33), enter_level(23)),
+             exit_level(33), enter_entrance(23)),
     movement("seg:bowser2->wdw", "Bowser 2 → WDW",
-             exit_level(33), enter_level(11),
+             exit_level(33), enter_entrance(11),
              via=[enter_area(LOBBY), enter_area(UPSTAIRS)]),
     # Griffin's own dictation of this route (2026-08-02): "I go from Bowser
     # two back into Bowser in the Fire Sea to the lobby, then to the
@@ -259,26 +260,26 @@ MOVEMENTS = [
     # unreferenced) rather than deleted -- it was requested by name and its
     # shape is correct regardless of whether a route uses it.
     movement("seg:bowser2->bits", "Bowser 2 → BitS",
-             exit_level(33), enter_level(21),
+             exit_level(33), enter_entrance(21),
              via=[enter_level(19, frm=6),
                   enter_level(6, frm=19, to_subarea=LOBBY),
                   enter_area(UPSTAIRS)]),
     # --- upstairs ---------------------------------------------------------
-    movement("seg:wdw->thi", "WDW → THI", exit_level(11), enter_level(13)),
-    movement("seg:thi->ttm", "THI → TTM", exit_level(13), enter_level(36)),
-    movement("seg:ttm->sl", "TTM → SL", exit_level(36), enter_level(10)),
+    movement("seg:wdw->thi", "WDW → THI", exit_level(11), enter_entrance(13)),
+    movement("seg:thi->ttm", "THI → TTM", exit_level(13), enter_entrance(36)),
+    movement("seg:ttm->sl", "TTM → SL", exit_level(36), enter_entrance(10)),
     # Re-enters SL and pause-exits, skipping the Upstairs -> Lobby walk.
     movement("seg:sl->basement", "SL → Basement (re-entry, pause exit)",
              exit_level(10), enter_area(BASEMENT),
              via=[enter_level(10, frm=6),
                   enter_level(6, frm=10, to_subarea=LOBBY)]),
-    movement("seg:sl->rr", "SL → RR", exit_level(10), enter_level(15)),
-    movement("seg:sl->wmotr", "SL → WMotR", exit_level(10), enter_level(31)),
-    movement("seg:wmotr->ttc", "WMotR → TTC", exit_level(31), enter_level(14)),
-    movement("seg:rr->ttc", "RR → TTC", exit_level(15), enter_level(14)),
-    movement("seg:ttc->rr", "TTC → RR", exit_level(14), enter_level(15)),
-    movement("seg:rr->bits", "RR → BitS", exit_level(15), enter_level(21)),
-    movement("seg:ttc->bits", "TTC → BitS", exit_level(14), enter_level(21)),
+    movement("seg:sl->rr", "SL → RR", exit_level(10), enter_entrance(15)),
+    movement("seg:sl->wmotr", "SL → WMotR", exit_level(10), enter_entrance(31)),
+    movement("seg:wmotr->ttc", "WMotR → TTC", exit_level(31), enter_entrance(14)),
+    movement("seg:rr->ttc", "RR → TTC", exit_level(15), enter_entrance(14)),
+    movement("seg:ttc->rr", "TTC → RR", exit_level(14), enter_entrance(15)),
+    movement("seg:rr->bits", "RR → BitS", exit_level(15), enter_entrance(21)),
+    movement("seg:ttc->bits", "TTC → BitS", exit_level(14), enter_entrance(21)),
 ]
 
 # --- Bowser-stage reds -> pipe (Task 20, spec 2026-07-28-multi-step-segments;

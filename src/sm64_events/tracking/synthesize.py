@@ -132,6 +132,15 @@ def _no_params(payload: dict) -> dict:
 # this registry does not bake it in). Only level_changed is role-restricted,
 # because it is the one journal type that means two DIFFERENT trigger types
 # depending which end is being filled -- see the ASYMMETRY section above.
+def _entrance_params(payload: dict) -> dict | None:
+    """An ENTRANCE TOUCH names only where it leads. A row written before
+    2026-08-04 carries no `to` (the detector could not know one), and one
+    published with `to: None` is a warp that went nowhere -- neither can
+    describe an entrance, so both decline rather than inventing a level."""
+    destination = payload.get("to")
+    return None if destination is None else {"to": destination}
+
+
 _SYNTH_PARAMS: dict[str, dict] = {
     "level_exit": {"journal_type": "level_changed", "role": "start",
                    "build": _level_changed_start},
@@ -141,6 +150,8 @@ _SYNTH_PARAMS: dict[str, dict] = {
                    "build": _area_changed_params},
     "warp_entered": {"journal_type": "warp_entered", "role": None,
                      "build": _level_field_params},
+    "entrance_touched": {"journal_type": "warp_entered", "role": None,
+                         "build": _entrance_params},
     "key_grabbed": {"journal_type": "key_grabbed", "role": None,
                     "build": _level_field_params},
     "star_grabbed": {"journal_type": "star_collected", "role": None,

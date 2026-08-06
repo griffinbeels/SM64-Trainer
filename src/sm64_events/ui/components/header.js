@@ -281,9 +281,18 @@ export function Header({ t, settingsOpen, closeSettings }) {
             flight and the hold, and save the result straight back into the code.
           </p>
           <p class="settings-note">
+            <a href="/ui/tunelog.html" target="_blank" rel="noopener">Open the
+              practice log tuning page</a> — dial the card's layout at two
+            widths side by side, and save the result straight back into the code.
+            <br />
             <a href="/ui/tuneselector.html" target="_blank" rel="noopener">Open the
               selector exchange tuning page</a> — swap the row's cards, tune how
             the old set leaves and the new set arrives, and save it into the code.
+            <br />
+            <a href="/ui/tunefeed.html" target="_blank" rel="noopener">Open the
+              feed and disclosure tuning page</a> — push a card into the log to
+            tune the arrival and the shove it gives the cards below, open one to
+            tune every dropdown in the app, and save it into the code.
           </p>
           <label class="settings-field">
             <span>Dust-trick counts</span>

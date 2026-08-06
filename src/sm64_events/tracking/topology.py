@@ -98,3 +98,36 @@ def hops(from_key: str | None, to_key: str | None) -> int | None:
                 seen.add(neighbour)
                 queue.append((neighbour, distance + 1))
     return None
+
+
+def entrance_level(destination: int | None) -> int | None:
+    """The LEVEL holding the entrance that leads to `destination` -- where
+    Mario is standing when he touches its painting, portal, hole or pipe.
+
+    THE one door for that derivation (task 0081): the corpus authors entrance
+    clauses through it and `segments.fires_from` checks arm positions against
+    it, so the builder and the shipped corpus cannot disagree about where an
+    entrance lives. Read off the world graph, never a hand table -- BBH is
+    entered from the courtyard and VCUtM from the grounds, so a list would have
+    been wrong on the day it was written and would drift again the first time
+    an edge is corrected.
+
+    Four destinations carry a second predecessor that is not castle-side
+    (BitDW from the Bowser 1 arena, BitFS from Bowser 2, BitS from Bowser 3,
+    HMC from CotMC); the castle REGION node is the one a player walks from, and
+    it is unique for all 23 destinations the corpus uses. None when the
+    destination is unknown or nothing castle-side reaches it -- the caller
+    treats that as "no constraint", the codebase's unknown-means-yes rule.
+    """
+    if destination is None:
+        return None
+    from sm64_events.memory.addresses import (CASTLE_REGION_NODES,
+                                              world_connections)
+    region = {node_key(level, area) for level, area in CASTLE_REGION_NODES}
+    sources = {node for node, destinations in world_connections().items()
+               if node in region
+               and any(tuple(step) == (destination, None)
+                       for step in destinations)}
+    if len(sources) != 1:
+        return None
+    return int(next(iter(sources)).partition(":")[0])

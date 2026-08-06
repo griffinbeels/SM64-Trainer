@@ -24,6 +24,14 @@ class GameSnapshot:
     particle_flags: int = 0  # Mario particleFlags, re-zeroed each frame; PARTICLE_DUST corroborates dive-slide frames
     curr_area: int = 0     # gCurrAreaIndex: per-level area (castle lobby/upstairs/basement) — see addresses.py
     pending_warp_op: int = 0  # sDelayedWarpOp; WARP_OP_WARP_FLOOR = void-out death pending (death.py)
+    # sWarpDest — where the pending warp leads. A painting/portal fills this AT
+    # the touch frame, which is what lets warp.py publish with no wait; a pipe
+    # fills it 20 frames later. All four bytes, because freshness is tested by
+    # the struct CHANGING and one byte alone would miss same-level rewrites.
+    warp_dest_type: int = 0   # WARP_TYPE_*; 0 = NOT_WARPING
+    warp_dest_level: int = 0
+    warp_dest_area: int = 0
+    warp_dest_node: int = 0
 
 
 class SnapshotReader:
@@ -46,4 +54,8 @@ class SnapshotReader:
             particle_flags=m.read_u32(A.MARIO_PARTICLE_FLAGS),
             curr_area=m.read_s16(A.CURR_AREA),
             pending_warp_op=m.read_u16(A.PENDING_WARP_OP),
+            warp_dest_type=m.read_u8(A.WARP_DEST_TYPE),
+            warp_dest_level=m.read_u8(A.WARP_DEST_LEVEL),
+            warp_dest_area=m.read_u8(A.WARP_DEST_AREA),
+            warp_dest_node=m.read_u8(A.WARP_DEST_NODE),
         )

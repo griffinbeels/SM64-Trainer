@@ -21,14 +21,14 @@ paths:
 | Fields sampled each tick | `core/snapshot.py` |
 | Event envelope / wire format | `core/events.py` |
 | Star-grab + IGT logic | `detectors/star_grab.py` — docstrings carry the domain rationale; IGT itself comes from the shared `detectors/igt_clock.py` (result→counter→reconstructed) which ALSO stamps key.py's grand star and warp.py's pipe — every displayed time routes through it, never a frame delta. **A star is timed at the X-CAM, not the grab, and Usamune's own result store — not our counter — is the number.** Both halves were live-measured on 2026-08-01 and neither is re-derivable by reading the code; the evidence, the four `STOP` values, the subarea-local counter, and the bracket on the settle wait are in **`## Star timing`** below. `key.py` is deliberately NOT changed: whether `STOP` moves the grand star's number is unmeasured, and `ACT_JUMBO_STAR_CUTSCENE` has no fall/dance pair to derive one from |
-| Whether an action counts as Mario ACTING | `memory/addresses.py` — three sets, read by `anchors.py`'s activity flag: `PASSIVE_ACTIONS` (idle/spawn, and ALSO `replay/activity.py`'s idle check — do not extend it for anchor-only reasons), `DEATH_ACTIONS`, and **`LEVEL_EXIT_ACTIONS` (2026-08-03)**. The last is the contiguous decomp block `0x1926-0x192D`: Mario is FLUNG out of a level with no control, **and the byte then LINGERS**. He died in WF, was flung to the castle, sat in the pause menu 92 s, and menu-warped back into WF with `mario_action` still reading `ACT_DEATH_EXIT` — so both of the arrival's anchors reported `mario_acted: true`, the unacted-reset discard could not fire, and the 44 frames between them banked a phantom 1.5 s reset (*"there's sometimes a Reset entry RIGHT when we start the map… The first time we enter a map should never be considered a reset"*). Measured across both journals: **62 anchors land on one of these and 62 of 62 read as having acted**; six of the seven members appear in his real play. Same lingering-state shape as the teleport fade-in. **FORWARD-ONLY** — `mario_acted` is baked into every historical anchor, so existing phantom rows are not repaired by this. **STILL OPEN**: a menu warp taken while Mario was mid-action (paused on a walk) still arrives with a real action on the byte, so the arrival can still bank a phantom; closing that needs the arrival's anchors COLLAPSED into one, which moves attempt start frames and is a decision, not a fix |
+| Whether an action counts as Mario ACTING | `memory/addresses.py` — three sets, read by `anchors.py`'s activity flag: `PASSIVE_ACTIONS` (idle/spawn, and ALSO `replay/activity.py`'s idle check — do not extend it for anchor-only reasons), `DEATH_ACTIONS`, and **`LEVEL_EXIT_ACTIONS` (2026-08-03)**. The last is the contiguous decomp block `0x1926-0x192D`: Mario is FLUNG out of a level with no control, **and the byte then LINGERS**. He died in WF, was flung to the castle, sat in the pause menu 92 s, and menu-warped back into WF with `mario_action` still reading `ACT_DEATH_EXIT` — so both of the arrival's anchors reported `mario_acted: true`, the unacted-reset discard could not fire, and the 44 frames between them banked a phantom 1.5 s reset (*"there's sometimes a Reset entry RIGHT when we start the map… The first time we enter a map should never be considered a reset"*). Measured across both journals: **62 anchors land on one of these and 62 of 62 read as having acted**; six of the seven members appear in his real play. Same lingering-state shape as the teleport fade-in. **FORWARD-ONLY** — `mario_acted` is baked into every historical anchor, so existing phantom rows are not repaired by this. **STILL OPEN**: a menu warp taken while Mario was mid-action (paused on a walk) still arrives with a real action on the byte, so the arrival can still bank a phantom; closing that needs the arrival's anchors COLLAPSED into one, which moves attempt start frames and is a decision, not a fix. **A FOURTH source, and it is not a set at all (2026-08-04, task 0084)**: the action the anchor ITSELF interrupted. The docstring has always said that one is swallowed; it swallowed one POLL, and a 60 Hz poll reads a 30 fps frame twice, so the next poll re-read the identical byte onto the FRESH attempt — *"warping to the beginning of a course inside a subarea results in an extra reset… this is a really common problem within subareas."* Exact, since `global_timer` IS the frame counter and a second poll of one value cannot have seen a new action: **1,325 of 3,558 anchors in the repo journal and 811 of 2,447 in the exe's**. `AnchorDetector._anchor_action` holds the action INSTANCE, not a frame window, and the first differing byte clears it for good — which the reload's own spawn supplies within 3 frames on 1,657 of the 1,686 anchors that see one, so anything longer than a blink behaves exactly as before. Every place that starts an anchor period latches, the console reset included. **The old journals cannot score this and `tools/measure_reset_stubs.py` says why** — `mario_acted` recorded the frame and never the action, so a walk resumed after the reload is indistinguishable after the fact from the anchor's own lingering byte; its question 3 is a strict upper bound, not a blast radius. The event carries `action` from this change on (inert), which makes the next round exact. **STILL OPEN, and it is the gravity half**: a reload that drops Mario into a fall or a slide enters a DIFFERENT action from the one latched, so it clears the latch and reads as the player acting. One instance in his journal (a CCM death respawn, journal ids 24768-24772, `mario_acted` 37 frames after the anchor); separating what the game did to Mario from what he did needs evidence task 0084's report did not carry, and the `action` field above is the head start for it |
 | game_reset | `detectors/lifecycle.py` |
 | Attempt anchors (practice_reset / state_loaded) | `detectors/anchors.py` — anchors carry mario_acted + paused_frames_before + acted_tracking + save_pending (post-star save-screen latch → segment echo) + frames_since_dialog (textbox/intro-cutscene recency → segment echo shape 5: a run never splits/resets on a textbox); emits the mario_acted event; docstring covers classification (incl. the pause-warp shape: menu warp with IGT already ~0 → anchor from position change + pause streak), pause streak, and VERIFY notes. **An in-course AREA LOAD fires a `practice_reset` too** — Usamune zeroes the overall IGT on an area warp exactly as it does on an L-reset, and nothing here can tell them apart: measured 2026-08-01 against a read-only backup of the live journal, **496 of 825 in-course area edges carry a co-frame `practice_reset`**. The segment matcher already treats involuntary anchors as echoes (door, save prompt, dialogue); the ATTEMPT projector does not, so entering the pyramid closed the run as a reset and opened a new one. **FIXED 2026-08-01 — the anchor payload's `area_load`, and the discriminator is the DESTINATION area**: a course always starts in area 1, so a zero paired (by recency, not co-frame equality) with an edge into a NON-1 area is Mario going deeper, while a reset's own reload walks the byte 1→2→1 and zeroes on the way BACK. Three readings that look right and are not — warp action (6% of entries vs 21% of resets, backwards), nearby `warp_entered` (6% vs 4%), door recency (0%) — plus the 424 back-to-1 anchors that are load TAILS rather than resets, are all in `anchors.py`'s docstring with their counts. `projection._dispatch` records no attempt for one and opens an attempt only if none is open. Forward-only: a historical anchor has no such key, so `.get()` is falsy and every old row replays unchanged (verified against a backup of the live journal, 3220 rows, zero differences). STILL OPEN: walking back OUT of a subarea zeroes the counter the same way and is indistinguishable from a reset by destination — the inert `warp_op` on every anchor is the evidence for that one. **An IN-LEVEL TELEPORTER fires one too, and `area_load` structurally cannot see it (2026-08-03, task 0082)** — the CCM broken bridge and the WDW corner warps relocate Mario inside the SAME area, so there is no area edge to pair the zero with, and *"we can't complete these stars in the practice tool"*. The discriminator is **how recently `ACT_TELEPORT_FADE_OUT` ran**, not what Mario's action reads now: measured on the three demonstrated warps (journal ids 23199/23200, 23218/23219, 23231/23232), the counter zeroes on the very frame Mario crosses fade-out → fade-in, 42 frames after the pad (`act_teleport_fade_out` calls `level_trigger_warp` at actionTimer 20, and the delayed warp takes 20 more), so recency is 1 frame; but the action byte still reads `ACT_TELEPORT_FADE_IN` **125 and 172 frames later**, across a menu warp into WDW, so an `action`-only test would have swallowed two real boundaries. A level edge clears the pairing the way it already clears `_last_area_edge` — the action is shared with cap-course warps that really do leave the level. Payload key `teleport`, read by `projection._dispatch` (no attempt) and by `segments._anchor_echo` shape (6) (invisible to the matcher). **NOT suppressed at the detector, and that is the interesting call**: `segments._zeroes_usamune_igt` reads every anchor to know when Usamune's counter last restarted, so a dropped anchor would leave a segment running through the warp banking a time measured from the warp. Population across all four journals: **4 in-level teleports, 4 bogus resets — 4/4, with no anchor of that shape from any other cause** |
 | Death detection | `detectors/death.py` — action-set edge + pending-warp pulse for void-outs (pit falls fire BEFORE level_changed; docstring carries why); closes open attempt as outcome "death". **CLOSED 2026-08-01 — measured, and it is CORRECT as it stands. Do not "fix" it.** This is the one time source that does not go through `igt_clock.py`: the payload carries `curr.igt_overall` RAW, while star/key/pipe times all add `DISPLAY_TICK`. The live gate (`uv run python tools/verify_death_clock.py`, behavioural not address — `USAMUNE_OVERALL` is already sampled, so no `VERIFY` row and `verify_addresses.py` is not the instrument) asked the human to pause and read the frozen timer. **Eight readings across three Usamune TIMER presets, unanimously the RAW counter.** So `DISPLAY_TICK` is a star-PATH calibration — it compensates for `_primary` back-computing to a touch frame, not for any offset in Usamune's display — and routing death through the clock would have put every historical death row 3 cs ABOVE what he saw, stars included (projection stamps a star's death attempt from this same payload). The same sitting retired a false alarm in the gate itself: `counter_tracked_cleanly` demanded the counter and the game frame move EXACTLY together and so cried PROBLEM on seven of eight healthy deaths, three of them for the counter moving MORE than the frame — impossible for a stall, and the tell that a 12-call non-atomic snapshot skews ±1 at each window end (`READ_SKEW_FRAMES`). Pure core pinned by `tests/test_verify_death_clock.py`, seven mutations proved |
 | Level-change detection | `detectors/level.py` — stateful: remembers last EMITTED level, journals establishing/corrective events (from may equal to) so projection-side level tracking never runs stale; closes open attempts as abandoned |
 | Dust tricks (dustless rollouts/jumps) | `detectors/dust.py` — TRICKS registry (one row per trick); docstring carries the decomp-verified landing-frame timing model; counts attach to attempts via projection.py |
 | Stage detection (quick-select banner context) | `detectors/stage.py` — broadcast-only `stage_changed {course_id, level, area, mode}` where `mode` ∈ stars (main course 1-15) / bowser_course (BitDW/BitFS/BitS = lvl 17/19/21 → course 16/17/18; reds star + no-reds pipe segment) / arena (Bowser 1/2/3 = lvl 30/33/34; single fight) / castle (Castle Inside subarea) / None; keys on the resolved CONTEXT so a BitDW→BitFS course swap and a lobby↔upstairs subarea switch both re-emit (offered targets differ); reuses `course_for_level` (addresses.py) |
-| area_changed / warp_entered / key_grabbed / spawned | `detectors/area.py` · `detectors/warp.py` · `detectors/key.py` · `detectors/spawn.py` — segment-primitive facts; area mirrors level.py's last-EMITTED discipline + stamps `from_transient` (source area not dwelt-in — every castle entry transits the lobby, so course exits read from=1 like a real lobby walk; area_enter's "coming from" rejects transients); key detector guards star_grab from misattributing Bowser keys AND carries Usamune IGT (via igt_clock) on fight-end grabs so a segment ending on the grand star matches Usamune's time, not a wall-frame delta. **warp.py carries it too since 2026-07-31** (live report: BitDW "No Reds" read 0'35"90, Usamune 0'35"96), so it is no longer stateless — it owns an `IgtClock` and observes every tick like key.py. The touch frame IS the observed edge frame: `ACT_DISAPPEARED` counts down `actionArg`, not `actionTimer` (decomp `act_disappeared`), so there is no action-timer backdating to be had the way star_grab/key have it. A pipe writes no Usamune RESULT, so the source is always `counter`; a star grabbed earlier in the same run leaves a stale result behind and `IgtClock._result_is_fresh` is what keeps it out (pinned by test_warp.py, not by an argument about how long a star dance takes). WHY the delta was wrong, and when the payload igt may be believed: `tracking/segments.py`'s rta_frames clause — the arithmetic and the 626-sample measurement live there |
+| area_changed / warp_entered / key_grabbed / spawned | `detectors/area.py` · `detectors/warp.py` · `detectors/key.py` · `detectors/spawn.py` — segment-primitive facts; area mirrors level.py's last-EMITTED discipline + stamps `from_transient` (source area not dwelt-in — every castle entry transits the lobby, so course exits read from=1 like a real lobby walk; area_enter's "coming from" rejects transients); key detector guards star_grab from misattributing Bowser keys AND carries Usamune IGT (via igt_clock) on fight-end grabs so a segment ending on the grand star matches Usamune's time, not a wall-frame delta. **warp.py carries it too since 2026-07-31** (live report: BitDW "No Reds" read 0'35"90, Usamune 0'35"96), so it is no longer stateless — it owns an `IgtClock` and observes every tick like key.py. The touch frame IS the observed edge frame: `ACT_DISAPPEARED` counts down `actionArg`, not `actionTimer` (decomp `act_disappeared`), so there is no action-timer backdating to be had the way star_grab/key have it. A pipe writes no Usamune RESULT, so the source is always `counter`; a star grabbed earlier in the same run leaves a stale result behind and `IgtClock._result_is_fresh` is what keeps it out (pinned by test_warp.py, not by an argument about how long a star dance takes). WHY the delta was wrong, and when the payload igt may be believed: `tracking/segments.py`'s rta_frames clause — the arithmetic and the 626-sample measurement live there. **warp.py became a HELD EMIT 2026-08-04 (task 0081) and moved to SECOND in the chain; since 2026-08-05 the hold is skipped entirely for a painting or portal, whose destination is already written at the touch frame** — full detail below: [The entrance touch names where it leads, on its own frame](#the-entrance-touch-names-where-it-leads-on-its-own-frame) |
 
 
 ## Star timing — the x-cam, the settle wait, and the evidence for both
@@ -222,6 +222,92 @@ area cannot separate them (the attempt side of anchors.py says the same about
 itself). It appears **0 times in those 875 grabs**, and the correction watch
 still covers it. That watch is unchanged and still runs to
 `RESULT_SETTLE_FRAMES`; it simply no longer bounds any publish.
+
+## The entrance touch names where it leads, on its own frame
+
+**Task 0081, 2026-08-04; corrected by measurement 2026-08-05.** `warp_entered`
+is the ENTRANCE TOUCH — the frame Mario collides with a painting, portal, hole
+or pipe. Measured over 140 castle entries in the repo journal, the level load
+follows it by a constant **77 frames** for a painting/portal (range 76-77) and
+**23** for a pipe (23-23). So a movement measured to the LOAD banks the fade as
+travelling; on `SSL → LLL` that fade is 60% of the recorded time.
+
+**This section said the opposite for one day, and that is the lesson.** It read
+"the destination is unknowable at the touch frame, from any address… **do not
+re-derive this by hunting the address**" — reasoned from decomp, never watched
+in RAM, and written down with an instruction not to check it. It cost three
+rounds of live reports, because the event was withheld until the level byte
+moved and the practice-log row therefore landed **2.9 s** after the portal (the
+journal and `data/ui_log.jsonl` split that: 2.57 s of hold, 0.33 s of websocket
+and render). His ruling, 2026-08-05: *"we should never be injecting that much
+artificial waiting into the system… if I can see the timer on my screen, we
+should be able to detect it as well; if you can't yet, you haven't found the
+right instrumentation."*
+
+**`tools/probe_warp_block.py`** is that instrumentation — a read-only trace of
+the whole warp block around each touch, safe to run beside a live session. 15
+consecutive castle entries settled it:
+
+* a **painting or portal** writes `sWarpDest` at or before the ACT_DISAPPEARED
+  frame. 13 of 13 named the destination at the touch, and 12 of those differed
+  from the previous warp's destination — a real write, not a stale read;
+* a **pipe** is the one genuinely delayed warp: `sDelayedWarpOp` pulses 0x04 a
+  frame or two in, counts 20 frames down, and `sWarpDest` is written then —
+  3 frames before the level byte moves. Both pipes read a STALE castle
+  destination at the touch.
+
+So `type != 0` is NOT a freshness test on its own: it also survives a completed
+painting warp (read live standing idle in DDD). The detector watches all four
+bytes of the struct and treats it as live only if it CHANGED within
+`FRESH_WINDOW_FRAMES` (4, slack for the poller, not for the game); the two
+pipes are the negative cases that prove it, and the first value seen after
+start-up is deliberately unstamped, because unstamped means hold.
+
+The destination matters at all because the castle basement alone hosts five
+exits (HMC, LLL, SSL, DDD, BitFS): an end condition reading only "a warp in the
+castle" lets walking into HMC record a false MIPS Clip.
+
+Publish order: the struct was just written (`to` = its level — the touch frame
+for a painting, touch+20 for a pipe) → a level edge (`to` = the new level) → an
+area edge (`to` = the unchanged level) → two bounds that guarantee nothing that
+fired before this can stop firing, each publishing `to: None` — a backward
+`global_timer` (console reset) and `HOLD_CAP_FRAMES` 240, which is also what
+covers an in-level teleporter (it relocates Mario inside his own area, so no
+edge ever arrives). `frame` and the igt trio stay the TOUCH's however late the
+publish lands.
+
+**`pending_warp_op` is not one of those bounds, and believing it could be cost
+a live round (2026-08-05).** A grace window on that flag looked like the precise
+way to resolve a teleporter promptly and published `to: None` on every real
+painting entry instead. The game clears `sDelayedWarpOp` when the delayed warp
+**initiates** and ~57 more frames of fade follow before the level byte moves:
+**the flag goes quiet in the MIDDLE of the wait, not at the end of it.** His
+journal, ids 25415/25371 — touch at 2519145, `level_changed 6 → 23` at 2519222,
+exactly 77 frames apart, and the event published around frame 30 of that. The
+regression test drives that real shape (high 20, quiet 57, edge at 77) and
+asserts silence on every frame of it.
+
+**It moved to SECOND in `main.build_detectors`, behind star_grab only.** On the
+release tick one poll carries a touch that happened 77 frames ago and the level
+change happening now; journaled the other way round the level change closes the
+attempt the touch belonged to and one movement records as two. Same rule and
+same reason as star_grab leading. Pinned by `tests/test_composition.py`.
+
+**Historical rows carry no `to`, and `projection.warp_destinations` recovers it
+on replay** — see `.claude/rules/tracking-storage.md`. Both obvious readings of
+such a row were measured over the real journal and both are wrong: refusing it
+vanishes 54 of 106 recorded segment successes, waving it through fabricates
+105.
+
+**OPEN, and the one thing this change does not know.** Of 202 castle→course
+entries after the detector existed, 128 carry a touch and the rest do not. Every
+touched arrival is unpaused, which is a clean one-way separation, but the
+no-touch entries cannot be split cleanly into menu warps (fine — a fabricated
+edge has no collision) and real entries the detector missed (not fine — those
+movements now record nothing). Depending on how wide the pause window is drawn
+the unexplained share is **between 2% and 21%**. Only a live sitting settles it:
+walk into the same painting several times and count. Until then, treat a
+movement that records nothing as possibly this rather than as a matcher bug.
 
 ## Recipes
 

@@ -469,3 +469,40 @@ def test_the_family_and_submode_memories_stay_two_separate_keys():
     assert 'const BOWSER_FAMILY_KEY = "sm64.bowserFamily";' in source
     assert source.count('const BOWSER_MODE_KEY') == 1
     assert source.count('const BOWSER_FAMILY_KEY') == 1
+
+
+# -- the arena keeps a pick made FOR HERE, and only that ---------------------
+#
+# Griffin, 2026-08-05, standing in the Bowser 3 arena with its only fight
+# unselected: "it seems to have worked for DDD, so that's weird... In any
+# case, if there's only one option, that's how it should look. Even if this is
+# our first, second, third time visiting this place."
+#
+# `ArenaRow` declined on `tgt.kind === "segment"` -- ANY segment target, from
+# anywhere -- so still holding "No Reds" (which starts in BitS) from earlier
+# play blocked the arena's own auto-select indefinitely. The rule that guard
+# exists for (2026-08-01) is narrower and is about a pick made for THIS place:
+# choosing "Bowser 1 -> WF" and then walking into the arena to run it must not
+# lose the pick. `heldStartsHere` states exactly that.
+
+def _arena_row_source() -> str:
+    """ArenaRow's own body. Scoped deliberately: `BowserCourseRow` carries a
+    byte-identical `tgt.kind === "segment"` line for its OWN remembered-family
+    re-target, which is a different rule nobody has reported, and a
+    whole-file scan would fail on that instead."""
+    source = strip_comments(BANNER.read_text(encoding="utf-8"))
+    start = source.index("function ArenaRow(")
+    rest = source[start + 1:]
+    return source[start:start + 1 + rest.index("function ")]
+
+
+def test_the_arena_declines_only_for_a_target_that_starts_here():
+    source = _arena_row_source()
+    assert "heldStartsHere" in source, (
+        "the arena's auto-select no longer asks whether the held target "
+        "belongs to this stage")
+    assert "if (heldStartsHere) return;" in source, (
+        "the auto-select must decline on that question, not on a broader one")
+    assert 'if (tgt.kind === "segment") return;' not in source, (
+        "declining on ANY segment target is the bug: a pick from another "
+        "place blocked this arena's only fight forever")

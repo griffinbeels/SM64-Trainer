@@ -9,6 +9,7 @@ import htm from "htm";
 import { useRankClimb } from "../rankclimb.js";
 import { capName, divisionDigit, rankAt } from "./caps.js";
 import { RankIcon } from "./rankicon.js";
+import { tightenedNextStepText } from "../nextstep.js";
 const html = htm.bind(h);
 
 // Mirrors ranks/classify.RANK_MODES keys+labels (keep in lockstep) in
@@ -108,9 +109,101 @@ function sentinelMsg(banner) {
 // wording built here because the reason is a fact about the CALL SITE's
 // data, and this component is deliberately ignorant of which two ladders
 // produced the banner it was handed.
+// `layout` is a LAYOUT VARIANT, not a second implementation: "row" (default,
+// today's single-line shape, byte-identical), "stacked" (the MARELO-shaped
+// compact form -- cap icon + name in a left column, the bar and the next-step
+// line in a right one, spec 2026-08-03-practice-log-entity-cards), and
+// "column" (the even-more-condensed form -- cap, bar, name, then the entity
+// noun in a small font, all in ONE column, spec 2026-08-04-rank-variants:
+// Griffin's own sketch, `[cap]` / `[progress_bar]` / `[rank_name]` / a small
+// "type" line, two of these side by side). Every line above this point in the
+// render -- the `useRankClimb` call, the climb plan, the animated values -- is
+// untouched by either: only the CSS class on the root selects which
+// arrangement of the SAME DOM parts applies (`.rank-banner-row` turns
+// `display: contents` under both `.rank-banner-stacked` and
+// `.rank-banner-column` in index.html, so its own children become direct grid
+// items alongside `.rank-progress-track`, its existing sibling -- no second
+// render tree to keep in sync with this one). "column" is what finally gives
+// the kicker (`label` -- "Strategy" or the entity noun) a home again: stacked
+// hides it outright since two side-by-side banners already say which is which
+// by position, but column's two banners sit side by side too, so it is drawn
+// small, under the name, as the "type" line his sketch asked for. The
+// alternative -- forking the JSX on `layout` -- is exactly what a user
+// requirement this spec exists to satisfy forbids: "I want the user to be
+// able to use this new design AND STILL be able to have all the animations
+// that they'd normally get," and a second tree has no reason to keep carrying
+// `--climb-reveal`/`climb.vars`/`is-climbing` unless whoever wrote it
+// remembered to copy them by hand.
+//
+// `showNext` is the caller's own answer to "is the reader actively
+// practising this entity right now" (practicelog.js's `LogCard`, from the
+// active target it already knows) -- ranks.js never reaches for a store to
+// ask. It gates only whether `.rank-banner-next` is RENDERED; every value
+// feeding its fade (`climb.reveal`, `mode`, `sentenceRef`/`priorRef`) is
+// still computed exactly as before, so the "may only change while invisible"
+// rule (`.claude/rules/ui-climb.md`) stays true whenever the line IS shown --
+// there is simply nothing to violate it when it is not.
+//
+// `iconSize` defaults to 24 -- every caller but the practice log's own
+// (practicelog.js, from logtuning.js's `rankIconSize`) keeps the exact pixel
+// size it always rendered at. It is a prop rather than a CSS var alone
+// because `RankIcon`'s own `size` is a JS NUMBER the Hat/Medal sprite draws
+// at (`rankicon.js`), not something a `--icon-size` custom property can
+// resize by itself -- that variable only ever reserved the wrapping
+// `.rank-icon-slot`'s wing-spill MARGIN (caps.js's `HAT_WING_SPILL_RATIO`),
+// which is why widening it alone (BUG 2, 2026-08-04 round) grew the reserved
+// space around the icon without growing the icon drawn inside it.
+//
+// `nextStepMode` is the practice log's own knob (logtuning.js's
+// `nextStep{Narrow,Wide}{Two,One}Ladders`, resolved once per section by
+// practicelog.js and handed down here as a plain string) for HOW the
+// next-rank timesave reads, layered on top of `showNext` (which still
+// answers WHETHER it may render at all -- unchanged, and still the only
+// thing every OTHER caller controls). Every value but the default is scoped
+// to the log card; no other caller passes this prop, so nothing about the
+// objective card's own banner changes.
+//
+//   "classic"  today's wording everywhere else: "→ Waluigi 3 · 0.22s to
+//              rank up" -- the shipped default for every caller that does
+//              not pass this prop, byte-identical to before this landed.
+//   "always"   the log card's own tightened wording Griffin asked for --
+//              "no need to say 'Waluigi 4 -> Waluigi 3'... What we DO need
+//              is an indicator of the timesave" -- "0.22s to go", no arrow,
+//              no destination rank.
+//   "compact"  the same number with even the "to go" suffix dropped --
+//              "0.22s" alone, the tightest reading that is still always on.
+//   "hidden"   `.rank-banner-next` never renders, no hover affordance.
+//   "hover"    `.rank-banner-next` never renders either, but hovering
+//              `.rank-progress-track` blinks its own UNFILLED portion and
+//              reveals a centred "XX.YYs to go" popup above it -- see the
+//              render below and index.html's own "Time to go" section for
+//              the mechanics, and the note on `--next-fill-pct` below for
+//              why this is suppressed outright during a climb.
+
+// The wording for one already-resolved {label, gap} pair, mode-aware. ONE
+// function so "may only change while invisible" (ui-climb.md) cannot regress
+// by drifting between branches -- whichever of `shown`'s three sources fed
+// `nextLabel`/`gap` below, this is the only place that turns them into text,
+// exactly the way the pre-existing inline JSX used to before this had a mode
+// to also account for.
+function nextStepWords(mode, nextLabel, gap) {
+  if (mode === "classic") {
+    return nextLabel
+      ? html`→ <b>${nextLabel}</b>${gap ? ` · ${gap}s to rank up` : ""}`
+      : "top rank";
+  }
+  // "always"/"compact": the destination rank never prints, by design -- see
+  // this function's own caller for the user's words. The rest of the logic
+  // (including the mid-climb withhold) lives in nextstep.js, import-free and
+  // node-tested (tests/test_ui_nextstep.py), since none of it needs `html`.
+  return tightenedNextStepText(mode, nextLabel, gap);
+}
+
 export function RankBanner({ label, banner, hint = null, identity = null,
                              atFloor: atFloorProp = false,
-                             lane = null, order = 0, replayKey = null }) {
+                             lane = null, order = 0, replayKey = null,
+                             layout = "row", showNext = true, iconSize = 24,
+                             nextStepMode = "classic" }) {
   const ranked = !!(banner && banner.rank);
   // Called unconditionally (rules of hooks) even on the sentinel/empty path
   // below — `null` passes straight through with no animation, which is what
@@ -290,8 +383,33 @@ export function RankBanner({ label, banner, hint = null, identity = null,
   // step the bar is moving on, so the fade and the bar cannot drift apart.
   // ranks.js used to pin it to 0 for the whole climb and let a settle-triggered
   // celebration wipe it in; that is what could never be in sync.
-  const vars = { ...climb.vars, "--climb-reveal": climb.reveal };
-  return html`<div class=${`rank-banner${climb.climbing ? " is-climbing" : ""}`} style=${vars}>
+  // `--next-fill-pct` positions the "hover" mode's popup/blink purely in CSS
+  // (index.html's own "Time to go" section) -- the midpoint of the UNFILLED
+  // portion is `(fillPct + 100) / 2`, computed there via calc() off this one
+  // var rather than a second JS-computed offset, so the popup tracks the
+  // exact same `climb.bar` the fill `<i>` beside it draws from. It is only
+  // ever LOOKED AT while `.rank-banner-nextstep-hover` is present AND
+  // `.is-climbing` is absent (see that section's own comment for why a climb
+  // suppresses hover outright), so writing it unconditionally here costs
+  // nothing when the mode is something else.
+  const vars = { ...climb.vars, "--climb-reveal": climb.reveal,
+    "--next-fill-pct": `${fillPct}%` };
+  const showInlineNext = showNext
+    && (nextStepMode === "classic" || nextStepMode === "always" || nextStepMode === "compact");
+  // Only offered on a REAL, SETTLED gap -- `gap == null` covers both "top
+  // rank" (nothing to save toward) and the mid-climb withhold (the exact
+  // value this whole hover surface would otherwise be showing while it is
+  // still changing, which is the one thing ui-climb.md's "may only change
+  // while invisible" rule forbids). `.is-climbing` on the root (below) is the
+  // belt to this suspenders: it also blocks the CSS hover affordance itself
+  // for the entire leaving/climbing/arriving stretch, including the rare
+  // frame where `gap` is still the stale pre-climb value (the "leaving"
+  // phase briefly keeps showing it before it clears).
+  const showHoverNext = showNext && nextStepMode === "hover" && nextLabel && gap != null;
+  return html`<div class=${`rank-banner${climb.climbing ? " is-climbing" : ""}${
+      layout === "stacked" ? " rank-banner-stacked" : ""}${
+      layout === "column" ? " rank-banner-column" : ""}${
+      nextStepMode === "hover" ? " rank-banner-nextstep-hover" : ""}`} style=${vars}>
     <div class="rank-banner-row">
       <!-- At the floor default the sentinel's own wording ("no PB on this
            strategy yet") is the only thing lost by showing Capless 5, so it
@@ -312,7 +430,7 @@ export function RankBanner({ label, banner, hint = null, identity = null,
            row's real painted content stops overlapping, without widening
            the whole row's gap for every OTHER pair of children too. -->
       <span class="rank-icon-slot rank-banner-icon"><${RankIcon} ...${climb.icon}
-          tier=${climb.tier} division=${climb.division} size=${24} /></span>
+          tier=${climb.tier} division=${climb.division} size=${iconSize} /></span>
       <b class="rank-banner-name">${capName(climb.tier).toUpperCase()}${climb.division ? ` ${divisionDigit(climb.division)}` : ""}</b>
       ${basis && html`<span class="meta rank-banner-basis" title=${basisTitle}>${basisText}</span>`}
       <!-- "X.XXs to rank up", not a bare "−0.22s" (user, 2026-07-27) -- the
@@ -323,12 +441,30 @@ export function RankBanner({ label, banner, hint = null, identity = null,
            duration: a sweep's length scales with the distance travelled and
            legibility does not, so the line's clock has a floor of its own. It
            fades in EVERY case, including a climb that gains no rank, where the
-           one bar step carries the whole exchange. -->
-      <span class="meta rank-banner-next">${nextLabel
-        ? html`→ <b>${nextLabel}</b>${gap ? ` · ${gap}s to rank up` : ""}` : "top rank"}</span>
+           one bar step carries the whole exchange.
+
+           showNext is THIS branch's addition and gates the whole line: the
+           user asked for it to be hidden unless he is actively practising that
+           entity, because at a narrow pane it is the least valuable thing
+           competing for the row. Gating the RENDER rather than the opacity is
+           deliberate -- the climb-reveal variable still drives the fade
+           whenever the line is present, so the rule above is untouched in
+           every case where it can be observed at all. -->
+      ${showInlineNext && html`<span class="meta rank-banner-next">${
+        nextStepWords(nextStepMode, nextLabel, gap)}</span>`}
     </div>
     <div class="rank-progress-track" title=${trackTitle}>
       <i style=${`width:${fillPct}%`}></i>
+      ${/* "hover" mode's whole surface: index.html's own ":hover" rule blinks
+           this element's UNFILLED half (from --next-fill-pct to the far edge)
+           and fades this popup in, centred over that same half -- both
+           suppressed while `.is-climbing` sits on the root above, which is
+           what keeps a resting hover from fighting a climb that starts while
+           the pointer happens to be resting here (see this component's own
+           header comment on nextStepMode and the CSS section's comment for
+           the full rule). Rendered even off-hover -- CSS opacity is what
+           reveals it, so mouseenter/mouseleave never need a JS listener. */""}
+      ${showHoverNext && html`<span class="rank-next-popup">${gap}s to go</span>`}
     </div>
   </div>`;
 }

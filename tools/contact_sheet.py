@@ -13,8 +13,8 @@ both obvious on sight and invisible to every assertion:
 So take a sheet while you are still implementing, not after.
 
     uv run python tools/contact_sheet.py                       # the whole page
-    uv run python tools/contact_sheet.py .objective-card       # one card
-    uv run python tools/contact_sheet.py .objective-card --collapsed
+    uv run python tools/contact_sheet.py .log-card              # one card
+    uv run python tools/contact_sheet.py .log-card --collapsed
 
 Writes a PNG and prints its path. Widths come from the project's own supported
 range, so this and the gate can never be looking at different sizes.

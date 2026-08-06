@@ -5,7 +5,7 @@ project would recognise. When we talk about changing something, these are the
 names we use for it.
 
 **A term earns a row when this project is what gives it meaning.** Backpressure
-and idempotency belong in a textbook; MARELO, the objective card and the caveat
+and idempotency belong in a textbook; MARELO, the practice log and the caveat
 mark exist only here, so only they are written down here.
 
 Two rules make this an artifact rather than a document, and
@@ -31,7 +31,7 @@ The one thing you are practicing right now — either a [[star]] or a
 against and which [[personal best]] to compare with.
 
 - **Lives** — the target rules (`src/sm64_events/tracking/practicable.py`)
-  → the [[selector]] and the [[objective card]]
+  → the [[selector]] and the [[practice log]]
 
 ### Star
 
@@ -75,7 +75,9 @@ leaving the area.
 
 The moment that opens an [[attempt]] — a practice [[reset]] or a state load. The
 [[projector]] discards an anchor you never moved after, so an idle [[reset]]
-never counts against your [[failure rate]].
+never counts against your [[failure rate]]. The move the anchor INTERRUPTED
+belongs to the [[attempt]] it ended, so the anchor holds that action back until
+you leave it.
 
 - **Lives** — the anchor detector (`src/sm64_events/detectors/anchors.py`)
 
@@ -93,7 +95,7 @@ trainer keeps personal bests separately from the [[journal]], so clearing
 history never erases one.
 
 - **Lives** — the store (`src/sm64_events/storage/db.py`)
-  → the PB tag on the [[objective card]]
+  → the PB tag on the [[practice log]]
 
 ### Strategy
 
@@ -137,7 +139,7 @@ time per step and rolls repeated tries up into the step they belong to.
 The [[tier]] one time earns on one [[ladder]].
 
 - **Lives** — the classifier (`src/sm64_events/ranks/classify.py`)
-  → the [[rank icon]] on the [[objective card]]
+  → the [[rank icon]] on the [[practice log]]
 - **Not** — a [[standard]]. A [[standard]] sets the threshold; a rank is what
   your time earns against it.
 
@@ -180,16 +182,16 @@ Your [[rank]] on the [[ladder]] of the [[strategy]] you are actually playing —
 "how well do I play this strat".
 
 - **Lives** — the scorer (`src/sm64_events/ranks/scoring.py`)
-  → the left banner on the [[objective card]]
+  → the left banner on the [[practice log]]
 
 ### Entity rank
 
 Your [[rank]] on the [[best-possible ladder]] — "how close is this to the
 fastest this [[target]] can go". When it agrees with your [[strategy rank]] the
-[[objective card]] draws one banner carrying both names instead of two.
+[[practice log]] draws one banner carrying both names instead of two.
 
 - **Lives** — the scorer (`src/sm64_events/ranks/scoring.py`)
-  → the right banner on the [[objective card]]
+  → the right banner on the [[practice log]]
 
 ### MARELO
 
@@ -278,6 +280,18 @@ x-cam starts rather than when the game finishes writing its own result.
 - **Lives** — the star-grab detector
   (`src/sm64_events/detectors/star_grab.py`)
 
+### Entrance touch
+
+The [[frame]] Mario collides with the painting, portal, hole or pipe that
+leads into a course. The game loads that course 77 [[frame]]s later — 23 at a
+pipe — so a [[segment]] measured to the load counts the fade as travelling.
+The trainer ends a movement at the touch instead.
+
+- **Lives** — the warp detector (`src/sm64_events/detectors/warp.py`)
+- **Not** — the moment the course loads. A painting or portal records where it
+  leads as Mario touches it, so the [[detector]] publishes on that same
+  [[frame]]; only a pipe makes it wait.
+
 ### Death
 
 Mario dying, which closes the open [[attempt]] with a losing [[outcome]].
@@ -295,7 +309,9 @@ Usamune restarting the game or loading a save state. A reset closes whatever
 
 One sitting of practice. Sessions group [[attempt]]s for the [[practice log]]
 and for scoping a [[progress graph]]; you can reopen one and keep appending to
-it.
+it. A sitting that recorded no [[attempt]] was not a session, so the trainer
+forgets it at the next startup — its [[journal]] rows stay, because they can
+still govern other sessions' [[attempt]]s.
 
 - **Lives** — the tracker service (`src/sm64_events/tracking/service.py`)
 
@@ -359,8 +375,8 @@ A person holding at least one [[entry]] in the [[Ultimate Sheet]].
 
 ### Practice tab
 
-The screen you keep open while you play: the [[selector]], the [[objective
-card]] for your [[target]], and the [[practice log]].
+The screen you keep open while you play: the [[selector]] and the
+[[practice log]].
 
 - **Lives** — the practice page
   (`src/sm64_events/ui/components/practice.js`)
@@ -391,14 +407,6 @@ you pick looks like what you get.
 - **Lives** — the cell
   (`src/sm64_events/ui/components/practicecell.js`)
 
-### Objective card
-
-The panel for your current [[target]]: its [[personal best]], its [[strategy
-rank]] and [[entity rank]], its [[standards ladder]] and its [[caveat mark]].
-
-- **Lives** — the practice page
-  (`src/sm64_events/ui/components/practice.js`)
-
 ### Standards ladder
 
 The table of every [[standard]] for one [[target]], each row linking to the
@@ -419,7 +427,7 @@ The icon owns only the drawing; which [[rank]] it shows, and the name that
 ### Caveat mark
 
 The badge that says a saved time carries a [[caveat]]. One module owns the
-wording for every surface, so the [[objective card]] and the [[practice cell]]
+wording for every surface, so the [[practice log]] and the [[practice cell]]
 can never disagree about what a time means.
 
 - **Lives** — the caveat vocabulary
@@ -435,11 +443,18 @@ The bar carrying your [[MARELO]] [[tier]] and [[division]] at the top of the
 
 ### Practice log
 
-The list of your recent [[attempt]]s at the bottom of the [[Practice tab]], one
-row each.
+The [[Practice tab]]'s history, newest first, EXCEPT the [[target]] you are
+practicing right now, which leads regardless of its own recency: one card per
+[[target]] you have earned one for (a recorded [[attempt]], or you still
+stand where you set it), each carrying its own [[personal best]], its
+[[strategy rank]] and [[entity rank]], its [[standards ladder]], its
+[[caveat mark]] and its own [[attempt]]s. It highlights the card for whatever
+you are practicing right now, and a Bowser course's Reds/Pipe pair never
+shows both halves at once — only the one matching how you are currently
+grading it.
 
-- **Lives** — the practice page
-  (`src/sm64_events/ui/components/practice.js`)
+- **Lives** — the log
+  (`src/sm64_events/ui/components/practicelog.js`)
 
 ### Progress graph
 

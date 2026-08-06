@@ -204,3 +204,19 @@ export const hasStandardsFor = (view, entityKey) => {
   if (_standardsSrc !== eks) { _standardsSrc = eks; _standardsSet = new Set(eks); }
   return _standardsSet.has(entityKey);
 };
+
+// The stage as a comparable string.
+//
+// It lives HERE rather than beside its one consumer because reading the
+// stage payload directly is how a second surface starts deciding for itself
+// what counts as being somewhere (the same rule `practiceMode` exists for,
+// owned by tests/test_single_source.py).
+//
+// Every field is in the key deliberately: detectors/stage.py only broadcasts
+// `stage_changed` when the resolved CONTEXT changes, so `t.stage` is replaced
+// exactly when the quick-select row would offer something different. That
+// makes "this key moved" and "the selector changed" the same statement.
+export function stageKey(stage) {
+  if (!stage) return null;
+  return `${stage.level ?? ""}:${stage.area ?? ""}:${stage.course_id ?? ""}`;
+}

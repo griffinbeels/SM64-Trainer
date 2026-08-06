@@ -204,7 +204,9 @@ def test_first_nonpassive_action_emits_mario_acted_event():
     events = d.process(snap(1000, igt=100), snap(1001, igt=101, action=ACT_WALKING))
     assert [e.type for e in events] == ["mario_acted"]
     assert events[0].frame == 1001
-    assert events[0].payload == {}
+    # `action` is inert evidence (task 0084): nothing reads it, and without it
+    # the journal can say WHEN Mario first acted but never what he was doing.
+    assert events[0].payload == {"action": ACT_WALKING}
 
 
 def test_mario_acted_emitted_once_per_anchor_period():
@@ -240,11 +242,17 @@ def test_death_action_does_not_emit_mario_acted_or_set_acted():
 
 def test_action_after_swallowed_anchor_tick_action_still_emits_event():
     # a non-passive action ON the anchor tick is swallowed and must not
-    # consume the once-per-period mario_acted budget
+    # consume the once-per-period mario_acted budget.
+    #
+    # The follow-up action is DELIBERATELY a different one (task 0084): the
+    # swallow holds the interrupted action until Mario leaves it, so repeating
+    # the same walk on the next frame is still the anchor's own byte and no
+    # longer counts. That case has its own test below; this one is about the
+    # budget, which a later action must still be able to spend.
     d = AnchorDetector()
     events = d.process(snap(1000, igt=500), snap(1001, igt=0, action=ACT_WALKING))
     assert [e.type for e in events] == ["practice_reset"]
-    events = d.process(snap(1001, igt=1), snap(1002, igt=2, action=ACT_WALKING))
+    events = d.process(snap(1001, igt=1), snap(1002, igt=2, action=0x03000880))
     assert [e.type for e in events] == ["mario_acted"]
 
 
@@ -860,3 +868,88 @@ def test_real_play_after_an_exit_still_counts_as_acting():
         snap(17000, igt=0, action=ACT_WALKING, level=24, area=1)])
     [anchor] = [e for e in events if e.type == "practice_reset"]
     assert anchor.payload["mario_acted"] is True
+
+
+# ---------------------------------------------------------------------------
+# The action a reset INTERRUPTED belongs to the attempt that just ended
+# (task 0084, "Subarea Double Reset"). The module docstring has always said the
+# action transition ON the anchor tick is swallowed; it swallowed one POLL,
+# which is not the same thing. A 60 Hz poll of a 30 fps game reads the same
+# game frame twice, and the reload that follows a reset does not reach Mario's
+# action byte for another frame or two — so the very action the anchor just
+# swallowed was re-read on the next poll and marked the FRESH attempt as acted.
+#
+# Measured over both journals: the first `mario_acted` after an anchor lands on
+# the anchor's own frame 2,130 times and one frame later 484 more, against 35
+# in the whole 2-6 band and 2,370 at 7+ frames. Nothing sits in between, which
+# is what a lingering byte looks like and what real play does not.
+# ---------------------------------------------------------------------------
+
+ACT_JUMP = 0x03000880          # non-passive, and NOT the action being latched
+ACT_SPAWN_NO_SPIN_AIRBORNE = 0x00001932
+
+
+def test_the_interrupted_action_does_not_act_for_the_next_attempt():
+    """Same game frame, polled twice, action unchanged: the second poll is
+    re-reading what the anchor already swallowed."""
+    detector = AnchorDetector()
+    events = run(detector, [
+        snap(1000, igt=400, action=ACT_WALKING),
+        snap(1001, igt=0, action=ACT_WALKING),      # the reset
+        snap(1001, igt=0, action=ACT_WALKING),      # SAME frame, polled again
+        snap(1002, igt=1, action=ACT_WALKING)])     # the byte still lingers
+    assert [e.type for e in events] == ["practice_reset"]
+
+
+def test_the_next_reset_reads_the_stub_attempt_as_unacted():
+    """The consequence the human sees: with the lingering action counted, the
+    warp that follows banks a second reset row for an attempt nobody made."""
+    events = run(AnchorDetector(), [
+        snap(999, igt=398, action=ACT_IDLE),        # throwaway prev (run()'s trap)
+        snap(1000, igt=400, action=ACT_WALKING),    # the attempt he really ran
+        snap(1001, igt=0, action=ACT_WALKING),      # reset #1, inside a subarea
+        snap(1001, igt=0, action=ACT_WALKING),      # the lingering byte
+        snap(1002, igt=1, action=ACT_SPAWN_NO_SPIN_AIRBORNE),
+        snap(1060, igt=20, action=ACT_IDLE),
+        snap(1061, igt=0, action=ACT_IDLE)])        # reset #2, the menu warp
+    first, second = [e for e in events if e.type == "practice_reset"]
+    assert first.payload["mario_acted"] is True     # the attempt he really ran
+    assert second.payload["mario_acted"] is False   # the stub between them
+
+
+def test_leaving_the_interrupted_action_and_returning_to_it_still_acts():
+    """The latch is the action INSTANCE, not the action id: once Mario has
+    been anywhere else, walking again is walking again."""
+    events = run(AnchorDetector(), [
+        snap(1000, igt=400, action=ACT_WALKING),
+        snap(1001, igt=0, action=ACT_WALKING),      # the reset
+        snap(1002, igt=1, action=ACT_SPAWN_NO_SPIN_AIRBORNE),
+        snap(1003, igt=2, action=ACT_WALKING),
+        snap(1004, igt=0, action=ACT_WALKING)])
+    assert "mario_acted" in [e.type for e in events]
+    assert [e for e in events
+            if e.type == "practice_reset"][-1].payload["mario_acted"] is True
+
+
+def test_a_different_action_on_the_next_poll_acts_immediately():
+    """Only the interrupted action is held back. Anything else Mario does is
+    the player doing something."""
+    events = run(AnchorDetector(), [
+        snap(1000, igt=400, action=ACT_WALKING),
+        snap(1001, igt=0, action=ACT_WALKING),      # the reset
+        snap(1001, igt=0, action=ACT_JUMP)])        # not what was swallowed
+    assert [e.type for e in events] == ["practice_reset", "mario_acted"]
+
+
+def test_a_console_reset_holds_its_own_action_back_too():
+    """`_update_pause_streak`'s boot-range branch starts an anchor period the
+    same way a classified anchor does, so it latches the same way."""
+    detector = AnchorDetector()
+    detector.process(snap(1000, igt=100), snap(1001, igt=101, action=ACT_WALKING))
+    assert detector.process(snap(1001, igt=101),
+                            snap(50, igt=5, action=ACT_WALKING)) == []
+    assert detector.process(snap(50, igt=5, action=ACT_WALKING),
+                            snap(51, igt=6, action=ACT_WALKING)) == []
+    events = detector.process(snap(51, igt=6, action=ACT_WALKING),
+                              snap(52, igt=7, action=ACT_JUMP))
+    assert [e.type for e in events] == ["mario_acted"]

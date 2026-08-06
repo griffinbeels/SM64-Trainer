@@ -635,11 +635,16 @@ def lvl(frame, from_, to):
 
 
 def lblj_success(svc, t0=1000, rta=85):
-    """Arm the seeded LBLJ segment (16->6) and close it (6->17) `rta`
-    frames later. Side effect (seed shape): the closing 6->17 edge also
-    arms BitDW Pipe Entry."""
+    """Arm the seeded LBLJ segment (16->6) and close it `rta` frames later on
+    the ENTRANCE TOUCH -- the frame Mario hits the BitDW hole, 23 frames
+    before the level loads (task 0081, 2026-08-04). The level edge still
+    follows, because it does in the game and because it is what arms BitDW
+    Pipe Entry (side effect of the seed shape, relied on below)."""
     asyncio.run(svc.publish(lvl(t0, 16, 6)))
-    asyncio.run(svc.publish(lvl(t0 + rta, 6, 17)))
+    asyncio.run(svc.publish(ev("warp_entered", t0 + rta,
+                               {"level": 6, "area": 1, "to": 17,
+                                "igt_frames": rta, "igt_source": "counter"})))
+    asyncio.run(svc.publish(lvl(t0 + rta + 23, 6, 17)))
 
 
 def seg_section(view, seg_id):
@@ -712,7 +717,8 @@ def test_segment_section_armed_flag_tracks_live_projector(tmp_path):
     asyncio.run(svc.publish(lvl(1000, 16, 6)))          # arms LBLJ
     view = build_session_view(db, svc, clock="igt")
     assert seg_section(view, 1)["armed"] is True
-    asyncio.run(svc.publish(lvl(1085, 6, 17)))          # closes it
+    asyncio.run(svc.publish(ev("warp_entered", 1085,                # closes it
+                               {"level": 6, "area": 1, "to": 17})))
     view2 = build_session_view(db, svc, clock="igt")
     sec = seg_section(view2, 1)
     assert sec["armed"] is False
@@ -738,14 +744,18 @@ def test_segment_section_armed_detail_reports_progress_and_waiting_for(tmp_path)
     assert detail["progress"] == 0 and detail["total"] == 0
     assert detail["start_frame"] == 1000
     assert detail["deadline_frame"] is None             # strict: no budget
-    assert detail["waiting_for"] == "Enter Bowser in the Dark World"
+    # Card voice moved with the condition (task 0081): the load reads "Enter
+    # Bowser in the Dark World", the TOUCH reads this -- deliberately
+    # different words, so the builder cannot offer two rows that look alike.
+    assert detail["waiting_for"] == "Touch the Bowser in the Dark World entrance"
     # 2026-08-03: the WHOLE route ships beside the one step you are on, and
     # `progress` indexes straight into it -- so a step list one shorter than
     # the counter above it would leave the last chip unreachable, which is
     # the shape a client-side re-derivation would get wrong.
     assert detail["steps"] == ["BitDW"]
     assert len(detail["steps"]) == detail["total"] + 1
-    asyncio.run(svc.publish(lvl(1085, 6, 17)))          # closes it
+    asyncio.run(svc.publish(ev("warp_entered", 1085,    # closes it
+                               {"level": 6, "area": 1, "to": 17})))
     view2 = build_session_view(db, svc, clock="igt")
     assert seg_section(view2, 1)["armed_detail"] is None
 
@@ -756,6 +766,16 @@ def test_segment_section_arms_ambiently_flag(tmp_path):
     # CASTLE interior (no course) -- false. A def shaped like reds->pipe /
     # the legacy pipe-entry trio (course-entry + attempt_anchor into a real
     # course) -- true.
+    #
+    # The pipe stand-in is TARGETED here (2026-08-05): an ambient arm with
+    # nothing chosen now gets no section at all (see the "no card for an
+    # ambient arm" tests below), so this test -- about the FLAG's value, not
+    # about whether arming alone publishes a card -- has to make it the live
+    # target to have a section to read the flag off. LBLJ still gets its
+    # section purely from being armed (never ambient), unchanged. Targeted
+    # AFTER closing LBLJ, not before: a segment SUCCESS auto-follows the live
+    # target onto itself (projection.py), so picking pipe_id first would
+    # just have LBLJ's own completion steal it straight back.
     db, svc = make(tmp_path)
     pipe_id = asyncio.run(svc.create_segment({
         "name": "BitDW Pipe Entry stand-in",
@@ -763,7 +783,10 @@ def test_segment_section_arms_ambiently_flag(tmp_path):
                           {"type": "attempt_anchor", "level": 17}],
         "end_triggers": [{"type": "warp_entered", "level": 17}]}))
     asyncio.run(svc.publish(lvl(1000, 16, 6)))          # arms LBLJ (id 1)
-    asyncio.run(svc.publish(lvl(1000, 6, 17)))          # arms the pipe stand-in
+    asyncio.run(svc.publish(ev("warp_entered", 1085,    # closes LBLJ
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.set_target_segment(pipe_id))
+    asyncio.run(svc.publish(lvl(1108, 6, 17)))          # arms the pipe stand-in
     view = build_session_view(db, svc, clock="igt")
     assert seg_section(view, 1)["arms_ambiently"] is False
     assert seg_section(view, pipe_id)["arms_ambiently"] is True
@@ -774,14 +797,20 @@ def test_segment_sections_order_by_journal_recency_not_raw_id(tmp_path):
     # raw-sorts above a lower one; recency must compare journal_id(...).
     db, svc = make(tmp_path)
     asyncio.run(svc.publish(lvl(1000, 7, 6)))     # arms MIPS Clip (def 2)
-    asyncio.run(svc.publish(lvl(1100, 6, 23)))    # MIPS success
+    asyncio.run(svc.publish(ev("warp_entered", 1100,          # MIPS success
+                               {"level": 6, "area": 3, "to": 23})))
+    asyncio.run(svc.publish(lvl(1177, 6, 23)))
     asyncio.run(svc.publish(lvl(1200, 23, 16)))
     asyncio.run(svc.publish(lvl(1300, 16, 6)))    # arms LBLJ (def 1)
-    asyncio.run(svc.publish(lvl(1400, 6, 17)))    # LBLJ success — newest
+    asyncio.run(svc.publish(ev("warp_entered", 1400,   # LBLJ success — newest
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(lvl(1423, 6, 17)))
     view = build_session_view(db, svc, clock="igt")
-    # the closing 6->17 edge also ARMS BitDW Pipe Entry (def 5): its pinned
-    # fresh section (no attempts, recency -1) sorts last.
-    assert [s["segment_id"] for s in view["segments"]] == [1, 2, 5]
+    # the closing 6->17 edge also ARMS BitDW Pipe Entry (def 5) ambiently,
+    # but nothing chose it -- an ambient-and-unchosen arm gets NO section
+    # since 2026-08-05 (see the "no card for an ambient arm" tests below),
+    # so def 5 is correctly absent here rather than pinned fresh.
+    assert [s["segment_id"] for s in view["segments"]] == [1, 2]
 
 
 def test_sections_carry_cross_kind_recency_for_interleaving(tmp_path):
@@ -817,13 +846,74 @@ def test_unassigned_excludes_segment_attempts(tmp_path):
 
 def test_armed_segment_without_attempts_or_target_gets_section(tmp_path):
     # armed = "active now": pinned like the target, so the armed badge has
-    # somewhere to render even before the first attempt closes.
+    # somewhere to render even before the first attempt closes. LBLJ (NOT
+    # ambient -- test_segment_section_arms_ambiently_flag pins this) is the
+    # right fixture for this claim: its arm is a deliberate action (leaving
+    # Whomp's Fortress into the castle), unlike BitDW Pipe Entry below, which
+    # used to stand in here before 2026-08-05 and is now the exact shape this
+    # rule must NOT apply to.
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(lvl(1000, 16, 6)))   # arms LBLJ only
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, 1)
+    assert sec["armed"] is True and sec["broken"] is False
+    assert sec["attempts"] == [] and sec["timeline"] is None
+
+
+def test_ambiently_armed_segment_without_target_gets_no_section(tmp_path):
+    # THE fix (live report 2026-08-05): "when we first start, nothing should
+    # be appearing at all, unless we have something selected." BitDW Pipe
+    # Entry (def 5, seeded) arms purely by walking into BitDW -- no gesture
+    # from the player -- so unlike LBLJ above it must publish NO section at
+    # all while unchosen, the same premise the sibling projection.py fix
+    # (_untargeted_ambient_failure) already applies to the phantom ROW this
+    # same engine used to also duplicate.
     db, svc = make(tmp_path)
     asyncio.run(svc.publish(lvl(1000, 6, 17)))   # arms BitDW Pipe Entry only
     view = build_session_view(db, svc, clock="igt")
-    sec = seg_section(view, 5)
-    assert sec["armed"] is True and sec["broken"] is False
-    assert sec["attempts"] == [] and sec["timeline"] is None
+    assert view["segments"] == []
+
+
+def test_ambiently_armed_segment_becomes_targeted_still_gets_section(tmp_path):
+    # The other half of the same rule: choosing the ambiently-armed def keeps
+    # its card, with its live timer visible -- "setting a target immediately
+    # surfaces its lifetime history" is not this bug.
+    db, svc = make(tmp_path)
+    bitdw_pipe = next(d["id"] for d in db.segment_defs()
+                      if d["name"] == "BitDW Pipe Entry")
+    asyncio.run(svc.set_target_segment(bitdw_pipe))
+    asyncio.run(svc.publish(lvl(1000, 6, 17)))   # arms it
+    view = build_session_view(db, svc, clock="igt")
+    sec = seg_section(view, bitdw_pipe)
+    assert sec["armed"] is True and sec["attempts"] == []
+
+
+def test_two_ambient_defs_off_one_course_entry_only_the_chosen_one_gets_a_section(tmp_path):
+    # THE sharpest discrimination test the fix rests on (live report
+    # 2026-08-05, his own screenshot): standing in Bowser in the Dark World
+    # with "8 Red Coins (Pipe)" explicitly selected, the practice log ALSO
+    # showed an empty, unchosen "No Reds" card -- both defs arm off the
+    # IDENTICAL course entry, so a per-COURSE "something here is chosen"
+    # predicate would keep both (his exact words: "the no reds card
+    # appeared immediately, but shouldn't because pipe was selected").
+    # Only a per-DEFINITION check gets this right. Reuses the real seeded
+    # "BitDW Pipe Entry" (legacy, left UNCHOSEN) beside a hand-built
+    # reds->pipe-shaped stand-in (CHOSEN) -- same ambient shape
+    # test_segment_section_arms_ambiently_flag already proves the flag for.
+    db, svc = make(tmp_path)
+    no_reds_id = next(d["id"] for d in db.segment_defs()
+                      if d["name"] == "BitDW Pipe Entry")
+    pipe_id = asyncio.run(svc.create_segment({
+        "name": "8 Red Coins (Pipe) stand-in",
+        "start_triggers": [{"type": "level_enter", "to": 17},
+                          {"type": "attempt_anchor", "level": 17}],
+        "end_triggers": [{"type": "warp_entered", "level": 17}]}))
+    asyncio.run(svc.set_target_segment(pipe_id))    # HE chose this one
+    asyncio.run(svc.publish(lvl(1108, 6, 17)))      # arms BOTH ambiently
+    view = build_session_view(db, svc, clock="igt")
+    ids = {s["segment_id"] for s in view["segments"]}
+    assert pipe_id in ids and no_reds_id not in ids
+    assert seg_section(view, pipe_id)["armed"] is True
 
 
 def test_segment_pb_dict_ships_igt_as_none(tmp_path):
@@ -1869,13 +1959,13 @@ def test_star_sections_carry_no_arm_detail_except_the_100_coin_star(tmp_path):
     assert view["stars"][0]["armed_detail"] is None
 
 
-def test_the_100_coin_star_section_carries_its_engines_armed_detail(tmp_path):
-    """The progress line survives the presentation change and reads as the
-    STAR's own progress (spec 2026-07-28-multi-step-segments, decision #2 —
-    the user's own reason: "i like the idea of knowing for sure the system
-    is aware of me grabbing that first star, proven by it progressing to
-    the next step"). Must visibly ADVANCE on the 100-coin grab, while still
-    in the level, before the exit star — that transition IS the feature."""
+def test_ambiently_armed_hundred_coin_star_without_target_gets_no_section(tmp_path):
+    # No card for an ambient arm (live report 2026-08-05): walking into a
+    # 100-coin course with nothing selected used to pin an empty "100 Coins"
+    # card at the top of the practice log ("an entity nobody chose should
+    # not get a card either") -- the star half of the same rule
+    # test_ambiently_armed_segment_without_target_gets_no_section proves for
+    # segments. This engine arms on mere course entry, exactly like those.
     db, svc = make(tmp_path)
     asyncio.run(svc.create_segment({
         "name": "WF 100 Coins -> Exit",
@@ -1885,6 +1975,36 @@ def test_the_100_coin_star_section_carries_its_engines_armed_detail(tmp_path):
         "end_triggers": [{"type": "star_grabbed", "course": 2, "star": s}
                         for s in range(6)],
         "match_mode": "strict"}))
+    asyncio.run(svc.publish(ev("level_changed", 900, {"from": 16, "to": 24})))
+    view = build_session_view(db, svc, clock="igt")
+    assert not any(s["course_id"] == 2 and s["star_id"] == 6
+                  for s in view["stars"])
+    assert view["segments"] == []   # its engine still excluded from segments
+
+
+def test_the_100_coin_star_section_carries_its_engines_armed_detail(tmp_path):
+    """The progress line survives the presentation change and reads as the
+    STAR's own progress (spec 2026-07-28-multi-step-segments, decision #2 —
+    the user's own reason: "i like the idea of knowing for sure the system
+    is aware of me grabbing that first star, proven by it progressing to
+    the next step"). Must visibly ADVANCE on the 100-coin grab, while still
+    in the level, before the exit star — that transition IS the feature.
+
+    TARGETED here (2026-08-05): this engine arms ambiently on mere course
+    entry, and an ambient-and-unchosen arm now publishes no section at all
+    (test_ambiently_armed_hundred_coin_star_without_target_gets_no_section,
+    above) -- this test is about armed_detail's CONTENT once the star IS
+    chosen, which is unaffected."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.create_segment({
+        "name": "WF 100 Coins -> Exit",
+        "start_triggers": [{"type": "level_enter", "to": 24},
+                          {"type": "attempt_anchor", "level": 24}],
+        "waypoints": [[{"type": "star_grabbed", "course": 2, "star": 6}]],
+        "end_triggers": [{"type": "star_grabbed", "course": 2, "star": s}
+                        for s in range(6)],
+        "match_mode": "strict"}))
+    asyncio.run(svc.set_target(2, 6))
     asyncio.run(svc.publish(ev("level_changed", 900, {"from": 16, "to": 24})))
     view = build_session_view(db, svc, clock="igt")
     sec = next(s for s in view["stars"]

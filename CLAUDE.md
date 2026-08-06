@@ -23,6 +23,7 @@ uv run pytest -q                                     # MUST pass before any merg
 uv run python -m sm64_events.main                    # run from repo root (data/ is cwd-relative); canonical — binds the CTRL+C shutdown deadline
 uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM)
 uv run python tools/verify_death_clock.py            # live gate, ANSWERED 2026-08-01 (raw counter); re-run only to re-check
+uv run python tools/probe_warp_block.py              # live gate, ANSWERED 2026-08-05: a painting writes sWarpDest AT the touch, a pipe 20 frames later (read-only, safe beside a live session)
 uv run python tools/verify_star_stop.py              # live gate, ANSWERED 2026-08-01: the screen is Usamune's RESULT store once it SETTLES (10/10)
 uv run python tools/derive_xcam.py                   # live gate, ANSWERED + now the REGRESSION gate: scores what we journal against Usamune (just play; MIDAIR grabs are the ones that measure)
 uv run python tools/dev_cleanup.py                   # kill orphaned dev/harness servers (auto-runs at session start)
@@ -33,13 +34,24 @@ uv run pytest tests/test_responsive.py -q            # render every breakpoint; 
 uv run python tools/check_glossary.py                # docs/glossary.md's own gate: closure, active voice, live Lives paths
 uv run python tools/scrape_sheet.py                  # rebuild the Ultimate Sheet library snapshot -- READ the "unknown:" list, it IS the deliverable
 uv run python tools/audit_library.py                 # AUDIT that snapshot by eye: every target, its verdict, the ratio behind each row; corrections save into the repo
-uv run python tools/contact_sheet.py .objective-card # one surface at 1500/1200/900/850, in one image -- LOOK at it
+uv run python tools/contact_sheet.py .log-card       # one surface at 1500/1200/900/850, in one image -- LOOK at it
 uv run python tools/mark_sheet.py                    # the caveat badge on both surfaces, side by side (the PICK is made: corner badge, 2026-08-01)
-uv run python tools/measure_objective_card.py        # re-measure the fixed card heights against real content
 uv run python tools/topology_map.py                  # DRAW the world graph the segment matcher judges moves against -- LOOK at it, a wrong edge is invisible to every test
 uv run python tools/why_cancelled.py             # WHY did that movement stop being ACTIVE -- replays the session and names the rule + hop counts per cancel (stamps the frame the MOVE happened on, not the one it was judged on)
 uv run python tools/measure_topology_cancels.py       # score those topological rules against the real journal: how many completed runs would they have destroyed?
+uv run python tools/measure_entrance_sweep.py         # replay both journals under the old corpus and the new one: did the topological rules move? (they must not) and which recorded rows did
+
+uv run python tools/measure_reset_stubs.py            # how often a reset's own interrupted action was re-read onto the NEXT attempt (exact), and how fast the reload's spawn ends the hold
+node .design-sync/facade/build.mjs                   # rebuild the Claude Design bundle from .design-sync/components.mjs (the registry: one row per published component)
+uv run pytest tests/test_design_sync_registry.py -q  # that registry's own gate: does every declared prop still exist on the component
 ```
+
+**Publishing a component to Claude Design is one row** in
+`.design-sync/components.mjs` — the bundle entry, the TypeScript contract the
+design agent codes against, and the per-component doc are all generated from
+it. The loop, the machine setup, and the traps that fail SILENTLY (Preact
+renders as React through a shim; the design system CSS is lifted out of
+`index.html`; `/ui/assets` art must be inlined) are in `.design-sync/NOTES.md`.
 
 **Supported window size: 850px wide minimum, any height** (2026-07-29). One
 number in two places, compared by `tests/test_min_supported_width.py`:
@@ -68,7 +80,7 @@ automatically when you touch matching files. Zones:
 | Tracking, storage, stats, routes/runs/segments, defaults corpus | `tracking/`, `storage/`, `stats/`, `data/`, `tools/corpus_*` | `.claude/rules/tracking-storage.md` |
 | Server, REST/WS APIs, wiring, paths, perf probes | `server/`, `main.py`, `core/paths.py`, `core/procmem.py`, `core/perfmon.py` | `.claude/rules/server.md` |
 | UI shell, shared primitives, **verification norms** (loads for all of `ui/`) | `ui/` | `.claude/rules/ui-core.md` |
-| Practice, stage banner, pickers, segments, routes, runs, strategies, graphs | `ui/components/practice*`, `stagebanner.js`, `entity*`, `segments.js`, `routes.js`, `runview.js`, `strat*`, `links.py` | `.claude/rules/ui-practice.md` |
+| Practice, stage banner, pickers, segments, routes, runs, strategies, graphs | `ui/components/practice*`, `ui/components/attemptlog.js`, `ui/entitysection.js`, `ui/focustarget.js`, `stagebanner.js`, `entity*`, `segments.js`, `routes.js`, `runview.js`, `strat*`, `links.py` | `.claude/rules/ui-practice.md` |
 | Rank icons + caps, banners, Rank tab, MARELO pill | `ui/components/caps.js`, `rankicon.js`, `hat.js`, `ranks.js`, `rankpage.js`, `marelo.js`, `standards.js` | `.claude/rules/ui-ranks.md` |
 | Celebrations, the level-up climb, the tuning inspector | `ui/celebrations.js`, `rankclimb.js`, `climb*.js`, `tune*`, `components/celebrate.js`, `server/tuning_api.py` | `.claude/rules/ui-climb.md` |
 | Replay capture/encode/extract, compare, compilation + **their UI** | `replay/`, `compare/`, `core/recorder_lock.py`, `ui/components/replay.js`, `compare.js`, `videosync.js`, `failcomp.js` | `.claude/rules/replay-compare.md` |
@@ -116,10 +128,14 @@ Contract changes land on main first, then dependent work fans out. Merge with
 11. **Star ↔ segment parity.** Stars and segments are two kinds of the SAME
     practiced thing — attempts, PBs, strats, ranks, markers, replays, routes.
     A feature built for one ships for both in the same change, or the
-    asymmetry is written down with its reason. Enforced structurally (shared
-    components `stratpicker.js`/`PbTag`/`TimeFilterChip`/`StandardsPanel`;
-    kind-dispatched endpoints `/api/target`, `/api/strat`, `/api/wipe`) and by
-    `tests/test_ui_section_parity.py`.
+    asymmetry is written down with its reason. Enforced structurally: the
+    practice log renders ONE `LogCard` per entity of either kind
+    (`ui/components/practicelog.js`), and the analysis card + detail drawer
+    are ONE page-level `EntityAnalysis`/`EntityDrawer` pair
+    (`ui/components/entitydetail.js`) rather than a copy per kind — plus the
+    shared `stratpicker.js`/`PbTag`/`TimeFilterChip`/`StandardsPanel` inside
+    them, and kind-dispatched endpoints `/api/target`, `/api/strat`,
+    `/api/wipe`. Pinned by `tests/test_ui_section_parity.py`.
 12. **Route step order is a hard contract** — seeded route steps must be in
     completion-event order or a run stalls permanently and silently (detail in
     `.claude/rules/tracking-storage.md`).
@@ -270,7 +286,7 @@ Contract changes land on main first, then dependent work fans out. Merge with
      A defect probe answers "is something broken"; it cannot answer "does this
      component draw itself the same way in both layouts"
      (`test_rank_banner_continuity.py`) or "does the widest value in the corpus
-     fit" (`test_objective_name_fits.py`). Both of those were user-reported
+     fit" (`test_log_card_name_fits.py`). Both of those were user-reported
      bugs that no probe could have caught, in either direction.
   Prove any new guard by mutation — put the bug back, watch it go red, revert.
   A guard nobody has seen fail is green forever

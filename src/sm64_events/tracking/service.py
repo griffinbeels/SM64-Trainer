@@ -194,6 +194,9 @@ class TrackerService:
         # it is precisely what this prune is for. Deciding before it existed
         # left one stale row behind on every single restart.
         await self._prune_unlabelled_attempts()
+        # LAST, because the prune above deletes attempts and so can empty a
+        # session that had rows when this method began.
+        await self._purge_empty_sessions()
 
     async def publish(self, event: Event) -> None:
         seq = await self.broadcaster.publish(event)
@@ -1565,6 +1568,29 @@ class TrackerService:
                 ns["label"] = step["label"]
             out.append(ns)
         return out
+
+    async def _purge_empty_sessions(self) -> int:
+        """Forget the sittings that recorded nothing — "if you didn't
+        practice anything during a session, was it really a session?"
+
+        A boot repair like the two above it, not a user command, so nothing
+        is journaled: the `sessions` table is authoritative state written by
+        `insert_session`, NOT something replay derives, so deleting a row is
+        durable on its own. The journal slice survives — `db.
+        delete_empty_sessions` carries the measurement that settled that.
+
+        Broadcasts a refetch when it deletes anything: on a clean boot no
+        client is connected yet, but `attach_db` runs this whole method with
+        the page already open, and an un-refetched session list keeps
+        offering a session the server has just forgotten."""
+        db = self._require_db()
+        purged = db.delete_empty_sessions(self.session_id)
+        if not purged:
+            return 0
+        log.info("purged %d session(s) that recorded no attempts", len(purged))
+        await self.publish(Event(type="attempts_invalidated", frame=0,
+                                 timestamp_utc=_now(), payload={}))
+        return len(purged)
 
     async def _prune_unlabelled_attempts(self) -> int:
         """Delete the attempts a PREVIOUS session left with nothing to say

@@ -1220,10 +1220,17 @@ along with minimizing levels of indirection. The measurement is
 the knowledge base rather than here because the practice is cross-project, and
 it REPORTS rather than gating.
 
-**Headline: this codebase is not systemically shallow.** 27,442 lines behind
-684 public names — 40.1 lines each — and 41 public names that only forward, 6.0%
+**Headline: this codebase is not systemically shallow.** 27,954 lines behind
+687 public names — 40.7 lines each — and 41 public names that only forward, 6.0%
 of the surface. The scan was run before designing any refactor, and it is the
 reason there is no refactor: the expected big restructuring did not exist.
+(Re-measured after task 0084's anchor fix, after the entrance-touch condition
+and task 0086's empty-session purge, and again after the touch-frame
+destination read plus the target-precedence fix: **the pass-through count and
+the public-name count have not moved once across all four**, and the extra
+lines are the evidence their docstrings now carry. `detectors/warp.py` doubled
+in size to 200 lines with its public surface unchanged at two, which is what
+deepening on evidence looks like from the outside.)
 
 What the number cannot see, and it matters more than what it can: this measures
 SURFACE, not information leakage. A module can score well here and still make
@@ -1236,7 +1243,7 @@ order its calls must happen in. Treat the tables as a place to start looking.
 |---|---|---|
 | `tracking/service.py` → `tracking/projection.py` | 9 public methods forward across two hops (`armed_segment_ids`, `armed_arms`, `settle`, …). A caller wanting armed state learns both objects' vocabulary. | Collapse the forwarding layer, or make the projector private to the service and expose one armed-state value. Mechanical, and provably behaviour-identical. |
 | `ranks/standards.py` | 8 forwarding publics, the highest in one file. | Look before cutting: several are legitimate format adapters, not hops. |
-| `tracking/views.py` (1,871L), `tracking/segments.py` (3,407L), `tracking/service.py` (1,830L), `ui/components/practice.js` (1,471L) | Deep by the ratio, but too large to hold in one context. | Size, not leakage — a different problem with a different fix. Split along existing seams when one next resists a change. |
+| `tracking/views.py` (1,917L), `tracking/segments.py` (3,489L), `tracking/service.py` (1,856L), `ui/components/practicelog.js` (956L) | Deep by the ratio, but too large to hold in one context. | Size, not leakage — a different problem with a different fix. Split along existing seams when one next resists a change. **Re-measured 2026-08-06, after the practice-log branch merged: 28,420 lines, 689 publics, 41.2 lines per public name, 41 pass-through (6.0%). The ratio held while the tree grew, so that branch added surface in proportion to what it added rather than in forwarding. One file changed places: `practice.js` fell off this row (1,471L → under the threshold) when the practice log split out of it, and `practicelog.js` took its place at 956L — the one file the branch pushed past what fits in one head. Its natural seam is `LogCard`, which is already a self-contained component inside it.** |
 | `main.py` | imports 41 internal modules | **Expected and correct.** It is the wiring point, and a wiring point is supposed to know everything. Recorded so a future scan does not re-flag it. |
 
 **A number worth not repeating.** A first hand-rolled scan reported 46

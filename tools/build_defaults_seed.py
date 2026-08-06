@@ -24,6 +24,7 @@ import corpus_legacy        # noqa: E402
 import corpus_movements     # noqa: E402
 import corpus_routes_main   # noqa: E402
 import corpus_routes_stage  # noqa: E402
+import corpus_vocab          # noqa: E402
 from corpus_vocab import (CASTLE_MOVEMENT, DEFAULT_MOVEMENT_MATCH_MODE,  # noqa: E402
                           ROUTE_SCOPED, STANDARD_STRAT)
 
@@ -54,6 +55,12 @@ def build() -> dict:
     candidates' seed_key -> local segment_id in that order)."""
     segments = list(corpus_legacy.SEGMENTS)
     segments += [_movement_row(row) for row in corpus_movements.MOVEMENTS]
+    # THE authoring gate for task 0081: no shipped definition may end on a
+    # course LOAD. Applied here, over every assembled row, rather than inside
+    # movement()/_seg() -- corpus_from_db.py calls those to reconstruct source
+    # from a LIVE db and must print a pre-sweep definition faithfully.
+    for row in segments:
+        corpus_vocab.refuse_a_course_load(row["seed_key"], row["end_triggers"])
     # Task 20 (spec 2026-07-28-multi-step-segments): these two are already
     # full seed-shape dicts (mechanic(), not the compact movement() row), so
     # they're appended verbatim rather than expanded through _movement_row.

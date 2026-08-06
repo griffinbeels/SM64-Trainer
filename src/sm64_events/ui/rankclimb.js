@@ -64,6 +64,28 @@ const LANE_MOUNT_GRACE_MS = 400;
 // that the second reads as following the first rather than as the same
 // animation continuing.
 
+// The last TARGET (ladder position, level+bar) actually shown for one
+// measurement -- keyed `lane:order:identity`, a high-water mark rather than
+// the latest value, so a strategy switch's own snap (a legitimate, lower
+// number) never erases the higher one a sibling surface already witnessed.
+//
+// This is what tells apart the two things that both look like "a banner
+// arrived late into a lane whose first-seen time is long past": a SIBLING
+// banner appearing for the first time ANYWHERE (picking a strategy that had
+// no rank display before -- a rank being earned for the first time, and
+// exactly what to celebrate) from a SECOND INSTANCE of a measurement that
+// was already on screen somewhere else (the active target's objective card
+// and its practice-log card render the SAME entity's SAME banner through two
+// independent `useRankClimb` calls sharing one `lane` -- practice.js and
+// practicelog.js). The practice log's own dropdown can delay its copy's
+// first mount by however long the card sits closed, which is exactly the
+// "seconds after the page loaded" the grace window cannot see through on its
+// own: opening it looks identical to a sibling arriving late, timing-wise,
+// but nothing was earned -- the user just revealed state that already
+// existed. `laneFirstSeen`/`arrivedLateRef` answer WHEN a banner appeared;
+// this answers WHETHER the number it is about to show is actually news.
+const laneWitnessed = new Map();
+
 
 // ---- The celebration HOLD ------------------------------------------------
 //
@@ -374,8 +396,24 @@ export function useRankClimb(rank, identity = null,
     // must sit still through the switch.
     const replayed = replayKeyRef.current !== replayKey;
     replayKeyRef.current = replayKey;
+    // Has THIS measurement -- this lane, this banner slot, this identity --
+    // already been shown to be at least `target` by some OTHER mounted
+    // instance (the objective card, if this is the log card's copy, or vice
+    // versa)? If so, `arrivedLateRef` is measuring the wrong thing: this
+    // instance mounted late, but the RANK did not change while it was
+    // missing -- it was simply not the surface on screen. See laneWitnessed's
+    // own comment above.
+    const laneKey = lane != null ? `${lane}:${order}:${identity ?? ""}` : null;
+    const witnessed = laneKey ? laneWitnessed.get(laneKey) : null;
+    const alreadyWitnessed = witnessed != null && target <= witnessed;
+    // A high-water mark, not the latest value: a strategy switch's own snap
+    // to a legitimately LOWER target (a different identity, a different key
+    // already) must never erase what a higher-graded identity left behind.
+    if (laneKey && (witnessed == null || target > witnessed)) {
+      laneWitnessed.set(laneKey, target);
+    }
     const earnedFirstRank = target > 0
-      && ((from == null && (!isFirstRun || arrivedLateRef.current))
+      && ((from == null && (!isFirstRun || arrivedLateRef.current) && !alreadyWitnessed)
           || (replayed && !isFirstRun));
     // A climb already heading for THIS target keeps going, whatever the
     // identity says. Picking a strategy changes a card's identity but not the

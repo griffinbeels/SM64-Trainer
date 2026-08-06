@@ -118,7 +118,14 @@ Caveats (hard-won — keep these current):
     auto-follow onto the segment either: it lands us in a fresh stage with no
     star picked, so the target clears to None (no active star AND no active
     segment). Segment successes that do not enter a stage (star grab, mid-
-    course, exit to hub) still auto-follow onto the segment. Retirement runs
+    course, exit to hub) still auto-follow onto the segment. **An explicit
+    pick outranks that auto-follow when ONE event finishes SEVERAL attempts**
+    (2026-08-05): the DDD portal touch closes MIPS Clip and HMC -> DDD
+    together, the assignment ran once per closure, and whichever closed LAST
+    took the slot from the segment he was practising — "MIPs should remain
+    selected because that's what I'm practicing!". Same rule `handIsEmpty`
+    states on the client: a convenience default may fill an empty hand, never
+    empty one. Retirement runs
     inside feed(), so replay rebuilds the same end-state target and service.
     _track auto-broadcasts target_changed. The UI reads this to highlight the
     active star XOR the active segment, never both (ui/components/practice.js);
@@ -211,6 +218,28 @@ Caveats (hard-won — keep these current):
     has to run for a corrected row to be right (tracking/service.py does
     exactly that when one is journaled). The event is inert in _dispatch: it
     opens and closes nothing, like attempt_strat_set.
+
+20. Bowser ambient-arm asymmetry (2026-08-04), the 100-coin star's own
+    reverse asymmetry (caveat 19's neighbor, above) generalized from ONE
+    reattributed identity to a family of THREE mutually-exclusive things a
+    Bowser stage offers: the reds star (grab alone), the reds star graded on
+    the whole run to the pipe (seg:reds->pipe:<abbrev>), and the legacy
+    no-reds pipe-only segment (seg:<abbrev>-pipe) — the latter two both
+    arms_ambiently, entering the stage arms BOTH at once, and neither ever
+    reattributes to anything (hundred_coin_entity is None for both; they
+    record honestly under their own segment identity in the seg_closed loop
+    below). His ruling: "See if the user has selected anything in the stage
+    before. If so, we track that... If the user hasn't tracked anything...
+    we cannot assume... Resets should be unattributed, because we could be
+    doing any of those 3 options." A FAILURE on either ambient def is
+    suppressed (_untargeted_ambient_failure) unless the live target names
+    that exact segment; the plain attempt (_close/_close_by_death) is
+    suppressed in turn (_ambient_family_records_this_too) whenever the
+    target names an armed one of the two, so exactly one row survives no
+    matter which of the three the target picks out, or none if it picks out
+    none. SUCCESS is never gated — my own extension of his ruling for
+    consistency with the 100-coin one, since he did not restate it for
+    Bowser: completing a run is what completing a run always means here.
 """
 from dataclasses import dataclass, replace
 
@@ -220,8 +249,9 @@ from sm64_events.memory.addresses import CASTLE_LEVELS, course_for_level
 from sm64_events.tracking.prune import PRUNE_EVENT
 from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
-    SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, hundred_coin_entity,
-    origin_course, segment_origin, stage_origin, time_bounds)
+    SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, arms_ambiently,
+    hundred_coin_entity, origin_course, segment_origin, stage_origin,
+    time_bounds)
 
 
 @dataclass(frozen=True)
@@ -445,6 +475,50 @@ def time_corrections(events) -> dict[int, dict]:
     return out
 
 
+def warp_destinations(events) -> dict[int, int]:
+    """journal id of a `warp_entered` with NO destination -> the level it led
+    to, recovered from the journal itself.
+
+    The FOURTH pre-pass, and it exists because the entrance touch became an
+    end condition (task 0081, 2026-08-04) while every row written before that
+    day carries no `to`. Both of the obvious readings of such a row are wrong,
+    and each was measured over the real journal rather than argued about:
+
+      * refuse it, and a pinned end can never match a historical touch -- 54
+        of 106 recorded segment successes simply VANISH on the next replay;
+      * wave it through, and a historical touch satisfies ANY pinned
+        destination -- 105 successes are FABRICATED, because a basement touch
+        toward HMC closes a DDD-pinned definition.
+
+    The destination was never missing from the JOURNAL, only from the row: the
+    level edge that follows names it, which is exactly what the live detector
+    now waits for. So this recovers it the same way, and the recovered value
+    is DERIVED at replay time and never written back -- the journal stays the
+    record of what the game did.
+
+    Paired forward to the next real level edge within `HOLD_CAP_FRAMES`, the
+    same bound the detector holds a live touch for. A touch with no such edge
+    keeps no destination (an in-level teleporter, or an aborted fade), which is
+    what the live detector publishes as `to: None` for the same case.
+    """
+    from sm64_events.detectors.warp import WarpDetector
+    out: dict[int, int] = {}
+    pending: list = []
+    for ev in events:
+        if ev.type == "warp_entered":
+            if "to" not in ev.payload:
+                pending.append(ev)
+        elif ev.type == "level_changed":
+            payload = ev.payload
+            if payload.get("from") == payload.get("to"):
+                continue            # establishing/corrective, not a crossing
+            for touch in pending:
+                if ev.frame - touch.frame < WarpDetector.HOLD_CAP_FRAMES:
+                    out[touch.id] = payload["to"]
+            pending = []
+    return out
+
+
 class _CorrectedRow:
     """One journal row seen with a revised payload. The single seam a time
     correction needs: everything downstream reads the row exactly as it always
@@ -468,6 +542,7 @@ class Projector:
                  strat_overrides: dict[int, str | None] | None = None,
                  origin_overrides: dict | None = None,
                  time_corrections: dict[int, dict] | None = None,
+                 warp_destinations: dict[int, int] | None = None,
                  hundred_coin_strat=None):
         # ((course_id, star_id), exit_star, current_strat) -> the 100-coin
         # strategy this run belongs to, or None for "keep what is remembered"
@@ -488,6 +563,11 @@ class Projector:
         # one, which is where this dict comes from.
         self._time_corrections = (time_corrections
                                   if time_corrections is not None else {})
+        # warp_entered journal id -> the level it led to, for the rows written
+        # before detectors/warp.py stamped one (task 0081). Empty on the LIVE
+        # path, where every touch carries its own destination.
+        self._warp_destinations = (warp_destinations
+                                   if warp_destinations is not None else {})
         # ("star", course_id, star_id) | ("segment", segment_id) | None
         self.target: tuple | None = None
         # (course_id, star_id) of the active star most recently retired BY
@@ -697,6 +777,15 @@ class Projector:
             fix = self._time_corrections.get(ev.id)
             if fix:
                 ev = _CorrectedRow(ev, {**ev.payload, **fix})
+        # The destination a pre-2026-08-04 touch never recorded, recovered
+        # from the level edge that followed it. Folded in HERE for the same
+        # reason the correction above is: the matcher, the attempt and every
+        # payload reader downstream then see one shape and none of them has to
+        # know that some rows predate the key.
+        elif ev.type == "warp_entered" and "to" not in ev.payload:
+            recovered = self._warp_destinations.get(ev.id)
+            if recovered is not None:
+                ev = _CorrectedRow(ev, {**ev.payload, "to": recovered})
         prev_level = self._level  # _dispatch may move it (level_changed)
         self._pending_target_retire = None   # transient, one event only
         # Snapshotted BEFORE _dispatch (which runs _close_by_grab for a
@@ -754,12 +843,19 @@ class Projector:
                 and self._pending_target_retire not in self.armed_segment_ids()):
             self.target = None
         self._pending_target_retire = None
+        # Whose slot is it before this event finishes anything? The auto-follow
+        # below reads these; the reasoning is at its own branch.
+        held_pick = (self.target[1] if self.target
+                     and self.target[0] == "segment" else None)
+        pick_is_closing = (held_pick is not None
+                           and any(a.segment_id == held_pick for a in seg_closed))
         for a in seg_closed:
             # The 100-coin star IS this segment when its def's own sequence
             # includes grabbing that course's 100-coin star (spec 2026-07-28-
-            # multi-step-segments, hundred_coin_entity): EVERY outcome —
-            # success, death, hard_reset — attributes to the star entity
-            # (course_id/star_id, segment_id cleared), not the segment. The
+            # multi-step-segments, hundred_coin_entity): a closed attempt
+            # attributes to the star entity (course_id/star_id, segment_id
+            # cleared), not the segment, WHEN `_untargeted_failure` says the
+            # asymmetry allows it (see that method's own docstring). The
             # segment stops existing as a visible practiced thing at all,
             # only as the timing engine. Reattribute BEFORE strat/cleared/
             # auto_ignored so every downstream rule (validity bounds, strat
@@ -769,6 +865,41 @@ class Projector:
             seg_def = self._segments.definition(a.segment_id)
             hc = (hundred_coin_entity(seg_def.start_triggers, seg_def.waypoints)
                  if seg_def is not None else None)
+            if hc is not None and self._untargeted_failure(hc, a.outcome):
+                # ONE reset, ONE row — the untargeted half `_close`'s own
+                # suppression (`_engine_records_this_too`) never covered,
+                # because THAT guard's very first line bails out whenever
+                # nothing is targeted (`star_tgt is None -> False`), which is
+                # correct for `_close` (it must still record the plain
+                # Unassigned attempt in that case) but left THIS loop
+                # relabelling the very same span into a second, phantom
+                # "100 Coins" row with no time at all — live report
+                # 2026-08-04: "one reset records two attempts — one correctly
+                # in Unassigned, one phantom row on the 100-coin star."
+                # Measured: 1 matching pair in this worktree's own journal,
+                # 107 more across his real practice history, none labelled,
+                # none a saved PB. Still counts as the physical attempt
+                # happening (caveat 15) even though nothing records a row
+                # for it here.
+                self._last_star_attempted = hc
+                continue
+            if (hc is None and seg_def is not None
+                    and self._untargeted_failure_for_segment(
+                        a.segment_id, a.outcome)):
+                # Caveat 20's sibling suppression: Bowser's seg:reds->pipe:*
+                # and seg:<abbrev>-pipe never reattribute (hc is None for
+                # both), so it is THIS def's own row — recorded honestly
+                # under its own segment identity in the `else` branch below
+                # — that duplicates whatever `_close`/`_close_by_death`
+                # already recorded (Unassigned, or the OTHER of these two
+                # defs) whenever the live target does not name this exact
+                # segment. See `_untargeted_ambient_failure`'s own
+                # docstring for the rule and why `self.target` is the
+                # signal. Physically happened either way, but there is no
+                # "last segment attempted" memory anything reads (unlike
+                # caveat 15's star-side bookkeeping above), so nothing to
+                # update on the way out.
+                continue
             if hc is not None:
                 # A segment's own igt_frames is always None -- segments are
                 # RTA-only by design (views.py: "segments have no igt
@@ -860,7 +991,22 @@ class Projector:
                 # IS, exactly as a plain star grab auto-follows.
                 entered_stage = (ev.type == "level_changed"
                                  and course_for_level(ev.payload["to"]) is not None)
-                if hc is not None:
+                # A convenience default may FILL an empty hand; it may not take
+                # something out of one (his rule, and the one `handIsEmpty`
+                # already states on the client). One event can close SEVERAL
+                # attempts — the DDD portal touch closes MIPS Clip and
+                # HMC -> DDD together — and this assignment used to run once
+                # per closure, so whichever happened to close LAST took the
+                # slot away from the segment he had picked and was practising:
+                # *"It seems like we somehow deselect MIPS and then trigger a
+                # different split?? All i know is that MIPs should remain
+                # selected because that's what I'm practicing!"* (2026-08-05,
+                # measured by replaying his journal — target moved
+                # `MIPS Clip` -> `HMC -> DDD` on the touch). His own pick wins
+                # over anything the same event finished.
+                if pick_is_closing and a.segment_id != held_pick:
+                    pass          # his pick closed here too; it keeps the slot
+                elif hc is not None:
                     self.target = None if entered_stage else ("star", *hc)
                 else:
                     self.target = None if entered_stage else ("segment", a.segment_id)
@@ -1254,7 +1400,8 @@ class Projector:
         # a death is always a meaningful failed attempt.
         first = self._open if self._open is not None else ev
         star_tgt = self._star_target()
-        if self._engine_records_this_too(star_tgt, "death"):
+        if (self._engine_records_this_too(star_tgt, "death")
+                or self._ambient_family_records_this_too("death")):
             # ONE death, ONE row — the same suppression `_close` applies to a
             # reset, and it was missing here because this method calls `_build`
             # DIRECTLY instead of going through `_close`. That made "death" a
@@ -1263,6 +1410,11 @@ class Projector:
             # TWO deaths simultaneously… when we have a 100 coin star selected,
             # there's always 2 deaths (I tested this across courses, with and
             # without 100 coins selected)."
+            #
+            # The second clause is the Bowser ambient-arm sibling (caveat 20):
+            # a SEGMENT target (reds->pipe / legacy no-reds pipe) that
+            # `_star_target()` cannot see at all, since it answers None for
+            # anything but a star.
             self._open = None
             return []
         course_id, star_id = star_tgt if star_tgt else (None, None)
@@ -1287,7 +1439,8 @@ class Projector:
             self._open = None
             return []
         star_tgt = self._star_target()
-        if self._engine_records_this_too(star_tgt, outcome):
+        if (self._engine_records_this_too(star_tgt, outcome)
+                or self._ambient_family_records_this_too(outcome)):
             # ONE reset, ONE row. The 100-coin star's engine turns this same
             # event into its own row and feed()'s seg_closed loop reattributes
             # it to this very entity, so recording the plain attempt as well
@@ -1303,6 +1456,11 @@ class Projector:
             # one. It was invisible until 2026-08-03 because the 100-coin star
             # had no rank standards, so nothing could set a strategy on it, so
             # BOTH rows were unlabelled and the startup prune ate them.
+            #
+            # The second clause is the Bowser ambient-arm sibling (caveat 20):
+            # a SEGMENT target (reds->pipe / legacy no-reds pipe) that
+            # `_star_target()` cannot see at all, since it answers None for
+            # anything but a star.
             self._open = None
             return []
         course_id, star_id = star_tgt if star_tgt else (None, None)
@@ -1341,6 +1499,156 @@ class Projector:
             return False
         return any(self._hundred_coin_engine_ids.get(seg_id) == star_tgt
                    for seg_id in self._segments.armed_ids())
+
+    def _untargeted_failure(self, hc: tuple[int, int], outcome: str) -> bool:
+        """True when `feed()`'s `seg_closed` loop must NOT reattribute this
+        closed engine attempt to the (course, 6) star `hc` names.
+
+        RULE 11 ASYMMETRY, Griffin's own words (2026-08-04): "Untargeted 100
+        coin run that successfully completed... should trigger the strategy
+        and always be attributed" — completing the run IS the evidence you
+        were practicing it, targeted or not, so a `success` is NEVER gated
+        here. A FAILURE (reset/hard_reset/death) with the star not targeted
+        carries no such evidence: `_close`/`_close_by_death` already
+        recorded the plain Unassigned attempt for this identical span
+        (`_engine_records_this_too` is this exact condition, read from the
+        OTHER side — it suppresses THEM only when a star IS targeted), so
+        reattributing here too duplicated it into a second, unlabelled
+        "100 Coins" row with no time at all — the bug both prior fixes
+        (6f97b51, 543d18d) left standing, because both were built and tested
+        only against the explicitly-targeted case (every test in
+        `tests/test_hundred_coin.py`'s "one reset, one row" section calls
+        `service.set_target(2, 6, …)` first).
+        """
+        return outcome != "success" and self._star_target() != hc
+
+    def _ambient_family_records_this_too(self, outcome) -> bool:
+        """`_engine_records_this_too`'s sibling for a SEGMENT target rather
+        than a star one — would an armed Bowser-ambient def (reds->pipe /
+        legacy no-reds pipe-entry — segments.arms_ambiently, with
+        hundred_coin_entity None) ALSO record this exact reset/hard_reset/
+        death under its OWN identity?
+
+        The 100-coin engine always REATTRIBUTES its own row to the star
+        target, so the two rows end up identical and `_star_target()` alone
+        settles whether `_close`/`_close_by_death` would duplicate it. A
+        Bowser-ambient def never reattributes — it records honestly under
+        its own segment identity in `feed()`'s `seg_closed` loop (see
+        `_untargeted_ambient_failure` below) — so it is the SEGMENT half of
+        `self.target` that must be consulted here, which `_star_target()`
+        cannot see (it answers None for a segment target by design, caveat
+        10). Same armed-fallback philosophy as `_engine_records_this_too`:
+        a target naming a def that is not currently armed records nothing
+        of its own, so the plain attempt must stay the fallback.
+        """
+        if outcome not in self._ENGINE_MIRRORED_OUTCOMES:
+            return False
+        if not (self.target and self.target[0] == "segment"):
+            return False
+        segment_id = self.target[1]
+        if segment_id not in self._segments.armed_ids():
+            return False
+        d = self._segments.definition(segment_id)
+        return (d is not None and arms_ambiently(d.start_triggers)
+               and hundred_coin_entity(d.start_triggers, d.waypoints) is None)
+
+    def _untargeted_failure_for_segment(self, segment_id: int,
+                                        outcome: str) -> bool:
+        """True when this segment's own closing FAILURE row must not be kept.
+
+        Generalises `_untargeted_ambient_failure` (below) from the Bowser
+        family to EVERY definition, on Griffin's own general statement of the
+        rule (2026-08-05):
+
+            "if I reset BUT HAVEN'T EXPLICITLY SELECTED ANYTHING (or if it's
+            not autoselected as a result of COMPLETING THE SEGMENT
+            SUCCESSFULLY), then a reset should always be unassigned. Unless
+            there is literally only 1 option, or unless the user has selected
+            it / it visually shows as selected in the star/segment picker,
+            then it should NEVER have a reset attributed... we should still be
+            tracking the possibility of completion, but we shouldn't
+            misattribute resets without explicit assignment or detection (by
+            the player completing a valid attempt)."
+
+        The case that produced it: doing MIPS Clip with nothing selected.
+        Entering Hazy Maze Cave arms HMC->DDD, HMC->RR and MIPS Clip together
+        — the player cannot have chosen among them, because he chose nothing —
+        and a reset closed all three, so "HMC -> RR (re-entry, pause exit)"
+        grew a practice card off a run he never did and never picked.
+
+        TWO ways a failure still records, and each is an existing signal
+        rather than a new one. Note what is NOT among them: a separate "was
+        this the only movement in flight" carve-out for his "literally only 1
+        option" clause. It was written, measured, and removed -- a lone option
+        is AUTO-SELECTED (`loneRouteOption`, `ArenaRow`), which writes the
+        target, so signal 1 already covers it; and as a standing rule it
+        defeated the fix, because the definitions armed alongside HMC->RR all
+        resolve BEFORE it does, leaving it looking like the only candidate at
+        the moment it closes -- which is exactly the row he reported.
+
+        1. `self.target` names this def — he picked it, or the app auto-picked
+           it somewhere he can see (`loneRouteOption`, `ArenaRow`), which is
+           exactly what "visually shows as selected in the picker" means.
+        2. The outcome is a SUCCESS, never gated here at all. Completing the
+           run IS the evidence, targeted or not — the same half
+           `_untargeted_failure` states for the 100-coin star, and the
+           mechanism behind his "or if it's not autoselected as a result of
+           COMPLETING THE SEGMENT SUCCESSFULLY": a segment success already
+           auto-follows the target onto itself, so the completion he means
+           becomes signal 1 for everything after it, through the door every
+           other completion already uses.
+
+        WHAT THIS DELIBERATELY DOES NOT CHANGE: arming. "We should still be
+        tracking the possibility of completion" — every def still arms, still
+        runs its matcher, and still records its SUCCESS. Only the failure ROW
+        is dropped, and the span is not lost: `_close`/`_close_by_death`
+        record it under Unassigned, which is where he said it belongs.
+        """
+        return outcome != "success" and self.target != ("segment", segment_id)
+
+    def _untargeted_ambient_failure(self, segment_id: int, outcome: str) -> bool:
+        """True when `feed()`'s `seg_closed` loop must NOT record THIS
+        Bowser-ambient def's (`segment_id`'s) own closing row.
+
+        `_untargeted_failure`'s sibling for a family with no single
+        reattributed identity to check against: a Bowser stage offers
+        THREE mutually-exclusive things to practice — the reds star
+        (graded on the grab alone), the reds star graded on the whole run
+        to the pipe (seg:reds->pipe:<abbrev>), and the legacy no-reds
+        pipe-only segment (seg:<abbrev>-pipe) — and entering the stage
+        arms BOTH segment defs at once, with no choice from the player
+        (segments.arms_ambiently). Griffin's ruling (2026-08-04), on this
+        exact family: "See if the user has selected anything in the stage
+        before. If so, we track that... If the user hasn't tracked
+        anything, then we cannot assume that they're doing reds
+        (star / pipe) or no reds... Resets should be unattributed, because
+        we could be doing any of those 3 options."
+
+        The signal is the LIVE target — the same one `_star_target()`
+        already reads for the star half of this family and
+        `_engine_records_this_too` reads for the 100-coin star — not
+        `strat_by_segment` (a standing preference that OUTLIVES the target
+        and would misattribute every later reset after a single earlier
+        pick, forever) and not a separate "last completed" lookup
+        (redundant: a segment SUCCESS already auto-follows the target onto
+        itself a few lines below in this same loop, and a star grab already
+        does the same in `_close_by_grab` — completing one of the three
+        already becomes this exact signal, through the mechanism every
+        other completion already uses; a THIRD lookup would just be a
+        second door onto state this one already exposes). Scope is
+        therefore whatever the target's own lifetime already is: survives
+        castle transit back into the SAME course (the existing course-based
+        retention rule, caveat 12), cleared by picking something else or by
+        `session_started` — the one door the rest of the app already reads
+        "did he deliberately choose this" through, not a second one
+        invented for this family alone.
+
+        SUCCESS is never gated, for the same reason `_untargeted_failure`'s
+        docstring gives for the 100-coin star — completing the run IS the
+        evidence, targeted or not. Griffin did not restate that half for
+        Bowser; applied here for consistency with his own 100-coin ruling.
+        """
+        return outcome != "success" and self.target != ("segment", segment_id)
 
     def _build(self, first, close, outcome, outcome_detail, course_id, star_id,
                igt_frames, strat) -> Attempt:
@@ -1440,6 +1748,7 @@ def replay(events, segments=None, time_filters=None, origin_overrides=None,
                      strat_overrides=strat_overrides(events),
                      origin_overrides=origin_overrides,
                      time_corrections=time_corrections(events),
+                     warp_destinations=warp_destinations(events),
                      hundred_coin_strat=hundred_coin_strat)
     attempts: list[Attempt] = []
     for ev in events:

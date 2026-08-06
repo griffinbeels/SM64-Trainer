@@ -639,12 +639,43 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and (p.get("from") is None
                      or (ev.payload["from"] == p["from"]
                          and not ev.payload.get("from_transient", False)))),
-    TriggerType("warp_entered", "You enter a warp/pipe", "Enter the pipe",
+    # Two conditions read the SAME journal event and mean different things,
+    # and the difference is one sentence: `warp_entered` names where you ARE,
+    # `entrance_touched` names where the entrance LEADS. Splitting them is a
+    # live report (2026-08-05): the combined form put three controls on one row
+    # -- "You touch a warp/pipe" IN Castle Inside GOING TO Dire, Dire Docks --
+    # and required knowing that the DDD portal lives in the castle interior
+    # before you could express "ends when I hit the DDD entrance" at all.
+    # *"it's not obvious what this would mean... Like, a specific option for
+    # triggering the warp into the course."*
+    TriggerType("warp_entered", "You touch a warp/pipe here", "Touch the pipe",
                 {"level": {"kind": "level", "required": True}},
                 "in {level}",
                 lambda p, ev, ctx: ev.type == "warp_entered"
                 and ev.payload["level"] == p["level"],
                 chip_label="Pipe"),
+    # The ENTRANCE TOUCH: the frame Mario collides with the painting, portal,
+    # hole or pipe that leads INTO a course -- 77 frames before it loads (23
+    # at a pipe). ONE control, because the entrance's own level is derived
+    # (topology.entrance_level) rather than asked for: the basement alone
+    # hosts five exits, so the destination is the only thing that identifies
+    # an entrance, and it is the only thing a player knows.
+    #
+    # A payload without `to` is a row written before 2026-08-04, when the
+    # detector could not know one; `projection.warp_destinations` recovers it
+    # on replay from the level edge that followed. Unrecovered, it matches
+    # nothing here -- the conservative direction, since an old journal must
+    # not start matching something new.
+    TriggerType("entrance_touched", "You touch a course entrance",
+                "Touch",
+                {"to": {"kind": "level", "required": True,
+                        "flow": _DEST_FLOW}},
+                "to {to}",
+                lambda p, ev, ctx: ev.type == "warp_entered"
+                and ev.payload.get("to") is not None
+                and ev.payload["to"] == p["to"],
+                card_template="the {to} entrance",
+                chip_label="Entrance"),
     TriggerType("key_grabbed", "You grab a Bowser key / grand star",
                 "Grab the key",
                 # key_grabbed claims all three fight-ending grabs: the Bowser
@@ -926,9 +957,11 @@ def arm_level(trig: dict) -> int | None:
 # A type with no branch here, or a branch whose param the clause leaves unset,
 # answers None = "this step names no place" — UNCONSTRAINED, the codebase's
 # unknown-means-yes convention. That is what exempts every Bowser fight
-# (key_grabbed), every pipe entry (warp_entered), every star-ending step and
-# every unpinned `level_exit` from the topological rules, rather than a list of
-# special cases somebody would have to maintain.
+# (key_grabbed), every star-ending step and every unpinned `level_exit` from
+# the topological rules, rather than a list of special cases somebody would
+# have to maintain. `warp_entered` (the three legacy pipe defs) stays in that
+# list; `entrance_touched`, which replaced it on 55 definitions, does not —
+# see its branch below.
 #
 # NOTE a `level_enter to=6` step with no `to_subarea` resolves to the bare "6",
 # which is NOT a node in WORLD_EDGES_* (the interior is keyed by subarea), so
@@ -941,6 +974,20 @@ def step_node(clause: dict) -> str | None:
         return topology.node_for(clause.get("to"), clause.get("to_subarea"))
     if kind == "area_enter":
         return topology.node_for(clause.get("level"), clause.get("area"))
+    if kind == "entrance_touched":
+        # The touch fires 77 frames before Mario arrives, so he is still in the
+        # castle when it does -- but the node this STEP leads to is the
+        # destination, and that is what the hop-distance rule measures. It
+        # therefore resolves exactly as the `level_enter` it replaced on 55
+        # definitions (task 0081): standing in the basement DDD is 1 hop,
+        # wander to the lobby and it is 2, so Rule 2 fires unchanged.
+        #
+        # Getting this wrong would have been SILENT and total: None means
+        # unconstrained, so re-pointing the whole castle corpus onto a
+        # place-less clause would have switched the topological cancel off for
+        # every movement at once with nothing going red. `warp_entered` keeps
+        # answering None and stays unconstrained, as it always has.
+        return topology.node_for(clause.get("to"), None)
     return None
 
 
@@ -1171,6 +1218,13 @@ def fires_from(trig: dict, level: int) -> bool:
         # secret stars) and an unscoped clause name no level of their own.
         course_level = _LEVEL_BY_COURSE.get(trig.get("course"))
         return course_level is None or level == course_level
+    if kind == "entrance_touched":
+        # An entrance clause names no level, so the level it must fire FROM is
+        # derived -- the same one door the corpus authors through, so the gate
+        # and the corpus cannot disagree about where an entrance lives. None
+        # (an unknown destination) is unconstrained, as everywhere else here.
+        entrance = topology.entrance_level(trig.get("to"))
+        return entrance is None or entrance == level
     param = _PRECONDITION_PARAM.get(kind)
     required = trig.get(param) if param else None
     return required is None or level == required
@@ -2711,6 +2765,34 @@ class SegmentEngine:
                     notices.append({"event": "segment_armed",
                                     "segment_id": d.id, "name": d.name,
                                     "frame": ev.frame})
+        # THE GRAND STAR ENDS THE RUN, so nothing may still be running after
+        # it. Griffin, 2026-08-05, on the credits screen with "CCM -> BBH"
+        # still showing a live timer: "at the end of the game (i.e., after
+        # grabbing the final star and finishing the Bowser 3 segment), there
+        # should be absolutely no segments still running (the game is
+        # literally over)... It also seems to persist to new areas of the
+        # map?"
+        #
+        # `key_grabbed` with `which == "grand"` is the game's own end (level
+        # 34; the grand star never fires `star_collected`, which is why
+        # `key.py` stamps this instead -- see the trigger table above). It is
+        # already journalled, so this needs no new memory read and applies
+        # retroactively on replay like every other projection rule.
+        #
+        # LAST, deliberately: Bowser 3's own definition ENDS on this event, so
+        # running after the closures above is what lets it record its success
+        # and only then clears whatever else was left over.
+        #
+        # SILENT, via the same helper an off-route move uses: "a movement that
+        # never happened must not bank a failure" (`_cancel_topologically`).
+        # A movement interrupted by winning the game did not happen either,
+        # and banking failures here would be exactly the misattribution the
+        # untargeted-reset rule exists to stop (projection.py). Cancelled
+        # rather than hard-disarmed so the ordinary "return to the start and
+        # press reset" recovery still brings it back.
+        if ev.type == "key_grabbed" and ev.payload.get("which") == "grand":
+            for d in [d for d in self._defs if d.id in self._armed]:
+                self._cancel_topologically(d, ev, notices)
         self._progress_notices(progress_before, ev.frame, notices)
         return closed, notices
 

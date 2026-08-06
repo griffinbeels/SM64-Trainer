@@ -1,0 +1,27 @@
+{
+  "projectId": "989d5bba-1b5d-4e0d-bbee-1e0fa08d246e",
+  "shape": "package",
+  "pkg": "sm64-trainer-ui",
+  "globalName": "SM64Trainer",
+  "cssEntry": "./src/styles.css",
+  "extraFonts": [
+    "./src/assets/fonts/supermario256.css"
+  ],
+  "docsDir": "./docs",
+  "readmeHeader": ".design-sync/conventions.md",
+  "overrides": {
+    "Icon": {
+      "cardMode": "column"
+    },
+    "RankBanner": {
+      "cardMode": "column"
+    },
+    "CardSelect": {
+      "cardMode": "column"
+    },
+    "Modal": {
+      "cardMode": "single",
+      "primaryStory": "Confirming"
+    }
+  }
+}

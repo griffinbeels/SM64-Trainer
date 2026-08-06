@@ -441,6 +441,42 @@ MIGRATIONS = [
     """
     ALTER TABLE attempts ADD COLUMN timed_at TEXT;
     """,
+    # v21 — a seeded definition the human has EDITED is frozen against every
+    # corpus refresh (`seed_dirty=1` blocks reconcile's update branch), so the
+    # 2026-08-04 entrance sweep reached 55 shipped rows and stopped at his own
+    # MIPS Clip and LBLJ. Live report the next morning: "timer still triggers
+    # for MIPS CLIP upon actually entering DDD... it was still set up to use
+    # entering DDD as the finish condition."
+    #
+    # This rewrites the END CLAUSE ONLY and leaves `seed_dirty` exactly as it
+    # found it, which is the whole difference from v17. Clearing the flag was
+    # right there (the rows were stranded by a retired feature, not by a
+    # choice) and is WRONG here: both of his rows carry real edits beside the
+    # end trigger -- MIPS Clip's start now pins the basement subarea, which is
+    # better than what ships -- and reconcile would discard them. A repair may
+    # fix the thing it is about; it may not spend the user's own work doing it.
+    #
+    # Guarded by SHAPE rather than by a list of keys, so it also catches the
+    # intermediate `warp_entered`+`to` form that shipped for one afternoon on
+    # 2026-08-04 and any row a hand edit left on the old shape: seeded rows
+    # only, exactly one end clause, naming a destination that is not the castle
+    # interior/grounds/courtyard (Lakitu Skip really does end on entering level
+    # 6, and there is no entrance to the castle to touch). A destination-free
+    # `warp_entered` -- the three legacy pipe entries -- has a NULL `to` and is
+    # excluded by that same test. Idempotent: after it runs, no row matches.
+    """
+    UPDATE segment_defs
+       SET end_triggers = json_array(
+             json_object('type', 'entrance_touched',
+                         'to', json_extract(end_triggers, '$[0].to')))
+     WHERE seed_key IS NOT NULL
+       AND json_valid(end_triggers)
+       AND json_array_length(end_triggers) = 1
+       AND json_extract(end_triggers, '$[0].type') IN ('level_enter',
+                                                       'warp_entered')
+       AND json_extract(end_triggers, '$[0].to') IS NOT NULL
+       AND json_extract(end_triggers, '$[0].to') NOT IN (6, 16, 26);
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -571,6 +607,36 @@ class Database:
                                (session_id,))
             self._conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
             self._conn.commit()
+
+    def delete_empty_sessions(self, keep_session_id: int) -> list[int]:
+        """Drop the session ROWS that hold no attempt, and return their ids.
+        `keep_session_id` is the live session, which is always empty at boot.
+
+        The journal slice STAYS, and that is the whole design. A session can
+        bank no attempt of its own and still hold events that govern OTHER
+        sessions' attempts — a clear, a strat reclassification, a prune
+        verdict. Measured over the live journal (2026-08-04): cutting the
+        events of every 0-attempt session RESURRECTS 2,167 pruned attempts
+        (233 of them successes) and rewrites the star/strategy of 13 more.
+        So this deletes only the row, which nothing derived reads —
+        `projection.replay` never opens this table, and `views` looks a
+        session up only for attempts that exist.
+
+        Safe to leave the events pointing at a missing row because `sessions`
+        is AUTOINCREMENT: a purged id is retired for good and can never be
+        handed to a future session.
+
+        Reads the `attempts` CACHE, so callers must have projected first."""
+        with self._lock:
+            doomed = [r["id"] for r in self._conn.execute(
+                "SELECT id FROM sessions WHERE id<>?"
+                " AND id NOT IN (SELECT DISTINCT session_id FROM attempts)",
+                (keep_session_id,)).fetchall()]
+            if doomed:
+                self._conn.executemany("DELETE FROM sessions WHERE id=?",
+                                       [(sid,) for sid in doomed])
+                self._conn.commit()
+            return doomed
 
     # -- attempts (derived cache) -------------------------------------------
     def _attempt_params(self, a: Attempt) -> tuple:
