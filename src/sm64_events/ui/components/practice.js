@@ -2,14 +2,11 @@
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { getJSON } from "../api.js";
-import { requestTarget } from "../target.js";
 import { useUiLog } from "../uilog.js";
 import { hasPracticeContext, justCompletedSegment,
         practicedHere, starPracticableHere, stageKey } from "../stagecontext.js";
 import { StageBanner } from "./stagebanner.js";
 import { useHeldWhileCelebrating } from "../rankclimb.js";
-import { RankIcon } from "./rankicon.js";
 import { useTargetPicker } from "./targetpicker.js";
 import { PageState } from "./states.js";
 import { entityKey, sectionClock } from "../entitysection.js";
@@ -55,68 +52,6 @@ function useFreshAttemptIds(t) {
   return freshIds;
 }
 
-// --- Route Practice focus (Phase C) ---------------------------------------
-// Non-destructive focus layer: when a route is active the Practice tab shows
-// ONLY that route's members, in route order. The current-step pointer reads
-// the live target; clicking a candidate sets the target (retry anything
-// freely). Driven by the route view (GET /api/routes/{id}) for order + names +
-// %s, cross-referenced to the session view for the current step's full section.
-const fpct = (r) => `${Math.round((r ?? 0) * 100)}%`;
-
-function candIsTarget(c, tgt) {
-  return c.kind === "segment"
-    ? (tgt.kind === "segment" && tgt.segment_id === c.segment_id)
-    : (tgt.kind !== "segment" && tgt.course_id === c.course && tgt.star_id === c.star);
-}
-
-async function setTargetCandidate(c, t) {
-  await requestTarget(t, c.kind === "segment"
-    ? { kind: "segment", segment_id: c.segment_id }
-    : { course_id: c.course, star_id: c.star });
-}
-
-function RouteFocus({ rv, t, ui, freshIds, openCompare }) {
-  const v = t.view;
-  const tgt = v.target || {};
-  // current = first step whose any candidate is the live target; else step 0
-  // (the suggested start). next = the following step (badge only — advancing is
-  // a suggestion; the target auto-follows completions, the user may click any
-  // step to retry).
-  let currentIdx = rv.steps.findIndex((s) =>
-    s.candidates.some((c) => candIsTarget(c, tgt)));
-  if (currentIdx === -1) currentIdx = 0;
-
-  return html`<div>
-    <div class="meta listhead">route — ${rv.name}</div>
-    ${rv.steps.length === 0
-      ? html`<p class="meta">This route has no steps yet — add some in the Routes tab.</p>`
-      : null}
-    ${rv.steps.map((s, i) => {
-      const isCurrent = i === currentIdx;
-      const badge = isCurrent
-        ? html`<span class="chip routecur">▶ CURRENT</span>`
-        : i === currentIdx + 1 ? html`<span class="chip">NEXT</span>` : null;
-      return html`<div class="routefstep ${isCurrent ? "active-star" : ""}">
-        <div class="shead">
-          <span class="routenum">${i + 1}.</span>
-          ${badge}
-          ${s.candidates.length > 1
-            ? html`<span class="chip">${s.need} of ${s.candidates.length}</span>` : null}
-          ${s.label ? html`<b>${s.label}</b>` : null}
-          ${s.candidates.map((c) => html`<button
-              class=${candIsTarget(c, tgt) ? "pb-glow" : ""}
-              onclick=${() => setTargetCandidate(c, t)}
-              title="practice this">${c.display}</button>`)}
-          <span style="flex:1"></span>
-          ${s.rank ? html`<${RankIcon} tier=${s.rank.rank} division=${s.rank.division} size=${16} />` : null}
-          <span class="routerate">step ${fpct(s.step_rate)}</span>
-          <span class="routecum">cum ${fpct(s.cumulative)}</span>
-        </div>
-      </div>`;
-    })}
-  </div>`;
-}
-
 export function Practice({ t, openCompare, openSegment }) {
   // Records what this page actually PAINTS — the selector's cells and every
   // practice-log card — so a report about a cell that "was just there a
@@ -141,24 +76,21 @@ export function Practice({ t, openCompare, openSegment }) {
   };
   const freshIds = useFreshAttemptIds(t);
   const [openTargetPicker, targetPickerDialog] = useTargetPicker(t);
-  const { activeRouteId, pickRoute } = t;
-  const [routeView, setRouteView] = useState(null);
-  // Refetch the resolved route view on selection change AND on every session
-  // view update, so per-step/cumulative % stay live as attempts land. A 404
-  // (route deleted) clears it → the tab falls back to normal practice.
-  useEffect(() => {
-    if (activeRouteId == null) { setRouteView(null); return; }
-    getJSON(`/api/routes/${activeRouteId}`).then(setRouteView).catch((e) => {
-      setRouteView(null);
-      // A 404 means the remembered route is GONE, so forget it. Clearing only
-      // the local view left the stale id in localStorage, and this effect
-      // re-runs on every session-view update — so a deleted route re-fetched
-      // and 404'd on every event, forever, across reloads (live log
-      // 2026-07-24). Any other failure (server restart, network blip) keeps
-      // the selection: losing it would be worse than one empty render.
-      if (e && e.status === 404) pickRoute(null);
-    });
-  }, [activeRouteId, t.view]);
+  // NO ROUTE VIEW IS FETCHED HERE ANY MORE. The route-focus card this fed is
+  // deleted (2026-08-05) -- Griffin: "we should also just get rid of the
+  // 'route focus' display card... this reads as noise. I don't think it's
+  // actually useful in any way. Unfortunately it ended up not being a useful
+  // feature." Choosing a route is unaffected: it lives on the header's route
+  // rank card and drives the Run tab, the Rank tab's scope and the selector's
+  // own route filtering (`loneOption`), none of which read this.
+  //
+  // The 404 handler that went with it is not owed a replacement. It existed
+  // to forget a route deleted while selected, and predates `store.js`'s
+  // reconcile effect, which ADOPTS the server's active route whenever this
+  // client has no pick in flight -- so a route that no longer exists is
+  // cleared from the authoritative side rather than by this tab noticing a
+  // failed fetch. Deleting the fetch also deletes the failure mode it was
+  // written for (a deleted route 404ing on every event, forever).
   // Held while any rank on screen is mid-climb (user, 2026-07-27: "if the
   // celebration occurs, and then… they leave the stage, we should prevent the
   // practice UI from transitioning to the next stage until the celebration is
@@ -465,16 +397,6 @@ export function Practice({ t, openCompare, openSegment }) {
 
     <${EntityAnalysis} sec=${focusedSec} t=${held} onPick=${pick}
       manualPick=${manualFocus} />
-
-    ${routeView && html`<section class="practice-card route-focus-card">
-      ${/* Was the practice toolbar's note. It is real state feedback, not
-           guidance for a control, so it moved to the surface it is about
-           rather than being deleted with the toolbar. */
-        null}
-      <p class="toolbar-note">Route focus is on · history still records</p>
-      <${RouteFocus} rv=${routeView} t=${held} ui=${ui}
-        freshIds=${freshIds} openCompare=${openCompare} />
-    </section>`}
 
     ${/* The Active Target card is gone (amendment A8 -- "the user can
          already understand what star / segment is active, AND get all of

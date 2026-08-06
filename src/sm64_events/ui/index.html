@@ -404,8 +404,6 @@
   .routestep-head { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
   .routestep-foot { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-top: .35rem; }
   .routenum { color: #6c7686; }
-  .routerate { color: #cead7f; font-size: .85em; }
-  .routecum { color: #e0c36a; font-size: .85em; }
   .routecands { display: flex; flex-wrap: wrap; gap: .35rem; margin: .3rem 0; }
   .routepick { display: inline-flex; flex-wrap: wrap; gap: .3rem; align-items: center; }
   .routeadd { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-top: .4rem; }
@@ -413,10 +411,6 @@
   .candx { border: none; background: transparent; color: #e0a3a3; padding: 0 0 0 .25rem; cursor: pointer; }
   .routeio { border: 1px solid #2c3140; border-radius: 8px; padding: .6rem; margin-top: .8rem; display: flex; flex-direction: column; gap: .6rem; }
   .routejson { width: 100%; min-height: 5rem; font: inherit; background: #1b1e24; color: #d8dee9; border: 1px solid #3a4150; border-radius: 4px; }
-  .routefstep { border: 1px solid #2c3140; border-radius: 8px; padding: .4rem .6rem; margin: 0 0 .6rem 0; }
-  .routefstep.active-star { border-color: #e0c36a; }
-  .routecur { border-color: #4ca; color: #4ca; }
-  .routefstep .shead { align-items: center; }
   .active-tag { color: #e0c36a; font-size: .7em; letter-spacing: 1px; margin-bottom: .2rem; }
   .listhead { letter-spacing: 1px; text-transform: uppercase; font-size: .7em; margin: .2rem 0 .4rem; }
   .shead { display: flex; flex-wrap: wrap; gap: .6rem; align-items: baseline; }
@@ -1031,10 +1025,6 @@
     border: 1px solid var(--border); border-radius: var(--radius);
     background: linear-gradient(180deg, rgba(14,30,48,.98), rgba(10,24,39,.98));
     box-shadow: 0 8px 24px rgba(0,0,0,.08);
-  }
-  .toolbar-note {
-    min-width: 0; flex: 1; color: var(--muted); font-size: .78rem;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   /* Out of flow, anchored under the Stats trigger: as a grid child of
      .practice-page it added a row and shifted every card 12px on open. The
@@ -2771,7 +2761,6 @@
     @keyframes emptybob { 0%, 100% { transform: translateY(0); }
                           50% { transform: translateY(-7px); } }
   }
-  .route-focus-card { overflow: hidden; }
   /* Segments + Routes share one calm, responsive workshop language.  The
      library and editor are separate cards so state changes replace content
      inside stable slots instead of reflowing the whole page. */
