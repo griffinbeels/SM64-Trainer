@@ -26,6 +26,8 @@ import { RankBanner } from "./ranks.js";
 import { Icon } from "./icons.js";
 import { ShrinkToFitName } from "./shrinkname.js";
 import { StepTrack } from "./steptrack.js";
+import { Disclose } from "./collapsible.js";
+import { useFeedMotion } from "./feedmotion.js";
 import { StratPicker } from "./stratpicker.js";
 import { StandardsPanel } from "./standards.js";
 import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
@@ -434,7 +436,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
           showNext=${active} iconSize=${rankIconSize}
           nextStepMode=${nextStepMode} />`}
     </div>`;
-  return html`<section class="log-card ${selected ? "is-selected" : ""}
+  return html`<section data-feed-key=${ek}
+      class="log-card ${selected ? "is-selected" : ""}
       ${active ? "log-card-active" : ""}
       ${isOpen ? "" : "is-closed"} ${twoLadder ? "log-card-two-ladder" : "log-card-one-ladder"}
       ${inBody ? "log-card-ranks-in-body" : ""}">
@@ -558,7 +561,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
          only the entity actually being practised offers "edit this
          movement", never a card that merely happens to also appear in the
          log. */""}
-    ${isOpen && html`<div class="log-card-body">
+    <${Disclose} open=${isOpen} className="log-card-disclose">
+      <div class="log-card-body">
       ${inBody && ranksBlock}
       ${rows.length
         ? html`<${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
@@ -608,7 +612,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
         sectionRank=${sec.rank} sectionPb=${sec.pb}
         family=${standards.family}
         onChanged=${t.refresh} defaultOpen=${false} />
-    </div>`}
+      </div>
+    <//>
   </section>`;
 }
 
@@ -655,7 +660,8 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
     .slice()
     .sort(comparator(ui.sort, t.clock));
   const shown = rows.slice(0, visible);
-  return html`<section class="log-card is-unassigned ${open ? "" : "is-closed"}">
+  return html`<section data-feed-key="unassigned"
+      class="log-card is-unassigned ${open ? "" : "is-closed"}">
     <div class="log-card-head">
       <span class="log-card-name">
         <span class="log-card-context">Unassigned</span>
@@ -667,7 +673,8 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
         <${Icon} name="chevron" size=${18} />
       </button>
     </div>
-    ${open && html`<div class="log-card-body">
+    <${Disclose} open=${open} className="log-card-disclose">
+      <div class="log-card-body">
       ${rows.length
         ? html`<${AttemptTable} attempts=${unassigned} rows=${shown} t=${t}
             freshIds=${freshIds} openCompare=${openCompare} />`
@@ -684,7 +691,8 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
             setShowHidden=${setShowHidden} />
         </div>
       </div>
-    </div>`}
+      </div>
+    <//>
   </section>`;
 }
 
@@ -867,6 +875,8 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   // cost to learn that those are two different lists.
   const topKey = autoOpenKey(sections, activeKey, playedKeys);
   const page = sections.slice(0, shown);
+  const listRef = useRef(null);
+  useFeedMotion(listRef, [...page.map(entityKey), "unassigned"]);
   return html`<section class="practice-card log-list-card ${logClasses}"
       style=${logVars} ref=${pageRef}>
     <div class="card-heading attempts-heading">
@@ -902,7 +912,13 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
         </button>`}
       </div>
     </div>
-    <div class="log-list">
+    ${/* THE FEED'S OWN MOTION. `.log-list` is the element every card is a
+         direct child of, which is what `useFeedMotion` measures against --
+         see components/feedmotion.js for why this is FLIP and why it runs in
+         a layout effect. The unassigned bucket carries a feed key too: it is
+         not an entity, but it is a card in this list and it gets pushed down
+         like any other physical object in the space. */""}
+    <div class="log-list" ref=${listRef}>
       ${page.map((sec) => {
         const ek = entityKey(sec);
         // Resolved here, per section, and handed to LogCard as plain

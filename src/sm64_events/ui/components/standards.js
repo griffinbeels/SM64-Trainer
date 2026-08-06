@@ -7,6 +7,7 @@
 // to the xcams Daily Star page for browsing every example.
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
+import { Disclose } from "./collapsible.js";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { fmtIgtShort, fmtSeconds } from "../format.js";
@@ -237,10 +238,11 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
       ${activeStrat ? html`<span class="meta"> · active: ${activeStrat}</span>` : null}
       <${Icon} name="chevron" size=${16} className="standards-chevron" />
     </button>
-    ${open && !data ? html`<div class="stdbody"><div class="inline-state loading">
+    <${Disclose} open=${open} className="stdpanel-disclose">
+    ${!data ? html`<div class="stdbody"><div class="inline-state loading">
       <${Icon} name="updates" size=${16} /> Loading standards…
     </div></div>` : null}
-    ${open && data ? html`<div class="stdbody">
+    ${data ? html`<div class="stdbody">
       <div class="stdtools">
         <button class=${editing ? "is-selected" : ""} onclick=${() => setEditing(!editing)}>
           <${Icon} name=${editing ? "check" : "edit"} size=${15} /> ${editing ? "Done editing" : "Edit"}
@@ -311,6 +313,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
           })}</tr>`)}
         </tbody></table>
     </div>` : null}
+    <//>
     ${showAdd ? html`<${StratModal} entity=${entity} existing=${strats}
         onSaved=${async () => { setShowAdd(false); await load(); onChanged && onChanged(); }}
         onClose=${() => setShowAdd(false)} />` : null}

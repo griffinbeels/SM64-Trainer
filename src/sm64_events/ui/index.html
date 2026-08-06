@@ -2652,6 +2652,15 @@
   .attempt-actions button { min-height: 30px; padding: .25rem .45rem; font-size: .76rem; }
   .attempt-actions .icon-button { width: 31px; padding-inline: 0; }
   .save-pb-narrow { display: none; }
+  /* THE DISCLOSURE PRIMITIVE (components/collapsible.js::Disclose). Two
+     rules and no more, deliberately: everything about HOW it opens is a
+     measured animation, and anything expressed here in CSS would be a second
+     opinion about it. The wrapper carries no padding, no border and no
+     background of its own -- it is a clipping box during the run and nothing
+     at all afterwards, so the surfaces inside it keep owning their own look
+     and a closed one leaves no trace in the layout. */
+  .disclose { display: block; }
+  .disclose-inner { min-width: 0; }
   .attempt-footer {
     min-height: 40px; display: flex; align-items: center; justify-content: space-between;
     gap: .5rem; border-top: 1px solid var(--border-soft); padding-top: .45rem;
