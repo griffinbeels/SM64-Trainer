@@ -156,18 +156,42 @@ export function Disclose({ open, className = "", children }) {
       running.current.forEach((animation) => animation.cancel());
       running.current = null;
     }
+    // A cancelled `fill` leaves whatever it had already applied, so the inline
+    // state is reset before the replacement measures anything -- otherwise the
+    // new run's `scrollHeight` is read through the old run's frozen box.
+    box.style.height = "";
+    box.style.overflow = "";
+    inner.style.opacity = "";
 
     // Each run stamps the direction it belongs to, so a `settle` scheduled by
     // a run that has since been replaced cannot unmount the contents of the
     // one now playing -- the other half of the rapid-toggle bug.
-    const era = open;
+    // UNCONDITIONAL, and this is the whole of the "everything bleeds out of
+    // the card" bug (2026-08-05). A previous version skipped the cleanup when
+    // the run that scheduled it had already been replaced -- which left the
+    // inline `height` frozen at a stale measurement while `overflow` was
+    // cleared by the run that replaced it, so the box was SHORTER than its
+    // contents and did not clip them. The rows painted straight through the
+    // card and over the cards below.
+    //
+    // Clearing inline state can never be conditional: it is the state that
+    // does not belong to any run, and whoever finishes last is right, because
+    // the CSS underneath is the truth in every direction. The double-unmount
+    // this guard was reaching for is handled where it belongs -- by
+    // CANCELLING the previous runs above, which is what stops their `onfinish`
+    // firing at all.
     const settle = () => {
-      if (wasOpen.current !== era) return;
+      // A FINISHED `fill` KEEPS APPLYING. It stays in `getAnimations()` and
+      // goes on holding the height it ended on, so "it finished" is not the
+      // same as "it stopped mattering" -- cancelling is what hands the box
+      // back to the stylesheet, and without it the next open measures its
+      // contents through the previous run's frozen box.
+      if (running.current) running.current.forEach((a) => a.cancel());
       box.style.height = "";
       box.style.overflow = "";
       inner.style.opacity = "";
       running.current = null;
-      if (!open) setMounted(false);
+      if (!wasOpen.current) setMounted(false);
     };
 
     if (reducedMotion() || typeof box.animate !== "function") {

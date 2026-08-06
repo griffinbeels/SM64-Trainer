@@ -150,3 +150,56 @@ def test_the_flip_measures_inside_the_list_not_the_viewport():
     assert "- rootTop" in source, (
         "card positions are viewport-relative again -- every card will animate "
         "whenever anything moves the list")
+
+
+def test_toggling_fast_never_strands_the_box_shorter_than_its_contents(page_server):
+    """The bleed: rows painting straight through the card and over its
+    neighbours (2026-08-05, two screenshots).
+
+    A run that gets replaced mid-flight used to skip its cleanup, leaving the
+    inline `height` frozen at a stale measurement while the replacement had
+    already cleared `overflow` -- a box shorter than what it holds, and no
+    longer clipping it. The symptom is entirely geometric and has no DOM
+    signature: the markup is identical, and every probe that walks the tree
+    reads the card as healthy.
+
+    Toggling several times inside one animation is how it was reached, so that
+    is what this does.
+    """
+    with driver.get_driver().launch(headless=True, viewport=(1600, 1000)) as page:
+        page.goto(page_server)
+        page.evaluate("new Promise(r => setTimeout(r, 2000))")
+        for _ in range(4):
+            page.evaluate("""
+              Array.from(document.querySelectorAll('.tune-actions button'))
+                .find((b) => b.textContent.includes('Open / close')).click()
+            """)
+            page.evaluate("new Promise(r => setTimeout(r, 60))")
+        # Open, then let everything settle.
+        page.evaluate("""
+          Array.from(document.querySelectorAll('.tune-actions button'))
+            .find((b) => b.textContent.includes('Open / close')).click()
+        """)
+        page.evaluate("new Promise(r => setTimeout(r, 1200))")
+        state = page.evaluate("""
+          (() => {
+            const box = document.querySelector('.log-card .disclose');
+            const inner = box && box.querySelector('.disclose-inner');
+            if (!box || !inner) return {error: 'no disclosure box'};
+            return {
+              inlineHeight: box.style.height,
+              inlineOverflow: box.style.overflow,
+              boxHeight: Math.round(box.getBoundingClientRect().height),
+              contentHeight: Math.round(inner.getBoundingClientRect().height),
+              stillAnimating: box.getAnimations().length,
+            };
+          })()
+        """)
+
+    assert state.get("stillAnimating") == 0, (
+        f"an animation is still running long after it should have settled: {state}")
+    assert state["inlineHeight"] == "" and state["inlineOverflow"] == "", (
+        f"the box is stranded holding inline state from a replaced run: {state}")
+    assert state["boxHeight"] >= state["contentHeight"] - 1, (
+        "the box is SHORTER than what it holds and is no longer clipping -- "
+        f"this is the bleed: {state}")
