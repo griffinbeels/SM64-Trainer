@@ -31,6 +31,19 @@ MARIO_PARTICLE_FLAGS = MARIO_STRUCT + 0x08  # u32 particleFlags, re-zeroed every
 MARIO_ACTION = MARIO_STRUCT + 0x0C        # u32; live-verified 2026-06-10
 MARIO_ACTION_TIMER = MARIO_STRUCT + 0x1A  # u16, resets to 0 on action change
 MARIO_NUM_STARS = MARIO_STRUCT + 0xAA     # s16, total star count; live-verified 2026-06-10
+# The pointers that say WHICH object Mario is engaged with. Live-verified
+# 2026-08-05 and DISCOVERED rather than asserted: tools/probe_objects.py
+# scanned every word of the struct's first 0xC0 bytes for a value landing on an
+# object-pool SLOT BOUNDARY while he played, and exactly these three plus
+# marioObj (+0x88, Mario's own object, deliberately absent here) ever did.
+# Names are decomp's. riddenObj (+0x84) is NOT listed: nothing in that session
+# rode anything, so it stays unverified.
+MARIO_INTERACT_OBJ = MARIO_STRUCT + 0x78  # what he touched (stomp, painting)
+MARIO_HELD_OBJ = MARIO_STRUCT + 0x7C      # what he picked up (bob-omb, shell)
+MARIO_USED_OBJ = MARIO_STRUCT + 0x80      # what he operated (door, pole, tree)
+# Priority when several are set at once: what he HOLDS beats what he USES beats
+# what he merely touched, because the more deliberate act is the one he means.
+MARIO_OBJECT_POINTERS = (MARIO_HELD_OBJ, MARIO_USED_OBJ, MARIO_INTERACT_OBJ)
 
 # Bit in particleFlags (the visible dust puffs) — corroborates the dust-
 # trick detector's action-edge signal. Decomp (fetched 2026-06-11): slide

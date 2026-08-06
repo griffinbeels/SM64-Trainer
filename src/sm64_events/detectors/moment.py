@@ -46,6 +46,7 @@ practice boundary anyone wants.
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from sm64_events.core.entity import entity_at
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.core.timefmt import format_igt
@@ -158,9 +159,15 @@ class MomentDetector:
         self._counts[kind] = self._counts.get(kind, 0) + 1
         reading, source = self._clock.igt_at(curr.global_timer, curr)
         igt_frames = reading + self.DISPLAY_LAG_FRAMES
+        # WHICH door, as opposed to how many doors ago. The ordinal above stays
+        # -- it is a property of the moment now rather than its name, which is
+        # his own sentence -- and `entity` is what a label and a subsection key
+        # on. None where Mario engaged nothing the pool could name.
+        found = entity_at(curr)
         return Event(type="moment_reached", frame=curr.global_timer,
                      timestamp_utc=curr.wall_time_utc,
                      payload={"kind": kind, "ordinal": self._counts[kind],
+                              "entity": found.payload() if found else None,
                               "level": curr.curr_level, "area": curr.curr_area,
                               "action": curr.mario_action,
                               "igt_frames": igt_frames, "igt_source": source,
