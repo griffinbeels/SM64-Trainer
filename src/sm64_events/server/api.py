@@ -502,7 +502,8 @@ def create_api_router(service) -> APIRouter:
 
     @router.get("/segments/timeline")
     def segments_timeline(limit: int = Query(default=200, ge=1, le=500),
-                          view: str = "steps"):
+                          view: str = "steps",
+                          after_id: int | None = None):
         """The recent journal, as rows a human can point at to define a
         segment from what they just did (`GET /api/segments/timeline`) --
         the endpoint behind Task 10's `tracking/eventlabel.py::label_event`.
@@ -535,20 +536,46 @@ def create_api_router(service) -> APIRouter:
         its ONLY route in or out. 422 on an unrecognised `view`, matching
         /api/session's own clock/scope validation. `limit` caps at 500 rows
         (422 above it) and is applied AFTER filtering, to the most recent
-        rows in the selected view. 503 in degraded mode."""
+        rows in the selected view. 503 in degraded mode.
+
+        `after_id` is the LIVE TAIL: it drops every row at or below that id,
+        so a surface already holding the list can ask for only what has
+        happened since. That is what makes the recorder live without a second
+        implementation of `label_event` in the browser — a broadcast event
+        carries `seq`, never the journal `id` this endpoint's rows are picked
+        by, so the client has to come back for the id regardless, and asking
+        for the tail costs one localhost round trip instead of the whole list.
+
+        Each row carries `igt_frames` when its own payload does — the number
+        Usamune had on screen at that moment. Surfaced, never derived:
+        `star_collected`, `key_grabbed`, `warp_entered` and `moment_reached`
+        are all stamped from the shared `detectors/igt_clock.py` when they are
+        journaled, and a type that carries none (a level change) reports null
+        rather than a computed stand-in.
+
+        FRAMES, not the payload's own pre-formatted `igt` string, even though
+        several of these events carry one. Frames is the quantity; the browser
+        renders it through `ui/format.js::fmtIgtShort`, which is THE display
+        form every other time on screen goes through. Shipping the string
+        would put a second formatter's output on the page beside it — and the
+        two really do differ, since the display form drops an empty minutes
+        field (`06"03`, not `0'06"03`) and the payload's does not."""
         if view not in ("steps", "all"):
             raise HTTPException(422, "view must be steps or all")
         if service.db is None:
             raise HTTPException(503, "database unavailable")
         rows = []
         for row in service.db.events():  # ORDER BY id -- oldest first
+            if after_id is not None and row.id <= after_id:
+                continue
             label = label_event(row)
             if label is None:
                 continue
             if view == "steps" and not _is_default_timeline_row(row):
                 continue
             rows.append({"id": row.id, "frame": row.frame, "type": row.type,
-                        "label": label, "wall_time_utc": row.wall_time_utc})
+                        "label": label, "wall_time_utc": row.wall_time_utc,
+                        "igt_frames": row.payload.get("igt_frames")})
         return {"rows": rows[-limit:]}
 
     @router.post("/segments")
@@ -658,29 +685,47 @@ def create_api_router(service) -> APIRouter:
         return {"warnings": lint_definition(candidate, service.segment_defs)}
 
     @router.get("/segments/synthesize")
-    def synthesize_from_timeline(start_id: int, end_id: int):
-        """Turn two picked `GET /api/segments/timeline` row ids into the
-        (start_clause, end_clause) pair a new segment would be defined by,
-        plus a suggested name and a plain-English sentence for each end --
-        the hinge behind "record what I just did" (`tracking/synthesize.py`,
-        Task 12) wired up for the timeline picker (Task 13). Declared BEFORE
-        /segments/{segment_id} -- same declaration-order rule as
-        /segments/vocab above (fastapi-patterns).
+    def synthesize_from_timeline(ids: str):
+        """Turn the picked `GET /api/segments/timeline` row ids into the
+        clauses a new segment would be defined by, plus a suggested name and a
+        plain-English sentence for each -- the hinge behind "record what I just
+        did" (`tracking/synthesize.py`, Task 12) wired up for the timeline
+        picker (Task 13). Declared BEFORE /segments/{segment_id} -- same
+        declaration-order rule as /segments/vocab above (fastapi-patterns).
 
-        Looks the two ids up directly in the journal (`service.db.events()`,
+        `ids` is a comma-separated list of at least two row ids. **The SERVER
+        sorts them, and that is the contract** (2026-08-05, replacing the
+        `start_id`/`end_id` pair this took until then): the earliest is the
+        start, the latest is the end, and everything between is a waypoint in
+        journal order. His words were "select any number of the events, IN
+        CHRONOLOGICAL ORDER" — and chronological is a property the events
+        already have, so reading it off the click order instead would let a
+        list drawn newest-first author a definition whose steps run backwards
+        through a walk that only ever happened one way. 422 on fewer than two
+        ids or on anything that is not a number.
+
+        A middle id becomes a waypoint through `clause_for(row, "end")`: a
+        waypoint is a place you REACH, which is the same role the end fills,
+        and the ASYMMETRY in synthesize.py's docstring is exactly about a
+        `level_changed` meaning two different clauses at the two ends.
+
+        Looks every id up directly in the journal (`service.db.events()`,
         the SAME source `/segments/timeline` reads) rather than trusting a
         client-supplied payload -- the picker only ever holds row IDS, never
-        the raw event. 404 when either id names no journal event.
+        the raw event. 404 when any id names no journal event.
 
-        409 when the pair can't become a segment, naming WHICH problem:
-        picking the SAME event for both ends (it would arm and close on the
-        identical tick -- segments.py's documented COROLLARY), or a row
-        whose type carries no synthesis rule for the role it was picked for
-        (`attempt_anchor`'s `practice_reset`/`state_loaded` source carries no
-        level/course at all -- the matcher resolves that from live
-        MatchContext, never the event, so a bare row can't supply it -- see
-        synthesize.py's module docstring). `synthesize()` itself can't say
-        which of the two failure shapes occurred (both return `None`), so on
+        Because the ids are DEDUPED before they are counted, picking one
+        moment twice is not a pair at all and reports the 422 above rather
+        than segments.py's documented COROLLARY (a definition armed and closed
+        on the identical tick) -- the same refusal, reached one step earlier
+        and worded for what the person actually did.
+
+        409 when a picked row's type carries no synthesis rule for the role it
+        was picked for (`attempt_anchor`'s `practice_reset`/`state_loaded`
+        source carries no level/course at all -- the matcher resolves that from
+        live MatchContext, never the event, so a bare row can't supply it --
+        see synthesize.py's module docstring). `synthesize()` itself can't say
+        which of the two ends failed (it returns `None` either way), so on
         failure this re-checks with `clause_for` to report the specific one --
         diagnosis, not a second decision.
 
@@ -694,17 +739,22 @@ def create_api_router(service) -> APIRouter:
         endpoint."""
         if service.db is None:
             raise HTTPException(503, "database unavailable")
+        try:
+            picked_ids = sorted({int(part) for part in ids.split(",") if part})
+        except ValueError:
+            raise HTTPException(422, "ids must be a comma-separated list of "
+                                     "timeline row ids")
+        if len(picked_ids) < 2:
+            raise HTTPException(422, "pick at least two moments — one to start "
+                                     "on and one to finish on")
         rows_by_id = {row.id: row for row in service.db.events()}
-        start_row, end_row = rows_by_id.get(start_id), rows_by_id.get(end_id)
-        if start_row is None or end_row is None:
+        picked_rows = [rows_by_id.get(row_id) for row_id in picked_ids]
+        if any(row is None for row in picked_rows):
             raise HTTPException(404, "unknown timeline event id")
+        start_row, end_row = picked_rows[0], picked_rows[-1]
+        middle_rows = picked_rows[1:-1]
         result = synthesize(start_row, end_row)
         if result is None:
-            if start_row.id == end_row.id:
-                raise HTTPException(409,
-                    "That's the same moment for both start and end — a "
-                    "segment can't arm and finish on the same event. Pick "
-                    "two different moments.")
             role = "start" if clause_for(start_row, "start") is None else "end"
             raise HTTPException(409,
                 f"That moment can't be this segment's {role} — it doesn't "
@@ -721,10 +771,27 @@ def create_api_router(service) -> APIRouter:
         steps = [{**step, "sentence": clause_sentence(step["clause"])}
                  for step in walked_steps(rows_by_id.values(),
                                           start_row, end_row)]
+        # The middles the PERSON picked, as opposed to `steps`, which is the
+        # walk we derived for them. Both ship on every answer and the caller
+        # chooses: picking exactly two moments leaves `picked` empty and the
+        # derived walk is what fills the middle (the two-click case this tool
+        # has always had), and picking more says the walk is not the answer.
+        # A middle whose row carries no clause for the role is a 409 like
+        # either end -- a definition cannot hold a step it cannot express.
+        picked = []
+        for row in middle_rows:
+            clause = clause_for(row, "end")
+            if clause is None:
+                raise HTTPException(409,
+                    f"That moment can't be a step of this segment — it "
+                    "doesn't carry enough information to define a trigger "
+                    "from (for example, a reset with no recorded place).")
+            picked.append({"id": row.id, "clause": clause,
+                           "sentence": clause_sentence(clause)})
         return {"start_clause": start_clause, "end_clause": end_clause,
                 "start_sentence": clause_sentence(start_clause),
                 "end_sentence": clause_sentence(end_clause),
-                "steps": steps,
+                "steps": steps, "picked": picked,
                 "name": suggest_name(start_clause, end_clause)}
 
     @router.post("/segments/merge")

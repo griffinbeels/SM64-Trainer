@@ -283,40 +283,43 @@ def test_the_merge_panel_is_offered(page):
     assert count(page, ".builder-merge") == 1
 
 
-def test_the_recorder_start_step_has_pickable_rows(page):
-    """`.record-rows` renders nothing (a plain-text empty state) if the
-    fixture's journal has no timeline rows -- both `_arm_segment`'s
-    level_changed events and `seed_practice`'s star_collected events count,
-    so this should never be empty in the default fixture."""
-    reach(page, "recorder-start")
-    assert count(page, ".record-steps") == 1
+def test_the_recorder_opens_onto_history_with_pickable_rows(page):
+    """The ARRIVAL state, and it is the whole of property 2: the recorder
+    opens onto what you just did, never an empty screen waiting for input.
+    `.record-rows` renders a plain-text empty state if the fixture's journal
+    has no timeline rows -- both `_arm_segment`'s level_changed events and
+    `seed_practice`'s star_collected events count, so this should never be
+    empty in the default fixture."""
+    reach(page, "recorder-open")
+    assert count(page, ".record-picks") == 1
     assert count(page, ".record-row") >= 1
+    # "what was the timer in game" -- the number he chooses BY, so it is on
+    # the row and not in the review. The fixture's star grabs carry
+    # `igt_frames`; its level edges do not, so a count EQUAL to the row count
+    # would mean we were inventing one.
+    times = count(page, ".record-igt")
+    assert 0 < times < count(page, ".record-row"), (
+        f"{times} of {count(page, '.record-row')} rows show a time")
+    # Nothing picked means no review and no Save -- a start with no end can
+    # never complete, so the control is absent rather than present-and-refused.
+    assert count(page, ".record-review") == 0
 
 
-def test_the_recorder_end_step_still_has_later_rows_to_pick(page):
-    """The `later` list is `rows.filter(row => row.id > startRow.id)` --
-    picking the MOST RECENT event as "start" would leave this empty, which
-    is exactly the bug this fixture's setup script had until the rows it
-    clicked were changed from last-in-list to first-in-list (measured, not
-    assumed: `later rows: 0` was the actual failure)."""
-    reach(page, "recorder-end")
-    assert count(page, ".record-picked") == 1
-    assert count(page, ".record-row") >= 1
-
-
-def test_the_recorder_reaches_the_dense_review_step(page):
-    """The review step is the one the team lead named as dense: two
-    `.record-picked` summaries, the synthesized start/end sentences, the
-    backtest summary and (when findings exist) the lint panel, all at once.
-    `.record-review` is the whole step's own root."""
+def test_the_recorder_review_appears_at_two_picked_moments(page):
+    """Two picks is the smallest definition there is, and the state the old
+    three-step modal called "review". `.record-review` is its own root."""
     reach(page, "recorder-review")
     assert count(page, ".record-review") == 1
-    assert count(page, ".record-picked") == 2
+    assert count(page, ".record-row.picked") == 2
+    # The two ends wear their roles, which is the only thing telling a reader
+    # which end of a newest-first list is the start.
+    assert count(page, ".record-mark.role-start") == 1
+    assert count(page, ".record-mark.role-finish") == 1
 
 
 def test_the_recorder_review_step_has_run_its_backtest(page):
-    """`synth`/`btReport` are both fetched asynchronously on entering this
-    step -- if the Story's setup did not wait for them, this measures
+    """`synth`/`btReport` are both fetched asynchronously on picking the
+    second moment -- if the Story's setup did not wait for them, this measures
     "Working it out…"/"Testing against your history…" placeholders instead
     of the real content whose layout the sweep is supposed to be checking."""
     reach(page, "recorder-review")
@@ -325,11 +328,34 @@ def test_the_recorder_review_step_has_run_its_backtest(page):
     # Absence of a placeholder is not presence of content. `segmenttimeline.js`
     # renders "Working it out…" only while `!synth && !synthErr` — a FAILED
     # synthesize clears the placeholder and renders `.badx` instead, so both
-    # this test and the dense-review-step one above pass green on an error
-    # state, measuring the layout of an error box. (Delta review, finding 6.)
+    # this test and the one above pass green on an error state, measuring the
+    # layout of an error box. (Delta review, finding 6.)
     assert count(page, ".record-review .badx") == 0, (
         "the review step rendered an error, not a synthesized definition — "
         "the placeholder assertions above cannot tell those apart")
+
+
+def test_the_recorder_asks_what_the_recording_is_a_piece_of(page):
+    """The ONLY door into a subsection. `parent` is absent from segments.js's
+    SAVE_FIELDS and no other control in the app writes one, so if this
+    control is unreachable the feature does not exist -- which is exactly
+    what he reported ("what star has subsections? I don't see a way to define
+    that?", 2026-08-05)."""
+    reach(page, "recorder-review")
+    assert count(page, ".record-parent") == 1
+    assert count(page, ".record-parent .entity-trigger") == 1
+
+
+def test_a_third_picked_moment_becomes_a_waypoint_the_person_chose(page):
+    """Three picks is the state that did not exist before 2026-08-05. The
+    middle one is a stop HE named, so the derived-walk picker is gone (its
+    whole job was filling a middle nobody had named) and the review grows a
+    "Then:" line."""
+    reach(page, "recorder-waypoints")
+    assert count(page, ".record-row.picked") == 3
+    assert count(page, ".record-mark.role-stop") == 1
+    assert count(page, ".record-review .step-picker") == 0
+    assert count(page, ".record-review:has-text('Then:')") >= 1
 
 
 def test_the_page_story_returns_to_practice_after_the_segments_tab(page):

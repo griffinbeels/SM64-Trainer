@@ -1,25 +1,58 @@
-// src/sm64_events/ui/components/segmenttimeline.js — "record what I just
-// did" (spec 2026-07-28-multi-step-segments, Task 13): pick a start moment
-// and an end moment off the recent journal (GET /api/segments/timeline),
-// preview the synthesized clause pair + a backtest against your own history
-// (POST /api/segments/backtest), then save (POST /api/segments) as a
-// match_mode: "loose" definition. This is the tool the whole feature exists
-// for — "I really love a 'record what I just did' tool. This also lets
-// someone define super custom segments very very very easily" (the user,
-// choosing this design 2026-07-28).
+// src/sm64_events/ui/components/segmenttimeline.js — the RECORDER: point at
+// what you just did and it becomes a definition.
 //
-// Three states in ONE modal: "start" -> "end" -> "review". Consumes Task 8
-// (backtest), Task 11 (timeline), Task 12 (tracking/synthesize.py). Neither
-// synthesize() nor suggest_name() had a caller outside tracking/ before this
-// component needed one, so GET /api/segments/synthesize (server/api.py) is
-// this task's own addition — the wiring the plan's Task 12 report flagged as
-// a concern to carry forward, not a contradiction of the brief's file list.
+// Rewritten 2026-08-05 from the three-state "Record a segment" modal that
+// shipped 2026-07-28 (spec 2026-07-28-multi-step-segments, Task 13). His
+// complaint about that one framed the whole rewrite:
+//
+//   "the user should not have to waste time on figuring out the vocabulary
+//    for what they want to do. They should just be able to DO THE THING THEY
+//    WANT TO DO IN GAME. Once they do it, they should be able to select from
+//    the history of what they just did, and be able to extract the important
+//    bit."
+//
+// and then, settling the shape:
+//
+//   "It should be one surface. If I come to that screen after playing, it
+//    should show stuff that I just did; if I open that screen and KEEP
+//    playing, it should show what I'm now doing. I should be able to select
+//    any number of the events, in chronological order, to define the segment
+//    that I want to capture."
+//
+// Five properties, each of which the old modal got wrong in its own way:
+//
+// 1. NO LIVE MODE. Arriving after playing and staying while playing are the
+//    SAME state. There is no toggle, no "go live", no paused/streaming
+//    distinction, because there is nothing for a person to choose between.
+// 2. IT OPENS ONTO HISTORY, never an empty screen waiting for input.
+// 3. NEWEST FIRST. `GET /api/segments/timeline` answers oldest-first (its
+//    `id` sort is the only chronological key the journal has — `frame` runs
+//    backward across every reset), so the reversal is a DISPLAY choice made
+//    here and the ids the endpoint is asked about are untouched by it.
+// 4. ROWS LAND AS THEY HAPPEN. Every websocket event triggers a tail fetch
+//    (`after_id=<newest held>`), which is why `label_event` stays server-side
+//    and there is no second labeller in the browser. A broadcast carries
+//    `seq`, never the journal `id` a row is picked by, so the client has to
+//    come back for the id regardless.
+// 5. N MOMENTS ARE THE DEFINITION. The earliest picked is the start, the
+//    latest is the end, everything between is a waypoint. The ORDER is the
+//    journal's, not the click order — see `pickedIds` below.
+//
+// The old modal's machinery survives unchanged where it was already right:
+// ONE `definitionFor` builder so backtest, lint and save send the identical
+// object; `StepPicker` for the walk the journal derives; the same
+// arms/fires/unclosed diagnostic the hand-authored Builder shows.
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { courseUnionGroups, entityKeyForOption, parseSegmentId }
+  from "../entities.js";
+import { fmtIgtShort } from "../format.js";
 import { Icon } from "./icons.js";
 import { Modal } from "./modal.js";
+import { PickerDialog } from "./entitymodal.js";
+import { optionIconSrc } from "./entityicons.js";
 import { StepPicker } from "./steptrack.js";
 
 const html = htm.bind(h);
@@ -53,32 +86,89 @@ function recordingSummary(report) {
     + "from there.";
 }
 
-// One clickable row per timeline event -- the row IS the picker, no
-// secondary confirm step (spec: "point at what you just did").
-function TimelineRows({ rows, onPick, emptyText }) {
+// What a picked row is FOR, given how many are picked and where this one
+// sits. Checked by RENDER rather than by a node test of its own -- the class
+// it produces is the only thing telling a reader which end of a newest-first
+// list is the start, so `tests/test_fixture_reaches_the_real_page.py` counts
+// `.record-mark.role-start`/`.role-finish`/`.role-stop` at two picks and at
+// three, which covers every branch including the boundary (at two, index 1 is
+// the finish and never a stop).
+function roleOf(index, count) {
+  if (index === 0) return "start";
+  if (index === count - 1) return "finish";
+  return "stop";
+}
+
+const ROLE_WORDS = { start: "Start", stop: "Stop", finish: "Finish" };
+
+// One clickable row per timeline moment. The row IS the picker -- no
+// secondary confirm step (spec: "point at what you just did") -- and it is a
+// TOGGLE, because with N selections there is no step to advance to that could
+// stand in for un-picking one.
+function TimelineRows({ rows, order, onToggle, emptyText }) {
   if (!rows.length) return html`<p class="meta">${emptyText}</p>`;
   return html`<div class="record-rows">
-    ${rows.map((row) => html`<button key=${row.id} type="button"
-        class="record-row" onclick=${() => onPick(row)}>
-      ${row.label}
-    </button>`)}
+    ${rows.map((row) => {
+      const index = order.indexOf(row.id);
+      const picked = index >= 0;
+      const role = picked ? roleOf(index, order.length) : null;
+      return html`<button key=${row.id} type="button"
+          class=${`record-row${picked ? " picked" : ""}`}
+          aria-pressed=${picked ? "true" : "false"}
+          onclick=${() => onToggle(row)}>
+        <span class=${`record-mark${picked ? ` role-${role}` : ""}`}>
+          ${picked ? index + 1 : ""}
+        </span>
+        <span class="record-label">${row.label}</span>
+        ${picked && order.length > 1
+          && html`<span class="record-role">${ROLE_WORDS[role]}</span>`}
+        ${/* "what was the timer in game", his own words -- and it is the
+             thing you choose BY, so it belongs on the row rather than in the
+             review. Through fmtIgtShort, the display form every other time on
+             screen goes through; a type with no Usamune number of its own (a
+             level change) shows nothing rather than a computed stand-in. */""}
+        ${row.igt_frames != null
+          && html`<span class="record-igt">${fmtIgtShort(row.igt_frames)}</span>`}
+      </button>`;
+    })}
   </div>`;
 }
 
-export function SegmentTimeline({ onSaved, onCancel }) {
-  const [step, setStep] = useState("start");      // "start" | "end" | "review"
+export function SegmentTimeline({ t, onSaved, onCancel }) {
   // Task 11's own carried concern: the default view (view=steps) is only
   // ~10% of the journal by design, and the rarer reset/spawn-triggered
   // starts are reachable ONLY through view=all -- without this control here
-  // they are unreachable through this tool at all.
+  // they are unreachable through this tool at all. It is NOT a live-mode
+  // toggle: both views are equally live.
   const [view, setView] = useState("steps");
-  const [rows, setRows] = useState(null);
+  const [rows, setRows] = useState(null);      // oldest first, as served
   const [rowsErr, setRowsErr] = useState(null);
-  const [startRow, setStartRow] = useState(null);
-  const [endRow, setEndRow] = useState(null);
-  const [synth, setSynth] = useState(null);       // {start_clause, end_clause, start_sentence, end_sentence, name}
+  // The ids the player pointed at, ALWAYS in journal order. Not click order:
+  // the list is drawn newest-first, so clicking down it hands them over
+  // backwards, and "in chronological order" is a property the events already
+  // have. The server sorts too (GET /api/segments/synthesize), so the two
+  // cannot disagree about which end is the start.
+  const [pickedIds, setPickedIds] = useState([]);
+  const [synth, setSynth] = useState(null);
   const [synthErr, setSynthErr] = useState(null);
   const [name, setName] = useState("");
+  // Which entity this is a piece of (`SegmentDef.parent`) -- the ONLY way a
+  // subsection can be created, and it is asked HERE because this is the
+  // moment you know the answer: "nothing asks 'you just recorded this, what
+  // is it a piece of?' when you would want to answer" (spec). Distinct from
+  // `origin`, which is where the LIBRARY files it; a subsection of a JRB star
+  // is parented to that star and filed under JRB.
+  //
+  // Held as the PICKER's own option id ("8:1" / "segment:12"), never as the
+  // entity key, so `value=` can highlight the chosen cell -- a star option's
+  // id is the bare composite and the key is "star:8:1", and storing the key
+  // here would leave every star looking unpicked while segments highlighted
+  // fine. `entityKeyForOption` is the one translation, applied where the
+  // definition is built.
+  const [parentOption, setParentOption] = useState(null);
+  const [pickingParent, setPickingParent] = useState(false);
+  const parent = parentOption == null ? null
+                                      : entityKeyForOption(parentOption);
   const [btReport, setBtReport] = useState(null);
   const [btErr, setBtErr] = useState(null);
   // Author-time lint (Task 16, spec 2026-07-28-multi-step-segments) --
@@ -91,16 +181,52 @@ export function SegmentTimeline({ onSaved, onCancel }) {
   // Node keys of the walked stops this definition REQUIRES. A Set, not a
   // list of clauses: the walk is ground truth and the only open question is
   // which of its stops count, so an invalid step is unreachable rather than
-  // validated away.
+  // validated away. Only consulted when exactly TWO moments are picked --
+  // picking a third says the walk is not the answer.
   const [required, setRequired] = useState(new Set());
   const [saving, setSaving] = useState(false);
+  // Serialises the tail fetches. Not a debounce: latency IS the deliverable
+  // here, so a burst must not be made to wait -- what this prevents is two
+  // fetches in flight racing each other into the row list out of order.
+  const tailing = useRef(false);
+  const tailAgain = useRef(false);
 
   useEffect(() => {
+    let alive = true;
     setRows(null); setRowsErr(null);
     getJSON(`/api/segments/timeline?limit=200&view=${view}`)
-      .then((body) => setRows(body.rows))
-      .catch((err) => setRowsErr(String(err)));
+      .then((body) => { if (alive) setRows(body.rows); })
+      .catch((err) => { if (alive) setRowsErr(String(err)); });
+    return () => { alive = false; };
   }, [view]);
+
+  // THE LIVE HALF, and the whole of it. `t.feed` grows on every websocket
+  // message (store.js), so this effect fires the moment the game does
+  // anything -- and asks only for what is newer than the newest row held.
+  // The old modal fetched inside a useEffect keyed on [view] and subscribed
+  // to nothing, so it was a snapshot of the moment it opened, forever.
+  const newestSeq = t && t.feed && t.feed.length ? t.feed[0].seq : null;
+  useEffect(() => {
+    if (!rows) return;                       // the first load is still in flight
+    let alive = true;
+    async function tail() {
+      if (tailing.current) { tailAgain.current = true; return; }
+      tailing.current = true;
+      try {
+        const after = rows.length ? rows[rows.length - 1].id : 0;
+        const body = await getJSON(
+          `/api/segments/timeline?limit=200&view=${view}&after_id=${after}`);
+        if (alive && body.rows.length)
+          setRows((held) => [...held, ...body.rows]);
+      } catch { /* a dropped tail is covered by the next event */ }
+      finally {
+        tailing.current = false;
+        if (tailAgain.current) { tailAgain.current = false; tail(); }
+      }
+    }
+    tail();
+    return () => { alive = false; };
+  }, [newestSeq]);
 
   function resetDownstream() {
     setSynth(null); setSynthErr(null);
@@ -109,32 +235,33 @@ export function SegmentTimeline({ onSaved, onCancel }) {
     setRequired(new Set());
   }
 
-  function pickStart(row) {
-    setStartRow(row); setEndRow(null);
-    resetDownstream();
-    setStep("end");
-  }
-
   // ONE builder for the definition every one of backtest / lint / save sends,
   // so the thing tested, the thing linted and the thing written are the same
   // object. They were three literals and stayed in step by hand; the moment
   // waypoints entered the picture that stopped being tenable -- a backtest run
   // against a DIFFERENT match_mode than the save uses reports on a matcher
-  // branch the user will never get (the exact trap the old match_mode comment
-  // here was already working around).
+  // branch the user will never get.
   //
   // STRICT the moment a stop is required, LOOSE when none is. That is not a
   // preference: a declared path only means anything under the strict matcher's
   // path cursor, and a recording with no declared stops is byte-for-byte the
   // loose definition this tool has always produced.
+  //
+  // TWO sources of waypoints and they are exclusive. `synthBody.picked` is
+  // what the PERSON pointed at; `synthBody.steps` filtered by `requiredNodes`
+  // is the walk we DERIVED for them, and it is offered only when exactly two
+  // moments are picked. Picking a third is how you say the derivation is not
+  // the answer -- which is what keeps the two-click case working unchanged.
   function definitionFor(synthBody, requiredNodes) {
-    const waypoints = (synthBody.steps || [])
-      .filter((step) => requiredNodes.has(step.node))
-      .map((step) => [step.clause]);
+    const waypoints = (synthBody.picked || []).length
+      ? synthBody.picked.map((step) => [step.clause])
+      : (synthBody.steps || [])
+          .filter((step) => requiredNodes.has(step.node))
+          .map((step) => [step.clause]);
     return { name: (name.trim() || synthBody.name), enabled: true,
       start_triggers: [synthBody.start_clause],
       end_triggers: [synthBody.end_clause], guards: [], waypoints,
-      match_mode: waypoints.length ? "strict" : "loose" };
+      parent, match_mode: waypoints.length ? "strict" : "loose" };
   }
 
   async function runBacktest(definition) {
@@ -173,13 +300,16 @@ export function SegmentTimeline({ onSaved, onCancel }) {
     if (synth) recheck(synth, next);
   }
 
-  async function pickEnd(row) {
-    setEndRow(row);
+  // Every change to the selection re-derives the whole definition. Nothing is
+  // written until Save, so there is no partial state to unwind and un-picking
+  // a moment costs exactly what picking one does (his standing rule that a
+  // multi-step flow is abandonable with NO side effects).
+  async function derive(ids) {
     resetDownstream();
-    setStep("review");
+    if (ids.length < 2) return;
     try {
       const body = await getJSON(
-        `/api/segments/synthesize?start_id=${startRow.id}&end_id=${row.id}`);
+        `/api/segments/synthesize?ids=${ids.join(",")}`);
       // Everywhere you went starts REQUIRED. You walked the route you meant to
       // practise, so the common case is that all of it counts; unticking a room
       // you were only crossing is one click, and the alternative default (none
@@ -193,15 +323,15 @@ export function SegmentTimeline({ onSaved, onCancel }) {
     } catch (err) { setSynthErr(String(err)); }
   }
 
-  // Abandonable with no side effects at every step (user rule 2026-07-26,
-  // the target-picker flow): nothing is written until Save, so going back
-  // just re-derives the review from scratch -- there is no partial state to
-  // unwind.
-  function backTo(target) {
-    if (target === "start") setEndRow(null);
-    resetDownstream();
-    setStep(target);
+  function toggleRow(row) {
+    const next = pickedIds.includes(row.id)
+      ? pickedIds.filter((id) => id !== row.id)
+      : [...pickedIds, row.id].sort((left, right) => left - right);
+    setPickedIds(next);
+    derive(next);
   }
+
+  function clearPicks() { setPickedIds([]); resetDownstream(); }
 
   async function save() {
     if (!synth || !btReport) return;   // see Save's disabled= below
@@ -214,21 +344,26 @@ export function SegmentTimeline({ onSaved, onCancel }) {
     finally { setSaving(false); }
   }
 
-  const later = startRow
-    ? (rows || []).filter((row) => row.id > startRow.id) : [];
+  // NEWEST FIRST is a display choice, made once, here. Every id handed to the
+  // server keeps the journal's own order.
+  const shown = rows ? [...rows].reverse() : [];
+  const parentGroups = t && t.view ? courseUnionGroups(
+    t.view.catalog, (t.segments || []).filter((s) => !s.is_hundred_coin_engine),
+    (t.vocab || {}).course_by_level || {}) : [];
+  const parentName = (() => {
+    if (parentOption == null) return null;
+    for (const group of parentGroups)
+      for (const option of group.options)
+        if (option.id === parentOption) return option.name;
+    return parent;
+  })();
   // Same name/shape as segments.js's Builder -- an "error" severity finding
   // disables Save there too; a "warning" one does not.
   const lintHasError = lintFindings.some((finding) => finding.severity === "error");
 
   return html`<${Modal} title="Record a segment" icon="segments" size="large"
       onClose=${onCancel}
-      description="Point at what you just did: pick when it started, then when it finished.">
-    <div class="record-steps">
-      <span class="record-step ${step === "start" ? "on" : ""}">1. Start</span>
-      <span class="record-step ${step === "end" ? "on" : ""}">2. End</span>
-      <span class="record-step ${step === "review" ? "on" : ""}">3. Review</span>
-    </div>
-
+      description="Play, then point at what you just did. Pick the moment it started, the moment it finished, and any stops in between.">
     <label class="record-view-toggle">
       <input type="checkbox" checked=${view === "all"}
           onchange=${(e) => setView(e.target.checked ? "all" : "steps")} />
@@ -238,61 +373,81 @@ export function SegmentTimeline({ onSaved, onCancel }) {
     ${rowsErr && html`<p class="badx">${rowsErr}</p>`}
     ${!rows && !rowsErr && html`<p class="meta">Loading your recent history…</p>`}
 
-    ${rows && step === "start" && html`<${TimelineRows} rows=${rows}
-        onPick=${pickStart}
-        emptyText="Nothing recorded yet — play a bit, then come back." />`}
-
-    ${rows && step === "end" && html`<div>
-      <p class="meta record-picked">Start: <b>${startRow.label}</b>
-        <button class="quiet-button" onclick=${() => backTo("start")}>
-          <${Icon} name="stepBack" size=${14} /> Change
-        </button>
-      </p>
-      <${TimelineRows} rows=${later} onPick=${pickEnd}
-          emptyText="Nothing later than that in your history yet — play a bit more, then come back." />
+    ${rows && html`<div class="record-picks">
+      <span class="meta">${pickedIds.length === 0
+        ? "Nothing picked yet — newest is at the top."
+        : pickedIds.length === 1
+          ? "1 moment picked. Pick the one it finished on."
+          : `${pickedIds.length} moments picked.`}</span>
+      ${pickedIds.length > 0 && html`<button class="quiet-button"
+          onclick=${clearPicks}>
+        <${Icon} name="close" size=${14} /> Clear
+      </button>`}
     </div>`}
 
-    ${step === "review" && html`<div class="record-review">
-      <p class="meta record-picked">Start: <b>${startRow.label}</b>
-        <button class="quiet-button" onclick=${() => backTo("start")}>
-          <${Icon} name="stepBack" size=${14} /> Change
+    ${rows && html`<${TimelineRows} rows=${shown} order=${pickedIds}
+        onToggle=${toggleRow}
+        emptyText="Nothing recorded yet — play a bit and it will appear here." />`}
+
+    ${synthErr && html`<p class="badx">${synthErr}</p>`}
+    ${pickedIds.length >= 2 && !synth && !synthErr
+      && html`<p class="meta">Working it out…</p>`}
+    ${synth && html`<div class="record-review">
+      <label class="builder-name">
+        <span class="field-label">Segment name</span>
+        <input value=${name} oninput=${(e) => setName(e.target.value)} />
+      </label>
+      <p class="meta">Starts when: <b>${synth.start_sentence}</b></p>
+      ${(synth.picked || []).map((step, i) => html`<p key=${i} class="meta">
+        Then: <b>${step.sentence}</b></p>`)}
+      <p class="meta">Ends when: <b>${synth.end_sentence}</b></p>
+      ${(synth.picked || []).length === 0
+        && html`<${StepPicker} steps=${synth.steps} required=${required}
+          onToggle=${toggleStep} />`}
+
+      ${/* The ONLY door into a subsection. `parent` is absent from
+           segments.js's SAVE_FIELDS and no other control writes one, which
+           is why he asked "what star has subsections? I don't see a way to
+           define that?" */""}
+      <div class="record-parent">
+        <span class="field-label">What is this a piece of?</span>
+        <button type="button" class="entity-trigger"
+            onclick=${() => setPickingParent(true)}>
+          ${parentName || "Nothing — it stands on its own"}
         </button>
-      </p>
-      <p class="meta record-picked">End: <b>${endRow.label}</b>
-        <button class="quiet-button" onclick=${() => backTo("end")}>
-          <${Icon} name="stepBack" size=${14} /> Change
-        </button>
-      </p>
-      ${synthErr && html`<p class="badx">${synthErr}</p>`}
-      ${!synth && !synthErr && html`<p class="meta">Working it out…</p>`}
-      ${synth && html`<div>
-        <label class="builder-name">
-          <span class="field-label">Segment name</span>
-          <input value=${name} oninput=${(e) => setName(e.target.value)} />
-        </label>
-        <p class="meta">Starts when: <b>${synth.start_sentence}</b></p>
-        <p class="meta">Ends when: <b>${synth.end_sentence}</b></p>
-        <${StepPicker} steps=${synth.steps} required=${required}
-          onToggle=${toggleStep} />
-        ${btErr && html`<p class="badx">${btErr}</p>`}
-        ${!btReport && !btErr
-          && html`<p class="meta">Testing against your history…</p>`}
-        ${btReport && html`<p class="meta">${recordingSummary(btReport)}</p>`}
-        ${lintErr && html`<p class="badx">${lintErr}</p>`}
-        ${lintFindings.length > 0 && html`<div class="lint-panel">
-          ${lintFindings.map((finding, i) => html`<div key=${i}
-              class="lint-finding lint-${finding.severity}">
-            <${Icon} name=${finding.severity === "error" ? "close" : "shield"} size=${14} />
-            ${" "}${finding.message}
-          </div>`)}
-        </div>`}
+      </div>
+      ${pickingParent && html`<${PickerDialog} groups=${parentGroups}
+        value=${parentOption} title="What is this a piece of?" depth=${2}
+        placeholder="Nothing — it stands on its own"
+        iconFor=${(id) => optionIconSrc(t,
+          parseSegmentId(id) == null ? "star" : "segment",
+          parseSegmentId(id) == null ? id : parseSegmentId(id))}
+        onPick=${(id) => { setParentOption(id); setPickingParent(false); }}
+        onClose=${() => setPickingParent(false)} />`}
+
+      ${btErr && html`<p class="badx">${btErr}</p>`}
+      ${!btReport && !btErr
+        && html`<p class="meta">Testing against your history…</p>`}
+      ${btReport && html`<p class="meta">${recordingSummary(btReport)}</p>`}
+      ${lintErr && html`<p class="badx">${lintErr}</p>`}
+      ${lintFindings.length > 0 && html`<div class="lint-panel">
+        ${lintFindings.map((finding, i) => html`<div key=${i}
+            class="lint-finding lint-${finding.severity}">
+          <${Icon} name=${finding.severity === "error" ? "close" : "shield"} size=${14} />
+          ${" "}${finding.message}
+        </div>`)}
       </div>`}
     </div>`}
 
     ${saveErr && html`<p class="badx">${saveErr}</p>`}
     <div class="builder-actions">
       <button onclick=${onCancel}>Cancel</button>
-      ${step === "review" && html`<button class="primary-button"
+      ${/* Save is simply ABSENT below two picks rather than present and
+           refused: a start with no end can never complete, and a disabled
+           control whose reason lives in its own hover is the shape he
+           reported as a dead button (2026-08-02). The line above the list
+           says what to do instead. */""}
+      ${pickedIds.length >= 2 && html`<button class="primary-button"
           disabled=${!btReport || saving || lintHasError} onclick=${save}>
         <${Icon} name="save" size=${16} />${" "}${saving ? "Saving…" : "Save segment"}
       </button>`}

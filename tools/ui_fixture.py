@@ -486,7 +486,21 @@ def _free_port() -> int:
 
 
 @contextlib.contextmanager
-def serve_ui(db_path: Path | None = None, timeout: float = 30,
+def serve_ui(*args, **kwargs):
+    """`serve_ui_live`, with the service handle dropped.
+
+    THE default door, and the one every gate uses: a caller that only needs a
+    URL should not be handed a live TrackerService it could publish through by
+    accident. The one caller that DOES need it is measuring latency -- how
+    long a real game event takes to reach the screen -- and that cannot be
+    asked of a page whose server nothing can make anything happen on.
+    """
+    with serve_ui_live(*args, **kwargs) as (base, _service):
+        yield base
+
+
+@contextlib.contextmanager
+def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               seed: bool = True, from_dev_db: bool = False,
               stage: tuple[int, int] | None = None,
               target: tuple[int, int] | None = None,
@@ -631,7 +645,7 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
                 # target set above survives untouched underneath a Bowser
                 # quick-select banner from a different course entirely.
                 _publish_bowser_stage(service, *bowser_stage)
-        yield base
+        yield base, service
     finally:
         server.should_exit = True
         thread.join(timeout=15)

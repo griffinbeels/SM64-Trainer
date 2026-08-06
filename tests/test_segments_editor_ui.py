@@ -286,11 +286,12 @@ def test_the_backtest_button_guard_can_still_fail():
     assert not _has_backtest_button_label(ternary_in_a_comment)
 
 
-# --- the timeline picker: "record what I just did" (Task 13, spec
-# 2026-07-28-multi-step-segments) -------------------------------------------
-# Three states in one modal (pick start -> pick end -> review): the user
-# points at what they just did instead of hand-authoring TRIGGERS clauses.
-# Consumes Task 8 (backtest), Task 11 (timeline), Task 12 (synthesize).
+# --- the RECORDER: "record what I just did" (Task 13, spec 2026-07-28-multi-
+# step-segments; rewritten 2026-08-05) --------------------------------------
+# ONE surface: a live list of moments, newest first, of which any number can
+# be picked to define a segment. The user points at what they just did
+# instead of hand-authoring TRIGGERS clauses. Consumes Task 8 (backtest),
+# Task 11 (timeline), Task 12 (synthesize).
 
 SEGMENT_TIMELINE_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
                        / "ui" / "components" / "segmenttimeline.js")
@@ -311,9 +312,33 @@ def _fetches_the_timeline_with_the_view(source: str) -> bool:
                           stripped))
 
 
-def _a_row_click_sets_each_end(source: str) -> bool:
+def _a_row_click_toggles_the_pick(source: str) -> bool:
+    """A row click TOGGLES membership of the selection, both ways.
+
+    Replaced `setStartRow(row)`/`setEndRow(row)` on 2026-08-05 along with the
+    stepper those belonged to. With N picks there is no next step to advance
+    to, so un-picking has to be the same gesture as picking -- and pinning
+    only the ADD half would stay green against a list you can fill and never
+    empty, which is a dead end reached by using the feature correctly.
+    """
     stripped = strip_comments(source)
-    return "setStartRow(row)" in stripped and "setEndRow(row)" in stripped
+    return ("pickedIds.filter((id) => id !== row.id)" in stripped
+            and "[...pickedIds, row.id].sort(" in stripped)
+
+
+def _asks_what_the_recording_is_a_piece_of(source: str) -> bool:
+    """The ONLY door into a subsection, and it must reach the DEFINITION.
+
+    Two halves, both load-bearing: a control that writes the state, and that
+    state riding the object `definitionFor` builds. A control writing a value
+    nothing sends is exactly the shape of the bug this closes -- `SegmentBody.
+    parent` has been real server-side the whole time and no control ever wrote
+    one, which is why he asked "what star has subsections? I don't see a way
+    to define that?" (2026-08-05).
+    """
+    stripped = strip_comments(source)
+    return ("setParentOption(id)" in stripped
+            and re.search(r"waypoints,\s+parent,", stripped) is not None)
 
 
 def _offers_a_view_toggle(source: str) -> bool:
@@ -333,8 +358,12 @@ def test_the_timeline_component_fetches_the_recent_journal():
     assert _fetches_the_timeline_with_the_view(SEGMENT_TIMELINE_JS_SOURCE)
 
 
-def test_a_row_click_sets_the_start_or_the_end():
-    assert _a_row_click_sets_each_end(SEGMENT_TIMELINE_JS_SOURCE)
+def test_a_row_click_toggles_that_moment_in_and_out_of_the_pick():
+    assert _a_row_click_toggles_the_pick(SEGMENT_TIMELINE_JS_SOURCE)
+
+
+def test_the_recorder_asks_what_the_recording_is_a_piece_of():
+    assert _asks_what_the_recording_is_a_piece_of(SEGMENT_TIMELINE_JS_SOURCE)
 
 
 def test_the_view_toggle_reaches_view_all():
@@ -348,21 +377,35 @@ def test_the_timeline_guards_can_still_fail():
     """
     comment_only = (
         '// Fetches /api/segments/timeline?limit=200&view=steps and lets a\n'
-        '// row click call setStartRow(row) / setEndRow(row); the toggle\n'
-        '// flips setView between "all" and "steps".\n')
+        '// row click do pickedIds.filter((id) => id !== row.id) or else\n'
+        '// [...pickedIds, row.id].sort(); the toggle flips setView between\n'
+        '// "all" and "steps", and setParentOption(id) rides the definition\n'
+        '// beside waypoints,\n'
+        '// parent, so a subsection can be made.\n')
     assert not _fetches_the_timeline_with_the_view(comment_only)
-    assert not _a_row_click_sets_each_end(comment_only)
+    assert not _a_row_click_toggles_the_pick(comment_only)
+    assert not _asks_what_the_recording_is_a_piece_of(comment_only)
     assert not _offers_a_view_toggle(comment_only)
 
     assert _fetches_the_timeline_with_the_view(
         'getJSON(`/api/segments/timeline?limit=200&view=${view}`)')
-    assert _a_row_click_sets_each_end(
-        'onclick=${() => { setStartRow(row); setEndRow(row); }}')
+    assert _a_row_click_toggles_the_pick(
+        'const next = pickedIds.includes(row.id)\n'
+        '  ? pickedIds.filter((id) => id !== row.id)\n'
+        '  : [...pickedIds, row.id].sort((l, r) => l - r);')
+    assert _asks_what_the_recording_is_a_piece_of(
+        'onPick=${(id) => { setParentOption(id); }}\n'
+        'return { start_triggers: [], waypoints,\n'
+        '  parent, match_mode: "loose" };')
     assert _offers_a_view_toggle(
         'onchange=${(e) => setView(e.target.checked ? "all" : "steps")}')
 
     # The specific weakness each replacement closes: the OLD assertions all
     # pass against these, the new ones must not.
+    assert not _a_row_click_toggles_the_pick(
+        'const next = [...pickedIds, row.id].sort((l, r) => l - r);')
+    assert not _asks_what_the_recording_is_a_piece_of(
+        'onPick=${(id) => { setParentOption(id); }}   // written, never sent')
     assert not _fetches_the_timeline_with_the_view(
         'getJSON("/api/segments/timeline?limit=200&view=steps")')
     assert not _offers_a_view_toggle(

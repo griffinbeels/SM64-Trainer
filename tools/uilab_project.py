@@ -190,52 +190,63 @@ if (btBtn && !document.querySelector('.backtest-panel')) {
 """)
 
 
-def _recorder_setup(target_step: int) -> str:
-    """Idempotent, order-independent: walks the "record a segment" modal
-    (segmenttimeline.js) FORWARD from wherever it currently is to
-    `target_step` (0 start / 1 end / 2 review), backing up to "start" first
-    if it is already further along. Each forward click picks the FIRST
-    currently-listed `.record-row` -- any row synthesizes into a segment
-    (any level_changed/star_collected pair works), and picking the first
-    (oldest) one at every step guarantees rows remain for the step after it;
-    picking the LAST (most recent) one at "start" was tried and left nothing
-    later to pick for "end" (measured, not assumed)."""
+def _recorder_setup(picks: int) -> str:
+    """Idempotent, order-independent: opens the RECORDER (segmenttimeline.js)
+    and leaves exactly `picks` moments selected.
+
+    Rewritten 2026-08-05 with the surface itself. The old script walked a
+    three-state stepper (start -> end -> review) and read its position off
+    `.record-step.on`; there are no steps now -- one list, a selection of any
+    size, and the review appears at two. So the position IS the number of
+    picked rows, which is what `.record-row.picked` counts.
+
+    Picks the OLDEST rows (the list is drawn newest-first, so the LAST DOM
+    rows) for the same reason the old script picked the first ones: the
+    synthesize call refuses a pair that is one event, and any
+    level_changed/star_collected pair the fixture holds synthesizes fine.
+    """
     return _script(f"""
 const segBtn = document.querySelector('button.nav-item[title="Segments"]');
 if (segBtn && segBtn.getAttribute('aria-current') !== 'page') {{
   segBtn.click();
   await waitFor(() => !!document.querySelector('.segments-page'));
 }}
-if (!document.querySelector('.record-steps')) {{
+if (!document.querySelector('.record-rows, .record-picks')) {{
   const openBtn = Array.from(document.querySelectorAll('button'))
     .find((b) => b.textContent.includes('Record a segment'));
   if (openBtn) {{
     openBtn.click();
-    await waitFor(() => !!document.querySelector('.record-steps'));
+    await waitFor(() => !!document.querySelector('.record-picks'));
   }}
 }}
-const stepIndex = () => {{
-  const el = document.querySelector('.record-step.on');
-  if (!el) return -1;
-  const label = el.textContent.trim();
-  return label.startsWith('1') ? 0 : label.startsWith('2') ? 1 : 2;
-}};
-if (stepIndex() > {target_step}) {{
-  // The FIRST `.record-picked` "Change" is always Start's -- one back-click
-  // from either "end" or "review" returns to "start" (segmenttimeline.js's
-  // own backTo("start") clears endRow too).
-  const back = document.querySelector('.record-picked button');
-  if (back) {{ back.click(); await waitFor(() => stepIndex() <= {target_step}); }}
+const picked = () => document.querySelectorAll('.record-row.picked').length;
+while (picked() > {picks}) {{
+  const clear = Array.from(document.querySelectorAll('.record-picks button'))
+    .find((b) => b.textContent.includes('Clear'));
+  if (!clear) break;
+  clear.click();
+  await waitFor(() => picked() === 0, 2000);
 }}
-let guard = 0;   // bounded: at most two forward steps ever needed
-while (stepIndex() >= 0 && stepIndex() < {target_step} && guard < 5) {{
+let guard = 0;   // bounded: never more than a handful of picks is measured
+while (picked() < {picks} && guard < 6) {{
   guard++;
-  const before = stepIndex();
   await waitFor(() => document.querySelectorAll('.record-row').length > 0, 3000);
-  const rows = document.querySelectorAll('.record-row');
+  const rows = Array.from(document.querySelectorAll('.record-row'))
+    .filter((row) => !row.classList.contains('picked'));
   if (!rows.length) break;
-  rows[0].click();
-  await waitFor(() => stepIndex() !== before, 2000);
+  const before = picked();
+  rows[rows.length - 1].click();          // oldest first
+  await waitFor(() => picked() !== before, 2000);
+}}
+if ({picks} >= 2) {{
+  // The review is fetched (synthesize -> backtest -> lint), so a story that
+  // does not wait measures "Working it out…" instead of the layout it is
+  // named for.
+  await waitFor(() => !!document.querySelector('.record-review'), 4000);
+  await waitFor(() => {{
+    const panel = document.querySelector('.record-review');
+    return panel && !panel.textContent.includes('Testing against your history');
+  }}, 6000);
 }}
 """)
 
@@ -274,9 +285,13 @@ STORIES = [
     # `skip_if` runs BEFORE `setup` (uilab's sweep loop), so gating on the
     # state setup is meant to create would skip every single time.
     Story(name="segments-editor", at=".segbuilder", setup=_EDITOR_SETUP),
-    Story(name="recorder-start", at=".modal", setup=_recorder_setup(0)),
-    Story(name="recorder-end", at=".modal", setup=_recorder_setup(1)),
+    Story(name="recorder-open", at=".modal", setup=_recorder_setup(0)),
     Story(name="recorder-review", at=".modal", setup=_recorder_setup(2)),
+    # THREE moments, which is the shape that only exists since 2026-08-05:
+    # the middle one is a waypoint the PERSON picked, so this is the state
+    # where the review grows a "Then:" line per stop and drops the derived
+    # step picker entirely.
+    Story(name="recorder-waypoints", at=".modal", setup=_recorder_setup(3)),
 ]
 
 PROJECT = Project(

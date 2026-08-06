@@ -1068,7 +1068,7 @@ def test_synthesize_endpoint_builds_a_clause_pair_a_name_and_sentences(tmp_path)
         asyncio.run(go())
         start_id, end_id = _timeline_ids(client)
         r = client.get(
-            f"/api/segments/synthesize?start_id={start_id}&end_id={end_id}")
+            f"/api/segments/synthesize?ids={start_id},{end_id}")
         assert r.status_code == 200
         body = r.json()
         assert body["start_clause"] == {"type": "level_exit", "from": 23}
@@ -1081,11 +1081,16 @@ def test_synthesize_endpoint_builds_a_clause_pair_a_name_and_sentences(tmp_path)
 def test_synthesize_endpoint_404s_on_an_unknown_event_id(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:
-        r = client.get("/api/segments/synthesize?start_id=999998&end_id=999999")
+        r = client.get("/api/segments/synthesize?ids=999998,999999")
         assert r.status_code == 404
 
 
-def test_synthesize_endpoint_409s_on_the_same_event_for_both_ends(tmp_path):
+def test_synthesize_endpoint_422s_on_the_same_event_picked_twice(tmp_path):
+    # segments.py's COROLLARY (a definition armed and closed on the identical
+    # tick) reached one step earlier than it used to be: `ids` is DEDUPED
+    # before it is counted, so picking one moment twice is not a pair at all.
+    # This was a 409 "same moment for both start and end" while the endpoint
+    # took a start_id/end_id pair.
     client, service, db = make_client(tmp_path)
     with client:
         async def go():
@@ -1094,10 +1099,9 @@ def test_synthesize_endpoint_409s_on_the_same_event_for_both_ends(tmp_path):
                                         payload={"from": 7, "to": 6}))
         asyncio.run(go())
         [only_id] = _timeline_ids(client)
-        r = client.get(
-            f"/api/segments/synthesize?start_id={only_id}&end_id={only_id}")
-        assert r.status_code == 409
-        assert "same moment" in r.json()["detail"]
+        r = client.get(f"/api/segments/synthesize?ids={only_id},{only_id}")
+        assert r.status_code == 422
+        assert "at least two" in r.json()["detail"]
 
 
 def test_synthesize_endpoint_409s_when_the_start_row_has_no_synthesis_rule(tmp_path):
@@ -1116,7 +1120,7 @@ def test_synthesize_endpoint_409s_when_the_start_row_has_no_synthesis_rule(tmp_p
         asyncio.run(go())
         start_id, end_id = _timeline_ids(client)
         r = client.get(
-            f"/api/segments/synthesize?start_id={start_id}&end_id={end_id}")
+            f"/api/segments/synthesize?ids={start_id},{end_id}")
         assert r.status_code == 409
         assert "start" in r.json()["detail"]
 
@@ -1134,7 +1138,7 @@ def test_synthesize_endpoint_409s_when_the_end_row_has_no_synthesis_rule(tmp_pat
         asyncio.run(go())
         start_id, end_id = _timeline_ids(client)
         r = client.get(
-            f"/api/segments/synthesize?start_id={start_id}&end_id={end_id}")
+            f"/api/segments/synthesize?ids={start_id},{end_id}")
         assert r.status_code == 409
         assert "end" in r.json()["detail"]
 
@@ -1143,8 +1147,157 @@ def test_synthesize_endpoint_503s_in_degraded_mode(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:
         service.db = None
-        r = client.get("/api/segments/synthesize?start_id=1&end_id=2")
+        r = client.get("/api/segments/synthesize?ids=1,2")
         assert r.status_code == 503
+
+
+# --- N picked moments, not two (2026-08-05, the recorder) ----------------
+# "I should be able to select any number of the events, in chronological
+# order, to define the segment that I want to capture." The middles become
+# waypoints; the two-moment case is byte-for-byte what it always was.
+
+def test_synthesize_makes_every_middle_moment_a_waypoint_in_journal_order(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            for frame, payload in ((100, {"from": 23, "to": 6}),
+                                   (200, {"from": 6, "to": 24}),
+                                   (300, {"from": 24, "to": 6}),
+                                   (400, {"from": 6, "to": 19})):
+                await service.publish(Event(type="level_changed", frame=frame,
+                                            timestamp_utc=T0, payload=payload))
+        asyncio.run(go())
+        ids = _timeline_ids(client)
+        r = client.get(f"/api/segments/synthesize?ids={','.join(map(str, ids))}")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["start_clause"] == {"type": "level_exit", "from": 23}
+        assert body["end_clause"] == {"type": "level_enter", "to": 19}
+        # Both middles, in journal order, each as the clause for the role a
+        # waypoint plays -- a place you REACH, which is the END role.
+        assert [step["clause"] for step in body["picked"]] == [
+            {"type": "level_enter", "to": 24}, {"type": "level_enter", "to": 6}]
+        assert body["picked"][0]["sentence"] == "Enter Whomp's Fortress"
+
+
+def test_synthesize_sorts_the_picked_ids_rather_than_trusting_click_order(tmp_path):
+    # The list is drawn NEWEST FIRST, so clicking down it hands the ids over
+    # backwards. Chronological order is a property the events already have,
+    # and reading it off the clicks instead would author a definition whose
+    # steps run backwards through a walk that only happened one way.
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            for frame, payload in ((100, {"from": 23, "to": 6}),
+                                   (200, {"from": 6, "to": 24}),
+                                   (300, {"from": 24, "to": 19})):
+                await service.publish(Event(type="level_changed", frame=frame,
+                                            timestamp_utc=T0, payload=payload))
+        asyncio.run(go())
+        ids = _timeline_ids(client)
+        forwards = client.get(
+            f"/api/segments/synthesize?ids={','.join(map(str, ids))}").json()
+        backwards = client.get(
+            f"/api/segments/synthesize?ids={','.join(map(str, reversed(ids)))}"
+        ).json()
+        assert forwards == backwards
+        assert forwards["start_clause"] == {"type": "level_exit", "from": 23}
+
+
+def test_synthesize_422s_on_fewer_than_two_moments(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.get("/api/segments/synthesize?ids=7")
+        assert r.status_code == 422
+        assert "at least two" in r.json()["detail"]
+
+
+def test_synthesize_422s_on_ids_that_are_not_numbers(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.get("/api/segments/synthesize?ids=7,nope")
+        assert r.status_code == 422
+
+
+def test_synthesize_409s_when_a_MIDDLE_moment_carries_no_clause(tmp_path):
+    # A definition cannot hold a step it cannot express, so a middle refuses
+    # for the same reason either end does -- and says "step", not "end", or
+    # the sentence points at the wrong row.
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="level_changed", frame=100,
+                                        timestamp_utc=T0,
+                                        payload={"from": 23, "to": 6}))
+            await service.publish(Event(type="practice_reset", frame=200,
+                                        timestamp_utc=T0,
+                                        payload={"igt_frames_before": 0}))
+            await service.publish(Event(type="level_changed", frame=300,
+                                        timestamp_utc=T0,
+                                        payload={"from": 6, "to": 19}))
+        asyncio.run(go())
+        ids = _timeline_ids(client)
+        r = client.get(f"/api/segments/synthesize?ids={','.join(map(str, ids))}")
+        assert r.status_code == 409
+        assert "step" in r.json()["detail"]
+
+
+# --- the timeline's live tail + the in-game timer (2026-08-05) -----------
+
+def test_timeline_rows_carry_the_in_game_timer_when_the_event_does(tmp_path):
+    # "what was the timer in game" -- surfaced from the payload the detector
+    # already stamped, never derived here. A type that carries none reports
+    # null rather than a computed stand-in.
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="moment_reached", frame=100,
+                                        timestamp_utc=T0,
+                                        payload={"kind": "door_open",
+                                                 "level": 16, "ordinal": 1,
+                                                 "igt": "0'06\"03",
+                                                 "igt_frames": 181}))
+            await service.publish(Event(type="level_changed", frame=200,
+                                        timestamp_utc=T0,
+                                        payload={"from": 16, "to": 6}))
+        asyncio.run(go())
+        rows = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        by_type = {row["type"]: row for row in rows}
+        assert by_type["moment_reached"]["igt_frames"] == 181
+        assert by_type["level_changed"]["igt_frames"] is None
+        # FRAMES only, never the payload's own pre-formatted string: the
+        # browser renders it through fmtIgtShort like every other time on
+        # screen, and shipping the string would put a second formatter's
+        # output on the page beside it (they differ — the display form drops
+        # an empty minutes field).
+        assert "igt" not in by_type["moment_reached"]
+
+
+def test_timeline_after_id_returns_only_what_happened_since(tmp_path):
+    # The live tail. A broadcast event carries `seq`, never the journal `id`
+    # these rows are picked by, so a live surface has to come back for the id
+    # regardless -- asking for the tail costs one round trip instead of the
+    # whole list, and keeps `label_event` server-side.
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go(payload):
+            await service.publish(Event(type="level_changed", frame=100,
+                                        timestamp_utc=T0, payload=payload))
+        asyncio.run(go({"from": 23, "to": 6}))
+        first = _timeline_ids(client)[-1]
+        asyncio.run(go({"from": 6, "to": 19}))
+        tail = client.get(
+            f"/api/segments/timeline?limit=50&view=all&after_id={first}"
+        ).json()["rows"]
+        assert [row["id"] for row in tail] == [first + 1]
+        assert tail[0]["label"] == "Exited Castle Inside into Bowser in the Fire Sea"
+        # Nothing new since the newest row is an EMPTY tail, not the last row
+        # over again -- a surface that prepends what it gets back would
+        # otherwise double every row it already holds.
+        assert client.get(
+            f"/api/segments/timeline?limit=50&view=all&after_id={first + 1}"
+        ).json()["rows"] == []
 
 
 # Fields that legitimately MUST NOT persist through create_segment/

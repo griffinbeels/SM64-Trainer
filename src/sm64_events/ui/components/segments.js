@@ -941,7 +941,7 @@ export function Segments({ t, intent, clearIntent }) {
         <${Icon} name="plus" size=${17} /> New segment
       </button>
     </header>
-    ${recording && html`<${SegmentTimeline}
+    ${recording && html`<${SegmentTimeline} t=${t}
         onCancel=${() => setRecording(false)}
         onSaved=${async (savedId) => {
           // Same "stay on what you just saved" rule the Builder's own

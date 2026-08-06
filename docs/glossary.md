@@ -395,6 +395,19 @@ parent again returns the full row.
   (`src/sm64_events/ui/components/stagebanner.js`), whose disclosure rule is
   its own module (`src/sm64_events/ui/subsections.js`)
 
+### Segment recorder
+
+The screen turning what you just played into a [[segment]]. It lists your recent
+[[moment]]s newest first, keeps listing them while you keep playing, and asks
+which [[target]] the result is a piece of — which is the only way to make a
+[[subsection]]. Picking two [[moment]]s defines the ends and the [[journal]]
+fills the middle from where you walked; picking more says which stops count.
+
+- **Lives** — the recording screen
+  (`src/sm64_events/ui/components/segmenttimeline.js`) → the Segments tab
+- **Not** — the [[recorder]], which captures video. This one captures nothing;
+  it reads the [[journal]] you already wrote by playing.
+
 ### Practice cell
 
 One clickable thing in the [[selector]] — its art, its [[rank icon]], its name

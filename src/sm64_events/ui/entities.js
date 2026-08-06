@@ -424,8 +424,14 @@ function segmentCourse(segment, courseByLevel) {
 // a segment option's id already IS "segment:12". Get this translation wrong
 // and every star silently shows no rank while every segment works, which
 // reads as missing data rather than as a bug.
-const rankMapKey = (optionId) =>
-  optionId.startsWith("segment:") ? optionId : `star:${optionId}`;
+export const entityKeyForOption = (optionId) =>
+  String(optionId).startsWith("segment:") ? String(optionId)
+                                          : `star:${optionId}`;
+// The rank map's key IS the entity key -- one name for the translation, used
+// for the badge lookup here and by the recorder to say which entity a new
+// subsection is a piece of (`SegmentDef.parent`, the sheet's own mapping key).
+// Two hand-built copies of a key format is how they drift.
+const rankMapKey = entityKeyForOption;
 
 // build_entity_ranks (GET /api/target/ranks) answers per entity with a FLAT
 // {rank, division, strat} -- the endpoint's own docstring names this shape.

@@ -34,6 +34,8 @@ uv run pytest tests/test_responsive.py -q            # render every breakpoint; 
 uv run python tools/check_glossary.py                # docs/glossary.md's own gate: closure, active voice, live Lives paths
 uv run python tools/contact_sheet.py .objective-card # one surface at 1500/1200/900/850, in one image -- LOOK at it
 uv run python tools/contact_sheet.py --subsections    # the SELECTOR EXPANDED into a star's subsections (--folded for the way back); no shipped definition has a parent, so this is the only fixture that can draw it
+uv run python tools/contact_sheet.py --recorder       # the RECORDER on arrival (--recording = two moments picked, --waypoints = three); it is a modal, so no plain page load reaches it
+uv run pytest tests/test_ui_recorder_latency.py -q -s  # MEASURE the recorder's live half: publish -> painted row, in ms, printed every run
 uv run pytest tests/test_responsive_subsections.py -q # that state's own sweep + the two reach assertions
 uv run python tools/mark_sheet.py                    # the caveat badge on both surfaces, side by side (the PICK is made: corner badge, 2026-08-01)
 uv run python tools/measure_objective_card.py        # re-measure the fixed card heights against real content

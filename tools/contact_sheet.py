@@ -51,6 +51,17 @@ def main(argv: list[str]) -> int:
     if "--collapsed" in argv:
         story = next(s for s in STORIES if s.name == "page-collapsed")
 
+    # The RECORDER, which is a modal and so is unreachable from a plain page
+    # load -- `--recorder` opens it empty (the arrival state), `--recording`
+    # with two moments picked (the review), `--waypoints` with three (a stop
+    # the person named rather than one the walk derived).
+    for flag, name in (("--recorder", "recorder-open"),
+                       ("--recording", "recorder-review"),
+                       ("--waypoints", "recorder-waypoints")):
+        if flag in argv:
+            story = next(s for s in STORIES if s.name == name)
+            selector = selector or ".modal"
+
     # The selector's expanded state needs a fixture with a `parent` in it --
     # no shipped definition has one, so the default project literally cannot
     # draw this surface. `--folded` shoots the same fixture after the fold.
