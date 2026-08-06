@@ -148,76 +148,59 @@ def test_the_bowser_reds_pipe_pairing_renders_its_family_naming():
             "stopped resolving it (tracking-storage.md's _reds_pipe_segments)")
 
 
-def test_the_star_kind_armed_detail_renders():
-    """`armed_detail` (the "Step N of M" progress row `LogCard` shares
-    between kinds) is a documented rule-11 ASYMMETRY: every star but the
-    100-coin one carries none, because an ordinary star is one atomic grab
-    with nothing to be part-way through (test_star_sections_carry_no_arm_
-    detail). `_arm_segment` (ui_fixture.py) exercises the SEGMENT half of
-    that asymmetry; nothing before this exercised the STAR half, so
-    `segments.hundred_coin_entity`'s reattribution path -- and the star-kind
-    `.seg-waiting` row -- had only ever been unit-tested against hand-built
-    dicts (tests/test_ui_entity_section.py), never rendered.
+def test_the_star_kind_carries_its_own_armed_detail():
+    """The rule-11 ASYMMETRY, re-pointed at the payload 2026-08-06.
+
+    Every star but the 100-coin one carries no `armed_detail`, because an
+    ordinary star is one atomic grab with nothing to be part-way through
+    (test_star_sections_carry_no_arm_detail). `_arm_segment` exercises the
+    SEGMENT half; this is the STAR half, and until 2026-08-05 nothing rendered
+    it at all -- `segments.hundred_coin_entity`'s reattribution path had only
+    ever been unit-tested against hand-built dicts.
+
+    It used to prove the asymmetry through the DRAWN `.seg-waiting` row. That
+    row is deleted (Griffin, 2026-08-06: "we should just remove the step
+    indicator entirely from the display here"), so the question moves down one
+    layer to where the asymmetry actually lives -- the section the real server
+    publishes to the real page. Still end to end: a live `serve_ui`, a real
+    `POST /api/target`, the app's own `/api/session`. It just no longer asserts
+    that a deleted element exists.
 
     `arm_hundred_coin` posts a synthetic def matching the pattern
-    `hundred_coin_entity` looks for (a `star_grabbed(star=6, course=…)`
-    WAYPOINT) and arms it, coexisting with the ordinary star target
-    `serve_ui` seeds by default on the same course.
-
-    **The 100-coin star's own card is TARGETED here too (2026-08-05):
-    arming its engine alone no longer publishes one** (`.claude/rules/
-    hundred-coin.md`, "one CARD, only when the entity is the target" --
-    walking into a 100-coin course with nothing chosen must not manufacture
-    an empty card, and this synthetic engine arms the identical ambient
-    way). `_seed_target(base, FIXTURE_COURSE, 6, with_pb=False)` is the same
-    real `POST /api/target` a player's click sends -- star 6 has no rank
-    standards in the bundled seed, so `with_pb=False` skips the strat/PB
-    half `_seed_target` otherwise does for a graded star. This retargets
-    away from the ordinary star `serve_ui` seeded by default, which keeps
-    its own card regardless (it has real seeded ATTEMPTS, not merely a
-    target) -- so the positive/negative pairing below is identified by
-    NAME now rather than by `.log-card-active`, since that class moved
-    with the target."""
-    with serve_ui(arm_hundred_coin=(FIXTURE_COURSE, FIXTURE_LEVEL)) as base, \
-            get_driver().launch() as opened:
-        opened.goto(f"{base}/ui/index.html")
-        opened.wait_for(".log-list-card")
-        opened.wait_ms(300)
-        _seed_target(base, FIXTURE_COURSE, 6, with_pb=False)
-        opened.wait_ms(300)
-        rows = opened.count(".log-card .seg-waiting")
-        assert rows == 1, (
-            f"{rows} `.seg-waiting` row(s) inside a `.log-card`, expected 1 "
-            "(the synthetic 100-coin engine) -- either it never armed, was "
-            "never targeted, or LogCard stopped drawing armed_detail for a "
-            "star")
-        step_text = opened.evaluate(
-            "const el = document.querySelector("
-            "'.log-card .seg-waiting .seg-waiting-step');"
-            "return el ? el.textContent : null")
-        assert step_text and re.search(r"Step\s*\d+\s*of\s*\d+", step_text), (
-            f"seg-waiting-step reads {step_text!r} -- not the expected "
-            '"Step N of M" shape')
-        # The ORDINARY star sharing this course (no longer the active
-        # target, but still on the page via its own seeded attempts) must
-        # carry none of this -- a positive count above paired with this
-        # zero is what makes both readable as real signal (same pairing
-        # test_the_armed_segments_log_card_shows_its_own_step_progress uses
-        # for the segment side). Identified by NAME, not `.log-card-active`
-        # -- the 100-coin star's own card wears that class now.
-        scoped = opened.evaluate(
-            "const cards = Array.from(document.querySelectorAll('.log-card'));"
-            "const hundredCoin = cards.find(c => "
-            "  c.querySelector('.log-card-name')?.textContent.includes('100 Coins'));"
-            "const other = cards.find(c => c !== hundredCoin "
-            "  && c.querySelector('.seg-waiting'));"
-            "return {hundredCoinHasIt: !!hundredCoin?.querySelector('.seg-waiting'),"
-            "        anotherCardHasIt: !!other};")
-        assert scoped["hundredCoinHasIt"] is True, (
-            "the .seg-waiting row is not inside the '100 Coins' card")
-        assert scoped["anotherCardHasIt"] is False, (
-            "a NON-100-coin card also carries .seg-waiting -- armed_detail "
-            "leaked onto the wrong star's card")
+    `hundred_coin_entity` looks for (a `star_grabbed(star=6, course=...)`
+    WAYPOINT) and arms it, coexisting with the ordinary star target `serve_ui`
+    seeds by default on the same course. The 100-coin star is TARGETED here
+    too: arming its engine alone no longer publishes a card
+    (`.claude/rules/hundred-coin.md`, "one CARD, only when the entity is the
+    target"). Star 6 has no rank standards in the bundled seed, hence
+    `with_pb=False`.
+    """
+    with serve_ui(arm_hundred_coin=(FIXTURE_COURSE, FIXTURE_LEVEL)) as base:
+        with get_driver().launch() as opened:
+            opened.goto(f"{base}/ui/index.html")
+            opened.wait_for(".log-list-card")
+            opened.wait_ms(300)
+            _seed_target(base, FIXTURE_COURSE, 6, with_pb=False)
+            opened.wait_ms(300)
+            armed = json.loads(opened.evaluate("""
+              fetch('/api/session?clock=igt').then(r => r.json()).then((view) =>
+                JSON.stringify((view.stars || [])
+                  .filter((sec) => sec && sec.armed_detail)
+                  .map((sec) => ({slot: sec.star_id,
+                                  steps: sec.armed_detail.steps,
+                                  progress: sec.armed_detail.progress}))))
+            """))
+            assert len(armed) == 1, (
+                f"expected exactly one STAR carrying armed_detail, got {armed}"
+                " -- either the synthetic 100-coin engine never armed, was "
+                "never targeted, or armed_detail leaked onto an ordinary star")
+            only = armed[0]
+            assert only["slot"] == 6, (
+                f"the armed star is slot {only['slot']}, not the 100-coin "
+                f"slot 6: {only}")
+            assert only["steps"], (
+                f"the 100-coin engine armed with no steps: {only}")
+            assert isinstance(only["progress"], int)
 
 
 # Two viewports, not one: 1500x1000 (comfortably wide, side-by-side rank
@@ -360,68 +343,41 @@ def test_a_log_card_still_draws_two_rank_banners(page):
         "showsEntityBanner)")
 
 
-def test_the_armed_segments_log_card_shows_its_own_step_progress(page):
-    """Griffin asked for this by name: "i like the idea of knowing for sure
-    the system is aware of me grabbing that first star, proven by it
-    progressing to the next step." `armed_detail` is NOT segment-only (the
-    100-coin star carries it too, which is why StarSection and
-    SegmentSection already draw this identically) -- this fixture only
-    exercises the segment side (`_arm_segment`, coexisting with the active
-    star target rather than replacing it), so this proves the row survived
-    for at least one kind, at its new address.
+def test_no_log_card_draws_a_step_track_any_more(page):
+    """INVERTED 2026-08-06, and kept rather than deleted because the fixture
+    is the only place that reliably reaches the state.
 
-    Before this task an armed-but-not-active segment still got a full
-    `.objective-card` -- including this row -- inside the now-deleted
-    practice index; a `LogCard` is the only surface such a segment gets now
-    (test_a_log_card_still_draws_two_rank_banners, above), so `LogCard` must
-    carry the identical `armed_detail` row (practicelog.js) or the
-    capability is lost outright, not merely relocated.
+    This used to assert the opposite: an armed segment's card drew "Step N of
+    M" plus the whole route as chips, which Griffin had asked for by name --
+    "i like the idea of knowing for sure the system is aware of me grabbing
+    that first star, proven by it progressing to the next step." He retired
+    that need once the engine was trusted: "the PURPOSE of that indicator was
+    to make it clear that the segment logic was working for me during
+    development, but now that it is indeed working, I don't think we really
+    need this anymore."
 
-    Asserts the rendered TEXT, not just that some markup exists: a
-    kind-gated conditional wrapped around the same literal `sec.armed_detail
-    && html` still leaves that string findable by a source scan (the
-    reviewer's own mutation proof on this branch: wrapping a shared call
-    site in a `!seg &&` guard left every count-based check green), so a
-    behavioural check on the DRAWN content is what actually proves neither
-    kind lost it.
-
-    2026-08-04 (main merge): `LogCard`'s own hand-rolled `.seg-waiting-step`
-    / `.seg-waiting-for` pair -- a third copy of markup main's merge gave a
-    shared component (`steptrack.js::StepTrack`) -- was replaced with the
-    same `<StepTrack>` the objective card renders. `.seg-waiting-for` no
-    longer exists anywhere: the "Waiting for X" sentence moved onto the
-    row's own `title` (a hover, same as the objective card's copy), and the
-    route itself is now visible as `.step-track .step-chip`s rather than
-    only named in prose."""
-    log_card_rows = count(page, ".log-card .seg-waiting")
-    assert log_card_rows == 1, (
-        f"{log_card_rows} `.seg-waiting` row(s) inside a `.log-card`, "
-        "expected 1 (the armed segment, ui_fixture.py::FIXTURE_SEGMENT) -- "
-        "either the segment stopped carrying armed_detail or LogCard "
-        "stopped drawing the row for it")
-    step_text = page.evaluate(
-        "const el = document.querySelector("
-        "'.log-card .seg-waiting .seg-waiting-step');"
-        "return el ? el.textContent : null")
-    waiting_title = page.evaluate(
-        "const el = document.querySelector('.log-card .seg-waiting');"
-        "return el ? el.getAttribute('title') : null")
-    chip_count = count(page, ".log-card .seg-waiting .step-track .step-chip")
-    assert step_text and re.search(r"Step\s*\d+\s*of\s*\d+", step_text), (
-        f"seg-waiting-step reads {step_text!r} -- not the expected "
-        '"Step N of M" shape')
-    assert waiting_title and "Waiting for" in waiting_title, (
-        f"the log card's step row title reads {waiting_title!r} -- "
-        "StepTrack puts \"Waiting for …\" in its own title, not in visible "
-        "text any more")
-    assert chip_count >= 1, (
-        "no `.step-chip`s inside the log card's step track -- StepTrack "
-        "renders the whole route as chips, not just a counter")
-    # The ACTIVE star in this fixture is an ordinary one (no armed_detail),
-    # so its own `.log-card-active` card must show none of this -- a
-    # positive count above paired with this zero is what makes both readable
-    # as real signal rather than one vacuous side of a tautology.
-    assert count(page, ".log-card.log-card-active .seg-waiting") == 0
+    The SERVER side is untouched and is asserted just below -- the section
+    still carries `armed_detail` with its cursor, so the capability is
+    unpainted, not lost. That pair is the whole point of this test: a zero on
+    the drawn side next to a live cursor on the data side is what tells a
+    future reader the row was deleted deliberately rather than quietly broken.
+    """
+    assert count(page, ".log-card .seg-waiting") == 0, (
+        "a practice-log card is drawing the armed step row again -- it was "
+        "deleted for crowding the head (2026-08-06), and two attempts to "
+        "seat it on the identity line were rejected before that")
+    assert count(page, ".log-card .step-track") == 0
+    armed = page.evaluate("""
+      fetch('/api/session?clock=igt').then(r => r.json()).then((view) => {
+        const all = (view.segments || []).concat(view.stars || []);
+        const hit = all.find((sec) => sec && sec.armed_detail);
+        return hit ? JSON.stringify(hit.armed_detail) : null;
+      })
+    """)
+    assert armed, (
+        "the fixture armed no segment -- without a live `armed_detail` the "
+        "zero counts above are vacuous, which is the failure mode this file "
+        "exists to catch")
 
 
 def test_the_pb_tag_and_strategy_picker_are_present(page):
@@ -511,11 +467,15 @@ def test_a_manual_pick_moves_the_analysis_drawer_between_kinds(page):
     never "did the content actually follow the pick".
 
     Clicks the real gesture. The armed segment's log card is found by its
-    `.seg-waiting` row, not by name — `ui_fixture.FIXTURE_SEGMENT` is not the
-    active target in this fixture (`Practice()` suppresses its pin while a
-    star target is active), so clicking it is a genuine manual browse pick
-    AWAY from the active entity, exactly `ui/focustarget.js`'s spring-loaded
-    mode. A star card is found by its `.log-card-context` NOT reading the
+    `.log-card-context` reading the literal "Segment" — it was found by its
+    `.seg-waiting` row until 2026-08-06, when that row was deleted from every
+    card, and a selector that matches nothing turns "the pick did not move the
+    drawer" into "there was nothing to click", which reads identically in the
+    failure. `ui_fixture.FIXTURE_SEGMENT` is not the active target in this
+    fixture (`Practice()` suppresses its pin while a star target is active),
+    so clicking it is a genuine manual browse pick AWAY from the active
+    entity, exactly `ui/focustarget.js`'s spring-loaded mode. A star card is
+    found by the mirror-image test — its `.log-card-context` NOT reading the
     literal "Segment" — `displayName`'s own star/segment branch (entitysection.js),
     not a hardcoded fixture name, so this keeps working if the seeded star or
     segment ever changes.
@@ -533,10 +493,12 @@ def test_a_manual_pick_moves_the_analysis_drawer_between_kinds(page):
 
     clicked = page.evaluate("""
         (() => {
-          const card = document.querySelector('.log-card:has(.seg-waiting)');
-          if (!card) return 'no armed-segment log card found';
+          const card = Array.from(document.querySelectorAll('.log-card'))
+            .find((c) => (c.querySelector('.log-card-context')?.textContent
+              || '').trim().toLowerCase() === 'segment');
+          if (!card) return 'no segment log card found';
           const btn = card.querySelector('.log-card-select');
-          if (!btn) return 'the armed-segment card has no select button';
+          if (!btn) return 'the segment card has no select button';
           btn.click();
           return 'clicked';
         })()

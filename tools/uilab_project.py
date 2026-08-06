@@ -296,13 +296,20 @@ STORIES = [
     # uilab/sweep.py, which now raises instead). CONFIRMED contributing zero
     # defects at every viewport for that whole stretch (final review).
     #
-    # Re-pointed at the log card itself, which is where the crowded
-    # combination this story exists to protect (two stacked rank banners plus
-    # the waiting-for row) actually renders now -- the same `sec.armed_detail`
-    # + `rank`/`entity_rank` data `_arm_segment` seeds, just drawn by
-    # `LogCard` instead of `StarSection`/`SegmentSection`.
-    Story(name="armed-segment", at=".log-card:has(.seg-waiting)",
-          skip_if="!document.querySelector('.seg-waiting')"),
+    # Re-pointed AGAIN 2026-08-06, and for the fourth time on this one story
+    # the reason is that its selector stopped matching: the waiting-for row is
+    # deleted (Griffin, "we should just remove the step indicator entirely
+    # from the display here"), so `.seg-waiting` no longer exists anywhere on
+    # the practice page and BOTH the `at` and the `skip_if` would have been
+    # satisfied by nothing -- this time skipping silently rather than erroring,
+    # which is the worse of the two failures and exactly what this file's own
+    # history keeps warning about.
+    # What survives of the crowded combination it exists to protect is the
+    # TWO-LADDER card (two stacked rank banners in one head), which is the
+    # same `_arm_segment` seeding drawn by `LogCard` -- so the story follows
+    # that class instead of the row that used to sit under it.
+    Story(name="armed-segment", at=".log-card.log-card-two-ladder",
+          skip_if="!document.querySelector('.log-card.log-card-two-ladder')"),
     # Renamed 2026-08-03 (Task 7): `.attempts-card` died with StarSection/
     # SegmentSection's own attempts table (Task 6) -- the practice log is
     # now the page-level `.log-list-card` (practicelog.js). The old selector

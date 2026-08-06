@@ -226,14 +226,10 @@ export const COMPONENTS = [
       ["pressed?", "boolean", "Pressed state when the chip is a toggle."],
     ],
   },
-  {
-    name: "StepTrack", module: "./components/steptrack.js", group: "Standards",
-    doc: "A route's steps in completion order, with what the run is currently waiting for.",
-    props: [
-      ["detail", "unknown", "The run's step detail. Null renders nothing."],
-      ["onEdit?", "() => void", "Called when the track's edit affordance is used."],
-    ],
-  },
+  // StepTrack was published here until 2026-08-06. The app deleted it (the
+  // practice card no longer draws a run's step cursor), so the row goes with
+  // it -- a published component with no implementation is a contract the
+  // design agent can code against and nobody can render.
   {
     name: "StepPicker", module: "./components/steptrack.js", group: "Standards",
     doc: "Choose which of a route's steps are required.",

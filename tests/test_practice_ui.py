@@ -55,14 +55,29 @@ def test_the_card_keeps_a_pinned_segment_while_it_is_armed():
     assert pin_guard(src)
 
 
-def test_the_card_renders_the_whole_step_track():
-    """Every step, not only the one you are on, and the full imperative for
-    the current one still reachable on hover (2026-08-03 live report)."""
-    src = strip_comments(read("components/steptrack.js"))
-    assert "waiting_for" in src
-    assert "detail.progress" in src
-    assert "detail.total" in src
-    assert "detail.steps" in src
+def test_no_practice_surface_draws_a_step_track():
+    """DELETED, and the guard is inverted rather than dropped.
+
+    The card used to draw the whole route ("Step 3 of 4 · ✓ BitFS › ▸ Lobby")
+    and this test pinned that it drew EVERY step rather than only the live
+    one. Griffin removed the display on 2026-08-06 — "we should just remove
+    the step indicator entirely from the display here. It's too cramped… they
+    will know how to do the strat, no need to display the steps."
+
+    So the claim now is that it stays gone. Two rounds tried to seat that row
+    on the identity line and both were rejected for crowding it; a third
+    attempt would look like an improvement and is the thing he ruled out. The
+    server half is untouched and deliberately NOT asserted here — the section
+    still carries `armed_detail`, which `test_views.py` owns.
+    """
+    owner = strip_comments(read("components/steptrack.js"))
+    assert "StepTrack" not in owner, (
+        "steptrack.js exports a read-only track again — the practice card's "
+        "step display was deleted, and this module is the editor's now")
+    for name in ("components/practicelog.js", "components/practice.js"):
+        src = strip_comments(read(name))
+        assert "detail.progress" not in src and "armed_detail.steps" not in src, (
+            f"{name} reads a run's step cursor to draw it again")
 
 
 def test_the_step_track_markup_exists_in_exactly_one_place():
@@ -88,21 +103,13 @@ def test_the_step_track_markup_exists_in_exactly_one_place():
         "copies inside the module is the same divergence one level down")
 
 
-def test_both_cards_draw_the_step_track_through_the_ONE_component():
-    """Was two call sites in practice.js (StarSection, SegmentSection), one
-    per kind. Amendment A8 (spec practice-log-entity-cards, 2026-08-04)
-    deleted both along with the Active Target card -- `LogCard`
-    (practicelog.js) is the one card either kind renders through now, so
-    there is exactly one call site left to draw the step track through,
-    not two to keep in step with each other."""
-    practice_src = strip_comments(read("components/practice.js"))
-    assert "<${StepTrack}" not in practice_src, (
-        "practice.js still renders StepTrack directly -- that door belongs "
-        "to LogCard now")
-    assert 'class="seg-waiting"' not in practice_src
-    log_src = strip_comments(read("components/practicelog.js"))
-    assert log_src.count("<${StepTrack}") == 1
-    assert 'class="seg-waiting"' not in log_src
+def test_no_practice_card_carries_the_step_rows_own_class():
+    """`.seg-waiting` was the practice card's own spacing on top of the shared
+    `.step-row` layout, and index.html still keys rules off it. With the card's
+    track deleted (above), no practice surface may wear it — a card claiming
+    that class would be claiming to be an armed row that no longer exists."""
+    for name in ("components/practice.js", "components/practicelog.js"):
+        assert 'class="seg-waiting"' not in strip_comments(read(name))
 
 
 def test_the_guards_can_still_fail():
