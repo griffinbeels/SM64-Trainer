@@ -113,6 +113,10 @@ export const COMPONENTS = [
       ["lane?", "string | null", "Which animation lane the band belongs to."],
       ["order?", "number", "Position within its lane, for staggered entrances."],
       ["replayKey?", "string | number | null", "Change this to replay the entrance."],
+      ["layout?", "'row' | 'stacked' | 'column'", "Which of the band's shapes to draw. The practice log leaves this alone and lets @container pick, because the choice depends on the card's own width rather than the page's."],
+      ["showNext?", "boolean", "Whether the distance-to-the-next-rung line is drawn at all."],
+      ["iconSize?", "number", "Pixel size the rank sprite draws itself at. A CSS variable alone only ever reserved its margin, never resized it."],
+      ["nextStepMode?", "'classic' | 'hover'", "Whether the next-rung line is always visible, or revealed by hovering the progress bar."],
     ],
   },
 
