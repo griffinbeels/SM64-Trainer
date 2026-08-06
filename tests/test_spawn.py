@@ -25,8 +25,11 @@ def test_leaving_intro_cutscene_emits_spawned_intro():
         snap(mario_action=ACT_INTRO_CUTSCENE), snap())
     assert len(events) == 1
     assert events[0].type == "spawned"
-    assert events[0].payload == {"level": LEVEL_CASTLE_GROUNDS,
-                                 "kind": "intro"}
+    # The keys this test OWNS, not the whole dict: `spawned` grew a time on
+    # 2026-08-06 and a shape assertion would go red for a field it is not
+    # about (auto-memory: pin-fields-not-payload-dicts).
+    assert events[0].payload["level"] == LEVEL_CASTLE_GROUNDS
+    assert events[0].payload["kind"] == "intro"
 
 
 def test_edge_into_spawn_action_emits_spawned_spawn():

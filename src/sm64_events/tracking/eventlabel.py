@@ -73,6 +73,7 @@ the labelled STREAM, deciding what to show, not what CAN be shown.
 from collections.abc import Callable
 
 from sm64_events.core.timefmt import format_igt
+from sm64_events.detectors.counter_epoch import LEVEL_LOAD_TAIL_FRAMES
 from sm64_events.detectors.moment import MOMENTS
 from sm64_events.memory.addresses import (CASTLE_AREA_NAMES, LEVEL_CASTLE_INSIDE,
                                           LEVEL_NAMES, course_name, star_name,
@@ -234,6 +235,93 @@ def _spawned(payload: dict) -> str | None:
     if payload.get("kind") == "intro":
         return f"Started the file in {_level_name(level)}"
     return f"Spawned into {_level_name(level)}"
+
+
+def label_level_entry(level) -> str:
+    """The one sentence for ARRIVING somewhere — see `level_entry_rows`."""
+    return f"Started {_level_name(level)}"
+
+
+def level_entry_rows(events) -> tuple[set[int], dict[int, int]]:
+    """Which rows a LEVEL LOAD produced, and which one row should speak for it.
+
+    Returns `(settled_by_the_load, {spawn row id: level})`.
+
+    THE REPORT, 2026-08-06: *"there are two spawn in events in SSL ('Moved to
+    another part of Shifting Sand Land' is the spawn in event when it's at the
+    beginning of the area like that). We should figure out how to explicitly
+    detect spawning in as an event (starting the course)"* — and the same
+    complaint one round earlier for Whomp's Fortress and Snowman's Land.
+
+    He is reading the LOAD, and the load really does walk the area byte.
+    Entering SSL, journal ids 2204-2209 inside two seconds:
+
+        level_changed 24 -> 8
+        area_changed  8: 1 -> 1     (unlabelled: from == to)
+        area_changed  8: 1 -> 2     "Moved to another part of Shifting Sand Land"
+        area_changed  8: 2 -> 1     "Moved to another part of Shifting Sand Land"
+        practice_reset
+        spawned {level: 8, kind: "spawn"}
+
+    So the event he asked for ALREADY EXISTS and was the one row not shown:
+    `detectors/spawn.py` fires on that last line, and the recorder's default
+    view lists a `spawned` only for `kind == "intro"`. Two moves, one rule.
+
+    THE WINDOW IS THE MEASURED ONE, not a new constant:
+    `counter_epoch.LEVEL_LOAD_TAIL_FRAMES`, 60, derived across 911 level
+    entries where the load's LAST area edge lands at 44-47 frames and the
+    earliest genuine warp deeper into a level appears at 60. Reusing it is the
+    point — the clock and the recorder must not disagree about where a load
+    ends.
+
+    A LOAD CONTRIBUTES EXACTLY ONE ROW — its spawn if it journaled one, and
+    otherwise its LAST area edge, which is where the load left him. The second
+    half is not defensive tidiness: journal ids 2172-2178 are a level entry
+    that never reached a spawn, because he walked back out inside the tail, and
+    a rule that only ever promoted spawns would have deleted that arrival from
+    the list entirely.
+
+    NOTHING IS DROPPED FROM THE JOURNAL. Every one of these rows is a true
+    thing the game did, and `segments._zeroes_usamune_igt`, the topological
+    matcher, `synthesize.walked_steps` and this endpoint's own position walk
+    all read them. This says only which row a HUMAN should be offered to point
+    at.
+    """
+    settled: set[int] = set()
+    entry_spawns: dict[int, int] = {}
+    load_frame: int | None = None
+    area_ids: list[int] = []
+    spawn_id: int | None = None
+
+    def close_the_load() -> None:
+        nonlocal load_frame, area_ids, spawn_id
+        if load_frame is not None:
+            # The last area edge speaks for the load only when no spawn did.
+            settled.update(area_ids if spawn_id is not None else area_ids[:-1])
+        load_frame, area_ids, spawn_id = None, [], None
+
+    for row in events:
+        payload = row.payload or {}
+        if row.type == "level_changed":
+            if payload.get("from") == payload.get("to"):
+                continue          # establishing/corrective bookkeeping
+            close_the_load()
+            load_frame = row.frame
+            continue
+        if load_frame is None:
+            continue
+        if row.frame - load_frame > LEVEL_LOAD_TAIL_FRAMES:
+            close_the_load()
+            continue
+        if row.type == "area_changed":
+            area_ids.append(row.id)
+        elif row.type == "spawned" and spawn_id is None:
+            # The FIRST spawn of the load only: a death respawn later in the
+            # same course is the player's, and its own load has its own edge.
+            spawn_id = row.id
+            entry_spawns[row.id] = payload.get("level")
+    close_the_load()
+    return settled, entry_spawns
 
 
 # practice_reset/state_loaded/game_reset carry no level/course at all

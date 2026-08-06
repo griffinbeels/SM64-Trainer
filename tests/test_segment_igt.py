@@ -341,11 +341,12 @@ COUNTER_AT_DOOR = 233               # Usamune's counter as he takes the door
 # +1 because the counter drops the frame AFTER the spawn (see `counter`
 # below), so this is the frame whose counter reads COUNTER_AT_DOOR.
 DOOR_FRAME = SPAWN_FRAME + 1 + COUNTER_AT_DOOR
-# counter + IgtClock.DISPLAY_TICK + MomentDetector.DISPLAY_LAG_FRAMES.
-# The second term is the 16-sample offset his own runs measured -- see
-# that constant's own comment for why the mechanism is open and the
-# number is not.
-DOOR_DISPLAY = COUNTER_AT_DOOR + 2
+# counter + IgtClock.DISPLAY_TICK, and NOTHING else -- exactly what a pipe
+# reads, and the pipe is the one live-verified against Usamune's own screen.
+# A second `MomentDetector.DISPLAY_LAG_FRAMES` term sat here for a day; it was
+# measured off the DELTA (see the test below) and applied to this number, which
+# put every door a frame slow. Retired 2026-08-06.
+DOOR_DISPLAY = COUNTER_AT_DOOR + 1
 
 
 def seeded_lakitu_def() -> SegmentDef:
@@ -417,25 +418,32 @@ def test_lakitu_banks_usamunes_number_not_the_frame_delta():
     """The report, end to end: "the practice log consistently shows about one
     frame faster than the time in Usamune, every time".
 
-    TWO things were wrong and only both together move the number he sees.
+    ONE thing was wrong, and a second "fix" rode along unfalsified beside it.
 
-    (1) The moment read a frame low. 16 samples, zero variance -- three
-    screenshot pairs and then thirteen consecutive Lakitu runs, every one
-    exactly one frame apart. `MomentDetector.DISPLAY_LAG_FRAMES`.
+    THE REAL ONE: the attempt was not taking the moment's number at all.
+    Lakitu arms on `spawned` and the reload's own `practice_reset` lands the
+    NEXT frame, so `_close`'s "the counter zeroed on the arm frame" test missed
+    by one and the `global_timer` DELTA stood. `segments.IGT_ARM_SKEW_FRAMES`.
 
-    (2) The attempt was not taking the moment's number at all. Lakitu arms on
-    `spawned` and the reload's own `practice_reset` lands the NEXT frame, so
-    `_close`'s "the counter zeroed on the arm frame" test missed by one and
-    the delta stood -- and the delta equalled the OLD, low reading in 31 of
-    31 runs, which is exactly why fixing the moment alone changed nothing on
-    screen. `segments.IGT_ARM_SKEW_FRAMES`.
+    THE ONE THAT WAS NOT: a `MomentDetector.DISPLAY_LAG_FRAMES = 1` shipped in
+    the same commit, on the reading of 16 samples that had all been taken off
+    the delta -- which equalled the moment's own number in 31 of 31 runs, so
+    the two were indistinguishable and the +1 was applied to the wrong one. It
+    put every door a frame ABOVE Usamune and came straight back: "all the timer
+    entries are one frame slower than expected" (2026-08-06). Retired; a moment
+    now reads `counter + DISPLAY_TICK`, the same as a live-verified pipe.
     """
     attempt = one_success(journal(a_lakitu_run()), seeded_lakitu_def())
     assert attempt.closed_by == "moment_reached"
     assert attempt.timed_by == "igt"
     assert attempt.rta_frames == DOOR_DISPLAY
-    # And the delta it used to bank is a frame cheaper -- the whole report.
-    assert DOOR_FRAME - SPAWN_FRAME < DOOR_DISPLAY
+    # THE TWO NUMBERS AGREE HERE, and that is the finding rather than a weak
+    # fixture: a clean Lakitu run's delta IS `counter + DISPLAY_TICK`, which is
+    # why 31 of 31 runs could not tell the delta from the moment's own reading
+    # and why a +1 measured on one got applied to the other. So `timed_by` is
+    # the discriminator this test rests on, not the value -- mutating
+    # `IGT_ARM_SKEW_FRAMES` to 0 flips it to "delta" and fails above.
+    assert DOOR_FRAME - SPAWN_FRAME == DOOR_DISPLAY
 
 
 def test_a_subsection_armed_ON_the_zeroing_event_does_take_usamunes_number():

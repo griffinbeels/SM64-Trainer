@@ -22,7 +22,8 @@ from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
 from sm64_events.tracking import topology
 from sm64_events.tracking.backtest import backtest
-from sm64_events.tracking.eventlabel import label_event
+from sm64_events.tracking.eventlabel import (label_event, label_level_entry,
+                                             level_entry_rows)
 from sm64_events.tracking.lint import lint_definition
 from sm64_events.tracking.segments import (SegmentDef, clause_sentence,
                                            origin_taxonomy,
@@ -632,6 +633,12 @@ def create_api_router(service) -> APIRouter:
             raise HTTPException(503, "database unavailable")
         events = list(service.db.events())      # ORDER BY id -- oldest first
         places = _timeline_places(events)
+        # ONE ROW PER ARRIVAL. A level load walks the area byte and each step
+        # is a real `area_changed`, so entering a course drew two or three
+        # "Moved to another part of Shifting Sand Land" rows and the `spawned`
+        # that actually names the arrival was filtered out. Both halves are one
+        # rule, and it lives beside the sentences: `eventlabel.level_entry_rows`.
+        settled, entry_spawns = level_entry_rows(events)
         # The catalogue is read ONCE per fetch and applied at LABEL time, which
         # is what makes a rename apply backwards: every row that landmark ever
         # appeared in re-labels on the next fetch, because no row ever stored
@@ -641,11 +648,16 @@ def create_api_router(service) -> APIRouter:
         for row in events:
             if after_id is not None and row.id <= after_id:
                 continue
-            label = label_event(row, names)
+            if row.id in settled:
+                continue          # the load's own settling, not a move he made
+            entry_level = entry_spawns.get(row.id)
+            label = (label_level_entry(entry_level) if entry_level is not None
+                     else label_event(row, names))
             if label is None:
                 continue
             landmark = (row.payload.get("landmark") or {}) if row.payload else {}
-            if view == "steps" and not _is_default_timeline_row(row):
+            if (view == "steps" and entry_level is None
+                    and not _is_default_timeline_row(row)):
                 continue
             place = places.get(row.id)
             rows.append({"id": row.id, "frame": row.frame, "type": row.type,

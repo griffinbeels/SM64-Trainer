@@ -128,12 +128,17 @@ def build_detectors(target_active=None) -> list:
     them — behind star_grab and warp, and otherwise wherever the stateless
     edges sit.
 
-    `target_active` is the task-0087 gate: "these should ONLY be tracked when
-    we explicitly select / autoselect a star or segment". It defaults to None
-    (permissive) so `build_detectors()` keeps working for every existing
-    caller and for the tests that drive the real chain end to end; `build()`
-    below injects the predicate that reads the live target, which is the only
-    place that knows the service.
+    `target_active` was the task-0087 gate ("these should ONLY be tracked when
+    we explicitly select / autoselect a star or segment") and `build()` used to
+    inject the live target into it. **It injects nothing now, deliberately** —
+    the recorder is the surface that consumes moments, and it is used with NO
+    target set, because pointing at what you just did is how a definition gets
+    made. Full evidence, the two live reports it cost, and why a recorder-open
+    gate cannot work: `detectors/moment.py`'s module docstring.
+
+    The parameter stays as an INJECTION SEAM rather than being deleted: a
+    future rule that wants to narrow WHEN a moment records has somewhere to go
+    that is not a new branch inside the detector.
     """
     moments = (MomentDetector() if target_active is None
                else MomentDetector(target_active=target_active))
@@ -283,10 +288,10 @@ def build():
             builder=CompilationBuilder(extractor=replay.extractor, codec=codec,
                                        fps=replay_cfg.fps),
             out_dir=compilations_dir())
-    # Moments are journaled only while something is being practiced (task
-    # 0087). Read as a callable rather than a snapshot: a target set mid
-    # session must start recording without a restart.
-    detectors = build_detectors(target_active=lambda: service.target is not None)
+    # NO target gate. This passed `target_active=lambda: service.target is not
+    # None` (task 0087) until 2026-08-06, which made the recorder blind exactly
+    # when it is used — see `build_detectors`' docstring and moment.py's.
+    detectors = build_detectors()
     # An ordinal means "the Nth since this attempt opened", so the counter
     # restarts when one does. The service sees every event and the detector
     # sees only snapshots, so this is the one place that can join them.

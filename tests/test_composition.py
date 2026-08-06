@@ -6,6 +6,7 @@ from pathlib import Path
 
 import sm64_events
 from sm64_events.main import build_detectors
+from source_scan import strip_comments
 
 
 def test_detector_order_is_load_bearing():
@@ -37,9 +38,11 @@ def test_the_moment_detector_runs_behind_the_held_emitters():
 
 
 def test_the_moment_detector_takes_the_live_target_predicate():
-    """build_detectors() with no argument stays permissive so every existing
-    caller (and every test that drives the real chain) keeps working; the
-    composition root is where the real gate is injected."""
+    """The SEAM, not a live rule. `build_detectors()` with no argument is
+    permissive, which is what the composition root now uses (the task-0087
+    target gate was retired 2026-08-06 — see the guard below). A caller that
+    wants to narrow when a moment records still has somewhere to inject it,
+    which is the only reason the parameter outlived the rule."""
     from sm64_events.main import build_detectors as build
 
     permissive = next(d for d in build()
@@ -51,14 +54,37 @@ def test_the_moment_detector_takes_the_live_target_predicate():
     assert gated._target_active() is False
 
 
-def test_the_composition_root_gates_moments_on_a_real_target():
-    """The predicate main passes must read the SERVICE's live target, not a
-    constant -- a moment journaled with no target selected is the volume
-    the task-0087 rule exists to prevent."""
-    src = (Path(sm64_events.__file__).parent / "main.py").read_text(
-        encoding="utf-8")
-    assert "build_detectors(target_active=" in src
-    assert "service.target" in src
+def test_the_composition_root_gates_moments_on_NOTHING():
+    """REVERSED 2026-08-06, and stated as a reversal rather than deleted: this
+    asserted `build_detectors(target_active=` was in main.py, wiring the live
+    target into the gate (task 0087).
+
+    The recorder is what consumes moments and it is used with NO target set --
+    pointing at what you just did is HOW a definition gets made -- so the gate
+    made the builder blind in the one situation it exists for. Two live reports
+    in one message, one cause: "I went into Whomp's Fortress, triggered the
+    Whomp King dialogue, and now nothing popped up in the segment recorder
+    tool" and "briefly I was able to detect the doors in HMC, but... I lost the
+    ability to detect those" (2026-08-06). His journal scored it exactly -- 207
+    moments, all inside target windows, then a whole session across three
+    levels with zero of any kind.
+
+    A recorder-OPEN gate is not the answer either and this guard is where that
+    is written down: he does the thing first and opens the recorder afterwards,
+    so detection has to have already happened.
+    """
+    src = strip_comments((Path(sm64_events.__file__).parent
+                          / "main.py").read_text(encoding="utf-8"))
+    # The PARAMETER survives as an injection seam (see build_detectors' own
+    # docstring), so the scan reads the CALLS and skips the definition — the
+    # thing that may not come back is main wiring the live target into it.
+    calls = [line.strip() for line in src.splitlines()
+             if "build_detectors(" in line and not line.lstrip().startswith("def ")]
+    assert calls, "nothing in main.py builds the detector chain any more"
+    assert all(call.endswith("build_detectors()") for call in calls), (
+        "the composition root must not gate moments on the practice target — "
+        "the recorder is used with no target set, and gating makes it blind "
+        f"exactly then. Calls: {calls}")
 
 
 def test_stage_detector_is_wired():

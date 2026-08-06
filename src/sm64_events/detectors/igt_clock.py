@@ -85,6 +85,19 @@ class IgtClock:
         time", it means "the raw counter alone would understate it"."""
         return self._epoch.banked > 0
 
+    def seed(self, prev: GameSnapshot) -> None:
+        """Give the clock the tick BEFORE its first event, once.
+
+        Every detector that owns a clock opens `process` with this and closes
+        it with `observe(curr)`, taking its reading in between — the reading is
+        taken AT `curr` and reads `curr` directly, so `curr` must not be in
+        history yet when it is taken. Six detectors spell that ordering out;
+        this names the half that is easy to get wrong (a second `prev` would
+        re-append a frame already held).
+        """
+        if self.empty():
+            self.observe(prev)
+
     def observe(self, snap: GameSnapshot) -> None:
         h = self._history
         if h and snap.global_timer < h[-1][0]:

@@ -2,7 +2,8 @@ from sm64_events.memory.addresses import COURSE_NAMES, LEVEL_NAMES
 from sm64_events.storage.db import EventRow
 from sm64_events.tracking.eventlabel import (LABELLABLE_TYPES,
                                              TRIGGER_JOURNAL_TYPES,
-                                             label_event)
+                                             label_event, label_level_entry,
+                                             level_entry_rows)
 from sm64_events.tracking.segments import TRIGGERS
 
 W = "2026-06-11T12:00:00Z"
@@ -191,3 +192,73 @@ def test_every_trigger_type_has_a_labellable_event_shape():
     assert set(TRIGGER_JOURNAL_TYPES) == set(TRIGGERS)
     for trigger_key, journal_types in TRIGGER_JOURNAL_TYPES.items():
         assert journal_types <= LABELLABLE_TYPES, trigger_key
+
+
+# -- one row per arrival ------------------------------------------------------
+
+def _entry_fixture():
+    """A real course entry, in the shape his own journal has it (ids 2204-2209):
+    the level edge, three area edges as the byte settles, the reload's anchor,
+    then the spawn. `LEVEL_LOAD_TAIL_FRAMES` is 60 and the load's last edge
+    lands well inside it."""
+    return [
+        jev(1, "level_changed", 1000, {"from": 24, "to": 8}),
+        jev(2, "area_changed", 1000, {"level": 8, "from": 1, "to": 1}),
+        jev(3, "area_changed", 1010, {"level": 8, "from": 1, "to": 2}),
+        jev(4, "area_changed", 1020, {"level": 8, "from": 2, "to": 1}),
+        jev(5, "practice_reset", 1030, {}),
+        jev(6, "spawned", 1032, {"level": 8, "kind": "spawn"}),
+    ]
+
+
+def test_a_course_entry_draws_one_row_and_it_names_the_place():
+    """His report, 2026-08-06: "there are two spawn in events in SSL". They are
+    the LOAD walking the area byte, and the row that actually names the arrival
+    was the one filtered out of the default view."""
+    settled, entry_spawns = level_entry_rows(_entry_fixture())
+    assert settled == {2, 3, 4}, "every settling edge belongs to the load"
+    assert entry_spawns == {6: 8}
+    assert label_level_entry(8) == "Started Shifting Sand Land"
+
+
+def test_an_entry_with_no_spawn_keeps_its_last_area_edge():
+    """Journal ids 2172-2178: he entered a level and walked back out before the
+    load ever reached a spawn. Promoting only spawns would delete that arrival
+    from the list, so the last settled edge speaks when nothing else can."""
+    rows = _entry_fixture()[:4]
+    settled, entry_spawns = level_entry_rows(rows)
+    assert settled == {2, 3}, "the LAST edge survives to name where he landed"
+    assert entry_spawns == {}
+
+
+def test_a_move_past_the_load_tail_is_the_players_own():
+    """The pyramid door. Same event type, outside the measured window, and it
+    is the one row on this surface he actually wants to point at."""
+    rows = _entry_fixture() + [
+        jev(7, "area_changed", 1000 + 61, {"level": 8, "from": 1, "to": 2})]
+    settled, _ = level_entry_rows(rows)
+    assert 7 not in settled
+
+
+def test_an_establishing_level_row_opens_no_load():
+    """`detectors/level.py` journals `from == to` bookkeeping on every session
+    start (his journal ids 2135, 2155, 2167). Reading one as an arrival opens a
+    60-frame window over moves the player made himself -- so this fixture is
+    the shape that can tell the difference: an establishing row, its own
+    establishing area row, and then a real walk deeper in, all inside the tail
+    a load would have claimed."""
+    rows = [jev(1, "level_changed", 500, {"from": 8, "to": 8}),
+            jev(2, "area_changed", 500, {"level": 8, "from": 1, "to": 1}),
+            jev(3, "area_changed", 520, {"level": 8, "from": 1, "to": 2}),
+            jev(4, "spawned", 530, {"level": 8, "kind": "spawn"})]
+    settled, entry_spawns = level_entry_rows(rows)
+    assert not settled, "no load happened, so nothing here belongs to one"
+    assert not entry_spawns, "a respawn is not an arrival"
+
+
+def test_a_death_respawn_inside_the_tail_is_not_a_second_arrival():
+    """Only the FIRST spawn of a load names it."""
+    rows = _entry_fixture() + [
+        jev(7, "spawned", 1040, {"level": 8, "kind": "spawn"})]
+    _, entry_spawns = level_entry_rows(rows)
+    assert list(entry_spawns) == [6]

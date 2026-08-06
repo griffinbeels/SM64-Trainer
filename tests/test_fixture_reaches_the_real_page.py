@@ -671,12 +671,20 @@ def test_the_recorder_opens_onto_history_with_pickable_rows(page):
     assert count(page, ".record-picks") == 1
     assert count(page, ".record-row") >= 1
     # "what was the timer in game" -- the number he chooses BY, so it is on
-    # the row and not in the review. The fixture's star grabs carry
-    # `igt_frames`; its level edges do not, so a count EQUAL to the row count
-    # would mean we were inventing one.
-    times = count(page, ".record-igt")
-    assert 0 < times < count(page, ".record-row"), (
-        f"{times} of {count(page, '.record-row')} rows show a time")
+    # the row and not in the review.
+    #
+    # REVERSED 2026-08-06. This asserted `0 < times < rows` -- SOME rows timed
+    # and not all -- because the fixture's level edges carried no `igt_frames`
+    # and neither did the real detector. His report: *"It looks like some
+    # events have the timer next to them, most don't? I would expect the timer
+    # for all of them."* `area.py`, `level.py` and `spawn.py` stamp the shared
+    # clock now, and `ui_fixture._place_time` puts the same trio on every
+    # hand-built place event -- so a blank cell here means a detector stopped
+    # stamping, which is the only thing this can now be about.
+    rows, times = count(page, ".record-row"), count(page, ".record-igt")
+    assert times == rows, (
+        f"only {times} of {rows} rows show a time — every type the recorder "
+        "draws stamps one")
     # Nothing picked means no review and no Save -- a start with no end can
     # never complete, so the control is absent rather than present-and-refused.
     assert count(page, ".record-review") == 0

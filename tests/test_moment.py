@@ -112,9 +112,14 @@ def test_a_backward_global_timer_resets_the_ordinals():
 
 
 def test_no_target_means_no_events_at_all():
-    """Task 0087: "these should ONLY be tracked when we explicitly select /
-    autoselect a star or segment". Also what keeps a per-wall-kick vocabulary
-    from multiplying journal volume."""
+    """The SEAM still works, and nothing in the shipped app injects it.
+
+    This was task 0087's live rule ("these should ONLY be tracked when we
+    explicitly select / autoselect a star or segment") until 2026-08-06, when
+    it turned out to blind the recorder in the one situation the recorder is
+    for. `tests/test_composition.py` is where that reversal is written down and
+    guarded; this pair only proves the predicate is honoured if anyone ever
+    passes one again."""
     det = MomentDetector(target_active=lambda: False)
     assert run([snap(ACT_WALKING, 100), snap(ACT_PULLING_DOOR, 101),
                 snap(ACT_IDLE, 102), snap(ACT_READING_NPC_DIALOG, 103)],

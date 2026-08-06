@@ -35,22 +35,42 @@ to the real destination one poll LATER on the SAME game frame (live journal
 level edge, then a co-frame area_changed settles 1->3). So curr.curr_area on
 the edge is the transient lobby for EVERY castle entry — useless as a
 destination. Destination-subarea triggers instead wait for the settled
-co-frame area_changed (segments.py SegmentEngine._pending)."""
+co-frame area_changed (segments.py SegmentEngine._pending).
+
+A LEVEL EDGE CARRIES USAMUNE'S NUMBER, since 2026-08-06 -- his report: *"It
+looks like some events have the timer next to them, most don't? I would expect
+the timer for all of them."* The recorder surfaces a row's own `igt_frames` and
+never computes one, so a type that does not stamp it draws a blank cell. Read
+through the shared `detectors/igt_clock.py`, like star_grab/key/warp/moment, so
+every time on screen comes from one derivation. Forward-only: the raw counter
+at a historical edge was never journaled."""
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
+from sm64_events.core.timefmt import format_igt
+from sm64_events.detectors.igt_clock import IgtClock
 
 
 class LevelChangeDetector:
     def __init__(self):
         self._last_emitted: int | None = None
+        self._clock = IgtClock()
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
+        self._clock.seed(prev)
+        events = self._detect(prev, curr)
+        self._clock.observe(curr)
+        return events
+
+    def _detect(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         if curr.curr_level == self._last_emitted:
             return []
         prior = self._last_emitted if self._last_emitted is not None \
             else prev.curr_level
         self._last_emitted = curr.curr_level
+        igt_frames, source = self._clock.igt_at(curr.global_timer, curr)
         return [Event(type="level_changed", frame=curr.global_timer,
                       timestamp_utc=curr.wall_time_utc,
                       payload={"from": prior, "to": curr.curr_level,
-                               "from_area": prev.curr_area})]
+                               "from_area": prev.curr_area,
+                               "igt_frames": igt_frames, "igt_source": source,
+                               "igt": format_igt(igt_frames)})]

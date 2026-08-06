@@ -69,7 +69,9 @@ rather than the whole [[star]]. A subsection IS a [[segment]], and names the
 Something Mario does that a [[subsection]] can start or end on — opening a
 door, triggering a textbox. The [[detector]] reads Mario's own action rather
 than where he stands, which is why a [[subsection]] begins and ends inside one
-course where every other trigger needs him to travel.
+course where every other trigger needs him to travel. It records whenever you
+play, with or without a [[target]] set: the [[segment recorder]] exists to let
+you point at what you just did, and you do the thing before you name it.
 
 - **Lives** — the moment registry (`src/sm64_events/detectors/moment.py`)
 
@@ -415,6 +417,9 @@ The screen turning what you just played into a [[segment]]. It lists your recent
 which [[target]] the result is a piece of — which is the only way to make a
 [[subsection]]. Picking two [[moment]]s defines the ends and the [[journal]]
 fills the middle from where you walked; picking more says which stops count.
+Each row says when it happened on Usamune's clock, and arriving somewhere draws
+ONE row that names the place — the load moves the area byte several times and
+this screen shows you the arrival rather than the load.
 
 - **Lives** — the recording screen
   (`src/sm64_events/ui/components/segmenttimeline.js`) → the Segments tab

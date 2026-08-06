@@ -27,11 +27,28 @@ everything after the arm, but "the 5th door in Big Boo's Haunt" is a start and
 a start has no arm to count from. A kind — not an action — owns the counter,
 so pulling one door and pushing the next reads as door 1 and door 2.
 
-TARGET-GATED, and read EVERY TICK rather than once at construction. The user's
-rule in task 0087 ("these should ONLY be tracked when we explicitly select /
-autoselect a star or segment") is also what keeps a vocabulary this fine from
-multiplying journal volume — the journal was deliberately trimmed from 4.97 MB
-to 3.42 MB on 2026-08-04 and a moment per wall kick would undo that.
+NOT GATED ON A TARGET, since 2026-08-06, and the reversal is the user's own.
+Task 0087's rule was "these should ONLY be tracked when we explicitly select /
+autoselect a star or segment", written before the recorder existed in the form
+that consumes these — and the recorder is exactly the surface where no target
+has been picked yet, because pointing at what you just did is HOW a definition
+gets made. Measured on his journal the day it bit: 207 moments, every one of
+them inside a target window, and then a whole session in WF, HMC and SSL with
+ZERO of any kind — his HMC target had retired on the level change into WF and
+every door and dialogue after it was correctly suppressed. Two reports, one
+cause: *"I went into Whomp's Fortress, triggered the Whomp King dialogue, and
+now nothing popped up in the segment recorder tool"* and *"briefly I was able
+to detect the doors in HMC, but... I lost the ability to detect those"*.
+
+A RECORDER-OPEN gate was considered and does not work, which is worth stating
+so it is not re-proposed: he does the thing FIRST and opens the recorder
+afterwards to point at it, so detection has to have already happened.
+
+What the gate was really protecting is journal volume (the 2026-08-04 trim from
+4.97 MB to 3.42 MB), and this vocabulary is deliberately coarse — a door and a
+textbox, not a wall kick — so the cost is ~200 rows per two days of his play.
+A moment per wall kick would still undo that trim; the ceiling is the MOMENTS
+registry below, and it is the thing to guard rather than the target.
 
 WHY THERE IS NO `first_controllable` MOMENT, since it is the obvious one to
 add and it is already covered. `detectors/spawn.py` emits `spawned` on the
@@ -73,38 +90,38 @@ MOMENTS: tuple[Moment, ...] = (
 class MomentDetector:
     """Emits `moment_reached {kind, ordinal, level, area, action}`."""
 
-    # A DOOR'S DISPLAY LAG. Usamune's screen reads one game frame HIGHER than
-    # `IgtClock`'s counter path answers at a moment, so the number we banked
-    # was always a frame cheap -- his report, 2026-08-05: "the practice log
-    # consistently shows about one frame faster than the time in Usamune,
-    # every time (the practice log is wrong and should be slower)".
+    # THERE IS NO DISPLAY LAG, and a `DISPLAY_LAG_FRAMES = 1` sat here for a
+    # day. A moment reads `counter + IgtClock.DISPLAY_TICK`, exactly what a
+    # PIPE reads -- and the pipe was live-verified against Usamune's own screen
+    # (0'35"96, 2026-07-31, same clock call, same still-running display).
     #
-    # MEASURED, 16 samples, ZERO variance: three screenshot pairs he read off
-    # the emulator (6"70/6"66, 6"50/6"46, 6"63/6"60) and then thirteen
-    # consecutive Lakitu runs, every one exactly one frame apart. Nothing here
-    # is inferred from a mechanism -- the OFFSET is what was measured, and
-    # that is what is encoded, the same standing this project gives
-    # `IgtClock.DISPLAY_TICK` itself.
+    # WHY THE +1 LOOKED MEASURED. His 2026-08-05 report -- "the practice log
+    # consistently shows about one frame faster than the time in Usamune" --
+    # was read off the PRACTICE LOG, which at that moment was not showing a
+    # moment's number at all: a definition armed by a savestate reload's
+    # `spawned` missed `_close`'s "the counter zeroed on the arm frame" test by
+    # one and banked the `global_timer` DELTA instead. That delta equalled the
+    # moment's own reading in 31 of 31 runs, so the -1 he measured belonged to
+    # the delta and `segments.IGT_ARM_SKEW_FRAMES` is what fixed it. The +1 was
+    # then applied to a DIFFERENT number nobody had compared against the
+    # emulator, and it overshot by exactly one -- his report the next day, and
+    # the exact reversal is the tell: "all the timer entries are one frame
+    # slower than expected (i.e., they should all be one frame faster)".
     #
-    # WHAT THE JOURNAL SAYS ABOUT THE MECHANISM, recorded because it is a real
-    # observation and not because it explains the sign: `action_timer` reads
-    # **1 on all 13**, so our poll never catches a door on its entry frame --
-    # it sees it on the next one. Three readings were checked and none of them
-    # accounts for the direction: the same clock call matched Usamune exactly
-    # at a PIPE (0'35"96, live 2026-07-31), a torn read between `mario_action`
-    # and `igt_overall` would put us one frame AHEAD, and action-timer
-    # backdating moves the frame EARLIER. So the mechanism is open and the
-    # measurement is not; do not "simplify" this away without re-measuring
-    # against the emulator, which is what the two inert payload fields below
-    # are kept for.
+    # The constant's own comment named the hole while the constant stood: none
+    # of the three mechanisms checked accounted for the DIRECTION. Two fixes
+    # landed in one commit and only the second one moved what he saw, which is
+    # what let the first ride along unfalsified.
     #
-    # A PIPE AND A STAR ARE DELIBERATELY UNTOUCHED. Both were calibrated
-    # against a display Usamune had STOPPED, and both match; a moment is read
-    # off a display that is still running, which is the one difference between
-    # the calibrations and may well be the whole of it.
-    DISPLAY_LAG_FRAMES = 1
+    # The two inert payload fields below are what made this a measurement
+    # rather than an argument -- every door in the journal reads
+    # `igt_frames == counter + 2`, 20 of 20, zero variance -- so keep them.
 
     def __init__(self, target_active: Callable[[], bool] = lambda: True):
+        # Kept as an INJECTION POINT, defaulting permissive: `build()` no
+        # longer passes one (see the module docstring on the retired
+        # task-0087 gate), and a future rule that wants to narrow WHEN a
+        # moment records has a seam to do it through rather than a new branch.
         self._target_active = target_active
         self._counts: dict[str, int] = {}
         # A moment CARRIES USAMUNE'S OWN NUMBER, through the shared clock that
@@ -157,8 +174,7 @@ class MomentDetector:
         event's payload, so a consumer never re-derives the display form.
         """
         self._counts[kind] = self._counts.get(kind, 0) + 1
-        reading, source = self._clock.igt_at(curr.global_timer, curr)
-        igt_frames = reading + self.DISPLAY_LAG_FRAMES
+        igt_frames, source = self._clock.igt_at(curr.global_timer, curr)
         # WHICH door, as opposed to how many doors ago. The ordinal above stays
         # -- it is a property of the moment now rather than its name, which is
         # his own sentence -- and `landmark` is what a label and a subsection key
