@@ -19,7 +19,7 @@ import { h } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { displayName, entityIdentity, entityKey, entityNoun, isSegment,
-         sectionClock, sectionPb } from "../entitysection.js";
+         sectionClock, sectionPb, standardsIdentity } from "../entitysection.js";
 import { entityIconSrc, fallbackToGenericStar, fallbackSlotForEntityKey }
   from "./entityicons.js";
 import { RankBanner } from "./ranks.js";
@@ -27,6 +27,7 @@ import { Icon } from "./icons.js";
 import { ShrinkToFitName } from "./shrinkname.js";
 import { StepTrack } from "./steptrack.js";
 import { StratPicker } from "./stratpicker.js";
+import { StandardsPanel } from "./standards.js";
 import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
          ResetFilterToggle, StatMenuTrigger, comparator, bannerLabel,
          bannerHint, ranksAreAtFloor, showsEntityBanner, rankIdentity, PbTag }
@@ -343,6 +344,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
     if (forceOpen && focus) onSetOpen(true);
   }, [forceOpen, focus && focus.nonce]);
   const ek = entityKey(sec);
+  const standards = standardsIdentity(sec);
   const clock = sectionClock(sec, t.clock);
   const named = displayName(sec, (t.view.catalog || {}).courses || []);
   const base = showHidden ? sec.attempts
@@ -589,6 +591,23 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
             setShowHidden=${setShowHidden} />
         </div>
       </div>
+      ${/* PER CARD, and CLOSED (Griffin, 2026-08-05): "let's actually move
+           this 'Rank Standards' dropdown to the INSIDE of the individual
+           practice log cards... for each card, we have the Rank Standards
+           dropdown. It should be closed by default. It should display
+           whatever the rank standards are for that specific star/segment."
+           It was one page-level panel in `EntityDrawer`, following whichever
+           entity was focused -- so reading one card's ladder meant selecting
+           that card first and then looking somewhere else on the page.
+           `standardsIdentity` (entitysection.js) answers WHICH ladder, which
+           is not the card's own identity for a Bowser reds pair. Closed also
+           means it fetches nothing until asked: the panel loads on open, so
+           N cards cost N requests only if he opens N of them. */""}
+      <${StandardsPanel} entity=${standards.entity}
+        activeStrat=${sec.last_strat} strategies=${sec.strategies}
+        sectionRank=${sec.rank} sectionPb=${sec.pb}
+        family=${standards.family}
+        onChanged=${t.refresh} defaultOpen=${false} />
     </div>`}
   </section>`;
 }

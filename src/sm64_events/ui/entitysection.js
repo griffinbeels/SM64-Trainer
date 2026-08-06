@@ -113,3 +113,32 @@ export function displayName(sec, courses = []) {
     name: family ? family.name : sec.name,
   };
 }
+
+/**
+ * WHICH LADDER this section's rank standards belong to, as `{entity, family}`.
+ *
+ * NOT simply the section's own identity, and that is the whole reason this is
+ * a function rather than two inline expressions: a Bowser course's reds run is
+ * graded two ways but has ONE published ladder, so the paired pipe SEGMENT
+ * grades against its star's entity (`pipe_star_entity`) and the paired reds
+ * STAR announces itself as the Star half of that family (`pipe_segment_id` is
+ * the discriminator views.py already ships). `family` is a LABEL for the panel,
+ * null for everything that is only ever itself.
+ *
+ * Lifted here verbatim from `EntityDrawer` when the panel moved into the
+ * practice-log cards (2026-08-05) -- the two call sites were about to become
+ * one per CARD rather than one per page, and this file is where every other
+ * "what does this kind of section mean" question is already answered.
+ */
+export function standardsIdentity(sec) {
+  if (isSegment(sec)) {
+    return {
+      entity: sec.pipe_star_entity || `segment:${sec.segment_id}`,
+      family: sec.pipe_star_entity ? "Pipe" : null,
+    };
+  }
+  return {
+    entity: entityKey(sec),
+    family: sec.pipe_segment_id != null ? "Star" : null,
+  };
+}

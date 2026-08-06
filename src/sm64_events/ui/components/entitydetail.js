@@ -15,11 +15,10 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
-import { displayName, entityKey, entityNoun, isSegment,
+import { displayName, entityNoun, isSegment,
         sectionClock } from "../entitysection.js";
 import { Timeline } from "./timeline.js";
 import { Progress, hasProgressPoints } from "./progress.js";
-import { StandardsPanel } from "./standards.js";
 import { FailureCompilation } from "./failcomp.js";
 import { EmptyState } from "./emptystate.js";
 import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
@@ -212,18 +211,18 @@ export async function wipeSection(sec, t) {
   t.refresh();
 }
 
-// The `<details>` drawer: tools row, stat chips, standards, failure
-// compilation. `entity`/`family` below are NOT the section's own identity --
-// a paired Bowser pipe segment deliberately grades its StandardsPanel against
-// its star's ladder (`sec.pipe_star_entity`), and a Bowser reds star's own
-// StandardsPanel passes `family="Star"` for the same pairing read the other
-// way. Both call sites' exact prop expressions, preserved.
+// The `<details>` drawer: tools row, stat chips, failure compilation.
+//
+// The STANDARDS panel left here on 2026-08-05 -- it lives inside every
+// practice-log card now (practicelog.js), closed, so a card's ladder is read
+// where the card is rather than by selecting it and looking elsewhere. Its
+// entity/family derivation went with it, into `entitysection.js`'s
+// `standardsIdentity`: which ladder a section grades against is a kind
+// question (a Bowser reds pair shares ONE published ladder), and that file is
+// where every other kind question is already answered.
 export function EntityDrawer({ sec, t }) {
   if (!sec) return null;
   const seg = isSegment(sec);
-  const entity = seg ? (sec.pipe_star_entity || `segment:${sec.segment_id}`) : entityKey(sec);
-  const family = seg ? (sec.pipe_star_entity ? "Pipe" : null)
-    : (sec.pipe_segment_id != null ? "Star" : null);
   const identity = seg ? { segment_id: sec.segment_id }
     : { course_id: sec.course_id, star_id: sec.star_id };
   const noun = entityNoun(sec).toLowerCase();
@@ -239,11 +238,6 @@ export function EntityDrawer({ sec, t }) {
           : `Wipe this ${noun}'s data in the current session`}>Clear data</button>
     </div>
     <${StatChipsRow} sec=${sec} t=${t} />
-    <${StandardsPanel} entity=${entity}
-        activeStrat=${sec.last_strat} strategies=${sec.strategies}
-        sectionRank=${sec.rank} sectionPb=${sec.pb}
-        family=${family}
-        onChanged=${t.refresh} defaultOpen=${true} />
     <${FailureCompilation} identity=${identity} defaultOpen=${true} />
   </details>`;
 }
