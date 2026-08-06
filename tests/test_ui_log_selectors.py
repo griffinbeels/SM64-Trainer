@@ -35,7 +35,16 @@ RENDERERS = (UI / "components" / "stagebanner.js",
              # empties the UI log SILENTLY, and an empty log is indistinguish-
              # able from "nothing was on screen" — the one answer it exists to
              # give.
-             UI / "components" / "steptrack.js")
+             UI / "components" / "steptrack.js",
+             # readLogs' own renderers, repointed at THIS branch's page-level
+             # practice log: `.log-card`/`.log-card-name` (practicelog.js)
+             # replaced the deleted per-section `.attempts-card`, and
+             # `.attempt-table`/`.attempt-result` moved out of practice.js
+             # into attemptlog.js in the same extraction. Missing either is
+             # the exact silent-empty-log failure this file exists to catch
+             # (2026-08-04, readLogs found nothing all session).
+             UI / "components" / "practicelog.js",
+             UI / "components" / "attemptlog.js")
 
 
 def _reader_source() -> str:
@@ -87,10 +96,15 @@ def test_every_class_the_reader_looks_for_is_actually_rendered():
 def test_the_reader_covers_both_surfaces_griffin_asked_for():
     """His ask named two things by pointing at them: the star/segment selector
     and the active target card. Losing either half is a quiet regression — the
-    log keeps filling, just not with the half you needed."""
+    log keeps filling, just not with the half you needed.
+
+    The active-target half is repointed at `.log-card.log-card-active`
+    (amendment A8) — the Active Target card it used to read is deleted, and
+    the practice log's own card carries the same "what's active right now"
+    fact instead."""
     needed = classes_the_reader_needs(_reader_source())
     assert "stagebanner" in needed and "starcell" in needed, "the selector half"
-    assert "objective-card" in needed, "the active-target half"
+    assert "log-card-active" in needed, "the active-target half"
     assert "active-star" in needed, (
         "which cell is HIGHLIGHTED is half of what the reports are about")
 

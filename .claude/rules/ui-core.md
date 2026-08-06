@@ -553,6 +553,35 @@ attempts AGAIN → `POST /api/pb` on a strat-TAGGED success. Fixing the shipped
 fixture is OWED, not done: it changes what the entire matrix measures, so it
 belongs in its own change with its own `known_defects` reckoning.
 
+**CORRECTION, 2026-08-04 (checked live, not assumed): the star target and
+`_arm_segment`'s own armed segment stopped being floor cards the day the
+untagged-PB fix landed** (`seed_practice`'s `strat` param, above) — both now
+grade `rank.rank: "Mario"` in a fresh sweep, so the paragraph above no longer
+describes them. What replaced it is a DIFFERENT, narrower gap: the 4 padding
+entities `_pad_log_with_more_entities` adds (BitDW/BitS Pipe Entry, Bowser
+1/2, all `arm_segment=` pulls in) call neither `/api/strat` nor `/api/pb`, and
+none of the ten legacy-migration segments carries a `default_strat`
+(`_arm_segment`'s own docstring), so all four render `rank.reason: "no_strat"`
+— the SENTINEL ("pick a strat to see your rank"), which draws no
+`.rank-progress-track` at all — never `"unranked"`, the ladder-FLOOR state
+(Capless V, an empty bar) a picked-but-unpracticed strategy produces. Verified
+by querying a fresh `serve_ui(arm_segment=FIXTURE_SEGMENT,
+seed_editor_fixtures=True)` instance's own `/api/session` directly (the exact
+config `tools/uilab_project.py::PROJECT` uses): 2 entities graded, 4 sentinel,
+**0 at the floor**, of the 6 the general sweep ever renders. So the SAME class
+of gap survives in a narrower form — the general responsive sweep still
+cannot render (or therefore probe, or even screenshot) the one state a
+strategy-with-a-ladder-but-no-PB-yet produces, which is the ordinary shape of
+a target the player just set. It happened to matter concretely on
+2026-08-04: a wash-bisected-by-a-line defect at exactly that floor state
+(`.claude/rules/ui-practice.md`'s "practice log" row has the report) was
+invisible to this fixture for the same structural reason the paragraph above
+already named — and would have stayed invisible even if the defect had been
+a DOM-shaped one a probe could see, since the state to trigger it never
+renders here at all. Still OWED, not done, for the same reason: seeding one
+padding entity through `/api/strat` with no `/api/pb` follow-up would reach it
+at the cost of a `known_defects` reckoning across the whole matrix.
+
 **A defect can be entirely in PAINT, and four of the five probes walk the DOM.**
 A pseudo-element is not in the DOM, so nothing that queries the tree can see
 one. The rank banners' colour wash is a `::before`; it bled sideways onto the
@@ -570,8 +599,13 @@ margin, which has no derivable geometry.
 **A measured constant is only as good as the state the fixture reached.**
 `--objective-card-narrow` was measured honestly and was 39px short at every
 width in its band, because at the time the fixture could only render the
-card's "Nothing to practice here" state. Re-measure after any change to what a
-fixed-height card can contain: `uv run python tools/measure_objective_card.py`.
+card's "Nothing to practice here" state. `tools/measure_objective_card.py` is
+deleted (amendment A8, spec practice-log-entity-cards) — the real practice
+page never renders `.objective-card` any more, so that tool's whole premise
+(a populated Active Target card reachable via `tools/ui_fixture.py`) is gone.
+The class and its CSS survive only because `ui/tune.js` still builds a
+REPLICA card out of them for the climb inspector; a future re-measure needs a
+tool built against that replica instead.
 
 **The supported minimum width is 850px** (user, 2026-07-29; height is
 unconstrained). One number, in two places that a test compares:

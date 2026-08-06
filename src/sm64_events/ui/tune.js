@@ -139,7 +139,17 @@ function PlanReadout({ values, startLevel, destLevel, destFill }) {
 // StarSection because that section is welded into practice.js with a live
 // store behind it; extracting it is the follow-up, and until then this is
 // honest about being the same CSS rather than the same component.
-function ObjectiveCard({ startLevel, destLevel, destFill, playing }) {
+// `layout` previews RankBanner's own layout prop ("row"/"stacked"/"column",
+// ranks.js) on the SAME climb this whole page already plays -- the point
+// being made twice (three times, since "column" landed) over here, since the
+// stacked (MARELO-shaped) and column (even more condensed) rank displays are
+// LAYOUT VARIANTS of this exact component, never a second implementation:
+// proving the climb still animates here is proving it for every arrangement
+// at once, because there is only one `useRankClimb` call underneath any of
+// them (`.claude/rules/ui-climb.md`, `.claude/rules/ui-ranks.md`).
+// `tests/test_ui_rank_stacked_climb.py`/`tests/test_ui_rank_column_climb.py`
+// drive this control to make exactly that claim against the real page.
+function ObjectiveCard({ startLevel, destLevel, destFill, playing, layout }) {
   const level = playing ? destLevel : startLevel;
   const fill = playing ? destFill : 0;
   const banner = bannerFor(level, fill);
@@ -162,9 +172,9 @@ function ObjectiveCard({ startLevel, destLevel, destFill, playing }) {
       <div class="objective-metrics">
         <div class="rank-slot">
           <${RankBanner} label="Strategy" banner=${banner} identity="tune"
-              lane="tune" order=${0} />
+              lane="tune" order=${0} layout=${layout} />
           <${RankBanner} label="Star" banner=${banner} identity="tune"
-              lane="tune" order=${1} />
+              lane="tune" order=${1} layout=${layout} />
         </div>
         <div class="objective-live-state" aria-label="Practice state">
           <${Icon} name="clock" size=${17} /><span>Ready</span>
@@ -185,6 +195,9 @@ function Inspector() {
   const [destFill, setDestFill] = useState(0.04);
   const [playing, setPlaying] = useState(false);
   const [status, setStatus] = useState(null);
+  // Which of RankBanner's two layouts this page previews -- see the
+  // ObjectiveCard header comment above.
+  const [layout, setLayout] = useState("row");
 
   useEffect(() => { localStorage.setItem(STORE_KEY, encodeTuning(values)); }, [values]);
   // The destination can never be BELOW the start: a drop is not a climb, and
@@ -244,7 +257,7 @@ function Inspector() {
         <div class="sidebar"></div>
         <div class="practice-page">
           <${ObjectiveCard} startLevel=${startLevel} destLevel=${destLevel}
-            destFill=${destFill} playing=${playing} />
+            destFill=${destFill} playing=${playing} layout=${layout} />
         </div>
       </div>
     </div>
@@ -287,6 +300,15 @@ function Inspector() {
                an input clipped it to "Capless 5 -> Waluig". -->
           <div class="tune-showing">${rankLabel(startLevel)} →
             ${rankLabel(destLevel)}</div>
+        </div>
+        <div>
+          <label>Layout</label>
+          <select id="layout-mode" value=${layout}
+              onchange=${(e) => setLayout(e.target.value)}>
+            <option value="row">Row (today's banner)</option>
+            <option value="stacked">Stacked (MARELO-shaped)</option>
+            <option value="column">Column (even more condensed)</option>
+          </select>
         </div>
       </div>
       <div class="tune-actions" style="margin-top:10px">

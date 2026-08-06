@@ -89,9 +89,20 @@ def test_the_step_track_markup_exists_in_exactly_one_place():
 
 
 def test_both_cards_draw_the_step_track_through_the_ONE_component():
-    src = strip_comments(read("components/practice.js"))
-    assert src.count("<${StepTrack}") == 2
-    assert 'class="seg-waiting"' not in src
+    """Was two call sites in practice.js (StarSection, SegmentSection), one
+    per kind. Amendment A8 (spec practice-log-entity-cards, 2026-08-04)
+    deleted both along with the Active Target card -- `LogCard`
+    (practicelog.js) is the one card either kind renders through now, so
+    there is exactly one call site left to draw the step track through,
+    not two to keep in step with each other."""
+    practice_src = strip_comments(read("components/practice.js"))
+    assert "<${StepTrack}" not in practice_src, (
+        "practice.js still renders StepTrack directly -- that door belongs "
+        "to LogCard now")
+    assert 'class="seg-waiting"' not in practice_src
+    log_src = strip_comments(read("components/practicelog.js"))
+    assert log_src.count("<${StepTrack}") == 1
+    assert 'class="seg-waiting"' not in log_src
 
 
 def test_the_guards_can_still_fail():

@@ -1142,10 +1142,20 @@ def test_segment_armed_broadcast_survives_recursive_publish(tmp_path):
          recursive path.
 
     Verify: attempt_completed fires with outcome "reset"; no armed/disarmed
-    notices at frame 1100; segment remains armed after the reset."""
+    notices at frame 1100; segment remains armed after the reset.
+
+    Explicitly TARGETED (2026-08-04): BitDW Pipe Entry arms ambiently on
+    mere course entry (segments.arms_ambiently), and an untargeted failure
+    on such a def no longer records a row of its own (projection.py caveat
+    20 — Griffin's ruling that a reset with nothing selected in a Bowser
+    stage "should be unattributed" since it could be any of the stage's
+    three practicable things). This test is about recursive-publish/notice
+    mechanics, not targeting, so it targets the def to keep exercising the
+    behavior it actually claims to test."""
     db, svc, sent = make_rec(tmp_path)
     bitdw = seed_id(db, "BitDW Pipe Entry")
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 6, "to": 17})))
+    asyncio.run(svc.set_target_segment(bitdw))
     asyncio.run(svc.publish(ev("practice_reset", 1100, {"igt_frames_before": 0})))
     completed = [e for e in sent if e.type == "attempt_completed"]
     assert completed and completed[-1].payload["outcome"] == "reset"  # recursion happened
@@ -1207,7 +1217,14 @@ def test_reproject_during_track_tail_abandons_stale_attempts(tmp_path):
     the freshly re-projected table.
 
     Note: anchor closures emit no armed/disarmed notices (live-gate amendment
-    2026-06-12), so the trigger is attempt_completed rather than segment_armed."""
+    2026-06-12), so the trigger is attempt_completed rather than segment_armed.
+
+    Explicitly TARGETED (2026-08-04), same reason as
+    test_segment_armed_broadcast_survives_recursive_publish above: BitDW
+    Pipe Entry arms ambiently, and an untargeted reset no longer records a
+    row of its own (projection.py caveat 20) — this test is about the
+    reproject-mid-tail race, not targeting, so it targets the def to keep
+    the attempt_completed it needs to trigger the race."""
     db = Database(tmp_path / "t.db")
 
     class DeleteOnCompleted(RecordingBroadcaster):
@@ -1233,6 +1250,7 @@ def test_reproject_during_track_tail_abandons_stale_attempts(tmp_path):
     asyncio.run(svc.start())
     bc.target_id = seed_id(db, "BitDW Pipe Entry")
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 6, "to": 17})))
+    asyncio.run(svc.set_target_segment(bc.target_id))
     asyncio.run(svc.publish(ev("practice_reset", 1100, {"igt_frames_before": 0})))
     assert bc.fired
     # the stale tail was abandoned: no seg attempt re-upserted, no second

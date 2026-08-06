@@ -9,14 +9,21 @@ Two different claims, and only the first has teeth today.
    showing a step the player had passed). So the rendered chips are compared
    against the running server's own answer, end to end.
 
-2. IT STAYS ON ONE LINE. `.objective-card` is a FIXED-HEIGHT `overflow:
-   hidden` box, so a second line here does not grow the card — it pushes the
-   card's own contents out under the clip, the trap `.claude/rules/ui-core.md`
-   names and the reason a layout probe cannot see it. Stated honestly: this
-   has HEADROOM right now, measured rather than assumed — the corpus's longest
-   route needs 386px and the row gives 614px at the 850px floor. It is here to
-   fail when the corpus grows a longer route or the card gets narrower, and it
-   has not been seen to fail. Do not read it as a tight fit.
+2. IT STAYS ON ONE LINE. Originally written against `.objective-card`, a
+   FIXED-HEIGHT `overflow: hidden` box where a second line here did not grow
+   the card — it pushed the card's own contents out under the clip, the trap
+   `.claude/rules/ui-core.md` names and the reason a layout probe cannot see
+   it. The Active Target card is deleted (amendment A8, spec practice-log-
+   entity-cards); the step track this measures now lives inside a `.log-card`
+   in the practice log, which is variable-height and would simply grow taller
+   rather than clip. The readability requirement itself does not change —
+   a route that wraps still reads worse, and a card growing to fit it still
+   pushes every card below it down the page — so the geometry check stays.
+   Stated honestly: this has HEADROOM right now, measured rather than
+   assumed — the corpus's longest route needs 386px and the row gives 614px
+   at the 850px floor. It is here to fail when the corpus grows a longer
+   route or the card gets narrower, and it has not been seen to fail. Do not
+   read it as a tight fit.
 
 Both measure the REAL chips: the widest-route check clones the shipped
 `.step-chip` and swaps only its label and state class, so the font, gaps,

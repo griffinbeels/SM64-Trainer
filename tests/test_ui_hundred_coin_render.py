@@ -65,13 +65,54 @@ def hundred_coin_page(hundred_coin_server):
     randomises order inside a module, so it failed about one run in three.
     Booting the server is the expensive half and stays module-scoped."""
     with _page(f"{hundred_coin_server}/ui/index.html") as page:
-        page.wait_for(".objective-card", timeout_ms=20000)
+        page.wait_for(".log-list-card", timeout_ms=20000)
+        _open_the_standards_panel(page)
         yield page
 
 
+def _open_the_standards_panel(page) -> None:
+    """The standards table is behind a CLOSED dropdown now.
+
+    It used to render open in the page-level drawer (`EntityDrawer`), so every
+    test below could wait straight for `.stdtable`. Griffin moved the panel
+    into each practice-log card on 2026-08-05 -- "for each card, we have the
+    Rank Standards dropdown. It should be closed by default" -- and the panel
+    fetches on OPEN, never on mount, so without this click the table does not
+    merely start hidden, it never loads at all.
+
+    Opening it here rather than in each test keeps the tests about the TABLE,
+    which is what this module is for. `.stdtable` is still what they wait on,
+    so a panel that opens but fails to load is still a red test.
+    """
+    # TWO folds, and the outer one is easy to forget: the panel lives in the
+    # card BODY, which a closed card does not render at all -- so a card the
+    # auto-open slot did not choose has no `.standards-toggle` to click yet.
+    page.evaluate("""
+      (() => {
+        const card = document.querySelector('.log-card:not(.is-unassigned)');
+        if (!card) return false;
+        if (!card.querySelector('.log-card-body')) card.querySelector('.log-card-fold').click();
+        return true;
+      })()
+    """)
+    page.wait_for(".log-card .standards-toggle", timeout_ms=10000)
+    page.evaluate("""
+      (() => {
+        const card = Array.from(document.querySelectorAll('.log-card'))
+          .find((c) => c.querySelector('.standards-toggle'));
+        if (!card) return false;
+        card.querySelector('.standards-toggle').click();
+        return true;
+      })()
+    """)
+
+
 def test_the_strategy_dropdown_groups_by_exit_star(hundred_coin_page):
+    # The strategy picker moved from the deleted Active Target card into the
+    # practice log's own `LogCard` head (amendment A2, spec practice-log-
+    # entity-cards) -- `.objective-strategy` -> `.log-card-strat-picker`.
     groups = hundred_coin_page.evaluate("""
-      Array.from(document.querySelectorAll(".objective-strategy optgroup"))
+      Array.from(document.querySelectorAll(".log-card-strat-picker optgroup"))
         .map((g) => [g.label,
                      Array.from(g.querySelectorAll("option")).map((o) => o.textContent.trim())])
     """)
@@ -97,7 +138,7 @@ def test_the_selected_value_is_the_full_qualified_name(hundred_coin_page):
     """The heading is presentation; the VALUE stays the stored identity, or
     the write would post a name no ladder is filed under."""
     values = hundred_coin_page.evaluate("""
-      Array.from(document.querySelectorAll(".objective-strategy optgroup option"))
+      Array.from(document.querySelectorAll(".log-card-strat-picker optgroup option"))
         .map((o) => o.value)
     """)
     assert values and all(" · " in value for value in values), values
@@ -175,7 +216,7 @@ def test_the_new_strategy_modal_asks_which_star_the_run_ends_on(hundred_coin_pag
     """
     hundred_coin_page.evaluate("""
       (() => {
-        const select = document.querySelector(".objective-strategy select");
+        const select = document.querySelector(".log-card-strat-picker select");
         select.value = "__new";
         select.dispatchEvent(new Event("change", {bubbles: true}));
       })()

@@ -16,8 +16,8 @@
 //
 // It also means there are NO changes in the components being observed. That
 // is not incidental: an instrument that requires its subject to cooperate is
-// one more thing to keep in step, and the subject here is four banner row
-// modes and three objective cards.
+// one more thing to keep in step, and the subject here is several banner row
+// modes and the practice log's own entity cards.
 import { useEffect, useRef } from "preact/hooks";
 import { send } from "./api.js";
 import { takeMarks } from "./latency.js";
@@ -49,23 +49,32 @@ export function readSelector(root) {
   };
 }
 
-// EVERY `.objective-card` on the page in ONE record, in DOM order. There can
-// be several at once (an active star plus one or more pinned segments), and
-// the LIST is the observation — a card vanishing is exactly the kind of thing
-// being reported, and one-record-per-card could only express that as an
-// absence, which is not something an append-only log can write down.
-// The shape is uniform across all three card types (StarSection,
-// SegmentSection, EmptyPractice), which is why one reader covers them.
+// EVERY currently-ACTIVE `.log-card` on the page in ONE record, in DOM order
+// -- typically zero or one (repointed from the deleted `.objective-card`,
+// amendment A8: the Active Target card is gone, and the log's own card now
+// carries the SAME per-card facts -- name, live strategy, mid-movement step
+// -- that card used to). The LIST is still the observation, not one record
+// per card: a card losing its `.log-card-active` highlight is exactly the
+// kind of thing a report is about, and one-record-per-card could only
+// express that as an absence, which is not something an append-only log can
+// write down.
+//
+// No `state` field any more (one-line-heads round, 2026-08-04): the
+// Ready/Running word this used to read off `.log-card-state` is deleted from
+// the card itself -- the gold `.log-card-active` highlight already says
+// "this is what you're practicing", and StepTrack's own `.seg-waiting` row
+// (still read below) already answers "running", in more detail, for an armed
+// entity. Reading a class nothing renders any more is exactly the SILENT
+// FALLBACK this module's own header warns about, so the field goes with it
+// rather than being left to report empty forever.
 export function readTargets(root) {
   return {
     surface: "target",
-    cards: Array.from(root.querySelectorAll(".objective-card")).map((card) => ({
-      label: text(card.querySelector(".objective-pick")),
-      context: text(card.querySelector(".objective-context")),
-      name: text(card.querySelector(".objective-name h2")),
-      strat: text(card.querySelector(".objective-strategy select")
-                  || card.querySelector(".objective-strategy")),
-      state: text(card.querySelector(".objective-live-state")),
+    cards: Array.from(root.querySelectorAll(".log-card.log-card-active")).map((card) => ({
+      context: text(card.querySelector(".log-card-context")),
+      name: text(card.querySelector(".log-card-name")),
+      strat: text(card.querySelector(".log-card-strat-picker select")
+                  || card.querySelector(".log-card-strat")),
       step: text(card.querySelector(".seg-waiting")),
     })),
   };
@@ -81,7 +90,7 @@ export function readTargets(root) {
 // The NEWEST rows rather than all of them: a log can hold hundreds and this
 // file is appended to on every change, so what is recorded is the head of each
 // card's table plus how many rows it has. A new entry moves both.
-// It reads `.attempts-card`, NOT `.objective-card`. The first version read the
+// It reads `.log-card`, NOT `.objective-card`. The first version read the
 // tables INSIDE the objective card, where there are none — the log is its own
 // `<section>` two cards below it — so `readLogs` returned a well-formed record
 // with an empty row list, every time, and the log filled with everything
@@ -93,15 +102,22 @@ export function readTargets(root) {
 // classes really are rendered, just not inside one another. The guard for THIS
 // is the render test, which now requires a real page to produce a non-empty
 // row list.
+//
+// `.log-card` (practicelog.js) is per-ENTITY here, not per-kind: the page-
+// level practice log this branch shipped merges stars and segments into one
+// recency-ordered list, one card per practiced thing, so `name` is that
+// entity's own display name rather than a fixed "Recent attempts" heading —
+// a genuine identity a class-rename report can use, where the card it
+// replaced could not.
 const LOG_ROWS = 3;
 
 export function readLogs(root) {
   return {
     surface: "log",
-    logs: Array.from(root.querySelectorAll(".attempts-card")).map((card) => {
+    logs: Array.from(root.querySelectorAll(".log-card")).map((card) => {
       const rows = Array.from(card.querySelectorAll(".attempt-table tr"));
       return {
-        name: text(card.querySelector(".attempts-heading h3")),
+        name: text(card.querySelector(".log-card-name")),
         rows: rows.slice(0, LOG_ROWS)
           .map((row) => text(row.querySelector(".attempt-result"))),
         total: rows.length,
