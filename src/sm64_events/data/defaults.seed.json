@@ -12200,5 +12200,42 @@
         }
       ]
     }
+  ],
+  "landmarks": [
+    {
+      "seed_key": "landmark:kind:800ebc8c",
+      "key": "kind:800ebc8c",
+      "name": "Door"
+    },
+    {
+      "seed_key": "landmark:kind:800ebc7c",
+      "key": "kind:800ebc7c",
+      "name": "Warp Door"
+    },
+    {
+      "seed_key": "landmark:6:3:800ebc8c:1126,-1074,-2661",
+      "key": "6:3:800ebc8c:1126,-1074,-2661",
+      "name": "HMC Door"
+    },
+    {
+      "seed_key": "landmark:6:3:800ebc8c:717,-1177,-869",
+      "key": "6:3:800ebc8c:717,-1177,-869",
+      "name": "Moat Door"
+    },
+    {
+      "seed_key": "landmark:6:3:800ebc8c:-3097,-1279,1434",
+      "key": "6:3:800ebc8c:-3097,-1279,1434",
+      "name": "DDD Door"
+    },
+    {
+      "seed_key": "landmark:6:3:800ebc7c:-1100,-1074,922",
+      "key": "6:3:800ebc7c:-1100,-1074,922",
+      "name": "Basement Stairs Door (from the basement)"
+    },
+    {
+      "seed_key": "landmark:6:1:800ebc7c:-1100,-1074,922",
+      "key": "6:1:800ebc7c:-1100,-1074,922",
+      "name": "Basement Stairs Door (from the lobby)"
+    }
   ]
 }

@@ -8,6 +8,7 @@ contention threshold."""
 import json
 import sqlite3
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sm64_events.core.events import Event
@@ -530,6 +531,23 @@ MIGRATIONS = [
        AND json_extract(end_triggers, '$[0].type') = 'level_enter'
        AND json_extract(end_triggers, '$[0].to') = 6;
     """,
+    # THE LANDMARK CATALOGUE. One row names one thing he interacts with, and the
+    # SAME table holds both levels of naming because `key` distinguishes them:
+    # `kind:800ebc8c` names a whole family game-wide (every pole in the game at
+    # once), `6:3:800ebc8c:1126,-1074,-2661` names one specific door. His ask,
+    # 2026-08-05: "if we already know that a specific door is the door to HMC,
+    # we don't ever need to redefine that" -- so these ship in
+    # data/defaults.seed.json like segments and routes, with the same
+    # seed_key/seed_dirty contract protecting an edit from the next refresh.
+    """
+    CREATE TABLE IF NOT EXISTS landmark_names (
+        key         TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        seed_key    TEXT,
+        seed_dirty  INTEGER NOT NULL DEFAULT 0,
+        updated_utc TEXT
+    );
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -598,6 +616,44 @@ class Database:
                  _iso(event.timestamp_utc), json.dumps(event.payload)))
             self._conn.commit()
             return cur.lastrowid
+
+    # -- landmark catalogue --------------------------------------------------
+    def landmark_names(self) -> dict[str, str]:
+        """Every name in the catalogue: key -> name, kinds and instances alike."""
+        with self._lock:
+            rows = self._conn.execute("SELECT key, name FROM landmark_names").fetchall()
+            return {row["key"]: row["name"] for row in rows}
+
+    def name_landmark(self, key: str, name: str) -> None:
+        """HIS naming gesture. Blank erases the row rather than storing "".
+
+        `seed_dirty=1` because a name he typed is an edit, and reconcile must
+        never overwrite it at the next corpus refresh -- the same contract
+        segment_defs and routes have carried since 2026-07-23.
+        """
+        with self._lock:
+            if not name.strip():
+                self._conn.execute("DELETE FROM landmark_names WHERE key=?", (key,))
+            else:
+                self._conn.execute(
+                    "INSERT INTO landmark_names (key, name, seed_dirty, updated_utc)"
+                    " VALUES (?,?,1,?)"
+                    " ON CONFLICT(key) DO UPDATE SET name=excluded.name,"
+                    " seed_dirty=1, updated_utc=excluded.updated_utc",
+                    (key, name.strip(), _iso(datetime.now(timezone.utc))))
+            self._conn.commit()
+
+    def seed_landmark_name(self, key: str, name: str, seed_key: str) -> None:
+        """A SHIPPED name. Refreshes an untouched row, never a row he edited."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO landmark_names (key, name, seed_key, seed_dirty, updated_utc)"
+                " VALUES (?,?,?,0,?)"
+                " ON CONFLICT(key) DO UPDATE SET name=excluded.name,"
+                " seed_key=excluded.seed_key, updated_utc=excluded.updated_utc"
+                " WHERE landmark_names.seed_dirty = 0",
+                (key, name, seed_key, _iso(datetime.now(timezone.utc))))
+            self._conn.commit()
 
     def delete_events(self, ids: list[int]) -> None:
         with self._lock:

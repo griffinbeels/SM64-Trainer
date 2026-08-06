@@ -10,7 +10,7 @@ from sm64_events.memory.objects import pool_slot, slot_address
 
 # The window of one object slot that spans BOTH identity fields, so naming what
 # Mario touched costs one read rather than two.
-_ENTITY_BLOCK = A.OBJECT_BEHAVIOR + 4 - A.OBJECT_HOME_POS
+_LANDMARK_BLOCK = A.OBJECT_BEHAVIOR + 4 - A.OBJECT_HOME_POS
 _BEHAVIOUR_IN_BLOCK = A.OBJECT_BEHAVIOR - A.OBJECT_HOME_POS
 _POINTERS_AT = min(A.MARIO_OBJECT_POINTERS)
 _POINTERS_SIZE = max(A.MARIO_OBJECT_POINTERS) + 4 - _POINTERS_AT
@@ -41,13 +41,13 @@ class GameSnapshot:
     warp_dest_level: int = 0
     warp_dest_area: int = 0
     warp_dest_node: int = 0
-    # WHICH thing Mario is engaged with — see core/entity.py. Two extra reads a
+    # WHICH thing Mario is engaged with — see core/landmark.py. Two extra reads a
     # tick, not five: one block over gMarioState's three object pointers, and
     # one over the chosen object that spans its spawn point and its behaviour.
     # Both linger after the interaction ends, which is harmless because a
     # moment reads them on its ACTION EDGE.
-    entity_behaviour: int = 0   # 0 = nothing engaged this frame
-    entity_home: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    landmark_behaviour: int = 0   # 0 = nothing engaged this frame
+    landmark_home: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
 class SnapshotReader:
@@ -59,7 +59,7 @@ class SnapshotReader:
 
         Zeroes when he is engaged with nothing, or when the pointer does not
         land on a pool SLOT BOUNDARY — the same test that discovered which
-        pointers these are, kept here so a torn read cannot name an entity out
+        pointers these are, kept here so a torn read cannot name a landmark out
         of the middle of some other object.
         """
         block = self._mem.read_block(_POINTERS_AT, _POINTERS_SIZE)
@@ -70,7 +70,7 @@ class SnapshotReader:
             if located is None or located[1] != 0:
                 continue
             found = self._mem.read_block(
-                slot_address(located[0], A.OBJECT_HOME_POS), _ENTITY_BLOCK)
+                slot_address(located[0], A.OBJECT_HOME_POS), _LANDMARK_BLOCK)
             behaviour = int.from_bytes(
                 found[_BEHAVIOUR_IN_BLOCK:_BEHAVIOUR_IN_BLOCK + 4], "big")
             return behaviour, struct.unpack(">fff", found[:12])
@@ -78,7 +78,7 @@ class SnapshotReader:
 
     def read(self) -> GameSnapshot:
         m = self._mem
-        entity_behaviour, entity_home = self._engaged_object()
+        landmark_behaviour, landmark_home = self._engaged_object()
         return GameSnapshot(
             wall_time_utc=datetime.now(timezone.utc),
             global_timer=m.read_u32(A.GLOBAL_TIMER),
@@ -97,6 +97,6 @@ class SnapshotReader:
             warp_dest_level=m.read_u8(A.WARP_DEST_LEVEL),
             warp_dest_area=m.read_u8(A.WARP_DEST_AREA),
             warp_dest_node=m.read_u8(A.WARP_DEST_NODE),
-            entity_behaviour=entity_behaviour,
-            entity_home=entity_home,
+            landmark_behaviour=landmark_behaviour,
+            landmark_home=landmark_home,
         )

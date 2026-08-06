@@ -73,17 +73,18 @@ course where every other trigger needs him to travel.
 
 - **Lives** — the moment registry (`src/sm64_events/detectors/moment.py`)
 
-### Entity
+### Landmark
 
 The specific thing in the world a [[moment]] happened to — that door, that
 pole, that bob-omb. The game rebuilds its object list every time an area
-loads, so we name an entity by where it SPAWNED rather than by which slot of
-that list holds it: the slot changes and the spawn point does not.
+loads, so we name a landmark by where it SPAWNED rather than by which slot of
+that list holds it: the slot changes and the spawn point does not. He names
+one in the [[recorder]] and every row it ever appeared in takes that name.
 
-- **Lives** — the spawn-point offset in
-  `src/sm64_events/memory/addresses.py`, read by `tools/probe_objects.py`
+- **Lives** — `src/sm64_events/core/landmark.py` (the key),
+  `src/sm64_events/data/defaults.seed.json` (the names we ship)
 - **Not** — the count in a [[moment]]'s name. "The 5th door you opened" counts
-  doors; an entity IS the door, and the count is something it has.
+  doors; a landmark IS the door, and the count is something it has.
 
 ### Attempt
 

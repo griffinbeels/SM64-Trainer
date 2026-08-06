@@ -13,7 +13,7 @@ reload, then 3/2/0 again) and neither is the live position (one SSL bob-omb took
 14 of them across 21 grabs). The spawn point held for both.
 
 THIS MODULE IS THE ONLY DOOR onto that key. It takes an identity — never the
-ingredients a caller assembles — so two surfaces cannot build the same entity's
+ingredients a caller assembles — so two surfaces cannot build the same landmark's
 name two different ways, which is the failure `tests/test_single_source.py`
 exists to stop.
 
@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class Entity:
+class Landmark:
     """One specific thing in the world, named by where the game spawned it."""
 
     level: int
@@ -36,9 +36,20 @@ class Entity:
 
     @property
     def key(self) -> str:
-        """The stable name this entity answers to, in every store and payload."""
+        """The stable name this landmark answers to, in every store and payload."""
         return (f"{self.level}:{self.area}:{self.behaviour:08x}"
                 f":{self.home[0]},{self.home[1]},{self.home[2]}")
+
+    @property
+    def kind_key(self) -> str:
+        """The name the whole FAMILY answers to, game-wide.
+
+        A behaviour pointer is fixed for the ROM, so naming "Pole" once names
+        every pole in Super Mario 64. That is what makes the catalogue tractable
+        by hand: kinds are a couple of dozen rows, and only the instances he
+        actually routes on need a name of their own.
+        """
+        return f"kind:{self.behaviour:08x}"
 
     @property
     def placed(self) -> bool:
@@ -46,23 +57,24 @@ class Entity:
 
         Mario himself, a star popping out of a box, the marker he spawns at —
         a level script never wrote them a spawn point, so several of them share
-        one key. Anything that offers to NAME an entity has to refuse these,
+        one key. Anything that offers to NAME a landmark has to refuse these,
         because the name would land on all of them at once.
         """
         return self.home != (0, 0, 0)
 
     def payload(self) -> dict:
-        return {"key": self.key, "behaviour": self.behaviour,
+        return {"key": self.key, "kind_key": self.kind_key,
+                "behaviour": self.behaviour,
                 "home": list(self.home), "placed": self.placed}
 
 
-def entity_at(snapshot) -> Entity | None:
-    """The entity Mario is engaged with on this frame, or None."""
-    if not snapshot.entity_behaviour:
+def landmark_at(snapshot) -> Landmark | None:
+    """The landmark Mario is engaged with on this frame, or None."""
+    if not snapshot.landmark_behaviour:
         return None
-    return Entity(
+    return Landmark(
         level=snapshot.curr_level,
         area=snapshot.curr_area,
-        behaviour=snapshot.entity_behaviour,
-        home=tuple(int(round(axis)) for axis in snapshot.entity_home),
+        behaviour=snapshot.landmark_behaviour,
+        home=tuple(int(round(axis)) for axis in snapshot.landmark_home),
     )

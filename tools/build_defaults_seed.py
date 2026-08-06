@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import corpus_landmarks     # noqa: E402
 import corpus_legacy        # noqa: E402
 import corpus_movements     # noqa: E402
 import corpus_routes_main   # noqa: E402
@@ -68,7 +69,8 @@ def build() -> dict:
     segments += list(corpus_movements.HUNDRED_COIN_EXITS)
     routes = list(corpus_routes_main.ROUTES) + list(corpus_routes_stage.ROUTES)
     return {"seed_version": SEED_VERSION, "segments": segments,
-            "routes": routes}
+            "routes": routes,
+            "landmarks": list(corpus_landmarks.LANDMARKS)}
 
 
 def render(seed: dict) -> str:
@@ -88,7 +90,8 @@ def main(argv) -> int:
         return 0
     OUT.write_text(text, encoding="utf-8", newline="\n")
     print(f"wrote {OUT}: {len(seed['segments'])} segments, "
-          f"{len(seed['routes'])} routes")
+          f"{len(seed['routes'])} routes, "
+          f"{len(seed['landmarks'])} landmarks")
     return 0
 
 

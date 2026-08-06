@@ -407,6 +407,35 @@ The settings string the page exports carries EVERY tunable, not just the ones
 that differ from the defaults, so it still means the same thing after a default
 is codified.
 
+## Landmarks — which door, which pole, which bob-omb
+
+A **landmark** is the specific object a `moment_reached` happened to, named by
+where the game SPAWNED it (`level:area:behaviour:x,y,z`). The pool slot it
+occupies is NOT part of the name and cannot be: three castle-basement doors
+held slots 3/2/0, then 38/42/44 after an area reload, then 3/2/0 again. A
+`kind:<behaviour>` key names a whole family game-wide instead, so naming
+"Pole" once names every pole in the game.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/landmarks` | `{names: {key: name}}` — the whole catalogue, kinds and instances in one map. One map rather than two endpoints because a row's label resolves from both. 503 in degraded mode. |
+| `POST /api/landmark` | `{key, name}` — name it, or send a blank `name` to erase. Returns the refreshed `{names}`. Writes `seed_dirty=1`, so the next corpus refresh never overwrites a name the user typed. 422 on an empty key. |
+
+**A name applies BACKWARDS, and that is a property of where it is resolved.**
+No row ever stores the name it was drawn with — `GET /api/segments/timeline`
+labels each row against the catalogue at fetch time — so renaming a landmark
+re-labels every row it ever appeared in, with nothing to migrate. Timeline rows
+carry `landmark` (the key), `landmark_kind`, `landmark_name` and
+`landmark_placed` for the rename control; `landmark_placed` is false for an
+object the game created mid-play (Mario, a star popping out of a box), which
+has no spawn point of its own and therefore shares one key with every other of
+its kind — those must not be offered a name.
+
+**Shipped names live in the corpus** (`src/sm64_events/data/defaults.seed.json`,
+authored in `tools/corpus_landmarks.py`) and reconcile at startup like segments
+and routes, so a door identified once is identified for every install.
+
+
 ## Data
 
 `data/tracker.db` is a SQLite database created on first run (gitignored). It holds an

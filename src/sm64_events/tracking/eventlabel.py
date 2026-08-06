@@ -181,25 +181,50 @@ def _key_grabbed(payload: dict) -> str | None:
 
 _MOMENT_LABELS = {m.kind: m.label for m in MOMENTS}
 
+# The labellers that take (payload, names) instead of (payload).
+_READS_THE_CATALOGUE = frozenset({"moment_reached"})
 
-def _moment_reached(payload: dict) -> str | None:
-    """"Open a door (#5) in Big Boo's Haunt" — the sentence the builder's
-    picker shows for a moment you can point at.
 
-    The ORDINAL is printed only past the first, because most subsections have
-    one unambiguous boundary and "#1" on every row is noise. Where it matters
-    it matters a lot: the fifth door in Big Boo's Haunt is a different pick
-    from the fourth, and the number is the only thing distinguishing them.
+def _moment_reached(payload: dict, names: dict) -> str | None:
+    """"Open the HMC Door in Castle Inside" once he has named that door, and
+    "Open a door (#5) in Big Boo's Haunt" until he has.
+
+    THE ORDINAL IS THE FALLBACK NOW, not the identity. His ruling 2026-08-05:
+    *"it's less about the specific order of doors, and more about WHICH door is
+    being entered"*. So a named landmark drops the count entirely — two runs
+    that take the doors in a different order read the same sentence — and an
+    unnamed one keeps the old behaviour, where the number is the only thing
+    distinguishing the fifth door from the fourth. Unnamed still prints "#1"
+    on nothing, because most subsections have one unambiguous boundary and a
+    "#1" on every row is noise.
+
+    A KIND name (`kind:800ebc8c` -> "Door") is a second, cheaper level: it
+    replaces the moment's generic word for every instance in the game at once,
+    so naming twenty families is most of the work and naming a door is the
+    part he only does where it matters.
     """
     kind = payload.get("kind")
     if kind is None:
         return None
     what = _MOMENT_LABELS.get(kind, kind)
     where = _level_name(payload.get("level"))
+    landmark = payload.get("landmark") or {}
+    named = names.get(landmark.get("key"))
+    if named:
+        return f"{_verb(what)} the {named} in {where}"
+    kind_named = names.get(landmark.get("kind_key"))
+    if kind_named:
+        what = f"{_verb(what)} a {kind_named.lower()}"
     ordinal = payload.get("ordinal")
     if ordinal and ordinal > 1:
         return f"{what} (#{ordinal}) in {where}"
     return f"{what} in {where}"
+
+
+def _verb(label: str) -> str:
+    """"Open a door" -> "Open". The registry's label is a whole phrase and a
+    named landmark supplies its own noun, so the verb is what survives."""
+    return label.split(" a ")[0].split(" the ")[0]
 
 
 def _spawned(payload: dict) -> str | None:
@@ -293,8 +318,12 @@ TRIGGER_JOURNAL_TYPES: dict[str, frozenset[str]] = {
 }
 
 
-def label_event(row) -> str | None:
-    """row: an EventRow (storage/db.py) — .type and .payload are read; .id,
+def label_event(row, names: dict | None = None) -> str | None:
+    """`names` is the LANDMARK CATALOGUE (key -> name); only the
+    labellers listed in `_READS_THE_CATALOGUE` read it, so adding an
+    ordinary labeller never has to know the catalogue exists.
+
+    row: an EventRow (storage/db.py) — .type and .payload are read; .id,
     .frame, .wall_time_utc are not needed for the sentence itself. Returns
     None for a non-boundary type, or for a boundary-capable type whose
     payload lacks the field(s) needed to name what happened (an
@@ -303,4 +332,6 @@ def label_event(row) -> str | None:
     labeler = _LABELERS.get(row.type)
     if labeler is None:
         return None
+    if row.type in _READS_THE_CATALOGUE:
+        return labeler(row.payload, names or {})
     return labeler(row.payload)

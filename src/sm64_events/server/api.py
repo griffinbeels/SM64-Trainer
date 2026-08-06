@@ -53,6 +53,11 @@ class PbBody(BaseModel):
     timer_mode: str
 
 
+class LandmarkNameBody(BaseModel):
+    key: str          # a landmark key, or `kind:<behaviour>` to name a family
+    name: str = ""    # blank erases the name rather than storing one
+
+
 class WipeBody(BaseModel):
     kind: str                      # "star" | "segment" | "all"
     course_id: int | None = None
@@ -627,13 +632,19 @@ def create_api_router(service) -> APIRouter:
             raise HTTPException(503, "database unavailable")
         events = list(service.db.events())      # ORDER BY id -- oldest first
         places = _timeline_places(events)
+        # The catalogue is read ONCE per fetch and applied at LABEL time, which
+        # is what makes a rename apply backwards: every row that landmark ever
+        # appeared in re-labels on the next fetch, because no row ever stored
+        # the name it was drawn with.
+        names = service.db.landmark_names()
         rows = []
         for row in events:
             if after_id is not None and row.id <= after_id:
                 continue
-            label = label_event(row)
+            label = label_event(row, names)
             if label is None:
                 continue
+            landmark = (row.payload.get("landmark") or {}) if row.payload else {}
             if view == "steps" and not _is_default_timeline_row(row):
                 continue
             place = places.get(row.id)
@@ -643,7 +654,14 @@ def create_api_router(service) -> APIRouter:
                         "place": place,
                         "place_label": node_label(place) if place else None,
                         "place_level": (int(str(place).partition(":")[0])
-                                        if place else None)})
+                                        if place else None),
+                        # What the row's rename control edits. `placed` False
+                        # means the game made this object mid-play, so it has no
+                        # name of its own to give -- the UI offers no pencil.
+                        "landmark": landmark.get("key"),
+                        "landmark_kind": landmark.get("kind_key"),
+                        "landmark_name": names.get(landmark.get("key")),
+                        "landmark_placed": landmark.get("placed", False)})
         return {"rows": rows[-limit:]}
 
     @router.post("/segments")
@@ -1312,6 +1330,35 @@ def create_api_router(service) -> APIRouter:
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}
+
+    @router.get("/landmarks")
+    def landmarks():
+        """The catalogue: every name we know, kinds and instances in one map.
+
+        One map rather than two endpoints because the browser resolves a row's
+        label from BOTH -- the instance name if he has given one, else the kind
+        name plus where it spawned -- and two fetches would let a row render
+        with half the answer.
+        """
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        return {"names": service.db.landmark_names()}
+
+    @router.post("/landmark")
+    def name_landmark(body: LandmarkNameBody):
+        """HIS naming gesture, and it applies BACKWARDS.
+
+        Nothing is written into the journal: a name is not something the game
+        did. Every row that landmark ever appeared in re-labels because the
+        browser resolves labels from this map at render time rather than
+        baking a string into the row when it arrived.
+        """
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        if not body.key.strip():
+            raise HTTPException(422, "key is required")
+        service.db.name_landmark(body.key.strip(), body.name)
+        return {"names": service.db.landmark_names()}
 
     @router.post("/pb")
     async def save_pb(body: PbBody):

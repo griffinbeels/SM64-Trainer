@@ -106,13 +106,41 @@ const ROLE_WORDS = { start: "Start", stop: "Stop", finish: "Finish" };
 // secondary confirm step (spec: "point at what you just did") -- and it is a
 // TOGGLE, because with N selections there is no step to advance to that could
 // stand in for un-picking one.
-function TimelineRows({ rows, order, onToggle }) {
+// The rename control. Only a PLACED landmark gets one: something the game made
+// mid-play (Mario, a star popping out of a box) shares one key with every other
+// of its kind, so a name typed here would land on all of them at once.
+//
+// A pencil on its own row-wrapper rather than inside the row button, because a
+// button inside a button is invalid and the browser drops it silently.
+function RenameControl({ row, renaming, onStart, onCommit, onCancel }) {
+  if (!row.landmark || !row.landmark_placed) return null;
+  if (renaming) {
+    return html`<input class="record-rename-input" type="text" autofocus
+        value=${row.landmark_name || ""}
+        placeholder="name this one"
+        onclick=${(e) => e.stopPropagation()}
+        onblur=${(e) => onCommit(row, e.target.value)}
+        onkeydown=${(e) => {
+          if (e.key === "Enter") { e.preventDefault(); onCommit(row, e.target.value); }
+          if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+        }} />`;
+  }
+  return html`<button type="button" class="record-rename"
+      title=${row.landmark_name
+        ? `Rename ${row.landmark_name} — every row it appears in follows`
+        : "Name this one — every row it appears in follows"}
+      onclick=${() => onStart(row)}>✎</button>`;
+}
+
+function TimelineRows({ rows, order, onToggle, renamingId,
+                        onRenameStart, onRenameCommit, onRenameCancel }) {
   return html`<div class="record-rows">
     ${rows.map((row) => {
       const index = order.indexOf(row.id);
       const picked = index >= 0;
       const role = picked ? roleOf(index, order.length) : null;
-      return html`<button key=${row.id} type="button"
+      return html`<div key=${row.id} class="record-row-wrap">
+        <button type="button"
           class=${`record-row${picked ? " picked" : ""}`}
           aria-pressed=${picked ? "true" : "false"}
           onclick=${() => onToggle(row)}>
@@ -129,7 +157,11 @@ function TimelineRows({ rows, order, onToggle }) {
              level change) shows nothing rather than a computed stand-in. */""}
         ${row.igt_frames != null
           && html`<span class="record-igt">${fmtIgtShort(row.igt_frames)}</span>`}
-      </button>`;
+        </button>
+        <${RenameControl} row=${row} renaming=${renamingId === row.id}
+            onStart=${onRenameStart} onCommit=${onRenameCommit}
+            onCancel=${onRenameCancel} />
+      </div>`;
     })}
   </div>`;
 }
@@ -141,7 +173,8 @@ function TimelineRows({ rows, order, onToggle }) {
 // The header is the fold. A separate chevron button beside a heading gives one
 // affordance two hit targets, and this app's own rule is that a card is ONE hit
 // target (the context cards, 2026-07-25, where the mismatch read as a bug).
-function VisitCard({ card, collapsed, onToggleFold, icon, order, onToggleRow }) {
+function VisitCard({ card, collapsed, onToggleFold, icon, order, onToggleRow,
+                     renamingId, onRenameStart, onRenameCommit, onRenameCancel }) {
   return html`<section class=${`record-card${collapsed ? " folded" : ""}`}>
     <button type="button" class="record-card-head" aria-expanded=${!collapsed}
         onclick=${onToggleFold}
@@ -162,7 +195,9 @@ function VisitCard({ card, collapsed, onToggleFold, icon, order, onToggleRow }) 
     <div class="record-card-body">
       <div class="record-card-clip">
         <${TimelineRows} rows=${card.rows} order=${order}
-            onToggle=${onToggleRow} />
+            onToggle=${onToggleRow} renamingId=${renamingId}
+            onRenameStart=${onRenameStart} onRenameCommit=${onRenameCommit}
+            onRenameCancel=${onRenameCancel} />
       </div>
     </div>
   </section>`;
@@ -183,6 +218,22 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   // have. The server sorts too (GET /api/segments/synthesize), so the two
   // cannot disagree about which end is the start.
   const [pickedIds, setPickedIds] = useState([]);
+  // NAMING, and it applies BACKWARDS: nothing stores the name a row was drawn
+  // with, so bumping `catalogue` refetches and every row that landmark ever
+  // appeared in re-labels at once. His pick over a separate Entities screen
+  // (2026-08-05) -- he names the thing while standing in front of it.
+  const [renamingId, setRenamingId] = useState(null);
+  const [catalogue, setCatalogue] = useState(0);
+  const startRename = (row) => setRenamingId(row.id);
+  const cancelRename = () => setRenamingId(null);
+  const commitRename = async (row, name) => {
+    setRenamingId(null);
+    if ((name || "").trim() === (row.landmark_name || "")) return;
+    try {
+      await send("POST", "/api/landmark", { key: row.landmark, name });
+      setCatalogue((n) => n + 1);
+    } catch (err) { setRowsErr(String(err)); }
+  };
   // The COLLAPSED cards, keyed by their oldest row's id. Collapsed rather than
   // open, because he asked for open by default and an empty set has to mean
   // "everything open" — the library's own `useOpenGroups` stores the opposite
@@ -240,7 +291,9 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
       .then((body) => { if (alive) setRows(body.rows); })
       .catch((err) => { if (alive) setRowsErr(String(err)); });
     return () => { alive = false; };
-  }, [view]);
+    // `catalogue` is in here on purpose: a rename changes no event, only what
+    // the labels READ, so the refetch is the whole of "names apply backwards".
+  }, [view, catalogue]);
 
   // THE LIVE HALF, and the whole of it. `t.feed` grows on every websocket
   // message (store.js), so this effect fires the moment the game does
@@ -450,7 +503,9 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
         onToggleFold=${() => toggleFold(card.key)}
         icon=${card.level == null ? null
                                   : optionIconSrc(t, "level", card.level)}
-        order=${pickedIds} onToggleRow=${toggleRow} />`)}
+        order=${pickedIds} onToggleRow=${toggleRow}
+        renamingId=${renamingId} onRenameStart=${startRename}
+        onRenameCommit=${commitRename} onRenameCancel=${cancelRename} />`)}
     </div>`}
 
     ${synthErr && html`<p class="badx">${synthErr}</p>`}

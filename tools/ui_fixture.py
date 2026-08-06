@@ -32,6 +32,7 @@ from pathlib import Path
 import uvicorn
 
 from sm64_events.core.events import Event
+from sm64_events.core.timefmt import format_igt
 from sm64_events.core.paths import (bundled_defaults_seed, bundled_rank_standards,
                                     rank_standards_path)
 from sm64_events.ranks.standards import RankStandards
@@ -347,6 +348,46 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
                                              "to": 1}))
         await service.publish(Event(type="warp_entered", frame=5085,
                                     timestamp_utc=now, payload={"level": 19}))
+        # TWO doors, so the recorder draws BOTH landmark states on one page: the
+        # first is named by the shipped catalogue (its key is the HMC Door row in
+        # tools/corpus_landmarks.py, taken from his own 2026-08-05 session), the
+        # second is a real basement door nobody has named yet and so still reads
+        # by its kind. Without a landmark-bearing row here the rename control
+        # renders nowhere and every gate passes on a page that cannot show it --
+        # this rig's own documented failure mode.
+        for frame, home in ((5100, [1126, -1074, -2661]),
+                            (5200, [717, -1177, -869])):
+            key = "6:3:800ebc8c:{},{},{}".format(*home)
+            await service.publish(Event(
+                type="moment_reached", frame=frame, timestamp_utc=now,
+                payload={"kind": "door_open", "ordinal": 1, "level": 6,
+                         "area": 3, "action": 0x00001321,
+                         "igt_frames": 200, "igt_source": "counter",
+                         "igt": format_igt(200),
+                         "landmark": {"key": key, "kind_key": "kind:800ebc8c",
+                                      "behaviour": 0x800EBC8C, "home": home,
+                                      "placed": True}}))
+        # A THIRD moment whose object the GAME made mid-play -- home (0,0,0),
+        # `placed` false. Every such object shares that one key, so a name typed
+        # on it would land on all of them at once and the recorder must offer no
+        # rename control at all. Without this row the rule has nothing to be
+        # tested against and a pencil on everything would look correct.
+        await service.publish(Event(
+            type="moment_reached", frame=5300, timestamp_utc=now,
+            payload={"kind": "textbox", "ordinal": 1, "level": 6, "area": 3,
+                     "action": 0x20001305, "igt_frames": 260,
+                     "igt_source": "counter", "igt": format_igt(260),
+                     "landmark": {"key": "6:3:800ee040:0,0,0",
+                                  "kind_key": "kind:800ee040",
+                                  "behaviour": 0x800EE040, "home": [0, 0, 0],
+                                  "placed": False}}))
+        # Name the FIRST door and leave the second alone, so one page carries
+        # both states. Applied directly rather than through reconcile: the
+        # catalogue does not depend on the 84-segment corpus this fixture
+        # deliberately skips, and a named row is the whole point of the row.
+        service.db.seed_landmark_name("kind:800ebc8c", "Door", "landmark:kind")
+        service.db.seed_landmark_name(
+            "6:3:800ebc8c:1126,-1074,-2661", "HMC Door", "landmark:hmc")
 
     async def rearm() -> None:
         await service.publish(Event(type="level_changed", frame=6000,

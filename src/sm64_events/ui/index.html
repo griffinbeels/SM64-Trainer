@@ -2989,6 +2989,29 @@
     color: var(--text); background: rgba(255,196,84,.30);
   }
   .record-label { flex: 1 1 auto; min-width: 0; }
+  /* The row and its rename control sit side by side: a button inside a button
+     is invalid and the browser drops it silently. The wrapper is what makes the
+     pencil a sibling rather than a child. */
+  .record-row-wrap { display: flex; align-items: stretch; gap: 4px; min-width: 0; }
+  .record-row-wrap > .record-row { flex: 1 1 auto; min-width: 0; }
+  .record-rename {
+    flex: 0 0 auto; width: 2rem; border: 1px solid var(--border-soft);
+    border-radius: 7px; background: rgba(8,20,34,.48); color: var(--muted);
+    cursor: pointer; font-size: .95rem; line-height: 1;
+    opacity: 0; transition: opacity 140ms ease, color 140ms ease,
+                            border-color 140ms ease;
+  }
+  /* Revealed on hover or focus, never removed from the tree -- a control that
+     appears from nothing has nothing to animate, and keyboard users need it to
+     exist before they can reach it. */
+  .record-row-wrap:hover .record-rename,
+  .record-rename:focus-visible { opacity: 1; }
+  .record-rename:hover { color: var(--gold); border-color: rgba(255,196,84,.55); }
+  .record-rename-input {
+    flex: 0 0 11rem; min-width: 0; padding: .35rem .5rem;
+    border: 1px solid rgba(255,196,84,.55); border-radius: 7px;
+    background: rgba(8,20,34,.8); color: var(--text); font: inherit;
+  }
   .record-role {
     flex: 0 0 auto; font-size: .7rem; letter-spacing: .04em;
     text-transform: uppercase; color: var(--gold);
