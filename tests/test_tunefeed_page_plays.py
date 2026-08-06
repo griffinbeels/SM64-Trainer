@@ -203,3 +203,43 @@ def test_toggling_fast_never_strands_the_box_shorter_than_its_contents(page_serv
     assert state["boxHeight"] >= state["contentHeight"] - 1, (
         "the box is SHORTER than what it holds and is no longer clipping -- "
         f"this is the bleed: {state}")
+
+
+def test_the_contents_keep_pace_with_the_opening_edge(page_server):
+    """Griffin, 2026-08-06, choosing this over clipping a static body: "they
+    should animate from top to bottom, as if they're in-sync, falling as the
+    dropdown itself falls downwards... keeping pace with the dropdown."
+
+    "Keeping pace" is a measurable claim, and this is what measures it: at any
+    instant during the open, the contents' BOTTOM edge should sit on the box's
+    bottom edge, because the inner is offset by exactly the height still to
+    come. A body that was merely being uncovered would have its bottom edge
+    far below the box, hidden by the clip -- which is the animation this
+    replaced.
+    """
+    with driver.get_driver().launch(headless=True, viewport=(1600, 1000)) as page:
+        page.goto(page_server)
+        page.evaluate("new Promise(r => setTimeout(r, 2000))")
+        page.evaluate("""
+          Array.from(document.querySelectorAll('.tune-actions button'))
+            .find((b) => b.textContent.includes('Open / close')).click()
+        """)
+        page.evaluate("new Promise(r => setTimeout(r, 120))")
+        mid = page.evaluate("""
+          (() => {
+            const box = document.querySelector('.log-card .disclose');
+            const inner = box && box.querySelector('.disclose-inner');
+            if (!box || !inner) return {error: 'no disclosure box'};
+            const b = box.getBoundingClientRect();
+            const i = inner.getBoundingClientRect();
+            return {boxBottom: Math.round(b.bottom), innerBottom: Math.round(i.bottom),
+                    boxHeight: Math.round(b.height), innerHeight: Math.round(i.height)};
+          })()
+        """)
+
+    assert mid.get("boxHeight", 0) > 0, f"the box never grew: {mid}"
+    assert mid["boxHeight"] < mid["innerHeight"], (
+        f"sampled after the animation finished, so this proves nothing: {mid}")
+    assert abs(mid["innerBottom"] - mid["boxBottom"]) <= 2, (
+        "the contents are not keeping pace with the edge -- they are being "
+        f"uncovered by it instead: {mid}")

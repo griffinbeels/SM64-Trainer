@@ -2661,6 +2661,21 @@
      and a closed one leaves no trace in the layout. */
   .disclose { display: block; }
   .disclose-inner { min-width: 0; }
+  /* A SMIDGE OF ROOM ABOVE THE RANK SYMBOL, because that symbol spills outside
+     its own box and the disclosure clips. Measured on the real page rather
+     than guessed: 36 elements sit above `.disclose-inner`'s top edge -- the
+     rank icon's wings and their shading -- by 2px at the shipped icon size,
+     which is enough to flatten the top of a wing for the whole animation and
+     restore it in one frame at the end. Griffin saw it and named the cause
+     from two screenshots: "the top of the Waluigi 1 wing is cut off...
+     something is weird here with layers, i think, or some type of clipping
+     boundary", then asked for exactly this: "there needs to be a smidge of
+     margin above where the rank symbol is displayed so that it doesn't clip".
+     Scoped with `:has` so a dropdown with nothing to spill -- the Rank
+     standards panel -- is not pushed down for a reason that does not apply to
+     it. The value is deliberately larger than the 2px measured: the icon size
+     is a tunable, so the spill grows with it. */
+  .disclose-inner:has(.rank-banner) { padding-top: 8px; }
   .attempt-footer {
     min-height: 40px; display: flex; align-items: center; justify-content: space-between;
     gap: .5rem; border-top: 1px solid var(--border-soft); padding-top: .45rem;

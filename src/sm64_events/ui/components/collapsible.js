@@ -162,6 +162,7 @@ export function Disclose({ open, className = "", children }) {
     box.style.height = "";
     box.style.overflow = "";
     inner.style.opacity = "";
+    inner.style.transform = "";
 
     // Each run stamps the direction it belongs to, so a `settle` scheduled by
     // a run that has since been replaced cannot unmount the contents of the
@@ -190,6 +191,7 @@ export function Disclose({ open, className = "", children }) {
       box.style.height = "";
       box.style.overflow = "";
       inner.style.opacity = "";
+      inner.style.transform = "";
       running.current = null;
       if (!wasOpen.current) setMounted(false);
     };
@@ -207,7 +209,24 @@ export function Disclose({ open, className = "", children }) {
       [{ height: `${plan.from}px` }, { height: `${plan.to}px` }],
       { duration: plan.durationMs, easing: plan.easing, fill: "both" });
     run.onfinish = settle;
-    const runs = [run];
+
+    // THE CONTENTS FALL WITH THE EDGE, they are not uncovered by it. Griffin,
+    // 2026-08-06, choosing this over clipping a static body: "an animation for
+    // all the elements inside the panel. They should animate from top to
+    // bottom, as if they're in-sync, falling as the dropdown itself falls
+    // downwards. When the dropdown goes back up, it should animate in the
+    // inverse direction, keeping pace with the dropdown."
+    //
+    // Same duration, same easing, no delay -- "keeping pace" is not a
+    // similar-looking curve, it is the SAME one, and any difference shows up
+    // as the contents sliding against their own container. Offsetting by the
+    // full height puts the body's bottom edge on the box's bottom edge at
+    // every instant, so the panel reads as one object arriving rather than a
+    // window being opened over something already there.
+    const runs = [run, inner.animate(
+      [{ transform: `translateY(${plan.from - plan.to}px)` },
+       { transform: "translateY(0)" }],
+      { duration: plan.durationMs, easing: plan.easing, fill: "both" })];
 
     if (plan.contentFadeMs > 0) {
       runs.push(inner.animate([{ opacity: 0 }, { opacity: 1 }], {
