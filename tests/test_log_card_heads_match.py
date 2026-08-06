@@ -18,6 +18,14 @@ Deliberately NOT a fixed pixel number: the head's floor is derived
 (`--log-icon-size` + `--log-head-pad-y` * 2) and both are tunable, so a
 literal here would turn a tuning round red for no reason. What is pinned is
 that the cards AGREE with each other.
+
+FOLD ONE OF THESE AT MERGE. The `sheet-library` branch independently wrote
+`tests/test_log_card_head_height.py`, which makes the same equality claim
+across FOUR widths and carries a mutation probe — a better test of that half.
+This file's other half (no step row on the page beside a live armed segment)
+has no equivalent there, and is the one that pins the 2026-08-06 deletion.
+Whoever merges that branch should keep this file's step-row assertions and
+take its width sweep, rather than landing two tests of one property.
 """
 import sys
 import tempfile

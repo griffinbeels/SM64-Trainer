@@ -582,6 +582,34 @@ renders here at all. Still OWED, not done, for the same reason: seeding one
 padding entity through `/api/strat` with no `/api/pb` follow-up would reach it
 at the cost of a `known_defects` reckoning across the whole matrix.
 
+**A DIFFERENT AXIS, and it is the one a screenshot does not protect you from:
+the fixture can reach exactly the right state and still seed it with data at
+the EASY end of every range.** Everything above is about a state the fixture
+never reaches. This is about a state it reaches with one item where the real
+page has four, and a short string where the real one overflows. The step
+track's alignment was fixed, screenshotted, read as confirmed and shipped
+wrong on 2026-08-06: `_arm_segment` arms a segment whose route is ONE step and
+whose entity is named "No Reds", so the contact sheet showed a single chip
+beside a name short enough never to trigger `ShrinkToFitName`. Griffin's own
+card was a two-chip route beside "8 Red Coins (Pipe)", which shrinks — and it
+looked nothing like the picture. He asked the right question: *"With
+screenshotting during development, you should have been able to see this
+right?"*
+
+So the contact sheet answered honestly and the reading of it was wrong. Before
+trusting a rendered check, name the card you are looking at and ask what makes
+the real one different — **count the repeated elements and measure the longest
+string**, because both are where the fixture sits at the floor:
+
+- the armed route has ONE step (a real one has up to four, and the separator
+  pseudo between chips only exists from the second chip onward);
+- `FIXTURE_STAR`/`FIXTURE_SEGMENT` names are short, so nothing on the swept
+  page ever exercises `ShrinkToFitName`, which changes a name's font size and
+  therefore where its baseline lands;
+- `tests/test_log_card_name_fits.py` is the pattern that covers this properly:
+  it drives the WIDEST value in the corpus through the real column instead of
+  whatever the fixture happens to seed.
+
 **A defect can be entirely in PAINT, and four of the five probes walk the DOM.**
 A pseudo-element is not in the DOM, so nothing that queries the tree can see
 one. The rank banners' colour wash is a `::before`; it bled sideways onto the
