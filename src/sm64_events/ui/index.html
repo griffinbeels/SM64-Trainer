@@ -2656,6 +2656,21 @@
     min-height: 40px; display: flex; align-items: center; justify-content: space-between;
     gap: .5rem; border-top: 1px solid var(--border-soft); padding-top: .45rem;
   }
+  /* A FOOTER WITH NO CONTROLS TAKES NO ROOM. Both of its children are
+     conditional -- the pagination hides itself at one page, and `HideToggle`
+     renders nothing when no attempt is hidden -- so an ordinary short card
+     drew an empty 40px box with a separator line above it, between the last
+     attempt row and the in-card Rank standards panel. Measured, not guessed:
+     48px of gap, 40 of it this box and 8 the panel's own margin (Griffin,
+     2026-08-05: "we should move the rank standards up a little bit to
+     tighten up the space vertically... basically just tightening up the
+     gap"). `:has(button)` is the test rather than `:empty`, because the
+     wrapper divs are always present and only their CONTENTS vary -- an
+     `:empty` rule would never match and would look like a fix that did
+     nothing. */
+  .attempt-footer:not(:has(button)) {
+    min-height: 0; padding-top: 0; border-top: 0;
+  }
   .quiet-button, .attempt-footer > button {
     min-height: 30px; border: 0; background: transparent; color: var(--muted);
   }
