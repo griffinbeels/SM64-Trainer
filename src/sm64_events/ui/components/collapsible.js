@@ -18,8 +18,7 @@
 // stored" means every card is open, which is the right first-run state. Same
 // shape as grouplist.js's open-set, opposite polarity, for the same reason --
 // the default must need no entry.
-import { useCallback, useEffect, useLayoutEffect, useRef, useState }
-  from "preact/hooks";
+import { useCallback, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { h } from "preact";
 import htm from "htm";
 import { Icon } from "./icons.js";
@@ -135,7 +134,7 @@ export function Disclose({ open, className = "", children }) {
   // box, animate 0 -> 0, and produce a real Web Animation that moves nothing.
   // Found by driving the page (tests/test_tunefeed_page_plays.py): the box
   // reported one running animation and a height of zero at every sample.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (open && !mounted) return;                      // contents not in yet
     if (open === wasOpen.current) return;              // never on mount
     wasOpen.current = open;
@@ -201,7 +200,8 @@ export function Disclose({ open, className = "", children }) {
       return undefined;
     }
 
-    const plan = disclosurePlan(open, inner.scrollHeight, feedTuning());
+    const full = inner.scrollHeight;
+    const plan = disclosurePlan(open, full, feedTuning());
     if (plan.durationMs <= 0) { settle(); return undefined; }
 
     box.style.overflow = "hidden";
@@ -223,9 +223,24 @@ export function Disclose({ open, className = "", children }) {
     // full height puts the body's bottom edge on the box's bottom edge at
     // every instant, so the panel reads as one object arriving rather than a
     // window being opened over something already there.
+    // THE OFFSET IS ALWAYS NEGATIVE, in both directions, and getting that
+    // wrong is what he photographed frame by frame (2026-08-06: "EVERYTHING
+    // INCORRECTLY DISAPPEARS... it's as if everything got offset by the entire
+    // height of the open panel area by accident?" -- it was, exactly).
+    //
+    // The contents' BOTTOM edge rides the box's bottom edge, so the offset at
+    // any moment is minus the height still to come: `-(full - current)`. Open
+    // runs -full -> 0 and close runs 0 -> -full, which is the same rule read
+    // in each direction and is what makes the close the inverse of the open
+    // rather than its own animation.
+    //
+    // The previous form was `from - to`, which is -full -> 0 on the way open
+    // (right, by luck) and +full -> 0 on the way closed (the contents shoved
+    // DOWN by a whole panel, out of the clip, leaving only the tip of a hat
+    // visible -- which is precisely what he saw).
+    const offset = (height) => `translateY(${-(full - height)}px)`;
     const runs = [run, inner.animate(
-      [{ transform: `translateY(${plan.from - plan.to}px)` },
-       { transform: "translateY(0)" }],
+      [{ transform: offset(plan.from) }, { transform: offset(plan.to) }],
       { duration: plan.durationMs, easing: plan.easing, fill: "both" })];
 
     if (plan.contentFadeMs > 0) {

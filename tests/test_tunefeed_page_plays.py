@@ -243,3 +243,51 @@ def test_the_contents_keep_pace_with_the_opening_edge(page_server):
     assert abs(mid["innerBottom"] - mid["boxBottom"]) <= 2, (
         "the contents are not keeping pace with the edge -- they are being "
         f"uncovered by it instead: {mid}")
+
+
+def test_the_contents_keep_pace_while_CLOSING_too(page_server):
+    """The direction bug, and the one his frame-by-frame capture caught
+    (2026-08-06): "EVERYTHING INCORRECTLY DISAPPEARS!!!! ... it's as if
+    everything got offset by the entire height of the open panel area by
+    accident?"
+
+    It was. The offset must be minus the height still to come in BOTH
+    directions -- open runs -full -> 0, close runs 0 -> -full. The previous
+    form was `from - to`, which is right on the way open by luck and pushes
+    the contents DOWN by a whole panel on the way closed, out of the clip.
+
+    Same property as the opening test, sampled during the close: a body being
+    shoved the wrong way has its bottom edge a full panel BELOW the box's.
+    """
+    with driver.get_driver().launch(headless=True, viewport=(1600, 1000)) as page:
+        page.goto(page_server)
+        page.evaluate("new Promise(r => setTimeout(r, 2000))")
+        page.evaluate("""
+          Array.from(document.querySelectorAll('.tune-actions button'))
+            .find((b) => b.textContent.includes('Open / close')).click()
+        """)
+        page.evaluate("new Promise(r => setTimeout(r, 900))")   # fully open
+        page.evaluate("""
+          Array.from(document.querySelectorAll('.tune-actions button'))
+            .find((b) => b.textContent.includes('Open / close')).click()
+        """)
+        page.evaluate("new Promise(r => setTimeout(r, 90))")
+        mid = page.evaluate("""
+          (() => {
+            const box = document.querySelector('.log-card .disclose');
+            const inner = box && box.querySelector('.disclose-inner');
+            if (!box || !inner) return {error: 'no disclosure box'};
+            const b = box.getBoundingClientRect();
+            const i = inner.getBoundingClientRect();
+            return {boxBottom: Math.round(b.bottom), innerBottom: Math.round(i.bottom),
+                    boxHeight: Math.round(b.height), innerHeight: Math.round(i.height)};
+          })()
+        """)
+
+    assert mid.get("innerHeight", 0) > 0, (
+        f"the contents were gone before the close could be measured: {mid}")
+    assert mid["boxHeight"] < mid["innerHeight"], (
+        f"sampled outside the close, so this proves nothing: {mid}")
+    assert abs(mid["innerBottom"] - mid["boxBottom"]) <= 2, (
+        "the contents are not keeping pace on the way closed -- a positive "
+        f"offset pushes them out of the clip entirely: {mid}")
