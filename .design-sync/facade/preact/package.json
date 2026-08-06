@@ -1,0 +1,8 @@
+{
+  "name": "preact",
+  "version": "0.0.0-sm64-react-shim",
+  "type": "module",
+  "main": "./index.js",
+  "module": "./index.js",
+  "exports": { ".": "./index.js", "./hooks": "./hooks.js" }
+}

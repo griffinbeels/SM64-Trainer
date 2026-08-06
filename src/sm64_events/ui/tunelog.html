@@ -1,0 +1,91 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>SM64 Trainer — practice log tuning</title>
+<link rel="icon" type="image/png" href="/ui/favicon.png">
+<script type="importmap">
+{"imports": {
+  "preact": "/ui/vendor/preact.module.js",
+  "preact/hooks": "/ui/vendor/hooks.module.js",
+  "htm": "/ui/vendor/htm.module.js"
+}}
+</script>
+<!--
+  The design system is one <style> block inside index.html, so this page
+  FETCHES that block and injects it rather than keeping a copy -- same as
+  tune.html/tunemarelo.html and for the same reason: it exists to judge the
+  real card, and a stylesheet that drifted by a single value would be judging
+  something else. Costs one request and a beat of unstyled content on load.
+-->
+<script>
+(async () => {
+  const source = await (await fetch("/ui/index.html")).text();
+  const block = source.slice(source.indexOf("<style>") + 7, source.indexOf("</style>"));
+  const style = document.createElement("style");
+  style.textContent = block;
+  document.head.insertBefore(style, document.getElementById("tune-style"));
+  document.documentElement.dataset.styled = "1";
+})();
+</script>
+<style id="tune-style">
+  /* Everything here is the RIG, never the card -- identical spirit to
+     tune.html/tunemarelo.html's own rig block. Nothing in this block may
+     touch a class the app owns. */
+  html:not([data-styled]) body { visibility: hidden; }
+  body { margin: 0; }
+  .tune-layout { display: grid; grid-template-columns: 1fr 380px;
+    min-height: 100vh; align-items: start; }
+  /* The two panes STACK, wide above narrow -- they do not sit side by side.
+     The arithmetic is why: 1494 + 854 + this panel is over 2700px against a
+     ~1990px window, so side-by-side could only ever be delivered by clipping
+     one pane or shrinking it, and a pane that is not the width it claims is a
+     pane measuring the wrong thing. It shipped clipped-and-scrolling once and
+     was reported immediately ("the inspector tuning column is obscuring the
+     layout below it", 2026-08-03) -- correct behaviour by the CSS, useless in
+     the hand, and an unexpected sideways scrollbar is itself the defect in
+     this project. Stacked, the wide pane fits its declared width whole in the
+     column left of the controls, and the alignment questions this rig exists
+     for -- do the icons and names line up DOWN the list -- are all within one
+     pane anyway. `overflow-x` stays as the honest fallback for a window too
+     narrow even for that; the label below reports the MEASURED width, so a
+     pane that ever did get squeezed says so itself. */
+  .tune-stage { display: flex; flex-direction: column; gap: 28px;
+    align-items: flex-start; padding: 20px 16px; overflow-x: auto; }
+  .tunelog-pane { flex: 0 0 auto; }
+  .tunelog-pane .app-shell { min-height: 0; }
+  .tunelog-pane-label { font-size: 11px; text-transform: uppercase;
+    letter-spacing: .08em; opacity: .6; margin: 0 0 8px; }
+  .tune-panel { position: sticky; top: 0; height: 100vh; overflow-y: auto;
+    z-index: 5; border-left: 1px solid rgba(255,255,255,.09);
+    padding: 16px 18px 60px; background: #0d1522; }
+  .tune-panel h1 { font-size: 15px; margin: 0 0 2px; letter-spacing: .06em;
+    text-transform: uppercase; }
+  .tune-panel h2 { font-size: 12px; letter-spacing: .09em; text-transform: uppercase;
+    margin: 20px 0 8px; opacity: .72; border-bottom: 1px solid rgba(255,255,255,.08);
+    padding-bottom: 5px; }
+  .tune-note { font-size: 11.5px; opacity: .62; margin: 0 0 14px; line-height: 1.45; }
+  .tune-warn { font-size: 11.5px; margin: 0 0 12px; padding: 7px 9px; border-radius: 6px;
+    background: rgba(226,59,59,.16); border: 1px solid rgba(226,59,59,.4); }
+  .tune-row { display: grid; grid-template-columns: 1fr 74px; gap: 4px 8px;
+    align-items: center; margin-bottom: 9px; }
+  .tune-row > label { font-size: 11.5px; opacity: .88; cursor: help; }
+  .tune-row > input[type=number] { width: 100%; }
+  .tune-row > select { grid-column: 1 / -1; width: 100%; }
+  .tune-row > input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; }
+  .tune-row.is-changed > label { color: #ffd479; font-weight: 600; }
+  .tune-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 14px; }
+  .tune-actions button { padding: 7px 13px; font: inherit; font-size: 12px;
+    border-radius: 6px; cursor: pointer; border: 1px solid rgba(255,255,255,.18);
+    background: rgba(255,255,255,.07); color: inherit; }
+  .tune-actions button.save { background: #2c7a4b; border-color: #3fa768; }
+  .tune-actions button:disabled { opacity: .45; cursor: default; }
+  .tune-diff { font: 11px/1.55 Consolas, monospace; background: rgba(0,0,0,.3);
+    border-radius: 6px; padding: 8px 10px; margin: 8px 0 0; max-height: 190px;
+    overflow: auto; white-space: pre-wrap; }
+  .tune-diff.empty { opacity: .5; }
+  .tune-status { font-size: 11.5px; margin: 8px 0 0; line-height: 1.45; }
+  .tune-status.ok { color: #7fdca0; }
+  .tune-status.bad { color: #ff9a9a; }
+</style>
+</head><body>
+<div id="root"></div>
+<script type="module" src="/ui/tunelog.js"></script>
+</body></html>

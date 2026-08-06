@@ -107,7 +107,11 @@ def test_naming_a_door_relabels_it_and_lands_in_the_catalogue():
     fixture = serve_ui_live(arm_segment=FIXTURE_SEGMENT)
     with fixture as (base, _service), get_driver().launch() as page:
         page.goto(f"{base}/ui/index.html")
-        page.wait_for(".objective-card")
+        # `.log-list-card`, not `.objective-card`: the Active Target card was
+        # deleted on main (spec practice-log-entity-cards) and the practice
+        # page never renders that class any more, so waiting on it times out
+        # on a page that is fully drawn.
+        page.wait_for(".log-list-card")
         assert page.evaluate(_OPEN_THE_RECORDER) is True, (
             "the recorder never opened — nothing below measures anything")
 

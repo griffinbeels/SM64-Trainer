@@ -122,6 +122,20 @@ FIXTURE_SEGMENT = 6
 FIXTURE_SEGMENT_STRAT = "Pole Glitch"
 
 
+
+# EVERY PLACE EVENT CARRIES A TIME, because the real detectors do (2026-08-06,
+# his report: "some events have the timer next to them, most don't? I would
+# expect the timer for all of them"). `area.py`, `level.py` and `spawn.py` each
+# stamp the shared IgtClock now, so a fixture publishing bare payloads renders
+# a recorder nobody will ever see -- and the reach test that counts timed rows
+# would go on passing against exactly the state the fix removed.
+def _place_time(payload: dict, igt_frames: int) -> dict:
+    """The `igt` trio a real place detector stamps, folded onto a hand-built
+    payload. One door, so a new fixture event cannot forget the shape."""
+    return {**payload, "igt_frames": igt_frames, "igt_source": "counter",
+            "igt": format_igt(igt_frames)}
+
+
 def seed_practice(service, course_id: int = FIXTURE_COURSE,
                   star_id: int = FIXTURE_STAR,
                   level: int = FIXTURE_LEVEL, attempts: bool = True,
@@ -182,7 +196,7 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
         # "Somewhere unrecorded" heap. Added 2026-08-05 with the cards.
         await service.publish(Event(
             type="area_changed", frame=900, timestamp_utc=now,
-            payload={"level": level, "from": None, "to": 1}))
+            payload=_place_time({"level": level, "from": None, "to": 1}, 30)))
         if not attempts:
             return
         if strat:
@@ -278,13 +292,77 @@ def _seed_target(base: str, course_id: int = FIXTURE_COURSE,
         post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "igt"})
 
 
+# Padding for the practice LOG's own pagination (practicelog.js's
+# CARDS_PER_PAGE = 5): with only the star target and one armed segment, the
+# view carries 2 sections, `sections.length (2) > shown (5)` is never true,
+# and the "Show 5 more" control -- plus a full-length list -- had never been
+# rendered by any gate (Task 7 review). Four more of the ten legacy tricks
+# baked into the schema migration (storage/db.py's v4 INSERT), each closed
+# with a SINGLE completed attempt rather than left armed: a completed
+# attempt is a permanent journal fact (`views.py`'s `seen_segs`: "has
+# attempts" survives regardless of what arms/disarms elsewhere), so padding
+# this way can never interfere with `_arm_segment`'s own segment staying
+# ARMED at the end of the whole sequence -- which a shared "leave it armed"
+# approach could not promise (entering a level foreign to an armed match_mode
+# def disarms it; two simultaneously-armed defs at different levels cannot
+# both survive a fixture that visits both levels). BitDW/BitS Pipe Entry
+# share BitFS Pipe Entry's own [level_enter, attempt_anchor] -> close shape;
+# Bowser 1/2 close on key_grabbed instead of warp_entered. Each entry is
+# (segment_id, level, close_event_type).
+_PADDING_SEGMENTS = (
+    (5, 17, "warp_entered"),   # BitDW Pipe Entry
+    (7, 21, "warp_entered"),   # BitS Pipe Entry
+    (8, 30, "key_grabbed"),    # Bowser 1
+    (9, 33, "key_grabbed"),    # Bowser 2
+)
+
+
+def _pad_log_with_more_entities(service) -> None:
+    """Complete one attempt on each of `_PADDING_SEGMENTS`, giving the log 4
+    more entity cards (6 total with the star + `_arm_segment`'s own segment)
+    -- enough to exceed CARDS_PER_PAGE (5) and render "Show 5 more". Must run
+    BEFORE `_arm_segment` (caller's own ordering): each entry here is a real
+    course-crossing `level_changed`, and `_arm_segment`'s own segment must be
+    the LAST thing armed or these would disarm it on their way past (the same
+    "nothing published afterwards" invariant `serve_ui`'s own docstring
+    states for `_arm_segment` today)."""
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    async def go() -> None:
+        # Frames stay below seed_practice's own range (1000+) and
+        # _arm_segment's (5000+) -- this runs before both, and the number is
+        # cosmetic (a self-healing detector never assumes frames only move
+        # forward, rule 4), but a frame that LOOKS earlier than what
+        # chronologically follows it is one less thing to double-take on.
+        previous_level = 0
+        frame = 100
+        for segment_id, level, close_type in _PADDING_SEGMENTS:
+            await service.publish(Event(
+                type="level_changed", frame=frame, timestamp_utc=now,
+                payload=_place_time({"from": previous_level, "to": level},
+                                    frame % 600)))
+            # >= DEFAULT_MIN_FRAMES (15, projection.py) between arm and close,
+            # or the projector auto-ignores the "attempt" as too fast to be
+            # real (`_auto_ignored`) -- measured directly: at +10 frames every
+            # padding entity's only attempt was cleared, so its card rendered
+            # AttemptLogEmpty's "every attempt is filtered out" state instead
+            # of a real row. 60 frames (2s) clears the floor with margin.
+            frame += 60
+            await service.publish(Event(
+                type=close_type, frame=frame, timestamp_utc=now,
+                payload=_place_time({"level": level}, frame % 600)))
+            frame += 100
+            previous_level = level
+
+    asyncio.run(go())
+
+
 def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
     """Arm a real segment definition and leave it ARMED -- the only way to
     reach `sec.armed_detail` non-null (`.seg-waiting`, Task 6, spec
-    2026-07-28-multi-step-segments), which neither the responsive sweep nor
-    `tools/measure_objective_card.py` could reach before this (final review
-    of that spec, finding 2): both only ever seeded a STAR target, and
-    `.seg-waiting` renders only inside `SegmentSection`.
+    2026-07-28-multi-step-segments), which the responsive sweep could not
+    reach before this (final review of that spec, finding 2): it only ever
+    seeded a STAR target.
 
     Defaults to `FIXTURE_SEGMENT` (BitFS Pipe Entry, segment id 6) -- one of
     the ten legacy tricks baked directly into the schema MIGRATION itself
@@ -294,14 +372,18 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
     from the 84-def corpus would not exist here at all. See `FIXTURE_SEGMENT`
     for why THIS one of the ten, specifically -- it is not an arbitrary pick.
 
-    Does not touch the active target. An armed segment gets its own section
-    (`views.py`'s `seen_segs`: armed OR targeted OR has attempts) and
-    therefore its own `.objective-card` in the practice index regardless of
-    whether it is the target -- so this composes with whatever star target
-    `serve_ui` already seeded rather than replacing it. That card starts
-    inside a closed `<details class="practice-index-item">`
-    (`ui/components/practice.js`); `tools/uilab_project.py`'s `_EXPAND_ALL`
-    opens it before measuring.
+    Does not touch the active target -- an armed segment gets its own SECTION
+    regardless (`views.py`'s `seen_segs`: armed OR targeted OR has attempts),
+    so this composes with whatever star target `serve_ui` already seeded
+    rather than replacing it. Getting a section is not the same as getting the
+    `.log-card-active` highlight, though: `Practice()` suppresses every
+    segment PIN while a star target is active
+    (`pinnedSegs = !inContext || starActive ? [] : ...`) -- so an armed-but-
+    not-targeted segment surfaces only as an ORDINARY (non-active) `.log-card`
+    in the practice log. Pass `target_segment=segment_id` to `serve_ui`
+    (below) when the segment itself needs to BE the active one -- retiring
+    the star target is what puts its own `.seg-waiting` on a card carrying
+    `.log-card-active` too (amendment A8, spec practice-log-entity-cards).
 
     Real events through the real matcher, not a hand-built row, matching
     BitFS Pipe Entry's own shape (storage/db.py's v4 INSERT: start
@@ -341,13 +423,16 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
     async def arm_and_close() -> None:
         await service.publish(Event(type="level_changed", frame=5000,
                                     timestamp_utc=now,
-                                    payload={"from": 17, "to": 19}))
+                                    payload=_place_time({"from": 17, "to": 19},
+                                                        412)))
         await service.publish(Event(type="area_changed", frame=5000,
                                     timestamp_utc=now,
-                                    payload={"level": 19, "from": None,
-                                             "to": 1}))
+                                    payload=_place_time({"level": 19,
+                                                         "from": None,
+                                                         "to": 1}, 412)))
         await service.publish(Event(type="warp_entered", frame=5085,
-                                    timestamp_utc=now, payload={"level": 19}))
+                                    timestamp_utc=now,
+                                    payload=_place_time({"level": 19}, 497)))
         # TWO doors, so the recorder draws BOTH landmark states on one page: the
         # first is named by the shipped catalogue (its key is the HMC Door row in
         # tools/corpus_landmarks.py, taken from his own 2026-08-05 session), the
@@ -392,11 +477,13 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
     async def rearm() -> None:
         await service.publish(Event(type="level_changed", frame=6000,
                                     timestamp_utc=now,
-                                    payload={"from": 17, "to": 19}))
+                                    payload=_place_time({"from": 17, "to": 19},
+                                                        538)))
         await service.publish(Event(type="area_changed", frame=6000,
                                     timestamp_utc=now,
-                                    payload={"level": 19, "from": None,
-                                             "to": 1}))
+                                    payload=_place_time({"level": 19,
+                                                         "from": None,
+                                                         "to": 1}, 538)))
 
     # A strat active BEFORE the closing edge, so the completed attempt's own
     # strat_tag stamps FIXTURE_SEGMENT_STRAT -- BitFS Pipe Entry carries no
@@ -421,6 +508,39 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
     if rows:
         post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "rta"})
     asyncio.run(rearm())
+
+
+def _target_segment(base: str, segment_id: int) -> None:
+    """Make an already-armed segment the ACTIVE target, retiring whatever
+    star `_seed_target` set.
+
+    This is what puts the `.log-card-active` highlight (amendment A8, spec
+    practice-log-entity-cards) on the segment's own practice-log card instead
+    of the star's -- `Practice()` suppresses every segment pin while a star
+    target is active, so `_arm_segment` alone (which deliberately never
+    touches the target) leaves the segment as an ordinary, non-active
+    `.log-card`. Retiring the star is the server's own rule (one active
+    target, mutually exclusive kinds), and because the segment stays ARMED
+    throughout, its section keeps `armed_detail` non-null through the swap --
+    verified against a live fixture (2026-08-03): `POST /api/target` with a
+    segment body returns `ok`, the session view's `target` flips to
+    `kind: "segment"`, and the segment's own section still carries both
+    `armed_detail` (still mid-run) and populated `rank`/`entity_rank` (two
+    banners render, since `one_ladder` is false for a strategy that is not
+    the entity's own best -- see FIXTURE_SEGMENT_STRAT above)."""
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(
+        f"{base}/api/target",
+        data=json.dumps({"kind": "segment", "segment_id": segment_id}).encode(),
+        method="POST", headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(request, timeout=10)
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(
+            f"fixture could not target segment {segment_id}: {error.code} "
+            f"{error.read()[:200]!r}") from error
 
 
 def _publish_bowser_stage(service, course_id: int, level: int) -> None:
@@ -451,6 +571,85 @@ def _publish_bowser_stage(service, course_id: int, level: int) -> None:
                      "mode": "bowser_course"}))
 
     asyncio.run(go())
+
+
+def _enter_level(service, level: int, frame: int = 9000) -> None:
+    """Publish ONE real `level_changed` entering `level`, arming whatever
+    real definition(s) key off it and leaving them ARMED -- no closing event
+    follows, so this is for a STRUCTURAL render check (a section merely
+    EXISTING is enough -- `pipe_star_entity`/`armed_detail` are both derived
+    from the definition's shape, not from an attempt's outcome), never for
+    exercising a saved PB. Kept generic (by level, not by segment id): the
+    Bowser reds->pipe family and the legacy no-reds pipe trio both arm off
+    the identical `[level_enter, attempt_anchor]` idiom, and a caller
+    reconciling the full corpus may not know their post-reconcile ids
+    (`tracking-storage.md`'s `arms_ambiently`)."""
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    async def go() -> None:
+        await service.publish(Event(
+            type="level_changed", frame=frame, timestamp_utc=now,
+            payload=_place_time({"from": 0, "to": level}, 271)))
+
+    asyncio.run(go())
+
+
+def _arm_hundred_coin_star(base: str, service, course_id: int, level: int) -> None:
+    """Arm a SYNTHETIC 100-coin-star engine for `course_id`'s star 6 and
+    leave it armed -- the STAR half of `armed_detail` (Task 7 review):
+    `_arm_segment` above only ever exercises the SEGMENT half, so
+    `segments.hundred_coin_entity`'s reattribution path -- and the star-kind
+    `.seg-waiting` row `practicelog.js`'s `LogCard` shares between kinds --
+    had never been rendered by any gate, only unit-tested against hand-built
+    dicts (`tests/test_ui_entity_section.py`).
+
+    `hundred_coin_entity` (tracking/segments.py) pattern-matches a
+    definition's raw trigger clauses -- it does not care whether the shape is
+    one of the 15 bundled hundred-coin exits or a hand-authored one -- so no
+    defaults-corpus reconcile is needed, only a def whose end trigger reads
+    `star_grabbed(star=6, course=course_id)`. Its ARM position is `level`,
+    the caller's own FIXTURE_LEVEL (WF) -- deliberately the SAME level
+    `_arm_segment`'s own BitFS Pipe Entry re-arms on at the very end of the
+    whole sequence would NOT be, if this ran independently: two defs armed
+    at two different levels cannot both survive a fixture that visits both
+    (entering a level foreign to an armed match_mode def disarms it). Callers
+    of this helper therefore run it WITHOUT `arm_segment` also set, so there
+    is nothing else to conflict with and no such visit happens.
+
+    The resulting entity (`star:{course_id}:6`) is that course's own real
+    100-coin star, coexisting with any ordinary star target already set on
+    the SAME course (arming does not retire a target on its own course --
+    `projection.py`'s course-scoped retirement rule)."""
+    import urllib.error
+    import urllib.request
+
+    def post(path: str, payload: dict) -> dict:
+        request = urllib.request.Request(
+            f"{base}{path}", data=json.dumps(payload).encode(), method="POST",
+            headers={"Content-Type": "application/json"})
+        try:
+            return json.loads(urllib.request.urlopen(request, timeout=10).read())
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(
+                f"fixture could not POST {path}: {error.code} "
+                f"{error.read()[:200]!r}") from error
+
+    post("/api/segments", {
+        "name": "Fixture 100 Coins",
+        "start_triggers": [{"type": "level_enter", "to": level},
+                          {"type": "attempt_anchor", "level": level}],
+        # `hundred_coin_entity` (tracking/segments.py) scans start_triggers
+        # and WAYPOINTS, never end_triggers -- the real corpus's own
+        # HUNDRED_COIN_EXITS (tools/corpus_movements.py) puts the 100-coin
+        # grab in `via` (waypoints), matching "you don't exit the stage when
+        # you grab 100 coins, you must find another star to exit". End
+        # trigger is any OTHER star purely so the def validates; it is never
+        # meant to fire (this stays armed, not closed).
+        "waypoints": [[{"type": "star_grabbed", "star": 6, "course": course_id}]],
+        "end_triggers": [{"type": "star_grabbed", "star": 0, "course": course_id}],
+        "guards": [], "enabled": True, "match_mode": "strict",
+    })
+    _enter_level(service, level, frame=8000)
 
 
 # Two user-authored segments, byte-identical to each other, for the segments-
@@ -573,10 +772,13 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               stage: tuple[int, int] | None = None,
               target: tuple[int, int] | None = None,
               arm_segment: int | None = None,
+              target_segment: int | None = None,
               seed_editor_fixtures: bool = False,
               seed_subsections: bool = False,
               reconcile_full_corpus: bool = False,
-              bowser_stage: tuple[int, int] | None = None):
+              bowser_stage: tuple[int, int] | None = None,
+              enter_level: int | None = None,
+              arm_hundred_coin: tuple[int, int] | None = None):
     """Yield the base URL of an offline instance; stop it on the way out.
 
     DETERMINISTIC BY DEFAULT: an empty database plus `seed_practice`, so two
@@ -598,8 +800,18 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
 
     `arm_segment` additionally arms a real segment definition (see
     `_arm_segment`) -- additive, not a replacement for `target`: an armed
-    segment gets its own section regardless of which kind is the active
+    segment gets its own SECTION regardless of which kind is the active
     target, so a star target and an armed segment coexist on the same page.
+    It does NOT carry the `.log-card-active` highlight unless it is also the
+    active target (see `target_segment` below) -- `Practice()` suppresses
+    every segment pin while a star target is active, so an armed-but-
+    untargeted segment surfaces only as an ordinary `.log-card`.
+
+    `target_segment` additionally makes an armed segment the ACTIVE target
+    (see `_target_segment`), retiring whatever star `target`/`_seed_target`
+    set. Pass the SAME id as `arm_segment` to reach the one state that puts
+    two rank banners AND a `.seg-waiting` row on the SAME `.log-card`, the
+    one also carrying `.log-card-active`.
 
     `seed_editor_fixtures` additionally POSTs two saved, byte-identical
     segments purpose-built for opening in the Segments editor (see
@@ -629,6 +841,24 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     `t.stage.mode` can never be anything but "stars", the mode `seed_practice`
     hardcodes, and `stagebanner.js::BowserCourseRow` is unreachable by this
     fixture no matter what `stage`/`target` are given.
+
+    `enter_level` publishes ONE real `level_changed` entering that level (see
+    `_enter_level`) -- for arming a def structurally, by LEVEL rather than by
+    segment id (needed after `reconcile_full_corpus` for a corpus-only def
+    whose post-reconcile id the caller does not know, e.g. the Bowser
+    `seg:reds->pipe:<abbrev>` family). Callers combining this with
+    `arm_segment` must reason about ordering themselves -- unlike the padding
+    below, this is a single caller-controlled event, not a sequence this
+    module already orders safely.
+
+    `arm_hundred_coin` additionally arms a SYNTHETIC 100-coin-star engine for
+    `(course_id, level)` and leaves it armed (see `_arm_hundred_coin_star`) --
+    the star-kind half of `armed_detail` (`_arm_segment` above only ever
+    exercises the segment kind). Pass this WITHOUT `arm_segment`: two defs
+    armed at two different levels cannot both survive a fixture that visits
+    both (a foreign level change disarms an armed def), so this and
+    `arm_segment` are for two separate, independent fixture instances, not
+    one shared one.
     """
     scratch = None
     if db_path is None:
@@ -695,6 +925,11 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
             # still-armed segment. Setting a star target itself only journals
             # `target_set` -- it does not read or touch segment arm state.
             if arm_segment is not None:
+                # Pad FIRST: each padding entity is a real course-crossing
+                # level_changed that would disarm `arm_segment`'s own
+                # still-armed instance if it ran after (see
+                # `_pad_log_with_more_entities`'s own docstring).
+                _pad_log_with_more_entities(service)
                 _arm_segment(base, service, segment_id=arm_segment)
             if seed_editor_fixtures:
                 _seed_editor_fixtures(base)
@@ -707,12 +942,23 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                           strat=FIXTURE_STRAT if target is None else None)
             _seed_target(base, *(target or (FIXTURE_COURSE, FIXTURE_STAR)),
                          with_pb=target is None)
+            if target_segment is not None:
+                # AFTER _seed_target, not before: retiring the star target
+                # _seed_target just set is the whole point (see
+                # _target_segment's own docstring). Requires the segment to
+                # already be armed (arm_segment), or there is no `armed_
+                # detail` for the resulting card to carry.
+                _target_segment(base, target_segment)
             if bowser_stage is not None:
                 # AFTER _seed_target, not instead of it: broadcast-only and
                 # retires nothing (see _publish_bowser_stage), so the star
                 # target set above survives untouched underneath a Bowser
                 # quick-select banner from a different course entirely.
                 _publish_bowser_stage(service, *bowser_stage)
+            if enter_level is not None:
+                _enter_level(service, enter_level)
+            if arm_hundred_coin is not None:
+                _arm_hundred_coin_star(base, service, *arm_hundred_coin)
         yield base, service
     finally:
         server.should_exit = True

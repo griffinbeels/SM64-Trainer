@@ -21,6 +21,28 @@ because neither rendering is defective on its own.
 
 So this compares them. The wide layout is the reference, because that is the one
 the user pointed at when he said the narrow one had diverged from it.
+
+RE-POINTED 2026-08-04 (amendment A8, spec practice-log-entity-cards): the
+Active Target card this test drove (`.practice-detail-grid.is-primary
+.objective-card`, always the plain "row" RankBanner layout reflowing via
+`.rank-slot`'s own flex-wrap) is deleted from the real Practice page. Its
+replacement, the practice log's `LogCard`, does NOT reflow the same way --
+its rank display is a deliberately-designed four-cell decision table (narrow/
+wide crossed with one/two ladders, `ui/logtuning.js`'s "Layout matrix"),
+never the plain row/stacked pair this file's regression was about. So this
+test's actual subject -- does `RankBanner` draw its own wash consistently
+between the row and stacked SHAPES -- is retargeted at `/ui/tune.html`'s
+climb inspector, which still mounts the byte-identical `.objective-card`/
+`.rank-slot`/plain-"row"-RankBanner replica (`ui/tune.js::ObjectiveCard`,
+kept alive specifically for this reason -- see `.claude/rules/ui-climb.md`'s
+"KNOWN GAP" paragraph) inside the real `.practice-page` container, so the
+same `@container` reflow rules still apply. The file's own self-checks
+(`reference`'s "not bands[0]['stacked']" assertion,
+`test_stacked_bands_never_touch`'s "bands[0]['stacked']" assertion) fail
+loudly rather than silently if the chosen widths stop landing on the
+side-by-side/stacked shapes they claim to -- exactly the guard needed if the
+inspector's own shell reflows at slightly different pixel widths than the
+real app's did.
 """
 import sys
 from pathlib import Path
@@ -35,10 +57,18 @@ _MISSING = find_uilab()
 if _MISSING:
     pytest.skip(_MISSING, allow_module_level=True)
 
+from ui_fixture import serve_ui     # noqa: E402
 from uilab.driver import get_driver  # noqa: E402
-from uilab_project import PROJECT    # noqa: E402
 
-REFERENCE_WIDTH = 1400          # the two banners sit side by side here
+# Re-measured 2026-08-04 against `/ui/tune.html`'s own shell (the retarget
+# above) rather than assumed: its `.sidebar` replica is an empty div, not the
+# real `app-sidebar` component, so the pane a card lives in is offset
+# differently than on the real page and the crossover moves. Measured
+# directly (getComputedStyle(".rank-slot").flexDirection at a sweep of
+# widths): "column" (stacked) through 1720px, "row" (side by side) from
+# 1740px -- 2000 sits comfortably inside the row band, the same way 1400 did
+# on the real page's own crossover.
+REFERENCE_WIDTH = 2000          # the two banners sit side by side here
 STACKED_WIDTHS = (1100, 900, 500)
 TOLERANCE = 1.0                 # sub-pixel layout noise
 
@@ -73,9 +103,9 @@ BANDS = r"""
 
 @pytest.fixture(scope="module")
 def page():
-    with PROJECT.open() as url, get_driver().launch() as opened:
-        opened.goto(url)
-        opened.wait_for(PROJECT.ready_selector)
+    with serve_ui() as base, get_driver().launch() as opened:
+        opened.goto(f"{base}/ui/tune.html")
+        opened.wait_for(".objective-card")
         yield opened
 
 

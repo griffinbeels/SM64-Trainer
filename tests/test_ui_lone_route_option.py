@@ -35,7 +35,7 @@ TARGET_JS = UI / "target.js"
 
 
 def run_node(expression: str):
-    script = (f"import {{ loneRouteOption, handIsEmpty }} from {RULE_URI!r};\n"
+    script = (f"import {{ loneOption, handIsEmpty }} from {RULE_URI!r};\n"
               f"console.log(JSON.stringify({expression}));")
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True,
@@ -44,31 +44,36 @@ def run_node(expression: str):
     return json.loads(result.stdout)
 
 
-ROUTE = 'new Set(["8:1"])'
+def test_one_option_is_the_pick():
+    assert run_node('loneOption([{"i": 1}])') == {"i": 1}
 
 
-def test_one_option_under_a_route_is_the_pick():
-    assert run_node(f'loneRouteOption({ROUTE}, [{{"i": 1}}])') == {"i": 1}
+def test_two_options_infer_NOTHING():
+    """The explicit bound he stated, and the one part of this rule that has
+    never moved. Picking the first would be inventing an intent, which is the
+    whole class of bug this surface keeps producing."""
+    assert run_node('loneOption([{"i": 1}, {"i": 4}])') is None
 
 
-def test_two_options_under_a_route_infer_NOTHING():
-    """The explicit bound he stated. Picking the first would be inventing an
-    intent, which is the whole class of bug this surface keeps producing."""
-    assert run_node(f'loneRouteOption({ROUTE}, [{{"i": 1}}, {{"i": 4}}])') is None
+def test_where_the_narrowing_came_from_is_no_longer_part_of_the_rule():
+    """WIDENED 2026-08-05. This module used to require that a ROUTE had done
+    the narrowing, so a place genuinely offering one thing was left unpicked.
+    Griffin: "either there genuinely being only one option (like in Bowser 3)
+    OR because the route itself reduces the star/segment space down to only
+    one option (like in DDD when the 16 star route is selected)."
 
-
-def test_no_route_never_auto_picks_however_few_options_there_are():
-    """A course with one star and no route active is still not an inference:
-    "given the route" is the premise, not the count. The selector rows pass
-    their own route filter here, which is null both when no route is active AND
-    when the active route never visits this place — the fallback that stops
-    the row rendering empty, and which must not become a pick."""
-    assert run_node('loneRouteOption(null, [{"i": 1}])') is None
-    assert run_node('loneRouteOption(undefined, [{"i": 1}])') is None
+    His bound survives the reversal untouched, because it was never about
+    routes -- two options is what cannot be inferred from, and the count is
+    still the whole test. A no-route course still holds its seven stars, and
+    `test_two_options_infer_NOTHING` above is what keeps that safe."""
+    assert run_node('loneOption([{"i": 1}])') == {"i": 1}
+    assert run_node('loneOption([{"i": 1}, {"i": 2}])') is None
 
 
 def test_no_options_at_all_is_not_a_pick():
-    assert run_node(f"loneRouteOption({ROUTE}, [])") is None
+    assert run_node("loneOption([])") is None
+    assert run_node("loneOption(null)") is None
+    assert run_node("loneOption(undefined)") is None
 
 
 def test_a_hand_holding_anything_is_not_empty():
@@ -103,7 +108,7 @@ def test_the_star_row_and_the_segment_row_share_ONE_implementation():
     source = _banner()
     assert source.count("function useLoneRouteOption(") == 1
     assert hook_call_sites(source) == 3       # the definition + two rows
-    assert source.count("loneRouteOption(") >= 2
+    assert source.count("loneOption(") >= 2
     assert 'from "../loneoption.js"' in source, (
         "the rule must be imported, never restated in the banner")
 
@@ -117,15 +122,29 @@ def test_the_auto_pick_is_quiet_at_both_call_sites():
     assert "quiet = false" in strip_comments(TARGET_JS.read_text(encoding="utf-8"))
 
 
-def test_the_segment_row_reads_the_ROUTE_filtered_list_not_the_fallback():
-    """`segs` falls back to the unfiltered list so the row is never empty; a
-    lone option in THAT list is one the route said nothing about. Reading it
-    would auto-pick in every castle subarea with a single segment, route or
-    no route — the exact inference he ruled out."""
+def test_the_segment_row_reads_THE_LIST_IT_DRAWS():
+    """REVERSED 2026-08-05, and worth stating as a reversal rather than
+    quietly rewriting: this guard used to assert the opposite.
+
+    It pinned `inRoute`, the route-filtered list, precisely so that a castle
+    subarea holding a single segment would NOT auto-pick -- "a lone option in
+    the fallback list is one the route said nothing about". Griffin then asked
+    for exactly that case by name: "when there's only one valid option for a
+    given course / area due to either there genuinely being only one option
+    (like in Bowser 3...) OR because the route itself reduces the
+    star/segment space down to only one option."
+
+    So the row reads `segs` -- the list actually drawn -- and WHERE the
+    narrowing came from is no longer part of the rule. What still holds the
+    line is the count: two options infer nothing, route or no route
+    (`test_two_options_infer_NOTHING`).
+    """
     source = _banner()
-    match = re.search(r"const lone = loneRouteOption\(routeSegs, (\w+)\)", source)
-    assert match, "the segment row's lone-option call is gone or reshaped"
-    assert match.group(1) == "inRoute"
+    reads = re.findall(r"const lone = loneOption\((\w+)\)", source)
+    assert reads == ["shown", "segs"], (
+        "both rows must feed the rule the list they RENDER — the star row's "
+        "`shown` and the segment row's `segs` — or a place that genuinely "
+        f"offers one thing goes unpicked: reads {reads}")
 
 
 @pytest.mark.parametrize("sample,expected", [

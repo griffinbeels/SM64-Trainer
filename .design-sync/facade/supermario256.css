@@ -1,0 +1,7 @@
+/* The brand display face. The app serves it from an absolute /ui/ path, which
+   the bundle cannot resolve -- this relative rule is what ships it to designs. */
+@font-face {
+  font-family: "SuperMario256";
+  src: url("./SuperMario256.ttf") format("truetype");
+  font-display: swap;
+}

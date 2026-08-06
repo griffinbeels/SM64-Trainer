@@ -231,13 +231,17 @@ def test_a_failed_100_coin_run_stays_unlabelled(tmp_path):
     """No exit star, so nothing classifies it — which is exactly why the 868
     historical 100-coin attempts (all deaths and resets, no strategy) remain
     prunable rather than being resurrected by this feature (user's call,
-    2026-08-03: "just drop 'em")."""
+    2026-08-03: "just drop 'em"). TARGETED (no strat_tag) so the death is
+    still reattributed at all -- proving the reverse asymmetry (2026-08-04,
+    see the "untargeted" section below) would instead leave this Unassigned,
+    never exercising classify()'s own "no exit star, no answer" branch."""
     import asyncio
 
     from tests.test_tracker_service import ev, star
 
     db, service = _wf_engine_service(tmp_path)
     asyncio.run(service.publish(ev("level_changed", 900, {"from": 16, "to": 24})))
+    asyncio.run(service.set_target(2, 6))
     asyncio.run(service.publish(star(1000, course=2, star_id=6, igt=1000)))
     asyncio.run(service.publish(ev("death", 1200, {"igt_frames": 1200})))
     rows = [a for a in db.attempts() if a.star_id == 6]
@@ -461,3 +465,70 @@ def test_every_mirrored_outcome_is_actually_suppressed(tmp_path, outcome):
     assert len(ids) == len(set(ids)), (
         f"one {outcome} span recorded twice: "
         f"{[(a.id, a.rta_frames) for a in rows]}")
+
+
+# ---- one reset, one row — the REVERSE asymmetry: nothing targeted ----
+
+@pytest.mark.parametrize("outcome", sorted(Projector._ENGINE_MIRRORED_OUTCOMES))
+def test_an_untargeted_failure_records_only_the_unassigned_row(tmp_path, outcome):
+    """Live report 2026-08-04: "one reset records two attempts — one
+    correctly in Unassigned, one phantom row on the 100-coin star." Griffin
+    walked into WF, selected nothing, and reset.
+
+    `_close`/`_close_by_death` already get this half right on their own —
+    `_engine_records_this_too`'s very first line bails out whenever nothing
+    is targeted (`star_tgt is None -> False`), so they correctly record the
+    plain Unassigned attempt. What they could not stop was `feed()`'s
+    seg_closed loop reattributing the SAME span to the star a second time,
+    unconditionally — a phantom "100 Coins" row with no time at all, since
+    game_reset/practice_reset/death payloads carry no igt_frames. Measured
+    against his real practice history: 107 such pairs, plus 1 in this
+    worktree's own journal, none labelled, none a saved PB.
+
+    His rule, and the reverse of the tests above: "resets with nothing
+    explicitly selected... should be classified as unassigned" — an ambient
+    100-coin arm is not itself a deliberate choice.
+    """
+    import asyncio
+
+    from tests.test_tracker_service import ev
+
+    db, service = _wf_engine_service(tmp_path)
+    asyncio.run(service.publish(ev("level_changed", 900, {"from": 16, "to": 24})))
+    # NOTE: no set_target call anywhere in this test — that is the whole point.
+    _reset(service, 1000, 0)                   # arms the engine and acts
+    closer = {
+        "reset": lambda: _reset(service, 1400, 400),
+        "death": lambda: asyncio.run(service.publish(
+            ev("death", 1400, {"igt_frames": 400, "cause": "fall"}))),
+        "hard_reset": lambda: asyncio.run(service.publish(
+            ev("game_reset", 1400, {}))),
+    }[outcome]
+    closer()
+
+    rows = [a for a in db.attempts() if a.outcome == outcome]
+    assert rows, f"no {outcome} recorded at all — the fixture never ran"
+    assert not any(a.star_id == 6 for a in rows), (
+        f"a phantom 100-coin row survived an untargeted {outcome}: "
+        f"{[(a.id, a.star_id, a.course_id) for a in rows]}")
+    assert len(rows) == 1 and rows[0].course_id is None \
+        and rows[0].star_id is None and rows[0].segment_id is None, (
+        f"expected exactly one plain Unassigned {outcome} row: "
+        f"{[(a.id, a.star_id, a.course_id, a.segment_id) for a in rows]}")
+
+
+def test_an_untargeted_success_still_attributes_to_the_star(tmp_path):
+    """The other half of the asymmetry, Griffin's own words: "Untargeted 100
+    coin run that successfully completed... should trigger the strategy and
+    always be attributed." Completing the run IS the evidence he was
+    practicing it — unlike a reset, a SUCCESS reattributes and sets the
+    strategy even with nothing targeted, exactly as before this fix
+    (`_untargeted_failure` never gates a `success` outcome)."""
+    db, service = _wf_engine_service(tmp_path)
+    _hundred_coin_run(service, 900, exit_star=3)   # no set_target call at all
+    rows = [a for a in db.attempts() if a.star_id == 6 and a.outcome == "success"]
+    assert [a.strat_tag for a in rows] == ["100c + Reds · Standard"]
+    assert service.strat_by_star[(2, 6)] == "100c + Reds · Standard"
+    assert not any(a.course_id is None and a.star_id is None
+                   for a in db.attempts()), \
+        "an untargeted success must not also leave an Unassigned duplicate"

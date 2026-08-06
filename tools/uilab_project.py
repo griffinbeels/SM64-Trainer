@@ -47,15 +47,25 @@ SHELL_SELECTORS = (
 
 # Elements carrying irreducible information: a defect if they ellipsise.
 #
-# `.objective-name h2` is the star (or segment) being practised -- the one
-# thing on that card that says WHAT you are doing, and it ellipsised mid-word
-# at 850 and 900px ("Fall onto the Cag...", 2026-07-29). Note this catches only
-# the star the FIXTURE seeds; the whole corpus is measured against the real
-# column by tests/test_objective_name_fits.py, which is what actually holds the
-# floor. Both, because they fail differently: this one catches a layout change
-# on any page state, that one catches a name nobody thought about.
+# `.log-card-name b` and `.rank-banner-name` -- the practice log's own entity
+# name and rank name, which ellipsised on `.log-card-head` below an 858-866px
+# container (index.html's own measured comment, above the `@container
+# (max-width: 900px)` reflow). This row catches a layout regression on any
+# seeded page state; the whole corpus is measured against the real column by
+# tests/test_log_card_name_fits.py, which is what catches a real name nobody
+# thought about. Both, because they fail differently.
+#
+# `.objective-name h2` -- the Active Target card's own version of this same
+# concern -- was here until amendment A8 (spec practice-log-entity-cards,
+# 2026-08-04) deleted that card; `.objective-name h2` never renders on the
+# page this rig measures any more (it survives only inside ui/tune.js's climb-
+# inspector replica, which PROJECT does not exercise), and its own corpus
+# check (test_objective_name_fits.py) is deleted with it -- a direct
+# duplicate of test_log_card_name_fits.py's own method once both cards shared
+# nothing left to test differently.
 NEVER_TRUNCATE = (".rank-banner-kicker", ".context-label", ".nav-item span",
-                  ".field-label", ".objective-name h2")
+                  ".field-label", ".log-card-name b",
+                  ".rank-banner-name")
 
 # States worth measuring. The Practice page renders EMPTY-state placeholders
 # whenever no target is selected, and a database snapshot taken while nobody is
@@ -127,16 +137,31 @@ _EXPAND_ALL = _script("""
 const practiceBtn = document.querySelector('button.nav-item[title="Practice"]');
 if (practiceBtn && practiceBtn.getAttribute('aria-current') !== 'page') {
   practiceBtn.click();
-  await waitFor(() => !!document.querySelector('.objective-card, .objective-empty'));
+  await waitFor(() => !!document.querySelector('.log-list-card'));
 }
 document.querySelectorAll('.card-collapse[aria-expanded="false"]')
-  .forEach((b) => { if (!b.closest('.practice-index-item')) b.click(); });
-document.querySelectorAll('details.practice-index-item:not([open])')
-  .forEach((d) => { d.open = true; });
+  .forEach((b) => b.click());
+document.querySelectorAll('.log-card-fold[aria-expanded="false"]')
+  .forEach((b) => b.click());
 """)
+# `.log-card-fold` (Task 7) is a SEPARATE mechanism from `.card-collapse`
+# above -- LogCard's own fold is PracticeLog's own state (auto-open-newest,
+# 2026-08-04: only the newest entity's card opens on the system's own
+# initiative, everything else defaults closed until a click says otherwise),
+# never the shared `useCollapsed`/localStorage class -- so the two `.is-
+# collapsed`/`.is-closed` layouts need their own selector even though both
+# read `aria-expanded` the same way. `_EXPAND_ALL`/`_COLLAPSE_ALL` reach their
+# state by clicking whatever is currently open/closed rather than assuming a
+# starting point, so neither depends on what a fresh page happens to default
+# to. Before this, no story ever toggled a log card's fold, so its
+# `.is-closed` layout was completely unswept: this is the fix, not a new
+# Story, since reaching it needs no new page state, only a control this sweep
+# already knows how to drive by the same attribute.
 _COLLAPSE_ALL = """
 document.querySelectorAll('.card-collapse[aria-expanded="true"]')
-  .forEach((b) => { if (!b.closest('.practice-index-item')) b.click(); });
+  .forEach((b) => b.click());
+document.querySelectorAll('.log-card-fold[aria-expanded="true"]')
+  .forEach((b) => b.click());
 """
 
 # This branch's OWN surfaces (spec 2026-07-28-multi-step-segments) were never
@@ -253,24 +278,50 @@ if ({picks} >= 2) {{
 
 STORIES = [
     Story(name="page", at="", setup=_EXPAND_ALL),
-    Story(name="active-target", at=".objective-card",
-          skip_if="!document.querySelector('.objective-card')"),
-    # `--objective-card-narrow` was measured against a STAR card and never
-    # re-measured after this branch (2026-07-28-multi-step-segments) put a
-    # `.seg-waiting` line inside the same fixed-height, overflow:hidden card
-    # -- and neither this sweep nor tools/measure_objective_card.py could
-    # even REACH a state with that line rendered (final review, finding 2):
-    # `serve_ui`'s fixture always targeted a star, and `.seg-waiting` renders
-    # only while `sec.armed_detail` is non-null. `serve` below arms a real
-    # segment definition alongside the existing star target (ui_fixture.py's
-    # `_arm_segment`) so this card exists on the SAME page the other stories
-    # already measure. It sits inside a closed `<details>` in the practice
-    # index until `_EXPAND_ALL` (above, already run by the "page" story
-    # earlier in this viewport's pass) opens it.
-    Story(name="armed-segment", at=".objective-card:has(.seg-waiting)",
+    # Re-pointed 2026-08-04 (amendment A8, spec practice-log-entity-cards):
+    # the Active Target card is DELETED -- ".objective-card" never renders on
+    # the real practice page any more, so `skip_if` here would have started
+    # returning true on EVERY run, forever, the exact "a skip's stated reason
+    # is a claim" trap this file's own history has already fallen into twice
+    # (see the "armed-segment" and "practice-log" stories' comments below).
+    # The entity actually being practised now gets the SAME highlight this
+    # story exists to probe (`.log-card-active`, LogCard's own class), so
+    # this is a repoint rather than a deletion -- the crowded content this
+    # story was written for (rank banners + PB + fold, all in one head row)
+    # still exists, just inside the log's own card.
+    Story(name="active-target", at=".log-card.log-card-active",
+          skip_if="!document.querySelector('.log-card.log-card-active')"),
+    # Re-pointed 2026-08-03 (final whole-branch review, spec practice-log-
+    # entity-cards): `.seg-waiting` moved off `.objective-card` entirely once
+    # the practice index was deleted (Task 6) -- an armed-but-untargeted
+    # segment now surfaces ONLY as a `.log-card` in the practice log
+    # (`ui_fixture.py::_arm_segment`'s own docstring), never as
+    # `.objective-card`, since `Practice()` suppresses every segment pin while
+    # a star target is active and `serve` below never targets the armed
+    # segment. The old `at=".objective-card:has(.seg-waiting)"` therefore
+    # matched nothing here; `skip_if` only ever checked for a bare
+    # `.seg-waiting`, which DOES exist (inside the log card), so the story
+    # never skipped and uilab's `_probe` returned "scope selector matched
+    # nothing" on every single run since Task 6 landed -- silently discarded
+    # by `continue` in uilab's own sweep loop (fixed at the root in
+    # uilab/sweep.py, which now raises instead). CONFIRMED contributing zero
+    # defects at every viewport for that whole stretch (final review).
+    #
+    # Re-pointed at the log card itself, which is where the crowded
+    # combination this story exists to protect (two stacked rank banners plus
+    # the waiting-for row) actually renders now -- the same `sec.armed_detail`
+    # + `rank`/`entity_rank` data `_arm_segment` seeds, just drawn by
+    # `LogCard` instead of `StarSection`/`SegmentSection`.
+    Story(name="armed-segment", at=".log-card:has(.seg-waiting)",
           skip_if="!document.querySelector('.seg-waiting')"),
-    Story(name="practice-log", at=".attempts-card",
-          skip_if="!document.querySelector('.attempts-card')"),
+    # Renamed 2026-08-03 (Task 7): `.attempts-card` died with StarSection/
+    # SegmentSection's own attempts table (Task 6) -- the practice log is
+    # now the page-level `.log-list-card` (practicelog.js). The old selector
+    # never matched anything, so this story silently skipped every run since
+    # Task 6 landed, which is the exact "a skip's stated reason is a claim"
+    # trap this file's own history warns about, a third time over.
+    Story(name="practice-log", at=".log-list-card",
+          skip_if="!document.querySelector('.log-list-card')"),
     # Last of the PRACTICE-page stories, so it does not leave the page folded
     # for the ones above.
     Story(name="page-collapsed", at="", setup=_COLLAPSE_ALL,
@@ -310,9 +361,13 @@ PROJECT = Project(
     page_path="/ui/index.html",
     # The shell paints before the session view lands, and a sweep that starts
     # measuring at that moment reports a page with none of its content on it --
-    # and calls it clean. `.objective-card` exists only once the view has
-    # rendered, so it is the honest "ready" signal.
-    ready_selector=".objective-card",
+    # and calls it clean. Re-pointed from the deleted `.objective-card`
+    # (amendment A8, spec practice-log-entity-cards) to `.log-list-card` --
+    # `PracticeLog` renders that wrapper unconditionally the moment `v`
+    # exists (practice.js's early "still loading" return is the only gate),
+    # so it exists only once the view has genuinely rendered, same honesty
+    # the old selector had.
+    ready_selector=".log-list-card",
     stylesheet=REPO / "src" / "sm64_events" / "ui" / "index.html",
     shell_selectors=SHELL_SELECTORS,
     never_truncate=NEVER_TRUNCATE,
@@ -351,8 +406,34 @@ PROJECT = Project(
     # and 794, below the supported floor, where they are dropped entirely. A
     # container threshold is therefore never self-probing here; whenever you
     # add one below ~1180, add its window equivalent to this list.
+    #
+    # 1019/1020 are the same shape for `.log-card-head`'s own `@container
+    # (max-width: 900px)` reflow (final review, item 1): measured on the
+    # shipping shell, the pane runs the SAME 119px narrower than the window
+    # in this range (900 -> container 781, 1019 -> container 900, 1020 ->
+    # container 901 -- confirmed directly, `.log-card-head`'s own
+    # `gridTemplateColumns` switches from the 2-column reflow to the 4-column
+    # wide template between these two exact window widths), so the derived
+    # matrix's own 900/901 VIEWPORT points land at a ~781px container deep
+    # inside the narrow layout and never exercise the actual crossover.
+    #
+    # 979/980 are the same shape again, for the log card's own rank-display
+    # narrow/wide split, `@container (max-width: 860px)` against
+    # `.log-card-ranks .rank-banner` (2026-08-04, layout-matrix round): the
+    # SAME ~119px window-to-container offset holds in this range (975 ->
+    # container 856, 980 -> container 861), and 979/980 is the exact window
+    # pair where a two-ladder card's shape (read off `.rank-banner`'s own
+    # `grid-template-areas`) flips from Column to stackedRow -- confirmed
+    # directly, not estimated from the offset alone. The derived matrix's own
+    # literal-860/861 VIEWPORT points are a coincidence of this threshold's
+    # chosen number, not a probe of this crossover; they land relatively
+    # narrow in real container terms (~741-742px, comfortably inside the
+    # Column band already) and happen to have surfaced an unrelated,
+    # already-owed stagebanner defect instead (see known_defects, below).
     extra_viewports=((850, 1180), (851, 1000), (900, 1180), (912, 1000),
-                     (913, 1000), (1500, 900), (1280, 720)),
+                     (913, 1000), (1019, 1000), (1020, 1000),
+                     (979, 1000), (980, 1000),
+                     (1500, 900), (1280, 720)),
     # OWED, not exempted. These became VISIBLE on 2026-07-28 when the
     # fixture finally rendered a populated practice page -- a stage, an
     # active target, a strategy and a PB. Everything on the star row and
@@ -420,6 +501,37 @@ PROJECT = Project(
             'scrollHeight 199 > clientHeight 197',
         '851x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
+        # 860/861 are BOTH SIDES of `.log-card-ranks`' own new narrow/wide
+        # `@container (max-width: 860px)` split (2026-08-04, layout-matrix
+        # round) -- the matrix derives its probe points from every declared
+        # threshold in the stylesheet, so this pair is new PURELY because
+        # nothing named 860 before. The defect itself is this same
+        # already-owed stagebanner/starcell class (see every other entry in
+        # this dict), unrelated to the log card: confirmed by diffing this
+        # round's index.html against HEAD restricted to every stagebanner/
+        # starcell/starholder/starrank/starname selector -- byte-identical,
+        # zero lines changed -- and by direct measurement that the SAME
+        # ~2px stagebanner shortfall recurs at literally every width from
+        # 859px through 900px tried by hand, not just these two.
+        '860x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 200 > clientHeight 198',
+        '860x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '861x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 200 > clientHeight 198',
+        '861x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        # 979/980 are the REAL window-pixel crossover for the SAME log-card
+        # threshold (extra_viewports' own comment above has the measurement);
+        # same already-owed defect class again.
+        '979x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 217 > clientHeight 215',
+        '979x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '980x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 217 > clientHeight 215',
+        '980x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
         '900x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 206 > clientHeight 204',
         '900x1180 [page] overlap :: span.starholder x span.starrank':
@@ -431,6 +543,32 @@ PROJECT = Project(
         '913x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 208 > clientHeight 206',
         '913x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        # 900x1000/901x1000/1019x1000/1020x1000: the SAME long-owed stage-
+        # banner-card shortfall + star-cell overlap class as every row above
+        # (both pre-existing, both unrelated to the practice log), newly
+        # REACHED at these four exact points only because `.log-card-head`'s
+        # own `@container (max-width: 900px)` (item 1, final review) added
+        # 900 as a css threshold value -- `_candidate_matrix` auto-derives a
+        # probe point at that literal VIEWPORT width whenever any stylesheet
+        # rule declares it, and 1019/1020 are this same threshold's window-
+        # equivalent pair (see `extra_viewports`, above). Not a new defect;
+        # a new coordinate on an old one.
+        '900x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 206 > clientHeight 204',
+        '900x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '901x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 206 > clientHeight 204',
+        '901x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1019x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 222 > clientHeight 220',
+        '1019x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 7x2px inside button.starcell',
+        '1020x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 222 > clientHeight 220',
+        '1020x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
     },
 )
@@ -643,6 +781,74 @@ BOWSER_PROJECT = dataclasses.replace(
             'overlap 7x2px inside button.starcell',
         '913x1000 [bowser-row] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
+
+        # 900x1000/901x1000/1019x1000/1020x1000: PROJECT's own new rows
+        # (final review, item 1 -- `.log-card-head`'s `@container (max-width:
+        # 900px)` reflow adds 900 as a css threshold, auto-deriving these
+        # four VIEWPORT points for every project that shares this stylesheet,
+        # BOWSER_PROJECT included) reached the SAME long-owed stagebanner/
+        # starcell defect class here too, at a genuinely different magnitude:
+        # this row's own 2-cell BowserCourseRow compresses further than the
+        # 7-cell StarRow does at these widths, so the wing-spill overlap is
+        # 26x2px here, not 7x2px. Measured directly against this project's
+        # own sweep output, not copied from PROJECT's rows.
+        '900x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 206 > clientHeight 204',
+        '900x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '900x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '901x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 206 > clientHeight 204',
+        '901x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '901x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1019x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 222 > clientHeight 220',
+        '1019x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1019x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1020x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 222 > clientHeight 220',
+        '1020x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1020x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+
+        # 860x1000/861x1000/979x1000/980x1000: PROJECT's own new rows again
+        # (2026-08-04, layout-matrix round -- the log card's rank-display
+        # `@container (max-width: 860px)` split; see PROJECT's own
+        # `extra_viewports` comment for the full measurement), same shape as
+        # the 900/901/1019/1020 block just above: the SAME long-owed defect
+        # class, at this row's own 26x2px overlap magnitude rather than
+        # PROJECT's 7x2px. Measured directly against this project's own
+        # sweep output.
+        '860x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 200 > clientHeight 198',
+        '860x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '860x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '861x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 200 > clientHeight 198',
+        '861x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '861x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '979x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 217 > clientHeight 215',
+        '979x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '979x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '980x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 217 > clientHeight 215',
+        '980x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '980x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
     },
 )
 
@@ -686,9 +892,31 @@ SUBSECTION_PROJECT = dataclasses.replace(
     # row is one of the SAME two long-owed classes PROJECT and BOWSER_PROJECT
     # already exempt (the `.stagebanner` card's own fixed-height shortfall and
     # `.starcell`'s starholder/starrank overlap), classified rather than
-    # assumed: 18 clipped + 54 overlap, and nothing else. So the expanded row
+    # assumed: 26 clipped + 78 overlap, and nothing else. So the expanded row
     # and its child treatment introduce no defect of their own.
+    #
+    # RE-TAKEN 2026-08-06 after merging main, which deleted the Active Target
+    # card: every fixed-height shortfall in the selector shifted by two pixels
+    # and eight viewports joined the matrix, so all 104 keys moved at once.
+    # Re-taken by running the sweep and classifying its output (0 rows outside
+    # the two owed classes), never by patching the numbers that went red.
     known_defects={
+        '1019x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 222 > clientHeight 220',
+        '1019x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1019x1000 [selector-expanded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1019x1000 [selector-folded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1020x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 222 > clientHeight 220',
+        '1020x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1020x1000 [selector-expanded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1020x1000 [selector-folded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
         '1060x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 228 > clientHeight 226',
         '1060x1000 [page] overlap :: span.starholder x span.starrank':
@@ -809,6 +1037,30 @@ SUBSECTION_PROJECT = dataclasses.replace(
             'overlap 26x2px inside button.starcell',
         '851x1000 [selector-folded] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
+        '860x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 200 > clientHeight 198',
+        '860x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '860x1000 [selector-expanded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '860x1000 [selector-folded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '861x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 200 > clientHeight 198',
+        '861x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '861x1000 [selector-expanded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '861x1000 [selector-folded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '900x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 206 > clientHeight 204',
+        '900x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '900x1000 [selector-expanded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '900x1000 [selector-folded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
         '900x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 206 > clientHeight 204',
         '900x1180 [page] overlap :: span.starholder x span.starrank':
@@ -816,6 +1068,14 @@ SUBSECTION_PROJECT = dataclasses.replace(
         '900x1180 [selector-expanded] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '900x1180 [selector-folded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '901x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 206 > clientHeight 204',
+        '901x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '901x1000 [selector-expanded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '901x1000 [selector-folded] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '912x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 207 > clientHeight 205',
@@ -832,6 +1092,22 @@ SUBSECTION_PROJECT = dataclasses.replace(
         '913x1000 [selector-expanded] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '913x1000 [selector-folded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '979x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 217 > clientHeight 215',
+        '979x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '979x1000 [selector-expanded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '979x1000 [selector-folded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '980x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 217 > clientHeight 215',
+        '980x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '980x1000 [selector-expanded] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '980x1000 [selector-folded] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
     },
 )

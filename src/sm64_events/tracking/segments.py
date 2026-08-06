@@ -2933,6 +2933,34 @@ class SegmentEngine:
                     notices.append({"event": "segment_armed",
                                     "segment_id": d.id, "name": d.name,
                                     "frame": ev.frame})
+        # THE GRAND STAR ENDS THE RUN, so nothing may still be running after
+        # it. Griffin, 2026-08-05, on the credits screen with "CCM -> BBH"
+        # still showing a live timer: "at the end of the game (i.e., after
+        # grabbing the final star and finishing the Bowser 3 segment), there
+        # should be absolutely no segments still running (the game is
+        # literally over)... It also seems to persist to new areas of the
+        # map?"
+        #
+        # `key_grabbed` with `which == "grand"` is the game's own end (level
+        # 34; the grand star never fires `star_collected`, which is why
+        # `key.py` stamps this instead -- see the trigger table above). It is
+        # already journalled, so this needs no new memory read and applies
+        # retroactively on replay like every other projection rule.
+        #
+        # LAST, deliberately: Bowser 3's own definition ENDS on this event, so
+        # running after the closures above is what lets it record its success
+        # and only then clears whatever else was left over.
+        #
+        # SILENT, via the same helper an off-route move uses: "a movement that
+        # never happened must not bank a failure" (`_cancel_topologically`).
+        # A movement interrupted by winning the game did not happen either,
+        # and banking failures here would be exactly the misattribution the
+        # untargeted-reset rule exists to stop (projection.py). Cancelled
+        # rather than hard-disarmed so the ordinary "return to the start and
+        # press reset" recovery still brings it back.
+        if ev.type == "key_grabbed" and ev.payload.get("which") == "grand":
+            for d in [d for d in self._defs if d.id in self._armed]:
+                self._cancel_topologically(d, ev, notices)
         self._progress_notices(progress_before, ev.frame, notices)
         return closed, notices
 

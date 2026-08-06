@@ -50,7 +50,7 @@ import { armedSegments, hasPracticeContext, hasStandardsFor,
          justCompletedSegment, justCompletedStar, practiceMode,
          selectorSurfaceId } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
-import { handIsEmpty, loneRouteOption } from "../loneoption.js";
+import { handIsEmpty, loneOption } from "../loneoption.js";
 import { familyRoot, isExpanded, visibleEntities } from "../subsections.js";
 import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
@@ -274,7 +274,7 @@ async function pickSegmentTarget(t, s, options) {
 // THE lone-route auto-pick, shared by the star row and the castle segment row
 // (rule 11 — one implementation, not two that drift). Task 0025: with a route
 // active, a place where the route leaves exactly ONE thing to practice needs no
-// pick from him. The RULE itself is `loneRouteOption`/`handIsEmpty` in
+// pick from him. The RULE itself is `loneOption`/`handIsEmpty` in
 // ../loneoption.js, import-free so node can test it; this is only the wiring.
 //
 // Deliberately NOT applied to the two Bowser rows above. `ArenaRow` already
@@ -427,7 +427,10 @@ function StarRow({ t, v, stage }) {
   // Task 0025 — DDD during 16 Star offers exactly one star, so pick it.
   // Computed BEFORE the `!course` early return because a hook may not run
   // conditionally; `shown` is empty there, so the rule answers null anyway.
-  const lone = loneRouteOption(routeStars, shown);
+  // `shown` is the route-filtered list when a route is active and the whole
+  // course otherwise, which is exactly what the widened rule wants: seven
+  // stars is not one, so a no-route course still picks nothing.
+  const lone = loneOption(shown);
   useLoneRouteOption(v, lone, `star:${stage.course_id}:${lone ? lone.i : ""}`,
                      () => pick(lone.i, { quiet: true }));
 
@@ -849,15 +852,30 @@ function ArenaRow({ t, v, stage }) {
   // its target, its arm and its card before he had done anything at all.
   // A convenience default may fill an empty hand; it may not take something
   // out of one.
+  //
+  // NARROWED 2026-08-05: `tgt.kind === "segment"` declined whenever ANY
+  // segment was targeted, including one belonging to a different place
+  // entirely -- so walking into Bowser 3 still holding "No Reds" (BitS) left
+  // the arena's only fight unselected. Griffin: "if there's only one option,
+  // that's how it should look. Even if this is our first, second, third time
+  // visiting this place." The 2026-08-01 rule it protects is about a pick
+  // made FOR HERE ("Bowser 1 -> WF", which starts in this very arena), and
+  // `heldStartsHere` is that rule stated exactly: keep a held target this
+  // stage can actually run, override one it cannot. Same question
+  // `ui/stagecontext.js` answers for the pinned card, asked of the row's own
+  // `v.segment_targets` rather than a second source.
+  const heldStartsHere = tgt.kind === "segment" && (v.segment_targets || [])
+    .some((s) => s.segment_id === tgt.segment_id
+      && (s.start_areas || []).some((a) => a[0] === stage.level));
   useEffect(() => {
     if (!only) return;
-    if (tgt.kind === "segment") return;
+    if (heldStartsHere) return;
     (async () => {
       if (!only.enabled)
         await send("PUT", `/api/segments/${only.segment_id}`, { enabled: true });
       await requestTarget(t, { kind: "segment", segment_id: only.segment_id });
     })();
-  }, [stage.level, only && only.segment_id]);
+  }, [stage.level, only && only.segment_id, heldStartsHere]);
 
   const extras = armedExtraCells(
     t, v, new Set(fights.map((s) => s.segment_id)), setPicking);
@@ -892,15 +910,6 @@ function SegmentRow({ t, v, stage }) {
   const inRoute = routeSegs
     ? here.filter((s) => routeSegs.has(s.segment_id)) : here;
 
-  // Task 0025's segment half (rule 11 — the same rule, the same module).
-  // Read off `inRoute`, NOT `segs` below: `segs` falls back to the unfiltered
-  // list so the row is never empty, and a lone option in THAT list is one the
-  // route said nothing about.
-  const lone = loneRouteOption(routeSegs, inRoute);
-  useLoneRouteOption(
-    v, lone, `seg:${stage.level}:${stage.area}:${lone ? lone.segment_id : ""}`,
-    () => pickSegmentTarget(t, lone, { quiet: true }));
-
   const offered = inRoute.length ? inRoute : here;   // never empty the row
 
   // PROGRESSIVE DISCLOSURE (Griffin, 2026-08-05). Selecting something hides
@@ -911,9 +920,26 @@ function SegmentRow({ t, v, stage }) {
   //
   // Keyed by ENTITY KEY (`targetEntityKey` above), and the fold shared with
   // the star row through `useFamilyView` -- rule 11, one implementation.
+  //
+  // It sits ABOVE the lone-option rule deliberately, since that rule reads the
+  // list actually drawn: a parent holding three subsections is ONE option here
+  // and four in `offered`, so feeding it `offered` would leave the one thing
+  // this place offers unpicked.
   const keyed = offered.map((s) => ({ ...s, key: segKey(s) }));
   const { segs, expanded, familyRootKey, toggleFamily } =
     useFamilyView(keyed, targetEntityKey(v));
+
+  // Task 0025's segment half (rule 11 — the same rule, the same module).
+  // READS `segs`, the list actually drawn, since 2026-08-05. It read the
+  // route-filtered `inRoute` before, precisely so that a subarea holding one
+  // segment would NOT auto-pick — which is the case Griffin then asked for by
+  // name ("there genuinely being only one option"). The two lists differ only
+  // where the route said nothing, and a place that offers exactly one thing is
+  // now a pick whether or not a route agreed.
+  const lone = loneOption(segs);
+  useLoneRouteOption(
+    v, lone, `seg:${stage.level}:${stage.area}:${lone ? lone.segment_id : ""}`,
+    () => pickSegmentTarget(t, lone, { quiet: true }));
 
   const extras = armedExtraCells(
     t, v, new Set(segs.map((s) => s.segment_id)), setPicking);
