@@ -130,3 +130,53 @@ def test_opening_it_loads_that_entity_s_own_ladder(page_state):
     opened = page_state["opened"]
     assert opened is not None, "clicking the toggle opened nothing"
     assert opened["body"].strip(), f"the opened panel is empty: {opened}"
+
+
+def test_the_ladder_is_fetched_before_it_is_ever_opened():
+    """Griffin, 2026-08-06: "when opening the rank standards, it seems like it
+    loads the rank standards from disk... which causes there to be a brief lag
+    before the rank standards loads -- then, every open/close going forward
+    looks as expected. I think the second the card appears in the list, we
+    should load those rank standards and prepare them to be opened later."
+
+    The REQUEST COUNT is the honest probe, not the rendered table: a panel that
+    fetches on open has made no request while closed, and one that prefetches
+    has -- and both look identical from the outside, because a closed panel
+    draws nothing either way. The visible symptom was worse than a stall: the
+    first open animated a box whose contents arrived mid-flight, so the height
+    it measured was the loading state's.
+    """
+    spy = """
+      (() => {
+        window.__stdReqs = 0;
+        const orig = window.fetch;
+        window.fetch = function (...args) {
+          if (String(args[0] || "").includes('/api/ranks/standards'))
+            window.__stdReqs += 1;
+          return orig.apply(this, args);
+        };
+        return true;
+      })()
+    """
+    with tempfile.TemporaryDirectory() as scratch:
+        with serve_ui(Path(scratch) / "prefetch.db") as base:
+            with driver.get_driver().launch(headless=True,
+                                            viewport=(1500, 1000)) as page:
+                page.goto(base)
+                page.evaluate(spy)
+                page.evaluate("new Promise(r => setTimeout(r, 3000))")
+                state = page.evaluate("""
+                  (() => {
+                    const panel = document.querySelector('.log-card .stdpanel');
+                    if (!panel) return {error: 'no standards panel'};
+                    return {requests: window.__stdReqs || 0,
+                            isOpen: !!panel.querySelector('.stdtable')};
+                  })()
+                """)
+
+    assert state.get("error") is None, state
+    assert state["isOpen"] is False, (
+        f"the panel opened itself, so this proves nothing about prefetching: {state}")
+    assert state["requests"] >= 1, (
+        "the ladder is still fetched on first open, so the first open of every "
+        f"card animates a box measured around a loading state: {state}")

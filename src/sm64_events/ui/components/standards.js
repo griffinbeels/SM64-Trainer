@@ -96,7 +96,25 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // When opened by default (or when the card remounts for a new entity while
   // open), fetch on mount — toggle() only loads on a user click, so an
   // open-by-default panel would otherwise sit on "Loading standards…" forever.
-  useEffect(() => { if (open) load(); }, [entity]);
+  // PREFETCHED THE MOMENT THE PANEL EXISTS, not on first open. Griffin,
+  // 2026-08-06: "when opening the rank standards, it seems like it loads the
+  // rank standards from disk (or a cold cache, whatever), which causes there
+  // to be a brief lag before the rank standards loads -- then, every
+  // open/close going forward looks as expected. I think the second the card
+  // appears in the list, we should load those rank standards and prepare them
+  // to be opened later."
+  //
+  // The panel used to fetch on open, which was a deliberate "no cost per card"
+  // when it moved inside the cards -- and the cost it avoided was invisible
+  // while the cost it created was not: the FIRST open of each panel animated
+  // a box whose contents arrived mid-flight, so the height it measured was
+  // the loading state's and the table appeared afterwards. Every later open
+  // looked right, which is exactly the shape of a cold-cache stall.
+  //
+  // `load()` is idempotent and this component is only mounted for cards the
+  // log is actually rendering, so the traffic is one request per visible card
+  // per entity change, not per card in the corpus.
+  useEffect(() => { load(); }, [entity]);
   // Reload on EVERY open, not just the first: a strat created from the
   // practice dropdown or header picker while this panel sat cached would
   // otherwise show empty cells forever (its data is fetched out-of-band,

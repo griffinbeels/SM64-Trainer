@@ -53,6 +53,12 @@ MEASURE = """
       steps: box(card.querySelector('.step-row')),
       insideIdentity: card.querySelector('.log-card-identity .step-row') !== null,
       chips: card.querySelectorAll('.step-row .step-chip').length,
+      pickerRight: (() => {
+        const p = card.querySelector('.log-card-strat-picker, .log-card-strat');
+        return p ? Math.round(p.getBoundingClientRect().right) : null;
+      })(),
+      headLeft: Math.round(card.querySelector('.log-card-head').getBoundingClientRect().left),
+      headWidth: Math.round(card.querySelector('.log-card-head').getBoundingClientRect().width),
     };
   })()
 """
@@ -99,3 +105,25 @@ def test_the_track_is_to_the_RIGHT_of_the_name(armed):
     half a vertical-overlap check alone would not catch."""
     assert armed["steps"]["left"] > armed["name"]["left"], (
         f"the step track is not right of the name: {armed}")
+
+
+def test_the_strategy_picker_stays_at_the_right_edge(armed):
+    """A segment card must put its picker where a star card does.
+
+    Griffin, 2026-08-06: "the drop down for 'Standard' there should be all the
+    way to the right, like for a star's card." The cause is structural rather
+    than cosmetic: `.log-card-select` gives up its own growth when a track
+    shares the line (so the track sits beside the name instead of across the
+    column), which leaves nothing in the row growing -- so the picker collapses
+    back against the track. The step row carries `margin-right: auto` to
+    replace it.
+
+    Measured as a FRACTION of the head, not a pixel: the head's width is
+    tunable and a hard number would pin this test to one column split.
+    """
+    assert armed.get("pickerRight") is not None, (
+        f"this card has no strategy picker to place: {armed}")
+    reach = (armed["pickerRight"] - armed["headLeft"]) / armed["headWidth"]
+    assert reach > 0.8, (
+        "the strategy picker sits beside the step track instead of at the "
+        f"card's right edge (reaches {reach:.0%} of the head): {armed}")

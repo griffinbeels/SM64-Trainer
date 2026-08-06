@@ -4748,6 +4748,33 @@
      and only its FLOW changes here: no top margin (it is no longer a row of
      its own), and it never grows, so the name still takes the slack and
      ellipsises first exactly as it did before this moved. */
+  /* OWED, NOT DONE: the chip's own items are BASELINE-aligned, so the place
+     name rides visibly above "Step 1 of 1" on the same row -- reported
+     2026-08-06 ("'> BITDW' displayed way above the 'Step 1 of 1' text").
+     Measured: the step row's two children share a centre to the pixel, so the
+     offset is entirely INSIDE the chip, and `align-items: center` on
+     `.log-card-identity .step-chip` fixes it.
+     It is NOT applied because it costs something worse. Centring changes the
+     chip's width enough to tip the three longest seeded routes into a wrap at
+     900px and 850px, which `tests/test_step_track_fits.py::
+     test_every_seeded_route_stays_on_one_line` forbids -- isolated by
+     applying and removing exactly this one rule (11 passed without it, 2
+     failed with it). The real fix pins the marker's contribution to the
+     chip's width so alignment cannot change it, which is a change to
+     `.step-mark` and belongs with a re-measure of that gate. */
+  /* THE PICKER TAKES THE SLACK, so a segment card puts it where a star card
+     does: "the drop down for 'Standard' there should be all the way to the
+     right, like for a star's card" (2026-08-06). `.log-card-select` gives up
+     its own growth when a track shares the line, which leaves nothing in the
+     row growing and collapses the picker back against the track.
+     `margin-left` on the PICKER rather than `margin-right` on the track,
+     measured rather than assumed: the track carries `flex-shrink: 0` so it
+     can wrap instead of ellipsising a place name, and an auto margin before
+     that wrap boundary consumed the room the longest seeded routes need --
+     `tests/test_step_track_fits.py` went red at 900px and 850px. An auto
+     margin AFTER it only ever eats slack that already exists. */
+  .log-card-identity .log-card-strat-picker,
+  .log-card-identity .log-card-strat { margin-left: auto; }
   .log-card-identity .step-row {
     margin-top: 0; flex: 0 0 auto;
     /* CENTRED, not baseline. `.step-row`'s own default is `baseline`, which
