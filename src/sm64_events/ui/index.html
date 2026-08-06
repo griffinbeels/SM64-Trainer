@@ -4715,6 +4715,23 @@
     grid-area: identity;
     min-width: 0; display: flex; flex-direction: row; align-items: center; gap: .5rem;
   }
+  /* The step track sits ON the identity line (practicelog.js). It keeps its
+     own `.step-row` layout -- one module owns that markup, steptrack.js --
+     and only its FLOW changes here: no top margin (it is no longer a row of
+     its own), and it never grows, so the name still takes the slack and
+     ellipsises first exactly as it did before this moved. */
+  .log-card-identity .step-row { margin-top: 0; flex: 0 0 auto; }
+  /* WRAPS RATHER THAN ELLIPSISES, and that is the whole reason `flex-shrink`
+     is 0 above. The chips carry `min-width: 0` and per-name ellipsis of their
+     own, so a shrinkable track would quietly clip a place name instead of
+     asking for a second line -- measured, not guessed: inline-and-shrinkable
+     truncated the three longest seeded routes (HMC>Lobby>Upstairs>RR and both
+     4-stop BitFS runs) at 900px and 850px, which is exactly the guarantee
+     `tests/test_step_track_fits.py` exists to hold. Refusing to shrink turns
+     that into a wrap: a short track ("Step 1 of 1 > Key", his own case) stays
+     on the identity line at every width, and only a track that genuinely
+     cannot fit takes a line of its own. */
+  .log-card-identity { flex-wrap: wrap; }
   .log-card-select {
     /* `flex: 1 1 auto` -- the identity row's other item
        (`.log-card-strat-picker`/`.log-card-strat`) carries a fixed

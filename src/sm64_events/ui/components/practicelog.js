@@ -451,6 +451,21 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
               enabled=${nameOverflow === "shrinkToFit"} />
           </span>
         </button>
+        ${/* ON THE IDENTITY LINE, not under it (Griffin, 2026-08-05): "when
+             there's a step X of X display, we should display it right after
+             the identity display to the right... That way, we can maintain
+             the single line height design with these cards." It rendered as
+             a sibling of `.log-card-head` before, which made every armed
+             card two rows tall while every other card stayed one.
+             `StepTrack` renders nothing when `armed_detail` is null, which
+             is true of every ordinary card, so this adds no element to the
+             common case. `onEdit` -- the doorway into the definition -- stays
+             gated on `active` (amendment A8): only the entity actually being
+             practised offers "edit this movement", never a card that merely
+             happens to appear in the log. */""}
+        <${StepTrack} detail=${sec.armed_detail}
+          onEdit=${active && openSegment && isSegment(sec) && !sec.broken
+            ? () => openSegment(sec.segment_id) : null} />
         ${/* SUPERSEDED (2026-08-04, one-line-heads round): the Ready/Running
              word that used to sit here is DELETED, not merely hidden --
              Griffin: "we should remove the 'ACTIVE' indicator (the card is
@@ -541,9 +556,6 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
          only the entity actually being practised offers "edit this
          movement", never a card that merely happens to also appear in the
          log. */""}
-    <${StepTrack} detail=${sec.armed_detail}
-      onEdit=${active && openSegment && isSegment(sec) && !sec.broken
-        ? () => openSegment(sec.segment_id) : null} />
     ${isOpen && html`<div class="log-card-body">
       ${inBody && ranksBlock}
       ${rows.length

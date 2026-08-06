@@ -50,7 +50,7 @@ import { armedSegments, hasPracticeContext, hasStandardsFor,
          justCompletedSegment, justCompletedStar, practiceMode,
          selectorSurfaceId } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
-import { handIsEmpty, loneRouteOption } from "../loneoption.js";
+import { handIsEmpty, loneOption } from "../loneoption.js";
 import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
 import { caveatOf, cellBadge } from "./marks.js";
@@ -378,7 +378,10 @@ function StarRow({ t, v, stage }) {
   // Task 0025 — DDD during 16 Star offers exactly one star, so pick it.
   // Computed BEFORE the `!course` early return because a hook may not run
   // conditionally; `shown` is empty there, so the rule answers null anyway.
-  const lone = loneRouteOption(routeStars, shown);
+  // `shown` is the route-filtered list when a route is active and the whole
+  // course otherwise, which is exactly what the widened rule wants: seven
+  // stars is not one, so a no-route course still picks nothing.
+  const lone = loneOption(shown);
   useLoneRouteOption(v, lone, `star:${stage.course_id}:${lone ? lone.i : ""}`,
                      () => pick(lone.i, { quiet: true }));
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
@@ -812,16 +815,19 @@ function SegmentRow({ t, v, stage }) {
   const inRoute = routeSegs
     ? here.filter((s) => routeSegs.has(s.segment_id)) : here;
 
+  const segs = inRoute.length ? inRoute : here;   // never empty the row
+
   // Task 0025's segment half (rule 11 — the same rule, the same module).
-  // Read off `inRoute`, NOT `segs` below: `segs` falls back to the unfiltered
-  // list so the row is never empty, and a lone option in THAT list is one the
-  // route said nothing about.
-  const lone = loneRouteOption(routeSegs, inRoute);
+  // READS `segs`, the list actually drawn, since 2026-08-05. It read the
+  // route-filtered `inRoute` before, precisely so that a subarea holding one
+  // segment would NOT auto-pick — which is the case Griffin then asked for by
+  // name ("there genuinely being only one option"). The two lists differ only
+  // where the route said nothing, and a place that offers exactly one thing is
+  // now a pick whether or not a route agreed.
+  const lone = loneOption(segs);
   useLoneRouteOption(
     v, lone, `seg:${stage.level}:${stage.area}:${lone ? lone.segment_id : ""}`,
     () => pickSegmentTarget(t, lone, { quiet: true }));
-
-  const segs = inRoute.length ? inRoute : here;   // never empty the row
   const extras = armedExtraCells(
     t, v, new Set(segs.map((s) => s.segment_id)), setPicking);
   if (!segs.length && !extras.length) return html`<${StagePlaceholder} t=${t} />`;
