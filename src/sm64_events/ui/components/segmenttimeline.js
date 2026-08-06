@@ -49,6 +49,7 @@ import { getJSON, send } from "../api.js";
 import { courseUnionGroups, entityKeyForOption, parseSegmentId }
   from "../entities.js";
 import { fmtIgtShort } from "../format.js";
+import { visitCards } from "../visits.js";
 import { Icon } from "./icons.js";
 import { Modal } from "./modal.js";
 import { PickerDialog } from "./entitymodal.js";
@@ -105,8 +106,7 @@ const ROLE_WORDS = { start: "Start", stop: "Stop", finish: "Finish" };
 // secondary confirm step (spec: "point at what you just did") -- and it is a
 // TOGGLE, because with N selections there is no step to advance to that could
 // stand in for un-picking one.
-function TimelineRows({ rows, order, onToggle, emptyText }) {
-  if (!rows.length) return html`<p class="meta">${emptyText}</p>`;
+function TimelineRows({ rows, order, onToggle }) {
   return html`<div class="record-rows">
     ${rows.map((row) => {
       const index = order.indexOf(row.id);
@@ -134,6 +134,40 @@ function TimelineRows({ rows, order, onToggle, emptyText }) {
   </div>`;
 }
 
+// One card per visit: the place's own symbol and name, how many moments landed
+// there, and a fold. OPEN BY DEFAULT, so the state held is the COLLAPSED set —
+// an empty set is "everything open", which is what a first render must be.
+//
+// The header is the fold. A separate chevron button beside a heading gives one
+// affordance two hit targets, and this app's own rule is that a card is ONE hit
+// target (the context cards, 2026-07-25, where the mismatch read as a bug).
+function VisitCard({ card, collapsed, onToggleFold, icon, order, onToggleRow }) {
+  return html`<section class=${`record-card${collapsed ? " folded" : ""}`}>
+    <button type="button" class="record-card-head" aria-expanded=${!collapsed}
+        onclick=${onToggleFold}
+        title=${collapsed ? `Show what happened in ${card.label}`
+                          : `Hide what happened in ${card.label}`}>
+      <span class="record-card-chevron"><${Icon} name="chevron" size=${14} /></span>
+      ${icon && html`<img class="record-card-icon" src=${icon} alt="" />`}
+      <span class="record-card-name">${card.label || "Somewhere unrecorded"}</span>
+      <span class="count-badge">${card.rows.length}</span>
+    </button>
+    ${/* The body is ALWAYS rendered and folded by CSS, never removed from the
+         tree. A conditional render has nothing left to animate out, and every
+         state change on this machine animates (his standing rule, 2026-07-26).
+         `grid-template-rows: 1fr -> 0fr` is the one height transition that
+         needs no measured pixel value; `visibility` rides along so a folded
+         card's buttons cannot be reached by Tab, which zero height alone does
+         not prevent. */""}
+    <div class="record-card-body">
+      <div class="record-card-clip">
+        <${TimelineRows} rows=${card.rows} order=${order}
+            onToggle=${onToggleRow} />
+      </div>
+    </div>
+  </section>`;
+}
+
 export function SegmentTimeline({ t, onSaved, onCancel }) {
   // Task 11's own carried concern: the default view (view=steps) is only
   // ~10% of the journal by design, and the rarer reset/spawn-triggered
@@ -149,6 +183,14 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   // have. The server sorts too (GET /api/segments/synthesize), so the two
   // cannot disagree about which end is the start.
   const [pickedIds, setPickedIds] = useState([]);
+  // The COLLAPSED cards, keyed by their oldest row's id. Collapsed rather than
+  // open, because he asked for open by default and an empty set has to mean
+  // "everything open" — the library's own `useOpenGroups` stores the opposite
+  // (an OPEN set in localStorage, where nothing stored means all collapsed),
+  // so reusing it here would mean fighting its default on every first render.
+  // Not persisted: which trips you folded a minute ago is not a preference,
+  // and a remembered fold would hide the newest place on the next open.
+  const [folded, setFolded] = useState(new Set());
   const [synth, setSynth] = useState(null);
   const [synthErr, setSynthErr] = useState(null);
   const [name, setName] = useState("");
@@ -333,6 +375,14 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
 
   function clearPicks() { setPickedIds([]); resetDownstream(); }
 
+  function toggleFold(key) {
+    setFolded((held) => {
+      const next = new Set(held);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
+
   async function save() {
     if (!synth || !btReport) return;   // see Save's disabled= below
     setSaving(true); setSaveErr(null);
@@ -347,6 +397,7 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   // NEWEST FIRST is a display choice, made once, here. Every id handed to the
   // server keeps the journal's own order.
   const shown = rows ? [...rows].reverse() : [];
+  const cards = visitCards(shown);
   const parentGroups = t && t.view ? courseUnionGroups(
     t.view.catalog, (t.segments || []).filter((s) => !s.is_hundred_coin_engine),
     (t.vocab || {}).course_by_level || {}) : [];
@@ -385,9 +436,22 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
       </button>`}
     </div>`}
 
-    ${rows && html`<${TimelineRows} rows=${shown} order=${pickedIds}
-        onToggle=${toggleRow}
-        emptyText="Nothing recorded yet — play a bit and it will appear here." />`}
+    ${/* ONE CARD PER PLACE YOU WERE IN, his ask 2026-08-05: "That way, when we
+         observe the live viewer, we can easily and quickly identify which
+         areas contained which events." The place is server-derived (a running
+         position over the whole journal — most rows do not say where they
+         are), and the symbol is the SAME chain every other surface resolves
+         art through, addressed as `level:<id>`. */""}
+    ${rows && !shown.length && html`<p class="meta">
+      Nothing recorded yet — play a bit and it will appear here.</p>`}
+    ${rows && shown.length > 0 && html`<div class="record-cards">
+      ${cards.map((card) => html`<${VisitCard} key=${card.key} card=${card}
+        collapsed=${folded.has(card.key)}
+        onToggleFold=${() => toggleFold(card.key)}
+        icon=${card.level == null ? null
+                                  : optionIconSrc(t, "level", card.level)}
+        order=${pickedIds} onToggleRow=${toggleRow} />`)}
+    </div>`}
 
     ${synthErr && html`<p class="badx">${synthErr}</p>`}
     ${pickedIds.length >= 2 && !synth && !synthErr

@@ -35,8 +35,15 @@ def test_labels_read_like_the_thing_that_happened():
         == "Grabbed Board Bowser's Sub in Dire, Dire Docks"
     assert label_event(jev(3, "warp_entered", 0, {"level": 17, "area": 1})) \
         == "Entered a pipe in Bowser in the Dark World"
-    assert label_event(jev(4, "area_changed", 0, {"to": 3})) \
+    # `level` is part of a real area payload (detectors/area.py names the level
+    # AND the settled area) and is what tells a castle room from a course's own
+    # subarea -- see _area_changed's docstring.
+    assert label_event(jev(4, "area_changed", 0, {"level": 6, "to": 3})) \
         == "Moved into the Basement"
+    # Courses have their own areas and nothing names them, so a subarea OUTSIDE
+    # the castle names the LEVEL instead of borrowing a castle room's name.
+    assert label_event(jev(5, "area_changed", 0, {"level": 22, "to": 2})) \
+        == "Moved to another part of Lethal Lava Land"
 
 
 def test_a_warp_is_called_a_warp_outside_a_bowser_stage():

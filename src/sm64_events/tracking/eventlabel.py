@@ -74,8 +74,9 @@ from collections.abc import Callable
 
 from sm64_events.core.timefmt import format_igt
 from sm64_events.detectors.moment import MOMENTS
-from sm64_events.memory.addresses import (CASTLE_AREA_NAMES, LEVEL_NAMES,
-                                          course_name, star_name, warp_word)
+from sm64_events.memory.addresses import (CASTLE_AREA_NAMES, LEVEL_CASTLE_INSIDE,
+                                          LEVEL_NAMES, course_name, star_name,
+                                          warp_word)
 
 
 def _level_name(level_id) -> str:
@@ -96,11 +97,33 @@ def _level_changed(payload: dict) -> str | None:
 
 
 def _area_changed(payload: dict) -> str | None:
+    """"Moved into the Basement", or — outside the castle — "Moved to another
+    part of Lethal Lava Land".
+
+    A SUBAREA ONLY MEANS SOMETHING INSIDE THE CASTLE INTERIOR, the same rule
+    `tracking/topology.py::node_for` states and for the same reason: courses
+    have their own areas (SSL area 2 is the pyramid interior, LLL area 2 the
+    volcano) and nothing names them. This used to read `CASTLE_AREA_NAMES`
+    unconditionally, so an area change inside a course announced a castle room
+    it had nothing to do with — "Moved into the Lobby" while standing in Bowser
+    in the Fire Sea (2026-08-05, seen the moment the recorder started drawing
+    one card per place and the row landed inside the card that contradicted
+    it). Harmless while nothing put the two side by side; a row asserting the
+    wrong place, next to a heading naming the right one, reads as the tool
+    being broken.
+    """
     from_area, to_area = payload.get("from"), payload.get("to")
     if to_area is None or from_area == to_area:
         # same reasoning as _level_changed: from == to is bookkeeping.
         return None
-    return f"Moved into the {_area_name(to_area)}"
+    level = payload.get("level")
+    if level == LEVEL_CASTLE_INSIDE:
+        return f"Moved into the {_area_name(to_area)}"
+    if level is None:
+        # A legacy row with no level cannot be placed either way. Say what is
+        # known rather than guessing a castle room.
+        return f"Moved into area {to_area}"
+    return f"Moved to another part of {_level_name(level)}"
 
 
 def _star_collected(payload: dict) -> str | None:

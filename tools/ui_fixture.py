@@ -172,6 +172,16 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
             type="stage_changed", frame=900, timestamp_utc=now,
             payload={"course_id": course_id, "level": level, "area": 1,
                      "mode": "stars"}))
+        # `stage_changed` is BROADCAST-ONLY, so it reaches the store and never
+        # the journal — which means it says nothing about where these grabs
+        # happened to anything that reads events back. `area_changed` is the
+        # one type that names the level AND the settled area outright, and the
+        # recorder's per-place cards are derived from it alone; without this
+        # row every grab below belongs to no place and the cards render as one
+        # "Somewhere unrecorded" heap. Added 2026-08-05 with the cards.
+        await service.publish(Event(
+            type="area_changed", frame=900, timestamp_utc=now,
+            payload={"level": level, "from": None, "to": 1}))
         if not attempts:
             return
         if strat:
@@ -318,10 +328,23 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
                 f"fixture could not POST {path}: {error.code} "
                 f"{error.read()[:200]!r}") from error
 
+    # EVERY level edge is followed by its establishing `area_changed` ON THE
+    # SAME FRAME, because that is what the real detectors emit (the corpus
+    # walker's own docstring says the same, and for the same reason) -- and
+    # because `area_changed` is the ONLY thing that says where the player is.
+    # Without these rows every event in the fixture belongs to no place at
+    # all, and the recorder's per-place cards render as one "Somewhere
+    # unrecorded" heap: a gate reporting a clean page nobody is looking at,
+    # which is this rig's own documented failure mode. Added 2026-08-05 with
+    # the cards; nothing measured before them depends on an area row.
     async def arm_and_close() -> None:
         await service.publish(Event(type="level_changed", frame=5000,
                                     timestamp_utc=now,
                                     payload={"from": 17, "to": 19}))
+        await service.publish(Event(type="area_changed", frame=5000,
+                                    timestamp_utc=now,
+                                    payload={"level": 19, "from": None,
+                                             "to": 1}))
         await service.publish(Event(type="warp_entered", frame=5085,
                                     timestamp_utc=now, payload={"level": 19}))
 
@@ -329,6 +352,10 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
         await service.publish(Event(type="level_changed", frame=6000,
                                     timestamp_utc=now,
                                     payload={"from": 17, "to": 19}))
+        await service.publish(Event(type="area_changed", frame=6000,
+                                    timestamp_utc=now,
+                                    payload={"level": 19, "from": None,
+                                             "to": 1}))
 
     # A strat active BEFORE the closing edge, so the completed attempt's own
     # strat_tag stamps FIXTURE_SEGMENT_STRAT -- BitFS Pipe Entry carries no

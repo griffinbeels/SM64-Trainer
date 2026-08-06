@@ -2899,9 +2899,68 @@
     display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
     margin-bottom: .45rem;
   }
+  /* ONE CARD PER VISIT (2026-08-05). The SCROLL moved up here from
+     .record-rows: with cards, each list is short and it is the stack of
+     places that gets long, so capping each card's own rows would give a
+     screenful of tiny independent scrollers. */
+  .record-cards {
+    display: flex; flex-direction: column; gap: 6px;
+    max-height: 45vh; overflow-y: auto; padding-right: 4px;
+  }
+  /* `flex: 0 0 auto` is load-bearing, not tidying. A flex column SHRINKS its
+     children by default, so several cards competing for the 45vh above were
+     squeezed below their content — and with overflow:hidden for the rounded
+     corners, the rows at the bottom of each card were silently eaten. The
+     responsive sweep found it at 18 viewports × 3 states; nothing about the
+     rendering looked wrong, which is exactly why the probe exists. The stack
+     scrolls; a card never does. */
+  .record-card {
+    flex: 0 0 auto;
+    border: 1px solid var(--border-soft); border-radius: 9px;
+    background: rgba(8,20,34,.30); overflow: hidden;
+  }
+  /* The HEADER is the fold: one affordance, one hit target — the same rule
+     the context cards are built on (a chevron beside a heading gives one
+     gesture two targets, and the mismatch reads as a bug). */
+  .record-card-head {
+    width: 100%; display: flex; align-items: center; gap: .5rem;
+    padding: .45rem .6rem; text-align: left; cursor: pointer;
+    background: rgba(255,255,255,.03); color: var(--text);
+    border: 0; border-bottom: 1px solid var(--border-soft);
+    transition: background 140ms ease;
+  }
+  .record-card-head:hover { background: rgba(255,255,255,.07); }
+  .record-card.folded .record-card-head { border-bottom-color: transparent; }
+  .record-card-chevron {
+    display: inline-grid; place-items: center; color: var(--muted);
+    transition: transform 180ms ease;
+  }
+  .record-card.folded .record-card-chevron { transform: rotate(-90deg); }
+  .record-card-icon {
+    width: 20px; height: 20px; object-fit: contain; flex: 0 0 auto;
+  }
+  .record-card-name {
+    flex: 1 1 auto; min-width: 0; font-weight: 600; font-size: .86rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* `grid-template-rows: 1fr -> 0fr` is the one height transition that needs
+     no measured pixel value, and it interpolates in Chromium 117+ (150 here).
+     `visibility` rides along so a folded card's buttons leave the tab order —
+     zero height with overflow:hidden does not take them out of it. Its own
+     delay is what keeps the content visible THROUGH the collapse rather than
+     vanishing on frame one. */
+  .record-card-body {
+    display: grid; grid-template-rows: 1fr;
+    transition: grid-template-rows 200ms ease, visibility 0s linear 0s;
+  }
+  .record-card.folded .record-card-body {
+    grid-template-rows: 0fr; visibility: hidden;
+    transition: grid-template-rows 200ms ease, visibility 0s linear 200ms;
+  }
+  .record-card-clip { min-height: 0; overflow: hidden; }
   .record-rows {
     display: flex; flex-direction: column; gap: 4px;
-    max-height: 45vh; overflow-y: auto; padding-right: 4px;
+    padding: 4px; padding-right: 4px;
   }
   .record-row {
     min-width: 0; display: flex; align-items: center; gap: .55rem;

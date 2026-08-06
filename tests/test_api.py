@@ -628,7 +628,8 @@ def test_timeline_default_view_includes_area_changed(tmp_path):
         async def go():
             await service.publish(Event(type="area_changed", frame=10,
                                         timestamp_utc=T0,
-                                        payload={"from": 1, "to": 3}))
+                                        payload={"level": 6, "from": 1,
+                                                 "to": 3}))
         asyncio.run(go())
         default_rows = client.get(
             "/api/segments/timeline?limit=50").json()["rows"]
@@ -1272,6 +1273,104 @@ def test_timeline_rows_carry_the_in_game_timer_when_the_event_does(tmp_path):
         # output on the page beside it (they differ — the display form drops
         # an empty minutes field).
         assert "igt" not in by_type["moment_reached"]
+
+
+def test_timeline_rows_carry_where_they_happened(tmp_path):
+    # "we should segment each of the events by the course / area that the
+    # event occurred in" (2026-08-05). Most rows do not say where they are, so
+    # the place is a running position over the whole journal -- derived here
+    # because the browser holds a windowed tail with no beginning to walk from.
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            # Standing in HMC, grab a star there, leave for the castle.
+            await service.publish(Event(type="area_changed", frame=100,
+                                        timestamp_utc=T0,
+                                        payload={"level": 7, "from": None,
+                                                 "to": 1}))
+            await service.publish(Event(type="star_collected", frame=200,
+                                        timestamp_utc=T0,
+                                        payload={"course_id": 6, "star_id": 0,
+                                                 "igt_frames": 900}))
+            # The exit and its establishing area row land on ONE frame, exactly
+            # as the real detectors emit them.
+            await service.publish(Event(type="level_changed", frame=300,
+                                        timestamp_utc=T0,
+                                        payload={"from": 7, "to": 6}))
+            await service.publish(Event(type="area_changed", frame=300,
+                                        timestamp_utc=T0,
+                                        payload={"level": 6, "from": 1,
+                                                 "to": 3}))
+            await service.publish(Event(type="level_changed", frame=400,
+                                        timestamp_utc=T0,
+                                        payload={"from": 6, "to": 22}))
+        asyncio.run(go())
+        rows = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        by_label = {row["label"]: row for row in rows}
+        star = by_label["Grabbed Swimming Beast in the Cavern in Hazy Maze Cave"]
+        assert (star["place"], star["place_label"], star["place_level"]) \
+            == ("7", "Hazy Maze Cave", 7)
+        # THE ROW THAT SAYS YOU LEFT closes the card you were in, because that
+        # is what its own sentence is about -- a row is filed under where its
+        # FRAME BEGAN, not under the destination.
+        assert by_label["Exited Hazy Maze Cave into Castle Inside"]["place"] == "7"
+        # ...and so does the establishing area row that shares its frame, which
+        # is the whole reason for the per-frame collapse: judged raw it would
+        # open a one-frame card of its own between the two real places.
+        assert by_label["Moved into the Basement"]["place"] == "7"
+        # The NEXT frame is where the basement's own card begins.
+        assert by_label["Exited Castle Inside into Lethal Lava Land"]["place"] \
+            == "6:3"
+
+
+def test_timeline_reads_area_changed_only_never_level_changed(tmp_path):
+    # The obvious reading -- move the position on a level edge too -- puts a
+    # one-frame "Castle Inside" card between the course you left and the
+    # basement you are standing in, for a place nobody was ever in. Same rule
+    # `walked_steps` and `SegmentEngine.feed` already use, and this is the
+    # assertion that fails if someone "simplifies" it back.
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="area_changed", frame=100,
+                                        timestamp_utc=T0,
+                                        payload={"level": 24, "from": None,
+                                                 "to": 1}))
+            await service.publish(Event(type="level_changed", frame=200,
+                                        timestamp_utc=T0,
+                                        payload={"from": 24, "to": 6}))
+            await service.publish(Event(type="area_changed", frame=200,
+                                        timestamp_utc=T0,
+                                        payload={"level": 6, "from": 1,
+                                                 "to": 3}))
+            await service.publish(Event(type="warp_entered", frame=300,
+                                        timestamp_utc=T0,
+                                        payload={"level": 6, "to": 22}))
+        asyncio.run(go())
+        rows = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        # Two places over the whole run: Whomp's Fortress, then the Basement.
+        # A bare "6" anywhere would mean a level edge had moved the position.
+        # The leading None is the establishing area row itself -- it is filed
+        # under where its own frame began, and nothing preceded it.
+        assert [row["place"] for row in rows] == [None, "24", "24", "6:3"]
+        assert "6" not in [row["place"] for row in rows]
+
+
+def test_timeline_place_is_null_before_the_first_area_row(tmp_path):
+    # Position genuinely unknown is not a place to invent. In practice this is
+    # the first frames of a fresh database only -- the walk covers the WHOLE
+    # journal while the timeline shows its last 200 rows.
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="game_reset", frame=10,
+                                        timestamp_utc=T0, payload={}))
+        asyncio.run(go())
+        [row] = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        assert row["place"] is None and row["place_label"] is None
 
 
 def test_timeline_after_id_returns_only_what_happened_since(tmp_path):

@@ -16,9 +16,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from sm64_events.core.paths import user_icons_dir
 from sm64_events.links import star_links
+from sm64_events.memory.addresses import node_label
 from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
+from sm64_events.tracking import topology
 from sm64_events.tracking.backtest import backtest
 from sm64_events.tracking.eventlabel import label_event
 from sm64_events.tracking.lint import lint_definition
@@ -500,6 +502,54 @@ def create_api_router(service) -> APIRouter:
         order wins — fastapi-patterns)."""
         return vocab()
 
+    def _timeline_places(events) -> dict[int, str]:
+        """`{event id: world node key}` — where each journal row happened.
+
+        Two rules, both BORROWED rather than invented, and the borrowing is the
+        point: `SegmentEngine.feed` and `tracking/synthesize.py::walked_steps`
+        already collapse a walk into settled positions, so the recorder's cards
+        and the matcher's own judgement cannot disagree about where you were.
+
+        1. **Read `area_changed` and NOTHING else.** An area payload names the
+           level AND the settled area outright, where a level payload's context
+           is still the OLD level's. Reading `level_changed` too — the obvious
+           reading — puts a one-frame "Castle Inside" card between the course
+           you left and the basement you are standing in, for a place nobody
+           was ever in.
+        2. **Take the LAST candidate per FRAME, and apply it to the NEXT
+           frame.** Every castle entry loads the Lobby for one poll before
+           warping to the real area, all on ONE game frame; judged raw that
+           transient Lobby is a card nobody visited.
+
+        The consequence of (2) is that a row is filed under WHERE ITS FRAME
+        BEGAN, which is also the reading its own sentence wants: "Exited Hazy
+        Maze Cave into Castle Inside" closes HMC's card rather than opening the
+        castle's.
+
+        Rows before the first `area_changed` in the journal map to nothing —
+        position genuinely unknown, not a place to invent. In practice that is
+        the first frames of a fresh database only, since this walks the WHOLE
+        journal while the timeline shows its last 200 rows.
+        """
+        places: dict[int, str] = {}
+        settled: str | None = None
+        pending: str | None = None
+        frame = None
+        for row in events:
+            if row.frame != frame:
+                if pending is not None:
+                    settled = pending
+                pending = None
+                frame = row.frame
+            if settled is not None:
+                places[row.id] = settled
+            if row.type == "area_changed":
+                node = topology.node_for(row.payload.get("level"),
+                                         row.payload.get("to"))
+                if node is not None:
+                    pending = node
+        return places
+
     @router.get("/segments/timeline")
     def segments_timeline(limit: int = Query(default=200, ge=1, le=500),
                           view: str = "steps",
@@ -559,13 +609,26 @@ def create_api_router(service) -> APIRouter:
         form every other time on screen goes through. Shipping the string
         would put a second formatter's output on the page beside it — and the
         two really do differ, since the display form drops an empty minutes
-        field (`06"03`, not `0'06"03`) and the payload's does not."""
+        field (`06"03`, not `0'06"03`) and the payload's does not.
+
+        Each row also carries WHERE IT HAPPENED — `place` (a world node key),
+        `place_label` and `place_level` — so the recorder can cut its list into
+        one card per area (his ask, 2026-08-05: *"we should segment each of the
+        events by the course / area that the event occurred in… if I move
+        between HMC and LLL, both HMC and LLL get their own cards"*). This is
+        DERIVED HERE and cannot be derived in the browser: most rows do not say
+        where they are (`practice_reset` and `game_reset` name nothing at all),
+        so position is a running total over the whole journal, and the browser
+        holds only a windowed tail with no beginning to walk from. The walk is
+        `_timeline_places` below."""
         if view not in ("steps", "all"):
             raise HTTPException(422, "view must be steps or all")
         if service.db is None:
             raise HTTPException(503, "database unavailable")
+        events = list(service.db.events())      # ORDER BY id -- oldest first
+        places = _timeline_places(events)
         rows = []
-        for row in service.db.events():  # ORDER BY id -- oldest first
+        for row in events:
             if after_id is not None and row.id <= after_id:
                 continue
             label = label_event(row)
@@ -573,9 +636,14 @@ def create_api_router(service) -> APIRouter:
                 continue
             if view == "steps" and not _is_default_timeline_row(row):
                 continue
+            place = places.get(row.id)
             rows.append({"id": row.id, "frame": row.frame, "type": row.type,
                         "label": label, "wall_time_utc": row.wall_time_utc,
-                        "igt_frames": row.payload.get("igt_frames")})
+                        "igt_frames": row.payload.get("igt_frames"),
+                        "place": place,
+                        "place_label": node_label(place) if place else None,
+                        "place_level": (int(str(place).partition(":")[0])
+                                        if place else None)})
         return {"rows": rows[-limit:]}
 
     @router.post("/segments")
