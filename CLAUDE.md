@@ -39,8 +39,18 @@ uv run python tools/topology_map.py                  # DRAW the world graph the 
 uv run python tools/why_cancelled.py             # WHY did that movement stop being ACTIVE -- replays the session and names the rule + hop counts per cancel (stamps the frame the MOVE happened on, not the one it was judged on)
 uv run python tools/measure_topology_cancels.py       # score those topological rules against the real journal: how many completed runs would they have destroyed?
 uv run python tools/measure_entrance_sweep.py         # replay both journals under the old corpus and the new one: did the topological rules move? (they must not) and which recorded rows did
+
 uv run python tools/measure_reset_stubs.py            # how often a reset's own interrupted action was re-read onto the NEXT attempt (exact), and how fast the reload's spawn ends the hold
+node .design-sync/facade/build.mjs                   # rebuild the Claude Design bundle from .design-sync/components.mjs (the registry: one row per published component)
+uv run pytest tests/test_design_sync_registry.py -q  # that registry's own gate: does every declared prop still exist on the component
 ```
+
+**Publishing a component to Claude Design is one row** in
+`.design-sync/components.mjs` — the bundle entry, the TypeScript contract the
+design agent codes against, and the per-component doc are all generated from
+it. The loop, the machine setup, and the traps that fail SILENTLY (Preact
+renders as React through a shim; the design system CSS is lifted out of
+`index.html`; `/ui/assets` art must be inlined) are in `.design-sync/NOTES.md`.
 
 **Supported window size: 850px wide minimum, any height** (2026-07-29). One
 number in two places, compared by `tests/test_min_supported_width.py`:
