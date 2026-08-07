@@ -202,26 +202,40 @@ def test_a_tier_row_link_lands_on_that_bands_scrolled_into_view(practice_page):
 
     practice_page.wait_for(".library-target .library-section.open",
                             timeout_ms=15000)
-    # The 80ms settle timer (librarytarget.js's own comment: it beats a race
-    # against Disclose mounting the section body a tick after `open` flips)
-    # plus the smooth scrollIntoView animation -- same margin
-    # test_ui_library_target.py's own TOC-row scroll test uses.
-    time.sleep(0.6)
-
     heading = practice_page.evaluate(
         "(document.querySelector('.library-target-heading h3') || {}).textContent")
     assert heading == "Fall onto the Caged Island", heading
 
-    result = practice_page.evaluate("""
-      (() => {
-        const band = document.querySelector(
-          '.library-section.open .library-band[data-tier="Silver"]');
-        if (!band) return {found: false};
-        const rect = band.getBoundingClientRect();
-        return {found: true, scrollY: window.scrollY,
-                top: rect.top, viewportHeight: window.innerHeight};
-      })()
-    """)
+    # POLL, never a fixed sleep. Two things have to finish here: the 80ms
+    # settle timer (librarytarget.js's own comment -- it beats a race against
+    # Disclose mounting the section body a tick after `open` flips) and then a
+    # SMOOTH scrollIntoView animation, whose duration the browser chooses. A
+    # fixed margin has to be long enough for the slowest machine and is still
+    # a guess; this one was 0.6s and it went red in a full-suite run on
+    # 2026-08-07 while passing alone every time, because a smooth scroll under
+    # load outlasts the margin someone measured on an idle box. Polling costs
+    # nothing when the scroll lands fast and cannot be tuned wrong.
+    def _band_in_viewport(timeout_s=8):
+        deadline = time.time() + timeout_s
+        last = {"found": False}
+        while time.time() < deadline:
+            last = practice_page.evaluate("""
+              (() => {
+                const band = document.querySelector(
+                  '.library-section.open .library-band[data-tier="Silver"]');
+                if (!band) return {found: false};
+                const rect = band.getBoundingClientRect();
+                return {found: true, scrollY: window.scrollY,
+                        top: rect.top, viewportHeight: window.innerHeight};
+              })()
+            """)
+            if (last["found"] and last["scrollY"] > 0
+                    and 0 <= last["top"] <= last["viewportHeight"]):
+                return last
+            time.sleep(0.05)
+        return last
+
+    result = _band_in_viewport()
     assert result["found"], "no Silver band anchor on the open section"
     assert result["scrollY"] > 0, (
         f"expected the page to have scrolled toward the band: {result}")

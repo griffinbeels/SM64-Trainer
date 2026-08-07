@@ -182,9 +182,20 @@ def test_clicking_a_toc_row_scrolls_to_its_band(library_page):
         rows[rows.length - 1].click();   // the fastest tier's row -- its band sits lowest
       })()
     """)
+    # POLL for the scroll rather than sleeping a fixed margin: a smooth
+    # scrollIntoView plays out over a browser-chosen number of frames, and
+    # under full-suite load it outlasts any margin measured on an idle
+    # machine. The sibling test in test_ui_library_links.py used 0.6s here and
+    # went red in a full-suite run on 2026-08-07 while passing alone every
+    # time; both are polls now.
     import time
-    time.sleep(0.4)   # smooth scrollIntoView plays out over a few frames
-    after = library_page.evaluate("window.scrollY")
+    deadline = time.time() + 8
+    after = before
+    while time.time() < deadline:
+        after = library_page.evaluate("window.scrollY")
+        if after > before:
+            break
+        time.sleep(0.05)
     assert after > before, (before, after)
 
 

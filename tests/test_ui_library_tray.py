@@ -157,9 +157,20 @@ def test_setting_a_trim_start_and_restarting_updates_the_first_iframe_src(librar
     """)
 
     library_page.evaluate("document.querySelector('.library-grid-restart').click()")
-    time.sleep(0.2)   # a fresh <iframe> mounts on the next commit
-    after = library_page.evaluate(
-        "document.querySelectorAll('.library-grid iframe')[0].src")
+    # POLL for the remounted iframe rather than sleeping a fixed 0.2s (the
+    # deferred Minor from Task 5's review: every sibling wait in this file
+    # already polls). A fresh <iframe> mounts on the next commit, and under
+    # full-suite load "the next commit" is not a fixed number of milliseconds
+    # -- the same shape made the library-links scroll test go red in a
+    # full-suite run on 2026-08-07 while passing alone every time.
+    deadline = time.time() + 8
+    after = before
+    while time.time() < deadline:
+        after = library_page.evaluate(
+            "document.querySelectorAll('.library-grid iframe')[0].src")
+        if "start=12" in after:
+            break
+        time.sleep(0.05)
     assert "start=12" in after, (before, after)
 
 
