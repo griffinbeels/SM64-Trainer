@@ -716,6 +716,13 @@ def build_entity_strategies(db, service, ek: str) -> dict:
         strategies.append({
             "name": name, "rank": rank, "division": division, "score": score,
             "pb_display": format_igt(pb_row["frames"]) if pb_row else None,
+            # Whether this ladder came off the Ultimate Sheet (fitted, at a
+            # measured 39-42% same-tier accuracy against a real vetted ladder)
+            # rather than the community's own vetted standards -- ranks.
+            # is_fitted's own contract. Without this the picker cannot tell
+            # the two apart, and a sheet-derived strategy grades attempts
+            # presented identically to a Daily Star one.
+            "fitted": bool(ranks is not None and ranks.is_fitted(ek, name)),
         })
 
     return {"entity": ek, "kind": kind, "current": current,

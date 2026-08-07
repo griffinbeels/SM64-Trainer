@@ -2239,7 +2239,27 @@ def test_entity_strategies_report_an_ungraded_strategy_as_unranked_not_missing(t
     out = build_entity_strategies(db, svc, "star:2:2")
     strat_row = next(s for s in out["strategies"] if s["name"] == "fast")
     assert strat_row == {"name": "fast", "rank": None, "division": None,
-                         "score": None, "pb_display": None}
+                         "score": None, "pb_display": None, "fitted": False}
+
+
+def test_entity_strategies_flags_a_sheet_derived_ladder_as_fitted(tmp_path):
+    """A strategy adopted from the Ultimate Sheet grades attempts exactly like
+    a community-vetted Daily Star one -- the picker can only warn the user
+    it's measured at 39-42% same-tier accuracy if this payload says which is
+    which (ranks/standards.py::is_fitted's own contract)."""
+    from sm64_events.tracking.views import build_entity_strategies
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    svc.ranks = _ranks(tmp_path)                # vetted-only: defines "fast"
+    svc.ranks.apply_sheet_ladders(
+        {"star:2:2": {"strategies": {"sheet strat": {"Mario": 11.0}}}})
+
+    out = build_entity_strategies(db, svc, "star:2:2")
+    vetted = next(s for s in out["strategies"] if s["name"] == "fast")
+    fitted = next(s for s in out["strategies"] if s["name"] == "sheet strat")
+    assert vetted["fitted"] is False
+    assert fitted["fitted"] is True
 
 
 def test_a_defaulted_segment_disallows_the_blank_strategy(tmp_path):
