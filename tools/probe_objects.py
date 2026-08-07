@@ -346,13 +346,124 @@ def report(path: Path) -> int:
     return 0
 
 
+# ------------------------------------------------- what Mario CAUSED (--pool)
+
+POOL_CAPTURE_PATH = Path("data/object_pool_probe.jsonl")
+
+
+def pool_watch(out_path: Path) -> int:
+    """Every object in the pool whose `oInteractStatus` or `oAction` MOVES,
+    whether or not Mario's own pointers ever name it.
+
+    His framing, 2026-08-07, and it is the whole design of this mode: *"the
+    switch press is the switch's, but that switch press never occurs without
+    mario. by association, it's therefore mario's action; the switch is
+    pressed by mario because YOUR ACTIONS triggered the switch's code.
+    Defeating an enemy is a result of MARIO defeating the enemy."*
+
+    `watch()` above cannot see any of that, and its blindness was MEASURED
+    rather than argued: he ground-pounded the blue coin switch in Whomp's
+    Fortress and again in Tick Tock Clock and nothing was recorded, because a
+    floor switch is pressed by its own behaviour code reading Mario's
+    position and never lands in `MARIO_OBJECT_POINTERS`. So this mode reads
+    the POOL instead of the pointers, and asks each slot what changed.
+
+    Four fields, from the decomp's own `include/object_fields.h` and
+    cross-checked against the two offsets this project measured itself
+    (`oPosX` 0x0A0, `oHomeX` 0x164 — both exactly what addresses.py already
+    had): `oInteractStatus` is the engine writing down what Mario just did,
+    `oAction` is the object's own state machine (a switch idle -> pressed, an
+    enemy alive -> dying), `oHealth` and `oInteractType` are context.
+
+    READ-ONLY and safe beside a live session, like the rest of this file.
+    One line per change, so the question it answers is "which behaviours
+    report anything at all, and on which field" — the answer decides whether
+    a landmark can be built from state at all, and the ledger says not to
+    build one until it exists (round 10).
+    """
+    mem = Pj64Memory()
+    if not mem.attach():
+        print("Could not attach -- is PJ64 running with the ROM loaded?")
+        return 1
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = out_path.open("a", encoding="utf-8")
+    print(f"Attached read-only; writing {out_path}")
+    print("Play. Ground-pound a blue coin switch, defeat a Goomba, open a")
+    print("door, enter Big Boo's Haunt. CTRL+C to stop.\n")
+
+    watched = {"interact_status": A.OBJECT_INTERACT_STATUS,
+               "action": A.OBJECT_ACTION,
+               "health": A.OBJECT_HEALTH}
+    previous: dict[tuple[int, str], int] = {}
+    previous_frame = -1
+    seen = 0
+
+    while True:
+        time.sleep(1 / 120)
+        frame = mem.read_u32(A.GLOBAL_TIMER)
+        if frame == previous_frame:
+            continue
+        backward = frame < previous_frame
+        previous_frame = frame
+        if backward:
+            previous.clear()          # reload: the pool is a different pool
+            continue
+        level = mem.read_s16(A.CURR_LEVEL)
+        area = mem.read_s16(A.CURR_AREA)
+        # ONE read of the whole pool, then decode locally: 240 slots x 4
+        # separate reads would cost more than the poll interval.
+        pool = mem.read_block(A.OBJECT_POOL, A.OBJECT_COUNT * A.OBJECT_SIZE)
+        for slot in range(A.OBJECT_COUNT):
+            base = slot * A.OBJECT_SIZE
+            behaviour = int.from_bytes(
+                pool[base + A.OBJECT_BEHAVIOR:base + A.OBJECT_BEHAVIOR + 4], "big")
+            if not behaviour:
+                continue
+            for name, offset in watched.items():
+                value = int.from_bytes(
+                    pool[base + offset:base + offset + 4], "big", signed=True)
+                key = (slot, name)
+                if previous.get(key) == value:
+                    continue
+                was = previous.get(key)
+                previous[key] = value
+                if was is None:
+                    continue          # first sight is not a change
+                record = {
+                    "frame": frame, "level": level, "area": area, "slot": slot,
+                    "behaviour": behaviour, "field": name,
+                    "was": was, "now": value,
+                    "mario_action": mem.read_u32(A.MARIO_ACTION),
+                    "interact_type": int.from_bytes(
+                        pool[base + A.OBJECT_INTERACT_TYPE:
+                             base + A.OBJECT_INTERACT_TYPE + 4], "big"),
+                    "pos": list(struct.unpack_from(
+                        ">fff", pool, base + A.OBJECT_POS)),
+                    "home": list(struct.unpack_from(
+                        ">fff", pool, base + A.OBJECT_HOME_POS)),
+                }
+                handle.write(json.dumps(record) + "\n")
+                handle.flush()
+                seen += 1
+                print(f"  [{seen:4d}] f{frame} bhv {behaviour:#010x} slot "
+                      f"{slot:3d}  {name}: {was} -> {value}")
+                sys.stdout.flush()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", action="store_true",
                         help="analyse what was captured instead of capturing")
-    parser.add_argument("--path", type=Path, default=CAPTURE_PATH)
+    parser.add_argument("--pool", action="store_true",
+                        help="watch the WHOLE object pool for state Mario "
+                             "caused (oInteractStatus/oAction/oHealth), "
+                             "instead of only what his own pointers name")
+    parser.add_argument("--path", type=Path, default=None)
     args = parser.parse_args()
-    return report(args.path) if args.report else watch(args.path)
+    if args.pool:
+        return pool_watch(args.path or POOL_CAPTURE_PATH)
+    path = args.path or CAPTURE_PATH
+    return report(path) if args.report else watch(path)
 
 
 if __name__ == "__main__":

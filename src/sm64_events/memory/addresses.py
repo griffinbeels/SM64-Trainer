@@ -116,6 +116,27 @@ OBJECT_HOME_POS = 0x164      # Vec3f oHome (spawn x/y/z) within a slot
 # kinds may key on it.
 OBJECT_POS = 0xA0            # Vec3f oPos (current x/y/z) within a slot
 
+# WHAT MARIO JUST DID TO THIS OBJECT — the game's own record of the
+# association, and Griffin's framing is what makes these the right read
+# (2026-08-07): *"the switch press is the switch's, but that switch press
+# never occurs without mario. by association, it's therefore mario's action…
+# Defeating an enemy is a result of MARIO defeating the enemy."* An object
+# does not have to reach Mario's engagement pointers to know he acted on it;
+# `oInteractStatus` is where the engine writes it down.
+#
+# Offsets are the decomp's own (`include/object_fields.h`, fetched
+# 2026-08-07) and the header states each one in a comment. VALIDATED against
+# this project's two independently-measured offsets in the same table:
+# `oPosX` reads 0x0A0 and `oHomeX` reads 0x164, which is exactly what
+# OBJECT_POS and OBJECT_HOME_POS above were measured to be. Two hits means
+# the field table lines up with the layout we actually read.
+# VERIFY (live gate): none of the four has been watched in RAM yet — that is
+# what `tools/probe_objects.py --pool` exists to do.
+OBJECT_INTERACT_TYPE = 0x130   # u32 oInteractType: what it offers Mario
+OBJECT_INTERACT_STATUS = 0x134 # s32 oInteractStatus: what Mario just did
+OBJECT_ACTION = 0x14C          # s32 oAction: its own state machine
+OBJECT_HEALTH = 0x184          # s32 oHealth
+
 # Mario actions entered the moment a star (or key) is grabbed — decomp sm64.h.
 ACT_STAR_DANCE_EXIT = 0x00001302               # live-verified 2026-06-10
 ACT_STAR_DANCE_WATER = 0x00001303
