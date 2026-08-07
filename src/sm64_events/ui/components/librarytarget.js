@@ -66,21 +66,35 @@ const approachIdentity = (approach) =>
 const sectionAnchorId = (approach) => `lib-section-${approachIdentity(approach)}`;
 const bandAnchorId = (approach, tier) =>
   `lib-band-${approachIdentity(approach)}-${slug(tier)}`;
-// The tray's own item identity (Task 5 fix round 1). NOT `entry.video`: the
-// controller measured it colliding across sibling ENTITIES on the real
-// bundled snapshot -- 8 videos cited by more than one entity (e.g. JoSniffy's
-// youtu.be/ANqWo4v9qfc evidences BOTH star:2:4 "Fall onto the Caged Island"
-// and star:2:5 "Blast Away the Wall"), plus 605 videos cited at more than one
-// TIME. One long recording standing as evidence for two different stars is
-// ordinary in this corpus, not a rarity -- so a video-keyed tray silently
-// read the second star's identical-runner entry as "already added" the
-// instant the first was, which is the tray's whole cross-entity use, not an
-// edge case. Scoped to the owning approach the same way every other identity
-// in this file already is (`approachIdentity`, target-scoped), plus the
-// entry's own runner+time -- the two fields that actually distinguish "this
-// evidence, for THIS star" from the same video's role on a sibling one.
+// The tray's own item identity (Task 5 fix round 1, then fix round 2). NOT
+// `entry.video` alone: the controller measured it colliding across sibling
+// ENTITIES on the real bundled snapshot -- 8 videos cited by more than one
+// entity (e.g. JoSniffy's youtu.be/ANqWo4v9qfc evidences BOTH star:2:4 "Fall
+// onto the Caged Island" and star:2:5 "Blast Away the Wall"), plus 605
+// videos cited at more than one TIME. One long recording standing as
+// evidence for two different stars is ordinary in this corpus, not a
+// rarity -- so a video-keyed tray silently read the second star's
+// identical-runner entry as "already added" the instant the first was,
+// which is the tray's whole cross-entity use, not an edge case. Scoped to
+// the owning approach the same way every other identity in this file
+// already is (`approachIdentity`, target-scoped), plus the entry's own
+// runner+time.
+//
+// FIX ROUND 2: `runner+time_cs` alone was still not unique -- measured over
+// every video-bearing entry this page can reach (approaches only;
+// subsections never render here), one real collision survived:
+// star:16:0 "Xiah cycle pipe entry", approach "131-xiah-pipe", Benji, both
+// at time_cs 5023, but TWO DIFFERENT recordings
+// (youtube.com/watch?v=B9wXEVjv1WU and .../watch?v=U42IDMKO180) -- the same
+// trick filmed twice. `video` is now a THIRD suffix. If a future reader's
+// instinct is "we key on the video again, wasn't that the original bug" --
+// it was NOT: the original bug was keying on video ALONE, with no
+// target-scoped prefix. Appending it here to an already
+// approach+runner+time key can only ever SPLIT a key that used to be
+// shared, never merge two that used to differ, so it cannot reintroduce
+// that collision.
 const entryTrayKey = (approach, entry) =>
-  `${approachIdentity(approach)}::${entry.runner}::${entry.time_cs}`;
+  `${approachIdentity(approach)}::${entry.runner}::${entry.time_cs}::${entry.video}`;
 
 // `t.view`'s active strategy for this entity — `entitysection.js::entityKey`
 // is the read-side identity every section already carries, and `last_strat`

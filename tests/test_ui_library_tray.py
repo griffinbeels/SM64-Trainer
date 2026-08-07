@@ -283,3 +283,105 @@ def test_a_video_shared_across_sibling_entities_does_not_collide_in_the_tray(lib
     library_page.wait_for(".library-tray-chip:nth-child(2)", timeout_ms=5000)
     assert library_page.evaluate(
         "document.querySelectorAll('.library-tray-chip').length") == 2
+
+
+# ---- fix round 2 (controller finding, self-measured): the one remaining
+# collision after approach+runner+time -------------------------------------
+
+def test_two_different_recordings_of_the_same_run_do_not_collide_in_the_tray(library_page):
+    """FIX ROUND 2. Measured directly against the real bundled snapshot
+    (every video-bearing entry reachable from this page -- approaches only,
+    since subsections never render here): after fix round 1's
+    approach+runner+time key, exactly ONE real collision survived --
+    star:16:0 "Xiah cycle pipe entry" (target "Bowser in the Dark World Red
+    Coins", group "Bowser Courses"), Benji, both entries at time_cs 5023, but
+    TWO DIFFERENT recordings of the same trick (a JP-version upload,
+    B9wXEVjv1WU, and a US-version upload, U42IDMKO180). `entryTrayKey` now
+    appends the video as a third field."""
+    library_page.evaluate("document.querySelector('.entity-back').click()")
+    library_page.wait_for(".library-courses", timeout_ms=15000)
+    opened_group = library_page.evaluate("""
+      (() => {
+        const cell = Array.from(document.querySelectorAll('.library-courses .starcell'))
+          .find((c) => c.querySelector('.starname')?.textContent === 'Bowser Courses');
+        if (!cell) return 'no Bowser Courses group cell';
+        cell.click();
+        return 'clicked';
+      })()
+    """)
+    assert opened_group == "clicked", opened_group
+    library_page.wait_for(".library-group", timeout_ms=15000)
+    picked_target = library_page.evaluate("""
+      (() => {
+        const cell = Array.from(document.querySelectorAll('.library-group .starcell'))
+          .find((c) => c.querySelector('.starname')?.textContent
+            === 'Bowser in the Dark World Red Coins');
+        if (!cell) return 'no "Bowser in the Dark World Red Coins" cell';
+        cell.click();
+        return 'clicked';
+      })()
+    """)
+    assert picked_target == "clicked", picked_target
+    library_page.wait_for(".library-target .library-section.open", timeout_ms=15000)
+    # This target's several sections are not auto-expanded to "Xiah cycle
+    # pipe entry" by default -- open it explicitly. Auto-expand's own effect
+    # (LibraryTarget's one-shot `useEffect`) fires ASYNCHRONOUSLY after the
+    # section headers first render, so a click issued before it settles gets
+    # silently overwritten the instant it does -- caught by this exact test
+    # flaking on its own MUTATION run (`.library-section.open` sometimes
+    # named the target's own first approach instead), never by a plain run,
+    # since a plain run doesn't care which section is open. Waiting for the
+    # auto-expanded `.open` class to already exist, above, is what orders
+    # this click strictly AFTER that effect.
+    time.sleep(0.3)
+    opened_section = library_page.evaluate("""
+      (() => {
+        const heads = Array.from(document.querySelectorAll('.library-section-head'));
+        const head = heads.find((h) =>
+          h.querySelector('.library-section-name').textContent === 'Xiah cycle pipe entry');
+        if (!head) return 'no "Xiah cycle pipe entry" section';
+        head.click();
+        return 'clicked';
+      })()
+    """)
+    assert opened_section == "clicked", opened_section
+    library_page.wait_for(".library-section.open .library-example", timeout_ms=10000)
+
+    def benji_cards_script(index, extra):
+        return f"""
+          (() => {{
+            const cards = Array.from(document.querySelectorAll(
+              '.library-section.open .library-example'))
+              .filter((c) => c.querySelector('.library-example-runner')
+                ?.textContent === 'Benji');
+            if (cards.length !== 2) return `expected 2 Benji cards, found ${{cards.length}}`;
+            {extra}
+          }})()
+        """
+
+    add_first = library_page.evaluate(benji_cards_script(0, """
+            const btn = cards[0].querySelector('.library-example-plus');
+            if (!btn || btn.disabled) return 'first Benji card has no enabled + button';
+            btn.click();
+            return 'clicked';
+    """))
+    assert add_first == "clicked", add_first
+    library_page.wait_for(".library-tray-chip", timeout_ms=5000)
+    assert library_page.evaluate(
+        "document.querySelectorAll('.library-tray-chip').length") == 1
+
+    # The causal check: adding the FIRST recording must not disable the
+    # second -- a fresh evaluate() call, after Preact has had a tick to
+    # commit the first add (ui-core.md: reading in the same tick as the
+    # dispatch sees the PRE-render value).
+    add_second = library_page.evaluate(benji_cards_script(1, """
+            const btn = cards[1].querySelector('.library-example-plus');
+            if (!btn) return 'no plus button on the second Benji card';
+            if (btn.disabled) return 'disabled -- the collision is back';
+            btn.click();
+            return 'clicked';
+    """))
+    assert add_second == "clicked", add_second
+    library_page.wait_for(".library-tray-chip:nth-child(2)", timeout_ms=5000)
+    assert library_page.evaluate(
+        "document.querySelectorAll('.library-tray-chip').length") == 2
