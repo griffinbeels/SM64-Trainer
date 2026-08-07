@@ -129,7 +129,7 @@ function useEntityStrategies(entityKey) {
   return data;
 }
 
-function ExampleCard({ entry, tier, hidden, trayKey, entityKey, inTray, foreignVersion, onAdd }) {
+function ExampleCard({ entry, tier, hidden, trayKey, entityKey, inTray, showVersion, onAdd }) {
   const [playing, setPlaying] = useState(false);
   const embed = entry.video ? youtubeEmbed(entry.video) : null;
   const thumb = entry.video ? youtubeThumb(entry.video) : null;
@@ -161,20 +161,29 @@ function ExampleCard({ entry, tier, hidden, trayKey, entityKey, inTray, foreignV
     </div>
     <div class="library-example-meta">
       <span class="library-example-tier"><${RankIcon} tier=${tier} size=${16} /></span>
-      ${/* FINAL REVIEW FIX (HIGH: JP/US band contamination). `.library-
-           example-meta` is a fixed 4-column grid (icon/runner/time/+), so the
-           badge nests INSIDE the runner cell rather than adding a 5th column
-           -- a plain grid child would shift the time and "+" columns for
-           every card that lacks one. This run's own `entry.version`
-           disagrees with the ladder the band above it was fit from -- it
-           still earns a real tier (the user's combined-unless-annotated rule
-           permits that), but the screen must say so rather than let it read
-           as a same-population time. */""}
+      ${/* FINAL REVIEW FIX (HIGH: JP/US band contamination), RULED ROUND 2:
+           a COLUMN, not an exception marker. `.library-example-meta` is a
+           fixed 4-column grid (icon/runner/time/+), so the badge nests
+           INSIDE the runner cell rather than adding a 5th column -- a plain
+           grid child would shift the time and "+" columns for every card
+           that lacks one. `showVersion` (Section's own `mixedVersions`) says
+           whether THIS APPROACH mixes both ROM versions at all -- every row
+           then wears its OWN version, unconditionally, never compared
+           against whichever ladder happens to be showing. The first version
+           of this fix badged only entries disagreeing with the shown ladder
+           and measured 108 of 112 badged in the worst real band -- an
+           exception marker on 96% of a band reads as the SECTION being
+           mislabelled, not the rows being annotated, and the badge set
+           INVERTED every time the JP/US toggle flipped (correct, and looked
+           like a bug). Decoupling from the toggle turns this into a plain
+           fact about the run, independent of the chip below (a statement
+           about the LADDER) -- one attribute plus one statement, not two
+           vocabularies for the same question. */""}
       <span class="library-example-runner-wrap">
         <span class="library-example-runner">${entry.runner}</span>
-        ${foreignVersion
+        ${showVersion && entry.version
           ? html`<span class="chip library-example-version"
-              title=${`This run is ${entry.version === "jp" ? "JP" : "US"} -- graded here against a ladder fitted from ${entry.version === "jp" ? "US" : "JP"} times.`}>
+              title=${`Recorded on the ${entry.version === "jp" ? "Japanese" : "US"} version of the game.`}>
               ${entry.version === "jp" ? "JP" : "US"}
             </span>`
           : ""}
@@ -217,23 +226,25 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
   const [jp, setJp] = useState(false);
   const hasJp = !!approach.ladder_jp;
   const ladder = (hasJp && jp ? approach.ladder_jp : approach.ladder) || {};
-  // Which ROM population `ladder` was actually FIT from -- library/ladders.py
-  // stamps `ladder_version` on the approach itself ("us"/"jp"/null), and
-  // `ladder_jp` (when it exists) is only ever derived from JP times
-  // (`fit_payload`'s own comment). null means the row's entries carry no
-  // version distinction at all, so this project's own combined-unless-
-  // annotated rule applies and no entry can be "foreign" against it.
-  //
-  // FINAL REVIEW FIX (HIGH): before this, every entry of an approach banded
-  // against ONE ladder regardless of which ROM it was recorded on -- measured
-  // on the shipped snapshot at 67 approaches / 4,659 entries banded against
-  // the OTHER version's ladder (Blast to the Stone Pillar's own top band: 108
-  // of 112 listed runs were JP times read against a US cutoff). The fix is
-  // per-entry LABELLING, not re-sorting bands by version: the user's standing
-  // rule is combined-unless-annotated, and where a row's data DOES annotate a
-  // difference the screen must say so rather than pretend the mixed band is
-  // uniform -- see the badge on ExampleCard below.
-  const ladderVersion = hasJp && jp ? "jp" : (approach.ladder_version || null);
+  // FINAL REVIEW FIX (HIGH: JP/US band contamination), RULED ROUND 2: every
+  // entry of an approach used to band against ONE ladder regardless of which
+  // ROM it was recorded on with nothing on screen saying so -- the ORIGINAL
+  // fix badged an entry only when its version disagreed with whichever ladder
+  // happened to be showing, and measured 108 of 112 badged in the worst real
+  // band (Blast to the Stone Pillar's Mario band). An exception marker on 96%
+  // of a band is not an exception marker -- it reads as the SECTION being
+  // mislabelled, and the badge set inverted every time the JP/US toggle
+  // flipped, correctly, which looked like a bug because it was the same
+  // shape as one. `mixedVersions` decouples the badge from the shown ladder
+  // entirely: whenever an approach's own entries carry BOTH ROM versions,
+  // every entry wears its own, always -- a plain fact about the run (a
+  // COLUMN), independent of the chip below (a statement about the ladder).
+  // An approach with only one version present (or none tagged at all) never
+  // badges anything, matching the combined-unless-annotated rule: nothing to
+  // annotate when there is only one population.
+  const mixedVersions = useMemo(() => new Set(
+    (approach.entries || []).map((entry) => entry.version).filter(Boolean),
+  ).size > 1, [approach.entries]);
   const bands = useMemo(() => bandsOf(ladder, approach.entries),
     [ladder, approach.entries]);
   const marioKey = approach.ladder && approach.ladder.Mario != null
@@ -323,7 +334,7 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
                   entry=${entry} tier=${band.tier} trayKey=${trayKey} entityKey=${entityKey}
                   hidden=${!matchesRunner(entry, query)}
                   inTray=${trayKeys.has(trayKey)}
-                  foreignVersion=${!!(ladderVersion && entry.version && entry.version !== ladderVersion)}
+                  showVersion=${mixedVersions}
                   onAdd=${onAdd} />`;
             })}
           </div>
@@ -371,9 +382,18 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
   // uniquely whether or not it has an entity at all.
   const pageIdentity = rows.map((row) => row.index).join(",");
 
+  // FINAL REVIEW FIX (minor: ambiguous headers), RULED ROUND 2: `_target`
+  // only disambiguates when this ENTITY PAGE holds more than one target --
+  // gated on `rows.length > 1` here rather than left to Section's own
+  // `_target !== name` check, which fired on 257 of 509 approaches (any
+  // strategy name differing from its star's label, the ordinary case) when
+  // only 9 of 112 entity pages actually hold more than one target to
+  // disambiguate between. On the other 103 pages it repeated the page's own
+  // `<h3>` verbatim on 178 of 281 sections -- noise dressed as a label.
   const approaches = useMemo(() => sectionOrder(
     rows.flatMap((target) => (target.approaches || []).map((approach) => (
-      { ...approach, _target: target.label, _targetIndex: target.index }))),
+      { ...approach, _target: rows.length > 1 ? target.label : null,
+        _targetIndex: target.index }))),
   ), [rows]);
 
   const activeStrat = activeStratFor(t && t.view, entityKey);
