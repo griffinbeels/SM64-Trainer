@@ -90,32 +90,48 @@ MOMENTS: tuple[Moment, ...] = (
 class MomentDetector:
     """Emits `moment_reached {kind, ordinal, level, area, action}`."""
 
-    # THERE IS NO DISPLAY LAG, and a `DISPLAY_LAG_FRAMES = 1` sat here for a
-    # day. A moment reads `counter + IgtClock.DISPLAY_TICK`, exactly what a
-    # PIPE reads -- and the pipe was live-verified against Usamune's own screen
-    # (0'35"96, 2026-07-31, same clock call, same still-running display).
+    # A DOOR'S DISPLAY LAG: Usamune's screen reads one game frame HIGHER than
+    # `counter + IgtClock.DISPLAY_TICK` on the frame Mario enters a door, so a
+    # moment is `counter + 2`.
     #
-    # WHY THE +1 LOOKED MEASURED. His 2026-08-05 report -- "the practice log
-    # consistently shows about one frame faster than the time in Usamune" --
-    # was read off the PRACTICE LOG, which at that moment was not showing a
-    # moment's number at all: a definition armed by a savestate reload's
+    # THE EVIDENCE IS ONE SCREENSHOT HOLDING BOTH NUMBERS (2026-08-06), and
+    # that sentence is the whole point of this comment. The emulator reads
+    # 1'06"83; the recorder's top row, same frame, reads 1'06"80. Journal id
+    # 2279 is that door -- raw `counter` 2003, `action_timer` 1 -- so Usamune
+    # showed frame 2005 while we published 2004. Not an inference about where
+    # an older measurement came from: two numbers, one frame, 3 centiseconds
+    # apart, which at 30 fps is exactly one frame.
+    #
+    # THIS CONSTANT HAS MOVED BY +-1 IN THREE ROUNDS, which is why the
+    # instrument matters more than the value. `tools/score_moment_clock.py`
+    # scores any reading off his screen against the RAW COUNTER the row
+    # carries -- never against what we published, which is the number under
+    # suspicion and changes whenever this does -- so doors journaled either
+    # side of a flip stay comparable and one screenshot settles the next
+    # disagreement. Its first output is the pair above.
+    #
+    # WHY A DOOR DIFFERS FROM A PIPE, which is the reason this looked wrong
+    # twice: `warp.py` was live-verified at `counter + DISPLAY_TICK` against
+    # Usamune's screen (0'35"96, 2026-07-31, same clock call), and reasoning
+    # from that to "a door must read the same" is what deleted this constant on
+    # 2026-08-06. The doors say otherwise and they are the measurement. Which
+    # of the two mechanisms in the payload comment below produces the extra
+    # frame is still open; the offset is not.
+    #
+    # WHAT ROUND 6 GOT RIGHT, kept because it is still true: his 2026-08-05
+    # report ("the practice log consistently shows about one frame faster than
+    # the time in Usamune") was read off the PRACTICE LOG, which was not
+    # showing a moment's number at all -- a definition armed by a reload's
     # `spawned` missed `_close`'s "the counter zeroed on the arm frame" test by
-    # one and banked the `global_timer` DELTA instead. That delta equalled the
-    # moment's own reading in 31 of 31 runs, so the -1 he measured belonged to
-    # the delta and `segments.IGT_ARM_SKEW_FRAMES` is what fixed it. The +1 was
-    # then applied to a DIFFERENT number nobody had compared against the
-    # emulator, and it overshot by exactly one -- his report the next day, and
-    # the exact reversal is the tell: "all the timer entries are one frame
-    # slower than expected (i.e., they should all be one frame faster)".
-    #
-    # The constant's own comment named the hole while the constant stood: none
-    # of the three mechanisms checked accounted for the DIRECTION. Two fixes
-    # landed in one commit and only the second one moved what he saw, which is
-    # what let the first ride along unfalsified.
+    # one and banked the `global_timer` DELTA. `segments.IGT_ARM_SKEW_FRAMES`
+    # fixed that and stands. Both fixes were needed and only one of them
+    # survived the round; a clean Lakitu run's delta is `counter + 1`, which is
+    # exactly why one report could be satisfied by either and why the residual
+    # came straight back.
     #
     # The two inert payload fields below are what made this a measurement
-    # rather than an argument -- every door in the journal reads
-    # `igt_frames == counter + 2`, 20 of 20, zero variance -- so keep them.
+    # rather than an argument -- keep them.
+    DISPLAY_LAG_FRAMES = 1
 
     def __init__(self, target_active: Callable[[], bool] = lambda: True):
         # Kept as an INJECTION POINT, defaulting permissive: `build()` no
@@ -174,7 +190,8 @@ class MomentDetector:
         event's payload, so a consumer never re-derives the display form.
         """
         self._counts[kind] = self._counts.get(kind, 0) + 1
-        igt_frames, source = self._clock.igt_at(curr.global_timer, curr)
+        reading, source = self._clock.igt_at(curr.global_timer, curr)
+        igt_frames = reading + self.DISPLAY_LAG_FRAMES
         # WHICH door, as opposed to how many doors ago. The ordinal above stays
         # -- it is a property of the moment now rather than its name, which is
         # his own sentence -- and `landmark` is what a label and a subsection key

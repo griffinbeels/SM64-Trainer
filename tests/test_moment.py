@@ -136,6 +136,24 @@ def test_the_target_gate_is_read_every_tick_not_once_at_construction():
     assert [e.payload["kind"] for e in later] == ["door_open"]
 
 
+# -- the number on his screen -------------------------------------------------
+# THE EVIDENCE IS A SCREENSHOT PAIR, and this is the third round on one
+# constant, so it is quoted here rather than summarised. His screenshot of
+# 2026-08-06 holds BOTH numbers in one frame: the emulator reads 1'06"83, the
+# recorder's top row reads 1'06"80. Journal id 2279 is that door -- raw
+# `counter` 2003, so Usamune showed frame 2005 and we published 2004.
+# Usamune = counter + 2, and `tools/score_moment_clock.py` is what scored it
+# (and what scores the next disagreement, from ONE screenshot, without
+# anybody recalling a comparison).
+
+def test_a_moment_carries_the_number_usamune_shows_not_the_raw_counter():
+    events = run([snap(ACT_WALKING, 100, igt_overall=2003),
+                  snap(ACT_PULLING_DOOR, 101, igt_overall=2003)])
+    assert events[0].payload["counter"] == 2003
+    assert events[0].payload["igt_frames"] == 2005
+    assert events[0].payload["igt"] == "1'06\"83"
+
+
 # -- the registry -------------------------------------------------------------
 
 def test_every_moment_kind_is_unique():

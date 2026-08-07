@@ -27,6 +27,7 @@ uv run python tools/probe_warp_block.py              # live gate, ANSWERED 2026-
 uv run python tools/probe_objects.py                 # live gate, ANSWERED 2026-08-05: WHICH door/pole/enemy is its SPAWN POINT, not its pool slot; --report lists the distinct things touched (read-only, safe beside a live session)
 uv run python tools/verify_star_stop.py              # live gate, ANSWERED 2026-08-01: the screen is Usamune's RESULT store once it SETTLES (10/10)
 uv run python tools/derive_xcam.py                   # live gate, ANSWERED + now the REGRESSION gate: scores what we journal against Usamune (just play; MIDAIR grabs are the ones that measure)
+uv run python tools/score_moment_clock.py            # a door writes no Usamune result, so ONE screenshot of the emulator is the ground truth: --usamune 1'06"83 names the row and the offset from the RAW COUNTER (comparable across any flip of the constant)
 uv run python tools/dev_cleanup.py                   # kill orphaned dev/harness servers (auto-runs at session start)
 uv run python tools/dedupe_journal.py data/tracker.db  # scan double-journaled events; --fix repairs (server stopped)
 uv run python tools/what_happened.py                 # READ BACK what the human just played -- journal events AND what the UI DREW, one timeline (--no-ui for events only)

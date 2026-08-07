@@ -341,12 +341,13 @@ COUNTER_AT_DOOR = 233               # Usamune's counter as he takes the door
 # +1 because the counter drops the frame AFTER the spawn (see `counter`
 # below), so this is the frame whose counter reads COUNTER_AT_DOOR.
 DOOR_FRAME = SPAWN_FRAME + 1 + COUNTER_AT_DOOR
-# counter + IgtClock.DISPLAY_TICK, and NOTHING else -- exactly what a pipe
-# reads, and the pipe is the one live-verified against Usamune's own screen.
-# A second `MomentDetector.DISPLAY_LAG_FRAMES` term sat here for a day; it was
-# measured off the DELTA (see the test below) and applied to this number, which
-# put every door a frame slow. Retired 2026-08-06.
-DOOR_DISPLAY = COUNTER_AT_DOOR + 1
+# counter + IgtClock.DISPLAY_TICK + MomentDetector.DISPLAY_LAG_FRAMES. A PIPE
+# reads one lower and was live-verified there; a DOOR reads this, measured off
+# a screenshot holding both numbers in one frame (2026-08-06, journal id 2279:
+# Usamune 1'06"83 against our 1'06"80 on raw counter 2003). Reasoning from the
+# pipe to the door is what deleted the term for a day. `moment.py` carries the
+# pair; `tools/score_moment_clock.py` scores the next one.
+DOOR_DISPLAY = COUNTER_AT_DOOR + 2
 
 
 def seeded_lakitu_def() -> SegmentDef:
@@ -425,25 +426,26 @@ def test_lakitu_banks_usamunes_number_not_the_frame_delta():
     NEXT frame, so `_close`'s "the counter zeroed on the arm frame" test missed
     by one and the `global_timer` DELTA stood. `segments.IGT_ARM_SKEW_FRAMES`.
 
-    THE ONE THAT WAS NOT: a `MomentDetector.DISPLAY_LAG_FRAMES = 1` shipped in
-    the same commit, on the reading of 16 samples that had all been taken off
-    the delta -- which equalled the moment's own number in 31 of 31 runs, so
-    the two were indistinguishable and the +1 was applied to the wrong one. It
-    put every door a frame ABOVE Usamune and came straight back: "all the timer
-    entries are one frame slower than expected" (2026-08-06). Retired; a moment
-    now reads `counter + DISPLAY_TICK`, the same as a live-verified pipe.
+    THE ONE THAT LOOKED LIKE IT: `MomentDetector.DISPLAY_LAG_FRAMES = 1`
+    shipped in the same commit, on 16 samples all read off that same delta --
+    so nothing in that round could tell WHICH of the two numbers the offset
+    belonged to, and round 6 removed it. His next screenshot held Usamune and
+    the recorder in ONE frame and settled it the other way: a door really does
+    read `counter + 2`. Restored 2026-08-06 with the pair written into
+    `moment.py`, and `tools/score_moment_clock.py` exists so the next
+    disagreement is scored rather than recalled.
     """
     attempt = one_success(journal(a_lakitu_run()), seeded_lakitu_def())
     assert attempt.closed_by == "moment_reached"
     assert attempt.timed_by == "igt"
     assert attempt.rta_frames == DOOR_DISPLAY
-    # THE TWO NUMBERS AGREE HERE, and that is the finding rather than a weak
-    # fixture: a clean Lakitu run's delta IS `counter + DISPLAY_TICK`, which is
-    # why 31 of 31 runs could not tell the delta from the moment's own reading
-    # and why a +1 measured on one got applied to the other. So `timed_by` is
-    # the discriminator this test rests on, not the value -- mutating
-    # `IGT_ARM_SKEW_FRAMES` to 0 flips it to "delta" and fails above.
-    assert DOOR_FRAME - SPAWN_FRAME == DOOR_DISPLAY
+    # WHY ONE REPORT COULD BE SATISFIED BY EITHER FIX, kept as an assertion
+    # because it is the trap: a clean Lakitu run's DELTA is `counter + 1`, one
+    # frame under the door's own reading, so "the log reads a frame fast" was
+    # true of the delta AND of the moment, and fixing either one alone looked
+    # like it had worked. `timed_by` is the discriminator this test rests on --
+    # mutating `IGT_ARM_SKEW_FRAMES` to 0 flips it to "delta" and fails above.
+    assert DOOR_FRAME - SPAWN_FRAME == DOOR_DISPLAY - 1
 
 
 def test_a_subsection_armed_ON_the_zeroing_event_does_take_usamunes_number():
