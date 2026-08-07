@@ -196,6 +196,22 @@ def bundled_sheet_library() -> Path | None:
     return cand if cand.exists() else None
 
 
+def bundled_library_overrides() -> Path | None:
+    """The human's audit corrections to our READING of the sheet
+    (tools/audit_library.py), shipped beside a frozen exe (PyInstaller
+    _MEIPASS), else the in-repo file when running from source. Mirrors
+    bundled_rank_standards() exactly. Without this, a server-side refresh
+    (library/store.py::LibraryStore.refresh) rebuilds the library with no
+    overrides at all -- and since a refreshed copy carries a newer
+    sheet_revision, the un-corrected copy then wins over the bundled,
+    corrected one until the next release."""
+    if is_frozen():
+        cand = Path(getattr(sys, "_MEIPASS", "")) / "library_overrides.json"
+        return cand if cand.exists() else None
+    cand = Path(__file__).resolve().parent.parent / "data" / "library_overrides.json"
+    return cand if cand.exists() else None
+
+
 def bundled_sheet_ladders() -> Path | None:
     """Ladders derived from the Ultimate Sheet. Its own file, never merged into
     rank_standards.seed.json, so a fitted ladder structurally cannot overwrite
