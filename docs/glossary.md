@@ -82,10 +82,16 @@ The specific thing in the world a [[moment]] happened to — that door, that
 pole, that bob-omb — and that warp, since a warp inside a course leads nowhere
 new and so has no destination to name it. The game rebuilds its object list every time an area
 loads, so we name a landmark by where it SPAWNED rather than by which slot of
-that list holds it: the slot changes and the spawn point does not. He names
-one in the [[recorder]] and every row it ever appeared in takes that name.
+that list holds it: the slot changes and the spawn point does not. Every
+landmark also belongs to a KIND — the game's own script for what the thing
+is — and we ship a name for every kind in the game, derived from the
+decompilation's symbol table, so a row says "a bob-omb" without anyone
+naming anything. He names one specific landmark in the [[recorder]] and
+every row it ever appeared in takes that name; a name he types always beats
+a shipped one.
 
 - **Lives** — `src/sm64_events/core/landmark.py` (the key),
+  `tools/corpus_behaviors.py` (every kind, named),
   `src/sm64_events/data/defaults.seed.json` (the names we ship)
 - **Not** — the count in a [[moment]]'s name. "The 5th door you opened" counts
   doors; a landmark IS the door, and the count is something it has.

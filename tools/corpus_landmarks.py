@@ -21,7 +21,20 @@ while the probe was running.
 
 The keys are LONG and that is on purpose — a key you can read is a key you can
 check against `tools/probe_objects.py --report` without decoding anything.
+
+THE KIND LEVEL IS GENERATED, since round 8 item 2 (2026-08-07): every behavior
+script in the US ROM ships named, derived from STROOP's symbol map through
+`corpus_behaviors.py` — the base anchoring, the 8-of-8 validation against his
+own play, and the name-case grammar all live there. Nobody hand-names two
+dozen kinds any more; what stays hand-written here is the INSTANCE rows, his
+own labels from the sessions that found them.
 """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import corpus_behaviors  # noqa: E402
 
 
 def kind(behaviour: int, name: str) -> dict:
@@ -36,18 +49,24 @@ def at(level: int, area: int, behaviour: int, home: tuple, name: str) -> dict:
     return {"seed_key": f"landmark:{key}", "key": key, "name": name}
 
 
-# Behaviour pointers observed in his 2026-08-05 session. Named from what Mario
-# was DOING when he touched them, not from a symbol table we do not have: the
-# first family always fired ACT_PULLING_DOOR / ACT_PUSHING_DOOR and left him in
-# the same area, the second always ended in ACT_WARP_DOOR_SPAWN somewhere else.
+# Behaviour pointers observed in his 2026-08-05 session, BEFORE the symbol
+# table arrived. Named then from what Mario was DOING when he touched them —
+# the first family always fired ACT_PULLING_DOOR / ACT_PUSHING_DOOR and left
+# him in the same area, the second always ended in ACT_WARP_DOOR_SPAWN
+# somewhere else — and the decomp agrees: bhvDoor and bhvDoorWarp exactly.
+# That agreement is part of the base constant's evidence (corpus_behaviors).
 DOOR = 0x800EBC8C
 WARP_DOOR = 0x800EBC7C
 
 CASTLE_INSIDE, BASEMENT, LOBBY = 6, 3, 1
 
-LANDMARKS: tuple[dict, ...] = (
-    kind(DOOR, "Door"),
-    kind(WARP_DOOR, "Warp Door"),
+# Every behavior script, named — bhvDoor -> "door", bhvBobomb -> "bob-omb",
+# bhvBowser -> "Bowser" — so "Pick up an object" can never appear for a thing
+# the ROM has a name for.
+_KIND_ROWS = tuple(kind(pointer, name)
+                   for pointer, name in corpus_behaviors.kind_names())
+
+LANDMARKS: tuple[dict, ...] = _KIND_ROWS + (
     # HIS OWN LABELS, verbatim from the session that found the key: "21/22 are
     # me opening the door to HMC", "23/24 are me opening the door to the moat
     # area leading to the castle grounds", "25/26 is a different door leading

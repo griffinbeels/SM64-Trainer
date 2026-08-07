@@ -166,7 +166,7 @@ def _warp_entered(payload: dict, names: dict) -> str | None:
     reads: the landmark work reached moments and never reached warps, so his
     two BoB warps were literally the same sentence twice and neither could be
     renamed. Named and unnamed differ only in the noun, exactly as a moment's
-    do -- and a KIND name ("Pipe") is the cheaper level, covering every
+    do -- and a KIND name ("warp pipe") is the cheaper level, covering every
     instance in the game at once.
     """
     level = payload.get("level")
@@ -179,8 +179,9 @@ def _warp_entered(payload: dict, names: dict) -> str | None:
     named, kind_named = _landmark_names(payload, names)
     if named:
         return f"Entered the {named} in {_level_name(level)}"
-    what = kind_named.lower() if kind_named else warp_word(level)
-    return f"Entered a {what} in {_level_name(level)}"
+    if kind_named:
+        return f"Entered {_kind_phrase(kind_named)} in {_level_name(level)}"
+    return f"Entered a {warp_word(level)} in {_level_name(level)}"
 
 
 # detectors/key.py's FIGHT_END_LEVELS values -> the human-facing object of
@@ -213,29 +214,44 @@ def _landmark_names(payload: dict, names: dict) -> tuple[str | None, str | None]
     THE one reading of a landmark out of a payload — every labeller in
     `_READS_THE_CATALOGUE` goes through it, so "how a row finds its name in
     the catalogue" cannot fork per event type. The two-level scheme is the
-    catalogue's own: an instance name ("HMC Door") beats a kind name ("Door"),
+    catalogue's own: an instance name ("HMC Door") beats a kind name ("door"),
     and a kind name covers every instance in the game at once."""
     landmark = payload.get("landmark") or {}
     return names.get(landmark.get("key")), names.get(landmark.get("kind_key"))
 
 
+def _kind_phrase(name: str) -> str:
+    """A kind name as it sits mid-sentence: "a bob-omb", "an exclamation box",
+    "Bowser".
+
+    The catalogue's case convention IS the grammar (corpus_behaviors.py ships
+    it): a common noun is seeded lowercase and gets an article, a proper noun
+    is seeded capitalized and stands bare — "Pick up a bob-omb" but "Pick up
+    Bowser", never "a Bowser". Derived from the name's own first letter, so
+    there is no second table to keep in step with the catalogue."""
+    if name[:1].islower():
+        article = "an" if name[0] in "aeiou" else "a"
+        return f"{article} {name}"
+    return name
+
+
 def _moment_reached(payload: dict, names: dict) -> str | None:
     """"Open the HMC Door in Castle Inside" once he has named that door, and
-    "Open a door (#5) in Big Boo's Haunt" until he has.
+    "Open a door in Big Boo's Haunt" from the shipped kind catalogue.
 
-    THE ORDINAL IS THE FALLBACK NOW, not the identity. His ruling 2026-08-05:
-    *"it's less about the specific order of doors, and more about WHICH door is
-    being entered"*. So a named landmark drops the count entirely — two runs
-    that take the doors in a different order read the same sentence — and an
-    unnamed one keeps the old behaviour, where the number is the only thing
-    distinguishing the fifth door from the fourth. Unnamed still prints "#1"
-    on nothing, because most subsections have one unambiguous boundary and a
-    "#1" on every row is noise.
+    A NAMED LANDMARK DROPS THE ORDINAL — his ruling 2026-08-05: *"it's less
+    about the specific order of doors, and more about WHICH door is being
+    entered"* — and since round 8 item 2 a named KIND drops it too: the
+    catalogue ships every behavior in the ROM named (corpus_behaviors.py), so
+    keeping the ordinal on kind-named rows would have put two number formats
+    on almost every row ("Pick up an object (#5)" beside the repeat counter's
+    "(3)", his screenshot). The repeat counter is the one number left; the
+    ordinal survives only on a row naming nothing at all, where it is still
+    the only thing distinguishing the fifth from the fourth.
 
-    A KIND name (`kind:800ebc8c` -> "Door") is a second, cheaper level: it
-    replaces the moment's generic word for every instance in the game at once,
-    so naming twenty families is most of the work and naming a door is the
-    part he only does where it matters.
+    A KIND name (`kind:800ebc8c` -> "door") replaces the moment's generic
+    word for every instance in the game at once; grammar comes from the
+    name's own case (`_kind_phrase`).
     """
     kind = payload.get("kind")
     if kind is None:
@@ -246,7 +262,7 @@ def _moment_reached(payload: dict, names: dict) -> str | None:
     if named:
         return f"{_verb(what)} the {named} in {where}"
     if kind_named:
-        what = f"{_verb(what)} a {kind_named.lower()}"
+        return f"{_verb(what)} {_kind_phrase(kind_named)} in {where}"
     ordinal = payload.get("ordinal")
     if ordinal and ordinal > 1:
         return f"{what} (#{ordinal}) in {where}"

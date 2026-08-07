@@ -58,6 +58,29 @@ def test_reconcile_leaves_user_rows(tmp_path):
     assert any(s["id"] == uid and s["seed_key"] is None for s in db.segment_defs())
 
 
+def test_a_seeded_kind_name_refreshes_but_his_rename_wins(tmp_path):
+    """Round 8 item 2's one behavioral requirement on the seed side: the
+    catalogue ships 510 kind names, a newer seed may respell any of them,
+    and a name HE typed must survive every future refresh (same seed_dirty
+    contract the segments above prove — this pins the landmark table's
+    `WHERE seed_dirty = 0` doing the same job)."""
+    db = Database(tmp_path / "t.db")
+    seed1 = {"seed_version": 1, "segments": [], "routes": [],
+             "landmarks": [{"seed_key": "landmark:kind:800ee2f4",
+                            "key": "kind:800ee2f4", "name": "bobomb"}]}
+    reconcile_defaults(db, seed1)
+    assert db.landmark_names()["kind:800ee2f4"] == "bobomb"
+    seed2 = json.loads(json.dumps(seed1)); seed2["seed_version"] = 2
+    seed2["landmarks"][0]["name"] = "bob-omb"
+    reconcile_defaults(db, seed2)
+    assert db.landmark_names()["kind:800ee2f4"] == "bob-omb", \
+        "an untouched seeded name refreshes with the seed"
+    db.name_landmark("kind:800ee2f4", "bomb guy")
+    reconcile_defaults(db, seed2)
+    assert db.landmark_names()["kind:800ee2f4"] == "bomb guy", \
+        "his own name must win over the seeded one, forever"
+
+
 def test_reconcile_leaves_dirty_route_alone(tmp_path):
     db = Database(tmp_path / "t.db")
     reconcile_defaults(db, SEED_V1)

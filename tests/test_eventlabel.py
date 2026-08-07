@@ -355,11 +355,13 @@ def test_a_named_warp_reads_as_the_thing_he_named():
 
 
 def test_a_named_KIND_covers_every_warp_of_that_family_at_once():
+    """The catalogue's case convention IS the grammar (corpus_behaviors.py):
+    a lowercase kind name is a common noun and gets an article."""
     row = jev(10, "warp_entered", 0,
               {"level": 9, "area": 1, "to": 9,
                "landmark": {"key": "9:1:aabbccdd:10,0,20",
                             "kind_key": "kind:aabbccdd"}})
-    assert label_event(row, {"kind:aabbccdd": "Hole"}) \
+    assert label_event(row, {"kind:aabbccdd": "hole"}) \
         == "Entered a hole in Bob-omb Battlefield"
 
 
@@ -402,5 +404,31 @@ def test_a_pickup_keeps_its_verb_when_the_thing_is_named():
                "landmark": {"key": "9:1:cc:4,5,6", "kind_key": "kind:cc"}})
     assert label_event(row, {"9:1:cc:4,5,6": "Bob-omb"}) \
         == "Pick up the Bob-omb in Bob-omb Battlefield"
-    assert label_event(row, {"kind:cc": "Bob-omb"}) \
+    assert label_event(row, {"kind:cc": "bob-omb"}) \
         == "Pick up a bob-omb in Bob-omb Battlefield"
+
+
+def test_a_proper_noun_kind_stands_bare():
+    """The other half of the case convention: a capitalized kind name is a
+    proper noun and takes NO article — "Pick up Bowser", never "a Bowser"
+    (round 8 item 2; the seeded catalogue ships Bowser's tail this way)."""
+    row = jev(15, "moment_reached", 0,
+              {"kind": "pickup", "level": 33, "ordinal": 1,
+               "landmark": {"key": "33:1:dd:0,0,0", "kind_key": "kind:dd"}})
+    assert label_event(row, {"kind:dd": "Bowser"}) \
+        == "Pick up Bowser in Bowser 2 Arena"
+
+
+def test_a_kind_named_row_drops_the_ordinal():
+    """With every behavior in the ROM named, keeping the ordinal on
+    kind-named rows would put two number formats on almost every row — his
+    screenshot: "Pick up an object (#5)" beside the repeat counter's "(3)".
+    The repeat counter is the one number left; a row naming NOTHING keeps
+    the ordinal, where it is still the only discriminator."""
+    payload = {"kind": "door_open", "level": 6, "ordinal": 5,
+               "landmark": {"key": "6:3:ee:1,2,3", "kind_key": "kind:ee"}}
+    named = label_event(jev(16, "moment_reached", 0, payload),
+                        {"kind:ee": "door"})
+    assert named == "Open a door in Castle Inside"
+    unnamed = label_event(jev(17, "moment_reached", 0, payload), {})
+    assert "(#5)" in unnamed

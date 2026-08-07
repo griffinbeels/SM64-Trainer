@@ -470,7 +470,10 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
         # both states. Applied directly rather than through reconcile: the
         # catalogue does not depend on the 84-segment corpus this fixture
         # deliberately skips, and a named row is the whole point of the row.
-        service.db.seed_landmark_name("kind:800ebc8c", "Door", "landmark:kind")
+        # Lowercase, per the catalogue's case convention (corpus_behaviors.py):
+        # a common noun's case IS its grammar, and "Door" would render bare as
+        # a proper noun ("Open Door in...").
+        service.db.seed_landmark_name("kind:800ebc8c", "door", "landmark:kind")
         service.db.seed_landmark_name(
             "6:3:800ebc8c:1126,-1074,-2661", "HMC Door", "landmark:hmc")
 
