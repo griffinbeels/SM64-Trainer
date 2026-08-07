@@ -407,9 +407,7 @@ The screen for browsing every [[approach]] the [[Ultimate Sheet]] documents.
 Opens straight on whichever [[star]] or [[segment]] you last practiced,
 otherwise a course grid to browse into; open one and its [[approach]]es lay
 out beginner to expert, each one's community times banded by the [[rank]]
-they earn. The [[tray]] collects [[entry]] rows to compare side by side, and
-Study in Compare hands the whole [[tray]] to Compare's own transport, playing
-them back in lockstep.
+they earn. The [[tray]] collects [[entry]] rows to compare side by side.
 
 - **Lives** — the tab (`src/sm64_events/ui/components/library.js`,
   `src/sm64_events/ui/components/librarynav.js`,
@@ -497,8 +495,10 @@ grading it.
 
 ### Book mark
 
-The icon on a [[practice log]] card that opens the [[Library tab]] straight to
-that card's own [[target]] and last-played [[strategy]]. A caller with
+The icon on a [[practice log]] card that opens the [[Library tab]] at
+whatever [[target]] and last-played [[strategy]] the card's own [[standards
+ladder]] actually grades against — its own [[target]], except a paired
+Bowser reds card, which opens its paired [[star]] instead. A caller with
 nowhere to send it omits the icon outright, never a disabled one with no
 doorway behind it.
 
