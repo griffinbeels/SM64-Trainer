@@ -272,6 +272,40 @@ def test_caveat_keys_agree():
         "nobody would look for it.")
 
 
+# --- 7. the Library page's own rank/frame-rate copies ----------------------
+
+LIBRARYMODEL_JS = UI / "components" / "librarymodel.js"
+
+
+def test_library_model_ranks_and_frame_rate_agree():
+    """librarymodel.js keeps its own copy of the rank ladder (reversed to
+    slowest-first, Iron dropped -- the Library bands times against a fitted
+    or vetted LADDER, which never carries Iron: it is classify.py's floor
+    tier and carries no threshold of its own) and the 30fps game clock,
+    because it must stay import-free for tests/test_library_model_js.py to
+    drive it under node with no Preact. Both are REAL top-level exports, so
+    this imports the module directly rather than extracting a declaration --
+    the module never touches Preact and has no reason to. Disagreeing here
+    means a Library band renders a tier the ranked ladder does not have, or
+    trims a video clip against the wrong frame rate."""
+    from sm64_events.core.timefmt import GAME_FPS
+    from sm64_events.ranks.classify import RANK_NAMES
+
+    js = run_node(
+        f"import {{ RANKS, GAME_FPS }} from {LIBRARYMODEL_JS.as_uri()!r};\n"
+        "console.log(JSON.stringify({ ranks: RANKS, gameFps: GAME_FPS }));")
+    expected_ranks = [r for r in reversed(RANK_NAMES) if r != "Iron"]
+    assert js["ranks"] == expected_ranks, (
+        "librarymodel.js's RANKS (slowest -> fastest, no Iron) no longer "
+        f"matches ranks/classify.py's RANK_NAMES reversed.\n"
+        f"  librarymodel.js RANKS:              {js['ranks']}\n"
+        f"  classify.py RANK_NAMES (reversed):  {expected_ranks}")
+    assert js["gameFps"] == GAME_FPS, (
+        f"librarymodel.js's GAME_FPS ({js['gameFps']}) disagrees with "
+        f"core/timefmt.py's GAME_FPS ({GAME_FPS}) -- a Library video trim "
+        "would be converted against the wrong clock.")
+
+
 # --- the guards themselves --------------------------------------------------
 
 def test_the_guards_can_still_fail():
