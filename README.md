@@ -97,6 +97,10 @@ never ends up in a clip you upload.
 local file, or a browser upload — with one frame-accurate transport driving
 both in lockstep.
 
+**Debug report.** Something behaving oddly? **Settings → Debug report** writes
+a single file capturing what the trainer was doing (logs, recent events,
+health) and shows it in Explorer — attach it to your bug report.
+
 ---
 
 ## Develop

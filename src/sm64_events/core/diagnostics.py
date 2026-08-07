@@ -128,4 +128,6 @@ def write_report(report_dir: Path, markdown: str, *,
     out.write_text(markdown, encoding="utf-8", newline="")
     for stale in sorted(report_dir.glob("debug-report-*.md"))[:-keep]:
         stale.unlink()
-    return out
+    # Resolved: the path is shown to the user and handed to the reveal
+    # endpoint, and from source data_root() is cwd-relative.
+    return out.resolve()
