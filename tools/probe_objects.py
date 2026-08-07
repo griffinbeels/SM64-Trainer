@@ -390,6 +390,10 @@ def pool_watch(out_path: Path) -> int:
     print(f"Attached read-only; writing {out_path}")
     print("Play. Ground-pound a blue coin switch, defeat a Goomba, open a")
     print("door, enter Big Boo's Haunt. CTRL+C to stop.\n")
+    # FLUSH: print() to a pipe is block-buffered on Windows, so piping this
+    # showed a blank screen until the first change landed -- indistinguishable
+    # from a failed attach, which is the one thing the banner rules out.
+    sys.stdout.flush()
 
     watched = {"interact_status": A.OBJECT_INTERACT_STATUS,
                "action": A.OBJECT_ACTION,

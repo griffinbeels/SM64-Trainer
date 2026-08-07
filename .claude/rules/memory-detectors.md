@@ -301,6 +301,19 @@ such a row were measured over the real journal and both are wrong: refusing it
 vanishes 54 of 106 recorded segment successes, waving it through fabricates
 105.
 
+**AN ENTRANCE CAN FIRE NO TOUCH AT ALL, and Big Boo's Haunt is one** (his
+probe run, 2026-08-07): five entrances produced clean touches — 2 paintings
+(`sWarpDest` at +0, level byte at +77) and 3 pipes/holes (op-4 countdown,
+written +19..+21, level at +23/24), both known shapes reproduced exactly —
+and BBH produced nothing, because its cage never enters a
+`WARP_ENTRY_ACTIONS` action. *"it's not a portrait, but is just a small cage
+that mario teleports into. he triggers an animation for entering it. that's
+the timer we want to detect."* `probe_warp_block.py --entries` is the
+instrument for it: it triggers on the LEVEL CHANGE instead of the touch and
+prints the run-up (every action edge in the preceding 150 frames, stamped by
+distance from the level byte, plus a verdict on whether any warp-entry action
+occurred). The action it names is unmeasured until he runs it.
+
 **OPEN, and the one thing this change does not know.** Of 202 castle→course
 entries after the detector existed, 128 carry a touch and the rest do not. Every
 touched arrival is unpaused, which is a clean one-way separation, but the
