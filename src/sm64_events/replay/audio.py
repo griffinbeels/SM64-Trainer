@@ -60,6 +60,18 @@ def device_name_hosting_pid(pid: int) -> str | None:
         from pycaw.constants import CLSID_MMDeviceEnumerator
         from pycaw.pycaw import AudioUtilities
 
+        # This scan runs on watchdog/rescan threads that never touched COM —
+        # comtypes only auto-initializes the thread that first IMPORTS it, so
+        # the frozen exe logged 33x "CoInitialize has not been called"
+        # (2026-06-17) and the endpoint fallback silently never engaged.
+        # Deliberately never balanced with CoUninitialize: the threads are
+        # long-lived re-scanners, and uninitializing per call risks releasing
+        # COM wrappers after their apartment is gone.
+        try:
+            comtypes.CoInitialize()
+        except OSError:
+            pass  # already initialized on this thread in another mode — usable
+
         devenum = comtypes.CoCreateInstance(
             CLSID_MMDeviceEnumerator, IMMDeviceEnumerator,
             comtypes.CLSCTX_INPROC_SERVER)
@@ -114,6 +126,11 @@ def session_peak_for_pid(pid: int) -> float:
         from pycaw.api.endpointvolume import IAudioMeterInformation
         from pycaw.api.mmdeviceapi import IMMDeviceEnumerator
         from pycaw.constants import CLSID_MMDeviceEnumerator
+
+        try:
+            comtypes.CoInitialize()   # same COM-naive-thread hole as the
+        except OSError:               # endpoint scan above — one fix, both doors
+            pass
 
         devenum = comtypes.CoCreateInstance(
             CLSID_MMDeviceEnumerator, IMMDeviceEnumerator,
