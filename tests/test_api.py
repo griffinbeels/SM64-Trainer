@@ -2340,3 +2340,58 @@ def test_merge_endpoint_response_carries_lint_warnings(tmp_path):
             "first_id": first_id, "second_id": second_id, "name": "WF -> SSL"})
         assert r.status_code == 200
         assert r.json()["warnings"] == []
+
+
+def test_timeline_counts_repeats_of_the_same_sentence(tmp_path):
+    """His ask, 2026-08-06, against EIGHT consecutive rows reading "Open the
+    Maze Door in Hazy Maze Cave": *"if we've already recorded that specific
+    landmark, it should show as a duplicate… we simply see a counter rising"*.
+    Naming the door correctly removed the ordinal that used to separate two
+    rows, and the count is what puts it back.
+
+    The key is the SENTENCE, not the landmark, which is why nothing extra was
+    needed for arrivals (item 7 asked for the counter there too): rows that
+    read identically are exactly the rows he cannot tell apart.
+    """
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            for _ in range(3):
+                await service.publish(Event(
+                    type="moment_reached", frame=1000, timestamp_utc=T0,
+                    payload={"kind": "door_open", "level": 7, "ordinal": 1,
+                             "landmark": {"key": "7:1:door:1,2,3"}}))
+            await service.publish(Event(
+                type="moment_reached", frame=1000, timestamp_utc=T0,
+                payload={"kind": "textbox", "level": 7, "ordinal": 1}))
+        asyncio.run(go())
+        rows = client.get(
+            "/api/segments/timeline?limit=50").json()["rows"]
+        doors = [r for r in rows if r["label"].startswith("Open")]
+        assert [r["repeat"] for r in doors] == [1, 2, 3]
+        assert [r["label"] for r in doors] == [
+            "Open a door in Hazy Maze Cave",
+            "Open a door in Hazy Maze Cave (2)",
+            "Open a door in Hazy Maze Cave (3)"]
+        other = [r for r in rows if r["label"].startswith("Trigger")]
+        assert [r["repeat"] for r in other] == [1], "a different sentence counts alone"
+
+
+def test_timeline_repeat_count_survives_the_live_tail(tmp_path):
+    """The count is taken BEFORE the `after_id` skip. Without that the
+    recorder's own live-tail fetch -- which is how every row after the first
+    reaches the screen -- would restart it at 1 on every poll, so the surface
+    the feature exists for would be the one place it never worked."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            for _ in range(4):
+                await service.publish(Event(
+                    type="moment_reached", frame=1000, timestamp_utc=T0,
+                    payload={"kind": "door_open", "level": 7, "ordinal": 1}))
+        asyncio.run(go())
+        everything = client.get("/api/segments/timeline?limit=50").json()["rows"]
+        cutoff = everything[1]["id"]
+        tail = client.get(
+            f"/api/segments/timeline?limit=50&after_id={cutoff}").json()["rows"]
+        assert [r["repeat"] for r in tail] == [3, 4]

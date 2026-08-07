@@ -52,6 +52,10 @@ import { fmtIgtShort } from "../format.js";
 import { visitCards } from "../visits.js";
 import { Icon } from "./icons.js";
 import { Modal } from "./modal.js";
+import { readRecorder, useUiLog } from "../uilog.js";
+
+// Module-level, so the array identity is stable across renders.
+const RECORDER_READERS = [readRecorder];
 import { PickerDialog } from "./entitymodal.js";
 import { optionIconSrc } from "./entityicons.js";
 import { StepPicker } from "./steptrack.js";
@@ -281,6 +285,15 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   // Serialises the tail fetches. Not a debounce: latency IS the deliverable
   // here, so a burst must not be made to wait -- what this prevents is two
   // fetches in flight racing each other into the row list out of order.
+  // WHAT THIS SURFACE ACTUALLY SHOWED, and when. Its own call rather than the
+  // practice page's, because that page is unmounted while this tab is open.
+  // Every latency report about the recorder so far has been unanswerable for
+  // want of this: the journal says what the GAME did, and nothing said what
+  // the LIST held (2026-08-06, *"I've clearly grabbed this star, but I don't
+  // see the event in the recorder"* -- measured innocent on the server side,
+  // 18 frames from the touch to the x-cam and published on the same frame).
+  const recorderRef = useRef(null);
+  useUiLog(recorderRef, RECORDER_READERS);
   const tailing = useRef(false);
   const tailAgain = useRef(false);
 
@@ -468,6 +481,12 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   return html`<${Modal} title="Record a segment" icon="segments" size="large"
       onClose=${onCancel}
       description="Play, then point at what you just did. Pick the moment it started, the moment it finished, and any stops in between.">
+    ${/* A plain block wrapper, and the only thing it does is give the UI log a
+         root to read this surface from. `.modal-body` is block flow, so it
+         changes no layout -- the alternative was a `rootRef` prop on the
+         SHARED modal, which is a change to a primitive nine other screens use
+         for the sake of one. */""}
+    <div ref=${recorderRef} class="record-observed">
     <label class="record-view-toggle">
       <input type="checkbox" checked=${view === "all"}
           onchange=${(e) => setView(e.target.checked ? "all" : "steps")} />
@@ -570,6 +589,7 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
           disabled=${!btReport || saving || lintHasError} onclick=${save}>
         <${Icon} name="save" size=${16} />${" "}${saving ? "Saving…" : "Save segment"}
       </button>`}
+    </div>
     </div>
   <//>`;
 }

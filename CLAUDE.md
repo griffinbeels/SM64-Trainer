@@ -227,8 +227,9 @@ Contract changes land on main first, then dependent work fans out. Merge with
   and disappearing ("it briefly lingered… and then was removed"; "after opening
   the usamune menu / pausing, it accidentally got rid of the Bowser 1 → WF
   segment") and neither was answerable from the journal, because nothing
-  recorded what was drawn. `ui/uilog.js` reads the RENDERED practice page back
-  — the selector's cells and every objective card — and posts a record whenever
+  recorded what was drawn. `ui/uilog.js` reads the RENDERED page back
+  — the selector's cells, every objective card, the practice log, and (since
+  2026-08-06) the segment recorder's own row list — and posts a record whenever
   the painted snapshot changes; `core/uilog.py` stores it beside the journal and
   `tools/what_happened.py` interleaves the two on one clock. It reads the DOM
   rather than the store on purpose: a model-based recorder logs what we BELIEVE

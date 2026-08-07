@@ -645,9 +645,27 @@ def create_api_router(service) -> APIRouter:
         # the name it was drawn with.
         names = service.db.landmark_names()
         rows = []
+        # HOW MANY TIMES HE HAS ALREADY DONE THIS, counted over the whole
+        # journal walk and stamped per row -- his ask, 2026-08-06, against
+        # EIGHT consecutive rows reading "Open the Maze Door in Hazy Maze
+        # Cave": *"if we've already recorded that specific landmark, it should
+        # show as a duplicate… we simply see a counter rising"*. Naming the
+        # door correctly is what removed the one thing that used to separate
+        # two rows, so the count is what puts it back.
+        #
+        # THE KEY IS THE SENTENCE, which is stronger than keying on the
+        # landmark and needs no per-type rule: rows that read identically are
+        # exactly the rows he cannot tell apart, which is the complaint. That
+        # covers a named door, an unnamed one, a warp and an arrival at once
+        # (item 7 asked for the counter on spawns too, and this is why nothing
+        # extra was needed for them).
+        #
+        # SCOPED TO THE SESSION, so the number means "this sitting" rather
+        # than "since June" -- his screenshot is eight in one sitting and reads
+        # 2..8 here. Counted BEFORE the `after_id` skip, or the live tail would
+        # restart the count at 1 on every poll.
+        repeats: dict[tuple, int] = {}
         for row in events:
-            if after_id is not None and row.id <= after_id:
-                continue
             if row.id in settled:
                 continue          # the load's own settling, not a move he made
             entry_level = entry_spawns.get(row.id)
@@ -659,9 +677,14 @@ def create_api_router(service) -> APIRouter:
             if (view == "steps" and entry_level is None
                     and not _is_default_timeline_row(row)):
                 continue
+            key = (row.session_id, label)
+            repeat = repeats[key] = repeats.get(key, 0) + 1
+            if after_id is not None and row.id <= after_id:
+                continue
             place = places.get(row.id)
             rows.append({"id": row.id, "frame": row.frame, "type": row.type,
-                        "label": label, "wall_time_utc": row.wall_time_utc,
+                        "label": label if repeat < 2 else f"{label} ({repeat})",
+                        "repeat": repeat, "wall_time_utc": row.wall_time_utc,
                         "igt_frames": row.payload.get("igt_frames"),
                         "place": place,
                         "place_label": node_label(place) if place else None,
