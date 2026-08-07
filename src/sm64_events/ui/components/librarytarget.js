@@ -129,7 +129,7 @@ function useEntityStrategies(entityKey) {
   return data;
 }
 
-function ExampleCard({ entry, tier, hidden, trayKey, entityKey, inTray, onAdd }) {
+function ExampleCard({ entry, tier, hidden, trayKey, entityKey, inTray, foreignVersion, onAdd }) {
   const [playing, setPlaying] = useState(false);
   const embed = entry.video ? youtubeEmbed(entry.video) : null;
   const thumb = entry.video ? youtubeThumb(entry.video) : null;
@@ -161,7 +161,24 @@ function ExampleCard({ entry, tier, hidden, trayKey, entityKey, inTray, onAdd })
     </div>
     <div class="library-example-meta">
       <span class="library-example-tier"><${RankIcon} tier=${tier} size=${16} /></span>
-      <span class="library-example-runner">${entry.runner}</span>
+      ${/* FINAL REVIEW FIX (HIGH: JP/US band contamination). `.library-
+           example-meta` is a fixed 4-column grid (icon/runner/time/+), so the
+           badge nests INSIDE the runner cell rather than adding a 5th column
+           -- a plain grid child would shift the time and "+" columns for
+           every card that lacks one. This run's own `entry.version`
+           disagrees with the ladder the band above it was fit from -- it
+           still earns a real tier (the user's combined-unless-annotated rule
+           permits that), but the screen must say so rather than let it read
+           as a same-population time. */""}
+      <span class="library-example-runner-wrap">
+        <span class="library-example-runner">${entry.runner}</span>
+        ${foreignVersion
+          ? html`<span class="chip library-example-version"
+              title=${`This run is ${entry.version === "jp" ? "JP" : "US"} -- graded here against a ladder fitted from ${entry.version === "jp" ? "US" : "JP"} times.`}>
+              ${entry.version === "jp" ? "JP" : "US"}
+            </span>`
+          : ""}
+      </span>
       <span class="library-example-time">${fmtSeconds(entry.time_cs / 100)}</span>
       <button type="button" class="library-example-plus"
           disabled=${!entry.video || inTray}
@@ -200,6 +217,23 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
   const [jp, setJp] = useState(false);
   const hasJp = !!approach.ladder_jp;
   const ladder = (hasJp && jp ? approach.ladder_jp : approach.ladder) || {};
+  // Which ROM population `ladder` was actually FIT from -- library/ladders.py
+  // stamps `ladder_version` on the approach itself ("us"/"jp"/null), and
+  // `ladder_jp` (when it exists) is only ever derived from JP times
+  // (`fit_payload`'s own comment). null means the row's entries carry no
+  // version distinction at all, so this project's own combined-unless-
+  // annotated rule applies and no entry can be "foreign" against it.
+  //
+  // FINAL REVIEW FIX (HIGH): before this, every entry of an approach banded
+  // against ONE ladder regardless of which ROM it was recorded on -- measured
+  // on the shipped snapshot at 67 approaches / 4,659 entries banded against
+  // the OTHER version's ladder (Blast to the Stone Pillar's own top band: 108
+  // of 112 listed runs were JP times read against a US cutoff). The fix is
+  // per-entry LABELLING, not re-sorting bands by version: the user's standing
+  // rule is combined-unless-annotated, and where a row's data DOES annotate a
+  // difference the screen must say so rather than pretend the mixed band is
+  // uniform -- see the badge on ExampleCard below.
+  const ladderVersion = hasJp && jp ? "jp" : (approach.ladder_version || null);
   const bands = useMemo(() => bandsOf(ladder, approach.entries),
     [ladder, approach.entries]);
   const marioKey = approach.ladder && approach.ladder.Mario != null
@@ -212,6 +246,17 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
       <div class="library-section-text">
         <div class="library-section-identity">
           <span class="library-section-name">${approach.name}</span>
+          ${/* FINAL REVIEW FIX (minor: ambiguous headers). Several approaches
+               across sibling targets share one bare name -- "100 coin star
+               Xcam" alone headed 6 real entity pages with no way to tell them
+               apart (star:14:6's two came from "Stomp on the Thwomp + 100c"
+               and "Thwomp + 100c w/ safety red"). `_target` (the owning
+               target's own label, stamped once in LibraryTarget below) was
+               already carried on every approach and never rendered --
+               identity was correctly target-scoped internally the whole time
+               (`approachIdentity`), only the VISIBLE header was ambiguous. */""}
+          ${approach._target && approach._target !== approach.name
+            ? html`<span class="meta library-section-target">${approach._target}</span>` : ""}
           ${approach.matched_strategy
             ? html`<span class="chip library-matched-chip">= your "${approach.matched_strategy}"</span>` : ""}
         </div>
@@ -234,7 +279,20 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
         ${hasJp ? html`<button type="button" class="chip chip-button library-jp-toggle"
             aria-pressed=${jp} onclick=${() => setJp((prev) => !prev)}>
             ${jp ? "JP ladder" : "US ladder"} · switch
-          </button>` : ""}
+          </button>`
+          : /* FINAL REVIEW FIX (medium: ladder_version read nowhere). A row
+               with too few of the OTHER version's times to fit a second
+               ladder still gets ONE, fitted entirely from whichever
+               population it has -- 13 approaches fit from JP-only times, no
+               `ladder_jp` companion (too few US runs to earn one), so no
+               toggle ever existed to say so. `ladder_version` was stamped
+               for exactly this and read by no JS at all until now. */
+          approach.ladder_version
+          ? html`<span class="chip library-ladder-version-chip"
+              title=${`Fitted from ${approach.ladder_version === "jp" ? "JP" : "US"}-only community times -- not enough of the other version's runs to fit a second ladder.`}>
+              ${approach.ladder_version === "jp" ? "JP" : "US"} ladder only
+            </span>`
+          : ""}
         <table class="library-toc"><tbody>
           ${bands.map((band) => html`<${TocRow} key=${bandAnchorId(approach, band.tier)} band=${band}
               count=${band.entries.filter((entry) => matchesRunner(entry, query)).length}
@@ -251,10 +309,21 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
           <div class="library-examples">
             ${band.entries.map((entry) => {
               const trayKey = entryTrayKey(approach, entry);
-              return html`<${ExampleCard} key=${entry.video || `${entry.runner}:${entry.time_cs}`}
+              // FIX (minor: duplicate Preact keys). `entryTrayKey` was
+              // already computed here and is already scoped uniquely per
+              // approach+runner+time+video (fix round 2's own reasoning,
+              // above) -- reusing it as the React key retires the ad hoc
+              // `entry.video || runner:time` fallback, which collided
+              // whenever the same runner posted the same time on both the
+              // JP and US row of a merged approach with neither carrying a
+              // video (measured: 8 bands, most example cards are exactly
+              // that kind of placeholder -- 34,264 of 40,974 entries have no
+              // video at all).
+              return html`<${ExampleCard} key=${trayKey}
                   entry=${entry} tier=${band.tier} trayKey=${trayKey} entityKey=${entityKey}
                   hidden=${!matchesRunner(entry, query)}
                   inTray=${trayKeys.has(trayKey)}
+                  foreignVersion=${!!(ladderVersion && entry.version && entry.version !== ladderVersion)}
                   onAdd=${onAdd} />`;
             })}
           </div>
@@ -272,7 +341,8 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
  * point 4) to this same full shape before mounting this component, so it
  * never has to branch on which door it came through.
  */
-export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTier }) {
+export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTier,
+                               fallbackLabel = null }) {
   const [query, setQuery] = useState("");
   // The OPEN approach's `approachIdentity` — target-scoped, not just its
   // name, so two sibling targets whose approaches share a name (fix round 1)
@@ -281,7 +351,17 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
 
   const rows = targets || [];
   const entityKey = (rows[0] && rows[0].entity_key) || null;
-  const label = (rows[0] && rows[0].label) || "";
+  // FINAL REVIEW FIX (important: blank-titled book mark). An entity the sheet
+  // never mapped (78 of every 84 segments, measured against the shipped
+  // corpus) returns `{targets: []}` from `/api/library/entity/{key}`, so
+  // `rows[0]` never exists and `label` fell back to `""` -- a real page with
+  // a real "No community times recorded here yet." paragraph, but under an
+  // EMPTY `<h3>`, which reads as broken rather than honest (acceptance.md's
+  // rule against a control that leads nowhere). `fallbackLabel` is the
+  // opening card's own name (library.js resolves it off the current session
+  // view, `entityLabel`, the same helper the mixed-entity Study note already
+  // uses) -- carried only for the empty case; a real sheet label always wins.
+  const label = (rows[0] && rows[0].label) || fallbackLabel || "";
   const missReason = rows.length === 1 ? rows[0].miss_reason : null;
   // The PAGE's own identity, for the auto-expand one-shot below -- never
   // `entityKey`. `rows[].index` is stable within one loaded payload (the
@@ -422,7 +502,12 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
             </span>` : ""}
       </div>
     </div>
-    <input class="library-search" type="search" value=${query}
+    ${/* FINAL REVIEW FIX (minor: shared class). This box used to share
+         `.library-search` with segments.js's own segment-library filter --
+         one CSS change for either surface silently restyled the other, and
+         it already broke the segments-editor uilab story once
+         (tests/test_uilab_story_setup_scoping.py). Its own class now. */""}
+    <input class="library-target-search" type="search" value=${query}
         placeholder="Search runners…" aria-label="Search runners"
         oninput=${(inputEvent) => setQuery(inputEvent.target.value)} />
     ${approaches.length === 0

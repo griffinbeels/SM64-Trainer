@@ -39,11 +39,15 @@ if _MISSING:
 
 from uilab_project import STORIES  # noqa: E402
 
-# Class names known to be reused by more than one UNRELATED surface in this
-# app. `.library-search` is the proven case (fix round 1): segments.js's own
-# segment-library filter box and librarytarget.js's runner-search box share
-# the name, and only ONE of the two surfaces it can appear on unmounts when
-# you leave it.
+# Class names known to have been reused by more than one UNRELATED surface in
+# this app. `.library-search` was the proven case (fix round 1): segments.js's
+# own segment-library filter box and librarytarget.js's runner-search box
+# shared the name, and only ONE of the two surfaces it could appear on
+# unmounts when you leave it. The final whole-branch review (minor finding:
+# shared class) gave librarytarget.js's box its own `.library-target-search`
+# class instead, so the two can no longer collide -- `.library-search` stays
+# in this registry anyway, as a standing warning against giving it a second
+# unrelated consumer again.
 GENERIC_STORY_CLASSES = (
     "library-search",
 )

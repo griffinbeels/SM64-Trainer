@@ -82,9 +82,9 @@ def test_exactly_one_section_opens_and_it_is_the_first_without_a_selection(libra
 
 
 def test_search_filters_across_sections(library_page):
-    library_page.evaluate("document.querySelector('.library-search').value = 'zzz-nobody'")
+    library_page.evaluate("document.querySelector('.library-target-search').value = 'zzz-nobody'")
     library_page.evaluate(
-        "document.querySelector('.library-search')"
+        "document.querySelector('.library-target-search')"
         ".dispatchEvent(new Event('input', {bubbles: true}))")
     assert library_page.evaluate(
         "document.querySelectorAll('.library-example:not(.hidden)').length") == 0
