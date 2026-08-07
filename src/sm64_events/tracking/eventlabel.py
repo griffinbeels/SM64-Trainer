@@ -369,6 +369,34 @@ def level_entry_rows(events) -> tuple[set[int], dict[int, int]]:
     all read them. This says only which row a HUMAN should be offered to point
     at.
     """
+    # THE TAIL IS SPENT IN UNPAUSED FRAMES (2026-08-07). `LEVEL_LOAD_TAIL_
+    # FRAMES` was measured across 911 WALKED entries, where a load's last area
+    # edge lands 44-47 frames after the level edge — but a Usamune MENU WARP
+    # pauses INSIDE the load, and `frame` is the raw game counter, which runs
+    # through a pause. His HMC -> LLL warp (journal ids 25830-25835) put 4,131
+    # frames between the level edge and the load's own final area edge, with
+    # the anchor's `paused_frames_before` reading 4,187. So the window expired
+    # mid-load, the load closed having banked no spawn, and its no-spawn
+    # branch PROMOTED one of the load's own area edges as the arrival: *"the
+    # 'moved to another part of lethal lava land' … BEFORE the 'Started Lethal
+    # Lava Land' is me warping from the previous stage. These are basically
+    # garbage events, and reads as noise events before the 'start' event."*
+    #
+    # Anchors carry the pause and land co-frame with the rows being judged, so
+    # the credit is collected in a PRE-PASS keyed by frame and spent as the
+    # walk advances. Nothing else about the rule moves: a load still ends at
+    # its spawn, at the next level edge, or at a tail that has genuinely
+    # elapsed while the game was running.
+    pause_at: dict[int, int] = {}
+    for row in events:
+        if row.type in ("practice_reset", "state_loaded"):
+            paused = (row.payload or {}).get("paused_frames_before") or 0
+            if paused:
+                pause_at[row.frame] = max(pause_at.get(row.frame, 0), paused)
+    paused_frames = sorted(pause_at.items())
+    pause_cursor = 0
+    paused_in_load = 0
+
     settled: set[int] = set()
     entry_spawns: dict[int, int] = {}
     load_frame: int | None = None
@@ -383,11 +411,12 @@ def level_entry_rows(events) -> tuple[set[int], dict[int, int]]:
     anchor_paused: int = 0
 
     def close_the_load() -> None:
-        nonlocal load_frame, area_ids, spawn_id
+        nonlocal load_frame, area_ids, spawn_id, paused_in_load
         if load_frame is not None:
             # The last area edge speaks for the load only when no spawn did.
             settled.update(area_ids if spawn_id is not None else area_ids[:-1])
         load_frame, area_ids, spawn_id = None, [], None
+        paused_in_load = 0
 
     def restarts_the_level(frame: int) -> bool:
         if area_now != COURSE_START_AREA:
@@ -400,6 +429,23 @@ def level_entry_rows(events) -> tuple[set[int], dict[int, int]]:
 
     for row in events:
         payload = row.payload or {}
+        # Spend every pause up to and including THIS frame before the tail is
+        # judged — a menu warp's anchor lands co-frame with the load's own
+        # final area edge, so crediting it later would be crediting it too
+        # late to save the row it explains.
+        #
+        # ONLY UNTIL THE ARRIVAL (`spawn_id is None`), and that bound is the
+        # measurement's doing rather than tidiness. A load that kept taking
+        # credit after it had already arrived ratcheted itself forward across
+        # a whole session of resets, and every spawn after the first stopped
+        # being an arrival of its own: SIX vanished across the two real
+        # journals, most with no surviving row beside them.
+        while (pause_cursor < len(paused_frames)
+               and paused_frames[pause_cursor][0] <= row.frame):
+            frame_of, paused = paused_frames[pause_cursor]
+            if load_frame is not None and frame_of > load_frame and spawn_id is None:
+                paused_in_load += paused
+            pause_cursor += 1
         if row.type == "area_changed":
             area_now = payload.get("to")
             if co_frame != row.frame:
@@ -414,8 +460,16 @@ def level_entry_rows(events) -> tuple[set[int], dict[int, int]]:
             close_the_load()
             load_frame = row.frame
             continue
-        if load_frame is not None and row.frame - load_frame > LEVEL_LOAD_TAIL_FRAMES:
-            close_the_load()
+        # The tail always runs from the LEVEL EDGE. What changes is whether the
+        # pause is forgiven: before the arrival it is (a menu warp pauses
+        # mid-load), after it the raw rule stands — so the short grace that
+        # keeps a death respawn from reading as a second "Started …" is exactly
+        # the window it always was, and a pause spent earlier cannot buy the
+        # load thousands of frames of afterlife.
+        if load_frame is not None:
+            credit = paused_in_load if spawn_id is None else 0
+            if row.frame - load_frame - credit > LEVEL_LOAD_TAIL_FRAMES:
+                close_the_load()
         if load_frame is not None:
             if row.type == "area_changed":
                 area_ids.append(row.id)

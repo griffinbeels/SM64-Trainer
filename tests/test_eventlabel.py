@@ -240,6 +240,56 @@ def test_a_move_past_the_load_tail_is_the_players_own():
     assert 7 not in settled
 
 
+def test_a_menu_warp_pauses_inside_the_load_and_still_draws_one_row():
+    """His report, 2026-08-07: *"the 'moved to another part of lethal lava
+    land' at the beginning BEFORE the 'Started Lethal Lava Land' is me warping
+    from the previous stage… These are basically garbage events, and reads as
+    noise events before the 'start' event."*
+
+    The exact shape of his journal ids 25830-25835 (HMC -> LLL through the
+    Usamune menu): the level edge, two area edges on that frame, then the
+    load's LAST area edge **4,131 frames later**, with the anchor reporting
+    4,187 paused. `LEVEL_LOAD_TAIL_FRAMES` is 60 and was measured on WALKED
+    entries, so a raw-frame tail expires mid-load and the no-spawn branch
+    promotes one of the load's own edges as the arrival — which is the row he
+    called garbage."""
+    rows = [
+        jev(1, "level_changed", 2688629, {"from": 7, "to": 22}),
+        jev(2, "area_changed", 2688629, {"level": 22, "from": 1, "to": 1}),
+        jev(3, "area_changed", 2688629, {"level": 22, "from": 1, "to": 2}),
+        jev(4, "area_changed", 2692760, {"level": 22, "from": 2, "to": 1}),
+        jev(5, "practice_reset", 2692760, {"paused_frames_before": 4187}),
+        jev(6, "spawned", 2692760, {"level": 22, "kind": "spawn"}),
+    ]
+    settled, entry_spawns = level_entry_rows(rows)
+    assert settled == {2, 3, 4}, (
+        "every edge the LOAD walked belongs to the load, however long he sat "
+        "in the menu while it happened")
+    assert entry_spawns == {6: 22}, "the spawn is the arrival, and the only one"
+
+
+def test_a_load_ends_at_its_arrival_so_a_later_reset_is_its_own():
+    """The bound on the pause credit, and the measurement that forced it: with
+    the load left open, each later pause extended it again and a whole session
+    of resets collapsed into one load — SIX arrivals vanished from the two real
+    journals, most with no surviving row beside them. A load ends when it
+    arrives."""
+    rows = [
+        jev(1, "level_changed", 1000, {"from": 24, "to": 8}),
+        jev(2, "area_changed", 1000, {"level": 8, "from": 1, "to": 1}),
+        jev(3, "practice_reset", 1010, {"paused_frames_before": 0}),
+        jev(4, "spawned", 1012, {"level": 8, "kind": "spawn"}),
+        # A reset minutes later, after a long pause. Its own arrival.
+        jev(5, "area_changed", 9000, {"level": 8, "from": 1, "to": 1}),
+        jev(6, "practice_reset", 9000, {"paused_frames_before": 900}),
+        jev(7, "spawned", 9000, {"level": 8, "kind": "spawn"}),
+    ]
+    _, entry_spawns = level_entry_rows(rows)
+    assert entry_spawns == {4: 8, 7: 8}, (
+        "the reset's own spawn is an arrival of its own — swallowing it into "
+        "the first load is what deleted six of them")
+
+
 def test_an_establishing_level_row_opens_no_load():
     """`detectors/level.py` journals `from == to` bookkeeping on every session
     start (his journal ids 2135, 2155, 2167). Reading one as an arrival opens a

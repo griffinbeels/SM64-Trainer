@@ -474,4 +474,14 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except KeyboardInterrupt:
-        print("\nstopped -- now run: uv run python tools/probe_objects.py --report")
+        # NAME THE FILE THIS RUN ACTUALLY WROTE. The message was hardcoded for
+        # the pointer-driven mode, so a `--pool` run ended by pointing at
+        # `--report`, which reads the OTHER capture file -- he ran it, got the
+        # old session's analysis back, and reasonably reported that as the
+        # pool probe's result (2026-08-07). A next-step instruction that names
+        # the wrong artefact is worse than none.
+        if "--pool" in sys.argv:
+            print(f"\nstopped -- wrote {POOL_CAPTURE_PATH}. Read it directly; "
+                  "`--report` analyses the OTHER capture (pointer-driven).")
+        else:
+            print("\nstopped -- now run: uv run python tools/probe_objects.py --report")
