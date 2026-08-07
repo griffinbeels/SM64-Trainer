@@ -30,7 +30,9 @@ def store(tmp_path):
 
 def test_the_file_ships_and_says_where_it_came_from(sheet):
     assert sheet["source"] == "sheet"
-    assert sheet["model"]["Mario"] == 6.7
+    # The model rides with the file; its VALUES are a retunable default and
+    # deliberately not pinned (CLAUDE.md's shipped-default rule).
+    assert set(sheet["model"]) and "Mario" in sheet["model"]
     assert len(sheet["entities"]) >= 40
     assert sum(len(v) for v in sheet["entities"].values()) >= 70
 

@@ -15,13 +15,30 @@ def test_a_thin_row_gets_no_ladder():
     assert ladders.fit_ladder(_spread(1000, 2000, ladders.MIN_ENTRIES)) != {}
 
 
-def test_cutoffs_are_strictly_increasing_in_whole_centiseconds():
-    # classify.py compares DISPLAYED centiseconds, so two tiers sharing a
-    # cutoff is a tier no time can ever earn.
-    ladder = ladders.fit_ladder([1200] * 40 + [1300] * 40)   # only two values
+def test_tiers_the_data_cannot_tell_apart_merge_instead_of_being_invented():
+    # Two distinct values in the whole population: the honest ladder has two
+    # tiers, not eight names spread over invented +1-frame thresholds. The
+    # faster rank of each colliding group survives.
+    ladder = ladders.fit_ladder([1200] * 40 + [1300] * 40)
     values = [int(round(ladder[r] * 100)) for r in RANK_NAMES if r in ladder]
-    assert values == sorted(values)
-    assert len(values) == len(set(values)), values
+    assert values == sorted(set(values)), values
+    assert len(values) <= 3, ladder
+    assert "Mario" in ladder
+
+
+def test_a_door_sized_population_never_gets_a_bronze_past_its_slowest_member():
+    """The frame-chain fabrication, pinned. A ~2s movement whose whole
+    community spread is four frames cannot carry eight tiers; the old forced
+    separation pushed Bronze a median 10 cs past its intended percentile with
+    0.0% of the population slower than it (measured 2026-08-06, 43 ladders)."""
+    from sm64_events.core.timefmt import attainable_cs
+    times = [230] * 30 + [233] * 40 + [236] * 20 + [240] * 10
+    ladder = ladders.fit_ladder(times)
+    cutoffs = [int(round(v * 100)) for v in ladder.values()]
+    assert max(cutoffs) <= attainable_cs(max(times)), ladder
+    assert len(cutoffs) == len(set(cutoffs))
+    assert len(cutoffs) <= 4, ladder          # four distinct frames observed
+    assert "Mario" in ladder                   # the top survives every merge
 
 
 def test_the_fastest_tier_is_near_the_fastest_times():
@@ -67,11 +84,10 @@ def test_quantising_only_ever_rounds_a_cutoff_UP():
 def test_the_quantiser_is_replaceable():
     """The model has already changed once; changing it again must stay cheap."""
     times = _spread(1000, 2000, 200)
-    raw = ladders.fit_ladder(times, quantise=lambda cs: cs,
-                             step=lambda cs: cs + 1)
+    raw = ladders.fit_ladder(times, quantise=lambda cs: cs)
     quantised = ladders.fit_ladder(times)
     assert raw != quantised
-    assert all(quantised[r] >= raw[r] for r in raw)
+    assert all(quantised[r] >= raw[r] for r in raw if r in quantised)
 
 
 def test_a_cutoff_inside_a_real_gap_moves_to_its_slow_edge():

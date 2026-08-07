@@ -202,9 +202,7 @@
   },
   "star:12:1": {
    "Log firsty": {
-    "Bronze": 46.7,
     "Diamond": 35.66,
-    "Gold": 43.7,
     "Grandmaster": 34.33,
     "Mario": 34.1,
     "Master": 35.2,
@@ -256,18 +254,6 @@
     "Master": 18.36,
     "Platinum": 18.63,
     "Silver": 19.03
-   }
-  },
-  "star:13:2": {
-   "w/ TJ dive beginning": {
-    "Bronze": 47.66,
-    "Diamond": 47.16,
-    "Gold": 47.53,
-    "Grandmaster": 46.5,
-    "Mario": 46.03,
-    "Master": 47.06,
-    "Platinum": 47.3,
-    "Silver": 47.63
    }
   },
   "star:13:5": {
@@ -331,7 +317,6 @@
     "Bronze": 15.76,
     "Diamond": 14.63,
     "Gold": 14.9,
-    "Grandmaster": 14.4,
     "Mario": 14.36,
     "Master": 14.53,
     "Platinum": 14.76,
@@ -384,7 +369,6 @@
    "Usamune (Dezanig) James (PAUSE TIME INCLUDED)": {
     "Bronze": 49.63,
     "Diamond": 43.7,
-    "Gold": 48.63,
     "Grandmaster": 38.2,
     "Mario": 35.83,
     "Master": 39.6,
@@ -480,7 +464,6 @@
     "Silver": 34.2
    },
    "Slope slide strat, no camera glitch": {
-    "Bronze": 39.26,
     "Diamond": 30.76,
     "Gold": 33.3,
     "Grandmaster": 29.96,
@@ -498,8 +481,7 @@
     "Grandmaster": 11.86,
     "Mario": 11.76,
     "Master": 11.93,
-    "Platinum": 12.06,
-    "Silver": 12.26
+    "Platinum": 12.06
    }
   },
   "star:20:0": {
@@ -613,13 +595,11 @@
   "star:5:5": {
    "DJ kick box break strat": {
     "Bronze": 26.93,
-    "Diamond": 26.8,
-    "Gold": 26.86,
     "Grandmaster": 26.6,
     "Mario": 26.56,
     "Master": 26.76,
-    "Platinum": 26.83,
-    "Silver": 26.9
+    "Platinum": 26.8,
+    "Silver": 26.86
    }
   },
   "star:6:0": {
@@ -820,16 +800,6 @@
     "Master": 35.23,
     "Platinum": 36.1,
     "Silver": 39.56
-   },
-   "[N64 REAL TIME] w/ sub": {
-    "Bronze": 47.93,
-    "Diamond": 36.16,
-    "Gold": 47.86,
-    "Grandmaster": 35.7,
-    "Mario": 35.46,
-    "Master": 35.93,
-    "Platinum": 36.76,
-    "Silver": 47.9
    }
   },
   "star:9:5": {

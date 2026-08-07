@@ -23,8 +23,7 @@ from 20-150 community times can resolve them. Bucketing by duration, scaling by
 the distribution's spread, and a canonical shape off the sheet best were all
 measured and none helped. Do not re-litigate it by trying a fourth form.
 """
-from sm64_events.core.timefmt import (attainable_cs, next_attainable_cs,
-                                      prev_attainable_cs)
+from sm64_events.core.timefmt import attainable_cs, prev_attainable_cs
 from sm64_events.ranks.classify import RANK_NAMES
 
 # Median position of each vetted cutoff inside its approach's own distribution,
@@ -94,9 +93,9 @@ def avoid_valleys(times, raw: dict) -> dict:
     return out
 
 
-def make_attainable(raw: dict, quantise=attainable_cs, step=next_attainable_cs) -> dict:
+def make_attainable(raw: dict, quantise=attainable_cs) -> dict:
     """Step 3 — every cutoff becomes a time the timer can actually show, and
-    no two share one.
+    tiers the data cannot tell apart MERGE instead of being invented.
 
     Usamune's clock is a frame counter, so only 30 of every 100 centisecond
     values ever appear: 0, 3, 6, 10, 13, 16, 20, 23, 26, 30 … A ladder asking
@@ -105,37 +104,44 @@ def make_attainable(raw: dict, quantise=attainable_cs, step=next_attainable_cs) 
 
     Rounds UP, never down: a cutoff is a threshold you must beat, so rounding
     down would quietly make a rank harder than the number it came from, and
-    rounding up biases every derived ladder gentle (user's ruling). Separating
-    two tiers steps to the next DISPLAYABLE time rather than adding one
-    centisecond, which would land straight back off the set."""
+    rounding up biases every derived ladder gentle (user's ruling).
+
+    When two ranks quantise to the SAME frame, the faster rank keeps it and
+    the slower one is dropped — a sparse ladder, which the whole rank system
+    already supports (`defined_tiers`, and vetted ladders ship with skipped
+    tiers). The previous rule pushed the slower rank one frame later instead,
+    and on a 2-second door that FABRICATES the ladder: eight percentile
+    targets over four distinct frames became a chain of +1s whose Bronze sat
+    a median 10 cs past its intended percentile with 0.0% of the community
+    slower than it — 43 such ladders, measured 2026-08-06. Eight tiers do not
+    fit in four frames, and inventing thresholds slower than every recorded
+    human is worse than admitting four tiers."""
     out, previous = {}, None
     for rank in RANK_NAMES:
         if rank not in raw:
             continue
         cutoff = quantise(int(round(raw[rank])))
         if previous is not None and cutoff <= previous:
-            cutoff = step(previous)
+            continue                       # merged into the faster rank above
         out[rank] = cutoff
         previous = cutoff
     return out
 
 
-def fit_ladder(times_cs, percentiles=None, quantise=attainable_cs,
-               step=next_attainable_cs) -> dict:
+def fit_ladder(times_cs, percentiles=None, quantise=attainable_cs) -> dict:
     """{rank: seconds} for one row's community times, or {} when the row is
     too thin to say anything.
 
     Three steps, each replaceable on its own: place at percentiles, move out
-    of observation valleys, make attainable. Pass `quantise=lambda cs: cs` and
-    `step=lambda cs: cs + 1` to derive a ladder for a clock that is not
-    Usamune's."""
+    of observation valleys, make attainable. Pass `quantise=lambda cs: cs` to
+    derive a ladder for a clock that is not Usamune's."""
     times = sorted(int(t) for t in times_cs)
     if len(times) < MIN_ENTRIES:
         return {}
     raw = place_at_percentiles(times, percentiles or LADDER_PERCENTILES)
     raw = avoid_valleys(times, raw)
     return {rank: round(cutoff / 100, 2)
-            for rank, cutoff in make_attainable(raw, quantise, step).items()}
+            for rank, cutoff in make_attainable(raw, quantise).items()}
 
 
 def row_times(item):

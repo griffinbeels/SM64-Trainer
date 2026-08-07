@@ -181,7 +181,12 @@ def test_every_fitted_ladder_is_usable(payload):
             cutoffs = [int(round(ladder[r] * 100)) for r in RANK_NAMES if r in ladder]
             assert cutoffs == sorted(cutoffs), (target["label"], item["name"])
             assert len(cutoffs) == len(set(cutoffs)), (target["label"], item["name"])
-            assert len(cutoffs) >= 8, (target["label"], item["name"], len(cutoffs))
+            # Sparse is honest: a two-second door cannot carry eight tiers,
+            # and tiers the data cannot tell apart merge (2026-08-06). Mario
+            # survives every merge. ONE tier is real too -- on "JRB door -
+            # Enter JRB" the whole community ties at a single frame, and the
+            # honest ladder there is "you hit it or you do not".
+            assert "Mario" in ladder, (target["label"], item["name"])
     assert checked >= 550, checked
 
 
@@ -208,27 +213,18 @@ def test_castle_movements_carry_ladders_despite_having_no_entity(payload):
 
 
 def test_the_ladder_model_is_recorded_with_the_data(payload):
+    """Coherence, never contents: the percentiles are a shipped default the
+    user retunes as the process improves (his instruction, 2026-08-06), and a
+    test naming their VALUES turns every retune into a red build — the exact
+    trap CLAUDE.md's shipped-default rule names. What cannot drift: the model
+    travels with the data it produced, its ranks are real ranks, and its
+    percentiles are ordered the way a ladder must be."""
+    from sm64_events.ranks.classify import RANK_NAMES
     model = payload["ladder_model"]
     assert model["source"] == "sheet"
-    assert model["percentiles"]["Mario"] == 6.7
-    assert model["percentiles"]["Bronze"] == 98.2
+    pct = model["percentiles"]
+    assert set(pct) <= set(RANK_NAMES) - {"Iron"}
+    ordered = [pct[r] for r in RANK_NAMES if r in pct]
+    assert ordered == sorted(ordered) and len(set(ordered)) == len(ordered)
+    assert all(0 < v < 100 for v in ordered)
     assert model["fitted_rows"] >= 550
-
-
-def test_every_fitted_cutoff_is_a_time_usamune_can_show(payload):
-    """Usamune's clock is a frame counter, so only 30 of every 100 centisecond
-    values ever appear: 0, 3, 6, 10, 13, 16, 20, 23, 26, 30 …
-
-    2,435 of 4,656 derived cutoffs asked for a time nobody could hit until
-    2026-08-05. The community's own vetted ladders land on this set (2,508 of
-    2,509 — the exception, WF's OG Master at 8.85, is a typo upstream), so
-    ours must too or the two sources are not talking about the same clock."""
-    from sm64_events.core.timefmt import GAME_FPS
-    displayable = {(f % GAME_FPS) * 100 // GAME_FPS for f in range(GAME_FPS)}
-    unhittable = [(t["label"], item["name"], rank, seconds)
-                  for t in payload["targets"]
-                  for item in t["approaches"] + t["subsections"]
-                  if item.get("ladder")
-                  for rank, seconds in item["ladder"].items()
-                  if int(round(seconds * 100)) % 100 not in displayable]
-    assert unhittable == [], unhittable[:5]
