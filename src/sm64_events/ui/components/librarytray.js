@@ -12,13 +12,19 @@
 // is this task's to place, not because the wiring behind it is.
 //
 // Tray item shape (library.js's own state, grown here, not reinvented --
-// task-5-caveats.md point 1): {key, runner, time_cs, video, strat, trim}.
-// `key` stays `entry.video`, unchanged from Task 4: a video URL is the
-// footage's own identity, so the collision the caveat warns about (two
-// sibling-target examples sharing a runner+time) cannot reach it -- two
-// independent recordings have two distinct URLs, and the one case that WOULD
-// collide (the identical clip cited from two sibling rows) is not a
-// collision to fix, it is the same clip correctly deduplicated.
+// task-5-caveats.md point 1): {key, runner, time_cs, video, strat, trim,
+// entity_key}. FIX ROUND 1: `key` is NOT `entry.video` -- that claim was
+// checked against the real bundled snapshot and was false. 8 videos are
+// cited by more than one ENTITY (one recording standing as evidence for two
+// different stars is ordinary in this corpus -- e.g. JoSniffy's
+// youtu.be/ANqWo4v9qfc evidences both star:2:4 and star:2:5) and 605 are
+// cited at more than one TIME, so a video-keyed tray read the second star's
+// own entry as "already added" the moment the first star's was -- silently
+// refusing the tray's own cross-entity use, not an edge case. `key` is now a
+// COMPOSITE librarytarget.js computes per entry (`entryTrayKey`: the owning
+// approach's own target-scoped identity, plus the entry's runner and time),
+// and `entity_key` rides along on the item itself so a mixed-entity tray
+// does not need one entity handed in from outside to import correctly.
 import { h } from "preact";
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
@@ -111,10 +117,13 @@ export function LibraryTray({ items, onTrim, onRemove, onPlayAll, onStudy }) {
         </button>
         <button type="button" class="library-tray-study"
             disabled=${!onStudy || items.length === 0}
-            title=${onStudy ? "Frame-accurate side-by-side study" : "Lands with the Compare fold-in (next task)"}
+            title=${onStudy ? "Frame-accurate side-by-side study" : ""}
             onclick=${() => onStudy && onStudy(items)}>
           <${Icon} name="compare" size=${15} /> Study in Compare
         </button>
+        ${!onStudy
+          ? html`<span class="meta library-tray-study-note">Frame-accurate study is coming soon.</span>`
+          : null}
       </div>
     </div>
   <//>`;

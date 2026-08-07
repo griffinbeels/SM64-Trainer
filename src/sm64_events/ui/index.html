@@ -448,8 +448,13 @@
     font-size: .68rem; color: var(--muted);
   }
   .library-tray-trim input { width: 66px; }
-  .library-tray-actions { display: flex; align-items: center; gap: .6rem; }
+  .library-tray-actions { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
   .library-tray-count { margin-right: auto; }
+  /* Fix round 1: a disabled control's reason must be visible without a
+     hover, never only in `title` (acceptance.md's "put the reason where the
+     click lands" -- a disabled button cannot even receive the click that
+     would land it). Always-rendered text, not a tooltip. */
+  .library-tray-study-note { flex-basis: 100%; }
 
   /* The grid overlay (Task 5): a plain fixed backdrop rather than the shared
      `Modal` -- every existing Modal call site snaps open/closed with no

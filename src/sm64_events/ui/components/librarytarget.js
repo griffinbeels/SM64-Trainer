@@ -66,6 +66,21 @@ const approachIdentity = (approach) =>
 const sectionAnchorId = (approach) => `lib-section-${approachIdentity(approach)}`;
 const bandAnchorId = (approach, tier) =>
   `lib-band-${approachIdentity(approach)}-${slug(tier)}`;
+// The tray's own item identity (Task 5 fix round 1). NOT `entry.video`: the
+// controller measured it colliding across sibling ENTITIES on the real
+// bundled snapshot -- 8 videos cited by more than one entity (e.g. JoSniffy's
+// youtu.be/ANqWo4v9qfc evidences BOTH star:2:4 "Fall onto the Caged Island"
+// and star:2:5 "Blast Away the Wall"), plus 605 videos cited at more than one
+// TIME. One long recording standing as evidence for two different stars is
+// ordinary in this corpus, not a rarity -- so a video-keyed tray silently
+// read the second star's identical-runner entry as "already added" the
+// instant the first was, which is the tray's whole cross-entity use, not an
+// edge case. Scoped to the owning approach the same way every other identity
+// in this file already is (`approachIdentity`, target-scoped), plus the
+// entry's own runner+time -- the two fields that actually distinguish "this
+// evidence, for THIS star" from the same video's role on a sibling one.
+const entryTrayKey = (approach, entry) =>
+  `${approachIdentity(approach)}::${entry.runner}::${entry.time_cs}`;
 
 // `t.view`'s active strategy for this entity — `entitysection.js::entityKey`
 // is the read-side identity every section already carries, and `last_strat`
@@ -100,7 +115,7 @@ function useEntityStrategies(entityKey) {
   return data;
 }
 
-function ExampleCard({ entry, tier, hidden, inTray, onAdd }) {
+function ExampleCard({ entry, tier, hidden, trayKey, entityKey, inTray, onAdd }) {
   const [playing, setPlaying] = useState(false);
   const embed = entry.video ? youtubeEmbed(entry.video) : null;
   const thumb = entry.video ? youtubeThumb(entry.video) : null;
@@ -140,8 +155,8 @@ function ExampleCard({ entry, tier, hidden, inTray, onAdd }) {
             : inTray ? "already in the tray" : "add to the comparison tray"}
           onclick=${(clickEvent) => {
             clickEvent.stopPropagation();
-            onAdd({ key: entry.video, runner: entry.runner, time_cs: entry.time_cs,
-                     video: entry.video, strat: null, trim: null });
+            onAdd({ key: trayKey, runner: entry.runner, time_cs: entry.time_cs,
+                     video: entry.video, entity_key: entityKey, strat: null, trim: null });
           }}>+</button>
     </div>
   </div>`;
@@ -167,7 +182,7 @@ function TocRow({ band, count, isYou, onJump }) {
  * one section open" is a property of the parent's own state rather than
  * something every section has to negotiate).
  */
-function Section({ approach, open, onOpen, query, stratInfo, trayKeys, onAdd }) {
+function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey, onAdd }) {
   const [jp, setJp] = useState(false);
   const hasJp = !!approach.ladder_jp;
   const ladder = (hasJp && jp ? approach.ladder_jp : approach.ladder) || {};
@@ -220,11 +235,14 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, onAdd }) 
             <span class="meta">${band.cutoffCs != null ? fmtSeconds(band.cutoffCs / 100) : "unranked"}</span>
           </div>
           <div class="library-examples">
-            ${band.entries.map((entry) => html`<${ExampleCard} key=${entry.video || `${entry.runner}:${entry.time_cs}`}
-                entry=${entry} tier=${band.tier}
-                hidden=${!matchesRunner(entry, query)}
-                inTray=${!!(entry.video && trayKeys.has(entry.video))}
-                onAdd=${onAdd} />`)}
+            ${band.entries.map((entry) => {
+              const trayKey = entryTrayKey(approach, entry);
+              return html`<${ExampleCard} key=${entry.video || `${entry.runner}:${entry.time_cs}`}
+                  entry=${entry} tier=${band.tier} trayKey=${trayKey} entityKey=${entityKey}
+                  hidden=${!matchesRunner(entry, query)}
+                  inTray=${trayKeys.has(trayKey)}
+                  onAdd=${onAdd} />`;
+            })}
           </div>
         </div>`)}
       </div>
@@ -340,6 +358,6 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
           approach=${approach} open=${expanded === approachIdentity(approach)}
           onOpen=${() => setExpanded(approachIdentity(approach))} query=${query}
           stratInfo=${approach.matched_strategy ? stratByName[approach.matched_strategy] : null}
-          trayKeys=${trayKeys} onAdd=${onAdd} />`)}
+          trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd} />`)}
   </div>`;
 }

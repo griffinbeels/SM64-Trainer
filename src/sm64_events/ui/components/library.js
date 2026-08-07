@@ -73,10 +73,17 @@ export function Library({ t, active, intent, clearIntent }) {
   // here", the shape `{key, runner, time_cs, video, strat, trim}`) just
   // enough for "+" to work; Task 5 (librarytray.js) is what actually reads
   // it, so this grows the SAME state -- trim edits and removal -- rather
-  // than inventing a second shape. Keyed on `video` (the only stable
-  // identity an entry carries) -- an entry with no video never reaches
-  // `onAdd` at all (librarytarget.js disables "+" there, since there is
-  // nothing to embed or import into Compare).
+  // than inventing a second shape, plus one field: `entity_key`, added in
+  // Task 5's fix round 1 so Task 6 can import each item onto the entity it
+  // actually came from rather than needing a single tray-wide entity handed
+  // in from outside (the tray can hold items from more than one entity
+  // across navigation). `key` is a COMPOSITE the entry's owning approach
+  // computes (librarytarget.js::entryTrayKey) -- never `entry.video` alone,
+  // which the controller measured colliding across sibling entities on the
+  // real snapshot (one recording cited as evidence for two different
+  // stars). An entry with no video never reaches `onAdd` at all
+  // (librarytarget.js disables "+" there, since there is nothing to embed or
+  // import into Compare).
   const [tray, setTray] = useState([]);
   const [showGrid, setShowGrid] = useState(false);
   const trayKeys = new Set(tray.map((item) => item.key));

@@ -67,6 +67,33 @@ def library_page(library_server):
         yield page
 
 
+def test_study_in_compares_disabled_reason_is_visible_text_not_a_hover(library_page):
+    """FIX ROUND 1 (controller finding 2). `onStudy` is `null` until Task 6
+    wires the Compare fold-in, so the button is disabled -- and the reason
+    must be readable withOUT hovering it (acceptance.md: "a toggle half
+    disabled for a real, data-driven reason... nobody hovers a control that
+    does nothing before reporting it. Put the reason where the click lands,
+    or do not disable it" -- and a disabled `<button>` cannot even receive
+    the click that would land it). This test never dispatches a mouse or
+    focus event, only reads `textContent`, so it fails if the reason is only
+    reachable via `title`."""
+    added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=1))
+    assert added == 1, added
+    library_page.wait_for(".library-tray-chip", timeout_ms=5000)
+    result = library_page.evaluate("""
+      (() => {
+        const btn = document.querySelector('.library-tray-study');
+        const note = document.querySelector('.library-tray-study-note');
+        return {
+          disabled: btn ? btn.disabled : null,
+          noteText: note ? note.textContent.trim() : null,
+        };
+      })()
+    """)
+    assert result["disabled"] is True, result
+    assert result["noteText"], "no visible reason next to the disabled Study in Compare button"
+
+
 def test_adding_examples_docks_the_tray_with_one_chip_each(library_page):
     added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=3))
     assert added == 3, f"only {added} example cards had an enabled + button"
@@ -141,12 +168,12 @@ _ENABLED_PLUS_COUNT = (
 
 
 def test_removing_a_chip_shrinks_the_tray_and_re_enables_its_plus_button(library_page):
-    # Counts, not "the first + button": several cards can share one video
-    # (librarytarget.js disables every card whose `entry.video` is already in
-    # the tray, and some cards start disabled for the unrelated reason of
-    # carrying no video at all -- library.md's "not every video link
-    # resolves"), so a query for THE first `.library-example-plus` can land
-    # on an always-disabled card that this test never touched.
+    # Counts, not "the first + button": librarytarget.js disables every card
+    # whose own tray key is already in the tray, and some cards start
+    # disabled for the unrelated reason of carrying no video at all --
+    # library.md's "not every video link resolves" -- so a query for THE
+    # first `.library-example-plus` can land on an always-disabled card this
+    # test never touched.
     enabled_before = library_page.evaluate(_ENABLED_PLUS_COUNT)
 
     added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=1))
@@ -167,3 +194,92 @@ def test_removing_a_chip_shrinks_the_tray_and_re_enables_its_plus_button(library
     assert library_page.evaluate(
         "document.querySelectorAll('.library-tray-chip').length") == 0
     assert library_page.evaluate(_ENABLED_PLUS_COUNT) == enabled_before
+
+
+# ---- fix round 1 (controller finding 1): tray key collision across sibling
+# entities sharing one recording ------------------------------------------
+
+def test_a_video_shared_across_sibling_entities_does_not_collide_in_the_tray(library_page):
+    """FIX ROUND 1. Measured against the real bundled snapshot: JoSniffy's
+    youtu.be/ANqWo4v9qfc evidences BOTH star:2:4 "Fall onto the Caged Island"
+    (this fixture's auto-opened target) and star:2:5 "Blast Away the Wall",
+    sibling stars under the "2. Whomp's Fortress" course group -- one
+    recording standing as evidence for two different stars, which is
+    ordinary in this corpus (8 videos do this on the real snapshot; 605 are
+    cited at more than one time). Before this fix the tray keyed an item by
+    `entry.video` alone, so adding star:2:4's entry silently disabled
+    star:2:5's OWN entry for the same runner -- a different star, refused
+    with no way to add it."""
+    added_first = library_page.evaluate("""
+      (() => {
+        // Scoped to `.library-target`, not a bare query: the tray persists
+        // across navigation and its OWN chip thumb can share this src once
+        // the first add has happened, and it sits earlier in DOM order.
+        const img = document.querySelector('.library-target img[src*="ANqWo4v9qfc"]');
+        if (!img) return 'no thumb for the shared video on star:2:4';
+        const card = img.closest('.library-example');
+        const btn = card.querySelector('.library-example-plus');
+        if (!btn || btn.disabled) return 'plus button missing or disabled on star:2:4';
+        btn.click();
+        return 'clicked';
+      })()
+    """)
+    assert added_first == "clicked", added_first
+    library_page.wait_for(".library-tray-chip", timeout_ms=5000)
+    assert library_page.evaluate(
+        "document.querySelectorAll('.library-tray-chip').length") == 1
+
+    # Back to the course grid, into "2. Whomp's Fortress", onto the sibling
+    # star -- confirms the fixture still reaches the real pair before
+    # trusting anything that follows.
+    library_page.evaluate("document.querySelector('.entity-back').click()")
+    library_page.wait_for(".library-courses", timeout_ms=15000)
+    opened_group = library_page.evaluate("""
+      (() => {
+        const cell = Array.from(document.querySelectorAll('.library-courses .starcell'))
+          .find((c) => c.querySelector('.starname')?.textContent === "2. Whomp's Fortress");
+        if (!cell) return "no Whomp's Fortress group cell";
+        cell.click();
+        return 'clicked';
+      })()
+    """)
+    assert opened_group == "clicked", opened_group
+    library_page.wait_for(".library-group", timeout_ms=15000)
+    picked_target = library_page.evaluate("""
+      (() => {
+        const cell = Array.from(document.querySelectorAll('.library-group .starcell'))
+          .find((c) => c.querySelector('.starname')?.textContent === 'Blast Away the Wall');
+        if (!cell) return 'no Blast Away the Wall cell';
+        cell.click();
+        return 'clicked';
+      })()
+    """)
+    assert picked_target == "clicked", picked_target
+    # Waits for the auto-expanded section's DISCLOSED body, not just the
+    # section header -- `Disclose` mounts its contents a tick after `open`
+    # flips (collapsible.js's own docstring), so a bare `.library-section`
+    # wait can win a race against an empty body and read as "no thumb"
+    # rather than as the disabled-button signal this test is actually after.
+    library_page.wait_for(".library-section.open .library-example", timeout_ms=10000)
+
+    # The sibling star's OWN entry for the same video must not read as
+    # already added.
+    added_second = library_page.evaluate("""
+      (() => {
+        // Scoped to `.library-target`, not a bare query: the tray persists
+        // across navigation and its OWN chip thumb can share this src once
+        // the first add has happened, and it sits earlier in DOM order.
+        const img = document.querySelector('.library-target img[src*="ANqWo4v9qfc"]');
+        if (!img) return 'no thumb for the shared video on star:2:5';
+        const card = img.closest('.library-example');
+        const btn = card.querySelector('.library-example-plus');
+        if (!btn) return 'no plus button on star:2:5';
+        if (btn.disabled) return 'disabled -- the collision is back';
+        btn.click();
+        return 'clicked';
+      })()
+    """)
+    assert added_second == "clicked", added_second
+    library_page.wait_for(".library-tray-chip:nth-child(2)", timeout_ms=5000)
+    assert library_page.evaluate(
+        "document.querySelectorAll('.library-tray-chip').length") == 2
