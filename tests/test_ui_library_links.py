@@ -28,9 +28,11 @@ active TARGET and carries the highest journal_id, so it is what Library's own
 after a book mark click is itself the proof a deep link, not auto-open, drove
 the navigation.
 """
+import json
 import shutil
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -47,8 +49,16 @@ _MISSING = find_uilab()
 if _MISSING:
     pytest.skip(_MISSING, allow_module_level=True)
 
-from ui_fixture import FIXTURE_SEGMENT, serve_ui  # noqa: E402
+from ui_fixture import FIXTURE_SEGMENT, _target_segment, serve_ui  # noqa: E402
 from uilab import driver  # noqa: E402
+from uilab_project import BOWSER_COURSE, BOWSER_LEVEL  # noqa: E402
+
+
+def _post(base, path, payload):
+    request = urllib.request.Request(
+        f"{base}{path}", data=json.dumps(payload).encode(), method="POST",
+        headers={"Content-Type": "application/json"})
+    return json.loads(urllib.request.urlopen(request, timeout=10).read())
 
 CLICK_PRACTICE_TAB = 'document.querySelector(\'.nav-item[title="Practice"]\').click()'
 
@@ -330,3 +340,114 @@ def test_a_manual_section_pick_survives_a_repeat_of_the_same_deep_link(practice_
         f"a repeat of the SAME deep link reverted the user's own pick back "
         f"to the stale target ({still_open!r}) -- the focus must be "
         f"consumed once, not re-applied on every `rows` change")
+
+
+# ---- fix round 1 (review finding): a paired Bowser reds/pipe card must open
+# the STAR's Library page, not its own segment: entity route ------------------
+
+def test_the_book_mark_and_the_tier_link_open_the_same_paired_entity():
+    """FIX ROUND 1 (task-7 review). A Bowser reds/pipe PAIR publishes exactly
+    ONE sheet target, under the STAR's key -- `standardsIdentity(sec).entity`
+    (entitysection.js), the identity the card's OWN standards ladder already
+    grades against (`sec.pipe_star_entity` for a paired segment, never
+    `segment:<id>`, because the sheet has no reds->pipe SEGMENT target at
+    all). Opening the book mark on `entityKey(sec)` instead sent a paired
+    segment's card to `segment:<id>`'s own Library page, which returns 200
+    with ZERO approaches (never a 404 -- a real but barren page), while the
+    ladder one click below kept showing the star's real, populated one.
+
+    Reuses the exact fixture recipe test_fixture_reaches_the_real_page.py's
+    own pairing test established (reconcile_full_corpus + enter_level +
+    _target_segment onto seg:reds->pipe:bitdw) -- a genuinely separate
+    scenario from this file's other tests, so it earns its own `serve_ui()`
+    instance rather than the shared `practice_page` fixture, matching that
+    file's own reasoning for the same recipe.
+    """
+    with serve_ui(reconcile_full_corpus=True,
+                 stage=(BOWSER_COURSE, BOWSER_LEVEL),
+                 target=(BOWSER_COURSE, 0),
+                 enter_level=BOWSER_LEVEL) as base:
+        segments = json.loads(urllib.request.urlopen(
+            f"{base}/api/segments", timeout=10).read())
+        pipe = next(s for s in segments
+                   if (s.get("seed_key") or "") == "seg:reds->pipe:bitdw")
+        _target_segment(base, pipe["id"])
+        # A strategy, so the standards panel's `activeStrat` is non-null and
+        # the tier-row link actually renders -- test_no_active_strategy_
+        # renders_no_tier_row_link (above) pins that it does not without one,
+        # deliberately, not a gap to route around here.
+        _post(base, "/api/strat", {"kind": "segment",
+                                    "segment_id": pipe["id"],
+                                    "strat_tag": "Standard"})
+
+        with driver.get_driver().launch(headless=True) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card", timeout_ms=20000)
+
+            def open_card_and_standards():
+                # The card's HEAD (book mark included) always renders; the
+                # BODY (the standards panel) needs the fold opened by hand --
+                # the freshly-targeted segment has recorded no attempts, so
+                # it does not win the auto-open slot (practicelog.js's own
+                # rule).
+                result = page.evaluate("""
+                  (() => {
+                    const card = document.querySelector('.log-card.log-card-active');
+                    if (!card) return 'no active card';
+                    if (!card.querySelector('.log-card-library-link')) return 'no book mark';
+                    card.querySelector('.log-card-fold').click();
+                    return 'clicked';
+                  })()
+                """)
+                assert result == "clicked", result
+                page.wait_for(".log-card.log-card-active .standards-toggle",
+                              timeout_ms=10000)
+                page.evaluate("document.querySelector("
+                              "'.log-card.log-card-active .standards-toggle').click()")
+                page.wait_for(".log-card.log-card-active .std-tier-link",
+                              timeout_ms=10000)
+
+            def read_landed_library():
+                # Waits for `.library-target-page` -- the OUTER wrapper
+                # library.js renders the instant `stage === "target"`,
+                # regardless of what `LibraryTarget` finds inside it -- never
+                # for the heading `<h3>` or an open section. Both of those
+                # depend on CONTENT that is exactly what this test is
+                # checking: an entity with zero approaches renders an EMPTY
+                # `<h3></h3>` (librarytarget.js: `label` falls back to `""`
+                # when `rows` is `[]`), which Playwright's default
+                # `state="visible"` wait treats as hidden (an empty text node
+                # collapses) -- so waiting on the heading turned the mutated
+                # run into a second flavour of TIMEOUT rather than a content
+                # assertion, no more diagnosable than the first one this
+                # rewrite was meant to fix. The wrapper's own presence is
+                # unconditional, so it stays a reliable sync point either
+                # way, and `approaches > 0` below carries the entire signal.
+                page.wait_for(".library-target-page", timeout_ms=15000)
+                heading = page.evaluate(
+                    "(document.querySelector('.library-target-heading h3') || {}).textContent")
+                approaches = page.evaluate(
+                    "document.querySelectorAll('.library-section').length")
+                return heading, approaches
+
+            open_card_and_standards()
+            page.evaluate("document.querySelector("
+                          "'.log-card.log-card-active .log-card-library-link').click()")
+            book_mark_heading, book_mark_approaches = read_landed_library()
+
+            page.evaluate(CLICK_PRACTICE_TAB)
+            page.wait_for(".log-list-card", timeout_ms=15000)
+            open_card_and_standards()
+            page.evaluate("document.querySelector("
+                          "'.log-card.log-card-active .std-tier-link').click()")
+            tier_link_heading, tier_link_approaches = read_landed_library()
+
+    assert book_mark_approaches > 0, (
+        "the book mark opened a real Library page with ZERO approaches -- "
+        "it is still resolving the paired segment's OWN (target-less) "
+        "identity rather than standardsIdentity(sec).entity")
+    assert tier_link_approaches > 0, tier_link_approaches
+    assert book_mark_heading == tier_link_heading, (
+        f"the book mark and the tier-row link opened two DIFFERENT Library "
+        f"pages for the SAME card: {book_mark_heading!r} vs "
+        f"{tier_link_heading!r} -- one card, one ladder, must be one door")

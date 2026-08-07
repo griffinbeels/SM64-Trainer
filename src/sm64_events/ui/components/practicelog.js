@@ -552,10 +552,23 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            card's grid exists to avoid (the unassigned-card double-height
            regression). Omitted entirely when the caller has no door to offer
            (`ui/tunelog.js`'s inspector, which never passes it) -- never a
-           disabled button with nothing behind it. */""}
+           disabled button with nothing behind it.
+
+           FIX ROUND 1: opens `standards.entity`, NOT `ek`. A Bowser reds/pipe
+           PAIR publishes exactly one sheet target under the STAR's key --
+           `standardsIdentity(sec)` already resolves that for the ladder one
+           click below this button (`entitysection.js`: a pipe segment's own
+           `standardsIdentity().entity` is `sec.pipe_star_entity`, never
+           `segment:<id>`, because the sheet has no reds->pipe SEGMENT target
+           at all, only the paired star's). Opening `ek` instead sent this
+           card's book mark to `segment:<id>`'s own Library page -- a real
+           route that resolves to ZERO approaches (a 200 with an empty list,
+           never a 404), while the ladder directly below kept showing the
+           star's real, populated one. One card, one ladder, and now one
+           Library identity -- never two doors to the same standings. */""}
       <div class="log-card-actions">
         ${openLibrary && html`<button type="button" class="log-card-library-link"
-            onclick=${() => openLibrary({ kind: "target", entity: ek, strat: sec.last_strat })}
+            onclick=${() => openLibrary({ kind: "target", entity: standards.entity, strat: sec.last_strat })}
             title=${`Open ${named.name} in the Library`}>
           <${Icon} name="bookmark" size=${15} />
         </button>`}

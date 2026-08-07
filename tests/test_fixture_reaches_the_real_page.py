@@ -147,6 +147,21 @@ def test_the_bowser_reds_pipe_pairing_renders_its_family_naming():
             "ui_fixture.py's enter_level) or views.py's pipe_star_entity "
             "stopped resolving it (tracking-storage.md's _reds_pipe_segments)")
 
+        # Task 7 fix round 1's own precondition: the ACTIVE card is a PAIRED
+        # segment (`pipe_star_entity` set), the one shape whose book mark must
+        # open the paired STAR's Library page rather than its own -- see
+        # tests/test_ui_library_links.py for the full regression. The book
+        # mark lives in `.log-card-head`, which renders whether or not the
+        # card is open, so no fold click is needed here -- this only pins
+        # that the fixture can produce the card the other file's test drives.
+        has_book_mark = opened.evaluate(
+            "!!document.querySelector('.log-card.log-card-active .log-card-library-link')")
+        assert has_book_mark, (
+            "the active paired-segment card carries no book mark button -- "
+            "either ui_fixture.py stopped reaching this state, or "
+            "practicelog.js stopped rendering one on a card an openLibrary "
+            "caller was given")
+
 
 def test_the_star_kind_armed_detail_renders():
     """`armed_detail` (the "Step N of M" progress row `LogCard` shares
