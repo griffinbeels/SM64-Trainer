@@ -366,13 +366,21 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     # The Ultimate Sheet library. Mounted unconditionally and independent of
     # the tracker service: it is community reference data, so it is worth
     # having even in a broadcast-only second instance with no store of its own.
-    from sm64_events.core.paths import (bundled_sheet_library,
+    from sm64_events.core.paths import (bundled_library_overrides,
+                                        bundled_sheet_library,
                                         sheet_library_path)
+    from sm64_events.library.audit import load_overrides
     from sm64_events.library.store import LibraryStore
     from sm64_events.server.library_api import create_library_router
     library = LibraryStore(sheet_library_path(), bundled_sheet_library())
     library.load()
     app.state.library = library
+    # The human's own audit corrections (tools/audit_library.py) -- a
+    # server-side refresh must apply them exactly as tools/scrape_sheet.py
+    # does at release time, or a re-fetched copy re-introduces every mistake
+    # the audit already fixed and (carrying a newer sheet_revision) keeps
+    # winning over the bundled, corrected snapshot until the next release.
+    library_overrides = load_overrides(bundled_library_overrides())
     # Adoptions bind a library row to a segment the USER built, so they need
     # the standards store to merge into. Without one (a broadcast-only second
     # instance) the read routes still mount and the adopt routes do not.
@@ -387,7 +395,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                               qualified)
         adoptions.load()
         app.state.library_adoptions = adoptions
-    app.include_router(create_library_router(library, adoptions=adoptions))
+    app.include_router(create_library_router(library, overrides=library_overrides,
+                                             adoptions=adoptions))
     if service is not None:
         app.include_router(create_api_router(service))
         from sm64_events.server.ranks_api import create_ranks_router
