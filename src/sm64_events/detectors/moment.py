@@ -86,6 +86,15 @@ MOMENTS: tuple[Moment, ...] = (
     Moment("textbox", A.DIALOG_ACTIONS, "Trigger a textbox"),
     Moment("pole_grab", A.POLE_GRAB_ACTIONS, "Grab a pole"),
     Moment("pickup", A.PICKUP_ACTIONS, "Pick up an object"),
+    # Round 9 item 6: *"We also need to detect when the user enters a cannon"*
+    # / *"(cannon entry xcam)"*. One row and its action set, which is what the
+    # registry is for. Its landmark resolves `bhvCannon` -> "cannon" out of the
+    # shipped catalogue, so a row reads "Enter a cannon in Bob-omb Battlefield"
+    # with nothing else added; the specific cannon is nameable like any other
+    # placed object. The OFFSET his x-cam wants is the open half —
+    # `tools/score_moment_clock.py` settles it from one screenshot, the same
+    # way a door's did, and until then a cannon carries the door's constant.
+    Moment("cannon_enter", A.CANNON_ACTIONS, "Enter a cannon"),
 )
 
 

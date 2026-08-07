@@ -495,6 +495,22 @@ ACT_PICKING_UP_BOWSER = 0x00000390
 PICKUP_ACTIONS = frozenset({ACT_PICKING_UP, ACT_DIVE_PICKING_UP,
                             ACT_PICKING_UP_BOWSER})
 
+# Climbing INTO a cannon — decomp include/sm64.h, fetched 2026-08-07 (the two
+# pole constants above came back byte-identical from the same file, which is
+# how this version was checked). His ask, round 9 item 6: *"We also need to
+# detect when the user enters a cannon"*, then *"(cannon entry xcam)"* naming
+# the timing reference.
+#
+# ENTRY ONLY, and the entry edge is the whole point: ACT_IN_CANNON is the
+# frame the game commits Mario to the in-cannon view, which is the camera cut
+# he calls the cannon-entry x-cam. Firing is a different moment
+# (ACT_SHOT_FROM_CANNON 0x00880898) and is deliberately NOT here — one kind,
+# one boundary, and the launch already has `spawned`-shaped consequences a
+# route can key on.
+# VERIFY (live gate): mario_action reads 0x00001371 while aiming in a cannon.
+ACT_IN_CANNON = 0x00001371
+CANNON_ACTIONS = frozenset({ACT_IN_CANNON})
+
 # gCurrAreaIndex (s16) — castle lobby/upstairs/basement are AREAS of level 6,
 # not levels. Live-verified 2026-06-12 via tools/hunt_exact.py snapshot diff:
 # reads 1 in the lobby, 2 upstairs, 3 in the basement, stable across repeated

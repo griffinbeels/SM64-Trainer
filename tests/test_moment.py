@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.detectors.moment import MOMENTS, MomentDetector
-from sm64_events.memory.addresses import (ACT_PULLING_DOOR, ACT_PUSHING_DOOR,
+from sm64_events.memory.addresses import (ACT_IN_CANNON, ACT_PULLING_DOOR,
+                                          ACT_PUSHING_DOOR,
                                           ACT_READING_NPC_DIALOG,
                                           ACT_SPAWN_SPIN_AIRBORNE)
 
@@ -213,6 +214,29 @@ def test_a_moment_carries_the_number_usamune_shows_not_the_raw_counter():
     assert events[0].payload["counter"] == 2003
     assert events[0].payload["igt_frames"] == 2005
     assert events[0].payload["igt"] == "1'06\"83"
+
+
+# -- cannon entry (round 9 item 6) --------------------------------------------
+# "We also need to detect when the user enters a cannon" / "(cannon entry
+# xcam)". ACT_IN_CANNON is the frame the game commits Mario to the in-cannon
+# view, which IS that camera cut; firing is a different action and is
+# deliberately not a moment.
+
+ACT_SHOT_FROM_CANNON = 0x00880898   # decomp include/sm64.h; NOT a moment
+
+
+def test_climbing_into_a_cannon_is_a_moment():
+    events = run([snap(ACT_WALKING, 100), snap(ACT_IN_CANNON, 101)])
+    assert [e.payload["kind"] for e in events] == ["cannon_enter"]
+    assert events[0].frame == 101
+
+
+def test_firing_the_cannon_is_not_a_second_moment():
+    """One kind, one boundary: entering the cannon is the practiced moment and
+    the launch would double-count it."""
+    events = run([snap(ACT_WALKING, 100), snap(ACT_IN_CANNON, 101),
+                  snap(ACT_SHOT_FROM_CANNON, 102)])
+    assert [e.payload["kind"] for e in events] == ["cannon_enter"]
 
 
 # -- the registry -------------------------------------------------------------
