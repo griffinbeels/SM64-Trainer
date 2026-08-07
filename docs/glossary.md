@@ -369,6 +369,18 @@ A person holding at least one [[entry]] in the [[Ultimate Sheet]].
 
 - **Lives** — the library builder (`src/sm64_events/library/build.py`)
 
+### Matched strategy
+
+The vetted [[strategy]] an [[approach]] turns out to be — found by comparing
+whole [[ladder]]s, since one time alone can misread a JP result as three
+seconds slower than its US twin. A match shows your real [[rank]] and
+[[personal best]] beside the community's; an [[approach]] with no match stays
+sheet-only. It can carry its own variant: a [[100-coin star]]'s [[approach]]
+matches only inside the exit its [[runner]]s actually used.
+
+- **Lives** — the matcher (`src/sm64_events/library/adopt.py`)
+  → the "= your …" chip on the [[Library tab]]
+
 ---
 
 ## What is on screen
@@ -391,14 +403,30 @@ pill]], the [[scope]] control, and your [[rank]]s across everything.
 
 ### Library tab
 
-The screen for browsing the [[Ultimate Sheet]] by course. Opens straight on
-whichever [[star]] or [[segment]] you last practiced, and otherwise shows
-every course you can browse into.
+The screen for browsing every [[approach]] the [[Ultimate Sheet]] documents.
+Opens straight on whichever [[star]] or [[segment]] you last practiced,
+otherwise a course grid to browse into; open one and its [[approach]]es lay
+out beginner to expert, each one's community times banded by the [[rank]]
+they earn. The [[tray]] collects [[entry]] rows to compare side by side, and
+Study in Compare hands the whole [[tray]] to Compare's own transport, playing
+them back in lockstep.
 
 - **Lives** — the tab (`src/sm64_events/ui/components/library.js`,
-  `src/sm64_events/ui/components/librarynav.js`)
+  `src/sm64_events/ui/components/librarynav.js`,
+  `src/sm64_events/ui/components/librarytarget.js`)
 - **Not** — the [[Practice tab]]. The Library never sets your [[target]]; it
   only shows what the community has recorded.
+
+### Tray
+
+The Library's comparison basket. Adding an [[entry]] docks it here, keyed on
+its [[approach]], its [[runner]] and its time together — never on its clip
+alone, since one video regularly stands as evidence for more than one
+[[star]]. "Play all" plays every docked clip loosely together; Study in
+Compare hands the whole tray to Compare's own transport instead, playing them
+back in lockstep.
+
+- **Lives** — the tray (`src/sm64_events/ui/components/librarytray.js`)
 
 ### Selector
 
@@ -466,6 +494,16 @@ grading it.
 
 - **Lives** — the log
   (`src/sm64_events/ui/components/practicelog.js`)
+
+### Book mark
+
+The icon on a [[practice log]] card that opens the [[Library tab]] straight to
+that card's own [[target]] and last-played [[strategy]]. A caller with
+nowhere to send it omits the icon outright, never a disabled one with no
+doorway behind it.
+
+- **Lives** — the doorway (`src/sm64_events/ui/components/practicelog.js`)
+  → the [[Library tab]]
 
 ### Progress graph
 
