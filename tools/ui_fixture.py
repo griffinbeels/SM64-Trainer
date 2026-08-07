@@ -746,6 +746,38 @@ def _seed_subsections(base: str) -> None:
                                **_subsection_definition(ordinal)})
 
 
+def _pad_journal(db_path: Path, count: int) -> None:
+    """Bulk-fill the journal with `count` inert rows, so the timeline
+    endpoint's per-poll walk costs what it costs on the LIVE journal (~23k
+    rows) instead of the near-zero a fresh fixture db pays.
+
+    The burst latency gate needs that: the tail-fetch discard cascade it
+    guards against (round 8 item 3, the 4.7 s star grab) only bites while a
+    fetch is genuinely IN FLIGHT when the burst's next broadcast lands, and
+    against an empty journal the fetch returns before any second message
+    arrives, so the gate would measure nothing.
+
+    Raw SQL on its own connection, BEFORE the server starts: `append_event`
+    commits per row, and these rows are deliberately below the service API --
+    type "padding" is unknown to every detector, projector branch and label
+    rule, so the replay and the timeline walks pay for them (the cost being
+    simulated) and no derived state changes.
+    """
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        cursor = conn.execute(
+            "INSERT INTO sessions (started_utc) VALUES (?)",
+            (datetime.now(timezone.utc).isoformat(),))
+        session_id = cursor.lastrowid
+        stamp = datetime.now(timezone.utc).isoformat()
+        conn.executemany(
+            "INSERT INTO events (session_id, seq, type, frame, wall_time_utc,"
+            " payload) VALUES (?,?,?,?,?,?)",
+            ((session_id, seq, "padding", seq * 2, stamp,
+              json.dumps({"igt_frames": seq % 3600}))
+             for seq in range(count)))
+        conn.commit()
+
+
 def _free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -778,7 +810,8 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               reconcile_full_corpus: bool = False,
               bowser_stage: tuple[int, int] | None = None,
               enter_level: int | None = None,
-              arm_hundred_coin: tuple[int, int] | None = None):
+              arm_hundred_coin: tuple[int, int] | None = None,
+              pad_journal: int = 0):
     """Yield the base URL of an offline instance; stop it on the way out.
 
     DETERMINISTIC BY DEFAULT: an empty database plus `seed_practice`, so two
@@ -859,6 +892,10 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     both (a foreign level change disarms an armed def), so this and
     `arm_segment` are for two separate, independent fixture instances, not
     one shared one.
+
+    `pad_journal` bulk-inserts that many inert journal rows before the server
+    starts, so per-poll endpoint costs match a LIVE-sized journal instead of a
+    fresh one (see `_pad_journal` -- the burst latency gate is why).
     """
     scratch = None
     if db_path is None:
@@ -879,6 +916,8 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
             if problems:
                 raise RuntimeError(
                     f"fixture's reconcile_defaults skipped rows: {problems}")
+    if pad_journal:
+        _pad_journal(db_path, pad_journal)
     broadcaster = Broadcaster()
     # `ranks=` is NOT optional here, whatever the signature says. Omit it and
     # every rank builder short-circuits to empty -- /api/ranks/standards starts

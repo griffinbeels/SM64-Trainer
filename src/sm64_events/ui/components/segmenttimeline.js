@@ -282,9 +282,6 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   // picking a third says the walk is not the answer.
   const [required, setRequired] = useState(new Set());
   const [saving, setSaving] = useState(false);
-  // Serialises the tail fetches. Not a debounce: latency IS the deliverable
-  // here, so a burst must not be made to wait -- what this prevents is two
-  // fetches in flight racing each other into the row list out of order.
   // WHAT THIS SURFACE ACTUALLY SHOWED, and when. Its own call rather than the
   // practice page's, because that page is unmounted while this tab is open.
   // Every latency report about the recorder so far has been unanswerable for
@@ -294,47 +291,85 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   // 18 frames from the touch to the x-cam and published on the same frame).
   const recorderRef = useRef(null);
   useUiLog(recorderRef, RECORDER_READERS);
+  // THE TAIL MACHINE'S STATE, all in refs, on purpose (round 8 item 3, his
+  // 4.7 s star grab). The tail used to live inside the feed-keyed effect
+  // below, and an effect RE-RUN cleans up the previous instance — but a star
+  // is never one broadcast, it is a BURST (star_collected, attempt_completed,
+  // rank traffic), so every fetch the burst triggered had its response
+  // discarded as stale, and the serialiser's retry ran inside the dead
+  // closure so ITS response was discarded too. The row only appeared when a
+  // LONE message let one instance survive its own round trip — usually his
+  // reset, which is the report verbatim. Refs give the machine nothing to die
+  // in: `deadRef` flips on UNMOUNT only, and `epochRef` counts base-list
+  // replacements so a tail racing a view switch cannot append old-view rows
+  // (its response is simply discarded; the fresh base load repaints anyway).
+  //
+  // `tailing`/`tailAgain` serialise the fetches. Not a debounce: latency IS
+  // the deliverable here, so a burst must not be made to wait -- what this
+  // prevents is two fetches in flight racing each other into the row list
+  // out of order.
   const tailing = useRef(false);
   const tailAgain = useRef(false);
+  const rowsRef = useRef(null);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const epochRef = useRef(0);
+  const deadRef = useRef(false);
+  useEffect(() => () => { deadRef.current = true; }, []);
+
+  // ONE writer for the held rows: the ref is what the tail machine reads for
+  // its after-id (state would hand it a stale closure), the state is what
+  // renders. Splitting the writes is how they would drift.
+  const holdRows = (next) => { rowsRef.current = next; setRows(next); };
+
+  async function tail() {
+    if (tailing.current) { tailAgain.current = true; return; }
+    const held = rowsRef.current;
+    if (held == null) return;   // base list in flight; its landing re-kicks
+    tailing.current = true;
+    const epoch = epochRef.current;
+    try {
+      const after = held.length ? held[held.length - 1].id : 0;
+      const body = await getJSON(
+        `/api/segments/timeline?limit=200&view=${viewRef.current}`
+        + `&after_id=${after}`);
+      if (!deadRef.current && epoch === epochRef.current && body.rows.length)
+        holdRows([...rowsRef.current, ...body.rows]);
+    } catch { /* a dropped tail is covered by the next event */ }
+    finally {
+      tailing.current = false;
+      if (!deadRef.current && tailAgain.current) {
+        tailAgain.current = false; tail();
+      }
+    }
+  }
 
   useEffect(() => {
-    let alive = true;
-    setRows(null); setRowsErr(null);
+    epochRef.current += 1;
+    const epoch = epochRef.current;
+    holdRows(null); setRowsErr(null);
     getJSON(`/api/segments/timeline?limit=200&view=${view}`)
-      .then((body) => { if (alive) setRows(body.rows); })
-      .catch((err) => { if (alive) setRowsErr(String(err)); });
-    return () => { alive = false; };
+      .then((body) => {
+        if (deadRef.current || epoch !== epochRef.current) return;
+        holdRows(body.rows);
+        tail();   // anything broadcast while the base load was in flight
+      })
+      .catch((err) => {
+        if (!deadRef.current && epoch === epochRef.current)
+          setRowsErr(String(err));
+      });
     // `catalogue` is in here on purpose: a rename changes no event, only what
     // the labels READ, so the refetch is the whole of "names apply backwards".
   }, [view, catalogue]);
 
   // THE LIVE HALF, and the whole of it. `t.feed` grows on every websocket
   // message (store.js), so this effect fires the moment the game does
-  // anything -- and asks only for what is newer than the newest row held.
-  // The old modal fetched inside a useEffect keyed on [view] and subscribed
-  // to nothing, so it was a snapshot of the moment it opened, forever.
+  // anything -- and merely KICKS the machine above, which asks only for what
+  // is newer than the newest row held. The old modal fetched inside a
+  // useEffect keyed on [view] and subscribed to nothing, so it was a snapshot
+  // of the moment it opened, forever.
   const newestSeq = t && t.feed && t.feed.length ? t.feed[0].seq : null;
-  useEffect(() => {
-    if (!rows) return;                       // the first load is still in flight
-    let alive = true;
-    async function tail() {
-      if (tailing.current) { tailAgain.current = true; return; }
-      tailing.current = true;
-      try {
-        const after = rows.length ? rows[rows.length - 1].id : 0;
-        const body = await getJSON(
-          `/api/segments/timeline?limit=200&view=${view}&after_id=${after}`);
-        if (alive && body.rows.length)
-          setRows((held) => [...held, ...body.rows]);
-      } catch { /* a dropped tail is covered by the next event */ }
-      finally {
-        tailing.current = false;
-        if (tailAgain.current) { tailAgain.current = false; tail(); }
-      }
-    }
-    tail();
-    return () => { alive = false; };
-  }, [newestSeq]);
+  useEffect(() => { tail(); }, [newestSeq]);
 
   function resetDownstream() {
     setSynth(null); setSynthErr(null);

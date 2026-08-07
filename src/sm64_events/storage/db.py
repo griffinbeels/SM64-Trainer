@@ -661,9 +661,18 @@ class Database:
                                    [(i,) for i in ids])
             self._conn.commit()
 
-    def events(self) -> list[EventRow]:
+    def events(self, after_id: int | None = None) -> list[EventRow]:
+        """The journal, oldest first. `after_id` returns only rows above that
+        id — the tail, for a caller (the API's journal cache) that already
+        holds everything up to it. Same shape either way."""
         with self._lock:
-            rows = self._conn.execute("SELECT * FROM events ORDER BY id").fetchall()
+            if after_id is None:
+                rows = self._conn.execute(
+                    "SELECT * FROM events ORDER BY id").fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM events WHERE id > ? ORDER BY id",
+                    (after_id,)).fetchall()
             return [EventRow(r["id"], r["session_id"], r["seq"], r["type"],
                              r["frame"], r["wall_time_utc"], json.loads(r["payload"]))
                     for r in rows]

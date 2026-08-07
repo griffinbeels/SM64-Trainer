@@ -563,6 +563,63 @@ def test_timeline_limit_is_bounded(tmp_path):
             "/api/segments/timeline?limit=99999").status_code == 422
 
 
+def test_timeline_journal_cache_extends_instead_of_rereading(tmp_path):
+    """The journal cache (round 8 item 1, approved: "we definitely shouldn't
+    be re-reading the journal from disk on every poll"): the first poll
+    decodes the whole journal, every later one asks only for `id > cached
+    max`. Asserted on the DOOR (which query the db was asked), never on a
+    timing — a timing assertion flakes, and the cost lives entirely in which
+    query runs. The second half asserts the rows still ARRIVE, so a cache
+    that extends wrongly cannot pass by never returning the new row."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)  # journal ids 2, 3 (session_started is id 1)
+        asked = []
+        whole_journal = service.db.events
+
+        def recording_events(after_id=None):
+            asked.append(after_id)
+            return whole_journal(after_id=after_id)
+
+        service.db.events = recording_events
+        first = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        assert asked == [None], "the first poll fetches the whole journal"
+        cached_max = max(row.id for row in whole_journal())
+        newest_shown = first[-1]["id"]
+
+        async def go():
+            await service.publish(Event(
+                type="star_collected", frame=2000, timestamp_utc=T0,
+                payload={"course_id": 2, "star_id": 3, "igt_frames": 500}))
+        asyncio.run(go())
+        second = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        assert asked[1:] == [cached_max], (
+            "a later poll asks only for the tail above the cached max id "
+            f"(got {asked[1:]})")
+        assert second[-1]["id"] > newest_shown, (
+            "the tail-extended cache must still serve the new row")
+
+
+def test_timeline_journal_cache_does_not_survive_a_db_swap(tmp_path):
+    """A reattach after a db-less boot swaps `service.db` (attach_db), and
+    another file's journal rows must not answer for the new one — same
+    object-identity rule the label memo already follows."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        primed = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        assert primed, "the cache must hold rows for the swap to matter"
+        service.db = Database(tmp_path / "second.db")
+        swapped = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        assert swapped == [], (
+            "a fresh, empty journal must answer empty — rows here are the "
+            "old db's cache outliving the object it belongs to")
+
+
 def test_timeline_orders_by_journal_id_not_frame(tmp_path):
     """CORRECTION to the task-11 brief: its sketch asserted rows sorted by
     `frame`, but `frame` is the raw game-frame counter and is NOT

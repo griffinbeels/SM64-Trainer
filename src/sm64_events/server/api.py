@@ -8,6 +8,7 @@ not the current PB), RuntimeError -> 503 (database unavailable / degraded
 mode)."""
 import dataclasses
 import re
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -436,6 +437,33 @@ def create_api_router(service) -> APIRouter:
     # The timeline's label memo — one per router, so tests building several
     # apps never share it. Shape and invalidation: the timeline route.
     timeline_memo: dict = {}
+    # The JOURNAL CACHE — the fetched-and-decoded `db.events()` list, extended
+    # by `id > cached max` instead of re-read whole. Re-fetching was ~68 ms at
+    # 23k rows, 90% of a timeline poll, unbounded in journal size, and the
+    # poll fires per game event while the recorder is open (round 8 item 1,
+    # approved: "we definitely shouldn't be re-reading the journal from disk
+    # on every poll"). Append-only is what makes this sound: the one runtime
+    # writer is `append_event`, `dedupe_journal --fix` only runs
+    # server-stopped, and replay never rewrites journal rows. Keyed on the db
+    # OBJECT (same rule as timeline_memo): a reattach after a db-less boot
+    # swaps `service.db`, and another file's rows must not answer for it.
+    # The lock covers concurrent polls (FastAPI runs sync endpoints in a
+    # threadpool); the returned list is a snapshot copy so an extension can
+    # never grow a list a caller is mid-walk through.
+    journal_lock = threading.Lock()
+    journal_cache: dict = {}
+
+    def journal_events():
+        with journal_lock:
+            if journal_cache.get("db") is not service.db:
+                journal_cache.clear()
+                journal_cache.update(db=service.db,
+                                     events=service.db.events())
+            else:
+                held = journal_cache["events"]
+                newest = held[-1].id if held else 0
+                held.extend(service.db.events(after_id=newest))
+            return list(journal_cache["events"])
 
     @router.get("/session")
     def session(clock: str = "igt", scope: str = "session"):
@@ -634,7 +662,7 @@ def create_api_router(service) -> APIRouter:
             raise HTTPException(422, "view must be steps or all")
         if service.db is None:
             raise HTTPException(503, "database unavailable")
-        events = list(service.db.events())      # ORDER BY id -- oldest first
+        events = journal_events()               # ORDER BY id -- oldest first
         places = _timeline_places(events)
         # ONE ROW PER ARRIVAL. A level load walks the area byte and each step
         # is a real `area_changed`, so entering a course drew two or three
@@ -777,7 +805,7 @@ def create_api_router(service) -> APIRouter:
             # default_strat, created_utc, ...).
             keys = [f.name for f in dataclasses.fields(SegmentDef)]
             current = SegmentDef(**{k: row[k] for k in keys})
-        report = backtest(service.db.events(), candidate, current)
+        report = backtest(journal_events(), candidate, current)
         return dataclasses.asdict(report)
 
     @router.post("/segments/lint")
@@ -894,7 +922,7 @@ def create_api_router(service) -> APIRouter:
         if len(picked_ids) < 2:
             raise HTTPException(422, "pick at least two moments — one to start "
                                      "on and one to finish on")
-        rows_by_id = {row.id: row for row in service.db.events()}
+        rows_by_id = {row.id: row for row in journal_events()}
         picked_rows = [rows_by_id.get(row_id) for row_id in picked_ids]
         if any(row is None for row in picked_rows):
             raise HTTPException(404, "unknown timeline event id")

@@ -151,3 +151,77 @@ def test_a_published_event_reaches_the_recorder_within_the_budget(capsys):
         assert latency_ms < LATENCY_CEILING_MS, (
             f"a row took {latency_ms:.0f} ms to appear; anything he can "
             "perceive is a defect, not a cost")
+
+
+def test_a_burst_of_events_still_paints_the_first_row(capsys):
+    """A star is never ONE broadcast — it is a burst (star_collected,
+    attempt_completed, rank traffic), and his grab painted 4.7 s late, in the
+    same paint as his RESET ("i usually have to reset the stage entirely for
+    it to update", round 8 item 3, diagnosed against his own ui_log). The
+    mechanism: the tail fetch lived inside an effect keyed on the feed's
+    newest seq, so each burst message re-ran the effect and CLEANED UP the
+    instance whose fetch was in flight — every response discarded as stale,
+    and the retry ran inside the dead closure so its response was discarded
+    too. The single-event test above cannot see any of that, which is why it
+    measured 29 ms while he waited seconds.
+
+    Two conditions make the failure reproducible rather than a race:
+    `pad_journal` gives the endpoint a LIVE-sized journal walk (his poll cost
+    ~70 ms at 23k rows), and the trailing broadcasts are spaced ~35 ms apart
+    so each one lands while the previous tail fetch is genuinely in flight.
+    Fails by construction against the effect-closure tail this branch shipped
+    with; the ceiling is the same regression bar as the lone-event test."""
+    needle = "Jolly Roger Bay"
+    with serve_ui_live(pad_journal=40_000) as (base, service), \
+            get_driver().launch() as page:
+        page.goto(f"{base}/ui/index.html")
+        page.wait_for(".log-list-card")
+        assert page.evaluate(_OPEN_THE_RECORDER) is True, (
+            "the recorder never opened — this measures nothing until it does")
+        assert needle not in (page.evaluate(
+            "document.querySelector('.record-rows').textContent") or ""), (
+            "the fixture already lists this row, so the stopwatch would stop "
+            "on someone else's event and report a latency of zero")
+        page.evaluate(_ARM_STOPWATCH % needle)
+
+        async def go():
+            await service.publish(Event(
+                type="level_changed", frame=90210,
+                timestamp_utc=dt.datetime.now(dt.timezone.utc),
+                payload={"from": 12, "to": 6}))
+            # THE BURST: four trailing broadcasts, none of which produces a
+            # row containing the needle (Castle <-> CCM edges). 35 ms apart —
+            # far enough that the browser flushes each as its own effect run
+            # (same-frame messages coalesce into one), close enough that each
+            # lands inside the previous tail fetch's flight window.
+            for trailing, (source, dest) in enumerate(
+                    ((6, 5), (5, 6), (6, 5), (5, 6))):
+                await asyncio.sleep(0.035)
+                await service.publish(Event(
+                    type="level_changed", frame=90211 + trailing,
+                    timestamp_utc=dt.datetime.now(dt.timezone.utc),
+                    payload={"from": source, "to": dest}))
+
+        published = threading.Thread(target=lambda: asyncio.run(go()))
+        started = time.time() * 1000
+        published.start()
+        published.join(timeout=10)
+
+        deadline = time.monotonic() + 10
+        mark = None
+        while mark is None and time.monotonic() < deadline:
+            mark = page.evaluate("window.__rowMark")
+            if mark is None:
+                page.wait_ms(20)
+        assert mark is not None, (
+            "the burst's first row never painted: every tail fetch the burst "
+            "triggered was discarded as stale — the effect-lifecycle bug this "
+            "test exists to keep dead")
+        latency_ms = mark - started
+        with capsys.disabled():
+            print(f"\n  recorder burst latency: publish -> painted row "
+                  f"= {latency_ms:.0f} ms (ceiling {LATENCY_CEILING_MS} ms)")
+        assert latency_ms < LATENCY_CEILING_MS, (
+            f"the burst's first row took {latency_ms:.0f} ms to appear; the "
+            "whole point of the tail machine is that a burst must not delay "
+            "what it announces")
