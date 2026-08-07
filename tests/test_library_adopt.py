@@ -74,8 +74,10 @@ def test_an_unmatched_approach_is_adopted_with_its_ladder():
         "subsections": []}]}
     adopted = adopt.adoptable(payload, {"star:1:4": {"Skyjump": _ladder(30.90)}})
     assert list(adopted) == ["star:1:4"]
-    assert list(adopted["star:1:4"]) == ["Slope slide strat"]
-    assert adopted["star:1:4"]["Slope slide strat"]["Mario"] == 24.0
+    layers = adopted["star:1:4"]
+    assert list(layers["strategies"]) == ["Slope slide strat"]
+    assert layers["strategies"]["Slope slide strat"]["Mario"] == 24.0
+    assert layers["jp_strategies"] == {}       # nothing annotated, so combined
 
 
 def test_an_approach_whose_name_already_exists_is_not_re_added():

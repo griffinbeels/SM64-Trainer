@@ -34,20 +34,20 @@ def test_the_file_ships_and_says_where_it_came_from(sheet):
     # deliberately not pinned (CLAUDE.md's shipped-default rule).
     assert set(sheet["model"]) and "Mario" in sheet["model"]
     assert len(sheet["entities"]) >= 40
-    assert sum(len(v) for v in sheet["entities"].values()) >= 70
+    assert sum(len(v["strategies"]) for v in sheet["entities"].values()) >= 70
 
 
 def test_no_fitted_strategy_shares_a_name_with_a_vetted_one(sheet):
     vetted = json.loads(Path(bundled_rank_standards()).read_text(encoding="utf-8"))
-    clashes = [(ek, name) for ek, strategies in sheet["entities"].items()
-               for name in strategies
+    clashes = [(ek, name) for ek, layers in sheet["entities"].items()
+               for name in layers["strategies"]
                if name in vetted["entities"].get(ek, {}).get("strategies", {})]
     assert clashes == [], clashes
 
 
 def test_a_fitted_ladder_is_served_and_marked(store, sheet):
-    entity, strategies = next(iter(sheet["entities"].items()))
-    name = next(iter(strategies))
+    entity, layers = next(iter(sheet["entities"].items()))
+    name = next(iter(layers["strategies"]))
     assert name in store.strategies(entity)
     assert store.is_fitted(entity, name)
     assert store.ladder_cs(entity, name)
@@ -65,8 +65,8 @@ def test_a_vetted_ladder_always_wins(store, sheet):
 def test_saving_never_spills_a_fitted_ladder_into_the_user_file(store, sheet, tmp_path):
     store.save()
     written = json.loads((tmp_path / "rank_standards.json").read_text(encoding="utf-8"))
-    leaked = [(ek, name) for ek, strategies in sheet["entities"].items()
-              for name in strategies
+    leaked = [(ek, name) for ek, layers in sheet["entities"].items()
+              for name in layers["strategies"]
               if name in written["entities"].get(ek, {}).get("strategies", {})]
     assert leaked == [], leaked
 

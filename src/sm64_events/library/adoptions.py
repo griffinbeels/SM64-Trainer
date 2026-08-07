@@ -80,7 +80,10 @@ def ladders(payload: dict, rows: dict) -> dict:
         if not entity or not item.get("ladder"):
             continue
         name = strategy_name(target["label"], item["name"])
-        out.setdefault(entity, {}).setdefault(name, item["ladder"])
+        layers = out.setdefault(entity, {"strategies": {}, "jp_strategies": {}})
+        layers["strategies"].setdefault(name, item["ladder"])
+        if item.get("ladder_jp"):
+            layers["jp_strategies"].setdefault(name, item["ladder_jp"])
     return out
 
 

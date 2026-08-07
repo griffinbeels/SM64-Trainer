@@ -92,7 +92,7 @@ def main() -> None:
                  if e.get("exit_variants")}
     adopted = adoptable(payload, vetted, qualified)
     LADDERS_OUT.write_text(json.dumps(
-        {"version": 1, "source": "sheet",
+        {"version": 2, "source": "sheet",
          "sheet_revision": payload["sheet_revision"],
          "model": payload["ladder_model"]["percentiles"],
          "entities": adopted}, indent=1, ensure_ascii=False, sort_keys=True),
@@ -126,7 +126,7 @@ def main() -> None:
     adopt_stats = summary(adopted, payload)
     print(f"  wrote {LADDERS_OUT.name}: {adopt_stats['strategies']} strategies "
           f"across {adopt_stats['entities']} entities that no vetted ladder "
-          f"already describes")
+          f"already describes ({adopt_stats['jp_ladders']} carry their own JP ladder)")
     drift = payload.get("styling_drift") or []
     if drift:
         print(f"  {len(drift)} rows where the sheet's BOLD disagrees with the "

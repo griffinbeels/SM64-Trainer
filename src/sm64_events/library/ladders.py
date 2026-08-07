@@ -189,6 +189,18 @@ def fit_payload(payload: dict) -> dict:
                 item.pop("ladder_version", None)
                 item["ladder_samples"] = len(times)
                 thin += 1
+            # The ANNOTATED-difference rule (user, 2026-08-07): a row whose JP
+            # population can carry its own ladder gets one BESIDE the US one;
+            # anything less is a combined ladder that applies to both modes.
+            # Only ever JP -- row_times prefers US, so a second fittable
+            # population is JP by construction.
+            jp_times = sorted(e["time_cs"] for e in item["entries"]
+                              if e.get("version") == "jp")
+            item.pop("ladder_jp", None)
+            if version == "us" and len(jp_times) >= MIN_ENTRIES:
+                jp_ladder = fit_ladder(jp_times)
+                if jp_ladder:
+                    item["ladder_jp"] = jp_ladder
     payload["ladder_model"] = {
         "percentiles": dict(LADDER_PERCENTILES),
         "min_entries": MIN_ENTRIES,

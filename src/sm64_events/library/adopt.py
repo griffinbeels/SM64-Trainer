@@ -97,17 +97,25 @@ def adoptable(payload: dict, vetted_by_entity: dict, qualified: set = ()) -> dic
             if index in matched or not approach.get("ladder"):
                 continue
             name = approach["name"]
-            existing = out.setdefault(entity, {})
-            if name in existing or name in vetted_by_entity.get(entity, {}):
+            existing = out.setdefault(entity, {"strategies": {}, "jp_strategies": {}})
+            if (name in existing["strategies"]
+                    or name in vetted_by_entity.get(entity, {})):
                 continue                   # same name, already covered
-            existing[name] = approach["ladder"]
-    return {entity: strategies for entity, strategies in out.items() if strategies}
+            existing["strategies"][name] = approach["ladder"]
+            # The SAME two-layer shape the vetted seed uses (strategies +
+            # jp_strategies), so the standards store resolves both sources
+            # with one rule instead of growing a second door per source.
+            if approach.get("ladder_jp"):
+                existing["jp_strategies"][name] = approach["ladder_jp"]
+    return {entity: layers for entity, layers in out.items()
+            if layers["strategies"]}
 
 
 def summary(adopted: dict, payload: dict) -> dict:
-    total = sum(len(s) for s in adopted.values())
+    total = sum(len(layers["strategies"]) for layers in adopted.values())
+    jp = sum(len(layers["jp_strategies"]) for layers in adopted.values())
     with_ladder = sum(1 for t in payload["targets"] for a in t["approaches"]
                       if a.get("ladder"))
-    return {"entities": len(adopted), "strategies": total,
+    return {"entities": len(adopted), "strategies": total, "jp_ladders": jp,
             "approaches_with_ladders": with_ladder,
             "percentiles": dict(LADDER_PERCENTILES)}

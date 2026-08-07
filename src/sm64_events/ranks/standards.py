@@ -89,6 +89,7 @@ class RankStandards:
         self.sheet_path = Path(sheet_path) if sheet_path else None
         self._data = {"version": 1, "entities": {}}
         self._sheet = {}
+        self._sheet_jp = {}
 
     # ---- load / save ----
     def _read_valid(self, p):
@@ -102,7 +103,13 @@ class RankStandards:
 
     def _load_sheet(self) -> None:
         sheet = self._read_valid(self.sheet_path)
-        self._sheet = sheet["entities"] if sheet else {}
+        self._sheet, self._sheet_jp = {}, {}
+        for ek, entity in (sheet["entities"] if sheet else {}).items():
+            if "strategies" in entity:     # v2: the vetted seed's own two-layer shape
+                self._sheet[ek] = entity.get("strategies", {})
+                self._sheet_jp[ek] = entity.get("jp_strategies", {})
+            else:                          # v1: flat strat -> ladder
+                self._sheet[ek] = entity
 
     def load(self) -> None:
         self._load_sheet()
@@ -167,8 +174,12 @@ class RankStandards:
         user's standards file. Called again whenever an assignment changes, so
         it REPLACES what it added last time rather than accumulating."""
         self._load_sheet()
-        for entity, strategies in (mapping or {}).items():
-            self._sheet.setdefault(entity, {}).update(strategies)
+        for entity, layers in (mapping or {}).items():
+            if "strategies" not in layers:           # tolerate the flat shape
+                layers = {"strategies": layers}
+            self._sheet.setdefault(entity, {}).update(layers.get("strategies", {}))
+            if layers.get("jp_strategies"):
+                self._sheet_jp.setdefault(entity, {}).update(layers["jp_strategies"])
 
     def is_fitted(self, ek, strat) -> bool:
         """Whether this ladder came from the sheet rather than the community's
@@ -178,8 +189,36 @@ class RankStandards:
     def fitted_strategies(self, ek) -> list:
         return [s for s in self._sheet.get(ek, {}) if s not in self._stored_ladders(ek)]
 
-    def ladder_cs(self, ek, strat) -> dict:
-        return {r: int(round(v * 100)) for r, v in self.ladders(ek).get(strat, {}).items()}
+    def jp_deltas(self, ek, strat) -> dict:
+        """{rank: JP seconds} where the JP time is ANNOTATED as different --
+        the vetted seed's sparse `jp_strategies` overlay, or the sheet layer's
+        fitted JP ladder. Empty means no annotated difference, and the base
+        ladder applies to BOTH modes (user's rule, 2026-08-07: combined unless
+        a difference is written down)."""
+        vetted = self._entity(ek).get("jp_strategies", {}).get(strat)
+        if vetted:
+            return dict(vetted)
+        return dict(self._sheet_jp.get(ek, {}).get(strat, {}))
+
+    def has_jp_ladder(self, ek, strat) -> bool:
+        return bool(self.jp_deltas(ek, strat))
+
+    def ladder_cs(self, ek, strat, version=None) -> dict:
+        """The ladder a time on `version` grades against, in centiseconds.
+
+        `version="jp"` OVERLAYS the annotated JP values onto the base ladder,
+        rank by rank -- sparse overlays (the vetted seed annotates only the
+        ranks whose JP time differs) and full JP ladders (the sheet layer)
+        resolve through the same rule. Any other version, and any (ek, strat)
+        with no annotation at all, gets the base ladder unchanged.
+
+        WHICH version a given attempt should grade on is deliberately not
+        decided here: that is the console-support branch's N64-mode spec, and
+        this parameter is the door it resolves through."""
+        base = self.ladders(ek).get(strat, {})
+        if version == "jp":
+            base = {**base, **self.jp_deltas(ek, strat)}
+        return {r: int(round(v * 100)) for r, v in base.items()}
 
     def clock_for(self, ek) -> str:
         return self._entity(ek).get("clock", _default_clock(ek))

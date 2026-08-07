@@ -60,6 +60,29 @@ here.** That work is theirs, is further along, and touches
 `server/api.py` and `main.py` — all of which this branch also touches, so
 whichever lands second reconciles.
 
+## JP standards: registered, resolved by one rule, mode-resolution NOT ours
+
+User's rule, 2026-08-07: **a JP time gets its own standard only where a
+difference is ANNOTATED; everywhere else the base ladder is COMBINED and
+applies to both modes.** Two sources annotate differently and ONE rule resolves
+both — `ranks/standards.py::ladder_cs(ek, strat, version="jp")` overlays the
+annotated JP values rank-by-rank onto the base:
+
+- **Vetted** — `rank_standards.seed.json` `jp_strategies` is SPARSE (only the
+  ranks whose JP time differs; 79 strategies / 617 cells, emitted by
+  `tools/scrape_ranks.py` since the beginning and unread until 2026-08-07).
+- **Sheet** — `sheet_ladders.seed.json` v2 mirrors the vetted two-layer shape
+  (`strategies` + `jp_strategies`), a FULL fitted JP ladder where a row's JP
+  population clears the feasibility floor on its own (58 library rows qualify;
+  6 of the adopted grading strategies carry one). `fit_payload` stamps it as
+  `ladder_jp`, and it rides adoption (`adopt.py` and user `adoptions.py` both).
+
+**WHICH version an attempt grades on is deliberately not decided here.** That
+is the console-support branch's N64-mode spec (AUTO/JP/US); `ladder_cs`'s
+`version=` parameter is the door their spec resolves through, and
+`has_jp_ladder(ek, strat)` is how a surface knows a split exists. Do not build
+mode detection or a version setting in this zone.
+
 ## Owed to phase 5: every standard links to its own examples
 
 User's ask, 2026-08-05, recorded before it is built. Each row of the
