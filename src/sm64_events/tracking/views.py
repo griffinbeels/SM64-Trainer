@@ -319,7 +319,13 @@ def _attempt_rank(a, frames, ranks, ek=None) -> dict | None:
     if not ladder:
         return None
     progress = _graded_progress(ladder, classify.display_cs(frames))
-    return {"rank": progress["rank"], "division": progress["division"]}
+    # Whether a.strat_tag's ladder is Ultimate-Sheet-derived rather than
+    # community-vetted (ranks.is_fitted's own contract) -- this medal is drawn
+    # on every practice-log row and every progress dot (both callers below),
+    # so a fitted-ladder grade must say so exactly as build_entity_strategies
+    # already does for the picker.
+    return {"rank": progress["rank"], "division": progress["division"],
+            "fitted": ranks.is_fitted(ek, a.strat_tag)}
 
 
 def valid_frames(history, strat, clock) -> list[int]:
@@ -387,7 +393,11 @@ def _strat_rank(ranks, ek, strat, basis) -> dict | None:
     if not ladder:
         return None
     progress = _graded_progress(ladder, classify.display_cs(basis["frames"]))
-    return {"rank": progress["rank"], "division": progress["division"]}
+    # Same is_fitted contract as _attempt_rank -- this feeds rank_by_star,
+    # segment_targets[].rank, and (via _candidate_rank's max()) a route
+    # step's own "rank", all of which grade one identified (ek, strat) pair.
+    return {"rank": progress["rank"], "division": progress["division"],
+            "fitted": ranks.is_fitted(ek, strat)}
 
 
 def _graded_progress(ladder: dict, time_cs: int) -> dict:
@@ -476,8 +486,14 @@ def entity_rank(ranks, ek, frames) -> dict | None:
     if not ladder:
         return None
     progress = _graded_progress(ladder, classify.display_cs(frames))
+    fastest_strat = _fastest_strategy(ranks, ek, ladder)
+    # The best-possible ladder is a pointwise minimum across every strategy
+    # (vetted and sheet-derived alike), so it has no single strategy to ask
+    # is_fitted about directly -- fastest_strat (just above) IS the strategy
+    # that actually sets it, so its fittedness is the entity's own.
     return {**progress, "score": round(progress["score"], 1),
-            "fastest_strat": _fastest_strategy(ranks, ek, ladder)}
+            "fastest_strat": fastest_strat,
+            "fitted": bool(fastest_strat) and ranks.is_fitted(ek, fastest_strat)}
 
 
 def ranks_share_ladder(ranks, ek, strat) -> bool:
@@ -542,8 +558,10 @@ def _best_strategy_graded(ranks, ek, history, pbs_by_strat, rank_mode,
 
 def build_entity_ranks(db, service) -> dict[str, dict]:
     """The picker's "how good am I at this star" answer, keyed by canonical
-    entity key: `{"rank": str, "division": str, "strat": str}` for every
-    practised entity that grades on AT LEAST ONE strategy.
+    entity key: `{"rank": str, "division": str, "strat": str, "fitted": bool}`
+    for every practised entity that grades on AT LEAST ONE strategy. `fitted`
+    is `strat`'s own ranks.is_fitted -- the winning strategy is a specific,
+    identified ladder here, unlike entity_rank's pointwise-min one.
 
     A THIRD "which rank" answer, deliberately distinct from the other two in
     this file: `rank_by_star` grades the ACTIVE strategy ("how am I doing at
@@ -604,7 +622,8 @@ def build_entity_ranks(db, service) -> dict[str, dict]:
         if best:
             strat, graded = best
             out[ek] = {"rank": graded["rank"], "division": graded["division"],
-                      "strat": strat}
+                      "strat": strat,
+                      "fitted": service.ranks.is_fitted(ek, strat)}
     return out
 
 
@@ -778,7 +797,12 @@ def _section_banner(ranks, ek, strat, basis, mode, pb_untagged=False) -> dict | 
     `classify.band`'s (the score/medal invariant, pinned by
     tests/test_ranks_scoring_seed.py), so `classify.band` is no longer
     called here; its own semantics, tests, and any other consumer are
-    untouched, this call site just stopped needing it."""
+    untouched, this call site just stopped needing it.
+
+    Every payload naming a strategy (i.e. everything past "no_strat") also
+    carries "fitted" (`ranks.is_fitted(ek, strat)`) -- whether this banner's
+    ladder is Ultimate-Sheet-derived rather than community-vetted, the same
+    contract build_entity_strategies' picker rows carry."""
     if ranks is None:
         return None
     has_standards = bool(ranks.ladders(ek))
@@ -788,13 +812,18 @@ def _section_banner(ranks, ek, strat, basis, mode, pb_untagged=False) -> dict | 
         return {"rank": None, "reason": "unattributed", "mode": mode}
     if not strat:
         return {"rank": None, "reason": "no_strat", "mode": mode}
+    # Computed once strat is known, whichever branch below returns -- every
+    # non-null payload names ONE (ek, strat) pair, so "fitted" belongs beside
+    # "rank" on all of them, not only the fully-graded case (a consistent
+    # shape means the UI never destructures a missing key on a sentinel).
+    fitted = ranks.is_fitted(ek, strat)
     ladder = ranks.ladder_cs(ek, strat)
     if not ladder:
-        return {"rank": None, "reason": "no_ladder", "mode": mode}
+        return {"rank": None, "reason": "no_ladder", "mode": mode, "fitted": fitted}
     if basis is None:
-        return {"rank": None, "reason": "unranked", "mode": mode}
+        return {"rank": None, "reason": "unranked", "mode": mode, "fitted": fitted}
     out = {**_graded_progress(ladder, classify.display_cs(basis["frames"])),
-           "mode": mode}
+           "mode": mode, "fitted": fitted}
     if mode != "pb":
         out["basis"] = {"frames": basis["frames"],
                         "display": format_igt(basis["frames"]),
