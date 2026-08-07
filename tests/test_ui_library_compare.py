@@ -14,6 +14,14 @@ pane via `enterCompare`. So this file checks `.compare-page` becoming the
 VISIBLE pane, never a `.library-study` wrapper -- that selector never exists
 by design.
 
+FIX ROUND 1 (controller + reviewer, live-verified): the FIRST version of this
+file only ever asserted the pane was VISIBLE, never that anything was OPEN
+inside it -- Study imported clips and showed the user an empty pane and a
+"load existing" dropdown to hunt through. Every test that drives a successful
+import now asserts `.compare-cmp` COUNT, never just pane visibility, per this
+project's own rule that a guard asserting existence rather than content is
+how an invisible feature ships.
+
 Fixture: same as test_ui_library_tray.py -- `ui_fixture.py`'s default seeding
 (star:2:4, "Fall onto the Caged Island") auto-opens a section with several
 approaches, each carrying example cards with an enabled "+"."""
@@ -57,40 +65,80 @@ _ADD_N_EXAMPLES = """
 }})()
 """
 
-# Stubs `window.fetch` for exactly the two import routes -- everything else
-# (including the real `/api/session`/`/api/replay/available` Compare fetches
-# once we route there) passes through to the real fixture server, per
-# task-6-brief.md step 3's own suggested fallback ("mock by pre-loading a stub
-# window.fetch wrapper before click"; uilab's Page has no `route` method to
-# intercept at the network layer). The SECOND `/api/compare/import` call fails
-# -- deterministic because studyInCompare awaits each item before starting the
-# next, so call order is tray order.
+# A FULL fake backend for the compare import+view loop -- FIX ROUND 1's own
+# lesson: mocking only `/api/compare/import` proves the pane becomes visible
+# but proves NOTHING about its content, because `/api/compare/view` (the real,
+# unmocked route) can never return a `saved` row for a synthetic import id
+# that was never actually written to the real db. So this stub keeps an
+# in-memory fake comparisons table and answers `/api/compare/view` FROM IT,
+# the same way the real server answers it from sqlite -- only then does
+# `.compare-cmp` reflect anything real about what studyInCompare did.
+#
+# Every call (including passthroughs) is logged to `window.__fetchCalls` so a
+# test can assert the ABSENCE of a call, not just the presence of one (FIX
+# ROUND 1, item 4 -- "no PUT was issued" needs a record of what WAS issued).
+#
+# The SECOND `/api/compare/import` call fails -- deterministic because
+# studyInCompare awaits each item before starting the next, so call order is
+# tray order. `FAIL_ON_CALL` lets a test pick which call (1-based) fails, or
+# skip failing entirely.
 _STUB_FETCH = """
-(() => {
+(() => {{
   const real = window.fetch.bind(window);
   let calls = 0;
-  window.__studyJobs = {};
-  window.fetch = (url, opts) => {
-    if (url === '/api/compare/import' && opts && opts.method === 'POST') {
+  let nextId = 9000;
+  window.__studyJobs = {{}};
+  window.__fakeComparisons = [];
+  window.__fetchCalls = [];
+  const FAIL_ON_CALL = {fail_on_call};
+  window.fetch = (url, opts) => {{
+    const method = (opts && opts.method) || 'GET';
+    window.__fetchCalls.push(method + ' ' + url);
+    if (url === '/api/compare/import' && method === 'POST') {{
       calls += 1;
       const jobId = 'study-test-job-' + calls;
-      window.__studyJobs[jobId] = (calls === 2)
-        ? { state: 'error', message: 'video unavailable' }
-        : { state: 'done', comparison: { id: 9000 + calls } };
-      return Promise.resolve(new Response(JSON.stringify({ job_id: jobId }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }));
-    }
-    if (typeof url === 'string' && url.startsWith('/api/compare/import/')) {
+      if (calls === FAIL_ON_CALL) {{
+        window.__studyJobs[jobId] = {{ state: 'error', message: 'video unavailable' }};
+      }} else {{
+        const body = JSON.parse(opts.body);
+        nextId += 1;
+        const comp = {{ id: nextId, entity_key: body.entity_key, strat: body.strat,
+          name: body.name, source_kind: body.source_kind, source_ref: body.source_ref,
+          in_frame: null, out_frame: null, clip_url: '/ui/assets/sm64_tracker.png' }};
+        window.__fakeComparisons.push(comp);
+        window.__studyJobs[jobId] = {{ state: 'done', comparison: {{ id: comp.id }} }};
+      }}
+      return Promise.resolve(new Response(JSON.stringify({{ job_id: jobId }}),
+        {{ status: 200, headers: {{ 'Content-Type': 'application/json' }} }}));
+    }}
+    if (typeof url === 'string' && url.startsWith('/api/compare/import/')) {{
       const jobId = url.split('/').pop();
       const status = window.__studyJobs[jobId]
-        || { state: 'error', message: 'unknown job' };
+        || {{ state: 'error', message: 'unknown job' }};
       return Promise.resolve(new Response(JSON.stringify(status),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }));
-    }
+        {{ status: 200, headers: {{ 'Content-Type': 'application/json' }} }}));
+    }}
+    if (typeof url === 'string' && url.startsWith('/api/compare/videos/') && method === 'PUT') {{
+      return Promise.resolve(new Response(JSON.stringify({{}}),
+        {{ status: 200, headers: {{ 'Content-Type': 'application/json' }} }}));
+    }}
+    if (typeof url === 'string' && url.startsWith('/api/compare/view')) {{
+      const params = new URLSearchParams(url.split('?')[1] || '');
+      const entity = params.get('entity');
+      const saved = window.__fakeComparisons.filter((c) => c.entity_key === entity);
+      return Promise.resolve(new Response(JSON.stringify(
+        {{ entity, strat: params.get('strat'), saved, suggestion: null,
+          library: [], rank_source: null }}),
+        {{ status: 200, headers: {{ 'Content-Type': 'application/json' }} }}));
+    }}
     return real(url, opts);
-  };
-})()
+  }};
+}})()
 """
+
+
+def _stub_fetch(page, fail_on_call="null"):
+    page.evaluate(_STUB_FETCH.format(fail_on_call=fail_on_call))
 
 
 @pytest.fixture(scope="module")
@@ -119,6 +167,23 @@ def _text_of(page, selector, timeout_s=8, interval=0.05):
     raise AssertionError(f"{selector} never appeared with text")
 
 
+def _count(page, selector, timeout_s=8, interval=0.05, at_least=1):
+    """Poll for `document.querySelectorAll(selector).length >= at_least`,
+    then return the count. Same visibility caveat as `_text_of` -- `.compare-
+    cmp` renders on a pane that may already be `display:none` again by the
+    time a later assertion in the SAME test looks at it (e.g. after
+    navigating away once already), so this polls presence in the DOM, not
+    visibility."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        count = page.evaluate(
+            f"document.querySelectorAll('{selector}').length")
+        if count >= at_least:
+            return count
+        time.sleep(interval)
+    return page.evaluate(f"document.querySelectorAll('{selector}').length")
+
+
 @pytest.fixture
 def library_page(library_server):
     """A FRESH page per test -- same reason test_ui_library_target.py gives:
@@ -144,18 +209,17 @@ def test_the_compare_nav_entry_is_gone(library_page):
     assert result["library"] is not None, "the Library nav entry should exist"
 
 
-def test_a_partial_import_failure_renders_the_line_and_still_studies_the_rest(library_page):
-    """Step 1 + Step 3's own contract: a failing item must not sink the
-    batch. Two items go into the tray; the mock fails the SECOND import.
-    Expect: (a) a visible '1 of 2 imported; ... failed: ...' line render in
-    the Library (readable even after navigating away, since the pane stays
-    mounted with display:none rather than unmounting), and (b) the page
-    still routes to the Compare pane for the item that DID import."""
+def test_a_successful_study_opens_every_imported_comparison(library_page):
+    """FIX ROUND 1, CRITICAL. The bug the reviewer found live: Study imported
+    the clips and left the Compare pane showing NONE of them (`.compare-cmp`
+    count 0, both stuck in "load existing"). Two items, both succeed -- assert
+    `.compare-cmp` count equals what was actually imported, not merely that
+    the pane became visible."""
     added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=2))
     assert added == 2, added
     library_page.wait_for(".library-tray-chip", timeout_ms=5000)
 
-    library_page.evaluate(_STUB_FETCH)
+    _stub_fetch(library_page)  # fail_on_call=null -- nothing fails
     clicked = library_page.evaluate("""
       (() => {
         const btn = document.querySelector('.library-tray-study');
@@ -166,7 +230,38 @@ def test_a_partial_import_failure_renders_the_line_and_still_studies_the_rest(li
     """)
     assert clicked == "clicked", clicked
 
-    message = _text_of(library_page, ".library-study-msg")
+    library_page.wait_for(".compare-page", timeout_ms=8000)
+    open_count = _count(library_page, ".compare-cmp", at_least=2)
+    assert open_count == 2, (
+        f"expected 2 open comparisons ({open_count} rendered) -- Study must "
+        "OPEN what it imported, not just navigate to an empty pane")
+
+
+def test_a_partial_import_failure_renders_the_line_and_still_studies_the_rest(library_page):
+    """Step 1 + Step 3's own contract: a failing item must not sink the
+    batch. Two items go into the tray; the mock fails the SECOND import.
+    Expect: (a) a visible '1 of 2 imported; ... failed: ...' line render in
+    the Library (readable even after navigating away, since the pane stays
+    mounted with display:none rather than unmounting), (b) the page routes
+    to the Compare pane for the item that DID import, and (c) that ONE
+    comparison is actually OPEN there (FIX ROUND 1 -- content, not just a
+    visible pane)."""
+    added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=2))
+    assert added == 2, added
+    library_page.wait_for(".library-tray-chip", timeout_ms=5000)
+
+    _stub_fetch(library_page, fail_on_call="2")
+    clicked = library_page.evaluate("""
+      (() => {
+        const btn = document.querySelector('.library-tray-study');
+        if (!btn || btn.disabled) return 'button missing or disabled';
+        btn.click();
+        return 'clicked';
+      })()
+    """)
+    assert clicked == "clicked", clicked
+
+    message = _text_of(library_page, ".library-study-msg-line.is-error")
     assert "1 of 2 imported" in message, message
     assert "failed: video unavailable" in message, message
 
@@ -180,6 +275,11 @@ def test_a_partial_import_failure_renders_the_line_and_still_studies_the_rest(li
     """)
     assert pane_display != "none", pane_display
 
+    open_count = _count(library_page, ".compare-cmp", at_least=1)
+    assert open_count == 1, (
+        f"expected the ONE successfully-imported comparison open "
+        f"({open_count} rendered)")
+
 
 def test_a_fully_failed_batch_shows_the_line_and_does_not_navigate(library_page):
     """The other half of "must not sink the batch": when NOTHING imported,
@@ -189,29 +289,102 @@ def test_a_fully_failed_batch_shows_the_line_and_does_not_navigate(library_page)
     assert added == 1, added
     library_page.wait_for(".library-tray-chip", timeout_ms=5000)
 
-    library_page.evaluate("""
-      (() => {
-        const real = window.fetch.bind(window);
-        window.fetch = (url, opts) => {
-          if (url === '/api/compare/import' && opts && opts.method === 'POST') {
-            return Promise.resolve(new Response(
-              JSON.stringify({ job_id: 'always-fails' }),
-              { status: 200, headers: { 'Content-Type': 'application/json' } }));
-          }
-          if (typeof url === 'string' && url.startsWith('/api/compare/import/')) {
-            return Promise.resolve(new Response(
-              JSON.stringify({ state: 'error', message: 'private video' }),
-              { status: 200, headers: { 'Content-Type': 'application/json' } }));
-          }
-          return real(url, opts);
-        };
-      })()
-    """)
+    _stub_fetch(library_page, fail_on_call="1")
     library_page.evaluate("document.querySelector('.library-tray-study').click()")
-    message = _text_of(library_page, ".library-study-msg")
+    message = _text_of(library_page, ".library-study-msg-line.is-error")
     assert "0 of 1 imported" in message, message
-    assert "failed: private video" in message, message
+    assert "failed: video unavailable" in message, message
 
     still_on_library = library_page.evaluate(
         "document.querySelector('.library-target-page') != null")
     assert still_on_library, "a fully-failed batch should not navigate away"
+
+
+def test_an_untrimmed_item_is_never_put_to_compare_videos(library_page):
+    """FIX ROUND 1, item 4. `trayToImport`'s `edit` is null for an untrimmed
+    tray item (every example card adds with `trim: null`, librarytarget.js),
+    and the server-side dedupe on `source_ref` within (entity_key, strat)
+    keeps whatever trim a re-imported comparison already has saved -- an
+    unconditional PUT would silently overwrite a user's own alignment on
+    re-add. Asserts the ABSENCE of the PUT directly, from the fetch call
+    log, rather than relying on the incidental 404 a real unmocked route
+    would produce (the reviewer's own reproduction: mutating the `if (edit)`
+    guard away hits the real, unmocked PUT route and 404s, which reports the
+    item as FAILED for the wrong reason and would silently stop proving
+    anything the moment a future round also mocks that route)."""
+    added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=1))
+    assert added == 1, added
+    library_page.wait_for(".library-tray-chip", timeout_ms=5000)
+
+    _stub_fetch(library_page)
+    library_page.evaluate("document.querySelector('.library-tray-study').click()")
+    library_page.wait_for(".compare-page", timeout_ms=8000)
+    _count(library_page, ".compare-cmp", at_least=1)  # let the batch finish
+
+    calls = library_page.evaluate("window.__fetchCalls")
+    put_calls = [c for c in calls if c.startswith("PUT /api/compare/videos/")]
+    assert put_calls == [], f"expected NO PUT for an untrimmed item, got: {put_calls}"
+
+
+def test_a_mixed_entity_study_names_what_it_is_showing_and_what_else_imported(library_page):
+    """FIX ROUND 1, item 2 (controller ruling, confirmed by the reviewer).
+    The tray is ordinary cross-entity state (librarytray.js's own header),
+    but Compare can only ever show ONE (entity, strat) pane -- before this
+    fix a mixed-entity Study said NOTHING about the ones it couldn't show
+    (StudyMessage only rendered on failure, and Compare's own "load
+    existing" is entity-scoped so it can't even hint others exist). Adds one
+    item on star:2:4 (already open), navigates to its sibling star:2:5 (same
+    course group, same navigation the tray's own cross-entity test in
+    test_ui_library_tray.py uses) and adds one there too, then asserts the
+    note names what is shown, says more was imported elsewhere, and that
+    `.compare-cmp` only ever shows the ONE entity Compare can actually
+    display."""
+    added_first = library_page.evaluate(_ADD_N_EXAMPLES.format(n=1))
+    assert added_first == 1, added_first
+    library_page.wait_for(".library-tray-chip", timeout_ms=5000)
+
+    library_page.evaluate("document.querySelector('.entity-back').click()")
+    library_page.wait_for(".library-courses", timeout_ms=15000)
+    opened_group = library_page.evaluate("""
+      (() => {
+        const cell = Array.from(document.querySelectorAll('.library-courses .starcell'))
+          .find((c) => c.querySelector('.starname')?.textContent === "2. Whomp's Fortress");
+        if (!cell) return "no Whomp's Fortress group cell";
+        cell.click();
+        return 'clicked';
+      })()
+    """)
+    assert opened_group == "clicked", opened_group
+    library_page.wait_for(".library-group", timeout_ms=15000)
+    picked_target = library_page.evaluate("""
+      (() => {
+        const cell = Array.from(document.querySelectorAll('.library-group .starcell'))
+          .find((c) => c.querySelector('.starname')?.textContent === 'Blast Away the Wall');
+        if (!cell) return 'no Blast Away the Wall cell';
+        cell.click();
+        return 'clicked';
+      })()
+    """)
+    assert picked_target == "clicked", picked_target
+    library_page.wait_for(".library-section.open .library-example", timeout_ms=10000)
+
+    added_second = library_page.evaluate(_ADD_N_EXAMPLES.format(n=1))
+    assert added_second == 1, added_second
+    library_page.wait_for(".library-tray-chip:nth-child(2)", timeout_ms=5000)
+
+    _stub_fetch(library_page)
+    library_page.evaluate("document.querySelector('.library-tray-study').click()")
+    library_page.wait_for(".compare-page", timeout_ms=8000)
+
+    note = _text_of(library_page, ".library-study-msg-line:not(.is-error)")
+    assert "Showing" in note, note
+    assert "also imported" in note, note
+    # star:2:4 is the FIRST tray item (added before navigating away), so it
+    # is the one Compare lands on and opens -- star:2:5's import is real
+    # (server-side, its own bucket) but not shown in THIS pane.
+    assert "2:5" in note or "Blast Away the Wall" in note, note
+
+    open_count = _count(library_page, ".compare-cmp", at_least=1)
+    assert open_count == 1, (
+        f"only the primary entity's comparison should be open here "
+        f"({open_count} rendered)")

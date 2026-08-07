@@ -110,6 +110,12 @@ function TrayChip({ item, editing, onToggleEdit, onTrim, onRemove }) {
 // always-visible-text law rather than dropping it: a click mid-batch would
 // double-fire every import, so the button explains why it will not respond
 // exactly the way the deleted note used to.
+//
+// FIX ROUND 1: `!onStudy` guards `disabled` and `onclick` again (the ONLY
+// caller today always passes a real function, so this changes nothing
+// visible -- it is defensive against a future caller that doesn't, which
+// would otherwise throw a TypeError on click rather than degrade to a
+// disabled button).
 export function LibraryTray({ items, onTrim, onRemove, onPlayAll, onStudy, studying }) {
   const [editingKey, setEditingKey] = useState(null);
   return html`<${Disclose} open=${items.length > 0} className="library-tray-disclose">
@@ -127,9 +133,9 @@ export function LibraryTray({ items, onTrim, onRemove, onPlayAll, onStudy, study
           <${Icon} name="play" size=${15} /> Play all
         </button>
         <button type="button" class="library-tray-study"
-            disabled=${items.length === 0 || studying}
+            disabled=${!onStudy || items.length === 0 || studying}
             title="Frame-accurate side-by-side study"
-            onclick=${() => onStudy(items)}>
+            onclick=${() => onStudy && onStudy(items)}>
           <${Icon} name="compare" size=${15} /> ${studying ? "Importing…" : "Study in Compare"}
         </button>
         ${studying

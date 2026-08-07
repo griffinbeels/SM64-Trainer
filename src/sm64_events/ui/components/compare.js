@@ -300,6 +300,12 @@ export function Compare({ t, intent, clearIntent, active }) {
   const [myIn, setMyIn] = useState(0);             // My Run work-area (in-memory)
   const [myOut, setMyOut] = useState(null);
   const initialized = useRef(false);
+  // A {entity, strat, ids} the Library's "Study in Compare" intent asked to
+  // have OPEN, held here until entity/strat state genuinely catch up with
+  // it -- see the dependency-less effect below for why this can't just call
+  // openComp from the intent effect directly (task-6 fix round 1, CRITICAL:
+  // Study imported clips and left the pane showing none of them).
+  const pendingOpenRef = useRef(null);
   const autoLoaded = useRef(new Set());            // combos whose default was auto-opened this mount
   // combos where the user CLOSED the rank-standard default (opt-out, persisted)
   const rankOff = useRef(null);
@@ -328,10 +334,18 @@ export function Compare({ t, intent, clearIntent, active }) {
     if (active && initialized.current) refreshFeed();
   }, [t.view]);
 
-  // deep-link intent (Compare button from Practice) — sets entity+strat+run
+  // deep-link intent (Compare button from Practice, or the Library's "Study
+  // in Compare" fold-in) — sets entity+strat+run. `openIds` (Study only) is
+  // NOT opened here: entity/strat state have not caught up yet on this same
+  // render (setEntity/setStrat only take effect on the NEXT one), so opening
+  // now would persist under the OLD combo's storage key -- stash it and let
+  // the dependency-less effect below (after openComp exists) consume it once
+  // entity/strat genuinely equal what this intent asked for.
   useEffect(() => {
     if (!intent) return;
     setEntity(intent.entity); setStrat(intent.strat); setAttemptId(intent.attemptId);
+    if (intent.openIds && intent.openIds.length)
+      pendingOpenRef.current = { entity: intent.entity, strat: intent.strat || null, ids: intent.openIds };
     clearIntent();
   }, [intent]);
 
@@ -389,6 +403,25 @@ export function Compare({ t, intent, clearIntent, active }) {
     const c = cmp.saved.find((x) => x.id === id);
     if (c && cmp.rank_source && c.source_ref === cmp.rank_source && comboKey) dismissRank(comboKey);
   };
+
+  // Flushes `pendingOpenRef` (Study in Compare's own imports) the moment
+  // entity/strat state genuinely equal what it asked for. Runs on EVERY
+  // render rather than a dependency array naming `openKey`/`entity`/`strat`
+  // on purpose: Study routing to the SAME combo already on screen sets
+  // entity/strat to their OWN current value, which Preact bails on with no
+  // re-render at all, so an effect keyed on "did openKey change" would never
+  // fire again and the freshly-imported ids would sit unopened forever. A
+  // ref check + early return costs nothing on the renders that don't match.
+  // Declared AFTER the open-set-from-localStorage effect above so a genuine
+  // combo SWITCH always sees that restore run first on the settling render
+  // and never gets its newly-opened ids clobbered by it.
+  useEffect(() => {
+    const pending = pendingOpenRef.current;
+    if (!pending) return;
+    if (pending.entity !== entity || pending.strat !== (strat || null)) return;
+    pendingOpenRef.current = null;
+    pending.ids.forEach(openComp);
+  });
 
   // shared import + poll (rank-standard auto-load below); OPENS the new comparison
   function importAndReload(source_kind, source_ref, name, useStrat) {

@@ -51,13 +51,52 @@ function RefreshMessage({ state }) {
 // A Twitch link failing must not sink the batch (task-6-brief.md step 1):
 // every tray item still gets its own import attempt, and this renders what
 // came back for the ones that didn't land. `result` is null before the
-// first Study click; a run with zero failures renders nothing here because
-// `studyInCompare` already routed to Compare to show the result directly.
+// first Study click. TWO independent lines, either or both -- a batch can
+// both fail partially AND span more than one entity:
+// - a failure line, whenever `failures` is non-empty (a full success shows
+//   nothing here, since the page has already routed to Compare to show the
+//   result directly);
+// - `mixedEntityNote` (fix round 1, CONTROLLER RULING): Compare shows one
+//   (entity, strat) pane at a time, so a Study batch spanning more than one
+//   entity still only opens the FIRST one there -- this says so, always
+//   visible, never a title/tooltip (acceptance.md's rule for anything that
+//   silently does less than its own affordance promises).
 function StudyMessage({ result }) {
-  if (!result || result.failures.length === 0) return null;
+  if (!result) return null;
+  const hasFailures = result.failures.length > 0;
+  if (!hasFailures && !result.mixedEntityNote) return null;
   const succeeded = result.total - result.failures.length;
   const parts = result.failures.map((f) => `'${f.label}' failed: ${f.detail}`);
-  return html`<p class="library-study-msg">${succeeded} of ${result.total} imported; ${parts.join("; ")}</p>`;
+  return html`<div class="library-study-msg">
+    ${hasFailures
+      ? html`<p class="library-study-msg-line is-error">${succeeded} of ${result.total} imported; ${parts.join("; ")}</p>`
+      : null}
+    ${result.mixedEntityNote
+      ? html`<p class="library-study-msg-line">${result.mixedEntityNote}</p>`
+      : null}
+  </div>`;
+}
+
+// A best-effort friendly name for an entity_key, off the CURRENT session
+// view -- the same `course_name`/`star_name`/segment `name` fields the
+// practice log already shows for these sections, never re-derived. Falls
+// back to the raw key when the session view has never carried that section
+// (an entity the player has not practiced yet this session): still an
+// honest, readable identifier, never a fabricated label.
+function entityLabel(t, key) {
+  const view = t && t.view;
+  if (!view) return key;
+  if (key.startsWith("segment:")) {
+    const id = Number(key.slice("segment:".length));
+    const sec = (view.segments || []).find((s) => s.segment_id === id);
+    return sec ? sec.name : key;
+  }
+  const match = key.match(/^star:(\d+):(\d+)$/);
+  if (!match) return key;
+  const [, courseId, starId] = match;
+  const sec = (view.stars || []).find(
+    (s) => s.course_id === Number(courseId) && s.star_id === Number(starId));
+  return sec ? `${sec.course_name} — ${sec.star_name}` : key;
 }
 
 // Poll GET /api/compare/import/{jobId} until it stops running (task-6-
@@ -241,13 +280,19 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
   // navigate Compare there yourself (its "load existing" dropdown) -- this
   // does not silently drop them, it just cannot show more than one entity's
   // worth of video at once, which is Compare's own existing limit, not a new
-  // one this task adds.
+  // one this task adds. FIX ROUND 1: `mixedEntityNote` says so on-screen
+  // (controller ruling) rather than leaving it to be discovered by opening
+  // "load existing" and wondering where the rest went.
   async function studyInCompare(items) {
     if (!items.length) return;
     setStudying(true);
     setStudyResult(null);
     const failures = [];
-    let firstOk = null;
+    // {entity_key, strat, comparisonId} per item that actually landed --
+    // comparisonId is null on the (rare) branch where the job reported
+    // "done" with no `comparison` at all, which still counts as imported
+    // for the "N of M" count but has nothing to open.
+    const succeeded = [];
     for (const item of items) {
       const { body, edit } = trayToImport(item);
       try {
@@ -265,14 +310,45 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
         if (status.comparison && edit) {
           await send("PUT", `/api/compare/videos/${status.comparison.id}`, edit);
         }
-        if (!firstOk) firstOk = { entity: item.entity_key, strat: item.strat || null };
+        // `body.strat`, not `item.strat || null` -- `trayToImport` already
+        // resolved the item's strat to what it actually IMPORTED under
+        // (its own "Standard" default), and routing must land on that same
+        // bucket or the strategy picker on the Compare pane would show "no
+        // strategy" beside videos saved under "Standard". Caught while
+        // building this fix round's own render test: the two independently
+        // re-derived the same fallback and would have drifted the moment a
+        // future caller ever passes a real per-approach strat.
+        succeeded.push({ entity_key: item.entity_key, strat: body.strat,
+                          comparisonId: status.comparison ? status.comparison.id : null });
       } catch (err) {
         failures.push({ label: body.name, detail: err.message || String(err) });
       }
     }
     setStudying(false);
-    setStudyResult({ total: items.length, failures });
-    if (firstOk) enterCompare(firstOk);
+    let mixedEntityNote = null;
+    if (succeeded.length) {
+      // FIX ROUND 1, CRITICAL: land on the first item's (entity, strat) AND
+      // actually OPEN what imported there -- `enterCompare`'s `openIds` is
+      // the door compare.js's own `openComp` already opens saved
+      // comparisons through (task-6-caveats.md point 3's "call the existing
+      // door", now applied to the fix too). Before this fix Study routed to
+      // the right pane and opened nothing in it.
+      const primary = succeeded[0];
+      const openIds = succeeded
+        .filter((s) => s.entity_key === primary.entity_key && s.strat === primary.strat
+                     && s.comparisonId != null)
+        .map((s) => s.comparisonId);
+      const otherKeys = [...new Set(succeeded
+        .filter((s) => s.entity_key !== primary.entity_key)
+        .map((s) => s.entity_key))];
+      if (otherKeys.length) {
+        mixedEntityNote = `Showing ${entityLabel(t, primary.entity_key)} here — also imported `
+          + `for ${otherKeys.map((k) => entityLabel(t, k)).join(", ")}; open those from their `
+          + `own target page to see them.`;
+      }
+      enterCompare({ entity: primary.entity_key, strat: primary.strat, openIds });
+    }
+    setStudyResult({ total: items.length, failures, mixedEntityNote });
   }
 
   return html`<div class="practice-card workshop-card library-page">
