@@ -190,10 +190,15 @@ function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVide
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
   async function startImport(source_kind, source_ref, name, useStrat) {
-    const r = await send("POST", "/api/compare/import",
-      { entity_key: entity, strat: useStrat != null ? useStrat : addStrat,
-        name, source_kind, source_ref });
-    pollJob(r.job_id);
+    try {
+      const r = await send("POST", "/api/compare/import",
+        { entity_key: entity, strat: useStrat != null ? useStrat : addStrat,
+          name, source_kind, source_ref });
+      pollJob(r.job_id);
+    } catch (e) {
+      // an unhandled throw here = the button silently does nothing (task 0053)
+      setJob({ state: "error", message: String(e) });
+    }
   }
   async function startUpload(file) {
     const q = new URLSearchParams({ entity_key: entity, strat: addStrat,
@@ -215,7 +220,11 @@ function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVide
         setJob(s);
         if (s.state === "done") { clearInterval(pollRef.current); pollRef.current = null; setJob(null); onAdded(s.comparison && s.comparison.id); }
         else if (s.state === "error") { clearInterval(pollRef.current); pollRef.current = null; }
-      } catch { clearInterval(pollRef.current); pollRef.current = null; }
+      } catch {
+        clearInterval(pollRef.current); pollRef.current = null;
+        // otherwise the drop zone shows "loading…" forever on a lost job
+        setJob({ state: "error", message: "lost contact with the import job" });
+      }
     }, 800);
   }
   function onDrop(e) {
@@ -296,6 +305,7 @@ export function Compare({ t, intent, clearIntent, active }) {
   const [strat, setStrat] = useState(null);
   const [attemptId, setAttemptId] = useState(null);
   const [cmp, setCmp] = useState({ saved: [], suggestion: null, library: [] });
+  const [cmpError, setCmpError] = useState(null);  // comparison fetch/auto-load failures — never silent
   const [openSet, setOpenSet] = useState(() => new Set());   // comparison ids shown now
   const [myIn, setMyIn] = useState(0);             // My Run work-area (in-memory)
   const [myOut, setMyOut] = useState(null);
@@ -359,9 +369,15 @@ export function Compare({ t, intent, clearIntent, active }) {
     if (!entity) return;
     getJSON(`/api/compare/view?entity=${encodeURIComponent(entity)}`
       + (strat ? `&strat=${encodeURIComponent(strat)}` : ""))
-      .then(setCmp).catch(() => {});
+      .then((v) => { setCmp(v); setCmpError(null); })
+      .catch((e) => setCmpError(`comparisons unavailable: ${e.message || e}`));
   };
-  useEffect(reloadCmp, [entity, strat]);
+  // Refetch on tab activation too, not only on an entity/strat change: a
+  // fetch that failed during a server restart otherwise sticks all session,
+  // because re-picking the SAME run is a state no-op that refires nothing
+  // (task 0053 — the tab read as "videos don't load" long after the server
+  // recovered).
+  useEffect(() => { if (active) reloadCmp(); }, [active, entity, strat]);
 
   // The OPEN SET (which saved comparisons are shown) is remembered per combo in
   // localStorage: opening a run reloads the last set you had open; closing (×)
@@ -390,7 +406,9 @@ export function Compare({ t, intent, clearIntent, active }) {
     if (c && cmp.rank_source && c.source_ref === cmp.rank_source && comboKey) dismissRank(comboKey);
   };
 
-  // shared import + poll (rank-standard auto-load below); OPENS the new comparison
+  // shared import + poll (rank-standard auto-load below); OPENS the new
+  // comparison. Failures land in cmpError — this path used to swallow them,
+  // which made a failed default auto-load indistinguishable from "no video".
   function importAndReload(source_kind, source_ref, name, useStrat) {
     send("POST", "/api/compare/import",
       { entity_key: entity, strat: useStrat != null ? useStrat : (strat || ""),
@@ -401,10 +419,12 @@ export function Compare({ t, intent, clearIntent, active }) {
             const s = await getJSON(`/api/compare/import/${r.job_id}`);
             if (s.state === "done") { clearInterval(id);
               if (s.comparison) openComp(s.comparison.id); reloadCmp(); }
-            else if (s.state === "error") clearInterval(id);
-          } catch { clearInterval(id); }
+            else if (s.state === "error") { clearInterval(id);
+              setCmpError(`couldn't load ${name}: ${s.message}`); }
+          } catch (e) { clearInterval(id);
+            setCmpError(`couldn't load ${name}: ${e.message || e}`); }
         }, 800);
-      }).catch(() => {});
+      }).catch((e) => setCmpError(`couldn't load ${name}: ${e.message || e}`));
   }
   // Rank-standard is OPT-OUT: whenever a combo has nothing open and its strategy
   // has a rank-standard example, open it by DEFAULT (open the saved copy, or
@@ -489,6 +509,7 @@ export function Compare({ t, intent, clearIntent, active }) {
           <${StrategySelect} strategies=${entityStrategies} value=${strat || ""}
             onChange=${(s) => setStrat(s || null)} />
         </div>
+        ${cmpError && html`<div class="badx">${cmpError}</div>`}
         ${shown.map((c) => html`<${ComparisonStage} key=${c.id} comp=${c}
           controller=${controller} onEdit=${editCmp} onDelete=${closeComp} />`)}
         <${AddComparison} entity=${entity} strat=${strat} strategies=${entityStrategies}

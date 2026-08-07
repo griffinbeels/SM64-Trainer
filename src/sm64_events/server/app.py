@@ -108,8 +108,8 @@ async def _db_reattach_loop(service, db_retry) -> None:
             log.exception("db attach failed - staying broadcast-only")
             return
         log.warning("instance lock freed - database attached, tracking "
-                    "enabled (was broadcast-only; the compare tab appears "
-                    "after the next restart)")
+                    "enabled (was broadcast-only; compare/compilation were "
+                    "mounted at boot and answer normally from here)")
         return
 
 

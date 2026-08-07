@@ -249,17 +249,23 @@ def build():
             tracker=service)
     # Compare tab: import comparison videos (yt-dlp/copy -> ffmpeg normalize)
     # into the content cache, then serve them as plain clips. Only built when
-    # ffmpeg is available (same binary the replay sink uses).
+    # ffmpeg is available (same binary the replay sink uses). Deliberately NOT
+    # gated on the db: a boot that loses the instance-lock race (the reload
+    # handoff, live 2026-07-30 + 2026-08-06) boots db-less and self-heals via
+    # the reattach loop, but a router that was never mounted 404s forever —
+    # the Compare tab swallows that silently and reads as "videos don't load"
+    # (task 0053). The service reads tracker.db per call, so it answers 503
+    # until the db lands, then works with no restart.
     compare = None
     _ffmpeg_bin = bundled_ffmpeg() or shutil.which("ffmpeg")
-    if db is not None and _ffmpeg_bin:
+    if _ffmpeg_bin:
         importer = VideoImporter(compare_cache_dir(), _ffmpeg_bin)
         compare = CompareService(importer, service, broadcaster,
                                  compare_cache_dir())
     # Failure compilations reuse the replay ring + extractor; only built when
-    # replay AND the db are available (needs attempts + footage).
+    # replay is available (same db reasoning as compare above).
     compilation = None
-    if replay is not None and db is not None:
+    if replay is not None:
         compilation = CompilationService(
             replay=replay, tracker=service,
             builder=CompilationBuilder(extractor=replay.extractor, codec=codec,
