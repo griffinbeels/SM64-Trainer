@@ -571,3 +571,14 @@ broadcasting but writes nothing, so two of them polling one emulator can never
 record every [[event]] twice.
 
 - **Lives** — the lock (`src/sm64_events/storage/instance_lock.py`)
+
+### Debug report
+
+One markdown file capturing what the trainer was doing when something went
+wrong: capped tails of the server log, the [[journal]], the [[UI log]] and the
+perf samples, plus the server's health readout and install facts. The Debug report
+button in the settings drawer writes one and opens Explorer with it selected,
+so a user can attach evidence to a bug report instead of a description of it.
+
+- **Lives** — the report builder (`src/sm64_events/core/diagnostics.py`) → the
+  settings drawer (`src/sm64_events/ui/components/header.js`)
