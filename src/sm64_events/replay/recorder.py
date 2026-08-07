@@ -39,6 +39,7 @@ import shutil
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Protocol
 
 import numpy as np
@@ -140,6 +141,12 @@ class ReplayRecorder:
         self._idle = False
         self._idle_since = None   # utc datetime while idle (the discard rule)
         self._idle_dropped = 0
+        # Idle-discard unlinks that hit a Windows sharing violation (ffmpeg's
+        # own segment close, a clip cut, an indexer briefly holding the file).
+        # Deferred here and retried from the attach loop instead of
+        # tracebacking: path -> monotonic time of the first failed attempt.
+        self._deferred_discards: dict[Path, float] = {}
+        self._discard_lock = threading.Lock()
         self._session_paused = False  # manual pause: outranks the input tap
 
     # -- lifecycle -----------------------------------------------------------
@@ -152,6 +159,8 @@ class ReplayRecorder:
         # that view() then serves against an empty ring after a restart.
         shutil.rmtree(scratch, ignore_errors=True)
         scratch.mkdir(parents=True, exist_ok=True)
+        with self._discard_lock:
+            self._deferred_discards.clear()   # the wipe above was their backstop
 
         if self._codec is None:
             self._codec = pick_video_codec()
@@ -192,6 +201,7 @@ class ReplayRecorder:
                 log.info("window lost — tearing down capture")
                 self._teardown_capture()
 
+            self._flush_deferred_discards()
             self._maybe_idle_pause()
             self._stop_event.wait(self._cfg.attach_poll_s)
 
@@ -233,8 +243,13 @@ class ReplayRecorder:
         # audio sidecar, the only path that still has the old two-clock
         # behaviour, reached solely when no ffmpeg is present.
         if self._video_sink_factory is not None:
+            # codec is pick_video_codec()'s answer (start() computes it once):
+            # the sink must encode with what THIS machine has, not with the
+            # nvenc it used to hardcode — a non-NVIDIA machine's child died at
+            # birth and the respawn loop flashed the user's cursor (2026-08-07).
             self._video_sink = self._video_sink_factory(self._cfg,
-                                                        self._on_segment)
+                                                        self._on_segment,
+                                                        self._codec)
             self._video_sink.start()
         else:
             with self._lock:
@@ -435,9 +450,41 @@ class ReplayRecorder:
             try:
                 seg.path.unlink(missing_ok=True)
             except OSError:
-                log.exception("idle-discard unlink failed for %s", seg.path)
+                # A sharing violation, not a defect: ffmpeg's segment close, a
+                # clip cut or an indexer still holds the file for a moment.
+                # Defer to the attach loop rather than tracebacking (the old
+                # ERROR here was reported as a bug in its own right,
+                # 2026-08-07); start()'s scratch wipe is the last resort.
+                with self._discard_lock:
+                    self._deferred_discards.setdefault(seg.path,
+                                                       time.monotonic())
+                log.debug("idle-discard deferred (file busy): %s", seg.path)
             return
         self.ring.add(seg)
+
+    # Give a held file this long to come free before we stop retrying and
+    # leave it for the next start()'s scratch wipe.
+    DISCARD_GIVE_UP_S = 300.0
+
+    def _flush_deferred_discards(self) -> None:
+        """Retry idle-discard unlinks that hit a sharing violation. Runs once
+        per attach tick; the holder (ffmpeg, a clip cut) usually lets go
+        within a segment or two."""
+        with self._discard_lock:
+            pending = list(self._deferred_discards.items())
+        for path, first_failure in pending:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                if time.monotonic() - first_failure > self.DISCARD_GIVE_UP_S:
+                    log.warning(
+                        "idle-discard: %s still held %.0f s after the first "
+                        "attempt — leaving it for the next startup wipe",
+                        path, time.monotonic() - first_failure)
+                else:
+                    continue          # still busy — keep it queued
+            with self._discard_lock:
+                self._deferred_discards.pop(path, None)
 
     # -- frame callback (library thread) -------------------------------------
 

@@ -221,13 +221,16 @@ def build():
         _ffmpeg = bundled_ffmpeg() or _shutil.which("ffmpeg")
         if _ffmpeg:
             try:
+                from sm64_events.core.childproc import quiet_spawn_kwargs
                 _sp.run([_ffmpeg, "-version"], capture_output=True,
-                        timeout=10, check=True,
-                        creationflags=_sp.CREATE_NO_WINDOW)
+                        timeout=10, check=True, **quiet_spawn_kwargs())
                 from sm64_events.replay.ffmpeg_sink import FfmpegAvSink
+                # codec: the recorder passes pick_video_codec()'s answer, so
+                # the sink encodes with what THIS machine has (hardcoded
+                # nvenc flashed a non-NVIDIA user's cursor, 2026-08-07).
                 video_sink_factory = (
-                    lambda cfg, on_seg, _f=_ffmpeg: FfmpegAvSink(
-                        cfg, on_seg, ffmpeg=_f))
+                    lambda cfg, on_seg, codec, _f=_ffmpeg: FfmpegAvSink(
+                        cfg, on_seg, ffmpeg=_f, codec=codec))
                 logging.getLogger("sm64.replay").info(
                     "replay backend: single ffmpeg A+V mux (%s)", _ffmpeg)
             except Exception:

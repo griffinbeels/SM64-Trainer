@@ -44,11 +44,13 @@ import os
 import queue
 import subprocess
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
 
+from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.replay.config import RING_MAXRATE, video_quality_args
 from sm64_events.replay.ring import SegmentInfo
 
@@ -207,10 +209,22 @@ class FfmpegAvSink:
     from any thread; segments arrive at on_segment with wall-true UTC spans and
     audio muxed in, synced on a single clock."""
 
-    def __init__(self, cfg, on_segment, ffmpeg: str = "ffmpeg"):
+    # A child alive at least this long was genuinely encoding; one that died
+    # younger is dying on arrival (encoder init failure, full disk) and gets
+    # backed off instead of respawned per write attempt.
+    _HEALTHY_CHILD_S = 5.0
+
+    def __init__(self, cfg, on_segment, ffmpeg: str = "ffmpeg",
+                 codec: str = "h264_nvenc"):
         self._cfg = cfg
         self._on_segment = on_segment
         self._ffmpeg = ffmpeg
+        # The codec is pick_video_codec()'s answer, threaded through the
+        # recorder — NEVER probed or hardcoded here. Hardcoding h264_nvenc
+        # here is the bug that flashed a non-NVIDIA user's mouse forever
+        # (2026-08-07): the child died at birth and the respawn loop showed
+        # Windows' busy cursor ~2 s per spawn.
+        self._codec = codec
         self._latest: np.ndarray | None = None
         self._proc: subprocess.Popen | None = None
         self._feeder: threading.Thread | None = None
@@ -221,6 +235,8 @@ class FfmpegAvSink:
         self._fed = 0
         self._seg_n_base = 0
         self._restarts = 0
+        self._fail_streak = 0
+        self._spawned_at_mono = 0.0
         self._jobs: list[int] = []
         # audio named-pipe transport
         self._audio_q: queue.Queue = queue.Queue(maxsize=256)
@@ -287,16 +303,21 @@ class FfmpegAvSink:
             "-use_wallclock_as_timestamps", "1", "-thread_queue_size", "1024",
             "-f", "s16le", "-ar", str(rate), "-ac", "2", "-i", self._pipe_name,
             "-map", "0:v:0", "-map", "1:a:0",
-            # video: NVENC, CFR locked to the wall clock. QUALITY comes from the
-            # one registry in config.py — the ring is the ceiling on every clip
-            # ever cut from it, so it targets a picture quality (cq), not a
-            # bitrate that over/undershoots with scene difficulty.
-            "-c:v", "h264_nvenc",
-            *video_quality_args("h264_nvenc", "realtime", RING_MAXRATE),
+            # video: the machine's picked codec, CFR locked to the wall clock.
+            # QUALITY comes from the one registry in config.py — the ring is
+            # the ceiling on every clip ever cut from it, so it targets a
+            # picture quality (cq/crf), not a bitrate that over/undershoots
+            # with scene difficulty.
+            "-c:v", self._codec,
+            *video_quality_args(self._codec, "realtime", RING_MAXRATE),
             # bf=0: B-frames shift a segment's start_time off frame 0, breaking
             # the pts contract the extractor cuts against.
             "-bf", "0",
-            "-g", str(int(fps * seg_s)), "-forced-idr", "1",
+            "-g", str(int(fps * seg_s)),
+            # forced-idr is an NVENC knob; x264 already emits IDR at every
+            # -g boundary (closed GOP is its default), which is all the
+            # segment muxer needs to cut on.
+            *(["-forced-idr", "1"] if self._codec == "h264_nvenc" else []),
             "-fps_mode", "cfr", "-r", str(fps),
             # audio: AAC, async-resampled to LOCK to the master (kills drift)
             "-c:a", "aac", "-b:a", "160k", "-ar", str(rate),
@@ -310,8 +331,8 @@ class FfmpegAvSink:
         ]
         self._proc = subprocess.Popen(
             args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, bufsize=0,
-            creationflags=subprocess.CREATE_NO_WINDOW)
+            stderr=subprocess.PIPE, bufsize=0, **quiet_spawn_kwargs())
+        self._spawned_at_mono = time.monotonic()
         job = _assign_kill_on_close(self._proc)
         if job is not None:
             self._jobs.append(job)
@@ -331,8 +352,22 @@ class FfmpegAvSink:
                                  name=name, daemon=True)
             t.start()
             self._readers.append(t)
-        log.info("ffmpeg AV sink: spawned %dx%d@%d nvenc + audio pipe (run %d)",
-                 w, h, fps, self._seg_n_base)
+        log.info("ffmpeg AV sink: spawned %dx%d@%d %s + audio pipe (run %d)",
+                 w, h, fps, self._codec, self._seg_n_base)
+
+    def _respawn_delay(self) -> float:
+        """How long to wait before replacing a dead child. A child that died
+        young is dying on arrival — respawning per write attempt produced 331
+        restarts in one sitting (disk-full, 2026-06-21) and a permanently
+        flashing busy cursor on a machine whose encoder cannot start
+        (2026-08-07). A healthy run resets the streak so a one-off death
+        still recovers instantly."""
+        alive_s = time.monotonic() - self._spawned_at_mono
+        if alive_s >= self._HEALTHY_CHILD_S:
+            self._fail_streak = 0
+            return 0.0
+        self._fail_streak = min(self._fail_streak + 1, 5)
+        return min(2.0 ** self._fail_streak, 30.0)
 
     def _stop_proc(self) -> None:
         proc = self._proc
@@ -467,6 +502,12 @@ class FfmpegAvSink:
                     self._restarts += 1
                     self._teardown_audio_pipe()
                     self._stop_proc()
+                    delay = self._respawn_delay()
+                    if delay:
+                        log.warning("ffmpeg child died young - waiting %.0f s "
+                                    "before respawn (streak %d)",
+                                    delay, self._fail_streak)
+                        self._stop.wait(delay)
                     next_t = _time.perf_counter()
                     continue
                 wms = (_time.perf_counter() - t0) * 1000
