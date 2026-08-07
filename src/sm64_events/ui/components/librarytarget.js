@@ -10,7 +10,7 @@
 // as two doors rather than unifying them lives on `sectionOrder`'s own
 // docstring, where the next person choosing between them will look first.
 import { h } from "preact";
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON } from "../api.js";
 import { fmtSeconds } from "../format.js";
@@ -317,27 +317,48 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
   // `entityKey`. Keying on `entityKey` broke two ways at once for the 129 of
   // 252 targets that have no entity at all (every Castle Movement, every
   // stage RTA, one not-a-target) -- `entityKey` is `null` for every one of
-  // them, and `useRef(null)`'s OWN initial value is `null`, so the guard's
+  // them, and the old guard's own sentinel started at `null` too, so the
   // very first comparison (`null === null`) was already true on mount and
-  // the effect returned before ever running: auto-expand never fired,
+  // the check returned before ever running: auto-expand never fired,
   // period, on more than half the library's target pages (190 approaches
   // across those 129 targets, including "CCM RTA"'s 4 approaches / 138
-  // entries). Swapping only the ref's initial value would have fixed the
-  // mount case and left navigation broken: `entityKey` stays `null` for
+  // entries). Swapping only the sentinel's initial value would have fixed
+  // the mount case and left navigation broken: `entityKey` stays `null` for
   // EVERY entity-less target, so hopping from one to another would still
   // read as "already opened this page" and never re-fire. Same failure
   // shape as the tray key two fix rounds ago -- an identity two genuinely
   // different things can share, here two different castle-movement targets
   // sharing the one value every entity-less target has.
-  const openedPage = useRef(null);
-  useEffect(() => {
-    if (openedPage.current === pageIdentity) return;
-    openedPage.current = pageIdentity;
+  //
+  // FIX ROUND 4 (controller finding, from the re-reviewer's own probe):
+  // computed DURING RENDER, not in a `useEffect`. An effect commits one
+  // FRAME AFTER the section headers this page draws already exist and are
+  // clickable, so a click landing in that gap was silently reverted the
+  // instant the effect caught up -- measured at 5 of 10 clicks reverted with
+  // no artificial wait: a coin flip, not a narrow window, and worse on a
+  // loaded machine than an idle one, since the gap is a TICK rather than a
+  // fixed delay. This is React/Preact's own documented pattern for state
+  // that must reset when a key changes but stay freely user-overridable in
+  // between: compare against the identity the LAST RENDER saw, and adjust
+  // `expanded` right here rather than scheduling a later commit. Calling
+  // `setExpanded` during render makes Preact re-run this render with the new
+  // value BEFORE anything paints, so there is no commit where a section is
+  // clickable and auto-expand has not yet decided -- nothing runs AFTER a
+  // click to revert it, because nothing runs after render at all for this.
+  // `openedPage` starts at `null`, never at `pageIdentity` itself, because
+  // `pageIdentity` is always a STRING (even `""` for an empty `rows`) and
+  // `null` can never equal a string -- the same trap `entityKey`'s old
+  // sentinel fell into, avoided this time by picking one no real value can
+  // collide with, not merely one that starts out different from today's
+  // data. WHAT this decides is unchanged from round 3 (still once per page,
+  // still `autoExpandName`'s own resolution) -- only WHEN it decides moved.
+  const [openedPage, setOpenedPage] = useState(null);
+  if (openedPage !== pageIdentity) {
+    setOpenedPage(pageIdentity);
     const wantedName = autoExpandName(approaches, activeStrat);
     const hit = approaches.find((approach) => approach.name === wantedName);
     setExpanded(hit ? approachIdentity(hit) : null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageIdentity]);
+  }
 
   // A deep link (Task 7: the standards ladder's own tier rows, and the
   // book mark) re-fires on every change, unlike the auto-open above — the

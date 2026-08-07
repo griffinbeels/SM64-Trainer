@@ -14,6 +14,7 @@ strategy" is a real assertion here, not a tautology that would also pass for
 "opens the first section"."""
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -362,3 +363,73 @@ def test_auto_expand_re_fires_navigating_between_two_entity_less_targets(library
         f"expected the SECOND entity-less target to auto-expand its own "
         f"first strategy too; {second_open} sections were open -- it "
         "inherited the first page's state instead of re-firing")
+
+
+# ---- fix round 4 (controller finding, from the re-reviewer's own probe):
+# a section click the instant its header exists must never be reverted -----
+
+def test_a_click_the_instant_the_header_exists_is_never_reverted(library_server):
+    """FIX ROUND 4. The re-reviewer's own method, deliberately NOT the
+    `wait_for(".library-section.open")` this file's other tests use --
+    that wait passes only once auto-expand has already committed, which
+    defines the race away instead of testing it. Clicks a section OTHER
+    than the one auto-expand picks (star:2:4's fixture: auto-expand opens
+    "Fall onto the Caged Island", confirmed by
+    `test_auto_open_follows_the_active_strategy_not_the_first_section`
+    above; "Double jump owlless" is a real sibling approach on the same
+    entity) the instant its own header exists.
+
+    FIRST ATTEMPT AT THIS TEST WAS A FALSE NEGATIVE, recorded here because
+    it is the actual proof this test has teeth. A two-step version --
+    Python `wait_for(".library-section-head")`, THEN a separate
+    `evaluate()` to click -- passed 10/10 even with the round-3 EFFECT-BASED
+    code restored (the exact code the re-reviewer measured 5/10 reverts
+    against). The Python<->browser round trip between those two calls is
+    slower than Preact's own effect scheduling, so by the time the click
+    script ran, the effect had already settled -- the test was measuring
+    IPC latency, not the render race. Fixed by arming a MutationObserver
+    and clicking inside its callback in ONE atomic in-browser script, with
+    no round trip between "the header exists" and "click it": the observer
+    fires as a microtask right after Preact's synchronous commit, ahead of
+    its own rAF-scheduled effect, which is the actual ordering a real
+    user's click competes against.
+    """
+    target_name = "Double jump owlless"
+    click_and_wait_for_settle = f"""
+      (async () => {{
+        const clickIfPresent = () => {{
+          const heads = Array.from(document.querySelectorAll('.library-section-head'));
+          const head = heads.find((h) =>
+            h.querySelector('.library-section-name').textContent === {target_name!r});
+          if (!head) return false;
+          head.click();
+          return true;
+        }};
+        const clicked = await new Promise((resolve) => {{
+          if (clickIfPresent()) {{ resolve(true); return; }}
+          const observer = new MutationObserver(() => {{
+            if (clickIfPresent()) {{ observer.disconnect(); resolve(true); }}
+          }});
+          observer.observe(document.body, {{ childList: true, subtree: true }});
+          // Armed BEFORE this click, in the same synchronous script --
+          // nothing round-trips to Python between arming and navigating.
+          document.querySelector('.nav-item[title="Library"]').click();
+          setTimeout(() => {{ observer.disconnect(); resolve(false); }}, 15000);
+        }});
+        if (!clicked) return 'timed out waiting for the header';
+        // One more microtask turn for a PENDING revert (the round-3 bug's
+        // own rAF-scheduled effect, if it were still there) to actually
+        // land before this script returns -- reading immediately would
+        // pass even under the bug, since the click's own optimistic state
+        // has not been overwritten yet.
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return document.querySelector(
+          '.library-section.open .library-section-name')?.textContent || null;
+      }})()
+    """
+    for trial in range(10):
+        with driver.get_driver().launch(headless=True) as page:
+            page.goto(f"{library_server}/ui/index.html")
+            page.wait_for(".log-list-card", timeout_ms=20000)
+            open_name = page.evaluate(click_and_wait_for_settle)
+            assert open_name == target_name, (trial, open_name)
