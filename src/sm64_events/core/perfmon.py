@@ -141,6 +141,12 @@ class PerfMonitor:
         return (_DEFAULT_LOG if self._perf_log_path is _USE_DEFAULT
                 else self._perf_log_path)
 
+    @property
+    def log_path(self) -> Path | None:
+        """Where samples actually land (None = persistence disabled) — the
+        public door the debug report reads."""
+        return self._logpath()
+
     def _collect(self) -> dict:
         """One full sample (heap walk + resources + children + GPU + watched
         processes + scratch)."""

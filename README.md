@@ -101,6 +101,10 @@ tray to watch several side by side, or send the tray to Compare — pulled from
 YouTube, a local file, or a browser upload — for one frame-accurate transport
 driving them all in lockstep.
 
+**Debug report.** Something behaving oddly? **Settings → Debug report** writes
+a single file capturing what the trainer was doing (logs, recent events,
+health) and shows it in Explorer — attach it to your bug report.
+
 ---
 
 ## Develop

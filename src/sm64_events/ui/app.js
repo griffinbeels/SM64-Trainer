@@ -180,13 +180,21 @@ function App() {
   // through -> back to default.
   const [tab, setTabState] = useState("Practice");
   const [compareIntent, setCompareIntent] = useState(null);
-  // Same intent-plus-tab shape as enterCompare below, deliberately: a
-  // second mechanism for "go to that tab and open that thing" is how the
-  // two drift. Noticing a wrong STEP happens while playing, and until
-  // this existed the only way into the definition was the Segments tab
-  // plus a hunt through the library.
-  const [segmentIntent, setSegmentIntent] = useState(null);
-  // Same shape again, for the Library tab (library.js consumes it).
+  // There was a SECOND intent here -- `segmentIntent`, plus an
+  // `openSegment(id)` that jumped to the Segments tab with that definition
+  // already selected. Its only trigger was the practice card's step track,
+  // which Griffin deleted on 2026-08-06 ("I don't see a need to display it to
+  // the user"), so the whole chain became a capability nothing could reach --
+  // and an unreachable route is indistinguishable from a missing feature from
+  // inside the code. Deleted with it, here and in `segments.js`. The Segments
+  // tab's own library is the way in again; re-add this exact shape (never a
+  // second one) if a new trigger ever wants it.
+  //
+  // The Library's intent is that exact shape, and it kept its trigger: the
+  // practice card's book mark and the standards table's per-tier links both
+  // arrive through it (library.js consumes it). One mechanism for "go to that
+  // tab and open that thing", never a second -- drifting apart is how the
+  // deleted one earned its comment above.
   const [libraryIntent, setLibraryIntent] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -203,7 +211,6 @@ function App() {
   // now the PUBLIC one every outside caller keeps using, and it means
   // something different: see below.
   const enterCompare = (intent) => { setCompareIntent(intent); setTab("Compare"); };
-  const openSegment = (id) => { setSegmentIntent(id); setTab("Segments"); };
   const openLibrary = (intent) => { setLibraryIntent(intent); setTab("Library"); };
   // Task 6: Compare's own nav entry is gone (the Library absorbed it), so
   // every caller that used to open the Compare tab directly -- today that is
@@ -243,11 +250,9 @@ function App() {
             enterCompare=${enterCompare} />
         </div>
         ${tab === "Practice" ? html`<div class="view-pane"><${Practice} t=${t}
-            openCompare=${openCompare} openSegment=${openSegment}
-            openLibrary=${openLibrary} /></div>`
-          : tab === "Segments" ? html`<div class="view-pane"><${Segments} t=${t}
-              intent=${segmentIntent}
-              clearIntent=${() => setSegmentIntent(null)} /></div>`
+            openCompare=${openCompare} openLibrary=${openLibrary} /></div>`
+          : tab === "Segments" ? html`<div class="view-pane">
+              <${Segments} t=${t} /></div>`
           : tab === "Routes" ? html`<div class="view-pane"><${Routes} t=${t} /></div>`
           : tab === "Run" ? html`<div class="view-pane"><${Run} t=${t} /></div>`
           : tab === "Rank" ? html`<div class="view-pane"><${RankPage} t=${t} /></div>`

@@ -5,6 +5,7 @@ wall-clock-stamped + aresample=async-locked to the same master.
 """
 import io
 import shutil
+import subprocess
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -40,6 +41,7 @@ def test_spawn_args_pin_av_single_mux_contract(tmp_path, monkeypatch):
 
     def fake_popen(args, **kwargs):
         captured["args"] = args
+        captured["kwargs"] = kwargs
         return _FakeProc()
 
     monkeypatch.setattr(
@@ -52,6 +54,16 @@ def test_spawn_args_pin_av_single_mux_contract(tmp_path, monkeypatch):
     for t in sink._readers:
         t.join(timeout=5)
     a = captured["args"]
+
+    # Background spawn: no console window AND no busy-cursor feedback. The
+    # cursor half is the flashing-mouse bug (2026-08-07): without
+    # STARTF_FORCEOFFFEEDBACK every CreateProcess from the windowed exe shows
+    # the "working in background" pointer ~2 s, and this child is the one that
+    # respawns in a loop when it cannot encode.
+    kw = captured["kwargs"]
+    assert kw["creationflags"] == subprocess.CREATE_NO_WINDOW
+    feedback_off = getattr(subprocess, "STARTF_FORCEOFFFEEDBACK", 0x80)
+    assert kw["startupinfo"].dwFlags & feedback_off
 
     # wallclock must appear before EACH -i (the entire sync model rests on it)
     inputs = [i for i, x in enumerate(a) if x == "-i"]
@@ -79,6 +91,54 @@ def test_spawn_args_pin_av_single_mux_contract(tmp_path, monkeypatch):
     # and clips detail on hard ones (blurry-recording bug, 2026-07-23).
     assert after("-cq").isdigit()
     assert after("-b:v") == "0"     # a bitrate target would override -cq
+
+
+def test_spawn_args_follow_the_picked_codec(tmp_path, monkeypatch):
+    """The sink encodes with pick_video_codec()'s answer, threaded through the
+    recorder. Hardcoding h264_nvenc here was the flashing-mouse bug
+    (2026-08-07): on a machine without an NVIDIA encoder the child died at
+    birth and the respawn loop never ended."""
+    captured = {}
+
+    class _FakeProc:
+        def __init__(self):
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO()
+            self.stderr = io.BytesIO()
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = args
+        return _FakeProc()
+
+    monkeypatch.setattr(
+        "sm64_events.replay.ffmpeg_sink.subprocess.Popen", fake_popen)
+    monkeypatch.setattr(
+        "sm64_events.replay.ffmpeg_sink._assign_kill_on_close", lambda p: None)
+    cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=2.0)
+    sink = FfmpegAvSink(cfg, lambda s: None, ffmpeg="ffmpeg", codec="libx264")
+    sink._spawn(320, 240)
+    for t in sink._readers:
+        t.join(timeout=5)
+    a = captured["args"]
+    assert a[a.index("-c:v") + 1] == "libx264"
+    assert "-crf" in a and "-cq" not in a   # quality registry followed the codec
+    assert "-forced-idr" not in a           # NVENC-only knob
+
+
+def test_respawn_backoff_scales_with_young_deaths_and_resets(tmp_path):
+    """A child that dies young (encoder init failure, full disk) must not be
+    respawned per write attempt — that ran 331 restarts in one sitting
+    (2026-06-21) and flashes the busy cursor ~2 s per spawn. A healthy run
+    resets the streak so a one-off death still recovers instantly."""
+    cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=2.0)
+    sink = FfmpegAvSink(cfg, lambda s: None, ffmpeg="ffmpeg")
+    sink._spawned_at_mono = time.monotonic()        # just spawned, dying now
+    assert [sink._respawn_delay() for _ in range(6)] == \
+        [2.0, 4.0, 8.0, 16.0, 30.0, 30.0]
+    sink._spawned_at_mono = time.monotonic() - 60   # child lived a minute
+    assert sink._respawn_delay() == 0.0
+    sink._spawned_at_mono = time.monotonic()
+    assert sink._respawn_delay() == 2.0             # streak restarted
 
 
 def test_parse_segment_csv_relative_to_origin(tmp_path):

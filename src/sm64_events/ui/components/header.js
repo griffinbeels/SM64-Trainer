@@ -89,6 +89,24 @@ export function Header({ t, settingsOpen, closeSettings }) {
     setTimeout(() => setRestarting(false), 8000);
   }
 
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportMsg, setReportMsg] = useState("");
+
+  async function debugReport() {
+    if (reportBusy) return;
+    setReportBusy(true);
+    try {
+      const r = await send("POST", "/api/diagnostics");
+      try { await send("POST", "/api/replay/reveal", { path: r.path }); }
+      catch { /* best effort - dev servers have no reveal route */ }
+      setReportMsg(`Report saved: ${r.path}`);
+    } catch (e) {
+      console.error(e);
+      setReportMsg("Could not generate the report.");
+    }
+    setReportBusy(false);
+  }
+
   const active = v && v.session.id;
 
   async function newSession() {
@@ -211,8 +229,14 @@ export function Header({ t, settingsOpen, closeSettings }) {
             <button type="button" onclick=${t.checkUpdates}>
               <${Icon} name="updates" />Check for updates
             </button>
+            <button type="button" onclick=${debugReport} disabled=${reportBusy}
+                title="Write a debug report file and show it in Explorer - attach it when reporting a bug">
+              <${Icon} name="shield" />
+              ${reportBusy ? "Generating…" : "Debug report"}
+            </button>
           </div>
           ${t.updateMsg && html`<p class="settings-note">${t.updateMsg}</p>`}
+          ${reportMsg && html`<p class="settings-note">${reportMsg}</p>`}
         </section>
 
         <section class="settings-section">

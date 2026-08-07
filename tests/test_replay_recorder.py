@@ -113,8 +113,14 @@ def test_av_sink_receives_both_video_and_audio(tmp_path):
     NO in-process SegmentWriter is created — ffmpeg owns muxing + sync."""
     video, audio = FakeVideoSource(), SystemFakeAudioSource()
     sink = FakeAvSink()
+    seen = {}
+
+    def sink_factory(cfg, on_seg, codec):
+        seen["codec"] = codec
+        return sink
+
     rec = make_recorder(tmp_path, video, audio,
-                        video_sink_factory=lambda cfg, on_seg: sink)
+                        video_sink_factory=sink_factory)
     rec.start()
     assert wait_for(lambda: video.on_frame is not None and audio.on_pcm is not None)
     assert sink.started is True
@@ -125,8 +131,40 @@ def test_av_sink_receives_both_video_and_audio(tmp_path):
     assert wait_for(lambda: len(sink.frames) >= 1 and len(sink.audio) >= 1)
     assert sink.audio[0] == pcm.tobytes()        # raw interleaved s16le
     assert rec._writer is None                    # no PCM-sidecar writer
+    # The sink gets the machine's PICKED codec — hardcoded nvenc in the sink
+    # is the flashing-mouse bug (2026-08-07).
+    assert seen["codec"] == "libx264"
     rec.stop()
     assert sink.stopped is True
+
+
+def test_idle_discard_defers_a_busy_file_instead_of_erroring(tmp_path, caplog):
+    """A Windows sharing violation on an idle-discard unlink (ffmpeg's segment
+    close, a clip cut or an indexer briefly holds the file) is a deferral, not
+    an ERROR traceback — the traceback itself was reported as a bug
+    (2026-08-07). The attach loop retries and deletes it once released."""
+    import logging
+
+    video, audio = FakeVideoSource(), FakeAudioSource()
+    rec = make_recorder(tmp_path, video, audio)
+    scratch = tmp_path / "buf"
+    scratch.mkdir(parents=True, exist_ok=True)
+    seg_path = scratch / "av_00_000001.ts"
+    seg_path.write_bytes(b"x")
+    rec._idle_since = T0                          # idle before the segment
+    seg = SegmentInfo(path=seg_path, kind="video",
+                      utc_start=T0 + timedelta(seconds=1),
+                      utc_end=T0 + timedelta(seconds=3), size_bytes=1)
+    with caplog.at_level(logging.DEBUG, logger="sm64.replay"):
+        with open(seg_path, "rb"):                # an open handle denies delete
+            rec._on_segment(seg)
+            rec._flush_deferred_discards()        # still held — stays queued
+            assert seg_path.exists()
+            assert not [r for r in caplog.records
+                        if r.levelno >= logging.ERROR], \
+                "a busy file must not produce an ERROR"
+        rec._flush_deferred_discards()            # holder gone — cleaned up
+    assert not seg_path.exists()
 
 
 def test_viewer_only_when_another_instance_holds_recorder_lock(tmp_path):

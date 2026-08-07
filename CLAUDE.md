@@ -273,10 +273,16 @@ Contract changes land on main first, then dependent work fans out. Merge with
   afterwards
 - **responsiveness is part of the feature, not a pass afterwards.** A UI change
   is not done at one width. The three habits, in the order they pay:
-  1. **Look at it.** `tools/contact_sheet.py <selector>` — one surface at
-     1500/1200/900/850 in one image. Every expensive failure in this area was
-     obvious on sight and invisible to every assertion; the cheapest moment to
-     see it is while still writing the code, not in review.
+  1. **Look at it, and name the card you are looking AT.**
+     `tools/contact_sheet.py <selector>` — one surface at 1500/1200/900/850 in
+     one image. Every expensive failure in this area was obvious on sight and
+     invisible to every assertion; the cheapest moment to see it is while
+     still writing the code, not in review. The one that got past a sheet
+     (2026-08-06) got past it because the fixture's card had ONE repeated
+     element and a SHORT name where the reported card had two and a shrinking
+     one — the picture was honest, the reading of it was not. Count the
+     repeats and measure the longest string before believing a render;
+     `.claude/rules/ui-core.md` has the specific floors this fixture sits at.
   2. **Ask what state the fixture is in.** The gates are only as good as the
      page `tools/ui_fixture.py` reaches, and a wrong state does not go red — it
      reports a clean page nobody is looking at. That has been the root cause

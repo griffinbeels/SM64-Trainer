@@ -119,6 +119,14 @@ def compilations_dir() -> Path:
     return replays_root() / "compilations"
 
 
+def diagnostics_dir() -> Path:
+    # One-button debug reports (task 0092). UNDER replays_root() (== the
+    # ReplayService save_root) for the same reason compilations_dir() is:
+    # /api/replay/reveal only opens files inside save_root, so a report is
+    # revealable with no new endpoint.
+    return replays_root() / "diagnostics"
+
+
 def replay_settings_path() -> Path:
     return data_root() / "data" / "replay_settings.json"
 

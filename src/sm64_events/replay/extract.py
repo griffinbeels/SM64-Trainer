@@ -30,11 +30,11 @@ segment's size and squash it if the aspect changed.
 """
 import shutil
 import subprocess
-import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.core.paths import bundled_ffmpeg
 from sm64_events.replay.config import (CLIP_MAXRATE, ReplayConfig,
                                        video_quality_args)
@@ -42,7 +42,6 @@ from sm64_events.replay.ring import SegmentRing
 
 _EDGE_TOLERANCE_S = 0.5   # clamping beyond this marks the clip truncated
 _GAP_TOLERANCE_S = 0.25   # segment join wider than this is a coverage hole
-_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
 @dataclass(frozen=True)
@@ -160,7 +159,7 @@ class ClipExtractor:
         ]
         try:
             subprocess.run(args, check=True, capture_output=True,
-                           creationflags=_NO_WINDOW)
+                           **quiet_spawn_kwargs())
         except subprocess.CalledProcessError as exc:
             out_path.unlink(missing_ok=True)
             raise RuntimeError(

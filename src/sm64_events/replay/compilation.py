@@ -16,13 +16,13 @@ import logging
 import re
 import shutil
 import subprocess
-import sys
 import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.core.paths import bundled_ffmpeg
 from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, star_name
@@ -32,7 +32,6 @@ from sm64_events.tracking.compilation import EntityRef, plan_compilation
 
 log = logging.getLogger("sm64.compilation")
 
-_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 _DIMS_RE = re.compile(r"Video:.*?(\d{2,5})x(\d{2,5})")
 
 
@@ -103,7 +102,7 @@ class CompilationBuilder:
         we only read the text. Returns None if unparseable (falls back to a
         default canvas)."""
         out = subprocess.run([self._ffmpeg, "-hide_banner", "-i", str(path)],
-                             capture_output=True, creationflags=_NO_WINDOW)
+                             capture_output=True, **quiet_spawn_kwargs())
         m = _DIMS_RE.search(out.stderr.decode("utf-8", "replace"))
         return (int(m.group(1)), int(m.group(2))) if m else None
 
@@ -130,7 +129,7 @@ class CompilationBuilder:
                 "-movflags", "+faststart", "-y", str(out_path)]
         try:
             subprocess.run(args, check=True, capture_output=True,
-                           creationflags=_NO_WINDOW)
+                           **quiet_spawn_kwargs())
         except subprocess.CalledProcessError as exc:
             out_path.unlink(missing_ok=True)
             raise RuntimeError(

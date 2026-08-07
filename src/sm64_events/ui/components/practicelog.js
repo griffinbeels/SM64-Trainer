@@ -25,7 +25,6 @@ import { entityIconSrc, fallbackToGenericStar, fallbackSlotForEntityKey }
 import { RankBanner } from "./ranks.js";
 import { Icon } from "./icons.js";
 import { ShrinkToFitName } from "./shrinkname.js";
-import { StepTrack } from "./steptrack.js";
 import { Disclose } from "./collapsible.js";
 import { useFeedMotion } from "./feedmotion.js";
 import { StratPicker } from "./stratpicker.js";
@@ -296,7 +295,7 @@ export function isCardOpen(overrides, topKey, key) {
 
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, pick, selected, onSelect, forceOpen,
-                          open, onSetOpen, openSegment, openLibrary = null,
+                          open, onSetOpen, openLibrary = null,
                           active = false,
                           nameOverflow = "ellipsis", rankIconSize = 24,
                           rankPlacement = "head", nextStepMode = "classic" }) {
@@ -456,21 +455,25 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
               enabled=${nameOverflow === "shrinkToFit"} />
           </span>
         </button>
-        ${/* ON THE IDENTITY LINE, not under it (Griffin, 2026-08-05): "when
-             there's a step X of X display, we should display it right after
-             the identity display to the right... That way, we can maintain
-             the single line height design with these cards." It rendered as
-             a sibling of `.log-card-head` before, which made every armed
-             card two rows tall while every other card stayed one.
-             `StepTrack` renders nothing when `armed_detail` is null, which
-             is true of every ordinary card, so this adds no element to the
-             common case. `onEdit` -- the doorway into the definition -- stays
-             gated on `active` (amendment A8): only the entity actually being
-             practised offers "edit this movement", never a card that merely
-             happens to appear in the log. */""}
-        <${StepTrack} detail=${sec.armed_detail}
-          onEdit=${active && openSegment && isSegment(sec) && !sec.broken
-            ? () => openSegment(sec.segment_id) : null} />
+        ${/* NO STEP TRACK HERE, and that is a deliberate deletion rather than
+             a gap (Griffin, 2026-08-06): "we should just remove the step
+             indicator entirely from the display here. It's too cramped. The
+             PURPOSE of that indicator was to make it clear that the segment
+             logic was working for me during development, but now that it is
+             indeed working, I don't think we really need this anymore.
+             Internally, we're still moving between the steps, but I don't see
+             a need to display it to the user (they will know how to do the
+             strat, no need to display the steps)."
+             So the SERVER half is untouched -- `armed_detail` still ships on
+             every section, the projector still advances the cursor, and
+             `tools/what_happened.py` still reads it back. What is gone is
+             only the drawing of it on this row. The doorway it carried (its
+             `onEdit`, "edit this movement") went with it; the Segments tab's
+             own library is the way in again.
+             Do not re-add a compact version. Two rounds tried to fit it on
+             this line -- centred, then baseline-aligned to the name -- and
+             both were rejected for crowding the row, which is what the
+             deletion answers. */""}
         ${/* SUPERSEDED (2026-08-04, one-line-heads round): the Ready/Running
              word that used to sit here is DELETED, not merely hidden --
              Griffin: "we should remove the 'ACTIVE' indicator (the card is
@@ -482,12 +485,11 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
              he said the day it was added ("this is already covered by the
              most recent entry in the practice log being highlighted"), so
              this is removing an over-implementation rather than reversing a
-             decision. For an ARMED entity specifically, nothing legible was
-             lost: `<${StepTrack}>` below renders unconditionally off
-             `sec.armed_detail` (never gated on `active`), so "Step X of N ·
-             <place>" already told the running story in more detail than the
-             bare word "Running" ever did -- confirmed by reading the render,
-             not assumed. */""}
+             decision. The step track above it was the other half of that
+             argument at the time -- "Step X of N > <place>" told the running
+             story in more detail than the bare word ever did -- and it is now
+             deleted too (see above), so an armed card announces itself with
+             the gold border alone. That is the whole intended signal. */""}
         ${/* The strategy NAME becomes the same picker the (now-deleted)
              Active Target card used (amendment A2: "replace the strategy
              name in the card with the same exact drop down we use for
@@ -540,10 +542,12 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            "open + turn to the right page + scroll + flash". */""}
       <${PbTag} pb=${sectionPb(sec, t.clock)} mode=${clock} rows=${rows}
         pick=${pbPick} t=${t} />
-      ${/* The book mark (spec 2026-08-07-library-page, section 1: "opens the
-           Library at the current target and strategy") -- a doorway OUT to
-           the community sheet for whatever this card is showing, the same
-           relationship StepTrack's onEdit already has to the Segments tab.
+      ${/* The book mark -- a doorway OUT to the community sheet for whatever
+           this card is showing: it opens the Library at this card's target
+           and strategy. It is the ONLY such doorway on the card now; the one
+           this comment used to compare itself to (StepTrack's onEdit, into
+           the Segments tab) was deleted with the step indicator on
+           2026-08-06, along with the whole openSegment chain (see app.js).
            Shares the fold button's grid-area/flex row (`.log-card-actions`)
            rather than claiming a new column -- adding a fifth named area
            would mean re-deriving it across all four layout matrix cells
@@ -579,21 +583,6 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
         </button>
       </div>
     </div>
-    ${/* The SAME component StarSection/SegmentSection used to render for
-         their own objective card (steptrack.js), and the same reason:
-         `armed_detail` is SERVER truth, re-derived from the journal on every
-         view fetch, and it is NOT segment-only -- the 100-coin star carries
-         it too. `LogCard` is the only surface any entity gets now, so it is
-         the one that carries the row for every card, or "is the system
-         aware I'm mid-movement" silently stops being answerable the moment
-         that movement is not also the active target. `StepTrack` renders
-         nothing when `armed_detail` is null -- true of every ordinary card.
-         `onEdit` -- the doorway into the definition -- is now gated on
-         `active` rather than on being a separate pinned card (the Active
-         Target card it used to be exclusive to is deleted, amendment A8):
-         only the entity actually being practised offers "edit this
-         movement", never a card that merely happens to also appear in the
-         log. */""}
     <${Disclose} open=${isOpen} className="log-card-disclose">
       <div class="log-card-body">
       ${inBody && ranksBlock}
@@ -787,7 +776,7 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
 export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
                               clearFocus, focusKey, onSelect, activeKey = null,
                               playedKeys = [], openTargetPicker = null,
-                              openSegment = null, openLibrary = null,
+                              openLibrary = null,
                               enforceMembership = true }) {
   const [shown, setShown] = useState(CARDS_PER_PAGE);
   // Per-entity fold overrides -- ONLY what the user has touched himself, in
@@ -968,7 +957,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
         const rankPlacement = rankPlacementFor(tuning, { isNarrow, twoLadder });
         const nextStepMode = nextStepModeFor(tuning, { isNarrow, twoLadder });
         return html`<${LogCard} key=${ek} sec=${sec} t=${t} ui=${ui}
-          freshIds=${freshIds} openCompare=${openCompare} openSegment=${openSegment}
+          freshIds=${freshIds} openCompare=${openCompare}
           openLibrary=${openLibrary}
           focus=${focus} clearFocus=${clearFocus} pick=${pick}
           selected=${ek === focusKey} onSelect=${onSelect}

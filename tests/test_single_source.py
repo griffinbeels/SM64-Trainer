@@ -78,6 +78,13 @@ def python_sources() -> tuple[Path, ...]:
     return tuple(sorted([*SRC.rglob("*.py"), *(REPO / "tools").rglob("*.py")]))
 
 
+def shipped_python() -> tuple[Path, ...]:
+    """Only what runs inside the shipped app. tools/ is excluded on purpose:
+    a dev CLI runs from a console the developer opened, where a busy cursor
+    or console window is normal shell behavior, not a defect."""
+    return tuple(sorted(SRC.rglob("*.py")))
+
+
 def strategy_name_zone() -> tuple[Path, ...]:
     """The modules that could plausibly COMPOSE a strategy name — the ranks
     store, the tracking layer that stamps one onto an attempt, the API that
@@ -97,6 +104,24 @@ def strategy_name_zone() -> tuple[Path, ...]:
 
 
 INVARIANTS = (
+    SingleSource(
+        concept="how a background child process is spawned",
+        owners=frozenset({"childproc.py", "installer.py"}),
+        tokens=("CREATE_NO_WINDOW", "0x08000000", "FORCEOFFFEEDBACK"),
+        files=shipped_python(),
+        why="core/childproc.py::quiet_spawn_kwargs is the one door: "
+            "CREATE_NO_WINDOW keeps Windows 11's default-terminal handoff "
+            "from opening an activated Terminal window, and "
+            "STARTF_FORCEOFFFEEDBACK keeps CreateProcess from flashing the "
+            "pointer's busy spinner for ~2 s per spawn. The second flag is "
+            "the one every hand-rolled site forgot, and the failure is "
+            "invisible on our machines: a non-NVIDIA user's encoder child "
+            "died at birth and the respawn loop kept the spinner on "
+            "permanently ('when I open it my mouse stars flashing', "
+            "2026-08-07). bootstrap/installer.py is exempt: a one-shot the "
+            "user launched themselves (its busy cursor is earned feedback), "
+            "kept stdlib-only on purpose.",
+    ),
     SingleSource(
         concept="how a 100-coin strategy name carries its exit-star variant",
         owners=frozenset({"standards.py", "hundred_coin.py", "scrape_ranks.py"}),
