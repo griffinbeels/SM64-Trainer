@@ -10,9 +10,11 @@
 // target grid, librarynav.js), auto-open (landing on the last-practiced
 // entity's target page the moment the tab first opens), and the plumbing the
 // real target page (librarytarget.js, Task 4) needs but does not own itself
-// -- resolving BOTH doors to one full-target shape, and a minimal comparison
-// tray (Task 5 owns the tray's own UI and its trim/persistence story; what
-// lives here is just enough state for "+"/"already added" to work today).
+// -- resolving BOTH doors to one full-target shape, and the comparison tray's
+// STATE (librarytray.js, Task 5, owns its rendering -- the chips, the trim
+// editors, the grid overlay; this file just holds the array and the three
+// mutations "+"/trim/remove make, so it survives navigating to a different
+// target the way "tray state lives here" asked for).
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
@@ -21,6 +23,7 @@ import { entityIconSrc, genericStarSrc } from "./entityicons.js";
 import { lastPracticed } from "./librarymodel.js";
 import { LibraryNav } from "./librarynav.js";
 import { LibraryTarget } from "./librarytarget.js";
+import { LibraryTray, LibraryGrid } from "./librarytray.js";
 import { Icon } from "./icons.js";
 
 const html = htm.bind(h);
@@ -66,20 +69,23 @@ export function Library({ t, active, intent, clearIntent }) {
   const [stage, setStage] = useState("browse");   // "browse" | "target"
   const [entry, setEntry] = useState(null);        // {entityKey, rows, focusStrat, focusTier}
   const [refreshState, setRefreshState] = useState(null);
-  // A MINIMAL comparison tray -- Task 5 owns the tray's own UI, its trim
-  // editors and its cross-navigation persistence story ("tray state lives
-  // here", its own brief). What LibraryTarget needs today is just enough for
-  // "+" to work and to disable once an example is already added; the item
-  // shape (`{key, runner, time_cs, video, strat, trim}`) is Task 5's own
-  // documented shape so its build only has to ADD behaviour, never migrate
-  // this state's format. Keyed on `video` (the only stable identity an entry
-  // carries) -- an entry with no video never reaches `onAdd` at all
-  // (librarytarget.js disables "+" there, since there is nothing to embed or
-  // import into Compare).
+  // The comparison tray. Task 4 seeded MINIMAL state here ("tray state lives
+  // here", the shape `{key, runner, time_cs, video, strat, trim}`) just
+  // enough for "+" to work; Task 5 (librarytray.js) is what actually reads
+  // it, so this grows the SAME state -- trim edits and removal -- rather
+  // than inventing a second shape. Keyed on `video` (the only stable
+  // identity an entry carries) -- an entry with no video never reaches
+  // `onAdd` at all (librarytarget.js disables "+" there, since there is
+  // nothing to embed or import into Compare).
   const [tray, setTray] = useState([]);
+  const [showGrid, setShowGrid] = useState(false);
   const trayKeys = new Set(tray.map((item) => item.key));
   const addToTray = (item) => setTray((prev) =>
     prev.some((existing) => existing.key === item.key) ? prev : [...prev, item]);
+  const trimTrayItem = (key, trim) => setTray((prev) =>
+    prev.map((item) => (item.key === key ? { ...item, trim } : item)));
+  const removeFromTray = (key) => setTray((prev) =>
+    prev.filter((item) => item.key !== key));
   // Whether auto-open has already run once for this mount. A ref, not state
   // -- flipping it must never itself trigger a re-render, only gate the next
   // one. Persistent-mount (see the module comment) is what makes "once" mean
@@ -181,6 +187,8 @@ export function Library({ t, active, intent, clearIntent }) {
       </button>
     </div>
     <${RefreshMessage} state=${refreshState} />
+    <${LibraryTray} items=${tray} onTrim=${trimTrayItem} onRemove=${removeFromTray}
+        onPlayAll=${() => setShowGrid(true)} onStudy=${null} />
     ${stage === "target"
       ? html`<div class="library-target-page">
           <button type="button" class="entity-back" onclick=${backToBrowse}>
@@ -192,5 +200,8 @@ export function Library({ t, active, intent, clearIntent }) {
               focusTier=${entry ? entry.focusTier : null} />
         </div>`
       : html`<${LibraryNav} index=${index} onPick=${handlePick} iconFor=${iconFor} />`}
+    ${showGrid
+      ? html`<${LibraryGrid} items=${tray} onClose=${() => setShowGrid(false)} />`
+      : null}
   </div>`;
 }

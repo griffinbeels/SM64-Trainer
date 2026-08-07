@@ -152,6 +152,12 @@ def test_tray_to_import_carries_the_trim_as_frames():
     assert out["body"]["entity_key"] == "star:1:0"
     assert out["body"]["source_ref"] == "https://youtu.be/z"
     assert out["body"]["strat"] == "Standard"
+    # TASK 5 RULING (task-5-caveats.md point 2): `name` is a pre-filled
+    # default for compare.js's editable "name this comparison" field, not a
+    # fixed label -- pinned to fmtSeconds (the SAME notation the Library card
+    # this item came from already showed for time_cs) rather than the raw
+    # `.toFixed(2)` it shipped with, so the number carries over unchanged.
+    assert out["body"]["name"] == 'Kally 43"80', out["body"]["name"]
     # in/out_frame are GAME frames on Usamune's 30fps clock (storage/db.py's
     # own comment: "in/out_frame are non-destructive sync bounds in GAME
     # frames"; tracking/comparisons.py::master_seek_time divides by the same

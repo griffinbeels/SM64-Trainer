@@ -294,6 +294,43 @@ if (libBtn && libBtn.getAttribute('aria-current') !== 'page') {
 await waitFor(() => !!document.querySelector('.library-target .library-section'));
 """)
 
+# The tray and the grid overlay (Task 5, spec 2026-08-07-library-page).
+# Shares its navigation with `_LIBRARY_TARGET_SETUP` above and its own
+# populate-the-tray step with tests/test_ui_library_tray.py's own
+# `_ADD_N_EXAMPLES` helper -- the SAME "click the open section's first two
+# enabled + buttons" mechanism, so a story and its test can never disagree
+# about how the tray gets populated.
+_LIBRARY_NAV = """
+const libBtn = document.querySelector('button.nav-item[title="Library"]');
+if (libBtn && libBtn.getAttribute('aria-current') !== 'page') {
+  libBtn.click();
+}
+await waitFor(() => !!document.querySelector('.library-target .library-section'));
+"""
+_LIBRARY_ADD_TWO = """
+if (document.querySelectorAll('.library-tray-chip').length < 2) {
+  const cards = Array.from(document.querySelectorAll(
+    '.library-section.open .library-example'));
+  let added = 0;
+  for (const card of cards) {
+    if (added >= 2) break;
+    const btn = card.querySelector('.library-example-plus');
+    if (btn && !btn.disabled) { btn.click(); added++; }
+  }
+  await waitFor(() => document.querySelectorAll('.library-tray-chip').length >= 2);
+}
+"""
+_LIBRARY_TRAY_SETUP = _script(_LIBRARY_NAV + _LIBRARY_ADD_TWO)
+# Play all, on top of the tray setup -- `.library-grid-panel` rather than the
+# inner `.library-grid` so the sheet also shows the honesty line and the
+# restart/close header, not just the tile grid.
+_LIBRARY_GRID_SETUP = _script(_LIBRARY_NAV + _LIBRARY_ADD_TWO + """
+if (!document.querySelector('.library-grid')) {
+  document.querySelector('.library-tray-playall').click();
+  await waitFor(() => !!document.querySelector('.library-grid iframe'));
+}
+""")
+
 STORIES = [
     Story(name="page", at="", setup=_EXPAND_ALL),
     # Re-pointed 2026-08-04 (amendment A8, spec practice-log-entity-cards):
@@ -349,6 +386,8 @@ STORIES = [
     # returns the app to Practice regardless of what the PREVIOUS viewport's
     # last story left it on, so nothing after this needs to clean up either.
     Story(name="library-target", at=".library-target", setup=_LIBRARY_TARGET_SETUP),
+    Story(name="library-tray", at=".library-tray", setup=_LIBRARY_TRAY_SETUP),
+    Story(name="library-grid", at=".library-grid-panel", setup=_LIBRARY_GRID_SETUP),
     # The four SEGMENTS-tab stories below are last on purpose: `_EXPAND_ALL`
     # (the "page" story's own setup, which runs first on every viewport) is
     # what returns the app to Practice for the next pass, so nothing after

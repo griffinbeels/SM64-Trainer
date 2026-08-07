@@ -401,6 +401,108 @@
     border-radius: 5px; font-weight: 700; line-height: 1;
   }
   .library-example-plus:disabled { opacity: .4; cursor: default; }
+
+  /* The tray (Task 5, librarytray.js): chips docked under the header,
+     wrapped in its own `Disclose` so arriving/leaving is a measured-height
+     animation, never a pop. `.library-tray` is Disclose's CONTENT, not the
+     thing that reserves layout height -- `.library-tray-disclose` is that. */
+  .library-tray-disclose { margin-bottom: .2rem; }
+  .library-tray {
+    display: flex; flex-direction: column; gap: .5rem;
+    padding: .55rem .7rem; border: 1px solid var(--border-soft);
+    border-radius: 8px; background: rgba(7,18,30,.6);
+  }
+  .library-tray-chips { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .library-tray-chip {
+    display: flex; flex-direction: column; gap: 0;
+    border: 1px solid var(--border-soft); border-radius: 7px;
+    background: rgba(4,13,23,.55); overflow: hidden;
+  }
+  .library-tray-chip-row {
+    display: flex; align-items: center; gap: .35rem; padding: .3rem .45rem;
+  }
+  .library-tray-chip-thumb {
+    width: 40px; height: 23px; object-fit: cover; border-radius: 4px;
+    flex: 0 0 auto; background: #0a1119;
+  }
+  .library-tray-chip-nothumb { background: #0a1119; }
+  .library-tray-chip-runner {
+    max-width: 110px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-size: .78rem;
+  }
+  .library-tray-chip-time {
+    font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+  .library-tray-chip-trim, .library-tray-chip-remove {
+    width: 22px; height: 22px; min-height: 0; padding: 0; border-radius: 5px;
+    flex: 0 0 auto;
+  }
+  .library-tray-chip-trim[aria-pressed="true"] {
+    color: var(--gold); border-color: #806d34;
+  }
+  .library-tray-trim {
+    display: flex; gap: .6rem; padding: 0 .45rem .45rem;
+  }
+  .library-tray-trim label {
+    display: flex; flex-direction: column; gap: .12rem;
+    font-size: .68rem; color: var(--muted);
+  }
+  .library-tray-trim input { width: 66px; }
+  .library-tray-actions { display: flex; align-items: center; gap: .6rem; }
+  .library-tray-count { margin-right: auto; }
+
+  /* The grid overlay (Task 5): a plain fixed backdrop rather than the shared
+     `Modal` -- every existing Modal call site snaps open/closed with no
+     transition, and this surface needed one (task-5-caveats.md point 5), so
+     copying Modal's shell would have copied the thing it needed to NOT copy.
+     `container-type` sits on the PANEL, not the page, because the panel is
+     `position: fixed` and sized off the viewport (`min(94vw, …)`) -- gating
+     `cols = min(cols, 2)` against `.view-pane` would measure a width the
+     panel does not actually have (ui-core.md's responsiveness law, same
+     trap in a new shape). */
+  .library-grid-backdrop {
+    position: fixed; inset: 0; z-index: 200; display: flex;
+    align-items: center; justify-content: center; padding: 18px;
+    background: rgba(1,7,14,.74); backdrop-filter: blur(5px);
+  }
+  .library-grid-panel {
+    width: min(94vw, 1100px); max-height: 88vh; display: flex;
+    flex-direction: column; overflow: hidden; container-type: inline-size;
+    background: #0b1929; border: 1px solid #42617e; border-radius: 11px;
+    box-shadow: 0 26px 90px rgba(0,0,0,.55);
+  }
+  .library-grid-head {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+    gap: .7rem; padding: 14px 16px; border-bottom: 1px solid var(--border-soft);
+  }
+  .library-grid-head h3 { margin: 0; font-size: 1.05rem; color: var(--text); }
+  .library-grid-head-actions { display: flex; align-items: center; gap: .5rem; }
+  .library-grid-honesty {
+    margin: .6rem 16px 0; font-size: .78rem; color: var(--muted);
+  }
+  .library-grid {
+    flex: 1 1 auto; display: grid; gap: .8rem; padding: 16px; overflow: auto;
+  }
+  .library-grid.cols-1 { grid-template-columns: 1fr; }
+  .library-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .library-grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+  /* Placed AFTER the base rules above on purpose (ui-core.md: same
+     specificity, later wins) -- no !important needed to clamp the JS-picked
+     `cols-3` back down when the PANEL itself (not the window) goes narrow. */
+  @container (max-width: 620px) {
+    .library-grid.cols-3 { grid-template-columns: repeat(2, 1fr); }
+  }
+  .library-grid-tile {
+    border: 1px solid var(--border-soft); border-radius: 7px; overflow: hidden;
+    background: rgba(4,13,23,.55);
+  }
+  .library-grid-tile-media { position: relative; aspect-ratio: 16/9; background: #0a1119; }
+  .library-grid-tile-footer {
+    display: flex; justify-content: space-between; gap: .4rem;
+    padding: .35rem .5rem; font-size: .78rem;
+  }
+  .library-grid-tile-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+
   /* Strategy step (picker layer 3, spec 2026-07-25-target-picker-strategy-
      step): the SAME auto-fill/minmax geometry as .entity-grid above, one
      column wider — a strat card carries a rank icon plus two lines of text

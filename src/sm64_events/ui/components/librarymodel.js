@@ -1,8 +1,17 @@
 // src/sm64_events/ui/components/librarymodel.js
 //
-// Pure rules for the Library page. Import-free ON PURPOSE: node drives these
-// in tests/test_library_model_js.py without a browser, which is what pins
-// section order, band order, the grid math and the trim mapping.
+// Pure rules for the Library page. Import-free of Preact/the DOM ON PURPOSE:
+// node drives these in tests/test_library_model_js.py without a browser,
+// which is what pins section order, band order, the grid math and the trim
+// mapping. `format.js` is the one exception -- it is itself Preact-free (node
+// can already import it, `tests/test_ui_time_format.py` does exactly that),
+// so pulling in `fmtSeconds` costs nothing this file exists to avoid, and
+// buys `trayToImport` the SAME time notation the rest of this page already
+// shows for the entry it came from (the chip, the TOC row, the example
+// card) -- the "one door for a value two surfaces show" rule, applied to a
+// label rather than a colour.
+
+import { fmtSeconds } from "../format.js";
 
 // Slowest -> fastest, Library-only vocabulary: the Library bands times
 // against a fitted or vetted LADDER (library/ladders.py::fit_payload,
@@ -151,11 +160,18 @@ export function trayToImport(item, entityKey) {
     out_frame: trim.end_s != null ? Math.round(trim.end_s * GAME_FPS) : null,
   } : null;
   // body matches server/compare_api.py::ImportBody's five fields exactly
-  // (entity_key, strat, name, source_kind, source_ref) -- name is the
-  // human-facing label the compare view shows, so it reads the time as
-  // seconds ("Kally 43.80"), not the raw centisecond count.
+  // (entity_key, strat, name, source_kind, source_ref) -- name is a
+  // PRE-FILLED default for an editable text input (compare.js's `.cmp-save`
+  // name field, "name this comparison"), never a fixed label, so exactness
+  // matters less than continuity: `fmtSeconds` is what the Library card this
+  // item came from already showed for the same time_cs, so the number the
+  // user just read on the "+" button matches the number waiting for them in
+  // Compare ("Kally 43"80", not a bare "43.80" the rest of the page never
+  // writes). TASK 5 RULING (task-5-caveats.md point 2): this was an
+  // unpinned `.toFixed(2)` until now: pinned below and in
+  // test_library_model_js.py.
   return { body: { entity_key: entityKey, strat: item.strat || "Standard",
-                   name: `${item.runner} ${(item.time_cs / 100).toFixed(2)}`,
+                   name: `${item.runner} ${fmtSeconds(item.time_cs / 100)}`,
                    source_kind: "youtube", source_ref: item.video },
            edit };
 }
