@@ -283,6 +283,13 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
   const entityKey = (rows[0] && rows[0].entity_key) || null;
   const label = (rows[0] && rows[0].label) || "";
   const missReason = rows.length === 1 ? rows[0].miss_reason : null;
+  // The PAGE's own identity, for the auto-expand one-shot below -- never
+  // `entityKey`. `rows[].index` is stable within one loaded payload (the
+  // same numeric door the picker's own numeric branch already addresses a
+  // target by; `library/store.py`'s `index()`/`for_entity()`/`target()` all
+  // stamp it identically), so joining every row's own index names THIS page
+  // uniquely whether or not it has an entity at all.
+  const pageIdentity = rows.map((row) => row.index).join(",");
 
   const approaches = useMemo(() => sectionOrder(
     rows.flatMap((target) => (target.approaches || []).map((approach) => (
@@ -297,7 +304,7 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
     return map;
   }, [stratsData]);
 
-  // Auto-expand once per entity — a deliberate one-shot, so a click the user
+  // Auto-expand once per PAGE — a deliberate one-shot, so a click the user
   // makes afterward is never silently reverted by a later render of the same
   // page (autoExpandName(ordered, t.view's active strat), brief step 1).
   // `autoExpandName` is Task 2's own contract and returns a bare `.name`
@@ -305,15 +312,32 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
   // FIRST approach carrying that name, matching `autoExpandName`'s own
   // internal `Array.find` semantics exactly, so this never picks a DIFFERENT
   // section than the one autoExpandName itself intended.
-  const openedEntity = useRef(null);
+  //
+  // FIX ROUND 3 (controller finding): keyed on `pageIdentity`, NOT
+  // `entityKey`. Keying on `entityKey` broke two ways at once for the 129 of
+  // 252 targets that have no entity at all (every Castle Movement, every
+  // stage RTA, one not-a-target) -- `entityKey` is `null` for every one of
+  // them, and `useRef(null)`'s OWN initial value is `null`, so the guard's
+  // very first comparison (`null === null`) was already true on mount and
+  // the effect returned before ever running: auto-expand never fired,
+  // period, on more than half the library's target pages (190 approaches
+  // across those 129 targets, including "CCM RTA"'s 4 approaches / 138
+  // entries). Swapping only the ref's initial value would have fixed the
+  // mount case and left navigation broken: `entityKey` stays `null` for
+  // EVERY entity-less target, so hopping from one to another would still
+  // read as "already opened this page" and never re-fire. Same failure
+  // shape as the tray key two fix rounds ago -- an identity two genuinely
+  // different things can share, here two different castle-movement targets
+  // sharing the one value every entity-less target has.
+  const openedPage = useRef(null);
   useEffect(() => {
-    if (openedEntity.current === entityKey) return;
-    openedEntity.current = entityKey;
+    if (openedPage.current === pageIdentity) return;
+    openedPage.current = pageIdentity;
     const wantedName = autoExpandName(approaches, activeStrat);
     const hit = approaches.find((approach) => approach.name === wantedName);
     setExpanded(hit ? approachIdentity(hit) : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entityKey]);
+  }, [pageIdentity]);
 
   // A deep link (Task 7: the standards ladder's own tier rows, and the
   // book mark) re-fires on every change, unlike the auto-open above — the

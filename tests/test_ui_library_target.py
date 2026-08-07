@@ -275,3 +275,90 @@ def test_sibling_targets_sharing_an_unmatched_approach_name_open_independently(l
         f"clicking the second of two identically-named sections left "
         f"{open_count_after_second_click} sections open -- they are sharing "
         "one identity again")
+
+
+# ---- fix round 3 (controller finding): auto-expand never fires on an
+# entity-less target -------------------------------------------------------
+
+def _navigate_to_target(page, group_name, target_label):
+    """Back to the course grid, into `group_name`, onto `target_label`."""
+    page.evaluate("document.querySelector('.entity-back').click()")
+    page.wait_for(".library-courses", timeout_ms=15000)
+    opened_group = page.evaluate(f"""
+      (() => {{
+        const cell = Array.from(document.querySelectorAll('.library-courses .starcell'))
+          .find((c) => c.querySelector('.starname')?.textContent === {group_name!r});
+        if (!cell) return 'no ' + {group_name!r} + ' group cell';
+        cell.click();
+        return 'clicked';
+      }})()
+    """)
+    assert opened_group == "clicked", opened_group
+    page.wait_for(".library-group", timeout_ms=15000)
+    picked_target = page.evaluate(f"""
+      (() => {{
+        const cell = Array.from(document.querySelectorAll('.library-group .starcell'))
+          .find((c) => c.querySelector('.starname')?.textContent === {target_label!r});
+        if (!cell) return 'no ' + {target_label!r} + ' target cell';
+        cell.click();
+        return 'clicked';
+      }})()
+    """)
+    assert picked_target == "clicked", picked_target
+    page.wait_for(".library-target .library-section", timeout_ms=15000)
+
+
+def test_auto_expand_opens_the_first_strategy_on_an_entity_less_target(library_page):
+    """FIX ROUND 3. `entityKey` is `null` for every target with no entity --
+    129 of the bundled snapshot's 252 targets (113 castle_movement, 15 route,
+    1 not_a_target), 190 approaches between them. `useRef(null)`'s own
+    initial value is `null`, so the auto-expand one-shot's guard
+    (`openedEntity.current === entityKey`) was ALREADY satisfied on the very
+    first mount of any one of these pages, and the effect returned before
+    ever running: no section opened, on more than half the library's target
+    pages. "BoB RTA (RTA strat, Fadeout, w/ cannon cutscene)" is a real
+    route target (miss_reason "route", no entity) with 2 approaches on the
+    bundled snapshot -- confirmed here, not assumed, since a sheet update
+    could in principle collapse it to zero."""
+    _navigate_to_target(library_page, "1. Bob-omb Battlefield",
+                         "BoB RTA (RTA strat, Fadeout, w/ cannon cutscene)")
+    section_count = library_page.evaluate(
+        "document.querySelectorAll('.library-section').length")
+    assert section_count > 0, "expected approaches on BoB RTA; got none"
+    # The auto-expand EFFECT fires a tick after the section headers first
+    # render (it is a `useEffect`, not part of the render itself), so this
+    # waits for the settled `.open` state rather than racing it -- the same
+    # timing this file's own Benji-collision test (test_ui_library_tray.py)
+    # had to account for once it started manually opening a section too.
+    library_page.wait_for(".library-target .library-section.open", timeout_ms=10000)
+    open_count = library_page.evaluate(
+        "document.querySelectorAll('.library-section.open').length")
+    assert open_count == 1, (
+        f"expected the first strategy auto-expanded on an entity-less "
+        f"target; {open_count} sections were open")
+
+
+def test_auto_expand_re_fires_navigating_between_two_entity_less_targets(library_page):
+    """FIX ROUND 3, second half. `entityKey` is `null` for EVERY entity-less
+    target, so keying the one-shot on it (or on a ref that merely started
+    non-null) would still fail here: hopping from one entity-less target to
+    another never changes the key, so the guard reads "already opened this
+    page" and the SECOND page inherits whatever the first one's `expanded`
+    state was -- 0 sections open here (a stale target-scoped identity from
+    the first page cannot match any approach on the second)."""
+    _navigate_to_target(library_page, "1. Bob-omb Battlefield",
+                         "BoB RTA (RTA strat, Fadeout, w/ cannon cutscene)")
+    library_page.wait_for(".library-target .library-section.open", timeout_ms=10000)
+    first_open = library_page.evaluate(
+        "document.querySelectorAll('.library-section.open').length")
+    assert first_open == 1, first_open
+
+    _navigate_to_target(library_page, "2. Whomp's Fortress",
+                         "WF RTA (RTA strat, Fadeout)")
+    library_page.wait_for(".library-target .library-section.open", timeout_ms=10000)
+    second_open = library_page.evaluate(
+        "document.querySelectorAll('.library-section.open').length")
+    assert second_open == 1, (
+        f"expected the SECOND entity-less target to auto-expand its own "
+        f"first strategy too; {second_open} sections were open -- it "
+        "inherited the first page's state instead of re-firing")

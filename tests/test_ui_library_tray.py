@@ -333,7 +333,6 @@ def test_two_different_recordings_of_the_same_run_do_not_collide_in_the_tray(lib
     # since a plain run doesn't care which section is open. Waiting for the
     # auto-expanded `.open` class to already exist, above, is what orders
     # this click strictly AFTER that effect.
-    time.sleep(0.3)
     opened_section = library_page.evaluate("""
       (() => {
         const heads = Array.from(document.querySelectorAll('.library-section-head'));
