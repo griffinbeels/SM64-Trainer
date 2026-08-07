@@ -67,7 +67,8 @@ rather than the whole [[star]]. A subsection IS a [[segment]], and names the
 ### Moment
 
 Something Mario does that a [[subsection]] can start or end on — opening a
-door, triggering a textbox. The [[detector]] reads Mario's own action rather
+door, triggering a textbox, grabbing a pole or a tree, picking up a bob-omb.
+The [[detector]] reads Mario's own action rather
 than where he stands, which is why a [[subsection]] begins and ends inside one
 course where every other trigger needs him to travel. It records whenever you
 play, with or without a [[target]] set: the [[segment recorder]] exists to let
@@ -78,7 +79,8 @@ you point at what you just did, and you do the thing before you name it.
 ### Landmark
 
 The specific thing in the world a [[moment]] happened to — that door, that
-pole, that bob-omb. The game rebuilds its object list every time an area
+pole, that bob-omb — and that warp, since a warp inside a course leads nowhere
+new and so has no destination to name it. The game rebuilds its object list every time an area
 loads, so we name a landmark by where it SPAWNED rather than by which slot of
 that list holds it: the slot changes and the spawn point does not. He names
 one in the [[recorder]] and every row it ever appeared in takes that name.

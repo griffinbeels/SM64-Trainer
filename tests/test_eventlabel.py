@@ -329,3 +329,78 @@ def test_a_warp_DEEPER_is_still_a_move_and_not_an_arrival():
             jev(3, "spawned", 1000, {"level": 8, "kind": "spawn"})]
     settled, entry_spawns = level_entry_rows(rows)
     assert not entry_spawns and not settled
+
+
+# -- a warp INSIDE a course is not an entrance --------------------------------
+# His report, 2026-08-06: *"'Touched the Bob-omb Battlefield entrance in Bob-omb
+# Battlefield' is *really* actually a warp. This is warp detection."* Three
+# recent rows read `to == level` -- ids 2330/2327 in BoB, 2306/2288 in LLL --
+# and every one is an intra-course warp, which never leaves the course.
+
+def test_a_warp_that_lands_in_its_own_level_is_not_an_entrance():
+    assert label_event(jev(8, "warp_entered", 0,
+                           {"level": 9, "area": 1, "to": 9})) \
+        == "Entered a warp in Bob-omb Battlefield"
+
+
+def test_a_named_warp_reads_as_the_thing_he_named():
+    """The landmark work reached moments and never reached warps, so his two
+    BoB warps were the same sentence twice and neither could be renamed."""
+    row = jev(9, "warp_entered", 0,
+              {"level": 9, "area": 1, "to": 9,
+               "landmark": {"key": "9:1:aabbccdd:10,0,20",
+                            "kind_key": "kind:aabbccdd"}})
+    assert label_event(row, {"9:1:aabbccdd:10,0,20": "Cannon Warp"}) \
+        == "Entered the Cannon Warp in Bob-omb Battlefield"
+
+
+def test_a_named_KIND_covers_every_warp_of_that_family_at_once():
+    row = jev(10, "warp_entered", 0,
+              {"level": 9, "area": 1, "to": 9,
+               "landmark": {"key": "9:1:aabbccdd:10,0,20",
+                            "kind_key": "kind:aabbccdd"}})
+    assert label_event(row, {"kind:aabbccdd": "Hole"}) \
+        == "Entered a hole in Bob-omb Battlefield"
+
+
+def test_an_entrance_out_of_the_level_still_reads_by_its_destination():
+    """The regression guard for the clause above: naming a warp must not cost
+    the entrance its own, more specific sentence."""
+    assert label_event(jev(11, "warp_entered", 0,
+                           {"level": 6, "area": 3, "to": 23,
+                            "landmark": {"key": "6:3:11:1,2,3"}}),
+                       {"6:3:11:1,2,3": "DDD Portal"}) \
+        == "Touched the Dire, Dire Docks entrance in Castle Inside"
+
+
+# -- the two moment kinds added 2026-08-06 ------------------------------------
+# *"We don't detect poles / trees when I would expect this to be there"* (a
+# screenshot of Mario hugging the BoB tree beside an empty recorder) and *"When
+# I grab a bob-omb in a level, I want to be able to detect WHEN i grabbed them.
+# The frame I managed to successfully grab them."* Both are one registry row
+# plus its action set, which is what the registry exists for.
+
+def test_a_pole_grab_reads_as_one():
+    assert label_event(jev(12, "moment_reached", 0,
+                           {"kind": "pole_grab", "level": 9, "ordinal": 1})) \
+        == "Grab a pole in Bob-omb Battlefield"
+
+
+def test_a_named_pole_drops_the_generic_noun():
+    row = jev(13, "moment_reached", 0,
+              {"kind": "pole_grab", "level": 9, "ordinal": 3,
+               "landmark": {"key": "9:1:bb:1,2,3"}})
+    assert label_event(row, {"9:1:bb:1,2,3": "BoB Tree"}) \
+        == "Grab the BoB Tree in Bob-omb Battlefield"
+
+
+def test_a_pickup_keeps_its_verb_when_the_thing_is_named():
+    """"Pick up an object" is the only registry label whose article is "an",
+    and missing it reads "Pick up an object the Bob-omb"."""
+    row = jev(14, "moment_reached", 0,
+              {"kind": "pickup", "level": 9, "ordinal": 1,
+               "landmark": {"key": "9:1:cc:4,5,6", "kind_key": "kind:cc"}})
+    assert label_event(row, {"9:1:cc:4,5,6": "Bob-omb"}) \
+        == "Pick up the Bob-omb in Bob-omb Battlefield"
+    assert label_event(row, {"kind:cc": "Bob-omb"}) \
+        == "Pick up a bob-omb in Bob-omb Battlefield"

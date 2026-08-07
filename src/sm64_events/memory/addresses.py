@@ -450,6 +450,33 @@ ACT_WAITING_FOR_DIALOG = 0x0000130A        # dialog about to begin
 DIALOG_ACTIONS = frozenset({ACT_READING_AUTOMATIC_DIALOG,
                             ACT_READING_NPC_DIALOG, ACT_WAITING_FOR_DIALOG})
 
+# Pole / tree grabs — decomp include/sm64.h. A TREE IS A POLE to the engine:
+# both use the same climbing action group, which is why one moment kind covers
+# the BoB tree, the WF pole and every LLL cage pole. His report, 2026-08-06:
+# *"We don't detect poles / trees when I would expect this to be there"*,
+# with a screenshot of Mario hugging the BoB tree and an empty recorder.
+# Only the two GRAB actions are the moment — the climb, the top transition and
+# the top itself all follow from one successful grab, and entering any of them
+# is not a separate practice boundary.
+# VERIFY (live gate): mario_action reads 0x00100341 grabbing a pole/tree slowly
+# and 0x00100342 grabbing one at speed.
+ACT_GRAB_POLE_SLOW = 0x00100341
+ACT_GRAB_POLE_FAST = 0x00100342
+POLE_GRAB_ACTIONS = frozenset({ACT_GRAB_POLE_SLOW, ACT_GRAB_POLE_FAST})
+
+# Picking something up — decomp include/sm64.h. His report, 2026-08-06: *"When
+# I grab a bob-omb in a level, I want to be able to detect WHEN i grabbed them.
+# The frame I managed to successfully grab them."* ACT_PICKING_UP is exactly
+# that frame: the game sets it when the grab SUCCEEDS, so the entry edge is
+# the moment and no holding action needs to be watched. The Bowser variant is
+# a separate id and is deliberately in the same set — a tail grab is a pickup
+# a runner would practice, and one row per KIND is what the registry is for.
+# VERIFY (live gate): mario_action reads 0x00000383 on grabbing a bob-omb or a
+# shell, and 0x00000385 on grabbing Bowser's tail.
+ACT_PICKING_UP = 0x00000383
+ACT_PICKING_UP_BOWSER = 0x00000385
+PICKUP_ACTIONS = frozenset({ACT_PICKING_UP, ACT_PICKING_UP_BOWSER})
+
 # gCurrAreaIndex (s16) — castle lobby/upstairs/basement are AREAS of level 6,
 # not levels. Live-verified 2026-06-12 via tools/hunt_exact.py snapshot diff:
 # reads 1 in the lobby, 2 upstairs, 3 in the basement, stable across repeated

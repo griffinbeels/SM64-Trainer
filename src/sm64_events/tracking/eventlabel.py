@@ -142,7 +142,7 @@ def _star_collected(payload: dict) -> str | None:
     return f"Grabbed {star_name(course_id, star_id)} in {course_name(course_id)}"
 
 
-def _warp_entered(payload: dict) -> str | None:
+def _warp_entered(payload: dict, names: dict) -> str | None:
     """Three different things wear this one event type, and the row has to
     say WHICH -- a player reading his own history recognises the thing he
     touched, not the event we named it after.
@@ -151,17 +151,38 @@ def _warp_entered(payload: dict) -> str | None:
     every row read "Entered the pipe", so *"I don't see anything about warps
     here? I guess it's 'Entered the pipe in Bob-omb Battlefield'?"* -- correct,
     and unrecognisable. `warp_word` carries his own rule (pipe in a Bowser
-    stage, warp everywhere else); `to` is the third case and the most specific,
-    since a course ENTRANCE is named by where it leads rather than by what it
-    looks like."""
+    stage, warp everywhere else); a course ENTRANCE is the most specific case
+    and is named by where it leads rather than by what it looks like.
+
+    AN ENTRANCE LEAVES THE LEVEL, and reading `to` alone said otherwise for a
+    day. Live report 2026-08-06: *"'Touched the Bob-omb Battlefield entrance in
+    Bob-omb Battlefield' is *really* actually a warp. This is warp detection."*
+    Three recent rows read `to == level` -- ids 2330 and 2327 inside BoB, 2306
+    and 2288 inside LLL -- and every one of them is an INTRA-COURSE warp, which
+    never leaves the course and so has no entrance to name. `to != level` is
+    the whole test, and it is in the payload already.
+
+    WHICH warp, once he has named it, comes from the same catalogue a moment
+    reads: the landmark work reached moments and never reached warps, so his
+    two BoB warps were literally the same sentence twice and neither could be
+    renamed. Named and unnamed differ only in the noun, exactly as a moment's
+    do -- and a KIND name ("Pipe") is the cheaper level, covering every
+    instance in the game at once.
+    """
     level = payload.get("level")
     if level is None:
         return None
     destination = payload.get("to")
-    if destination is not None:
+    if destination is not None and destination != level:
         return (f"Touched the {_level_name(destination)} entrance in "
                 f"{_level_name(level)}")
-    return f"Entered a {warp_word(level)} in {_level_name(level)}"
+    landmark = payload.get("landmark") or {}
+    named = names.get(landmark.get("key"))
+    if named:
+        return f"Entered the {named} in {_level_name(level)}"
+    kind_named = names.get(landmark.get("kind_key"))
+    what = kind_named.lower() if kind_named else warp_word(level)
+    return f"Entered a {what} in {_level_name(level)}"
 
 
 # detectors/key.py's FIGHT_END_LEVELS values -> the human-facing object of
@@ -185,7 +206,7 @@ def _key_grabbed(payload: dict) -> str | None:
 _MOMENT_LABELS = {m.kind: m.label for m in MOMENTS}
 
 # The labellers that take (payload, names) instead of (payload).
-_READS_THE_CATALOGUE = frozenset({"moment_reached"})
+_READS_THE_CATALOGUE = frozenset({"moment_reached", "warp_entered"})
 
 
 def _moment_reached(payload: dict, names: dict) -> str | None:
@@ -226,8 +247,15 @@ def _moment_reached(payload: dict, names: dict) -> str | None:
 
 def _verb(label: str) -> str:
     """"Open a door" -> "Open". The registry's label is a whole phrase and a
-    named landmark supplies its own noun, so the verb is what survives."""
-    return label.split(" a ")[0].split(" the ")[0]
+    named landmark supplies its own noun, so the verb is what survives.
+
+    " an " is here for "Pick up an object", and it is not a special case: any
+    registry label naming its object needs its article stripped, and missing
+    one produces "Pick up an object the Bob-omb", which reads as the tool being
+    broken rather than as a missing rule."""
+    for article in (" a ", " an ", " the "):
+        label = label.split(article)[0]
+    return label
 
 
 def _spawned(payload: dict) -> str | None:

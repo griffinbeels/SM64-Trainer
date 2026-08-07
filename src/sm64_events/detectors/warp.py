@@ -103,6 +103,7 @@ what keeps it out (test_warp.py pins that). The clock must see every tick, so
 it is observed in process() whether or not a touch fires — this detector has
 not been stateless since 2026-07-31, and now holds a pending touch as well."""
 from sm64_events.core.events import Event
+from sm64_events.core.landmark import landmark_at
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.core.timefmt import format_igt
 from sm64_events.detectors.igt_clock import IgtClock
@@ -165,9 +166,19 @@ class WarpDetector:
         # be had here — the event's own `frame` and the frame the IGT is read
         # at stay the same number, whatever the poll phase was.
         igt_frames, source = self._clock.igt_at(curr.global_timer, curr)
+        # WHICH warp, read HERE and not at publish. A painting publishes on
+        # its own frame but a pipe waits ~20 for the destination, and by then
+        # Mario is engaged with nothing — the landmark belongs to the touch,
+        # exactly like the frame and the time already held beside it. Without
+        # it his two BoB warps are the same sentence twice and neither can be
+        # renamed (2026-08-06: every `warp_entered` in the journal carried
+        # `landmark: null`, because the landmark work reached moments and
+        # never reached warps).
+        found = landmark_at(curr)
         self._held = {"frame": curr.global_timer, "level": curr.curr_level,
                       "area": curr.curr_area, "action": curr.mario_action,
                       "igt_frames": igt_frames, "igt_source": source,
+                      "landmark": found.payload() if found else None,
                       "wall_time_utc": curr.wall_time_utc}
         if self._destination_is_live(curr):
             return self._publish(curr.warp_dest_level)
@@ -195,6 +206,7 @@ class WarpDetector:
                       timestamp_utc=held["wall_time_utc"],
                       payload={"level": held["level"], "area": held["area"],
                                "action": held["action"], "to": to,
+                               "landmark": held["landmark"],
                                "igt_frames": held["igt_frames"],
                                "igt": format_igt(held["igt_frames"]),
                                "igt_source": held["igt_source"]})]

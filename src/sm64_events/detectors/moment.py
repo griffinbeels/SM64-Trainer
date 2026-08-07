@@ -84,6 +84,8 @@ class Moment:
 MOMENTS: tuple[Moment, ...] = (
     Moment("door_open", A.DOOR_ACTIONS, "Open a door"),
     Moment("textbox", A.DIALOG_ACTIONS, "Trigger a textbox"),
+    Moment("pole_grab", A.POLE_GRAB_ACTIONS, "Grab a pole"),
+    Moment("pickup", A.PICKUP_ACTIONS, "Pick up an object"),
 )
 
 

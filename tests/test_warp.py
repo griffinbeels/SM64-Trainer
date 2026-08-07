@@ -321,3 +321,33 @@ def test_teleport_fade_out_also_emits_warp_entered():
 def test_exit_from_warp_action_is_silent():
     # savestate-load mid-warp: prev=warp, curr=idle -> no edge-in, no event
     assert WarpDetector().process(snap(mario_action=ACT_DISAPPEARED), snap()) == []
+
+
+def test_the_touch_carries_WHICH_warp_it_was():
+    """Read at the TOUCH, not at publish. A painting publishes on its own frame
+    but a pipe waits ~20 for the destination, and by then Mario is engaged with
+    nothing -- so the landmark belongs to the touch exactly like the frame and
+    the time already held beside it.
+
+    Until 2026-08-06 every `warp_entered` in the journal carried `landmark:
+    null`, so his two BoB warps (ids 2327 and 2330) were the same sentence
+    twice and neither could be renamed.
+    """
+    detector = WarpDetector()
+    touching = snap(mario_action=ACT_DISAPPEARED, curr_level=9,
+                    landmark_behaviour=0xAABBCCDD,
+                    landmark_home=(120.0, 0.0, -30.0))
+    assert detector.process(snap(curr_level=9), touching) == []
+    [event] = land(detector, touching)
+    assert event.payload["landmark"]["key"] == "9:1:aabbccdd:120,0,-30"
+    assert event.payload["landmark"]["placed"] is True
+
+
+def test_a_touch_that_engages_nothing_names_nothing():
+    """A warp the object pool cannot name still records; `None` is what makes
+    the label fall back to "Entered a warp in ..." rather than inventing one."""
+    detector = WarpDetector()
+    touching = snap(mario_action=ACT_DISAPPEARED)
+    assert detector.process(snap(), touching) == []
+    [event] = land(detector, touching)
+    assert event.payload["landmark"] is None
