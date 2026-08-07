@@ -305,6 +305,13 @@
   }
   .library-refresh-msg.is-ok { color: var(--green); }
   .library-refresh-msg.is-error { color: var(--coral); }
+  /* The index-load failure state (library.js) -- had no rule at all, so the
+     message and Retry button were legible but unspaced (final review
+     follow-up, minor). Its own `<p class="library-refresh-msg is-error">`
+     already carries the bottom margin the message needs; this just keeps the
+     button from hugging it. */
+  .library-load-error { display: grid; gap: .4rem; margin: 0 0 .8rem; }
+  .library-load-error .library-refresh-msg { margin: 0; }
   /* Task 6: the Study-in-Compare result summary (library.js's
      `StudyMessage`) -- up to TWO independent lines (a batch can both fail
      partially AND span more than one entity, fix round 1), so the outer
