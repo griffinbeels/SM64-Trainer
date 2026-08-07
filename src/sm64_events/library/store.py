@@ -202,7 +202,11 @@ class LibraryStore:
         if self.path:
             write_snapshot(self.path, fresh)
         self._payload = fresh
-        self._source = "local"
+        # "local" only means something once written -- a pathless store (no
+        # embedder passes one; create_app always does) never persists this
+        # payload anywhere, so claiming "local" here would have status()
+        # report a copy on disk that was never actually saved.
+        self._source = "local" if self.path else None
         return {"applied": True, "sheet_revision": fresh.get("sheet_revision"),
                 "fetched_revision": fresh.get("sheet_revision"),
                 "targets": len(fresh["targets"])}

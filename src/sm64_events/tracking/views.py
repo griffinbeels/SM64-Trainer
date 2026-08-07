@@ -454,6 +454,27 @@ def _fastest_strategy(ranks, ek, best_ladder_cs: dict) -> str | None:
     return min(candidates, key=str) if candidates else None
 
 
+def _ladder_is_fitted(ranks, ek, best_ladder_cs: dict) -> bool:
+    """Whether ANY tier of `best_ladder_cs` (a pointwise-minimum ladder) is
+    set by a fitted (sheet-derived) strategy -- deliberately NOT
+    `_fastest_strategy`'s single identity. That helper answers a narrower
+    question (which strategy is uniquely responsible for the ladder's
+    HARDEST shared tiers) and stops as soon as one candidate is left, so it
+    can name a vetted strategy while a completely different, fitted one
+    still owns an easier tier -- and `classify.rank_for` grades a run
+    against every tier's own cutoff, contaminated or not, not just the
+    hardest one. Checks every strategy that sets at least one tier, and errs
+    toward True: a fitted ladder's own accuracy is 39-42% against a held-out
+    vetted one, so a false "vetted" is the wrong direction to be wrong in."""
+    for strat in ranks.strategies(ek):
+        strat_ladder = ranks.ladder_cs(ek, strat)
+        sets_a_tier = any(strat_ladder.get(tier) == value
+                          for tier, value in best_ladder_cs.items())
+        if sets_a_tier and ranks.is_fitted(ek, strat):
+            return True
+    return False
+
+
 def entity_rank(ranks, ek, frames) -> dict | None:
     """The star/segment's OWN rank: the time graded against the entity's
     best-possible ladder (pointwise best across every strategy) rather than
@@ -479,7 +500,18 @@ def entity_rank(ranks, ek, frames) -> dict | None:
     that actually sets this best-possible ladder — so the UI can explain a
     low entity rank next to a high strategy rank ("Iron I · fastest here is
     Sign Clip") instead of leaving the two numbers to look like a
-    contradiction (live user report 2026-07-25)."""
+    contradiction (live user report 2026-07-25).
+
+    `fitted` is NOT fastest_strat's own is_fitted -- `best_ladder` is a
+    POINTWISE minimum, so a different strategy can own an easier tier than
+    the one that wins the hardest tier `_fastest_strategy` identifies (its
+    own hardest-tier-first narrowing stops at the first uniquely-identified
+    strategy and never claims to speak for every tier). `_ladder_is_fitted`
+    asks every strategy that actually SETS a tier, not just the one strategy
+    named as "fastest" -- measured against the bundled seeds, 8 of 117
+    entities have a vetted fastest_strat while a fitted strategy alone still
+    sets one of the easier tiers a run is graded against there, which
+    fastest_strat's own is_fitted silently missed."""
     if ranks is None or frames is None:
         return None
     ladder = scoring.best_ladder(ranks.ladders(ek))
@@ -487,13 +519,9 @@ def entity_rank(ranks, ek, frames) -> dict | None:
         return None
     progress = _graded_progress(ladder, classify.display_cs(frames))
     fastest_strat = _fastest_strategy(ranks, ek, ladder)
-    # The best-possible ladder is a pointwise minimum across every strategy
-    # (vetted and sheet-derived alike), so it has no single strategy to ask
-    # is_fitted about directly -- fastest_strat (just above) IS the strategy
-    # that actually sets it, so its fittedness is the entity's own.
     return {**progress, "score": round(progress["score"], 1),
             "fastest_strat": fastest_strat,
-            "fitted": bool(fastest_strat) and ranks.is_fitted(ek, fastest_strat)}
+            "fitted": _ladder_is_fitted(ranks, ek, ladder)}
 
 
 def ranks_share_ladder(ranks, ek, strat) -> bool:

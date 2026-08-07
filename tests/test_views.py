@@ -2323,6 +2323,31 @@ def test_fitted_reaches_every_rank_surface_the_session_view_builds(tmp_path):
     assert build_entity_ranks(db, svc)["star:2:2"]["fitted"] is False
 
 
+def test_entity_rank_flags_fitted_even_when_a_vetted_strategy_wins_mario(tmp_path):
+    """entity_rank's ladder is a POINTWISE MINIMUM across every strategy: a
+    vetted strategy can own the HARDEST shared tier (and so become
+    _fastest_strategy) while a completely different, fitted strategy still
+    sets an EASIER tier of that same graded ladder. fastest_strat's own
+    is_fitted cannot see that -- it stops narrowing at the first uniquely-
+    identified strategy, which here is the vetted one at Mario. A run graded
+    against this ladder is compared to EVERY tier's own cutoff (classify.
+    rank_for), contaminated tiers included, so fitted must ask the whole
+    ladder, not one name."""
+    from sm64_events.tracking.views import entity_rank
+
+    ranks = _ranks(tmp_path)      # vetted "fast": Mario 11.0, Diamond 12.0, Silver 13.0
+    # Slower than "fast" at Mario (so "fast" uniquely wins that tier and
+    # becomes fastest_strat) but FASTER at Silver (so it alone sets that
+    # tier of the pointwise-min ladder).
+    ranks.apply_sheet_ladders(
+        {"star:2:2": {"strategies": {
+            "sheet strat": {"Mario": 12.0, "Silver": 10.0}}}})
+
+    out = entity_rank(ranks, "star:2:2", 330)   # frames value is irrelevant here
+    assert out["fastest_strat"] == "fast"       # the vetted strategy, correctly
+    assert out["fitted"] is True                # but "sheet strat" still owns Silver
+
+
 def test_a_route_steps_rank_flags_a_sheet_derived_ladder(tmp_path):
     """build_route_view's per-step rank goes through the SAME _strat_rank as
     rank_by_star (module docstring's own claim) -- prove fitted rides along

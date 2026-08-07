@@ -117,6 +117,21 @@ def test_a_refresh_that_lands_on_a_newer_sheet_is_kept(tmp_path, monkeypatch):
     assert read_snapshot(path)["targets"][0]["label"] == "fresher"
 
 
+def test_a_pathless_refresh_never_claims_a_persisted_local_copy(monkeypatch):
+    """A store with no local path (no real embedder passes one; create_app
+    always does) can still apply a refresh in memory, but nothing was WRITTEN
+    anywhere -- status() must not call that "local", which implies a saved
+    copy that survives a restart."""
+    store = LibraryStore(None, None)
+    monkeypatch.setattr("sm64_events.library.build.build",
+                        lambda data, fetched_at, overrides=None:
+                        _snapshot("2026-08-05T09:15:18", "fresher"))
+    monkeypatch.setattr("sm64_events.library.ladders.fit_payload", lambda p: p)
+    result = store.refresh(_fetch_returning(None))
+    assert result["applied"] is True
+    assert store.status()["source"] is None
+
+
 def test_a_refresh_stamps_each_approachs_vetted_twin(tmp_path, monkeypatch):
     """The refresh producer must stamp exactly as scrape time does -- a
     refreshed snapshot the Library page reads differently is a fork."""

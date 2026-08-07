@@ -139,7 +139,13 @@ own contract: `true` when the ladder graded here is Ultimate-Sheet-derived
 (measured at 39-42% same-tier accuracy against a held-out community-vetted
 ladder) rather than the community's own vetted standard. `entity_rank` grades
 a pointwise-minimum ladder with no single strategy of its own, so its
-`fitted` is the strategy named by its own `fastest_strat`. A route's
+`fitted` is `true` when ANY tier of that ladder is set by a fitted strategy
+(`tracking/views.py::_ladder_is_fitted`) — NOT merely `fastest_strat`'s own
+is_fitted, which names only the strategy that wins the ladder's hardest
+shared tiers and can miss a completely different, fitted strategy owning an
+easier one (measured against the bundled seeds: 8 of 117 entities have a
+vetted `fastest_strat` while a fitted strategy alone still sets one of the
+tiers a run is actually graded against). A route's
 `avg_rank` (the nearest-tier MEAN of its steps' own ranks) and every MARELO
 scope/entity score (`/api/marelo*`) carry no `fitted` — neither names one
 identified (entity, strategy) ladder, so there is nothing for the flag to
