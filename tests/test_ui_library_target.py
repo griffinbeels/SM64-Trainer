@@ -206,3 +206,72 @@ def test_plus_adds_to_the_tray_and_then_disables(library_page):
     assert result["before"] is False
     library_page.wait_for(
         ".library-section.open .library-example-plus:disabled", timeout_ms=5000)
+
+
+# ---- fix round 1 (controller finding 1): section/anchor identity collision -
+
+def test_sibling_targets_sharing_an_unmatched_approach_name_open_independently(library_page):
+    """FIX ROUND 1. CCM's 100-coin star (star:4:6) maps to FOUR sheet
+    targets, and two of them (indices 23 and 24 in the bundled snapshot) each
+    carry an approach literally named "100 coin star Xcam" with no
+    `matched_strategy` -- an UNMATCHED-name collision, confirmed against the
+    real snapshot to be the MORE common half (6 entities share it, every
+    100-coin star with more than one sheet target), not the rarer matched-
+    strategy case this file originally reported as the only kind. Before
+    target-index disambiguation, both sections shared one identity
+    (`matched_strategy || name`), so `open === expanded` was satisfied for
+    BOTH the instant either was clicked -- opening one silently opened both.
+    """
+    # Back out of the auto-opened star:2:4 page, into the course grid.
+    library_page.evaluate("document.querySelector('.entity-back').click()")
+    library_page.wait_for(".library-courses", timeout_ms=15000)
+    opened_group = library_page.evaluate("""
+      (() => {
+        const cell = Array.from(document.querySelectorAll('.library-courses .starcell'))
+          .find((c) => c.querySelector('.starname')?.textContent === '4. Cool, Cool Mountain');
+        if (!cell) return 'no CCM group cell';
+        cell.click();
+        return 'clicked';
+      })()
+    """)
+    assert opened_group == "clicked", opened_group
+    library_page.wait_for(".library-group", timeout_ms=15000)
+    picked_target = library_page.evaluate("""
+      (() => {
+        const cell = Array.from(document.querySelectorAll('.library-group .starcell'))
+          .find((c) => (c.querySelector('.starname')?.textContent || '')
+            .includes('100c'));
+        if (!cell) return 'no 100-coin target cell in the CCM group (looking for "100c" in the label)';
+        cell.click();
+        return 'clicked';
+      })()
+    """)
+    assert picked_target == "clicked", picked_target
+    library_page.wait_for(".library-target .library-section", timeout_ms=15000)
+
+    # Confirms the fixture actually reached the real collision (a sheet
+    # update could in principle rename one of the two rows and quietly
+    # de-fang this test) before trusting anything that follows.
+    names = library_page.evaluate(
+        "Array.from(document.querySelectorAll('.library-section-name'))"
+        ".map(e => e.textContent)")
+    assert names.count("100 coin star Xcam") == 2, (
+        f"expected the known real duplicate on star:4:6; got {names}")
+
+    ids = library_page.evaluate(
+        "Array.from(document.querySelectorAll('.library-section')).map(e => e.id)")
+    assert len(ids) == len(set(ids)), f"duplicate section anchor ids: {ids}"
+
+    open_count_after_second_click = library_page.evaluate("""
+      (() => {
+        const heads = Array.from(document.querySelectorAll('.library-section-head'))
+          .filter((h) => h.querySelector('.library-section-name').textContent
+            === '100 coin star Xcam');
+        heads[1].click();
+        return document.querySelectorAll('.library-section.open').length;
+      })()
+    """)
+    assert open_count_after_second_click == 1, (
+        f"clicking the second of two identically-named sections left "
+        f"{open_count_after_second_click} sections open -- they are sharing "
+        "one identity again")

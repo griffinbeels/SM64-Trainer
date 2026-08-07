@@ -31,21 +31,41 @@ const enc = encodeURIComponent;
 // `·` and `(JP)` — none legal (or at least none SAFE) inside a bare `id`, and
 // `matched_strategy` is worse (it is the qualified vetted name, e.g.
 // "100c + Slide · Open"). caveat 7 grants latitude to change the brief's
-// literal `lib-band-${approachName}-${tier}` format for exactly this reason;
-// the final format is `lib-band-<slug(matched_strategy||name)>-<slug(tier)>`,
-// recorded in the task report for Task 7 (it reaches these anchors through
-// `focusStrat`/`focusTier` PROPS, resolved inside this file, never by
-// reconstructing the id string itself — see the report for why that is safe
-// even though two approaches on a 100-coin star's sibling targets can share a
-// literal unmatched name).
+// literal `lib-band-${approachName}-${tier}` format for exactly this reason.
+//
+// FIX ROUND 1 (2026-08-07): `matched_strategy || name` is NOT unique on its
+// own. Measured against the real bundled snapshot: 10 colliding section
+// identities across 8 entities, and the MORE common half is the raw,
+// UNMATCHED name — "100 coin star Xcam" alone collides on 6 different stars
+// (every 100-coin entity with more than one sheet target), not just the
+// matched-strategy case the original version of this file called the only
+// one worth naming. `target.index` (stable within one loaded payload, and
+// already how the picker/course-grid's own numeric door addresses a target)
+// is what actually disambiguates, so every anchor/key is now scoped to the
+// owning approach's OWN target as well: `_targetIndex`, stamped once when
+// `approaches` is built (below), never re-derived per anchor call.
+//
+// The final format is
+// `lib-band-<targetIndex>-<slug(matched_strategy||name)>-<slug(tier)>`
+// (section anchors drop the `-<tier>` suffix). Recorded here for Task 7: it
+// reaches these anchors through `focusStrat`/`focusTier` PROPS, resolved
+// inside this file, never by reconstructing the id string itself — a name-
+// only deep link is still inherently ambiguous between two sibling sections
+// that share a `matched_strategy` (see the `focusStrat` effect below for why
+// that specific ambiguity is not a bug to fix here).
 function slug(text) {
   return String(text || "").trim().toLowerCase()
     .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "x";
 }
-const sectionAnchorId = (approach) =>
-  `lib-section-${slug(approach.matched_strategy || approach.name)}`;
+// The single identity every open/closed state, React `key`, and anchor id in
+// this file keys on — target index PLUS the display identity, so two
+// sections that happen to share a name (matched or not) are still two
+// independently addressable things.
+const approachIdentity = (approach) =>
+  `${approach._targetIndex}-${slug(approach.matched_strategy || approach.name)}`;
+const sectionAnchorId = (approach) => `lib-section-${approachIdentity(approach)}`;
 const bandAnchorId = (approach, tier) =>
-  `lib-band-${slug(approach.matched_strategy || approach.name)}-${slug(tier)}`;
+  `lib-band-${approachIdentity(approach)}-${slug(tier)}`;
 
 // `t.view`'s active strategy for this entity — `entitysection.js::entityKey`
 // is the read-side identity every section already carries, and `last_strat`
@@ -222,7 +242,10 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, onAdd }) 
  */
 export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTier }) {
   const [query, setQuery] = useState("");
-  const [expanded, setExpanded] = useState(null);   // the OPEN approach's .name
+  // The OPEN approach's `approachIdentity` — target-scoped, not just its
+  // name, so two sibling targets whose approaches share a name (fix round 1)
+  // can never accidentally open/close together.
+  const [expanded, setExpanded] = useState(null);
 
   const rows = targets || [];
   const entityKey = (rows[0] && rows[0].entity_key) || null;
@@ -231,7 +254,7 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
 
   const approaches = useMemo(() => sectionOrder(
     rows.flatMap((target) => (target.approaches || []).map((approach) => (
-      { ...approach, _target: target.label }))),
+      { ...approach, _target: target.label, _targetIndex: target.index }))),
   ), [rows]);
 
   const activeStrat = activeStratFor(t && t.view, entityKey);
@@ -245,24 +268,40 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
   // Auto-expand once per entity — a deliberate one-shot, so a click the user
   // makes afterward is never silently reverted by a later render of the same
   // page (autoExpandName(ordered, t.view's active strat), brief step 1).
+  // `autoExpandName` is Task 2's own contract and returns a bare `.name`
+  // (never a target-scoped identity — that is not its job); resolved to the
+  // FIRST approach carrying that name, matching `autoExpandName`'s own
+  // internal `Array.find` semantics exactly, so this never picks a DIFFERENT
+  // section than the one autoExpandName itself intended.
   const openedEntity = useRef(null);
   useEffect(() => {
     if (openedEntity.current === entityKey) return;
     openedEntity.current = entityKey;
-    setExpanded(autoExpandName(approaches, activeStrat));
+    const wantedName = autoExpandName(approaches, activeStrat);
+    const hit = approaches.find((approach) => approach.name === wantedName);
+    setExpanded(hit ? approachIdentity(hit) : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entityKey]);
 
   // A deep link (Task 7: the standards ladder's own tier rows, and the
   // book mark) re-fires on every change, unlike the auto-open above — the
   // whole point of a link is to move you even while the page is already
-  // open on something else.
+  // open on something else. `approaches.find` here still resolves by NAME
+  // alone and can still land on the first of two sibling sections that
+  // share one `matched_strategy` (the 100-coin case, caveat 4) — that is not
+  // this fix's bug to close: the two sections show the IDENTICAL rank/PB for
+  // that strategy by design ("your rank on a strategy is the same fact
+  // wherever it appears"), so a strategy-named link has no third piece of
+  // information to disambiguate WHICH sibling with, and landing on either is
+  // correct. What this fix DOES close is that such a link now always opens
+  // and scrolls to a single, stable section rather than one whose identity
+  // collided with an unrelated approach on the OTHER sibling target.
   useEffect(() => {
     if (!focusStrat) return undefined;
     const hit = approaches.find((approach) =>
       approach.matched_strategy === focusStrat || approach.name === focusStrat);
     if (!hit) return undefined;
-    setExpanded(hit.name);
+    setExpanded(approachIdentity(hit));
     // Disclose mounts the section body a tick after `open` flips — see its
     // own docstring ("Preact commits after the tick"). A short timer beats a
     // race against that mount rather than guessing a single rAF is enough.
@@ -297,9 +336,9 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
             : missReason === "route" ? "Stage route — browse the sheet, no per-target ladder here."
             : "No community times recorded here yet."}
         </p>`
-      : approaches.map((approach) => html`<${Section} key=${approach.matched_strategy || approach.name}
-          approach=${approach} open=${expanded === approach.name}
-          onOpen=${() => setExpanded(approach.name)} query=${query}
+      : approaches.map((approach) => html`<${Section} key=${approachIdentity(approach)}
+          approach=${approach} open=${expanded === approachIdentity(approach)}
+          onOpen=${() => setExpanded(approachIdentity(approach))} query=${query}
           stratInfo=${approach.matched_strategy ? stratByName[approach.matched_strategy] : null}
           trayKeys=${trayKeys} onAdd=${onAdd} />`)}
   </div>`;
