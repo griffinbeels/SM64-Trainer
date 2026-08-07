@@ -72,12 +72,15 @@ class LibraryStore:
         self.path = Path(path) if path else None
         self.bundled_path = Path(bundled_path) if bundled_path else None
         self._payload = None
+        self._source = None   # "local" | "bundled" | None (nothing loaded)
 
     # ---- load ----
     def load(self) -> None:
         bundled = read_snapshot(self.bundled_path)
         local = read_snapshot(self.path)
         self._payload = newer(local, bundled)
+        self._source = ("local" if self._payload is local and local is not None
+                        else "bundled" if self._payload is not None else None)
         if self._payload is None:
             _log.info("no usable sheet library at %s or %s", self.path,
                       self.bundled_path)
@@ -104,8 +107,7 @@ class LibraryStore:
                 "targets": len(payload["targets"]),
                 "runners": len(payload.get("runners") or []),
                 "ladder_model": payload.get("ladder_model") or {},
-                "source": "local" if self._payload is read_snapshot(self.path)
-                          else "bundled"}
+                "source": self._source}
 
     # ---- reads ----
     def index(self) -> dict:
@@ -113,8 +115,12 @@ class LibraryStore:
         without shipping 44,000 entries to do it."""
         groups = {}
         for position, target in enumerate(self.payload["targets"]):
-            group = groups.setdefault(target["group"] or target["section"],
-                                      {"group": target["group"], "targets": []})
+            # The stored "group" must be the SAME value used as the dict key --
+            # a falsy target["group"] keyed by target["section"] but stamped
+            # with the raw (falsy) value would hand the UI a group it can
+            # never reopen, since falsy is its own "nothing is open" sentinel.
+            key = target["group"] or target["section"]
+            group = groups.setdefault(key, {"group": key, "targets": []})
             group["targets"].append({
                 "index": position,
                 "section": target["section"], "label": target["label"],
@@ -196,6 +202,7 @@ class LibraryStore:
         if self.path:
             write_snapshot(self.path, fresh)
         self._payload = fresh
+        self._source = "local"
         return {"applied": True, "sheet_revision": fresh.get("sheet_revision"),
                 "fetched_revision": fresh.get("sheet_revision"),
                 "targets": len(fresh["targets"])}

@@ -139,6 +139,59 @@ def test_a_refresh_stamps_each_approachs_vetted_twin(tmp_path, monkeypatch):
     assert stamped["matched_strategy"] == "Skyjump"
 
 
+# -- status()'s "source" field: which copy is actually being served --------
+
+def test_status_reports_bundled_when_only_the_bundled_copy_exists(tmp_path):
+    bundled = tmp_path / "bundled.json.gz"
+    write_snapshot(bundled, _snapshot("2026-08-05T09:15:18", "bundled-only"))
+    store = LibraryStore(tmp_path / "local.json.gz", bundled)
+    store.load()
+    assert store.status()["source"] == "bundled"
+
+
+def test_status_reports_local_when_the_local_copy_is_newer(tmp_path):
+    local, bundled = tmp_path / "local.json.gz", tmp_path / "bundled.json.gz"
+    write_snapshot(local, _snapshot("2026-08-05T09:15:18", "fresh"))
+    write_snapshot(bundled, _snapshot("2026-07-01T00:00:00", "stale"))
+    store = LibraryStore(local, bundled)
+    store.load()
+    assert store.status()["source"] == "local"
+
+
+def test_status_reports_nothing_when_no_snapshot_exists_anywhere(tmp_path):
+    store = LibraryStore(tmp_path / "local.json.gz", tmp_path / "bundled.json.gz")
+    store.load()
+    assert store.status()["source"] is None
+
+
+def test_an_applied_refresh_is_the_only_persistent_confirmation_offered(tmp_path, monkeypatch):
+    """Right after a successful refresh, status() must say "local" -- that is
+    the whole of what tells the user their refresh actually took."""
+    path = tmp_path / "local.json.gz"
+    store = LibraryStore(path, None)
+    store._payload = _snapshot("2026-01-01T00:00:00", "current")
+    monkeypatch.setattr("sm64_events.library.build.build",
+                        lambda data, fetched_at, overrides=None:
+                        _snapshot("2026-08-05T09:15:18", "fresher"))
+    monkeypatch.setattr("sm64_events.library.ladders.fit_payload", lambda p: p)
+    result = store.refresh(_fetch_returning(None))
+    assert result["applied"] is True
+    assert store.status()["source"] == "local"
+
+
+def test_a_falsy_group_stamps_the_same_value_it_was_keyed_by():
+    """The stored `group` field must equal the key it was grouped under, or a
+    falsy group collapses every such target into one permanently-unopenable
+    cell -- falsy is the UI's own "nothing is open" sentinel."""
+    store = LibraryStore()
+    payload = _snapshot("2026-08-05T09:15:18")
+    payload["targets"][0]["group"] = None
+    store._payload = payload
+    index = store.index()
+    assert len(index["groups"]) == 1
+    assert index["groups"][0]["group"] == payload["targets"][0]["section"]
+
+
 def test_reads_answer_the_questions_the_ui_asks():
     store = LibraryStore()
     store._payload = _snapshot("2026-08-05T09:15:18")
