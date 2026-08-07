@@ -189,7 +189,20 @@ if (segBtn && segBtn.getAttribute('aria-current') !== 'page') {
   await waitFor(() => !!document.querySelector('.segments-page'));
 }
 if (!document.querySelector('.segbuilder')) {
-  const search = document.querySelector('.library-search');
+  // Scoped to `.segments-page`, not a bare `.library-search` -- the Library
+  // tab (Task 4, spec 2026-08-07-library-page) reuses that same generic
+  // class for its OWN search box and stays mounted with `display:none` when
+  // you leave it (library.js's own docstring: "the same display:none trick
+  // Compare uses"), so an unscoped query silently grabs the HIDDEN Library
+  // box instead of this tab's real one whenever the "library-target" story
+  // ran first in the same sweep pass. Measured: `document.querySelectorAll(
+  // '.library-search').length` was 2 on the Segments page after that
+  // sequence, and the first (DOM-order) match was the Library tab's own,
+  // stuck at whatever text it last held -- so nothing here ever typed into
+  // the real box, `.segment-row-main` never appeared, and `.segbuilder`
+  // never opened. Caught by `RuntimeError: uilab story 'segments-editor'...
+  // scope selector matched nothing: .segbuilder`, not by a wrong screenshot.
+  const search = document.querySelector('.segments-page .library-search');
   if (search) {
     const setter = Object.getOwnPropertyDescriptor(
       window.HTMLInputElement.prototype, 'value').set;
@@ -265,6 +278,22 @@ while (stepIndex() >= 0 && stepIndex() < {target_step} && guard < 5) {{
 """)
 
 
+# The Library tab's target page (Task 4, spec 2026-08-07-library-page) --
+# OWED to this task by the Task 3 reviewer: `.library-target` had no story at
+# all while the page was a placeholder (a story for a placeholder would be
+# thrown away), and Task 4 makes it real content. `serve_ui`'s default seeding
+# already sets `lastPracticed` onto star:2:4 (FIXTURE_STAR), so clicking the
+# tab is the whole setup -- no course-grid navigation needed, same as how
+# `test_ui_library_nav.py::test_auto_open_lands_on_the_last_practiced_target`
+# reaches it.
+_LIBRARY_TARGET_SETUP = _script("""
+const libBtn = document.querySelector('button.nav-item[title="Library"]');
+if (libBtn && libBtn.getAttribute('aria-current') !== 'page') {
+  libBtn.click();
+}
+await waitFor(() => !!document.querySelector('.library-target .library-section'));
+""")
+
 STORIES = [
     Story(name="page", at="", setup=_EXPAND_ALL),
     # Re-pointed 2026-08-04 (amendment A8, spec practice-log-entity-cards):
@@ -315,6 +344,11 @@ STORIES = [
     # for the ones above.
     Story(name="page-collapsed", at="", setup=_COLLAPSE_ALL,
           skip_if="!document.querySelector('.card-collapse')"),
+    # Neither Practice-page nor Segments-tab state -- sits between the two
+    # groups. `_EXPAND_ALL` (the "page" story, first on every viewport pass)
+    # returns the app to Practice regardless of what the PREVIOUS viewport's
+    # last story left it on, so nothing after this needs to clean up either.
+    Story(name="library-target", at=".library-target", setup=_LIBRARY_TARGET_SETUP),
     # The four SEGMENTS-tab stories below are last on purpose: `_EXPAND_ALL`
     # (the "page" story's own setup, which runs first on every viewport) is
     # what returns the app to Practice for the next pass, so nothing after

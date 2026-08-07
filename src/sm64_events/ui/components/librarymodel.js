@@ -24,6 +24,21 @@ export const RANKS = ["Bronze", "Silver", "Gold", "Platinum", "Diamond",
 // default).
 export const GAME_FPS = 30;
 
+// SECOND-DOOR RULING (task-4-caveats.md point 1, 2026-08-07): `ladderorder.js`
+// already sorts strategies by the same Mario-cutoff idea (`slowestFirst`,
+// used by standards.js's rank table), and its no-ladder rule is the OPPOSITE
+// of this one -- there, an unproven strategy sorts FIRST ("it is not slow, it
+// is unproven, and the left edge is where a run starts"). This is not an
+// unpinned duplicate of that rule; it is a second caller asking a different
+// question of the same fact. `slowestFirst` orders a TABLE's columns, read
+// left-to-right as a run gets faster on ONE strategy already chosen. This
+// orders a PAGE's sections, read top-to-bottom as a reader picks WHICH
+// strategy to try next -- and there, an approach nobody has timed yet is not
+// a beginner's first rung, it belongs at the bottom with the rest of "harder
+// / less proven ways". Two rules stay ONE door each: this file owns "which
+// section should a climbing reader meet first" (librarytarget.js is the only
+// caller), `ladderorder.js` owns "which column is a run's own floor"
+// (standards.js is the only caller). Neither reads the other's ladder key.
 export function sectionOrder(approaches) {
   const keyed = approaches.map((a, i) => ({ a, i,
     mario: a.ladder && a.ladder.Mario != null ? a.ladder.Mario : -Infinity }));

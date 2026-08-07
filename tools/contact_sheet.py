@@ -15,6 +15,13 @@ So take a sheet while you are still implementing, not after.
     uv run python tools/contact_sheet.py                       # the whole page
     uv run python tools/contact_sheet.py .log-card              # one card
     uv run python tools/contact_sheet.py .log-card --collapsed
+    uv run python tools/contact_sheet.py .library-target --story=library-target
+
+`--story=<name>` navigates through a registered Story's own `setup` before
+shooting -- required for anything that is not on the default page/practice
+state (a selector with no matching story reports every width "NOT PRESENT",
+which looks like a missing feature rather than a missing navigation step).
+`--collapsed` is the pre-existing shorthand for `--story=page-collapsed`.
 
 Writes a PNG and prints its path. Widths come from the project's own supported
 range, so this and the gate can never be looking at different sizes.
@@ -46,9 +53,16 @@ WIDTHS = (1500, 1200, 900, 850)
 def main(argv: list[str]) -> int:
     args = [a for a in argv if not a.startswith("--")]
     selector = args[0] if args else None
-    story = None
+    story_name = next((a.split("=", 1)[1] for a in argv if a.startswith("--story=")), None)
     if "--collapsed" in argv:
-        story = next(s for s in STORIES if s.name == "page-collapsed")
+        story_name = "page-collapsed"
+    story = None
+    if story_name:
+        try:
+            story = next(s for s in STORIES if s.name == story_name)
+        except StopIteration:
+            names = ", ".join(s.name for s in STORIES)
+            raise SystemExit(f"no story named {story_name!r} -- have: {names}") from None
 
     floor = PROJECT.min_viewport_width
     assert min(WIDTHS) >= floor, (

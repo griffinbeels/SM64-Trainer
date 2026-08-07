@@ -6,13 +6,13 @@
 // done it, and a persistent mount is what lets `intent` from elsewhere in the
 // app (Task 5's own job) arrive on an ALREADY-open tab and still navigate.
 //
-// Two things this component owns, and Task 4 owns a third: browsing (course
-// grid -> a group's target grid, librarynav.js) and auto-open (landing on the
-// last-practiced entity's target page the moment the tab first opens). The
-// TARGET PAGE ITSELF is a placeholder here -- see LibraryTargetPage below --
-// task-3-caveats.md point 4 is explicit that `/api/library/target/{index}`
-// belongs to Task 4, so this only ever shows what `/api/library/entity/{key}`
-// or the course grid's own light summary already carries.
+// Three things this component owns: browsing (course grid -> a group's
+// target grid, librarynav.js), auto-open (landing on the last-practiced
+// entity's target page the moment the tab first opens), and the plumbing the
+// real target page (librarytarget.js, Task 4) needs but does not own itself
+// -- resolving BOTH doors to one full-target shape, and a minimal comparison
+// tray (Task 5 owns the tray's own UI and its trim/persistence story; what
+// lives here is just enough state for "+"/"already added" to work today).
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
@@ -20,6 +20,7 @@ import { getJSON, send } from "../api.js";
 import { entityIconSrc, genericStarSrc } from "./entityicons.js";
 import { lastPracticed } from "./librarymodel.js";
 import { LibraryNav } from "./librarynav.js";
+import { LibraryTarget } from "./librarytarget.js";
 import { Icon } from "./icons.js";
 
 const html = htm.bind(h);
@@ -44,33 +45,6 @@ function RefreshMessage({ state }) {
   return html`<p class="library-refresh-msg">Already up to date — ${state.reason}</p>`;
 }
 
-// The placeholder Task 4 replaces. `entry` is {entityKey, rows} — `rows` is
-// whatever the caller already had in hand: the FULL target objects
-// `/api/library/entity/{key}` returns for an entity-driven open, or the
-// light per-target summary `/api/library` already shipped for a course-grid
-// pick on a Castle Movement / stage RTA (neither of which carries an entity
-// key to look up by). Both shapes carry `label`/`section`/`miss_reason`,
-// which is all this placeholder draws — render the target's LABEL so the
-// render test can assert an auto-open actually landed here.
-function LibraryTargetPage({ entry, onBack }) {
-  const rows = (entry && entry.rows) || [];
-  return html`<div class="library-target">
-    <button type="button" class="entity-back" onclick=${onBack}>
-      <${Icon} name="chevron" size=${15} /> Back
-    </button>
-    ${rows.length === 0
-      ? html`<p class="library-target-empty">No community times recorded here yet.</p>`
-      : rows.map((row) => html`<div class="library-target-row" key=${row.index}>
-          <h3>${row.label}</h3>
-          <p class="library-target-section">${row.section}</p>
-          ${row.miss_reason === "castle_movement"
-            ? html`<span class="chip">Browse only</span>` : null}
-          ${row.miss_reason === "route"
-            ? html`<span class="chip">Stage route</span>` : null}
-        </div>`)}
-  </div>`;
-}
-
 /**
  * t            the tracker store
  * active       true while the Library tab is the one on screen
@@ -80,15 +54,32 @@ function LibraryTargetPage({ entry, onBack }) {
  *              app.js). Only the "target" kind is acted on here: it routes
  *              straight to that entity's target page, the same door
  *              auto-open uses, and clears itself so it fires once. `strat`/
- *              `tier` ride along unconsumed — Task 5's own job.
+ *              `tier` ride along into LibraryTarget's `focusStrat`/
+ *              `focusTier` props (Task 4) -- the deep-linking CALLER (the
+ *              standards ladder's own tier rows, the practice-log book mark)
+ *              is still Task 7's job; this only wires the pipe through.
  * clearIntent  () => void, called once an intent has been acted on
  */
 export function Library({ t, active, intent, clearIntent }) {
   const [index, setIndex] = useState(null);
   const [status, setStatus] = useState(null);
   const [stage, setStage] = useState("browse");   // "browse" | "target"
-  const [entry, setEntry] = useState(null);        // the LibraryTargetPage's own data
+  const [entry, setEntry] = useState(null);        // {entityKey, rows, focusStrat, focusTier}
   const [refreshState, setRefreshState] = useState(null);
+  // A MINIMAL comparison tray -- Task 5 owns the tray's own UI, its trim
+  // editors and its cross-navigation persistence story ("tray state lives
+  // here", its own brief). What LibraryTarget needs today is just enough for
+  // "+" to work and to disable once an example is already added; the item
+  // shape (`{key, runner, time_cs, video, strat, trim}`) is Task 5's own
+  // documented shape so its build only has to ADD behaviour, never migrate
+  // this state's format. Keyed on `video` (the only stable identity an entry
+  // carries) -- an entry with no video never reaches `onAdd` at all
+  // (librarytarget.js disables "+" there, since there is nothing to embed or
+  // import into Compare).
+  const [tray, setTray] = useState([]);
+  const trayKeys = new Set(tray.map((item) => item.key));
+  const addToTray = (item) => setTray((prev) =>
+    prev.some((existing) => existing.key === item.key) ? prev : [...prev, item]);
   // Whether auto-open has already run once for this mount. A ref, not state
   // -- flipping it must never itself trigger a re-render, only gate the next
   // one. Persistent-mount (see the module comment) is what makes "once" mean
@@ -103,25 +94,36 @@ export function Library({ t, active, intent, clearIntent }) {
     getJSON("/api/library/status").then(setStatus).catch(() => {});
   }, []);
 
-  function openEntity(entityKey) {
+  // `focus` is {strat?, tier?} -- carried from an `intent` (Task 7's own
+  // deep links) into LibraryTarget's `focusStrat`/`focusTier` props. Read
+  // once at open time: `intent` is cleared right after this runs (below), so
+  // capturing it into `entry` is the only way it survives past that clear.
+  function openEntity(entityKey, focus = {}) {
     return getJSON(`/api/library/entity/${encodeURIComponent(entityKey)}`)
       .then((data) => {
-        setEntry({ entityKey, rows: data.targets || [] });
+        setEntry({ entityKey, rows: data.targets || [],
+                   focusStrat: focus.strat || null, focusTier: focus.tier || null });
         setStage("target");
       });
   }
 
   // The course grid hands back an entity key when a target has one, else its
   // numeric index into the index we already fetched (librarynav.js's own
-  // contract) -- so the index-branch never calls /api/library/target/{index}
-  // (Task 4's door), it just looks the row up in what LibraryNav is already
-  // showing.
+  // contract). A Castle Movement / stage RTA target has no entity to look up
+  // by, but it still needs its FULL shape (approaches/subsections as real
+  // arrays, not `GET /api/library`'s own summary counts) -- exactly the door
+  // task-3-caveats.md point 4 left for this task: `GET
+  // /api/library/target/{index}`, which library_api.py already spreads as
+  // `{index, ...target}`, the same full shape `/api/library/entity/{key}`'s
+  // own `targets` array carries. One shape either door produces is what lets
+  // librarytarget.js stay ignorant of which door it came through.
   function handlePick(value) {
     if (typeof value === "string") { openEntity(value); return; }
-    const row = (index ? index.groups : [])
-      .flatMap((group) => group.targets)
-      .find((target) => target.index === value);
-    if (row) { setEntry({ entityKey: null, rows: [row] }); setStage("target"); }
+    getJSON(`/api/library/target/${value}`)
+      .then((row) => {
+        setEntry({ entityKey: null, rows: [row], focusStrat: null, focusTier: null });
+        setStage("target");
+      });
   }
 
   function backToBrowse() { setStage("browse"); setEntry(null); }
@@ -134,7 +136,7 @@ export function Library({ t, active, intent, clearIntent }) {
     if (!active || !intent) return;
     if (intent.kind !== "target") return;
     autoOpenedRef.current = true;
-    openEntity(intent.entity);
+    openEntity(intent.entity, { strat: intent.strat, tier: intent.tier });
     clearIntent();
   }, [active, intent]);
 
@@ -180,7 +182,15 @@ export function Library({ t, active, intent, clearIntent }) {
     </div>
     <${RefreshMessage} state=${refreshState} />
     ${stage === "target"
-      ? html`<${LibraryTargetPage} entry=${entry} onBack=${backToBrowse} />`
+      ? html`<div class="library-target-page">
+          <button type="button" class="entity-back" onclick=${backToBrowse}>
+            <${Icon} name="chevron" size=${15} /> Back
+          </button>
+          <${LibraryTarget} t=${t} targets=${entry ? entry.rows : []}
+              onAdd=${addToTray} trayKeys=${trayKeys}
+              focusStrat=${entry ? entry.focusStrat : null}
+              focusTier=${entry ? entry.focusTier : null} />
+        </div>`
       : html`<${LibraryNav} index=${index} onPick=${handlePick} iconFor=${iconFor} />`}
   </div>`;
 }
