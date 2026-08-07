@@ -120,15 +120,25 @@ def test_naming_a_door_relabels_it_and_lands_in_the_catalogue():
         assert any(NAMED in label for label in by_label), (
             f"the catalogue's own name never reached the page. Rows: {list(by_label)}")
 
-        # ONLY a PLACED landmark offers one. A level change names no object at
-        # all; the textbox row names one the GAME made mid-play, which shares
-        # its key with every other of its kind, so a name typed there would
-        # land on all of them at once.
+        # ONLY a NAMEABLE landmark offers one, and since round 9 item 7 that
+        # is nearly everything: a POLE has no spawn point but never moves, so
+        # it is keyed by where it stands and can carry a name of its own ("we
+        # should be able to rename ANYTHING"). What is still refused is the
+        # textbox row's object, which has NEITHER coordinate and so shares one
+        # key with every other of its kind in that area. A level change names
+        # no object at all.
         assert any("Trigger a textbox" in label for label in by_label), (
-            "the fixture no longer carries a runtime-spawned landmark, so the "
-            "rule that refuses to name one has nothing to be tested against")
+            "the fixture no longer carries a landmark with neither "
+            "coordinate, so the rule that refuses to name one has nothing to "
+            "be tested against")
+        # "a pole", not "a tree": this fixture deliberately skips
+        # reconcile_defaults, so the shipped kind catalogue is absent and the
+        # row falls back to the MOMENTS registry's own generic label.
+        assert any("Grab a pole" in label for label in by_label), (
+            "the fixture no longer carries a scriptless STATIC landmark, so "
+            f"the rule that DOES name one is untested. Rows: {list(by_label)}")
         for label, renameable in rows:
-            expected = "Open " in label
+            expected = "Open " in label or "Grab " in label
             assert renameable is expected, (
                 f"{label!r} {'lacks' if expected else 'has'} a rename control")
 
@@ -140,3 +150,66 @@ def test_naming_a_door_relabels_it_and_lands_in_the_catalogue():
         names = page.evaluate(
             "(async () => (await (await fetch('/api/landmarks')).json()).names)()")
         assert names["6:3:800ebc8c:717,-1177,-869"] == "Moat Door"
+
+
+_START_TYPING = """
+(async () => {
+  const waitFor = async (test, ms = 4000) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      if (test()) return true;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return false;
+  };
+  const wrap = Array.from(document.querySelectorAll('.record-row-wrap'))
+    .find((w) => w.querySelector('.record-row').textContent.includes(%r));
+  if (!wrap) return 'no row to rename';
+  wrap.querySelector('.record-rename').click();
+  const ok = await waitFor(() => !!wrap.querySelector('.record-rename-input'));
+  if (!ok) return 'the input never appeared';
+  const input = wrap.querySelector('.record-rename-input');
+  input.value = 'Volcano P';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  return 'typing';
+})()
+"""
+
+
+def test_typing_a_name_survives_a_live_event(capsys):
+    """Round 9 item 2: "my text suddenly gets deleted, and I find myself
+    racing against some mysterious timer". The timer is the next game event:
+    the live tail appends a row, the recorder re-renders, and an input whose
+    value is drawn from the stored name gets diffed back to it — empty, for
+    the unnamed row he is mid-typing on. While the game runs that is every
+    few seconds, hence the race. The draft must belong to the control while
+    he types."""
+    import asyncio
+    import datetime as dt
+    import threading
+
+    from sm64_events.core.events import Event
+
+    with serve_ui_live(arm_segment=FIXTURE_SEGMENT) as (base, service), \
+            get_driver().launch() as page:
+        page.goto(f"{base}/ui/index.html")
+        page.wait_for(".log-list-card")
+        assert page.evaluate(_OPEN_THE_RECORDER) is True
+        assert page.evaluate(_START_TYPING % UNNAMED) == "typing"
+
+        async def go():
+            await service.publish(Event(
+                type="level_changed", frame=90210,
+                timestamp_utc=dt.datetime.now(dt.timezone.utc),
+                payload={"from": 6, "to": 9}))
+        published = threading.Thread(target=lambda: asyncio.run(go()))
+        published.start()
+        published.join(timeout=10)
+
+        page.wait_ms(500)   # long enough for the tail append + repaint
+        held = page.evaluate(
+            "document.querySelector('.record-rename-input')"
+            " && document.querySelector('.record-rename-input').value")
+        assert held == "Volcano P", (
+            f"the repaint ate his draft (input now holds {held!r}) — the "
+            "mysterious timer he reported racing against")

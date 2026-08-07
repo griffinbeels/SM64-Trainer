@@ -42,10 +42,14 @@ def anchor(kind: str, frame: int) -> Event:
 
 
 def door(detector, frame) -> list:
-    """One door pull: walk, then enter the pulling action."""
+    """One door pull: walk, enter the pulling action, then the settle poll
+    that publishes it (a moment is a one-poll held emit since round 9 item 4
+    — the landmark settles from the poll after the edge)."""
     detector.process(snap(ACT_WALKING, frame - 1), snap(ACT_WALKING, frame))
-    return detector.process(snap(ACT_WALKING, frame),
-                            snap(ACT_PULLING_DOOR, frame + 1))
+    detector.process(snap(ACT_WALKING, frame),
+                     snap(ACT_PULLING_DOOR, frame + 1))
+    return detector.process(snap(ACT_PULLING_DOOR, frame + 1),
+                            snap(ACT_PULLING_DOOR, frame + 2))
 
 
 def service_with(detector) -> TrackerService:

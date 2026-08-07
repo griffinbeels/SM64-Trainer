@@ -145,6 +145,18 @@ class MomentDetector:
         # A moment CARRIES USAMUNE'S OWN NUMBER, through the shared clock that
         # star_grab, key and warp already read -- see `_emit`.
         self._clock = IgtClock()
+        # THE ONE-POLL LANDMARK SETTLE (round 9 item 4). The event is built at
+        # the edge — frame, igt, ordinal, action are all the edge's — but its
+        # LANDMARK is re-read from the NEXT poll before publishing, because
+        # the engaged-object pointer can lag the action byte by a read: his
+        # first WF tree grab (journal id 2794, 2 s after spawning) resolved to
+        # bhvSpinAirborneWarp — Mario's own SPAWN MARKER, the previous thing
+        # the pointer held — while every later grab in the session read the
+        # tree. Invisible before the kind catalogue named things, since both
+        # objects labelled "Grab a pole" identically. One poll later Mario is
+        # still IN the grab (a 60 Hz poll of a 30 fps game cannot miss it), so
+        # the re-read is unambiguous; the hold costs 16 ms nobody can see.
+        self._pending: list[Event] = []
 
     def reset(self) -> None:
         """A new attempt opened: ordinals count from here.
@@ -156,19 +168,42 @@ class MomentDetector:
         self._counts.clear()
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
-        if curr.global_timer < prev.global_timer:
+        backward = curr.global_timer < prev.global_timer
+        released = self._release(curr, backward=backward)
+        if backward:
             # Savestate load / console reset: the ordinals we were counting
             # belong to a run that is no longer happening.
             self.reset()
-            return []
+            return released
         if not self._target_active():
-            return []
-        events = []
+            return released
         for moment in MOMENTS:
             if (curr.mario_action in moment.actions
                     and prev.mario_action not in moment.actions):
-                events.append(self._emit(moment.kind, curr))
-        return events
+                self._pending.append(self._emit(moment.kind, curr))
+        return released
+
+    def _release(self, curr: GameSnapshot, backward: bool) -> list[Event]:
+        """Publish last poll's moments, with the landmark settled from THIS
+        poll — see `_pending` in __init__ for why the edge's own read can
+        name the wrong object. The settled read must agree about WHERE (a
+        backward jump or a level edge on the settle poll means `curr` is no
+        longer the place the moment happened), else the edge's reading
+        stands: a possibly-stale name beats a definitely-foreign one."""
+        if not self._pending:
+            return []
+        released, self._pending = self._pending, []
+        for event in released:
+            if backward:
+                continue
+            settled = landmark_at(curr)
+            if settled is None:
+                continue
+            if (curr.curr_level != event.payload["level"]
+                    or curr.curr_area != event.payload["area"]):
+                continue
+            event.payload["landmark"] = settled.payload()
+        return released
 
     def _emit(self, kind: str, curr: GameSnapshot) -> Event:
         """One moment, stamped with Usamune's own number at that frame.

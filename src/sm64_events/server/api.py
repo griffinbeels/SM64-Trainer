@@ -744,13 +744,21 @@ def create_api_router(service) -> APIRouter:
                         "place_label": node_label(place) if place else None,
                         "place_level": (int(str(place).partition(":")[0])
                                         if place else None),
-                        # What the row's rename control edits. `placed` False
-                        # means the game made this object mid-play, so it has no
-                        # name of its own to give -- the UI offers no pencil.
+                        # What the row's rename control edits. `nameable` is
+                        # the question the pencil asks: does a name typed here
+                        # land on THIS thing and nothing else. A pole reads
+                        # `placed` False (no level script wrote it a spawn
+                        # point) and is still nameable, because it is keyed by
+                        # where it stands -- core/landmark.py. `placed` rides
+                        # along for a historical row, which carries no
+                        # `nameable` key of its own and whose unplaced key
+                        # really is shared.
                         "landmark": landmark.get("key"),
                         "landmark_kind": landmark.get("kind_key"),
                         "landmark_name": names.get(landmark.get("key")),
-                        "landmark_placed": landmark.get("placed", False)})
+                        "landmark_placed": landmark.get("placed", False),
+                        "landmark_nameable": landmark.get(
+                            "nameable", landmark.get("placed", False))})
         return {"rows": rows[-limit:]}
 
     @router.post("/segments")

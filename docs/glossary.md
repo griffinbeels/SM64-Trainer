@@ -82,7 +82,10 @@ The specific thing in the world a [[moment]] happened to — that door, that
 pole, that bob-omb — and that warp, since a warp inside a course leads nowhere
 new and so has no destination to name it. The game rebuilds its object list every time an area
 loads, so we name a landmark by where it SPAWNED rather than by which slot of
-that list holds it: the slot changes and the spawn point does not. Every
+that list holds it: the slot changes and the spawn point does not. A thing the
+game creates with no spawn point of its own — a pole, a tree — takes the place
+it STANDS in instead, which never moves either, so one specific pole can carry
+a name. Every
 landmark also belongs to a KIND — the game's own script for what the thing
 is — and we ship a name for every kind in the game, derived from the
 decompilation's symbol table, so a row says "a bob-omb" without anyone

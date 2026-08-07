@@ -110,30 +110,53 @@ const ROLE_WORDS = { start: "Start", stop: "Stop", finish: "Finish" };
 // secondary confirm step (spec: "point at what you just did") -- and it is a
 // TOGGLE, because with N selections there is no step to advance to that could
 // stand in for un-picking one.
-// The rename control. Only a PLACED landmark gets one: something the game made
-// mid-play (Mario, a star popping out of a box) shares one key with every other
-// of its kind, so a name typed here would land on all of them at once.
+// The rename control. Only a NAMEABLE landmark gets one — a name typed here
+// has to land on THIS thing and nothing else. Since 2026-08-07 that is almost
+// everything: a pole or a tree carries no spawn point (the game creates them
+// scriptless) but never moves, so it is keyed by where it stands, which is his
+// own ask — "we should be able to rename ANYTHING", and the specific poles the
+// Ultimate Sheet's subsections are built on. What is still refused is an
+// object with NEITHER coordinate, whose key is shared with every other of its
+// kind in that area. The rule and its measurement: core/landmark.py.
 //
 // A pencil on its own row-wrapper rather than inside the row button, because a
 // button inside a button is invalid and the browser drops it silently.
+//
+// THE DRAFT IS THE INPUT'S OWN STATE while he types (round 9 item 2: "my text
+// suddenly gets deleted, and I find myself racing against some mysterious
+// timer"). The timer was the next game event: the live tail appends a row,
+// the recorder re-renders, and an input whose `value` is drawn from the
+// stored name gets diffed straight back to it — empty, for the unnamed row he
+// is mid-typing on. `draft` survives the repaint because it is component
+// state; the COMMITS still read `e.target.value` (the DOM's own text), so a
+// driven test that sets the value and hits Enter in one tick — before any
+// re-render lands the draft — commits what was typed, same as a human whose
+// keystrokes each get their own tick.
 function RenameControl({ row, renaming, onStart, onCommit, onCancel }) {
-  if (!row.landmark || !row.landmark_placed) return null;
+  if (!row.landmark || !row.landmark_nameable) return null;
   if (renaming) {
-    return html`<input class="record-rename-input" type="text" autofocus
-        value=${row.landmark_name || ""}
-        placeholder="name this one"
-        onclick=${(e) => e.stopPropagation()}
-        onblur=${(e) => onCommit(row, e.target.value)}
-        onkeydown=${(e) => {
-          if (e.key === "Enter") { e.preventDefault(); onCommit(row, e.target.value); }
-          if (e.key === "Escape") { e.preventDefault(); onCancel(); }
-        }} />`;
+    return html`<${RenameInput} key=${row.id} row=${row}
+        onCommit=${onCommit} onCancel=${onCancel} />`;
   }
   return html`<button type="button" class="record-rename"
       title=${row.landmark_name
         ? `Rename ${row.landmark_name} — every row it appears in follows`
         : "Name this one — every row it appears in follows"}
       onclick=${() => onStart(row)}>✎</button>`;
+}
+
+function RenameInput({ row, onCommit, onCancel }) {
+  const [draft, setDraft] = useState(row.landmark_name || "");
+  return html`<input class="record-rename-input" type="text" autofocus
+      value=${draft}
+      placeholder="name this one"
+      onclick=${(e) => e.stopPropagation()}
+      oninput=${(e) => setDraft(e.target.value)}
+      onblur=${(e) => onCommit(row, e.target.value)}
+      onkeydown=${(e) => {
+        if (e.key === "Enter") { e.preventDefault(); onCommit(row, e.target.value); }
+        if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+      }} />`;
 }
 
 function TimelineRows({ rows, order, onToggle, renamingId,

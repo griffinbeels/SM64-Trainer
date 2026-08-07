@@ -106,6 +106,15 @@ OBJECT_BEHAVIOR = 0x20C      # u32 behavior-script pointer within a slot
 # offset: 13 of 13 door captures keyed by (level, area, behaviour, home) matched
 # his own labels for HMC / moat / DDD across the reload.
 OBJECT_HOME_POS = 0x164      # Vec3f oHome (spawn x/y/z) within a slot
+# Current position (+0xA0, Vec3f oPos). NOT an identity in general -- the
+# bob-omb measurement above is exactly about that -- but for a STATIC object
+# the game creates scriptless (a pole, a tree: oHome never written, reads
+# 0,0,0) the live position IS the authored placement and never moves. Measured
+# 2026-08-07 from the stored 2026-08-05 probe captures: the WF tree, 6 grabs
+# across TWO area reloads, position (2560, 256, 4608) byte-identical every
+# time -- clean power-of-2 designer coordinates. core/landmark.py owns which
+# kinds may key on it.
+OBJECT_POS = 0xA0            # Vec3f oPos (current x/y/z) within a slot
 
 # Mario actions entered the moment a star (or key) is grabbed — decomp sm64.h.
 ACT_STAR_DANCE_EXIT = 0x00001302               # live-verified 2026-06-10

@@ -8,10 +8,14 @@ from sm64_events.memory import addresses as A
 from sm64_events.memory.base import N64Memory
 from sm64_events.memory.objects import pool_slot, slot_address
 
-# The window of one object slot that spans BOTH identity fields, so naming what
-# Mario touched costs one read rather than two.
-_LANDMARK_BLOCK = A.OBJECT_BEHAVIOR + 4 - A.OBJECT_HOME_POS
-_BEHAVIOUR_IN_BLOCK = A.OBJECT_BEHAVIOR - A.OBJECT_HOME_POS
+# The window of one object slot that spans ALL THREE identity fields —
+# current position, spawn point, behaviour — so naming what Mario touched
+# costs one read rather than three. Position joined 2026-08-07 (round 9
+# item 7): a scriptless static object's live position IS its placement, and
+# it is what lets a specific pole be named at all.
+_LANDMARK_BLOCK = A.OBJECT_BEHAVIOR + 4 - A.OBJECT_POS
+_BEHAVIOUR_IN_BLOCK = A.OBJECT_BEHAVIOR - A.OBJECT_POS
+_HOME_IN_BLOCK = A.OBJECT_HOME_POS - A.OBJECT_POS
 _POINTERS_AT = min(A.MARIO_OBJECT_POINTERS)
 _POINTERS_SIZE = max(A.MARIO_OBJECT_POINTERS) + 4 - _POINTERS_AT
 
@@ -44,18 +48,22 @@ class GameSnapshot:
     # WHICH thing Mario is engaged with — see core/landmark.py. Two extra reads a
     # tick, not five: one block over gMarioState's three object pointers, and
     # one over the chosen object that spans its spawn point and its behaviour.
-    # Both linger after the interaction ends, which is harmless because a
-    # moment reads them on its ACTION EDGE.
+    # Both LINGER after the interaction ends — which is why a moment's
+    # landmark is settled from the poll AFTER its action edge (round 9 item 4:
+    # the edge poll can still read the PREVIOUS engagement, and his first WF
+    # tree grab named Mario's own spawn marker that way).
     landmark_behaviour: int = 0   # 0 = nothing engaged this frame
     landmark_home: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    landmark_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
 class SnapshotReader:
     def __init__(self, mem: N64Memory):
         self._mem = mem
 
-    def _engaged_object(self) -> tuple[int, tuple[float, float, float]]:
-        """(behaviour, spawn point) of the object Mario is engaged with.
+    def _engaged_object(self):
+        """(behaviour, spawn point, current position) of the object Mario is
+        engaged with.
 
         Zeroes when he is engaged with nothing, or when the pointer does not
         land on a pool SLOT BOUNDARY — the same test that discovered which
@@ -70,15 +78,17 @@ class SnapshotReader:
             if located is None or located[1] != 0:
                 continue
             found = self._mem.read_block(
-                slot_address(located[0], A.OBJECT_HOME_POS), _LANDMARK_BLOCK)
+                slot_address(located[0], A.OBJECT_POS), _LANDMARK_BLOCK)
             behaviour = int.from_bytes(
                 found[_BEHAVIOUR_IN_BLOCK:_BEHAVIOUR_IN_BLOCK + 4], "big")
-            return behaviour, struct.unpack(">fff", found[:12])
-        return 0, (0.0, 0.0, 0.0)
+            return (behaviour,
+                    struct.unpack_from(">fff", found, _HOME_IN_BLOCK),
+                    struct.unpack_from(">fff", found, 0))
+        return 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)
 
     def read(self) -> GameSnapshot:
         m = self._mem
-        landmark_behaviour, landmark_home = self._engaged_object()
+        landmark_behaviour, landmark_home, landmark_pos = self._engaged_object()
         return GameSnapshot(
             wall_time_utc=datetime.now(timezone.utc),
             global_timer=m.read_u32(A.GLOBAL_TIMER),
@@ -99,4 +109,5 @@ class SnapshotReader:
             warp_dest_node=m.read_u8(A.WARP_DEST_NODE),
             landmark_behaviour=landmark_behaviour,
             landmark_home=landmark_home,
+            landmark_pos=landmark_pos,
         )

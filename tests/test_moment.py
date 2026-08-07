@@ -22,11 +22,21 @@ def snap(action, timer, level=24, **overrides) -> GameSnapshot:
 
 
 def run(snaps, detector=None):
-    """Feed consecutive (prev, curr) pairs like the poller does."""
+    """Feed consecutive (prev, curr) pairs like the poller does — plus one
+    trailing settle poll, because a moment is a one-poll HELD emit since
+    round 9 item 4 (the landmark settles from the poll after the edge) and
+    the poller never stops polling the way a finite list does."""
     det = detector or MomentDetector()
     events = []
     for prev, curr in zip(snaps, snaps[1:]):
         events.extend(det.process(prev, curr))
+    last = snaps[-1]
+    settle = snap(last.mario_action, last.global_timer + 1,
+                  level=last.curr_level, curr_area=last.curr_area,
+                  igt_overall=last.igt_overall,
+                  landmark_behaviour=last.landmark_behaviour,
+                  landmark_home=last.landmark_home)
+    events.extend(det.process(last, settle))
     return events
 
 
@@ -80,6 +90,57 @@ def test_reset_restarts_the_ordinals():
     det.reset()
     again = run([snap(ACT_WALKING, 200), snap(ACT_PULLING_DOOR, 201)], det)
     assert again[0].payload["ordinal"] == 1
+
+
+# -- the one-poll landmark settle (round 9 item 4) ----------------------------
+# His first WF tree grab (journal id 2794, 2 s after spawning) resolved to
+# bhvSpinAirborneWarp — Mario's own SPAWN MARKER, the previous thing the
+# engaged-object pointer held — while every later grab read the tree. The
+# pointer lags the action byte by a read, so the landmark is settled from the
+# poll AFTER the edge; everything else in the payload stays the edge's.
+
+SPAWN_MARKER, TREE = 0x800EE0F4, 0x800EDC24
+ACT_GRAB_POLE = next(iter(next(m for m in MOMENTS
+                               if m.kind == "pole_grab").actions))
+
+
+def test_the_landmark_settles_from_the_poll_after_the_edge():
+    events = run([
+        snap(ACT_WALKING, 100,
+             landmark_behaviour=SPAWN_MARKER, landmark_home=(0.0, 0.0, 0.0)),
+        snap(ACT_GRAB_POLE, 101,     # the edge still reads the STALE pointer
+             landmark_behaviour=SPAWN_MARKER, landmark_home=(0.0, 0.0, 0.0)),
+        snap(ACT_GRAB_POLE, 102,     # one poll later the game has settled it
+             landmark_behaviour=TREE, landmark_home=(0.0, 0.0, 0.0)),
+    ])
+    assert len(events) == 1
+    assert events[0].frame == 101, "the frame stays the edge's"
+    assert events[0].payload["landmark"]["behaviour"] == TREE
+
+
+def test_a_backward_jump_on_the_settle_poll_still_publishes_the_moment():
+    """A reset right after the edge must not eat the moment — it happened.
+    The edge's own landmark stands, since a post-reset snapshot describes a
+    different world."""
+    det = MomentDetector()
+    det.process(snap(ACT_WALKING, 100, landmark_behaviour=TREE),
+                snap(ACT_GRAB_POLE, 101, landmark_behaviour=TREE))
+    released = det.process(snap(ACT_GRAB_POLE, 101, landmark_behaviour=TREE),
+                           snap(ACT_IDLE, 5))
+    assert [e.payload["kind"] for e in released] == ["pole_grab"]
+    assert released[0].payload["landmark"]["behaviour"] == TREE
+
+
+def test_the_settle_never_crosses_a_place_change():
+    """If the settle poll is somewhere else, `curr`'s engaged object belongs
+    to that other place — the edge's reading stands, stale or not."""
+    events = run([
+        snap(ACT_WALKING, 100, landmark_behaviour=SPAWN_MARKER),
+        snap(ACT_PULLING_DOOR, 101, landmark_behaviour=SPAWN_MARKER),
+        snap(ACT_PULLING_DOOR, 102, level=6, curr_area=3,
+             landmark_behaviour=TREE),
+    ])
+    assert events[0].payload["landmark"]["behaviour"] == SPAWN_MARKER
 
 
 # -- what this module deliberately does NOT emit ------------------------------

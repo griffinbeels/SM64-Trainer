@@ -452,11 +452,11 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
                          "landmark": {"key": key, "kind_key": "kind:800ebc8c",
                                       "behaviour": 0x800EBC8C, "home": home,
                                       "placed": True}}))
-        # A THIRD moment whose object the GAME made mid-play -- home (0,0,0),
-        # `placed` false. Every such object shares that one key, so a name typed
-        # on it would land on all of them at once and the recorder must offer no
-        # rename control at all. Without this row the rule has nothing to be
-        # tested against and a pencil on everything would look correct.
+        # A THIRD moment whose object has NEITHER coordinate -- no spawn point
+        # and standing at the origin. Every such object shares that one key, so
+        # a name typed on it would land on all of them at once and the recorder
+        # must offer no rename control. Without this row the rule has nothing to
+        # be tested against and a pencil on everything would look correct.
         await service.publish(Event(
             type="moment_reached", frame=5300, timestamp_utc=now,
             payload={"kind": "textbox", "ordinal": 1, "level": 6, "area": 3,
@@ -465,7 +465,23 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
                      "landmark": {"key": "6:3:800ee040:0,0,0",
                                   "kind_key": "kind:800ee040",
                                   "behaviour": 0x800EE040, "home": [0, 0, 0],
-                                  "placed": False}}))
+                                  "pos": [0, 0, 0],
+                                  "placed": False, "nameable": False}}))
+        # A FOURTH: a POLE. Scriptless (`placed` false, no spawn point) and
+        # still nameable, because it never moves and is keyed by where it
+        # stands -- round 9 item 7, "we should be able to rename ANYTHING",
+        # and the specific poles his subsections are built on. The numbers are
+        # the WF tree's own, from the 2026-08-05 probe captures.
+        await service.publish(Event(
+            type="moment_reached", frame=5400, timestamp_utc=now,
+            payload={"kind": "pole_grab", "ordinal": 1, "level": 6, "area": 3,
+                     "action": 0x00000841, "igt_frames": 300,
+                     "igt_source": "counter", "igt": format_igt(300),
+                     "landmark": {"key": "6:3:800edc24:2560,256,4608",
+                                  "kind_key": "kind:800edc24",
+                                  "behaviour": 0x800EDC24, "home": [0, 0, 0],
+                                  "pos": [2560, 256, 4608],
+                                  "placed": False, "nameable": True}}))
         # Name the FIRST door and leave the second alone, so one page carries
         # both states. Applied directly rather than through reconcile: the
         # catalogue does not depend on the 84-segment corpus this fixture

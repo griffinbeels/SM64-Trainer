@@ -127,7 +127,11 @@ def code_offset() -> int:
     door = next(iter(next(m for m in MOMENTS if m.kind == "door_open").actions))
     walking = 0x04000440
     detector = MomentDetector()
-    events = detector.process(snap(walking, 100), snap(door, 101))
+    detector.process(snap(walking, 100), snap(door, 101))
+    # The SETTLE poll: a moment is a one-poll held emit since 2026-08-07 (its
+    # landmark is re-read after the edge — detectors/moment.py), so the edge
+    # alone publishes nothing. The number this scores is still the EDGE's.
+    events = detector.process(snap(door, 101), snap(door, 102))
     return events[0].payload["igt_frames"] - 1000
 
 

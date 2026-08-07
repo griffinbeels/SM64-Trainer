@@ -123,10 +123,17 @@ def build_detectors(target_active=None) -> list:
 
     ## MomentDetector's position, and its argument
 
-    A moment (`door_open`, `textbox`) is emitted on the frame it HAPPENED, so
-    unlike the two leaders it describes the present and must not jump ahead of
-    them — behind star_grab and warp, and otherwise wherever the stateless
-    edges sit.
+    THIRD since round 9 item 4 (2026-08-07): a moment is now a one-poll HELD
+    emit — the event is built on the action edge but its landmark is settled
+    from the next poll, because the engaged-object pointer can lag the action
+    byte by a read (his first WF tree grab resolved to Mario's own spawn
+    marker; detectors/moment.py carries the evidence). So on the release tick
+    it describes the PAST, and the same rule that put star_grab first and warp
+    second applies: a held event is published before anything describing the
+    present, or an anchor/level change on the settle tick closes the attempt
+    the moment belongs to. Still behind the two leaders — their holds span
+    many frames where this one spans one poll, and a star's settle can release
+    on the same tick a door moment fires.
 
     `target_active` was the task-0087 gate ("these should ONLY be tracked when
     we explicitly select / autoselect a star or segment") and `build()` used to
@@ -142,11 +149,11 @@ def build_detectors(target_active=None) -> list:
     """
     moments = (MomentDetector() if target_active is None
                else MomentDetector(target_active=target_active))
-    detectors = [StarGrabDetector(), WarpDetector(), GameResetDetector(),
-                 LevelChangeDetector(), AreaChangeDetector(),
-                 StageChangeDetector(), AnchorDetector(), DeathDetector(),
-                 DustTrickDetector(), KeyGrabDetector(), SpawnDetector(),
-                 moments]
+    detectors = [StarGrabDetector(), WarpDetector(), moments,
+                 GameResetDetector(), LevelChangeDetector(),
+                 AreaChangeDetector(), StageChangeDetector(),
+                 AnchorDetector(), DeathDetector(), DustTrickDetector(),
+                 KeyGrabDetector(), SpawnDetector()]
     return detectors
 
 
