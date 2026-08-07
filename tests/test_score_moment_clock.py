@@ -19,10 +19,10 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 
-from score_moment_clock import (code_offset, parse_igt,  # noqa: E402
-                                score, verdict)
+from score_moment_clock import code_offset, score, verdict  # noqa: E402
 
-from sm64_events.core.timefmt import format_igt  # noqa: E402
+# The parser is asserted at its canonical home -- the tool only imports it.
+from sm64_events.core.timefmt import format_igt, parse_igt  # noqa: E402
 from sm64_events.detectors.moment import MomentDetector  # noqa: E402
 from sm64_events.memory.addresses import ACT_PULLING_DOOR  # noqa: E402
 

@@ -2395,3 +2395,28 @@ def test_timeline_repeat_count_survives_the_live_tail(tmp_path):
         tail = client.get(
             f"/api/segments/timeline?limit=50&after_id={cutoff}").json()["rows"]
         assert [r["repeat"] for r in tail] == [3, 4]
+
+
+def test_timeline_labels_follow_a_rename_through_the_memo(tmp_path):
+    """A rename applies BACKWARDS (the /api/landmark route's own contract),
+    and since 2026-08-06 the timeline memoises labels per row id -- so this is
+    the memo's one failure mode made into a test: fetch (populates the memo),
+    rename, fetch again, and the OLD sentence coming back is the cache
+    surviving its own invalidation rule."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(
+                type="moment_reached", frame=1000, timestamp_utc=T0,
+                payload={"kind": "door_open", "level": 7, "ordinal": 1,
+                         "landmark": {"key": "7:1:aa:1,2,3", "placed": True}}))
+        asyncio.run(go())
+        before = client.get("/api/segments/timeline?limit=50").json()["rows"]
+        assert any(r["label"] == "Open a door in Hazy Maze Cave" for r in before)
+        client.post("/api/landmark",
+                    json={"key": "7:1:aa:1,2,3", "name": "Maze Door"})
+        after = client.get("/api/segments/timeline?limit=50").json()["rows"]
+        assert any(r["label"] == "Open the Maze Door in Hazy Maze Cave"
+                   for r in after), (
+            "the rename never reached the row -- the label memo is serving a "
+            "sentence from before the catalogue changed")

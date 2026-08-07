@@ -433,6 +433,9 @@ def _is_default_timeline_row(row) -> bool:
 
 def create_api_router(service) -> APIRouter:
     router = APIRouter(prefix="/api")
+    # The timeline's label memo — one per router, so tests building several
+    # apps never share it. Shape and invalidation: the timeline route.
+    timeline_memo: dict = {}
 
     @router.get("/session")
     def session(clock: str = "igt", scope: str = "session"):
@@ -644,6 +647,25 @@ def create_api_router(service) -> APIRouter:
         # appeared in re-labels on the next fetch, because no row ever stored
         # the name it was drawn with.
         names = service.db.landmark_names()
+        # LABELS ARE MEMOISED PER ROW ID, because the repeat counter below
+        # forces this loop over the WHOLE journal on every poll — the live
+        # tail included, which fires per game event while the recorder is
+        # open. Measured on the 23k-row journal (2026-08-06, review): the
+        # labelling pass alone went 0.44 ms -> 7.68 ms per tail poll when the
+        # counter landed, and the journal only grows. A journal row's payload
+        # is immutable, so its sentence changes for exactly one reason — a
+        # landmark RENAME — and the memo is dropped whole when the catalogue
+        # differs (which is also the documented mechanism for "a rename
+        # applies backwards"). Keyed on the db OBJECT too: a reattach after a
+        # db-less boot swaps `service.db`, and row ids from another file must
+        # not answer for this one. Arrival rows are deliberately NOT memoised:
+        # `entry_spawns` can claim a row retroactively (a load's spawn lands
+        # after its edges), and `label_level_entry` is two dict lookups.
+        if timeline_memo.get("names") != names \
+                or timeline_memo.get("db") is not service.db:
+            timeline_memo.clear()
+            timeline_memo.update(db=service.db, names=names, labels={})
+        memo: dict = timeline_memo["labels"]
         rows = []
         # HOW MANY TIMES HE HAS ALREADY DONE THIS, counted over the whole
         # journal walk and stamped per row -- his ask, 2026-08-06, against
@@ -669,8 +691,12 @@ def create_api_router(service) -> APIRouter:
             if row.id in settled:
                 continue          # the load's own settling, not a move he made
             entry_level = entry_spawns.get(row.id)
-            label = (label_level_entry(entry_level) if entry_level is not None
-                     else label_event(row, names))
+            if entry_level is not None:
+                label = label_level_entry(entry_level)
+            elif row.id in memo:
+                label = memo[row.id]
+            else:
+                label = memo[row.id] = label_event(row, names)
             if label is None:
                 continue
             landmark = (row.payload.get("landmark") or {}) if row.payload else {}

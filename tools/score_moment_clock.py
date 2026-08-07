@@ -49,10 +49,10 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 from sm64_events.core.snapshot import GameSnapshot  # noqa: E402
-from sm64_events.core.timefmt import format_igt  # noqa: E402
+from sm64_events.core.timefmt import format_igt, parse_igt  # noqa: E402
 from sm64_events.detectors.moment import MOMENTS, MomentDetector  # noqa: E402
-from what_happened import (candidate_journals, describe_age,  # noqa: E402
-                           label_for, newest_event, open_readonly)
+from what_happened import (describe_age, label_for,  # noqa: E402
+                           open_readonly, survey_journals)
 
 # How far from the raw counter a reading may sit and still be believed to
 # belong to that moment. Deliberately wider on both sides than any hypothesis
@@ -80,32 +80,6 @@ class Scored:
         if not self.matches:
             return "unmatched"
         return "scored" if len(self.matches) == 1 else "ambiguous"
-
-
-def parse_igt(text: str) -> int:
-    """Usamune's display back into game frames — the inverse of `format_igt`.
-
-    Exact, and that is a property of the format rather than luck: centiseconds
-    are `frames % 30 * 100 // 30`, which is injective over 0..29, so no two
-    frames share a display and nothing is guessed here.
-    """
-    cleaned = text.strip().replace("”", '"').replace("’", "'")
-    try:
-        minutes, rest = cleaned.split("'", 1)
-        seconds, cents = rest.split('"', 1)
-        frames_of_second = _frames_for_cents(int(cents))
-        return int(minutes) * 1800 + int(seconds) * 30 + frames_of_second
-    except (ValueError, IndexError) as exc:
-        raise ValueError(
-            f"{text!r} is not a Usamune reading — it looks like 1'06\"83"
-        ) from exc
-
-
-def _frames_for_cents(cents: int) -> int:
-    for frame in range(30):
-        if frame * 100 // 30 == cents:
-            return frame
-    raise ValueError(f"{cents:02d} is not a centisecond value the game displays")
 
 
 def score(rows: list[dict], readings: list[str], band=BAND) -> list[Scored]:
@@ -235,19 +209,16 @@ def render_scores(scored: list[Scored], shipped: int) -> str:
 
 
 def pick_journal(explicit: str | None) -> tuple[Path, str] | None:
+    """The freshest journal, through `what_happened.survey_journals` — ONE
+    freshness policy on this machine, owned there (its docstring says why)."""
     if explicit:
         path = Path(explicit)
         return (path, "forced") if path.exists() else None
     now = datetime.now(timezone.utc)
-    best, best_stamp, note = None, None, ""
-    for path in candidate_journals():
-        count, stamp = newest_event(path)
-        if not count or stamp is None:
-            continue
-        if best_stamp is None or stamp > best_stamp:
-            best, best_stamp = path, stamp
-            note = f"{label_for(path)}, newest {describe_age(stamp, now)}"
-    return (best, note) if best else None
+    for path, count, stamp in survey_journals():
+        if count and stamp is not None:
+            return path, f"{label_for(path)}, newest {describe_age(stamp, now)}"
+    return None
 
 
 def main() -> int:

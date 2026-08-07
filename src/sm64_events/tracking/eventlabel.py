@@ -176,11 +176,9 @@ def _warp_entered(payload: dict, names: dict) -> str | None:
     if destination is not None and destination != level:
         return (f"Touched the {_level_name(destination)} entrance in "
                 f"{_level_name(level)}")
-    landmark = payload.get("landmark") or {}
-    named = names.get(landmark.get("key"))
+    named, kind_named = _landmark_names(payload, names)
     if named:
         return f"Entered the {named} in {_level_name(level)}"
-    kind_named = names.get(landmark.get("kind_key"))
     what = kind_named.lower() if kind_named else warp_word(level)
     return f"Entered a {what} in {_level_name(level)}"
 
@@ -209,6 +207,18 @@ _MOMENT_LABELS = {m.kind: m.label for m in MOMENTS}
 _READS_THE_CATALOGUE = frozenset({"moment_reached", "warp_entered"})
 
 
+def _landmark_names(payload: dict, names: dict) -> tuple[str | None, str | None]:
+    """(instance name, kind name) for the landmark this row carries.
+
+    THE one reading of a landmark out of a payload — every labeller in
+    `_READS_THE_CATALOGUE` goes through it, so "how a row finds its name in
+    the catalogue" cannot fork per event type. The two-level scheme is the
+    catalogue's own: an instance name ("HMC Door") beats a kind name ("Door"),
+    and a kind name covers every instance in the game at once."""
+    landmark = payload.get("landmark") or {}
+    return names.get(landmark.get("key")), names.get(landmark.get("kind_key"))
+
+
 def _moment_reached(payload: dict, names: dict) -> str | None:
     """"Open the HMC Door in Castle Inside" once he has named that door, and
     "Open a door (#5) in Big Boo's Haunt" until he has.
@@ -232,11 +242,9 @@ def _moment_reached(payload: dict, names: dict) -> str | None:
         return None
     what = _MOMENT_LABELS.get(kind, kind)
     where = _level_name(payload.get("level"))
-    landmark = payload.get("landmark") or {}
-    named = names.get(landmark.get("key"))
+    named, kind_named = _landmark_names(payload, names)
     if named:
         return f"{_verb(what)} the {named} in {where}"
-    kind_named = names.get(landmark.get("kind_key"))
     if kind_named:
         what = f"{_verb(what)} a {kind_named.lower()}"
     ordinal = payload.get("ordinal")
@@ -353,8 +361,10 @@ def level_entry_rows(events) -> tuple[set[int], dict[int, int]]:
     # Walked from the top of the journal, because most rows do not say where
     # they are — the same reason the endpoint's position walk exists.
     area_now: int | None = None
-    co_frame_areas: tuple[int, list[int]] = (-1, [])
-    co_frame_anchor: tuple[int, dict] | None = None
+    co_frame: int = -1                    # the frame the two lists below are for
+    co_frame_area_ids: list[int] = []
+    anchor_frame: int = -1
+    anchor_paused: int = 0
 
     def close_the_load() -> None:
         nonlocal load_frame, area_ids, spawn_id
@@ -366,22 +376,22 @@ def level_entry_rows(events) -> tuple[set[int], dict[int, int]]:
     def restarts_the_level(frame: int) -> bool:
         if area_now != COURSE_START_AREA:
             return False
-        if co_frame_areas[0] != frame or not co_frame_areas[1]:
+        if co_frame != frame or not co_frame_area_ids:
             return True                      # an L-reset in place
-        if co_frame_anchor is None or co_frame_anchor[0] != frame:
+        if anchor_frame != frame:
             return False
-        paused = co_frame_anchor[1].get("paused_frames_before") or 0
-        return paused >= PAUSE_WARP_MIN_STREAK
+        return anchor_paused >= PAUSE_WARP_MIN_STREAK
 
     for row in events:
         payload = row.payload or {}
         if row.type == "area_changed":
             area_now = payload.get("to")
-            if co_frame_areas[0] != row.frame:
-                co_frame_areas = (row.frame, [])
-            co_frame_areas[1].append(row.id)
+            if co_frame != row.frame:
+                co_frame, co_frame_area_ids = row.frame, []
+            co_frame_area_ids.append(row.id)
         elif row.type in ("practice_reset", "state_loaded"):
-            co_frame_anchor = (row.frame, payload)
+            anchor_frame = row.frame
+            anchor_paused = payload.get("paused_frames_before") or 0
         if row.type == "level_changed":
             if payload.get("from") == payload.get("to"):
                 continue          # establishing/corrective bookkeeping
@@ -402,8 +412,8 @@ def level_entry_rows(events) -> tuple[set[int], dict[int, int]]:
             continue
         if row.type == "spawned" and restarts_the_level(row.frame):
             entry_spawns[row.id] = payload.get("level")
-            settled.update(co_frame_areas[1]
-                           if co_frame_areas[0] == row.frame else [])
+            if co_frame == row.frame:
+                settled.update(co_frame_area_ids)
     close_the_load()
     return settled, entry_spawns
 

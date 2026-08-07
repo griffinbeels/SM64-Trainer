@@ -464,18 +464,27 @@ ACT_GRAB_POLE_SLOW = 0x00100341
 ACT_GRAB_POLE_FAST = 0x00100342
 POLE_GRAB_ACTIONS = frozenset({ACT_GRAB_POLE_SLOW, ACT_GRAB_POLE_FAST})
 
-# Picking something up — decomp include/sm64.h. His report, 2026-08-06: *"When
-# I grab a bob-omb in a level, I want to be able to detect WHEN i grabbed them.
+# Picking something up — decomp include/sm64.h, quoted verbatim from
+# n64decomp/sm64 master, fetched 2026-08-06. His report, same day: *"When I
+# grab a bob-omb in a level, I want to be able to detect WHEN i grabbed them.
 # The frame I managed to successfully grab them."* ACT_PICKING_UP is exactly
 # that frame: the game sets it when the grab SUCCEEDS, so the entry edge is
-# the moment and no holding action needs to be watched. The Bowser variant is
-# a separate id and is deliberately in the same set — a tail grab is a pickup
-# a runner would practice, and one row per KIND is what the registry is for.
-# VERIFY (live gate): mario_action reads 0x00000383 on grabbing a bob-omb or a
-# shell, and 0x00000385 on grabbing Bowser's tail.
+# the moment and no holding action needs to be watched.
+#
+# THE DIVE PICKUP IS ITS OWN ID, and it is the one a runner mostly uses —
+# diving onto a bob-omb grabs it in one motion, and the game enters 0x385
+# rather than 0x383 for it. This set shipped for a few hours calling 0x385
+# "Bowser's tail", from memory; the decomp says otherwise, and Bowser's tail
+# is 0x390 — also here, deliberately, because the first tail grab is exactly
+# the practiced boundary of every ranked Bowser fight. One kind covers all
+# three: which thing was grabbed is the LANDMARK's job, not the action's.
+# VERIFY (live gate): mario_action reads 0x00000383 walking into a bob-omb,
+# 0x00000385 dive-grabbing one, 0x00000390 grabbing Bowser's tail.
 ACT_PICKING_UP = 0x00000383
-ACT_PICKING_UP_BOWSER = 0x00000385
-PICKUP_ACTIONS = frozenset({ACT_PICKING_UP, ACT_PICKING_UP_BOWSER})
+ACT_DIVE_PICKING_UP = 0x00000385
+ACT_PICKING_UP_BOWSER = 0x00000390
+PICKUP_ACTIONS = frozenset({ACT_PICKING_UP, ACT_DIVE_PICKING_UP,
+                            ACT_PICKING_UP_BOWSER})
 
 # gCurrAreaIndex (s16) — castle lobby/upstairs/basement are AREAS of level 6,
 # not levels. Live-verified 2026-06-12 via tools/hunt_exact.py snapshot diff:
