@@ -14776,6 +14776,41 @@
       "seed_key": "landmark:6:1:800ebc7c:-1100,-1074,922",
       "key": "6:1:800ebc7c:-1100,-1074,922",
       "name": "Basement Stairs Door (from the lobby)"
+    },
+    {
+      "seed_key": "landmark:6:1:800ebc8c:256,0,-1074",
+      "key": "6:1:800ebc8c:256,0,-1074",
+      "name": "WF Door"
+    },
+    {
+      "seed_key": "landmark:6:1:800ebc8c:-1775,0,-824",
+      "key": "6:1:800ebc8c:-1775,0,-824",
+      "name": "Left Basement Door"
+    },
+    {
+      "seed_key": "landmark:6:1:800ebc8c:-271,0,-824",
+      "key": "6:1:800ebc8c:-271,0,-824",
+      "name": "Right Basement Door"
+    },
+    {
+      "seed_key": "landmark:6:1:800ebc7c:-1023,-101,-5170",
+      "key": "6:1:800ebc7c:-1023,-101,-5170",
+      "name": "Courtyard Door"
+    },
+    {
+      "seed_key": "landmark:6:3:800ebc7c:7885,-1586,-511",
+      "key": "6:3:800ebc7c:7885,-1586,-511",
+      "name": "Moat to Castle Grounds Door"
+    },
+    {
+      "seed_key": "landmark:16:1:800ebc7c:3292,-511,-2931",
+      "key": "16:1:800ebc7c:3292,-511,-2931",
+      "name": "Castle Grounds to Moat Door"
+    },
+    {
+      "seed_key": "landmark:7:1:800ebc8c:3817,205,870",
+      "key": "7:1:800ebc8c:3817,205,870",
+      "name": "Maze Door"
     }
   ]
 }

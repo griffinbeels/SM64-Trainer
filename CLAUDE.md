@@ -34,6 +34,7 @@ uv run python tools/what_happened.py                 # READ BACK what the human 
 uv run python tools/what_happened.py --list          # which journal is live: repo / each worktree / installed exe
 uv run pytest tests/test_responsive.py -q            # render every breakpoint; report layout defects (no PJ64 needed)
 uv run python tools/check_glossary.py                # docs/glossary.md's own gate: closure, active voice, live Lives paths
+uv run python tools/corpus_from_db.py --landmarks    # every landmark name HE typed, as corpus_landmarks.py rows to paste (read-only)
 uv run python tools/contact_sheet.py .objective-card # one surface at 1500/1200/900/850, in one image -- LOOK at it
 uv run python tools/contact_sheet.py --subsections    # the SELECTOR EXPANDED into a star's subsections (--folded for the way back); no shipped definition has a parent, so this is the only fixture that can draw it
 uv run python tools/contact_sheet.py --recorder       # the RECORDER on arrival (--recording = two moments picked, --waypoints = three); it is a modal, so no plain page load reaches it
