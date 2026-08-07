@@ -1,0 +1,20 @@
+---
+paths:
+  - "src/sm64_events/tracking/eventlabel.py"
+  - "src/sm64_events/tracking/synthesize.py"
+  - "src/sm64_events/ui/components/segmenttimeline.js"
+---
+
+# The segment recorder — where to change what
+
+The screen that turns what he just played into a definition: it reads the
+JOURNAL back as sentences, decides which rows a human would ever point at, and
+fills the middle of a two-ended pick from where he actually walked. Split out of
+`tracking-storage.md` on 2026-08-06 when that file hit its ceiling — the
+recorder is a narrower zone with its own two modules, and nothing here is
+summarised.
+
+| To change... | Edit |
+|---|---|
+| Which row the recorder draws for ARRIVING somewhere | `tracking/eventlabel.py::level_entry_rows` — **an arrival is a SPAWN, not a level edge** (corrected 2026-08-06; the level edge was the convenient signal, and a Usamune menu warp from SSL to SSL moves no level byte, so his arrival drew the load's area edge instead: *"I would expect it to show me the 'Started Shifting Sand Land'… I think when we're spawning, that's the event that should show"*). A level edge still opens a load and still decides which rows the spawn SPEAKS FOR. Three clauses decide which spawns RESTART the level, each one a discriminator measured elsewhere in this project rather than invented here: the spawn lands in `counter_epoch.COURSE_START_AREA` (a course starts in area 1, so anywhere else is Mario going deeper — the pyramid, the volcano); a spawn with no area edge beside it is an L-reset in place and IS a start; a spawn with one is a warp, and `anchors.PAUSE_WARP_MIN_STREAK` separates the menu from his own feet (walked loads pause 0-3 frames, menu warps 13+ — his two SSL warps read 80 and 1007, walking into the pyramid and the volcano both read 3). That last clause is what stops "Started Lethal Lava Land" appearing every time he walks out of the volcano, which the destination area alone cannot separate from a retry. **Replayed over both journals: arrivals 62 → 157 and 482 → 1,730, none lost** — the additions are 82/1,057 resets in place and 13/191 menu warps. Its time comes from `IgtClock.igt_at_spawn` and reads 0'00"00; see `.claude/rules/memory-detectors.md` |
+| Turning a RUN THE PLAYER DID into a definition's steps | `tracking/synthesize.py::walked_steps(rows, start_row, end_row)` — every settled place walked between the two picked journal rows, each with its short label and the clause that requires it; served on `GET /api/segments/synthesize` as `steps`. The path was always in the journal and nothing was reading it, which is the whole reason a multi-step movement could not be made in the app at all. Borrows two rules verbatim from `SegmentEngine.feed` rather than restating them: read `area_changed` and NOT `level_changed` (an area payload names the level AND the settled area outright), and take the LAST candidate per FRAME (every castle entry loads the Lobby for one poll before warping to the real area, all on one frame — judged raw, that transient Lobby is a stop the player never made). The arm position is dropped unconditionally ("the start is implicit"); the END is dropped by IDENTITY via `segments.step_node`, **never by position** — a `level_changed` end row sits one id BEFORE its own co-frame `area_changed`, so the destination is outside the span and the last walked node is a real step. Dropping by position ate the Basement out of `WF → SSL`, the one route this feature is measured against, while leaving four-step arena routes looking perfect. `_step_clause` picks `level_enter`+`to_subarea` over `area_enter` when the frame carried a level edge — `can_run_from` rule (A)'s trap, absorbed rather than explained. Scored against the shipped corpus: `WF → SSL` and `Bowser 2 → Upstairs` derive byte-identical to their hand-authored rows |

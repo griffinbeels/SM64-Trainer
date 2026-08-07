@@ -73,7 +73,9 @@ the labelled STREAM, deciding what to show, not what CAN be shown.
 from collections.abc import Callable
 
 from sm64_events.core.timefmt import format_igt
-from sm64_events.detectors.counter_epoch import LEVEL_LOAD_TAIL_FRAMES
+from sm64_events.detectors.anchors import PAUSE_WARP_MIN_STREAK
+from sm64_events.detectors.counter_epoch import (COURSE_START_AREA,
+                                                 LEVEL_LOAD_TAIL_FRAMES)
 from sm64_events.detectors.moment import MOMENTS
 from sm64_events.memory.addresses import (CASTLE_AREA_NAMES, LEVEL_CASTLE_INSIDE,
                                           LEVEL_NAMES, course_name, star_name,
@@ -281,6 +283,34 @@ def level_entry_rows(events) -> tuple[set[int], dict[int, int]]:
     a rule that only ever promoted spawns would have deleted that arrival from
     the list entirely.
 
+    AN ARRIVAL IS A SPAWN, NOT A LEVEL EDGE — the correction, 2026-08-06, and
+    the level edge was the convenient signal rather than the thing. He warped
+    from Shifting Sand Land to Shifting Sand Land through the Usamune menu,
+    which moves no level byte at all, so no load ever opened and the row he
+    got was the load's area edge: *"I would expect it to show me the 'Started
+    Shifting Sand Land'… I think when we're spawning, that's the event that
+    should show"* (journal ids 2343-2345). A level edge still opens a load and
+    still decides which rows the spawn SPEAKS FOR; it is no longer what makes
+    an arrival an arrival.
+
+    WHICH SPAWNS RESTART THE LEVEL, since most do not, and every clause here
+    is a discriminator this project already measured rather than a new one:
+
+    * the spawn must land in `COURSE_START_AREA` — a course always starts in
+      area 1, so a spawn anywhere else is Mario going deeper (the pyramid, the
+      volcano). `counter_epoch.is_area_load` turns on the same fact;
+    * a spawn with NO area edge beside it is an L-reset in place — nothing
+      moved but the clock, and that is a start (ids 2347, 2353, 2356);
+    * a spawn WITH one is a warp, and the discriminator between the menu and
+      his own feet is `anchors.PAUSE_WARP_MIN_STREAK` — walked loads pause
+      0-3 frames, menu warps 13+. His two SSL warps read 80 and 1007 frames
+      paused; walking into the pyramid and into the LLL volcano both read 3.
+
+    That last clause is what stops "Started Lethal Lava Land" appearing every
+    time he walks back out of the volcano, which the destination area alone
+    cannot separate from a retry (`anchors.py` records the same limit for the
+    attempt side of it).
+
     NOTHING IS DROPPED FROM THE JOURNAL. Every one of these rows is a true
     thing the game did, and `segments._zeroes_usamune_igt`, the topological
     matcher, `synthesize.walked_steps` and this endpoint's own position walk
@@ -292,6 +322,11 @@ def level_entry_rows(events) -> tuple[set[int], dict[int, int]]:
     load_frame: int | None = None
     area_ids: list[int] = []
     spawn_id: int | None = None
+    # Walked from the top of the journal, because most rows do not say where
+    # they are — the same reason the endpoint's position walk exists.
+    area_now: int | None = None
+    co_frame_areas: tuple[int, list[int]] = (-1, [])
+    co_frame_anchor: tuple[int, dict] | None = None
 
     def close_the_load() -> None:
         nonlocal load_frame, area_ids, spawn_id
@@ -300,26 +335,47 @@ def level_entry_rows(events) -> tuple[set[int], dict[int, int]]:
             settled.update(area_ids if spawn_id is not None else area_ids[:-1])
         load_frame, area_ids, spawn_id = None, [], None
 
+    def restarts_the_level(frame: int) -> bool:
+        if area_now != COURSE_START_AREA:
+            return False
+        if co_frame_areas[0] != frame or not co_frame_areas[1]:
+            return True                      # an L-reset in place
+        if co_frame_anchor is None or co_frame_anchor[0] != frame:
+            return False
+        paused = co_frame_anchor[1].get("paused_frames_before") or 0
+        return paused >= PAUSE_WARP_MIN_STREAK
+
     for row in events:
         payload = row.payload or {}
+        if row.type == "area_changed":
+            area_now = payload.get("to")
+            if co_frame_areas[0] != row.frame:
+                co_frame_areas = (row.frame, [])
+            co_frame_areas[1].append(row.id)
+        elif row.type in ("practice_reset", "state_loaded"):
+            co_frame_anchor = (row.frame, payload)
         if row.type == "level_changed":
             if payload.get("from") == payload.get("to"):
                 continue          # establishing/corrective bookkeeping
             close_the_load()
             load_frame = row.frame
             continue
-        if load_frame is None:
-            continue
-        if row.frame - load_frame > LEVEL_LOAD_TAIL_FRAMES:
+        if load_frame is not None and row.frame - load_frame > LEVEL_LOAD_TAIL_FRAMES:
             close_the_load()
+        if load_frame is not None:
+            if row.type == "area_changed":
+                area_ids.append(row.id)
+            elif row.type == "spawned" and spawn_id is None:
+                # The FIRST spawn of the load only: a death respawn later in
+                # the same course is the player's, and its own load has its
+                # own edge.
+                spawn_id = row.id
+                entry_spawns[row.id] = payload.get("level")
             continue
-        if row.type == "area_changed":
-            area_ids.append(row.id)
-        elif row.type == "spawned" and spawn_id is None:
-            # The FIRST spawn of the load only: a death respawn later in the
-            # same course is the player's, and its own load has its own edge.
-            spawn_id = row.id
+        if row.type == "spawned" and restarts_the_level(row.frame):
             entry_spawns[row.id] = payload.get("level")
+            settled.update(co_frame_areas[1]
+                           if co_frame_areas[0] == row.frame else [])
     close_the_load()
     return settled, entry_spawns
 

@@ -419,7 +419,11 @@ which [[target]] the result is a piece of — which is the only way to make a
 fills the middle from where you walked; picking more says which stops count.
 Each row says when it happened on Usamune's clock, and arriving somewhere draws
 ONE row that names the place — the load moves the area byte several times and
-this screen shows you the arrival rather than the load.
+this screen shows you the arrival rather than the load. An arrival is the game
+handing control back, so entering a course, warping through the Usamune menu
+and resetting the level all draw one, and it reads 0'00"00 because that is
+where Usamune starts counting. Going deeper — the pyramid, the volcano — draws
+a move instead.
 
 - **Lives** — the recording screen
   (`src/sm64_events/ui/components/segmenttimeline.js`) → the Segments tab

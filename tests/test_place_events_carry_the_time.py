@@ -74,26 +74,40 @@ def test_an_area_edge_says_when_it_happened():
 
 def test_an_arrival_reads_the_start_of_the_run():
     """Usamune zeroes at the SPAWN, so this row is the zero everything else is
-    measured from -- and it reads ONE DISPLAY TICK rather than a literal zero,
-    which is `IgtClock.DISPLAY_TICK` and not this detector's opinion.
+    measured from, and it says 0'00"00 -- his requirement, verbatim: *"for
+    'starting' a level, the timer event should be at 0"00"*.
 
-    NOT LIVE-GATED AT A SPAWN. That tick was calibrated at a pipe and at a star
-    and is live-verified there; whether Usamune's screen reads 00"00 or 00"03
-    on the frame control returns has never been read off the emulator. Pinned
-    to the clock's own answer rather than to a number, so this file cannot be
-    the thing that quietly asserts an unmeasured one.
+    THIS TEST ASSERTED ONE DISPLAY TICK AND PASSED WHILE THE SHIPPED ROWS READ
+    THE PREVIOUS RUN'S FINAL TIME, which is worth more than the assertion. Its
+    fixture put the counter at 0 on BOTH frames, and real play never does that
+    -- the counter drops AT the spawn, the clock's reset-race guard sees the
+    drop and reconstructs across it. The fixture below reproduces the drop, so
+    the state under test is the one he plays.
     """
-    arrival = snap(igt_overall=0)
-    event = only(SpawnDetector().process(
-        snap(mario_action=ACT_INTRO_CUTSCENE, igt_overall=0), arrival))
+    running = snap(global_timer=4999, igt_overall=500,
+                   mario_action=ACT_INTRO_CUTSCENE)
+    arrival = snap(global_timer=5000, igt_overall=0)
+    event = only(SpawnDetector().process(running, arrival))
     carries_a_time(event)
-    expected, _ = IgtClock().igt_at(arrival.global_timer, arrival)
-    assert event.payload["igt_frames"] == expected == IgtClock.DISPLAY_TICK
+    assert event.payload["igt_frames"] == 0
+    assert event.payload["igt"] == "0'00\"00"
 
 
 def test_a_respawn_says_when_it_happened():
     carries_a_time(only(SpawnDetector().process(
         snap(), snap(mario_action=ACT_SPAWN_SPIN_AIRBORNE, igt_overall=940))))
+
+
+def test_a_spawn_ACTION_mid_run_still_states_the_counter_it_can_read():
+    """The zero is a claim about the run restarting, not about the event type.
+    A cannon exit enters a spawn action with the clock running; stating 0 there
+    would make "0'00"00" mean "we did not know" on some rows and "the run
+    starts here" on others."""
+    event = only(SpawnDetector().process(
+        snap(igt_overall=940), snap(mario_action=ACT_SPAWN_SPIN_AIRBORNE,
+                                    igt_overall=941)))
+    assert event.payload["igt_frames"] == 941 + IgtClock.DISPLAY_TICK
+    assert event.payload["igt_source"] == "counter"
 
 
 def test_the_place_detectors_read_the_shared_clock_and_not_a_second_one():

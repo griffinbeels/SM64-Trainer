@@ -262,3 +262,70 @@ def test_a_death_respawn_inside_the_tail_is_not_a_second_arrival():
         jev(7, "spawned", 1040, {"level": 8, "kind": "spawn"})]
     _, entry_spawns = level_entry_rows(rows)
     assert list(entry_spawns) == [6]
+
+
+# -- an arrival is a SPAWN, not a level edge -----------------------------------
+# His report, 2026-08-06: he warped from Shifting Sand Land to Shifting Sand
+# Land through the Usamune menu and got "Moved to another part of Shifting Sand
+# Land" -- *"I would expect it to show me the 'Started Shifting Sand Land'…
+# I think when we're spawning, that's the event that should show"*. A same-level
+# menu warp moves no level byte, so the old rule never opened a load.
+#
+# Every fixture below is a shape read off his own journal, named by its ids.
+
+def test_a_menu_warp_to_the_same_level_is_an_arrival():
+    """Journal ids 2343-2345: area 2 -> 1, an anchor 80 frames paused, a spawn,
+    all on one frame, and not a level edge in sight."""
+    rows = [jev(1, "area_changed", 900, {"level": 8, "from": 1, "to": 2}),
+            jev(2, "area_changed", 1000, {"level": 8, "from": 2, "to": 1}),
+            jev(3, "practice_reset", 1000, {"paused_frames_before": 80}),
+            jev(4, "spawned", 1000, {"level": 8, "kind": "spawn"})]
+    settled, entry_spawns = level_entry_rows(rows)
+    assert entry_spawns == {4: 8}
+    assert 2 in settled, "the load's own edge is what the spawn speaks for"
+    assert 1 not in settled, "the walk INTO the pyramid was his own move"
+
+
+def test_walking_back_out_of_a_subarea_is_not_an_arrival():
+    """Journal ids 2307-2309 inverted -- the volcano door, 3 frames paused.
+    The destination area cannot separate this from a retry (anchors.py records
+    the same limit), so the PAUSE streak is what does: a walked load pauses 0-3
+    frames and a menu warp 13+. Without this clause every walk out of the
+    volcano would announce "Started Lethal Lava Land"."""
+    rows = [jev(1, "area_changed", 900, {"level": 22, "from": 1, "to": 2}),
+            jev(2, "area_changed", 1000, {"level": 22, "from": 2, "to": 1}),
+            jev(3, "practice_reset", 1000, {"paused_frames_before": 3}),
+            jev(4, "spawned", 1000, {"level": 22, "kind": "spawn"})]
+    settled, entry_spawns = level_entry_rows(rows)
+    assert not entry_spawns and not settled
+
+
+def test_a_reset_in_place_is_an_arrival():
+    """Journal ids 2347-2348: nothing moved but the clock, and that IS a start
+    -- it is the boundary a subsection would be defined from."""
+    rows = [jev(1, "area_changed", 900, {"level": 8, "from": 1, "to": 1}),
+            jev(2, "practice_reset", 1000, {"paused_frames_before": 0}),
+            jev(3, "spawned", 1000, {"level": 8, "kind": "spawn"})]
+    _, entry_spawns = level_entry_rows(rows)
+    assert entry_spawns == {3: 8}
+
+
+def test_a_reset_INSIDE_a_subarea_is_not_an_arrival():
+    """Journal ids 2297-2298: he restarted inside the LLL volcano. He did not
+    start Lethal Lava Land, and saying so would be the row telling the truth in
+    the wrong words -- `COURSE_START_AREA` is the discriminator."""
+    rows = [jev(1, "area_changed", 900, {"level": 22, "from": 1, "to": 2}),
+            jev(2, "practice_reset", 1000, {"paused_frames_before": 0}),
+            jev(3, "spawned", 1000, {"level": 22, "kind": "spawn"})]
+    _, entry_spawns = level_entry_rows(rows)
+    assert not entry_spawns
+
+
+def test_a_warp_DEEPER_is_still_a_move_and_not_an_arrival():
+    """Journal ids 2340-2342, the pyramid door: a load, a spawn, and the row he
+    wants to point at is still "Moved to another part of Shifting Sand Land"."""
+    rows = [jev(1, "area_changed", 1000, {"level": 8, "from": 1, "to": 2}),
+            jev(2, "practice_reset", 1000, {"paused_frames_before": 3}),
+            jev(3, "spawned", 1000, {"level": 8, "kind": "spawn"})]
+    settled, entry_spawns = level_entry_rows(rows)
+    assert not entry_spawns and not settled

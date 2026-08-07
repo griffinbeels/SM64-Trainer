@@ -16,9 +16,14 @@ blank cell. Read through the shared `detectors/igt_clock.py`, like
 star_grab/key/warp/moment, so every time on screen comes from one derivation.
 Forward-only: the raw counter at a historical edge was never journaled.
 
-A spawn's number is normally 0'00"00, and that is the point rather than a
-degenerate case: Usamune zeroes at the SPAWN, so this row is the zero the
-whole run is measured from and the recorder can say so.
+A spawn's number is 0'00"00, and that is the point rather than a degenerate
+case: Usamune zeroes at the SPAWN, so this row is the zero the whole run is
+measured from and the recorder can say so. It reads `IgtClock.igt_at_spawn`
+rather than `igt_at` — this docstring claimed the zero for a day while the
+shipped rows carried the PREVIOUS run's final time, because the shared clock's
+reset-race guard reconstructs across exactly this edge and its premise is
+inverted here. That method's docstring carries the measurement and the guard
+that keeps a mid-run spawn honest.
 """
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
@@ -46,7 +51,7 @@ class SpawnDetector:
             kind = "spawn"
         else:
             return []
-        igt_frames, source = self._clock.igt_at(curr.global_timer, curr)
+        igt_frames, source = self._clock.igt_at_spawn(curr.global_timer, curr)
         return [Event(type="spawned", frame=curr.global_timer,
                       timestamp_utc=curr.wall_time_utc,
                       payload={"level": curr.curr_level, "kind": kind,

@@ -156,6 +156,40 @@ class IgtClock:
         warp.py (pipe), where the touch is the whole event."""
         return self._reading(touch_frame, curr, self._result_is_fresh)
 
+    def igt_at_spawn(self, spawn_frame: int, curr: GameSnapshot
+                     ) -> tuple[int, str]:
+        """Usamune's number at an ARRIVAL — zero, because the run starts here.
+
+        A spawn is the one moment that is not a reading of the counter at all:
+        it is the origin the counter is about to measure from. Usamune zeroes
+        at the spawn, and `addresses.py` calls the same edge the canonical
+        Lakitu-skip timing start.
+
+        WHY `igt_at` CANNOT ANSWER IT, which is the whole reason this method
+        exists rather than a subtraction at the call site. `_reading`'s
+        reset-race guard reconstructs the PRE-reset value whenever the counter
+        zeroed within a blink of the moment — right for a star grabbed just
+        after a reset, since that grab concluded the attempt being played, and
+        exactly inverted for a spawn, which OPENS the attempt that reset
+        started. His journal, 2026-08-06: every recent `spawned` carried
+        `igt_source: "reconstructed"` and the previous run's final time, which
+        is what put "Started Bob-omb Battlefield 16"33" on his screen.
+
+        NOT AN UNCONDITIONAL ZERO, and that distinction is the guard: a stated
+        zero that really means "we could not read the clock" is the kind of
+        guarantee this project has been burned by. A spawn ACTION can fire
+        mid-run — a cannon exit, a savestate loaded into one — and there the
+        counter is running and its reading is the truth. Zero is stated only
+        where the counter is at or just back at zero, which is a thing we
+        WATCHED rather than assumed; `NEAR_ZERO_IGT` is anchors.py's own
+        definition of that, shared so there are not two opinions about when a
+        run restarted.
+        """
+        reading, source = self.igt_at(spawn_frame, curr)
+        if source == "reconstructed" or curr.igt_overall <= NEAR_ZERO_IGT:
+            return 0, "spawn"
+        return reading, source
+
     def igt_at_xcam(self, xcam_frame: int, curr: GameSnapshot) -> tuple[int, str]:
         """Usamune's number at the X-CAM moment — the leaderboard-legal time.
 
