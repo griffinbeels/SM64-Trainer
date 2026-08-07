@@ -117,6 +117,28 @@ def test_a_refresh_that_lands_on_a_newer_sheet_is_kept(tmp_path, monkeypatch):
     assert read_snapshot(path)["targets"][0]["label"] == "fresher"
 
 
+def test_a_refresh_stamps_each_approachs_vetted_twin(tmp_path, monkeypatch):
+    """The refresh producer must stamp exactly as scrape time does -- a
+    refreshed snapshot the Library page reads differently is a fork."""
+    twin = {"Mario": 30.9, "Grandmaster": 31.8, "Master": 32.8, "Diamond": 33.8}
+    fresh = _snapshot("2026-08-05T09:15:18")
+    fresh["targets"][0]["approaches"][0]["ladder"] = dict(twin)
+    seed = tmp_path / "vetted.json"
+    seed.write_text(json.dumps(
+        {"entities": {"star:1:0": {"strategies": {"Skyjump": twin}}}}),
+        encoding="utf-8")
+    monkeypatch.setattr("sm64_events.core.paths.bundled_rank_standards",
+                        lambda: seed)
+    monkeypatch.setattr("sm64_events.library.build.build",
+                        lambda data, fetched_at, overrides=None: fresh)
+    monkeypatch.setattr("sm64_events.library.ladders.fit_payload", lambda p: p)
+    store = LibraryStore(tmp_path / "local.json.gz", None)
+    result = store.refresh(_fetch_returning(None))
+    assert result["applied"] is True
+    stamped = store.payload["targets"][0]["approaches"][0]
+    assert stamped["matched_strategy"] == "Skyjump"
+
+
 def test_reads_answer_the_questions_the_ui_asks():
     store = LibraryStore()
     store._payload = _snapshot("2026-08-05T09:15:18")

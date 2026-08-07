@@ -73,7 +73,14 @@ def match_vetted(vetted: dict, approaches: list) -> dict:
 def stamp_matches(payload: dict, vetted_by_entity: dict) -> dict:
     """Write each approach's vetted twin onto it. The page needs this to
     attach YOUR rank, PB and replays to the right section; recomputing the
-    match in JS would be the second-door class."""
+    match in JS would be the second-door class.
+
+    Stamps are 1:N across sibling targets sharing an entity, and that is
+    intentional rather than a leak: your rank on a strategy is the same fact
+    wherever the strategy appears, so the two CCM targets that both map to
+    star:4:6 each carry a "100c + Slide · Open" stamp and show the same
+    standing. WITHIN one target, match_vetted assigns each vetted name at
+    most once (tests/test_library_seed.py pins both halves)."""
     for target in payload["targets"]:
         entity = target.get("entity_key")
         approaches = target["approaches"]

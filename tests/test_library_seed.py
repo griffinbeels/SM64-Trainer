@@ -28,7 +28,11 @@ def payload():
 
 
 def test_schema_and_revision_present(payload):
-    assert payload["schema_version"] == 1
+    # Against the constant, not a literal: the claim is "the shipped snapshot
+    # matches the schema THIS code reads", which is exactly what goes red when
+    # someone bumps SCHEMA_VERSION without rebuilding the snapshot.
+    from sm64_events.library.build import SCHEMA_VERSION
+    assert payload["schema_version"] == SCHEMA_VERSION
     assert payload["sheet_revision"] >= "2026-08-04T20:14:25"
 
 
@@ -216,6 +220,15 @@ def test_matched_strategies_are_stamped(payload):
     stamped = [a["matched_strategy"] for t in payload["targets"]
                for a in t["approaches"] if a.get("matched_strategy")]
     assert len(stamped) >= 180, len(stamped)   # 203 matched on 2026-08-07
+    # A strategy stamped on sibling targets sharing an entity is INTENTIONAL
+    # (your rank on it is the same fact wherever it appears — 4 such pairs
+    # today, e.g. star:4:6's "100c + Slide · Open" on two CCM rows). Within
+    # ONE target each vetted name lands at most once; this pins
+    # match_vetted's per-target dedupe against regression.
+    for target in payload["targets"]:
+        names = [a["matched_strategy"] for a in target["approaches"]
+                 if a.get("matched_strategy")]
+        assert len(names) == len(set(names)), (target["label"], names)
 
 
 def test_the_ladder_model_is_recorded_with_the_data(payload):

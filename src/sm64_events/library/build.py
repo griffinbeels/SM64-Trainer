@@ -17,7 +17,11 @@ from sm64_events.library.mapping import map_target, miss_reason
 from sm64_events.library.sheet import read_rows
 from sm64_events.library.workbook import log_revision
 
-SCHEMA_VERSION = 1
+# 2: approaches carry `matched_strategy` (2026-08-07). The Library page
+# REQUIRES it, so a pre-stamp local snapshot (a dev refresh) must lose to the
+# stamped bundled one -- newest-sheet-revision-wins would otherwise keep a
+# stale local copy whose shape the page cannot read.
+SCHEMA_VERSION = 2
 
 _VERSION_SUFFIX = re.compile(r"\s*\((?:JP|US)\)\s*$", re.I)
 
