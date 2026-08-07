@@ -220,6 +220,41 @@ def test_the_star_kind_armed_detail_renders():
             "leaked onto the wrong star's card")
 
 
+# --- the Compare fold-in's backend (Task 6 fix round 2) --------------------
+# This file's own canary lesson, a fifth time: `serve_ui()` had NO Compare
+# backend at all until this round -- `create_app()` was never given
+# `compare=`, so `/api/compare/view` 404d regardless of what the app code
+# did, and every render test asserting `.compare-cmp` CONTENT (Task 6 fix
+# round 1) could only be proved against a hand-built harness, never this
+# shared fixture. Not a UI reach check (test_ui_library_compare.py already
+# drives the real click-through) -- this is the fixture's own promise that
+# the ROUTE exists at all, which is the thing that silently wasn't true.
+#
+# Placed HERE, above the module's own `page` fixture, for the SAME reason
+# the two tests above it are: `serve_ui()`'s own seeding calls `asyncio.run()`
+# internally, and running that in a thread whose event-loop state a prior
+# `get_driver().launch()` has already touched hits the identical, real
+# `asyncio.run() cannot be called from a running event loop` this file's own
+# `reach()` docstring names for two Playwright launches in one process —
+# measured directly: placed at the end of the file (after `page`'s many
+# launches) this failed with exactly that traceback; moved here, clean.
+
+def test_the_fixture_reaches_a_real_compare_backend():
+    """`/api/compare/view` must answer 200 with a real (empty) payload, not
+    404 -- confirms `serve_ui()` actually wires `compare=` into `create_app`
+    rather than leaving it `None`. A 404 here is indistinguishable from a
+    typo in the route path unless this asserts the STATUS, not just that a
+    response arrived."""
+    with serve_ui() as base:
+        with urllib.request.urlopen(
+                f"{base}/api/compare/view?entity=star:2:4", timeout=10) as r:
+            assert r.status == 200, r.status
+            body = json.loads(r.read())
+        assert body["entity"] == "star:2:4", body
+        assert body["saved"] == [], (
+            "a fresh fixture should have no saved comparisons yet")
+
+
 # Two viewports, not one: 1500x1000 (comfortably wide, side-by-side rank
 # banners) and 850x1180 (the supported floor, min_viewport_width -- stacked
 # banners, the narrow objective-card band). Reach had only ever been proven

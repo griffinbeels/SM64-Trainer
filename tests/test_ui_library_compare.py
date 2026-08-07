@@ -22,6 +22,23 @@ import now asserts `.compare-cmp` COUNT, never just pane visibility, per this
 project's own rule that a guard asserting existence rather than content is
 how an invisible feature ships.
 
+FIX ROUND 2 (controller, root cause named three times in ui-core.md): fix
+round 1's own content assertions still ran against a HAND-BUILT fake
+`/api/compare/view` in this file, because `tools/ui_fixture.py::serve_ui()`
+had NO Compare backend at all -- `/api/compare/import` and `/api/compare/view`
+both 404d under it regardless of what the app code did. That fake could drift
+from the real `views.py::build_compare_view` (it did: it filtered `saved` by
+entity only, ignoring `strat`, so it would have stayed green over the exact
+`item.strat`-vs-`body.strat` drift fix round 1 fixed). `serve_ui` now wires a
+REAL `CompareService` (real sqlite `comparisons` table, real `/api/compare/
+view`) -- only the network download and ffmpeg re-encode are stubbed, the
+same idiom `tests/test_compare_service.py::_svc` already uses server-side.
+Every test below drives the REAL import/view/PUT routes; `_STUB_FETCH` here
+is now a thin WRAPPER, not a fake -- it forces at most ONE targeted `/api/
+compare/import` call to fail without ever reaching the real backend for that
+call (so a "failure" scenario needs no cooperation from the download stub),
+and every other call passes straight through to `real()`.
+
 Fixture: same as test_ui_library_tray.py -- `ui_fixture.py`'s default seeding
 (star:2:4, "Fall onto the Caged Island") auto-opens a section with several
 approaches, each carrying example cards with an enabled "+"."""
@@ -65,30 +82,26 @@ _ADD_N_EXAMPLES = """
 }})()
 """
 
-# A FULL fake backend for the compare import+view loop -- FIX ROUND 1's own
-# lesson: mocking only `/api/compare/import` proves the pane becomes visible
-# but proves NOTHING about its content, because `/api/compare/view` (the real,
-# unmocked route) can never return a `saved` row for a synthetic import id
-# that was never actually written to the real db. So this stub keeps an
-# in-memory fake comparisons table and answers `/api/compare/view` FROM IT,
-# the same way the real server answers it from sqlite -- only then does
-# `.compare-cmp` reflect anything real about what studyInCompare did.
+# FIX ROUND 2: no longer a fake backend -- everything but ONE optional call
+# passes straight through to the REAL, now-real `/api/compare/*` routes
+# (real import, real db, real `/api/compare/view`). The only override: the
+# Nth `/api/compare/import` POST (1-based, `FAIL_ON_CALL`) is answered with a
+# synthetic job id that reports "error" on poll, WITHOUT ever reaching the
+# real backend for that call -- so a failure test needs no cooperation from
+# the fixture's download stub and creates no real db row for the item that
+# "failed". `null` means nothing fails; every import in the batch is real.
 #
 # Every call (including passthroughs) is logged to `window.__fetchCalls` so a
 # test can assert the ABSENCE of a call, not just the presence of one (FIX
 # ROUND 1, item 4 -- "no PUT was issued" needs a record of what WAS issued).
 #
-# The SECOND `/api/compare/import` call fails -- deterministic because
-# studyInCompare awaits each item before starting the next, so call order is
-# tray order. `FAIL_ON_CALL` lets a test pick which call (1-based) fails, or
-# skip failing entirely.
+# `studyInCompare` awaits each item before starting the next, so call order
+# is deterministically tray order.
 _STUB_FETCH = """
 (() => {{
   const real = window.fetch.bind(window);
   let calls = 0;
-  let nextId = 9000;
-  window.__studyJobs = {{}};
-  window.__fakeComparisons = [];
+  const fakeJobs = new Set();
   window.__fetchCalls = [];
   const FAIL_ON_CALL = {fail_on_call};
   window.fetch = (url, opts) => {{
@@ -96,40 +109,22 @@ _STUB_FETCH = """
     window.__fetchCalls.push(method + ' ' + url);
     if (url === '/api/compare/import' && method === 'POST') {{
       calls += 1;
-      const jobId = 'study-test-job-' + calls;
       if (calls === FAIL_ON_CALL) {{
-        window.__studyJobs[jobId] = {{ state: 'error', message: 'video unavailable' }};
-      }} else {{
-        const body = JSON.parse(opts.body);
-        nextId += 1;
-        const comp = {{ id: nextId, entity_key: body.entity_key, strat: body.strat,
-          name: body.name, source_kind: body.source_kind, source_ref: body.source_ref,
-          in_frame: null, out_frame: null, clip_url: '/ui/assets/sm64_tracker.png' }};
-        window.__fakeComparisons.push(comp);
-        window.__studyJobs[jobId] = {{ state: 'done', comparison: {{ id: comp.id }} }};
+        const jobId = 'fixture-fail-' + calls;
+        fakeJobs.add(jobId);
+        return Promise.resolve(new Response(JSON.stringify({{ job_id: jobId }}),
+          {{ status: 200, headers: {{ 'Content-Type': 'application/json' }} }}));
       }}
-      return Promise.resolve(new Response(JSON.stringify({{ job_id: jobId }}),
-        {{ status: 200, headers: {{ 'Content-Type': 'application/json' }} }}));
+      return real(url, opts);
     }}
     if (typeof url === 'string' && url.startsWith('/api/compare/import/')) {{
       const jobId = url.split('/').pop();
-      const status = window.__studyJobs[jobId]
-        || {{ state: 'error', message: 'unknown job' }};
-      return Promise.resolve(new Response(JSON.stringify(status),
-        {{ status: 200, headers: {{ 'Content-Type': 'application/json' }} }}));
-    }}
-    if (typeof url === 'string' && url.startsWith('/api/compare/videos/') && method === 'PUT') {{
-      return Promise.resolve(new Response(JSON.stringify({{}}),
-        {{ status: 200, headers: {{ 'Content-Type': 'application/json' }} }}));
-    }}
-    if (typeof url === 'string' && url.startsWith('/api/compare/view')) {{
-      const params = new URLSearchParams(url.split('?')[1] || '');
-      const entity = params.get('entity');
-      const saved = window.__fakeComparisons.filter((c) => c.entity_key === entity);
-      return Promise.resolve(new Response(JSON.stringify(
-        {{ entity, strat: params.get('strat'), saved, suggestion: null,
-          library: [], rank_source: null }}),
-        {{ status: 200, headers: {{ 'Content-Type': 'application/json' }} }}));
+      if (fakeJobs.has(jobId)) {{
+        return Promise.resolve(new Response(JSON.stringify(
+          {{ state: 'error', message: 'video unavailable' }}),
+          {{ status: 200, headers: {{ 'Content-Type': 'application/json' }} }}));
+      }}
+      return real(url, opts);
     }}
     return real(url, opts);
   }};
@@ -318,8 +313,17 @@ def test_an_untrimmed_item_is_never_put_to_compare_videos(library_page):
 
     _stub_fetch(library_page)
     library_page.evaluate("document.querySelector('.library-tray-study').click()")
-    library_page.wait_for(".compare-page", timeout_ms=8000)
-    _count(library_page, ".compare-cmp", at_least=1)  # let the batch finish
+    # Wait for the BATCH to finish, not for navigation -- against the real
+    # backend (fix round 2), an unconditional PUT sending `edit: null` as its
+    # body errors, which fails the item entirely and means Study never
+    # routes anywhere at all. `.library-tray-study` re-enabling (studying ->
+    # false) is true whether the batch succeeded or not, so it is the right
+    # thing to wait for here regardless of which way this test is run.
+    for _ in range(100):
+        if not library_page.evaluate(
+                "document.querySelector('.library-tray-study').disabled"):
+            break
+        time.sleep(0.05)
 
     calls = library_page.evaluate("window.__fetchCalls")
     put_calls = [c for c in calls if c.startswith("PUT /api/compare/videos/")]

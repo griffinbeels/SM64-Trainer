@@ -31,6 +31,8 @@ from pathlib import Path
 
 import uvicorn
 
+from sm64_events.compare.importer import VideoImporter
+from sm64_events.compare.service import CompareService
 from sm64_events.core.events import Event
 from sm64_events.core.paths import (bundled_defaults_seed, bundled_rank_standards, bundled_sheet_ladders,
                                     rank_standards_path)
@@ -60,6 +62,29 @@ class _OfflineMemory:
 
     def detach(self) -> None:
         pass
+
+
+# Task 6 fix round 2 (task-6-caveats.md's own root cause, cited three times
+# in ui-core.md): the fixture had NO Compare backend at all, so
+# `/api/compare/view` 404d under it no matter what the code did and a
+# content-asserting render test could only prove itself against a hand-built
+# harness. `serve_ui` now wires a REAL `CompareService` -- real sqlite
+# `comparisons` table, real `/api/compare/view` -- and stubs ONLY the two
+# genuinely slow, genuinely network-bound steps a gate should never run for
+# real: yt-dlp's download and ffmpeg's re-encode. Same idiom
+# `tests/test_compare_service.py::_svc` already uses for the server-side unit
+# tests, applied here so the UI layer gets the same real backend.
+def _fixture_downloader(source_ref: str, dest_dir: Path) -> Path:
+    p = dest_dir / "fixture-src.mp4"
+    p.write_bytes(b"fixture video bytes")
+    return p
+
+
+def _fixture_ffmpeg_runner(cmd: list[str]) -> None:
+    # cmd[-1] is VideoImporter's own tmp_out path (see
+    # VideoImporter._normalize_to_cache) -- writing bytes there IS the
+    # "normalize" step this fixture needs to fake.
+    Path(cmd[-1]).write_bytes(b"fixture normalized bytes")
 
 
 def snapshot_db(source: Path, destination: Path) -> Path:
@@ -720,6 +745,11 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
         db_path = Path(scratch.name) / "fixture.db"
         if from_dev_db and DEV_DB.exists():
             snapshot_db(DEV_DB, db_path)
+    # Own tempdir regardless of `scratch` above (which is None whenever the
+    # caller passed an explicit `db_path`) -- the compare cache needs
+    # somewhere to write fixture clips into and must never touch a real
+    # user's `core/paths.compare_cache_dir()`.
+    compare_cache_scratch = tempfile.TemporaryDirectory(prefix="sm64-fixture-cache-")
 
     database = Database(db_path)
     if reconcile_full_corpus:
@@ -746,7 +776,21 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
     ranks.load()
     service = TrackerService(database, broadcaster, ranks=ranks)
     poller = Poller(_OfflineMemory(), [], service)
-    app = create_app(poller, broadcaster, service=service)
+    # Real CompareService over the SAME db/broadcaster/ranks the rest of the
+    # fixture already uses (`service` exposes `.db`/`.ranks`, exactly what
+    # CompareService's `tracker` param wants) -- only the network download
+    # and ffmpeg re-encode are faked. `title_probe` is stubbed too: the
+    # default hits YouTube's real oEmbed endpoint, and every import this
+    # fixture (or a caller) makes supplies a real `name`, never a bare URL,
+    # so the probe would never fire anyway -- stubbed defensively rather
+    # than relying on that staying true.
+    compare_importer = VideoImporter(
+        Path(compare_cache_scratch.name), "ffmpeg",
+        downloader=_fixture_downloader, runner=_fixture_ffmpeg_runner)
+    compare = CompareService(compare_importer, service, broadcaster,
+                             Path(compare_cache_scratch.name),
+                             title_probe=lambda url: None)
+    app = create_app(poller, broadcaster, service=service, compare=compare)
 
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(
@@ -822,3 +866,4 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
         database.close()
         if scratch is not None:
             scratch.cleanup()
+        compare_cache_scratch.cleanup()

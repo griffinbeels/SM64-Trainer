@@ -341,11 +341,22 @@ export function Compare({ t, intent, clearIntent, active }) {
   // now would persist under the OLD combo's storage key -- stash it and let
   // the dependency-less effect below (after openComp exists) consume it once
   // entity/strat genuinely equal what this intent asked for.
+  //
+  // FIX ROUND 2 (MINOR, re-reviewer): `pendingOpenRef` is cleared on EVERY
+  // intent now, not only ones carrying `openIds` -- an intent with none must
+  // WIN over anything an earlier one left pending, or a later, unrelated
+  // navigation back to that same combo could spuriously re-open clips the
+  // user had since closed (this project's "acts without a gesture of mine"
+  // rejection). The re-reviewer could not construct this live today (the
+  // three `enterCompare` callers cannot currently interleave), but nothing
+  // stops a later caller from doing so, and the ref is dependency-less and
+  // matches on entity/strat alone, not on recency.
   useEffect(() => {
     if (!intent) return;
     setEntity(intent.entity); setStrat(intent.strat); setAttemptId(intent.attemptId);
-    if (intent.openIds && intent.openIds.length)
-      pendingOpenRef.current = { entity: intent.entity, strat: intent.strat || null, ids: intent.openIds };
+    pendingOpenRef.current = (intent.openIds && intent.openIds.length)
+      ? { entity: intent.entity, strat: intent.strat || null, ids: intent.openIds }
+      : null;
     clearIntent();
   }, [intent]);
 
