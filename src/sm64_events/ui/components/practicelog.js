@@ -296,7 +296,7 @@ export function isCardOpen(overrides, topKey, key) {
 
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, pick, selected, onSelect, forceOpen,
-                          open, onSetOpen, openSegment,
+                          open, onSetOpen, openSegment, openLibrary = null,
                           active = false,
                           nameOverflow = "ellipsis", rankIconSize = 24,
                           rankPlacement = "head", nextStepMode = "classic" }) {
@@ -540,11 +540,31 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            "open + turn to the right page + scroll + flash". */""}
       <${PbTag} pb=${sectionPb(sec, t.clock)} mode=${clock} rows=${rows}
         pick=${pbPick} t=${t} />
-      <button type="button" class="log-card-fold" onclick=${() => onSetOpen(!isOpen)}
-          aria-expanded=${isOpen ? "true" : "false"}
-          title=${`${isOpen ? "Collapse" : "Expand"} ${named.name}'s attempts`}>
-        <${Icon} name="chevron" size=${18} />
-      </button>
+      ${/* The book mark (spec 2026-08-07-library-page, section 1: "opens the
+           Library at the current target and strategy") -- a doorway OUT to
+           the community sheet for whatever this card is showing, the same
+           relationship StepTrack's onEdit already has to the Segments tab.
+           Shares the fold button's grid-area/flex row (`.log-card-actions`)
+           rather than claiming a new column -- adding a fifth named area
+           would mean re-deriving it across all four layout matrix cells
+           (oneLine/twoLine/stacked/stackNarrow) for one small icon, and
+           `.log-card-head`'s own comment already names that as the bug this
+           card's grid exists to avoid (the unassigned-card double-height
+           regression). Omitted entirely when the caller has no door to offer
+           (`ui/tunelog.js`'s inspector, which never passes it) -- never a
+           disabled button with nothing behind it. */""}
+      <div class="log-card-actions">
+        ${openLibrary && html`<button type="button" class="log-card-library-link"
+            onclick=${() => openLibrary({ kind: "target", entity: ek, strat: sec.last_strat })}
+            title=${`Open ${named.name} in the Library`}>
+          <${Icon} name="bookmark" size=${15} />
+        </button>`}
+        <button type="button" class="log-card-fold" onclick=${() => onSetOpen(!isOpen)}
+            aria-expanded=${isOpen ? "true" : "false"}
+            title=${`${isOpen ? "Collapse" : "Expand"} ${named.name}'s attempts`}>
+          <${Icon} name="chevron" size=${18} />
+        </button>
+      </div>
     </div>
     ${/* The SAME component StarSection/SegmentSection used to render for
          their own objective card (steptrack.js), and the same reason:
@@ -610,7 +630,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
       <${StandardsPanel} entity=${standards.entity}
         activeStrat=${sec.last_strat} strategies=${sec.strategies}
         sectionRank=${sec.rank} sectionPb=${sec.pb}
-        family=${standards.family}
+        family=${standards.family} openLibrary=${openLibrary}
         onChanged=${t.refresh} defaultOpen=${false} />
       </div>
     <//>
@@ -754,7 +774,8 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
 export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
                               clearFocus, focusKey, onSelect, activeKey = null,
                               playedKeys = [], openTargetPicker = null,
-                              openSegment = null, enforceMembership = true }) {
+                              openSegment = null, openLibrary = null,
+                              enforceMembership = true }) {
   const [shown, setShown] = useState(CARDS_PER_PAGE);
   // Per-entity fold overrides -- ONLY what the user has touched himself, in
   // either direction. Lives here rather than inside LogCard's own state
@@ -935,6 +956,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
         const nextStepMode = nextStepModeFor(tuning, { isNarrow, twoLadder });
         return html`<${LogCard} key=${ek} sec=${sec} t=${t} ui=${ui}
           freshIds=${freshIds} openCompare=${openCompare} openSegment=${openSegment}
+          openLibrary=${openLibrary}
           focus=${focus} clearFocus=${clearFocus} pick=${pick}
           selected=${ek === focusKey} onSelect=${onSelect}
           forceOpen=${ek === focusKey}

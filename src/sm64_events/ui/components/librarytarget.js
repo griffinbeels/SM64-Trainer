@@ -10,7 +10,7 @@
 // as two doors rather than unifying them lives on `sectionOrder`'s own
 // docstring, where the next person choosing between them will look first.
 import { h } from "preact";
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON } from "../api.js";
 import { fmtSeconds } from "../format.js";
@@ -361,23 +361,41 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
   }
 
   // A deep link (Task 7: the standards ladder's own tier rows, and the
-  // book mark) re-fires on every change, unlike the auto-open above — the
-  // whole point of a link is to move you even while the page is already
-  // open on something else. `approaches.find` here still resolves by NAME
-  // alone and can still land on the first of two sibling sections that
-  // share one `matched_strategy` (the 100-coin case, caveat 4) — that is not
-  // this fix's bug to close: the two sections show the IDENTICAL rank/PB for
-  // that strategy by design ("your rank on a strategy is the same fact
-  // wherever it appears"), so a strategy-named link has no third piece of
-  // information to disambiguate WHICH sibling with, and landing on either is
-  // correct. What this fix DOES close is that such a link now always opens
-  // and scrolls to a single, stable section rather than one whose identity
-  // collided with an unrelated approach on the OTHER sibling target.
+  // book mark) moves you once per LINK, then goes quiet — task-7-caveats.md
+  // point 2's own ruling. The effect's dependency list includes `approaches`
+  // (needed to resolve the `hit`), and `approaches` is a `useMemo` over
+  // `rows` — so with no guard, ANY later `rows` change (a library refresh, a
+  // re-fetch, a second intent landing on this same entity) re-runs this
+  // effect and snaps `expanded` back to the SAME stale link, silently
+  // reverting a click the user made in between. This project rejects exactly
+  // that shape everywhere else (CLAUDE.md's rank-up-on-load ruling: an action
+  // needs a gesture of his own, and "a page refetch happened to land while he
+  // was browsing something else" is not one). `consumedFocusRef` is the same
+  // "consume it once" treatment `library.js` already gives its own `intent`
+  // prop (`clearIntent`, called the instant `openEntity` reads it) — here
+  // expressed as a ref rather than a callback, since there is no owner above
+  // this component to hand a clear-signal back to. Keyed on `pageIdentity`
+  // too, not just `focusStrat`/`focusTier`: a DIFFERENT page that happens to
+  // reuse the same strategy name is a fresh link, never "the same one
+  // already consumed" (pageIdentity's own comment, above, has the reasoning
+  // for why it — not `entityKey` — is what names a page).
+  const consumedFocusRef = useRef(null);
   useEffect(() => {
     if (!focusStrat) return undefined;
+    const focusId = `${pageIdentity}::${focusStrat}::${focusTier || ""}`;
+    if (consumedFocusRef.current === focusId) return undefined;
+    // `approaches.find` here still resolves by NAME alone and can still land
+    // on the first of two sibling sections that share one `matched_strategy`
+    // (the 100-coin case, caveat 4) — that is not this fix's bug to close:
+    // the two sections show the IDENTICAL rank/PB for that strategy by
+    // design ("your rank on a strategy is the same fact wherever it
+    // appears"), so a strategy-named link has no third piece of information
+    // to disambiguate WHICH sibling with, and landing on either is correct.
     const hit = approaches.find((approach) =>
       approach.matched_strategy === focusStrat || approach.name === focusStrat);
-    if (!hit) return undefined;
+    if (!hit) return undefined;  // approaches not loaded yet -- stay
+                                  // unconsumed, try again next render
+    consumedFocusRef.current = focusId;
     setExpanded(approachIdentity(hit));
     // Disclose mounts the section body a tick after `open` flips — see its
     // own docstring ("Preact commits after the tick"). A short timer beats a
@@ -387,7 +405,7 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
       document.getElementById(id)?.scrollIntoView({ block: "start", behavior: "smooth" });
     }, 80);
     return () => clearTimeout(timer);
-  }, [focusStrat, focusTier, approaches]);
+  }, [focusStrat, focusTier, approaches, pageIdentity]);
 
   const iconSrc = entityKey ? entityIconSrc(t, entityKey) : genericStarSrc();
   const activeStratInfo = activeStrat ? stratByName[activeStrat] : null;

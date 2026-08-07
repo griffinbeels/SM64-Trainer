@@ -779,6 +779,17 @@
   .timefield-sep{color:var(--text-dim,#8b98a6);padding:0 1px}
   .stdcell{display:inline-flex;align-items:center;gap:4px}
   .vidbtn{border:none;background:transparent;color:#6cb6ff;cursor:pointer;font-size:11px;padding:0 2px;line-height:1}
+  /* The standards-ladder deep link (Task 7, spec 2026-08-07-library-page) --
+     `color: inherit` deliberately, not the blue every other in-table link
+     uses: this cell's own background is the tier's rank colour (`capGradient`/
+     `rankColor`, set inline above) against dark `#111` text for contrast, and
+     that pairing is what stays legible across all eight tiers -- a fixed blue
+     would fight several of them. The gap before it is margin, not a text-node
+     space: htm collapses whitespace between a text node and a tag (this
+     file's own JS rule, `.claude/rules/ui-core.md`), so a literal " " before
+     the button would silently vanish. */
+  .std-tier-link{border:none;background:transparent;color:inherit;cursor:pointer;padding:0;margin-left:4px;line-height:1;vertical-align:middle;opacity:.7}
+  .std-tier-link:hover{opacity:1}
   .stdtable td a{color:#6cb6ff;text-decoration:none}
   .stdtable td a:hover{text-decoration:underline}
   .stdtable th a{color:#cdd3da}
@@ -5223,6 +5234,26 @@
     margin-left: var(--log-pb-offset, 0px);
     white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 700;
   }
+  /* Book mark (Task 7, spec 2026-08-07-library-page) sits BESIDE the fold
+     button now, sharing its "fold" grid-area through this wrapper rather
+     than claiming a fifth named area of its own -- see practicelog.js's own
+     comment at the call site for why a new area was rejected. `.log-card-
+     fold`'s `grid-area: fold` below is what actually places this wrapper (it
+     is the direct grid child); the button keeps the declaration as a
+     harmless no-op on the rare `UnassignedLogCard` header, which has no
+     wrapper and still needs it. */
+  .log-card-actions { grid-area: fold; display: flex; align-items: center; gap: .3rem; }
+  /* Same 30px icon-button shape as `.log-card-fold` below, minus its rotate
+     transition -- sharing that class outright would spin the bookmark
+     glyph -90deg on every closed card along with the chevron. */
+  .log-card-library-link {
+    flex: 0 0 auto; width: 30px; height: 30px; display: inline-flex;
+    align-items: center; justify-content: center; padding: 0;
+    border: 1px solid transparent; border-radius: 7px;
+    background: transparent; color: var(--muted); cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+  }
+  .log-card-library-link:hover { background: #16283e; color: var(--text); }
   .log-card-fold {
     grid-area: fold;
     flex: 0 0 auto; width: 30px; height: 30px; display: inline-flex;

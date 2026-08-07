@@ -243,7 +243,8 @@ function App() {
             enterCompare=${enterCompare} />
         </div>
         ${tab === "Practice" ? html`<div class="view-pane"><${Practice} t=${t}
-            openCompare=${openCompare} openSegment=${openSegment} /></div>`
+            openCompare=${openCompare} openSegment=${openSegment}
+            openLibrary=${openLibrary} /></div>`
           : tab === "Segments" ? html`<div class="view-pane"><${Segments} t=${t}
               intent=${segmentIntent}
               clearIntent=${() => setSegmentIntent(null)} /></div>`
