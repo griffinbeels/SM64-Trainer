@@ -306,6 +306,59 @@ def test_library_model_ranks_and_frame_rate_agree():
         "would be converted against the wrong clock.")
 
 
+# --- 8. the Library page's band-vs-tier comparison -------------------------
+
+def test_library_band_for_agrees_with_rank_for():
+    """`librarymodel.js::bandFor` re-implements the tier comparison
+    `ranks/classify.py::rank_for` owns, because the Library bands a community
+    time against a ladder with no server round trip -- the two scan the same
+    ladder in OPPOSITE directions (rank_for: hardest-first, return on the
+    first tier beaten; bandFor: easiest-first, keep overwriting through the
+    last tier beaten), which `bandFor`'s own comment claims are equivalent.
+    The final whole-branch review drove both over 40,836 real (ladder, time)
+    pairs from the shipped snapshot and found zero disagreements -- correct
+    today, but held together only by a JS-only unit test
+    (test_library_model_js.py) and that comment. This is the missing
+    COMPARISON of the two real implementations (CLAUDE.md's own rule: when one
+    door is impossible, the duplicate gets a test that compares the two).
+
+    Generates its own corpus rather than depending on the shipped snapshot, so
+    the guard runs in a fresh clone with no library data fetched. Includes
+    ladders with 1..7 of the 7 non-Iron tiers (never all-absent, and
+    deliberately not always monotonic in practice since a real ladder can be
+    hand-edited) and times spanning well below the fastest cutoff to well past
+    the slowest, which is what the non-monotonic unit test's OWN comment says
+    is the case that would catch either scan getting the direction wrong."""
+    import random
+
+    from sm64_events.ranks.classify import RANK_NAMES, rank_for
+
+    tiers = [r for r in RANK_NAMES if r != "Iron"]
+    rng = random.Random(20260807)
+    cases = []
+    for _ in range(60):
+        ladder_cs = {tier: rng.randint(100, 200_00)
+                     for tier in rng.sample(tiers, rng.randint(1, len(tiers)))}
+        for _ in range(30):
+            cases.append((ladder_cs, rng.randint(0, 220_00)))
+
+    js_cases = [[{t: v / 100 for t, v in ladder.items()}, time] for ladder, time in cases]
+    js = run_node(
+        f"import {{ bandFor }} from {LIBRARYMODEL_JS.as_uri()!r};\n"
+        f"const cases = {json.dumps(js_cases)};\n"
+        "console.log(JSON.stringify(cases.map(([ladder, time]) => "
+        "bandFor(ladder, time))));")
+    python = ["Below Bronze" if (r := rank_for(ladder, time)) in (None, "Iron") else r
+             for ladder, time in cases]
+    disagreements = [(ladder, time, py, node)
+                     for (ladder, time), py, node in zip(cases, python, js)
+                     if py != node]
+    assert not disagreements, (
+        "librarymodel.js::bandFor and ranks/classify.py::rank_for disagree "
+        f"on {len(disagreements)}/{len(cases)} generated (ladder_cs, time_cs) "
+        f"pairs. First few: {disagreements[:5]}")
+
+
 # --- the guards themselves --------------------------------------------------
 
 def test_the_guards_can_still_fail():
@@ -325,3 +378,14 @@ def test_the_guards_can_still_fail():
     from sm64_events.ranks.classify import RANK_NAMES
     assert list(RANK_NAMES) != [*RANK_NAMES, "Ultra"]
     assert commented.name == "sample.js"
+
+    # test_library_band_for_agrees_with_rank_for's own comparison shape,
+    # exercised on a KNOWN disagreement -- a real mismatch between the two
+    # implementations must survive the zip/list-comprehension that finds it,
+    # not get silently dropped by it.
+    fake_cases = [({"Bronze": 100}, 50)]
+    fake_python, fake_js = ["Silver"], ["Bronze"]
+    fake_disagreements = [(ladder, time, py, node)
+                          for (ladder, time), py, node in
+                          zip(fake_cases, fake_python, fake_js) if py != node]
+    assert fake_disagreements == [({"Bronze": 100}, 50, "Silver", "Bronze")]
