@@ -275,14 +275,26 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
   // below, is the one gated to "once".
   useEffect(() => {
     if (!active || !intent) return;
-    // Either kind is a real navigation of its own (a target page, or a
-    // straight pass-through into Compare) -- suppress the "land on whatever
-    // was last practiced" auto-open below in both cases, or it would race a
-    // fetch this activation is about to abandon anyway.
-    autoOpenedRef.current = true;
     if (intent.kind === "target") {
+      // A real navigation of the Library's OWN page -- suppress the "land on
+      // whatever was last practiced" auto-open below, or it would race a
+      // fetch this activation is about to abandon anyway.
+      autoOpenedRef.current = true;
       openEntity(intent.entity, { strat: intent.strat, tier: intent.tier });
     } else if (intent.kind === "compare") {
+      // FINAL REVIEW FIX (broad review finding #7, never landed until now):
+      // this is a straight PASS-THROUGH into Compare -- the Library's own
+      // page never actually shows anything for the user to have "already
+      // auto-opened" past. Setting the ref here anyway spent the ONE-PER-
+      // MOUNT auto-open slot on a tab switch the user never saw content
+      // from; the Library persistently mounts (app.js's own doc comment),
+      // so that spend was permanent for the rest of the session -- an
+      // attempt row's Compare button silently disabled "land on your last-
+      // practiced target" for every later genuine Library visit. Leaving the
+      // ref untouched here means the auto-open effect below may still run
+      // once (its own guard already prevents it running twice), which is a
+      // real fetch for a target the user will not see this instant, exactly
+      // as wasteful as intended -- and no more.
       enterCompare({ attemptId: intent.attemptId, entity: intent.entity, strat: intent.strat });
     }
     clearIntent();
