@@ -68,7 +68,15 @@ const MOBILE_BAR = ["Practice", "Run", "Library"];
 const inBar = ([name]) => MOBILE_BAR.includes(name);
 
 function NavItem({ name, icon, tab, setTab, onSessions, compact = false }) {
-  const active = tab === name;
+  // FINAL REVIEW FIX (minor: Compare is an orphan destination). Compare's own
+  // nav entry is gone since Task 6 folded it into the Library (see NAV_GROUPS
+  // above) -- while `tab === "Compare"` no item named itself "Compare" any
+  // more, so NOTHING lit up: the sidebar and the mobile bar both went dark,
+  // which reads as a rendering fault rather than the deliberate fold-in it
+  // is. "Library" is the one door into Compare now (its own "Study in
+  // Compare"), so it wears the highlight while Compare is on screen instead
+  // of leaving every item unlit.
+  const active = tab === name || (name === "Library" && tab === "Compare");
   const choose = () => name === "Sessions" ? onSessions() : setTab(name);
   return html`<button type="button" class="nav-item ${active ? "on" : ""}"
       aria-current=${active ? "page" : null} title=${name}

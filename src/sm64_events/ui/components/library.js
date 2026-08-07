@@ -28,7 +28,11 @@ import { Icon } from "./icons.js";
 
 const html = htm.bind(h);
 
-function statusLine(status) {
+function statusLine(status, error) {
+  // FINAL REVIEW FIX (medium: two fetches fail into a permanent spinner).
+  // `error` was not a parameter before -- a dead or slow server were
+  // indistinguishable, both reading "Loading the community sheet…" forever.
+  if (error) return `Could not load the sheet status: ${error}`;
   if (!status) return "Loading the community sheet…";
   const revision = status.sheet_revision || "unknown revision";
   const source = status.source === "local" ? "your last refresh" : "bundled with the app";
@@ -143,8 +147,21 @@ function pollImportJob(jobId) {
 export function Library({ t, active, intent, clearIntent, enterCompare }) {
   const [index, setIndex] = useState(null);
   const [status, setStatus] = useState(null);
+  // FINAL REVIEW FIX (medium: two fetches fail into a permanent spinner). A
+  // dead server and a slow one used to be indistinguishable -- `index`/
+  // `status` just stayed `null` forever on a `.catch(() => {})` that swallowed
+  // the failure. These carry the message so the page can say so and offer a
+  // real retry instead of an infinite "Loading…".
+  const [indexError, setIndexError] = useState(null);
+  const [statusError, setStatusError] = useState(null);
+  // And a navigation failure (a 404/500 opening a specific target) used to
+  // have no `.catch` AT ALL -- for the book-mark deep link `clearIntent()` had
+  // already run by then, so the tab landed on the browse grid with no message
+  // and nothing to retry. Cleared at the START of the next attempt (below),
+  // so a later successful open silently supersedes a stale one.
+  const [entryError, setEntryError] = useState(null);
   const [stage, setStage] = useState("browse");   // "browse" | "target"
-  const [entry, setEntry] = useState(null);        // {entityKey, rows, focusStrat, focusTier}
+  const [entry, setEntry] = useState(null);        // {entityKey, rows, focusStrat, focusTier, fallbackLabel}
   const [refreshState, setRefreshState] = useState(null);
   const [studying, setStudying] = useState(false);
   const [studyResult, setStudyResult] = useState(null);  // {total, failures:[{label,detail}]}
@@ -181,22 +198,51 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
   const iconFor = (entityKey) =>
     entityKey ? entityIconSrc(t, entityKey) : genericStarSrc();
 
-  useEffect(() => {
-    getJSON("/api/library").then(setIndex).catch(() => {});
-    getJSON("/api/library/status").then(setStatus).catch(() => {});
-  }, []);
+  // Both fetch-and-set, clear their own error on success -- shared by the
+  // mount effect below and by `refresh()`'s own success branch, which used to
+  // repeat the same unguarded `getJSON(...).then(...).catch(() => {})` pair.
+  function loadIndex() {
+    return getJSON("/api/library")
+      .then((data) => { setIndex(data); setIndexError(null); })
+      .catch((err) => setIndexError(err.message || String(err)));
+  }
+  function loadStatus() {
+    return getJSON("/api/library/status")
+      .then((data) => { setStatus(data); setStatusError(null); })
+      .catch((err) => setStatusError(err.message || String(err)));
+  }
+
+  useEffect(() => { loadIndex(); loadStatus(); }, []);
 
   // `focus` is {strat?, tier?} -- carried from an `intent` (Task 7's own
   // deep links) into LibraryTarget's `focusStrat`/`focusTier` props. Read
   // once at open time: `intent` is cleared right after this runs (below), so
   // capturing it into `entry` is the only way it survives past that clear.
   function openEntity(entityKey, focus = {}) {
+    setEntryError(null);
     return getJSON(`/api/library/entity/${encodeURIComponent(entityKey)}`)
       .then((data) => {
         setEntry({ entityKey, rows: data.targets || [],
-                   focusStrat: focus.strat || null, focusTier: focus.tier || null });
+                   focusStrat: focus.strat || null, focusTier: focus.tier || null,
+                   // FINAL REVIEW FIX (important: blank-titled book mark). An
+                   // entity the sheet never maps (78 of every 84 segments,
+                   // measured) returns `{targets: []}` here -- `rows[0]` never
+                   // exists, so librarytarget.js's own `label` fell back to
+                   // "" and the target page rendered a real "No community
+                   // times recorded here yet." paragraph under an EMPTY
+                   // `<h3>`. `entityLabel` is the same best-effort name
+                   // `mixedEntityNote` below already resolves off the current
+                   // session view -- carried only as a FALLBACK; a real sheet
+                   // label always wins inside LibraryTarget.
+                   fallbackLabel: entityLabel(t, entityKey) });
         setStage("target");
-      });
+      })
+      // FINAL REVIEW FIX (medium: two fetches fail into a permanent
+      // spinner). This had NO `.catch` at all -- a 404/500 opening a
+      // book-mark deep link was a click that silently did nothing, and
+      // `clearIntent()` had already run, so the tab landed on the browse
+      // grid with no message and nothing to retry.
+      .catch((err) => setEntryError(err.message || String(err)));
   }
 
   // The course grid hands back an entity key when a target has one, else its
@@ -211,14 +257,17 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
   // librarytarget.js stay ignorant of which door it came through.
   function handlePick(value) {
     if (typeof value === "string") { openEntity(value); return; }
+    setEntryError(null);
     getJSON(`/api/library/target/${value}`)
       .then((row) => {
-        setEntry({ entityKey: null, rows: [row], focusStrat: null, focusTier: null });
+        setEntry({ entityKey: null, rows: [row], focusStrat: null, focusTier: null,
+                   fallbackLabel: null });
         setStage("target");
-      });
+      })
+      .catch((err) => setEntryError(err.message || String(err)));
   }
 
-  function backToBrowse() { setStage("browse"); setEntry(null); }
+  function backToBrowse() { setStage("browse"); setEntry(null); setEntryError(null); }
 
   // Runs on every activation, not gated on `!active` staying false — an
   // intent may arrive on a tab that is ALREADY open (a click from elsewhere
@@ -256,10 +305,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
     send("POST", "/api/library/refresh")
       .then((result) => {
         setRefreshState(result);
-        if (result.applied) {
-          getJSON("/api/library").then(setIndex).catch(() => {});
-          getJSON("/api/library/status").then(setStatus).catch(() => {});
-        }
+        if (result.applied) { loadIndex(); loadStatus(); }
       })
       .catch((err) => setRefreshState({ error: err.message }));
   }
@@ -357,7 +403,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
         <span class="workshop-title-icon"><${Icon} name="library" size=${22} /></span>
         <div>
           <h2>Library</h2>
-          <p>${statusLine(status)}</p>
+          <p>${statusLine(status, statusError)}</p>
         </div>
       </div>
       <button type="button" class="primary-button" onclick=${refresh}
@@ -367,6 +413,15 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
       </button>
     </div>
     <${RefreshMessage} state=${refreshState} />
+    ${/* FINAL REVIEW FIX (medium: two fetches fail into a permanent
+         spinner). A failed navigation (a 404/500 opening a book mark or a
+         browse-grid pick) used to be a click that silently did nothing --
+         this is the one message surface for it, shown only on the browse
+         page (the target page itself renders its own real content once a
+         later attempt succeeds, which already clears this). */""}
+    ${entryError && stage === "browse"
+      ? html`<p class="library-refresh-msg is-error">Could not open that target: ${entryError}</p>`
+      : null}
     <${LibraryTray} items=${tray} onTrim=${trimTrayItem} onRemove=${removeFromTray}
         onPlayAll=${() => setShowGrid(true)} onStudy=${studyInCompare} studying=${studying} />
     <${StudyMessage} result=${studyResult} />
@@ -378,9 +433,15 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
           <${LibraryTarget} t=${t} targets=${entry ? entry.rows : []}
               onAdd=${addToTray} trayKeys=${trayKeys}
               focusStrat=${entry ? entry.focusStrat : null}
-              focusTier=${entry ? entry.focusTier : null} />
+              focusTier=${entry ? entry.focusTier : null}
+              fallbackLabel=${entry ? entry.fallbackLabel : null} />
         </div>`
-      : html`<${LibraryNav} index=${index} onPick=${handlePick} iconFor=${iconFor} />`}
+      : indexError
+        ? html`<div class="library-load-error">
+            <p class="library-refresh-msg is-error">Could not load the library: ${indexError}</p>
+            <button type="button" class="quiet-button" onclick=${loadIndex}>Retry</button>
+          </div>`
+        : html`<${LibraryNav} index=${index} onPick=${handlePick} iconFor=${iconFor} />`}
     ${showGrid
       ? html`<${LibraryGrid} items=${tray} onClose=${() => setShowGrid(false)} />`
       : null}
