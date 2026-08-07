@@ -7,9 +7,11 @@
 // playing roughly together -- it cannot frame-sync (a `start=` query param on
 // an iframe is not a shared clock), so the overlay says that in plain words
 // rather than pretending otherwise. "Study in Compare" is the second tier,
-// frame-accurate, and belongs to Task 6 (task-5-caveats.md point 3 and the
-// plan's own Task 6 section) -- `onStudy` is a prop here because the BUTTON
-// is this task's to place, not because the wiring behind it is.
+// frame-accurate, and is Task 6's `studyInCompare` (library.js): imports the
+// tray into Compare, then routes there. `onStudy` stays a prop here -- this
+// file still only places the BUTTON and reports `studying` for the one state
+// that still disables it (an import batch already running); library.js owns
+// what the click actually does.
 //
 // Tray item shape (library.js's own state, grown here, not reinvented --
 // task-5-caveats.md point 1): {key, runner, time_cs, video, strat, trim,
@@ -99,7 +101,16 @@ function TrayChip({ item, editing, onToggleEdit, onTrim, onRemove }) {
  * library.js never mounts/unmounts this component itself, so the close
  * direction gets to play too, not just the open one.
  */
-export function LibraryTray({ items, onTrim, onRemove, onPlayAll, onStudy }) {
+// TASK 6: `onStudy` is real now (library.js's `studyInCompare`), so the
+// always-visible "coming soon" note (task-5-caveats.md's own fix round 1,
+// citing acceptance.md: a disabled control must explain itself where the
+// click lands, never only on hover) is gone -- the reason it existed for is
+// gone with it. `studying` is the ONE remaining state that still disables
+// the button (an import batch already running), and it keeps the same
+// always-visible-text law rather than dropping it: a click mid-batch would
+// double-fire every import, so the button explains why it will not respond
+// exactly the way the deleted note used to.
+export function LibraryTray({ items, onTrim, onRemove, onPlayAll, onStudy, studying }) {
   const [editingKey, setEditingKey] = useState(null);
   return html`<${Disclose} open=${items.length > 0} className="library-tray-disclose">
     <div class="library-tray">
@@ -116,13 +127,13 @@ export function LibraryTray({ items, onTrim, onRemove, onPlayAll, onStudy }) {
           <${Icon} name="play" size=${15} /> Play all
         </button>
         <button type="button" class="library-tray-study"
-            disabled=${!onStudy || items.length === 0}
-            title=${onStudy ? "Frame-accurate side-by-side study" : ""}
-            onclick=${() => onStudy && onStudy(items)}>
-          <${Icon} name="compare" size=${15} /> Study in Compare
+            disabled=${items.length === 0 || studying}
+            title="Frame-accurate side-by-side study"
+            onclick=${() => onStudy(items)}>
+          <${Icon} name="compare" size=${15} /> ${studying ? "Importing…" : "Study in Compare"}
         </button>
-        ${!onStudy
-          ? html`<span class="meta library-tray-study-note">Frame-accurate study is coming soon.</span>`
+        ${studying
+          ? html`<span class="meta library-tray-study-note">Importing your clips…</span>`
           : null}
       </div>
     </div>

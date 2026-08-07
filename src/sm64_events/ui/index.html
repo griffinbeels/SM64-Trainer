@@ -305,6 +305,12 @@
   }
   .library-refresh-msg.is-ok { color: var(--green); }
   .library-refresh-msg.is-error { color: var(--coral); }
+  /* Task 6: the per-item import-failure summary (library.js's
+     `StudyMessage`) -- same treatment as a refresh error, its own class
+     because it answers a different question (a Study batch, not a sheet
+     refresh) and the two must be able to show at once without one masking
+     the other's styling intent. */
+  .library-study-msg { margin: 0 0 .8rem; font-size: .82rem; color: var(--coral); }
   .library-target-empty { color: var(--muted); }
 
   /* The target page itself (Task 4, librarytarget.js) -- progression-first:

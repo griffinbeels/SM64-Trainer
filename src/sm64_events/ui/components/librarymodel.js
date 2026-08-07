@@ -153,7 +153,14 @@ export function lastPracticed(view) {
   return best;
 }
 
-export function trayToImport(item, entityKey) {
+// TASK 6 RULING (task-6-caveats.md point 6): `entityKey` used to be a second
+// parameter here. It is gone -- a tray item carries its OWN `entity_key`
+// (Task 5 fix round 1, `librarytray.js`'s own header comment), stamped at
+// the moment it was added, and import dedupe is scoped to (entity_key,
+// strat). A caller handing in a DIFFERENT entity than the item's own would
+// import it into the wrong bucket; reading `item.entity_key` makes that
+// impossible rather than merely undocumented.
+export function trayToImport(item) {
   const trim = item.trim || {};
   const edit = (trim.start_s != null || trim.end_s != null) ? {
     in_frame: trim.start_s != null ? Math.round(trim.start_s * GAME_FPS) : null,
@@ -170,7 +177,7 @@ export function trayToImport(item, entityKey) {
   // writes). TASK 5 RULING (task-5-caveats.md point 2): this was an
   // unpinned `.toFixed(2)` until now: pinned below and in
   // test_library_model_js.py.
-  return { body: { entity_key: entityKey, strat: item.strat || "Standard",
+  return { body: { entity_key: item.entity_key, strat: item.strat || "Standard",
                    name: `${item.runner} ${fmtSeconds(item.time_cs / 100)}`,
                    source_kind: "youtube", source_ref: item.video },
            edit };

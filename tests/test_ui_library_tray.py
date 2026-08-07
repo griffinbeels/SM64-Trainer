@@ -67,16 +67,15 @@ def library_page(library_server):
         yield page
 
 
-def test_study_in_compares_disabled_reason_is_visible_text_not_a_hover(library_page):
-    """FIX ROUND 1 (controller finding 2). `onStudy` is `null` until Task 6
-    wires the Compare fold-in, so the button is disabled -- and the reason
-    must be readable withOUT hovering it (acceptance.md: "a toggle half
-    disabled for a real, data-driven reason... nobody hovers a control that
-    does nothing before reporting it. Put the reason where the click lands,
-    or do not disable it" -- and a disabled `<button>` cannot even receive
-    the click that would land it). This test never dispatches a mouse or
-    focus event, only reads `textContent`, so it fails if the reason is only
-    reachable via `title`."""
+def test_study_in_compare_is_enabled_once_the_tray_has_an_item(library_page):
+    """TASK 6 supersedes FIX ROUND 1's test of the same name. `onStudy` is
+    wired for real now (library.js's `studyInCompare`), and the always-
+    visible "coming soon" note this test used to pin is gone with it --
+    there is nothing left to explain once the control can act. What
+    survives is the PRINCIPLE the note existed to satisfy (acceptance.md: a
+    disabled control must explain itself where the click lands), now checked
+    from the other side: a control that CAN act must not still claim it
+    can't, which is exactly the bug a stale disabled-by-default would be."""
     added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=1))
     assert added == 1, added
     library_page.wait_for(".library-tray-chip", timeout_ms=5000)
@@ -86,12 +85,14 @@ def test_study_in_compares_disabled_reason_is_visible_text_not_a_hover(library_p
         const note = document.querySelector('.library-tray-study-note');
         return {
           disabled: btn ? btn.disabled : null,
+          label: btn ? btn.textContent.trim() : null,
           noteText: note ? note.textContent.trim() : null,
         };
       })()
     """)
-    assert result["disabled"] is True, result
-    assert result["noteText"], "no visible reason next to the disabled Study in Compare button"
+    assert result["disabled"] is False, result
+    assert result["label"] == "Study in Compare", result
+    assert result["noteText"] is None, "no reason should render once the button can act"
 
 
 def test_adding_examples_docks_the_tray_with_one_chip_each(library_page):

@@ -24,13 +24,15 @@ const NAV_GROUPS = [
   // "Library" group two rows down -- that group already exists (Sessions /
   // Live feed) and putting a tab of the same name inside it renders the word
   // twice (task-3-caveats.md point 2). It is a play-time reference tool, and
-  // Task 6 removes Compare from this group once the Library absorbs it -- so
-  // it ends up standing exactly where Compare stood. Last item on purpose.
+  // Task 6 removed Compare's own entry from this group once the Library
+  // absorbed it (its "Study in Compare" routes to the SAME Compare pane,
+  // still mounted below -- task-6-caveats.md point 3: the pane never moved,
+  // only the nav entry into it did) -- so Library ends up standing exactly
+  // where Compare stood. Last item on purpose.
   ["Play", [
     ["Practice", "practice"],
     ["Run", "run"],
     ["Rank", "rank"],
-    ["Compare", "compare"],
     ["Library", "library"],
   ]],
   ["Build", [
@@ -58,8 +60,10 @@ const NAV_ITEMS = NAV_GROUPS.flatMap(([, items]) => items);
 // The bottom bar has room for three plus "More". This is a ranking of what
 // gets a permanent slot, NOT a second list of what exists: anything named here
 // that is not a real destination is a bug, and anything omitted still shows up
-// in More automatically.
-const MOBILE_BAR = ["Practice", "Run", "Compare"];
+// in More automatically. "Compare" held the third slot until Task 6 folded it
+// into the Library (see NAV_GROUPS above) -- "Library" takes the slot it
+// vacates, same reasoning: a play-time reference tool earns a permanent spot.
+const MOBILE_BAR = ["Practice", "Run", "Library"];
 
 const inBar = ([name]) => MOBILE_BAR.includes(name);
 
@@ -176,16 +180,13 @@ function App() {
   // through -> back to default.
   const [tab, setTabState] = useState("Practice");
   const [compareIntent, setCompareIntent] = useState(null);
-  // Same intent-plus-tab shape as openCompare below, deliberately: a
+  // Same intent-plus-tab shape as enterCompare below, deliberately: a
   // second mechanism for "go to that tab and open that thing" is how the
   // two drift. Noticing a wrong STEP happens while playing, and until
   // this existed the only way into the definition was the Segments tab
   // plus a hunt through the library.
   const [segmentIntent, setSegmentIntent] = useState(null);
-  // Same shape again, for the Library tab (library.js consumes it). Task 6
-  // finishes the fold-in that points existing openCompare call sites here
-  // instead -- this task only adds the mechanism, byte-for-byte how the two
-  // above already work.
+  // Same shape again, for the Library tab (library.js consumes it).
   const [libraryIntent, setLibraryIntent] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -196,9 +197,27 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [moreOpen]);
   const setTab = (name) => { setTabState(name); setMoreOpen(false); };
-  const openCompare = (intent) => { setCompareIntent(intent); setTab("Compare"); };
+  // The Compare PANE's own entry point -- unchanged from before Task 6
+  // (task-6-caveats.md point 3: the pane never moves, this is still the one
+  // thing that opens it). Renamed from `openCompare` because that name is
+  // now the PUBLIC one every outside caller keeps using, and it means
+  // something different: see below.
+  const enterCompare = (intent) => { setCompareIntent(intent); setTab("Compare"); };
   const openSegment = (id) => { setSegmentIntent(id); setTab("Segments"); };
   const openLibrary = (intent) => { setLibraryIntent(intent); setTab("Library"); };
+  // Task 6: Compare's own nav entry is gone (the Library absorbed it), so
+  // every caller that used to open the Compare tab directly -- today that is
+  // only attemptlog.js's per-attempt "Compare" button, threaded down
+  // practice.js -> practicelog.js -> attemptlog.js under the prop name
+  // `openCompare` -- now arrives at the Library first, exactly like a target
+  // deep-link (`openLibrary`, added by Task 3 for precisely this). Library's
+  // own {kind:"compare"} intent handler forwards straight into
+  // `enterCompare` with no browse stop, so the caller sees no behavioural
+  // difference: attemptlog.js still calls a prop literally named
+  // `openCompare`, unrenamed, with the same {attemptId, entity, strat} shape
+  // it always has (task-6-caveats.md point 4 -- change the ONE function,
+  // never the prop chain).
+  const openCompare = (intent) => openLibrary({ kind: "compare", ...intent });
 
   return html`<div class="app-shell">
     <${Sidebar} t=${t} tab=${tab} setTab=${setTab}
@@ -220,7 +239,8 @@ function App() {
              reach an ALREADY-open tab, not just a freshly mounted one. */""}
         <div class="view-pane" style=${tab === "Library" ? "" : "display:none"}>
           <${Library} t=${t} intent=${libraryIntent}
-            clearIntent=${() => setLibraryIntent(null)} active=${tab === "Library"} />
+            clearIntent=${() => setLibraryIntent(null)} active=${tab === "Library"}
+            enterCompare=${enterCompare} />
         </div>
         ${tab === "Practice" ? html`<div class="view-pane"><${Practice} t=${t}
             openCompare=${openCompare} openSegment=${openSegment} /></div>`

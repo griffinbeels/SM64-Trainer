@@ -145,9 +145,13 @@ def test_last_practiced_is_null_with_no_attempts_anywhere():
 
 
 def test_tray_to_import_carries_the_trim_as_frames():
+    # TASK 6: entity_key rides on the item itself now (task-6-caveats.md
+    # point 6), not a second argument -- see test_tray_to_import_reads_the_
+    # items_own_entity_key below for the case that argument existing used to
+    # hide (a caller passing a DIFFERENT entity than the item's own).
     item = {"runner": "Kally", "time_cs": 4380, "video": "https://youtu.be/z",
-            "trim": {"start_s": 12, "end_s": 19.5}}
-    out = run_js(f"m.trayToImport({json.dumps(item)}, 'star:1:0')")
+            "trim": {"start_s": 12, "end_s": 19.5}, "entity_key": "star:1:0"}
+    out = run_js(f"m.trayToImport({json.dumps(item)})")
     assert out["body"]["source_kind"] == "youtube"
     assert out["body"]["entity_key"] == "star:1:0"
     assert out["body"]["source_ref"] == "https://youtu.be/z"
@@ -166,6 +170,19 @@ def test_tray_to_import_carries_the_trim_as_frames():
 
 
 def test_tray_to_import_edit_is_null_when_untrimmed():
-    item = {"runner": "Kally", "time_cs": 4380, "video": "https://youtu.be/z"}
-    out = run_js(f"m.trayToImport({json.dumps(item)}, 'star:1:0')")
+    item = {"runner": "Kally", "time_cs": 4380, "video": "https://youtu.be/z",
+            "entity_key": "star:1:0"}
+    out = run_js(f"m.trayToImport({json.dumps(item)})")
     assert out["edit"] is None
+
+
+def test_tray_to_import_reads_the_items_own_entity_key():
+    """A tray can hold items gathered from more than one entity (Task 5 fix
+    round 1) -- this is the case a second `entityKey` PARAMETER could get
+    wrong (a caller handing in whatever entity the user happens to be
+    standing on, rather than the one the item actually came from), which is
+    exactly why that parameter is gone."""
+    item = {"runner": "Kally", "time_cs": 4380, "video": "https://youtu.be/z",
+            "entity_key": "star:2:5"}
+    out = run_js(f"m.trayToImport({json.dumps(item)})")
+    assert out["body"]["entity_key"] == "star:2:5"

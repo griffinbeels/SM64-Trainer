@@ -20,7 +20,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { entityIconSrc, genericStarSrc } from "./entityicons.js";
-import { lastPracticed } from "./librarymodel.js";
+import { lastPracticed, trayToImport } from "./librarymodel.js";
 import { LibraryNav } from "./librarynav.js";
 import { LibraryTarget } from "./librarytarget.js";
 import { LibraryTray, LibraryGrid } from "./librarytray.js";
@@ -48,27 +48,67 @@ function RefreshMessage({ state }) {
   return html`<p class="library-refresh-msg">Already up to date — ${state.reason}</p>`;
 }
 
+// A Twitch link failing must not sink the batch (task-6-brief.md step 1):
+// every tray item still gets its own import attempt, and this renders what
+// came back for the ones that didn't land. `result` is null before the
+// first Study click; a run with zero failures renders nothing here because
+// `studyInCompare` already routed to Compare to show the result directly.
+function StudyMessage({ result }) {
+  if (!result || result.failures.length === 0) return null;
+  const succeeded = result.total - result.failures.length;
+  const parts = result.failures.map((f) => `'${f.label}' failed: ${f.detail}`);
+  return html`<p class="library-study-msg">${succeeded} of ${result.total} imported; ${parts.join("; ")}</p>`;
+}
+
+// Poll GET /api/compare/import/{jobId} until it stops running (task-6-
+// caveats.md point 1: `state` is "running" | "done" | "error", `comparison`
+// is null until "done"). A plain setTimeout loop, not setInterval -- each
+// tick waits for the PREVIOUS response before scheduling the next, so a slow
+// answer can't stack up overlapping requests for the same job.
+function pollImportJob(jobId) {
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      getJSON(`/api/compare/import/${jobId}`)
+        .then((status) => (status.state === "running" ? setTimeout(tick, 400) : resolve(status)))
+        .catch(reject);
+    };
+    tick();
+  });
+}
+
 /**
  * t            the tracker store
  * active       true while the Library tab is the one on screen
  * intent       null, or {kind:"target", entity, strat?, tier?} / {kind:
- *              "compare", ...} — a caller elsewhere in the app asking the
- *              Library to open on something specific (openLibrary in
- *              app.js). Only the "target" kind is acted on here: it routes
- *              straight to that entity's target page, the same door
- *              auto-open uses, and clears itself so it fires once. `strat`/
+ *              "compare", attemptId?, entity, strat} — a caller elsewhere in
+ *              the app asking the Library to open on something specific
+ *              (openLibrary in app.js). "target" routes straight to that
+ *              entity's target page, the same door auto-open uses; `strat`/
  *              `tier` ride along into LibraryTarget's `focusStrat`/
  *              `focusTier` props (Task 4) -- the deep-linking CALLER (the
  *              standards ladder's own tier rows, the practice-log book mark)
- *              is still Task 7's job; this only wires the pipe through.
+ *              is still Task 7's job, this only wires the pipe through.
+ *              "compare" (Task 6) is app.js's `openCompare` arriving here
+ *              instead of opening the Compare pane directly (task-6-
+ *              caveats.md point 4) -- it never touches `stage`/`entry` at
+ *              all, just forwards straight into `enterCompare` with no
+ *              browse stop, since the caller already has everything
+ *              (attemptId/entity/strat) an attempt row's own Compare button
+ *              always had. Both kinds clear themselves so they fire once.
  * clearIntent  () => void, called once an intent has been acted on
+ * enterCompare (intent) => void — app.js's own Compare-pane entry point
+ *              (`{attemptId?, entity, strat}` — Compare's existing prop
+ *              shape, unchanged by this task). Used for the "compare" intent
+ *              above and by `studyInCompare` below, once its imports land.
  */
-export function Library({ t, active, intent, clearIntent }) {
+export function Library({ t, active, intent, clearIntent, enterCompare }) {
   const [index, setIndex] = useState(null);
   const [status, setStatus] = useState(null);
   const [stage, setStage] = useState("browse");   // "browse" | "target"
   const [entry, setEntry] = useState(null);        // {entityKey, rows, focusStrat, focusTier}
   const [refreshState, setRefreshState] = useState(null);
+  const [studying, setStudying] = useState(false);
+  const [studyResult, setStudyResult] = useState(null);  // {total, failures:[{label,detail}]}
   // The comparison tray. Task 4 seeded MINIMAL state here ("tray state lives
   // here", the shape `{key, runner, time_cs, video, strat, trim}`) just
   // enough for "+" to work; Task 5 (librarytray.js) is what actually reads
@@ -147,9 +187,16 @@ export function Library({ t, active, intent, clearIntent }) {
   // below, is the one gated to "once".
   useEffect(() => {
     if (!active || !intent) return;
-    if (intent.kind !== "target") return;
+    // Either kind is a real navigation of its own (a target page, or a
+    // straight pass-through into Compare) -- suppress the "land on whatever
+    // was last practiced" auto-open below in both cases, or it would race a
+    // fetch this activation is about to abandon anyway.
     autoOpenedRef.current = true;
-    openEntity(intent.entity, { strat: intent.strat, tier: intent.tier });
+    if (intent.kind === "target") {
+      openEntity(intent.entity, { strat: intent.strat, tier: intent.tier });
+    } else if (intent.kind === "compare") {
+      enterCompare({ attemptId: intent.attemptId, entity: intent.entity, strat: intent.strat });
+    }
     clearIntent();
   }, [active, intent]);
 
@@ -178,6 +225,56 @@ export function Library({ t, active, intent, clearIntent }) {
       .catch((err) => setRefreshState({ error: err.message }));
   }
 
+  // Task 6, step 1: import every tray item -- EACH under its OWN
+  // `entity_key` (`trayToImport` reads it off the item, task-6-caveats.md
+  // point 6), never a single entity handed in from outside, because the
+  // tray is ordinary cross-entity state (librarytray.js's own header). One
+  // item failing (a dead link, a private video) must not sink the batch, so
+  // every item still gets its own POST + poll + optional trim PUT even after
+  // an earlier one has already failed -- `failures` collects per item rather
+  // than the loop stopping at the first `catch`.
+  //
+  // Compare shows exactly ONE (entity, strat) pane at a time (compare.js),
+  // so "Study in Compare" has to land on ONE of them: the FIRST item that
+  // actually imported, in tray order. Every other import still lands in ITS
+  // OWN (entity, strat) bucket server-side and is reachable the moment you
+  // navigate Compare there yourself (its "load existing" dropdown) -- this
+  // does not silently drop them, it just cannot show more than one entity's
+  // worth of video at once, which is Compare's own existing limit, not a new
+  // one this task adds.
+  async function studyInCompare(items) {
+    if (!items.length) return;
+    setStudying(true);
+    setStudyResult(null);
+    const failures = [];
+    let firstOk = null;
+    for (const item of items) {
+      const { body, edit } = trayToImport(item);
+      try {
+        const { job_id } = await send("POST", "/api/compare/import", body);
+        const status = await pollImportJob(job_id);
+        if (status.state === "error") {
+          failures.push({ label: body.name, detail: status.message || "import failed" });
+          continue;
+        }
+        // Non-null `edit` only: an untrimmed tray item must inherit whatever
+        // trim the comparison already has saved (server-side dedupe on
+        // `source_ref` within (entity_key, strat) reuses the existing row),
+        // never blank it out. task-6-caveats.md point 2 -- do not
+        // "simplify" this condition away.
+        if (status.comparison && edit) {
+          await send("PUT", `/api/compare/videos/${status.comparison.id}`, edit);
+        }
+        if (!firstOk) firstOk = { entity: item.entity_key, strat: item.strat || null };
+      } catch (err) {
+        failures.push({ label: body.name, detail: err.message || String(err) });
+      }
+    }
+    setStudying(false);
+    setStudyResult({ total: items.length, failures });
+    if (firstOk) enterCompare(firstOk);
+  }
+
   return html`<div class="practice-card workshop-card library-page">
     <div class="workshop-hero">
       <div class="workshop-title">
@@ -195,7 +292,8 @@ export function Library({ t, active, intent, clearIntent }) {
     </div>
     <${RefreshMessage} state=${refreshState} />
     <${LibraryTray} items=${tray} onTrim=${trimTrayItem} onRemove=${removeFromTray}
-        onPlayAll=${() => setShowGrid(true)} onStudy=${null} />
+        onPlayAll=${() => setShowGrid(true)} onStudy=${studyInCompare} studying=${studying} />
+    <${StudyMessage} result=${studyResult} />
     ${stage === "target"
       ? html`<div class="library-target-page">
           <button type="button" class="entity-back" onclick=${backToBrowse}>
