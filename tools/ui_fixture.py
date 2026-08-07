@@ -97,6 +97,14 @@ def snapshot_db(source: Path, destination: Path) -> Path:
 # would otherwise have failed every time. Only mattered once something finally
 # asked "is the player standing where they can practice this" BEFORE an
 # attempt had already answered it implicitly.
+# Also the entity the Library tab (Task 3, spec 2026-08-07-library-page)
+# auto-opens to under PROJECT's own config (arm_segment=FIXTURE_SEGMENT,
+# seed_editor_fixtures=True): `seed_practice` runs AFTER `_arm_segment` and
+# `_pad_log_with_more_entities` in `serve_ui`'s own ordering below, so its
+# star_collected rows get the highest journal_id of anything the fixture
+# seeds -- confirmed by querying a live PROJECT-shaped instance directly
+# (`journal_id` 22, star:2:4, against 21 or lower for every other seeded
+# entity). `librarymodel.js::lastPracticed` is what reads that ordering back.
 FIXTURE_COURSE = 2
 FIXTURE_LEVEL = 24
 FIXTURE_STAR = 4

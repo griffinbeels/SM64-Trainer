@@ -389,6 +389,17 @@ pill]], the [[scope]] control, and your [[rank]]s across everything.
 - **Lives** — the rank page
   (`src/sm64_events/ui/components/rankpage.js`)
 
+### Library tab
+
+The screen for browsing the [[Ultimate Sheet]] by course. Opens straight on
+whichever [[star]] or [[segment]] you last practiced, and otherwise shows
+every course you can browse into.
+
+- **Lives** — the tab (`src/sm64_events/ui/components/library.js`,
+  `src/sm64_events/ui/components/librarynav.js`)
+- **Not** — the [[Practice tab]]. The Library never sets your [[target]]; it
+  only shows what the community has recorded.
+
 ### Selector
 
 The row of [[practice cell]]s across the top of the [[Practice tab]], showing

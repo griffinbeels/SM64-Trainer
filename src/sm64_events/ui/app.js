@@ -10,6 +10,7 @@ import { Segments } from "./components/segments.js";
 import { Routes } from "./components/routes.js";
 import { Run } from "./components/runview.js";
 import { Compare } from "./components/compare.js";
+import { Library } from "./components/library.js";
 import { UpdatePopup } from "./components/update.js";
 import { RecordingDot } from "./components/replay.js";
 import { Icon } from "./components/icons.js";
@@ -19,11 +20,18 @@ import { RankUpCelebration } from "./components/marelocelebrate.js";
 const html = htm.bind(h);
 
 const NAV_GROUPS = [
+  // "Library" (the sheet-library tab, below) goes HERE rather than into the
+  // "Library" group two rows down -- that group already exists (Sessions /
+  // Live feed) and putting a tab of the same name inside it renders the word
+  // twice (task-3-caveats.md point 2). It is a play-time reference tool, and
+  // Task 6 removes Compare from this group once the Library absorbs it -- so
+  // it ends up standing exactly where Compare stood. Last item on purpose.
   ["Play", [
     ["Practice", "practice"],
     ["Run", "run"],
     ["Rank", "rank"],
     ["Compare", "compare"],
+    ["Library", "library"],
   ]],
   ["Build", [
     ["Routes", "routes"],
@@ -174,6 +182,11 @@ function App() {
   // this existed the only way into the definition was the Segments tab
   // plus a hunt through the library.
   const [segmentIntent, setSegmentIntent] = useState(null);
+  // Same shape again, for the Library tab (library.js consumes it). Task 6
+  // finishes the fold-in that points existing openCompare call sites here
+  // instead -- this task only adds the mechanism, byte-for-byte how the two
+  // above already work.
+  const [libraryIntent, setLibraryIntent] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   useEffect(() => {
@@ -185,6 +198,7 @@ function App() {
   const setTab = (name) => { setTabState(name); setMoreOpen(false); };
   const openCompare = (intent) => { setCompareIntent(intent); setTab("Compare"); };
   const openSegment = (id) => { setSegmentIntent(id); setTab("Segments"); };
+  const openLibrary = (intent) => { setLibraryIntent(intent); setTab("Library"); };
 
   return html`<div class="app-shell">
     <${Sidebar} t=${t} tab=${tab} setTab=${setTab}
@@ -199,6 +213,14 @@ function App() {
         <div class="view-pane" style=${tab === "Compare" ? "" : "display:none"}>
           <${Compare} t=${t} intent=${compareIntent}
             clearIntent=${() => setCompareIntent(null)} active=${tab === "Compare"} />
+        </div>
+        ${/* Library stays mounted for the same reason Compare does: its own
+             auto-open-once (library.js) needs to remember it already ran, and
+             an intent arriving from elsewhere in the app must be able to
+             reach an ALREADY-open tab, not just a freshly mounted one. */""}
+        <div class="view-pane" style=${tab === "Library" ? "" : "display:none"}>
+          <${Library} t=${t} intent=${libraryIntent}
+            clearIntent=${() => setLibraryIntent(null)} active=${tab === "Library"} />
         </div>
         ${tab === "Practice" ? html`<div class="view-pane"><${Practice} t=${t}
             openCompare=${openCompare} openSegment=${openSegment} /></div>`

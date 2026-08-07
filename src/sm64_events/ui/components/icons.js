@@ -43,6 +43,7 @@ const PATHS = {
   expand: "M8 3H3v5M16 3h5v5M8 21H3v-5m13 5h5v-5",
   split: "M12 3v6m0 0-5 5v7m5-12 5 5v7",
   merge: "M7 3v7l5 5v6m5-18v7l-5 5",
+  library: "M12 6c-1.6-1.1-4-1.6-6-1.1v13c2-.5 4.4 0 6 1.1 1.6-1.1 4-1.6 6-1.1v-13c-2-.5-4.4 0-6 1.1zM12 6v13",
 };
 
 export function Icon({ name, size = 18, className = "" }) {

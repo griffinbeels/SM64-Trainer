@@ -722,3 +722,46 @@ def test_the_page_story_returns_to_practice_after_the_segments_tab(page):
     # (hidden by CSS at this viewport, still present in the DOM), so a wide
     # viewport genuinely has two.
     assert page.count('button.nav-item[title="Practice"][aria-current="page"]') >= 1
+
+
+# --- the Library tab (Task 3, spec 2026-08-07-library-page) ---------------
+# Appended at the end, per this file's own canary lesson at the top: a fixture
+# that does not reach the state a feature needs does not go red, it reports a
+# clean page nobody is looking at. Placed last so it inherits the "page" story
+# above's own self-healing return to Practice, rather than measuring whatever
+# tab the LAST test above it happened to leave open.
+
+CLICK_LIBRARY_TAB = 'document.querySelector(\'.nav-item[title="Library"]\').click()'
+
+
+@pytest.fixture(scope="module")
+def fresh_db_page():
+    """An UNSEEDED instance -- no stage, no target, no attempts anywhere --
+    so `librarymodel.js::lastPracticed` has nothing to resolve and the
+    Library tab's auto-open must fall back to the course grid rather than
+    erroring or rendering nothing (task-3-caveats.md point 3: null is the
+    empty-log case). A fresh fixture rather than a state reached by clicking
+    around `page` -- that fixture's own default seeding is exactly what the
+    OTHER new test below needs present."""
+    with serve_ui(seed=False) as base, get_driver().launch() as opened:
+        opened.goto(f"{base}/ui/index.html")
+        opened.wait_for(".log-list-card")
+        yield opened
+
+
+def test_the_library_tab_reaches_the_target_page(page):
+    """Auto-open's whole point: switching to the Library tab with a practiced
+    entity in hand lands straight on that entity's target page, not on the
+    course grid the user would then have to re-navigate through by hand.
+    FIXTURE_STAR (star:2:4, "Fall onto the Caged Island") is the NEWEST
+    entity by journal_id in this fixture (ui_fixture.py's own comment on
+    FIXTURE_STAR has the measurement), so `lastPracticed` resolves to it
+    every time."""
+    page.evaluate(CLICK_LIBRARY_TAB)
+    page.wait_for(".library-target", timeout_ms=15000)
+
+
+def test_an_empty_log_falls_back_to_the_course_grid(fresh_db_page):
+    """The other half of the same rule, with nothing to land on."""
+    fresh_db_page.evaluate(CLICK_LIBRARY_TAB)
+    fresh_db_page.wait_for(".library-courses", timeout_ms=15000)

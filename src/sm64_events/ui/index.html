@@ -293,6 +293,23 @@
   }
   .entity-back > .ui-icon { transform: rotate(90deg); }
   .entity-back:hover { color: var(--text); }
+  /* The Library tab (Task 3, spec 2026-08-07-library-page). Its course and
+     target grids are `.entity-grid` + `PracticeCell` — the picker's own
+     geometry and cell, reused rather than restyled, because the request was
+     literally "reuse the same exact design" (task-3-caveats.md point 1). Only
+     the bits the picker has no equivalent for get their own rule here: the
+     card frame is `.practice-card.workshop-card` (routes.js's own choice for
+     a tab-level panel), so the two below are genuinely the whole addition. */
+  .library-refresh-msg {
+    margin: 0 0 .8rem; font-size: .82rem; color: var(--muted);
+  }
+  .library-refresh-msg.is-ok { color: var(--green); }
+  .library-refresh-msg.is-error { color: var(--coral); }
+  .library-target-empty { color: var(--muted); }
+  .library-target-section { color: var(--muted); font-size: .82rem; margin: 0 0 .4rem; }
+  .library-target-row + .library-target-row {
+    margin-top: .9rem; padding-top: .9rem; border-top: 1px solid var(--border-soft);
+  }
   /* Strategy step (picker layer 3, spec 2026-07-25-target-picker-strategy-
      step): the SAME auto-fill/minmax geometry as .entity-grid above, one
      column wider — a strat card carries a rank icon plus two lines of text
