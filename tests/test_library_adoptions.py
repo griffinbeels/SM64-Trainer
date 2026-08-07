@@ -141,6 +141,33 @@ def test_the_routes_report_a_refusal_rather_than_failing_silently(wiring):
     assert client.get("/api/library/adoptions").json()["rows"] == {}
 
 
+def test_a_refresh_re_syncs_adopted_ladders(wiring, monkeypatch):
+    """standards._sheet holds ladders derived from the payload as of the last
+    adopt/unadopt/load -- a refresh replaces that payload in place with no
+    call of its own, so an adopted strategy keeps grading against the
+    PRE-refresh ladder until something re-syncs it. The refresh route must."""
+    adoptions, standards, keys, _ = wiring
+    key = keys["Lobby door (L) - BoB door"]
+    adoptions.adopt(key, "segment:42")
+    assert standards.ladder_cs("segment:42", ad.DEFAULT_STRATEGY)["Mario"] == 276
+
+    def fake_refresh(fetch_fn, overrides=None):
+        # The SAME store object refresh() mutates in place, exactly as a real
+        # POST /api/library/refresh does -- the adopted row's ladder moved.
+        moved = _payload()
+        moved["targets"][0]["approaches"][0]["ladder"]["Mario"] = 3.00
+        adoptions.store._payload = moved
+        return {"applied": True, "sheet_revision": "2026-08-06T00:00:00"}
+    monkeypatch.setattr(adoptions.store, "refresh", fake_refresh)
+
+    app = FastAPI()
+    app.include_router(create_library_router(adoptions.store, adoptions=adoptions))
+    client = TestClient(app)
+    response = client.post("/api/library/refresh")
+    assert response.status_code == 200 and response.json()["applied"] is True
+    assert standards.ladder_cs("segment:42", ad.DEFAULT_STRATEGY)["Mario"] == 300
+
+
 def test_the_adopt_routes_are_absent_without_a_standards_store(wiring):
     adoptions, _, _, _ = wiring
     app = FastAPI()

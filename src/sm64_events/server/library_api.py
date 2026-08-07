@@ -50,12 +50,20 @@ def create_library_router(store, overrides=None, adoptions=None) -> APIRouter:
     @router.post("/refresh")
     async def library_refresh():
         try:
-            return await run_in_threadpool(store.refresh, fetch, overrides)
+            result = await run_in_threadpool(store.refresh, fetch, overrides)
         except OSError as err:
             # A download failure is the network's fault, not a bad request --
             # and the caller needs the reason, since "refresh did nothing" and
             # "refresh could not reach Google" look identical otherwise.
             raise HTTPException(503, f"could not fetch the sheet: {err}") from err
+        if adoptions is not None and result.get("applied"):
+            # Adoptions._sync() merges ladders derived from `store.payload` AT
+            # THE TIME of the last adopt/unadopt/load -- a refresh replaces
+            # that payload in place without telling adoptions, so a strategy
+            # the user assigned keeps grading against the PRE-refresh ladder
+            # until the next adopt/unadopt or a restart. Re-loading closes it.
+            adoptions.load()
+        return result
 
     if adoptions is not None:
         @router.get("/adoptions")
