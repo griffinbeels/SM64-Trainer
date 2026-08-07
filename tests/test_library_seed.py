@@ -212,6 +212,12 @@ def test_castle_movements_carry_ladders_despite_having_no_entity(payload):
     assert len(fitted) >= 80, len(fitted)
 
 
+def test_matched_strategies_are_stamped(payload):
+    stamped = [a["matched_strategy"] for t in payload["targets"]
+               for a in t["approaches"] if a.get("matched_strategy")]
+    assert len(stamped) >= 180, len(stamped)   # 203 matched on 2026-08-07
+
+
 def test_the_ladder_model_is_recorded_with_the_data(payload):
     """Coherence, never contents: the percentiles are a shipped default the
     user retunes as the process improves (his instruction, 2026-08-06), and a

@@ -80,6 +80,16 @@ def test_an_unmatched_approach_is_adopted_with_its_ladder():
     assert layers["jp_strategies"] == {}       # nothing annotated, so combined
 
 
+def test_stamp_matches_names_the_vetted_strategy_on_the_approach():
+    payload = {"targets": [{"entity_key": "star:1:4", "approaches": [
+        _approach("Mario Wings to the Sky", 30.90),
+        _approach("Slope slide strat", 24.00)], "subsections": []}]}
+    adopt.stamp_matches(payload, {"star:1:4": {"Skyjump": _ladder(30.90)}})
+    first, second = payload["targets"][0]["approaches"]
+    assert first["matched_strategy"] == "Skyjump"
+    assert "matched_strategy" not in second
+
+
 def test_an_approach_whose_name_already_exists_is_not_re_added():
     payload = {"targets": [{"entity_key": "star:1:4", "approaches": [
         _approach("Skyjump", 24.00)], "subsections": []}]}

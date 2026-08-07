@@ -70,6 +70,23 @@ def match_vetted(vetted: dict, approaches: list) -> dict:
     return out
 
 
+def stamp_matches(payload: dict, vetted_by_entity: dict) -> dict:
+    """Write each approach's vetted twin onto it. The page needs this to
+    attach YOUR rank, PB and replays to the right section; recomputing the
+    match in JS would be the second-door class."""
+    for target in payload["targets"]:
+        entity = target.get("entity_key")
+        approaches = target["approaches"]
+        matched = match_vetted(vetted_by_entity.get(entity, {}), approaches) \
+            if entity else {}
+        for index, approach in enumerate(approaches):
+            if index in matched:
+                approach["matched_strategy"] = matched[index]
+            else:
+                approach.pop("matched_strategy", None)
+    return payload
+
+
 def adoptable(payload: dict, vetted_by_entity: dict, qualified: set = ()) -> dict:
     """{entity_key: {strategy name: fitted ladder}} for approaches that are
     genuinely new — a star we practice, an approach with a ladder, and no

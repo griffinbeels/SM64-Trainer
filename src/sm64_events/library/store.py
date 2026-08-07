@@ -177,6 +177,17 @@ class LibraryStore:
                       .isoformat().replace("+00:00", "Z"))
         fresh = fit_payload(build(data, fetched_at=fetched_at,
                                   overrides=overrides))
+        # Stamp each approach's vetted twin, exactly as the bundled snapshot
+        # does at scrape time -- a refresh must not produce a snapshot the
+        # Library page reads differently.
+        from sm64_events.core.paths import bundled_rank_standards
+        from sm64_events.library.adopt import stamp_matches
+        seed_path = bundled_rank_standards()
+        if seed_path:
+            seed = json.loads(Path(seed_path).read_text(encoding="utf-8"))
+            stamp_matches(fresh,
+                          {ek: {s: l for s, l in e.get("strategies", {}).items() if l}
+                           for ek, e in seed["entities"].items()})
         current = self._payload
         if current is not None and newer(current, fresh) is current:
             return {"applied": False, "sheet_revision": self.revision,

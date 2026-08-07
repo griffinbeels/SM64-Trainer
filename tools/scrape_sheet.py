@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from sm64_events.library.audit import load_overrides           # noqa: E402
-from sm64_events.library.adopt import adoptable, summary        # noqa: E402
+from sm64_events.library.adopt import adoptable, stamp_matches, summary  # noqa: E402
 from sm64_events.library.build import build, coverage          # noqa: E402
 from sm64_events.library.ladders import fit_payload            # noqa: E402
 from sm64_events.library.mapping import UNMAPPED_EXPECTED      # noqa: E402
@@ -76,12 +76,6 @@ def main() -> None:
     # approaches and subsections keeps its own times either way, but a row the
     # audit re-pointed at another entity must be fitted as what it now is.
     fit_payload(payload)
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    # mtime=0 so re-running with no sheet change produces byte-identical output
-    # and an empty git diff, rather than a 0.4 MB blob whose only change is a
-    # timestamp.
-    with gzip.GzipFile(OUT, "wb", compresslevel=9, mtime=0) as out:
-        out.write(json.dumps(payload, indent=1, ensure_ascii=False).encode("utf-8"))
 
     vetted_seed = json.loads(VETTED.read_text(encoding="utf-8"))
     vetted = {ek: {s: l for s, l in e.get("strategies", {}).items() if l}
@@ -90,6 +84,17 @@ def main() -> None:
     # identify a ladder there, so nothing is adopted onto them.
     qualified = {ek for ek, e in vetted_seed["entities"].items()
                  if e.get("exit_variants")}
+    # Stamped INTO the snapshot, so the Library page can attach the user's
+    # rank, PB and replays to the right section without recomputing the match
+    # in JS -- that would be a second door on the same derivation.
+    stamp_matches(payload, vetted)
+
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    # mtime=0 so re-running with no sheet change produces byte-identical output
+    # and an empty git diff, rather than a 0.4 MB blob whose only change is a
+    # timestamp.
+    with gzip.GzipFile(OUT, "wb", compresslevel=9, mtime=0) as out:
+        out.write(json.dumps(payload, indent=1, ensure_ascii=False).encode("utf-8"))
     adopted = adoptable(payload, vetted, qualified)
     LADDERS_OUT.write_text(json.dumps(
         {"version": 2, "source": "sheet",
