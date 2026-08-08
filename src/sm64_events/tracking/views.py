@@ -57,6 +57,7 @@ from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
 from sm64_events.tracking.projection import DEFAULT_MIN_FRAMES, journal_id
 from sm64_events.tracking.routes import route_stats
 from sm64_events.tracking.caveats import (attempt_caveat, caveat_for,
+                                           igt_seen_in,
                                           pb_blocked_by)
 from sm64_events.tracking.segments import (arm_level, arms_ambiently,
                                             card_step_labels,
@@ -1257,7 +1258,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                               # quick-select cell, so the two surfaces cannot
                               # word the same fact differently.
                               "caveat": caveat_for(
-                                  row, attempt_by_id.get(row["attempt_id"]))}
+                                  row, attempt_by_id.get(row["attempt_id"]),
+                                  igt_seen_in(history))}
                              if row else None)
         # Basis computed ONCE per section and shared by both rank numbers
         # below: the strat rank grades it against the ACTIVE strategy's
@@ -1609,7 +1611,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             f"{c}:{s}": key
             for (c, s, mode), row in pbs.items()
             if c != "segment" and mode == "igt"
-            and (key := caveat_for(row, attempt_by_id.get(row["attempt_id"])))},
+            and (key := caveat_for(
+                row, attempt_by_id.get(row["attempt_id"]),
+                igt_seen_in(attempts_by_star.get((c, s), []))))},
         "rank_mode": rank_mode,
         # Entity keys that HAVE a ladder, whether or not this player has a time
         # on them. `rank_by_star`/`segment_targets[].rank` are None in both the
@@ -1663,7 +1667,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
              # Rule 11: the same mark the star cells get, from the same
              # derivation, off this segment's own strategy-blind current PB.
              "caveat": (lambda row: caveat_for(
-                 row, attempt_by_id.get(row["attempt_id"]) if row else None))(
+                 row, attempt_by_id.get(row["attempt_id"]) if row else None,
+                 igt_seen_in(attempts_by_seg.get(d.id, []))))(
                      pbs.get(("segment", d.id, "rta")))}
             # EVERY def is included except the HUNDRED_COIN_EXIT family
             # (spec 2026-07-28-multi-step-segments) — a fully location-less

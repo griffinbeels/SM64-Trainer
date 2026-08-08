@@ -52,23 +52,34 @@ def test_a_grab_timed_star_is_marked_and_an_xcam_timed_one_is_not():
     assert caveats_for(pb(), replace(BASE, timed_at="xcam")) == []
 
 
-def test_old_clock_needs_BOTH_a_delta_and_an_igt_bearing_closing_event():
-    """The second clause is the whole finding. 570 of 626 segment attempts in
-    the 2026-07-31 journal are delta-timed and MOST ARE DELTA FOREVER — a
-    castle movement closes on a `level_changed`, an event that has no Usamune
-    number to give, so its delta simply is how that segment is measured and
-    stays comparable to the next run of it. Dropping this clause put a warning
-    on nearly every movement PB he owns."""
+def test_old_clock_needs_all_three_clauses():
+    """Delta-timed, igt-bearing closer, AND the entity's history holding an
+    igt-timed attempt. The second clause was the round-3 finding (570 of 626
+    segment attempts are delta-timed and MOST ARE DELTA FOREVER — a castle
+    movement closing on a `level_changed` has no Usamune number to be given).
+    The third is round 17 item 2: task 0081 moved 55 movements' closers onto
+    the igt-bearing entrance touch, so the closer's TYPE stopped implying a
+    fresh run would time differently — LBLJ, a trigger-clock definition whose
+    every attempt banks the same delta, wore "not comparable to a fresh run"
+    for runs comparable by construction ("I don't understand why this LBLJ
+    timer has a caveat. Feels like it shouldn't."). Two clocks must provably
+    coexist in the entity's own record before the mark may draw."""
     delta_but_untimeable = replace(BASE, segment_id=4, course_id=None, star_id=None,
                                    timed_by="delta", closed_by="level_changed")
-    assert caveats_for(pb(), delta_but_untimeable) == []
+    assert caveats_for(pb(), delta_but_untimeable, igt_seen=True) == []
 
     delta_and_timeable = replace(delta_but_untimeable, closed_by="warp_entered")
-    assert caveats_for(pb(), delta_and_timeable) == ["old_clock"]
+    assert caveats_for(pb(), delta_and_timeable, igt_seen=True) == ["old_clock"]
+
+    # LBLJ's exact shape: delta PB, igt-bearing closer, and an all-delta
+    # history — every run of it measures alike, so there is nothing to warn
+    # about. This is the clause whose absence produced his report.
+    assert caveats_for(pb(), delta_and_timeable, igt_seen=False) == []
 
     # An igt-timed row closed by the same event type is fine: the fallback
     # never ran, so there is nothing to explain.
-    assert caveats_for(pb(), replace(delta_and_timeable, timed_by="igt")) == []
+    assert caveats_for(pb(), replace(delta_and_timeable, timed_by="igt"),
+                       igt_seen=True) == []
 
 
 # --- the precedence, once the predicates are settled ------------------------
@@ -84,7 +95,8 @@ def test_the_worst_caveat_wins_and_severity_covers_every_key():
 
     assert caveat_for(pb(strat_tag=None),
                       replace(BASE, segment_id=4, timed_by="delta",
-                              closed_by="star_collected")) == "old_clock"
+                              closed_by="star_collected"),
+                      igt_seen=True) == "old_clock"
 
 
 @pytest.mark.parametrize("key", CAVEAT_SEVERITY)
@@ -93,10 +105,11 @@ def test_every_ranked_key_is_reachable_by_some_real_input(key):
     mark that will never draw — and it would still pass the cross-language
     key-set check, which compares vocabularies rather than behaviour."""
     inputs = {
-        "grab_timed": (pb(), replace(BASE, timed_at="grab")),
+        "grab_timed": (pb(), replace(BASE, timed_at="grab"), False),
         "old_clock": (pb(), replace(BASE, timed_by="delta",
-                                    closed_by="star_collected")),
-        "unattributed": (pb(strat_tag=None), replace(BASE, timed_at="xcam")),
+                                    closed_by="star_collected"), True),
+        "unattributed": (pb(strat_tag=None), replace(BASE, timed_at="xcam"),
+                         False),
     }
     assert key in inputs, f"{key} is ranked but this test names no input for it"
     assert key in caveats_for(*inputs[key])
