@@ -314,3 +314,42 @@ def test_the_segment_editor_links_from_the_other_side(library_page, library_serv
         "document.querySelector('.library-unlink').click()")
     library_page.wait_for(".library-target-titleline .library-link-button",
                           timeout_ms=15000)
+
+
+def test_clicking_outside_the_popup_closes_it(library_page):
+    """ROUND 11: "if I click outside of it, I'm clearly expressing intent to
+    close the dropdown. This should apply to all dropdowns of this type."
+    One listener in the shared SearchMenu covers every door -- proved here on
+    the Library's link door: an outside pointerdown closes it, and the
+    trigger's own click still TOGGLES (no close-then-reopen race)."""
+    _navigate_to_target(library_page, "Castle Movements (Lobby)",
+                        "Lobby door (L) - CCM wooden door")
+    library_page.wait_for(".library-target-titleline .library-link-button",
+                          timeout_ms=15000)
+    library_page.evaluate(
+        "document.querySelector('.library-target-titleline .library-link-button').click()")
+    library_page.wait_for(".search-menu", timeout_ms=10000)
+
+    # an outside pointerdown (the page heading) closes it immediately
+    library_page.evaluate("""(() => {
+      const outside = document.querySelector('.library-target-search');
+      outside.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    })()""")
+    library_page.wait_for(".library-target-titleline .library-link-button",
+                          timeout_ms=10000)
+    assert library_page.evaluate(
+        "document.querySelectorAll('.search-menu').length") == 0
+
+    # the trigger still toggles: open, then a second trigger click closes --
+    # the outside listener must not race it back open or eat the toggle
+    library_page.evaluate(
+        "document.querySelector('.library-target-titleline .library-link-button').click()")
+    library_page.wait_for(".search-menu", timeout_ms=10000)
+    library_page.evaluate("""(() => {
+      const trigger = document.querySelector('.library-target-titleline .library-link-button');
+      trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      trigger.click();
+    })()""")
+    deadline_ok = library_page.evaluate(
+        "document.querySelectorAll('.search-menu').length")
+    assert deadline_ok == 0, f"trigger click while open must close; {deadline_ok} menus"

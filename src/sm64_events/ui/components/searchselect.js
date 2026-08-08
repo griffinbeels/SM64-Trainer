@@ -36,9 +36,29 @@ export function SearchMenu({ title, groups, onPick, onClose, busy = false,
                              error = null, emptyNote = "Nothing to pick." }) {
   const [filter, setFilter] = useState("");
   const inputRef = useRef(null);
+  const menuRef = useRef(null);
   // Click → type → click: the filter is the whole point of the panel, so it
   // takes focus on open rather than making him aim a second time.
   useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
+  // ROUND 11 (2026-08-08): "if I click outside of it, I'm clearly expressing
+  // intent to close the dropdown. This should apply to all dropdowns of this
+  // type." One listener here covers every door. The ANCHOR is the menu's
+  // PARENT, not the menu: every call site renders this panel as a sibling of
+  // its trigger inside one wrapper, so a click on the trigger stays "inside"
+  // and closes through the trigger's own toggle rather than racing a
+  // close-then-reopen. `pointerdown`, not `click`, so the panel is gone
+  // before the outside element's own click lands.
+  useEffect(() => {
+    const closeOnOutsidePointer = (pointerEvent) => {
+      const menuElement = menuRef.current;
+      if (!menuElement) return;
+      const anchor = menuElement.parentElement || menuElement;
+      if (anchor.contains(pointerEvent.target)) return;
+      onClose();
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [onClose]);
   const needle = filter.toLowerCase();
   const total = groups.reduce((count, group) => count + group.options.length, 0);
   const shown = groups
@@ -46,7 +66,7 @@ export function SearchMenu({ title, groups, onPick, onClose, busy = false,
       options: group.options.filter((option) =>
         !needle || option.label.toLowerCase().includes(needle)) }))
     .filter((group) => group.options.length);
-  return html`<div class="search-menu"
+  return html`<div class="search-menu" ref=${menuRef}
       onkeydown=${(keyEvent) => { if (keyEvent.key === "Escape") onClose(); }}>
     <div class="search-menu-head">
       <span>${title}</span>
