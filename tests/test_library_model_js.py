@@ -317,3 +317,23 @@ def test_linkable_rows_are_entityless_approaches_and_every_subsection():
     assert run_js(f"m.linkable({star}, {keyed}, 'subsection')") is True
     assert run_js(f"m.linkable({movement}, {keyed}, 'subsection')") is True
     assert run_js(f"m.linkable({movement}, {unkeyed}, 'approach')") is False
+
+
+def test_standing_on_grades_the_readers_pb_by_the_displayed_walk():
+    """Round 6: a linked/matched row's standing comes from the SAME walk that
+    files every sheet entry, so the pin and the chip cannot disagree; no PB
+    is Capless verbatim ("if there are no times, it's capless")."""
+    ladder = json.dumps({"Mario": 2.76, "Grandmaster": 2.80, "Master": 2.86,
+                         "Diamond": 2.93, "Platinum": 3.00, "Gold": 3.10,
+                         "Silver": 3.20, "Bronze": 3.40})
+    fast = run_js(f"m.standingOn({ladder}, 270)")
+    assert fast["rank"] == "Mario"
+    mid = run_js(f"m.standingOn({ladder}, 305)")
+    assert mid["rank"] == "Gold" and mid["division"]
+    slow = run_js(f"m.standingOn({ladder}, 999)")
+    assert slow["rank"] == "Iron"
+    absent = run_js("m.standingOn(null, null)")
+    assert absent == {"rank": "Iron", "division": None}
+    # agreement with the entry-filing walk itself, not a restatement of it
+    same_tier = run_js(f"m.bandFor({ladder}, 305)")
+    assert same_tier == mid["rank"]

@@ -22,6 +22,7 @@ import { Disclose } from "./collapsible.js";
 import { Icon } from "./icons.js";
 import {
   sectionOrder, autoExpandName, bandsOf, matchesRunner, videoSource, linkable,
+  standingOn,
 } from "./librarymodel.js";
 
 const html = htm.bind(h);
@@ -127,6 +128,58 @@ function useEntityStrategies(entityKey) {
     return () => { cancelled = true; };
   }, [entityKey]);
   return data;
+}
+
+// Round 6: the PB behind every ASSOCIATED row (linked or name-matched) --
+// the same step-3 payload useEntityStrategies reads, one fetch per distinct
+// segment, reduced to the entity's best saved PB across its strategies.
+// Name-agnostic on purpose: "it reads whatever the data was for that
+// segment", and his practice may sit under any strategy name.
+function useAssocStandings(entityKeys) {
+  const [standings, setStandings] = useState({});
+  const requested = useRef(new Set());
+  useEffect(() => {
+    let cancelled = false;
+    entityKeys.forEach((key) => {
+      if (requested.current.has(key)) return;
+      requested.current.add(key);
+      getJSON(`/api/target/strategies?entity=${enc(key)}`)
+        .then((result) => {
+          if (cancelled) return;
+          const timed = (result.strategies || [])
+            .filter((strategy) => strategy.pb_cs != null);
+          const best = timed.length
+            ? timed.reduce((a, b) => (a.pb_cs <= b.pb_cs ? a : b)) : null;
+          setStandings((prev) => ({
+            ...prev,
+            [key]: { pbCs: best ? best.pb_cs : null,
+                     pbDisplay: best ? best.pb_display : null } }));
+        })
+        .catch(() => {
+          // Loaded-with-nothing, not stuck-loading: the row still shows an
+          // honest Capless rather than waiting on a fetch that failed.
+          if (!cancelled) setStandings((prev) => ({
+            ...prev, [key]: { pbCs: null, pbDisplay: null } }));
+        });
+    });
+    return () => { cancelled = true; };
+  }, [entityKeys.join(",")]);
+  return standings;
+}
+
+// Which segment a row is associated with, if any: an explicit assignment
+// (linked, unlink lives on the row) outranks the target's name-match.
+function assocFor(row, standings, resolveLabel) {
+  const matched = row._matchedSegment;
+  const entity = row.adopted || (matched && matched.entity) || null;
+  if (!entity) return null;
+  const standing = standings[entity];
+  return { entity,
+           name: row.adopted ? resolveLabel(row.adopted) : matched.name,
+           source: row.adopted ? "linked" : "matched",
+           loaded: !!standing,
+           pbCs: standing ? standing.pbCs : null,
+           pbDisplay: standing ? standing.pbDisplay : null };
 }
 
 // One video-bearing entry, as a card big enough to watch (round 1: "each grid
@@ -482,17 +535,31 @@ function PiecesList({ pieces, query, linkCtx }) {
   if (!shown.length) return null;
   return html`<div class="library-pieces">
     <h4 class="library-pieces-head">Pieces of this run</h4>
-    ${shown.map((piece) => html`<div class="library-piece" key=${piece.row_key || piece.name}>
+    ${shown.map((piece) => {
+      // Round 6: a linked piece shows the same standing a linked section
+      // does -- the segment's best PB graded by the piece's own ladder,
+      // Capless when no times.
+      const assoc = linkCtx
+        ? assocFor(piece, linkCtx.assocStandings, linkCtx.resolveLabel) : null;
+      const standing = assoc && assoc.loaded
+        ? standingOn(piece.ladder, assoc.pbCs) : null;
+      return html`<div class="library-piece" key=${piece.row_key || piece.name}>
       <div class="library-piece-facts">
         <span class="library-piece-name">${piece.name}</span>
         ${piece._target ? html`<span class="meta">${piece._target}</span>` : ""}
         ${piece.best_cs != null
           ? html`<span class="meta">Best ${fmtSeconds(piece.best_cs / 100)} · ${piece.best_runner}</span>` : ""}
         <span class="meta">${(piece.entries || []).length} times</span>
+        ${standing
+          ? html`<span class="meta library-your-standing"
+              title=${assoc.pbCs == null ? "Capless — no recorded time on this segment yet." : undefined}>
+              <${RankIcon} tier=${standing.rank} division=${standing.division} size=${14} />
+              ${assoc.pbDisplay ? ` ${assoc.pbDisplay}` : " no times yet"}</span>` : ""}
       </div>
       <${LinkControl} row=${piece} kind="subsection" entityKey=${piece._entityKey}
           adoptable=${piece._adoptable} ...${linkCtx} />
-    </div>`)}
+    </div>`;
+    })}
   </div>`;
 }
 
@@ -535,6 +602,21 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
   const marioKey = approach.ladder && approach.ladder.Mario != null
     ? approach.ladder.Mario : -1;   // presentational echo of sectionOrder's own key; -1 (not -Infinity) so it survives JSON round-trips a render probe takes
 
+  // Round 6: an associated row's standing -- his segment PB graded by THIS
+  // section's displayed ladder (the JP/US-resolved one the entries file
+  // under), Capless when no PB. A star's matched strategy keeps its served
+  // standing (there the displayed ladder IS the grading ladder); the one
+  // named difference is that an association's ladder may not be, so it
+  // walks the displayed one. Rendered only once loaded -- a Capless flash
+  // that flips to Gold reads as the page changing its mind.
+  const assoc = linkCtx
+    ? assocFor(approach, linkCtx.assocStandings, linkCtx.resolveLabel) : null;
+  const assocInfo = assoc && assoc.loaded
+    ? { ...standingOn(ladder, assoc.pbCs),
+        pb_display: assoc.pbDisplay, noTimes: assoc.pbCs == null }
+    : null;
+  const standing = stratInfo || assocInfo;
+
   return html`<div class="library-section ${open ? "open" : ""}" data-mario=${marioKey}
       id=${sectionAnchorId(approach)}>
     <button type="button" class="library-section-head" onclick=${onOpen}
@@ -555,16 +637,22 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
             ? html`<span class="meta library-section-target">${approach._target}</span>` : ""}
           ${approach.matched_strategy
             ? html`<span class="chip library-matched-chip">= your "${approach.matched_strategy}"</span>` : ""}
+          ${assoc && assoc.source === "matched"
+            ? html`<span class="chip library-matched-chip"
+                title="This movement matches a segment you already have, by name — no linking needed.">
+                = your segment "${assoc.name}"</span>` : ""}
         </div>
         <div class="library-section-facts">
           ${approach.best_cs != null
             ? html`<span class="meta">Best ${fmtSeconds(approach.best_cs / 100)} · ${approach.best_runner}</span>` : ""}
           ${approach.fill_rate != null
             ? html`<span class="meta">Fill ${Math.round(approach.fill_rate * 100)}%</span>` : ""}
-          ${stratInfo
-            ? html`<span class="meta library-your-standing">
-                ${stratInfo.rank ? html`<${RankIcon} tier=${stratInfo.rank} division=${stratInfo.division} size=${16} />` : "Not yet ranked"}
-                ${stratInfo.pb_display ? html` · ${stratInfo.pb_display}` : ""}
+          ${standing
+            ? html`<span class="meta library-your-standing"
+                title=${standing.noTimes ? "Capless — no recorded time on this segment yet." : undefined}>
+                ${standing.rank ? html`<${RankIcon} tier=${standing.rank} division=${standing.division} size=${16} />` : "Not yet ranked"}
+                ${standing.pb_display ? html` · ${standing.pb_display}`
+                  : standing.noTimes ? " · no times yet" : ""}
               </span>` : ""}
         </div>
       </div>
@@ -572,9 +660,14 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
     </button>
     <${Disclose} open=${open} className="library-section-disclose">
       <div class="library-section-body">
-        ${linkCtx ? html`<${LinkControl} row=${approach} kind="approach"
-            entityKey=${approach._entityKey} adoptable=${approach._adoptable}
-            ...${linkCtx} />` : ""}
+        ${/* Round 6: an auto-matched row's offer strip would contradict the
+             "= your segment" chip right above it -- the match already IS the
+             association, so only an explicit assignment (which outranks the
+             match and carries Unlink) still renders a control here. */""}
+        ${linkCtx && !(assoc && assoc.source === "matched")
+          ? html`<${LinkControl} row=${approach} kind="approach"
+              entityKey=${approach._entityKey} adoptable=${approach._adoptable}
+              ...${linkCtx} />` : ""}
         ${versioned ? html`<button type="button" class="chip chip-button library-jp-toggle"
             aria-pressed=${version === "jp"}
             title=${hasJp
@@ -600,7 +693,7 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
         <table class="library-toc"><tbody>
           ${shownBands.map((band) => html`<${TocRow} key=${bandAnchorId(approach, band.tier || "unranked")} band=${band}
               count=${band.entries.filter((entry) => matchesRunner(entry, query)).length}
-              you=${stratInfo && stratInfo.rank === band.tier ? stratInfo : null}
+              you=${standing && standing.rank === band.tier ? standing : null}
               onJump=${() => document.getElementById(bandAnchorId(approach, band.tier || "unranked"))
                 ?.scrollIntoView({ block: "start", behavior: "smooth" })} />`)}
         </tbody></table>
@@ -616,8 +709,8 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
             ? band.divisions.map((division) => html`<${DivisionGroup}
                 key=${`${bandAnchorId(approach, band.tier)}-${division.numeral}`}
                 approach=${approach} band=${band} division=${division} query=${query}
-                isYou=${!!(stratInfo && stratInfo.rank === band.tier
-                           && stratInfo.division === division.numeral)}
+                isYou=${!!(standing && standing.rank === band.tier
+                           && standing.division === division.numeral)}
                 trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd} />`)
             : html`<div class="library-division-body">
                 <div class="library-examples">
@@ -697,14 +790,20 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
         // Round 5: what the link door needs from the OWNING row -- whether
         // this target has an entity (a star's approaches auto-adopt, so
         // they never link) and whether this instance mounts the adopt
-        // routes at all.
+        // routes at all. Round 6 adds the target's name-matched segment,
+        // stamped per row so a section needs no second lookup.
         _entityKey: target.entity_key || null,
-        _adoptable: !!target.adoptable }))),
+        _adoptable: !!target.adoptable,
+        _matchedSegment: target.matched_segment || null }))),
   ), [rows]);
 
   // Round 5: the sheet's subsections, stamped the same way -- every one is
   // linkable (they never auto-adopt; the user builds the segment first, his
   // 2026-08-05 ruling), so they finally render, as the Pieces list below.
+  // NO `_matchedSegment` here on purpose: a piece is a PART of the movement,
+  // so inheriting the whole segment's association would grade a
+  // whole-segment PB against a part's ladder. Pieces associate only through
+  // their own explicit link.
   const pieces = useMemo(() => rows.flatMap((target) =>
     (target.subsections || []).map((piece) => (
       { ...piece, _target: rows.length > 1 ? target.label : null,
@@ -736,7 +835,23 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
     }
     return (resolveEntityLabel && resolveEntityLabel(key)) || key;
   };
-  const linkCtx = { segments, segmentsError, onRelink, resolveLabel };
+
+  // Round 6: one standings fetch per distinct associated segment feeds every
+  // linked/matched row's rank chip and ◀ you pin.
+  const assocEntities = useMemo(() => {
+    const keys = new Set();
+    approaches.forEach((approach) => {
+      const entity = approach.adopted
+        || (approach._matchedSegment && approach._matchedSegment.entity);
+      if (entity) keys.add(entity);
+    });
+    pieces.forEach((piece) => { if (piece.adopted) keys.add(piece.adopted); });
+    return [...keys].sort();
+  }, [approaches, pieces]);
+  const assocStandings = useAssocStandings(assocEntities);
+
+  const linkCtx = { segments, segmentsError, onRelink, resolveLabel,
+                    assocStandings };
 
   const activeStrat = activeStratFor(t && t.view, entityKey);
   const stratsData = useEntityStrategies(entityKey);

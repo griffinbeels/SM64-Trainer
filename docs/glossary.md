@@ -404,7 +404,12 @@ Your own assignment of a sheet row — a castle-movement [[approach]] or a
 [[strategy]] with the community's [[ladder]] so every [[attempt]] grades there.
 Yours, not the community's: it lives beside your data and survives a
 refresh. The link strip on the [[Library tab]] is the door; unlink reverses
-it.
+it. A [[segment]] whose name equals an entity-less [[target]]'s label
+associates by itself — no click — and an associated row shows your standing
+at once: your [[segment]]'s best [[personal best]] graded on the row's own
+displayed [[ladder]], or Capless ([[Iron]]) when you hold no time yet. Where
+the [[segment]] already carries a community-vetted [[strategy]] of the same
+name, the assignment still lands and the vetted [[ladder]] keeps grading.
 
 - **Lives** — the assignments (`src/sm64_events/library/adoptions.py`)
   → the link strip on the [[Library tab]]'s target page

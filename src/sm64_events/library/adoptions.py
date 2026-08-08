@@ -15,6 +15,7 @@ must not be confused with this — those are corrections to our READING of the
 sheet, they are committed, and they are the same for everybody."""
 import json
 import logging
+import re
 from pathlib import Path
 
 _log = logging.getLogger("sm64.library")
@@ -49,6 +50,33 @@ def save(path, rows: dict) -> None:
 def strategy_name(target_label: str, approach_name: str) -> str:
     return (DEFAULT_STRATEGY if approach_name.strip() == target_label.strip()
             else approach_name)
+
+
+def _normalized(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (name or "").lower()).strip()
+
+
+def auto_match(target_label: str, segments) -> dict | None:
+    """The segment a movement target associates with UNASKED — round 6:
+    "we should autoassign any segments that exist already."
+
+    Normalized NAME equality (case and punctuation blind), nothing fuzzier,
+    and the choice is measured rather than preferred: ladder proximity (the
+    star matcher) is structurally unable here — the corpus segments'
+    hand-seeded 3-tier Standard rows never reach `_distance`'s 4-shared-tier
+    floor, and scoring all 184 entity-less laddered rows against all 18
+    vetted segment strategies paired ZERO — while name equality pairs
+    exactly the set a human would (one target on today's snapshot, Lakitu
+    skip). `segments` is (id, name) pairs from the LIVE definition list, so
+    a segment built tomorrow with a movement's name pairs on the next page
+    load. An explicit assignment (a stored adoption) always outranks this."""
+    wanted = _normalized(target_label)
+    if not wanted:
+        return None
+    for segment_id, segment_name in segments:
+        if _normalized(segment_name) == wanted:
+            return {"entity": f"segment:{segment_id}", "name": segment_name}
+    return None
 
 
 def _rows(payload):
@@ -121,10 +149,8 @@ class Adoptions:
             self.standards.apply_sheet_ladders(self.ladders())
 
     def adopt(self, key: str, entity: str) -> dict:
-        vetted = {entity: self.standards._stored_ladders(entity)} \
-            if self.standards is not None else {}
         target, item, name = validate(self.store.payload, key, entity,
-                                      self.qualified, vetted)
+                                      self.qualified)
         self._rows[key] = entity
         save(self.path, self._rows)
         self._sync()
@@ -139,7 +165,7 @@ class Adoptions:
         return {"adopted": False, "row_key": key, "entity_key": removed}
 
 
-def validate(payload: dict, key: str, entity: str, qualified=(), vetted=None):
+def validate(payload: dict, key: str, entity: str, qualified=()):
     """Raise unless this row can be assigned to this entity.
 
     Every refusal names its reason: an assignment that silently does nothing is
@@ -158,7 +184,11 @@ def validate(payload: dict, key: str, entity: str, qualified=(), vetted=None):
             f"{entity} names its strategies by exit-star variant, and the sheet "
             f"row does not say which exit star it ran")
     name = strategy_name(target["label"], item["name"])
-    if name in (vetted or {}).get(entity, {}):
-        raise AdoptionError(
-            f"{entity} already has a community-vetted strategy called {name!r}")
+    # A vetted strategy of the same name is NOT a refusal (round 6, reversing
+    # round 5's arm): the standards read-merge keeps the vetted ladder
+    # structurally, so the assignment cannot touch grading -- and it now
+    # carries the row's DISPLAY association, which is exactly what the user
+    # wants on a segment that already grades ("we should autoassign any
+    # segments that exist already, and otherwise let them be associated by
+    # hand", 2026-08-07).
     return target, item, name

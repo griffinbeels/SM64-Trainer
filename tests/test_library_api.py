@@ -143,3 +143,45 @@ def test_a_read_only_instance_still_serves_row_keys_but_says_not_adoptable(clien
     entity = client.get("/api/library/entity/star:1:0").json()["targets"][0]
     assert "adoptable" in entity and "index" in entity
     assert all(row.get("row_key") for row in entity["approaches"])
+
+
+def test_an_entity_less_target_carries_its_name_matched_segment(tmp_path):
+    # Round 6: "we should autoassign any segments that exist already." The
+    # stamp is computed per request against the LIVE segment list, so a
+    # segment built after the snapshot shipped still pairs.
+    from sm64_events.library import adoptions as ad
+    from sm64_events.ranks.standards import RankStandards
+
+    store = LibraryStore()
+    store._payload = {
+        "schema_version": 1, "sheet_revision": "2026-08-05T09:15:18",
+        "fetched_at": "x", "runners": [], "ladder_model": {}, "targets": [
+            {"entity_key": None, "group": "Castle Movements (Lobby)",
+             "section": "★ Misc", "label": "Lakitu skip",
+             "version": None, "miss_reason": "castle_movement",
+             "approaches": [], "subsections": []},
+            {"entity_key": "star:1:0", "group": "1. Bob-omb Battlefield",
+             "section": "★ BoB", "label": "Big Bob-omb on the Summit",
+             "version": None, "miss_reason": None,
+             "approaches": [], "subsections": []}]}
+    standards = RankStandards(tmp_path / "rank_standards.json")
+    standards.load()
+    adoptions = ad.Adoptions(tmp_path / "library_adoptions.json", store, standards)
+    adoptions.load()
+    app = FastAPI()
+    app.include_router(create_library_router(
+        store, adoptions=adoptions,
+        segment_names=lambda: [(3, "Lakitu Skip"), (6, "BitFS Pipe Entry")]))
+    api = TestClient(app)
+
+    movement = api.get("/api/library/target/0").json()
+    assert movement["matched_segment"] == {"entity": "segment:3",
+                                           "name": "Lakitu Skip"}
+    # an entity-bearing target never auto-matches -- its rows already grade
+    star = api.get("/api/library/target/1").json()
+    assert star["matched_segment"] is None
+
+
+def test_without_a_segment_list_no_target_claims_a_match(client):
+    body = client.get("/api/library/target/0").json()
+    assert body.get("matched_segment") is None

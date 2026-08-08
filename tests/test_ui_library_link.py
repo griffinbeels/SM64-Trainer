@@ -96,12 +96,15 @@ def _navigate_to_target(page, group_name, target_label):
 
 
 def test_link_unlink_round_trip_on_a_movement_approach(library_page):
-    """The whole loop on 'Lakitu skip' (a real castle movement with a fitted
-    ladder): the open section offers the link strip, the menu lists the
-    user's segments, picking one flips the strip to the linked chip naming
-    that segment, and Unlink restores the button. Every state read off the
-    real DOM after a real server round trip."""
-    _navigate_to_target(library_page, "Castle Movements (Lobby)", "Lakitu skip")
+    """The whole loop on a real castle movement with a fitted ladder: the
+    open section offers the link strip, the menu lists the user's segments,
+    picking one flips the strip to the linked chip naming that segment, and
+    Unlink restores the button. Every state read off the real DOM after a
+    real server round trip. NOT 'Lakitu skip' since round 6 -- that target
+    name-matches the corpus segment and no longer offers the strip (its own
+    test below); this one matches nothing."""
+    _navigate_to_target(library_page, "Castle Movements (Lobby)",
+                        "Lobby door (L) - CCM wooden door")
     library_page.wait_for(".library-section.open .library-link-state",
                           timeout_ms=15000)
 
@@ -155,3 +158,59 @@ def test_a_stars_subsections_render_as_pieces_with_the_link_door(library_page):
     assert section_strips == 0, (
         f"a star target's strategy sections must not offer the link door; "
         f"found {section_strips}")
+
+
+def test_a_name_matched_movement_shows_the_association_and_its_standing(library_page):
+    """Round 6: "we should autoassign any segments that exist already."
+    'Lakitu skip' name-matches the corpus segment 'Lakitu Skip', so its
+    sections wear the "= your segment" chip and a standing WITHOUT any click
+    -- and with no recorded time on that segment in this fixture, the
+    standing is Capless, verbatim his rule ("if there are no times, it's
+    capless"). The offer strip is gone: a match already IS the association."""
+    _navigate_to_target(library_page, "Castle Movements (Lobby)", "Lakitu skip")
+    library_page.wait_for(".library-section .library-matched-chip",
+                          timeout_ms=15000)
+    chip = library_page.evaluate(
+        "document.querySelector('.library-section .library-matched-chip').textContent")
+    assert "Lakitu Skip" in chip, chip
+    library_page.wait_for(".library-section .library-your-standing",
+                          timeout_ms=15000)
+    standing_icons = library_page.evaluate(
+        """Array.from(document.querySelectorAll(
+             '.library-section .library-your-standing [data-tier]'))
+           .map((icon) => icon.getAttribute('data-tier'))""")
+    if not standing_icons:
+        standing_icons = library_page.evaluate(
+            """Array.from(document.querySelectorAll(
+                 '.library-section .library-your-standing'))
+               .map((el) => el.textContent)""")
+    assert standing_icons, "no standing rendered on a matched movement"
+    offers = library_page.evaluate(
+        "document.querySelectorAll('.library-section .library-link-button').length")
+    assert offers == 0, (
+        f"a name-matched target must not also offer the link strip; {offers}")
+
+
+def test_linking_shows_a_standing_immediately(library_page):
+    """Round 6 item 1, verbatim: "the second we link it, it reads whatever
+    the data was for that segment ... if there are no times, it's capless."
+    The freshly built link-target segment has no attempts, so the instant the
+    link lands the section shows a Capless standing with no further clicks."""
+    _navigate_to_target(library_page, "Castle Movements (Lobby)",
+                        "Lobby door (L) - CCM wooden door")
+    library_page.wait_for(".library-section.open .library-link-button",
+                          timeout_ms=15000)
+    library_page.evaluate(
+        "document.querySelector('.library-section.open .library-link-button').click()")
+    library_page.wait_for(".library-link-option", timeout_ms=10000)
+    library_page.evaluate(f"""Array.from(document.querySelectorAll('.library-link-option'))
+      .find((o) => o.textContent === {LINK_SEGMENT_NAME!r}).click()""")
+    library_page.wait_for(".library-link-state.is-linked", timeout_ms=15000)
+    library_page.wait_for(".library-section.open .library-your-standing",
+                          timeout_ms=15000)
+    standing = library_page.evaluate(
+        "document.querySelector('.library-section.open .library-your-standing').textContent")
+    assert "no times yet" in standing, standing
+    # leave the fixture as found for the other tests
+    library_page.evaluate("document.querySelector('.library-unlink').click()")
+    library_page.wait_for(".library-link-button", timeout_ms=15000)

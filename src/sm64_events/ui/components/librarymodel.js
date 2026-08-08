@@ -296,6 +296,20 @@ export function bandsOf(ladder, entries) {
   return bands.filter((band) => band.entries.length || band.cutoffCs != null);
 }
 
+// Your standing on an associated row (round 6): the reader's segment PB
+// graded by the ROW's own displayed ladder -- the SAME walk that files every
+// sheet entry (bandFor + divisionWithin), so the ◀ you pin and the rank chip
+// can never disagree on one surface. No PB → Capless, verbatim his ruling:
+// "if there are no times, it's capless; if there are, we automatically
+// calculate the rank." The practice tab keeps grading by the segment's own
+// ladder; where the sheet's span differs, this page's answer is "where your
+// time sits among THESE times."
+export function standingOn(ladder, pbCs) {
+  if (pbCs == null) return { rank: "Iron", division: null };
+  const tier = bandFor(ladder || {}, pbCs);
+  return { rank: tier, division: divisionWithin(ladderCsOf(ladder || {}), tier, pbCs) };
+}
+
 // Which rows offer the link-to-segment button (round 5). A star's approaches
 // auto-adopt at scrape time, so only approaches on an ENTITY-LESS target
 // (castle movements, stage routes) are linkable; subsections never auto-adopt

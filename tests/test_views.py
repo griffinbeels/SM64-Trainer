@@ -2245,7 +2245,8 @@ def test_entity_strategies_report_an_ungraded_strategy_as_unranked_not_missing(t
     out = build_entity_strategies(db, svc, "star:2:2")
     strat_row = next(s for s in out["strategies"] if s["name"] == "fast")
     assert strat_row == {"name": "fast", "rank": None, "division": None,
-                         "score": None, "pb_display": None, "fitted": False}
+                         "score": None, "pb_display": None, "pb_cs": None,
+                         "fitted": False}
 
 
 def test_entity_strategies_flags_a_sheet_derived_ladder_as_fitted(tmp_path):

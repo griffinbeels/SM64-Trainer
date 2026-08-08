@@ -105,11 +105,22 @@ def test_a_variant_qualified_entity_is_refused(wiring):
 
 
 def test_a_vetted_strategy_of_the_same_name_wins(wiring):
+    """ROUND 6 (2026-08-07), reversing round 5's refusal arm: assigning a row
+    to a segment that already carries a vetted strategy of the same name is
+    ALLOWED -- the assignment is what the Library page's display association
+    rides on -- and the vetted ladder still wins on the merged read, because
+    the standards store's read-merge keeps vetted structurally. "We should
+    autoassign any segments that exist already, and otherwise let them be
+    associated by hand." """
     adoptions, standards, keys, _ = wiring
     standards.create_strategy("segment:42", ad.DEFAULT_STRATEGY)
-    with pytest.raises(ad.AdoptionError) as err:
-        adoptions.adopt(keys["Lobby door (L) - BoB door"], "segment:42")
-    assert "already has a community-vetted strategy" in str(err.value)
+    standards.set_threshold("segment:42", ad.DEFAULT_STRATEGY, "Mario", 2.00)
+    result = adoptions.adopt(keys["Lobby door (L) - BoB door"], "segment:42")
+    assert result["adopted"] is True
+    assert adoptions.rows()[keys["Lobby door (L) - BoB door"]] == "segment:42"
+    # the vetted cutoff, not the fitted row's 276
+    assert standards.ladder_cs("segment:42", ad.DEFAULT_STRATEGY)["Mario"] == 200
+    assert not standards.is_fitted("segment:42", ad.DEFAULT_STRATEGY)
 
 
 def test_a_corrupt_assignments_file_is_simply_empty(tmp_path):
@@ -175,3 +186,21 @@ def test_the_adopt_routes_are_absent_without_a_standards_store(wiring):
     client = TestClient(app)
     assert client.post("/api/library/adopt", json={}).status_code == 404
     assert client.get("/api/library").status_code == 200
+
+
+def test_auto_match_pairs_by_normalized_name_only():
+    """ROUND 6: "we should autoassign any segments that exist already."
+    Ladder proximity was measured structurally unable here (the corpus
+    segments' hand-seeded 3-tier rows never reach `_distance`'s 4-shared-tier
+    floor; 184 rows x 18 vetted strategies scored zero pairs), so the auto
+    key is normalized NAME equality -- case and punctuation blind, nothing
+    fuzzier. Exactly one pair exists on today's snapshot (Lakitu skip), and
+    a segment the user builds tomorrow with a movement's name pairs on the
+    next page load."""
+    segments = [(3, "Lakitu Skip"), (6, "BitFS Pipe Entry")]
+    assert ad.auto_match("Lakitu skip", segments) == {
+        "entity": "segment:3", "name": "Lakitu Skip"}
+    assert ad.auto_match("lakitu-skip!", segments) == {
+        "entity": "segment:3", "name": "Lakitu Skip"}
+    assert ad.auto_match("Lobby door (L) - BoB door", segments) is None
+    assert ad.auto_match("", segments) is None

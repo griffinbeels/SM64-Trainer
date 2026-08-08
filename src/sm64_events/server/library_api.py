@@ -12,10 +12,16 @@ from sm64_events.library.audit import row_key
 from sm64_events.library.source import fetch
 
 
-def create_library_router(store, overrides=None, adoptions=None) -> APIRouter:
+def create_library_router(store, overrides=None, adoptions=None,
+                          segment_names=None) -> APIRouter:
     """`adoptions` is an `Adoptions` binding the user's assignments to the
     standards store; omit it and the adopt routes are simply not mounted, which
-    is what a second broadcast-only instance wants."""
+    is what a second broadcast-only instance wants.
+
+    `segment_names` is a zero-arg callable yielding (id, name) pairs for the
+    user's LIVE segment definitions -- what `auto_match` pairs an entity-less
+    target against per request (round 6: "we should autoassign any segments
+    that exist already"). Omit it and no target claims a match."""
     router = APIRouter(prefix="/api/library", tags=["library"])
 
     @router.get("")
@@ -45,10 +51,19 @@ def create_library_router(store, overrides=None, adoptions=None) -> APIRouter:
                      "adopted": assigned.get(key)}
                     for item in items]
 
+        matched = None
+        if segment_names is not None and not target.get("entity_key"):
+            try:
+                matched = adoptions_store.auto_match(target["label"],
+                                                     segment_names())
+            except Exception:          # a degraded db must not sink the page
+                matched = None
+
         return {**target,
                 "approaches": rows(target["approaches"]),
                 "subsections": rows(target["subsections"]),
-                "adoptable": adoptions is not None}
+                "adoptable": adoptions is not None,
+                "matched_segment": matched}
 
     @router.get("/target/{index}")
     def library_target(index: int):

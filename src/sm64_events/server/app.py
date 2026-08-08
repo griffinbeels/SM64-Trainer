@@ -400,8 +400,19 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                               library, standards, qualified)
         adoptions.load()
         app.state.library_adoptions = adoptions
-    app.include_router(create_library_router(library, overrides=library_overrides,
-                                             adoptions=adoptions))
+    # The live segment list the auto-match pairs entity-less targets against
+    # (round 6). Read per request so a segment built mid-session pairs on the
+    # next page load; empty when the db is degraded rather than an error.
+    def live_segment_names():
+        db = getattr(service, "db", None)
+        if db is None:
+            return []
+        return [(definition["id"], definition["name"])
+                for definition in db.segment_defs()]
+
+    app.include_router(create_library_router(
+        library, overrides=library_overrides, adoptions=adoptions,
+        segment_names=live_segment_names if service is not None else None))
     if service is not None:
         app.include_router(create_api_router(service))
         from sm64_events.server.ranks_api import create_ranks_router
