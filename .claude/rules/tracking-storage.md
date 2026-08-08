@@ -15,10 +15,10 @@ paths:
 
 | To change... | Edit |
 |---|---|
-| Segment defs, trigger vocabulary, matcher FSM | `tracking/segments.py` — ONE registry (TRIGGERS/GUARDS) drives validation, matching, and the /api/segments/vocab endpoint; docstring carries the FSM invariants (closures before arming, guards re-evaluated every arm, silent disarm on foreign level change, position-gated anchor closures: retry re-arms in place at the arm position, a warp elsewhere disarms with no row and swaps to the destination's segment, load/door/save-prompt-echo shapes). **ARM-POSITION gate** (`can_run_from`, live report 2026-07-27) — **full detail below: [The arm-position gate](#the-arm-position-gate)**; **TOPOLOGICAL VALIDITY** (`_flush_move`, live report 2026-08-01) — **full detail below: [Topological validity](#topological-validity)**; GuardType.phase — close-phase `min_time`/`max_time` rows are declarative validity bounds read by projection (`time_bounds`), arm-phase `last_star_grabbed`/`last_star_attempted` gate on MatchContext's last-star memory. **Multi-step segments** (spec 2026-07-23-default-routes-foundation): `SegmentDef.waypoints` is an ordered list of middle any-of clause-sets (`[]` = plain start/end pair, byte-for-byte unchanged). A waypoint-bearing def's armed branch runs `SegmentEngine._feed_waypoint` with its own precedence: end (only once every waypoint is consumed) > death/game_reset (hard fail, row) > `session_started` (silent disarm) > echo anchor (invisible, shares `_anchor_echo`) > real anchor (rewinds `progress` to 0, re-arms in place — **records a RESET row for the attempt that ends there**, round 2 live report 2026-07-30, subject to the same AFK/unacted discard `_feed_strict` applies; this used to record no row at all, the "live-gate VERIFY" this line named until the user settled it — the practice log is how he sees his own retries, and a whole class of segment silently omitting them made it lie about what he did) > next waypoint (advance, no row) > **the anchor branch is additionally gated by `_arrived_by_a_real_move` (2026-08-03) -- full detail below: [A pause exit is not a retry](#a-pause-exit-is-not-a-retry)** > major action (`star_collected`/`key_grabbed`/a real-edge `level_changed` that isn't the next waypoint → SILENT cancel, no row) > transparent (`area_changed`/`warp_entered`/`spawned` stay invisible). Authoring caveat (docstring): a def's start trigger must be at least as specific as any waypoint clause it could collide with, or the same event that cancels the sequence can satisfy the start trigger and re-arm same-tick. **Route-scoped arming**: `MatchContext.route_segments`/`target_segment` (fed from the journaled `route_selected` event / current segment target) back the opt-in `in_active_route` guard (real arm gate = module-level `_route_allows(d, ctx)`); unguarded defs (all 10 pre-existing) are unaffected. **`SegmentDef.default_strat`** (spec 2026-07-24-segment-default-strat): the strategy the segment is practiced with unless the user picks another — the 56 castle movements carry `"Standard"`; the 10 legacy tricks, the 3 reds-to-pipe and the 15 100-coin exits carry None, as does every user-created def. The matcher stays strategy-blind: it is `validate_definition`-checked here (non-empty string or absent) and APPLIED by the projector. **Segment ORIGIN** (spec 2026-07-24-segment-origin-categories): `start_areas`/`start_levels` (moved DOWN here from views.py 2026-07-26, beside the `arm_level` they already read through, so `tracking/service.py` can ask "does this segment start where the player is standing" without importing the view layer). `start_origin(start_triggers)` maps a definition to the world node it can START in, through the `_ORIGIN_PARAMS` TABLE (one row per trigger type, read as param NAMES like `arm_level` — a new trigger type is one row or defaults to "Anywhere"). NOT arm_level's mapping: a `level_exit` arms at its destination but ORIGINATES at its source (52 of the 53 seeded exits omit `to`; the one that carries it, MIPS Clip, is still filed by its source, which is the point). Most-specific clause wins (a subarea beats the same level without one); conflicting clauses take the first. `origin_course(node)` maps a world node to the COURSE it sits in (None for the castle interior, the hubs and the arenas) — the vocabulary the RETIREMENT rule speaks, and what `views.py` stamps on every segment section as `course_id` so the practice page can ask "does this pinned card still belong where I am standing" without re-deriving anything. NOT `views.segment_courses`, which asks the same question through `start_levels`/`arm_level` and so answers None for every movement that starts in a course. `origin_view()` is the `{key,label,region,region_label}` shape the API stamps; `origin_taxonomy()` is the ordered region→place tree in `vocab()["origins"]`, deliberately domain-free so the picker modal can serve courses/stars through the same renderer. **The recorded TIME is Usamune's IGT, not a `global_timer` delta** (`_close`, live report 2026-07-31) — **full detail below: [A segment's time is Usamune's IGT](#a-segments-time-is-usamunes-igt)** | **Split / merge** (`split_definition`, `merge_definitions`) — **full detail below: [Split and merge](#split-and-merge)**
+| Segment defs, trigger vocabulary, matcher FSM | `tracking/segments.py` — ONE registry (TRIGGERS/GUARDS) drives validation, matching, and the /api/segments/vocab endpoint; docstring carries the FSM invariants (closures before arming, guards re-evaluated every arm, silent disarm on foreign level change, position-gated anchor closures: retry re-arms in place at the arm position, a warp elsewhere disarms with no row and swaps to the destination's segment, load/door/save-prompt-echo shapes). **ARM-POSITION gate** (`can_run_from`, live report 2026-07-27) — **full detail below: [The arm-position gate](#the-arm-position-gate)**; **TOPOLOGICAL VALIDITY** (`_flush_move`, live report 2026-08-01) — **full detail in `.claude/rules/segment-topology.md`** (lifted there 2026-08-08 at this file's size ceiling); GuardType.phase — close-phase `min_time`/`max_time` rows are declarative validity bounds read by projection (`time_bounds`), arm-phase `last_star_grabbed`/`last_star_attempted` gate on MatchContext's last-star memory. **Multi-step segments** (spec 2026-07-23-default-routes-foundation): `SegmentDef.waypoints` is an ordered list of middle any-of clause-sets (`[]` = plain start/end pair, byte-for-byte unchanged). A waypoint-bearing def's armed branch runs `SegmentEngine._feed_waypoint` with its own precedence: end (only once every waypoint is consumed) > death/game_reset (hard fail, row) > `session_started` (silent disarm) > echo anchor (invisible, shares `_anchor_echo`) > real anchor (rewinds `progress` to 0, re-arms in place — **records a RESET row for the attempt that ends there**, round 2 live report 2026-07-30, subject to the same AFK/unacted discard `_feed_strict` applies; this used to record no row at all, the "live-gate VERIFY" this line named until the user settled it — the practice log is how he sees his own retries, and a whole class of segment silently omitting them made it lie about what he did) > next waypoint (advance, no row) > **the anchor branch is additionally gated by `_arrived_by_a_real_move` (2026-08-03) -- full detail below: [A pause exit is not a retry](#a-pause-exit-is-not-a-retry)** > major action (`star_collected`/`key_grabbed`/a real-edge `level_changed` that isn't the next waypoint → SILENT cancel, no row) > transparent (`area_changed`/`warp_entered`/`spawned` stay invisible). Authoring caveat (docstring): a def's start trigger must be at least as specific as any waypoint clause it could collide with, or the same event that cancels the sequence can satisfy the start trigger and re-arm same-tick. **Route-scoped arming**: `MatchContext.route_segments`/`target_segment` (fed from the journaled `route_selected` event / current segment target) back the opt-in `in_active_route` guard (real arm gate = module-level `_route_allows(d, ctx)`); unguarded defs (all 10 pre-existing) are unaffected. **`SegmentDef.default_strat`** (spec 2026-07-24-segment-default-strat): the strategy the segment is practiced with unless the user picks another — the 56 castle movements carry `"Standard"`; the 10 legacy tricks, the 3 reds-to-pipe and the 15 100-coin exits carry None, as does every user-created def. The matcher stays strategy-blind: it is `validate_definition`-checked here (non-empty string or absent) and APPLIED by the projector. **Segment ORIGIN** (spec 2026-07-24-segment-origin-categories): `start_areas`/`start_levels` (moved DOWN here from views.py 2026-07-26, beside the `arm_level` they already read through, so `tracking/service.py` can ask "does this segment start where the player is standing" without importing the view layer). `start_origin(start_triggers)` maps a definition to the world node it can START in, through the `_ORIGIN_PARAMS` TABLE (one row per trigger type, read as param NAMES like `arm_level` — a new trigger type is one row or defaults to "Anywhere"). NOT arm_level's mapping: a `level_exit` arms at its destination but ORIGINATES at its source (52 of the 53 seeded exits omit `to`; the one that carries it, MIPS Clip, is still filed by its source, which is the point). Most-specific clause wins (a subarea beats the same level without one); conflicting clauses take the first. `origin_course(node)` maps a world node to the COURSE it sits in (None for the castle interior, the hubs and the arenas) — the vocabulary the RETIREMENT rule speaks, and what `views.py` stamps on every segment section as `course_id` so the practice page can ask "does this pinned card still belong where I am standing" without re-deriving anything. NOT `views.segment_courses`, which asks the same question through `start_levels`/`arm_level` and so answers None for every movement that starts in a course. `origin_view()` is the `{key,label,region,region_label}` shape the API stamps; `origin_taxonomy()` is the ordered region→place tree in `vocab()["origins"]`, deliberately domain-free so the picker modal can serve courses/stars through the same renderer. **The recorded TIME is Usamune's IGT, not a `global_timer` delta** (`_close`, live report 2026-07-31) — **full detail below: [A segment's time is Usamune's IGT](#a-segments-time-is-usamunes-igt)** | **Split / merge** (`split_definition`, `merge_definitions`) — **full detail below: [Split and merge](#split-and-merge)**
 | Whether an attempt counts as one the player MADE (the no-op discard) | Two doors, and reading only one is how a measurement invents its own findings. `projection.py::_close_by_reset` discards on `_unacted_open() OR NOT ev.payload["mario_acted"]` — the ANCHOR PAYLOAD's flag, which `segments.py`'s two anchor branches also read. `_close_by_death` and `_close` (abandon / hard reset) call `_unacted_open()` alone, so for them only the `mario_acted` EVENT exists. Cost, 2026-08-04: a journal-level simulation of task 0084's detector fix patched the payload and not the event, and reported **27 removed deaths and 13 removed abandons that were pure instrument artefact** — the shape read as a dangerous change until the second door turned up. Anything that rewrites, replays or fabricates activity must move BOTH, and the `acted_tracking` marker gates the payload half only (a historical anchor without it keeps recording, by design) |
 | An attempt's DURATION across an involuntary counter restart | `tracking/projection.py::_with_carried_igt` + `_open_carried_igt` — Usamune restarts its overall counter at a subarea load AND at an in-level teleporter, so a closing event that reads that counter reports only the LAST leg. Each involuntary anchor journaled its own pre-restart value; `_dispatch` banks them as they pass and the reset/death closers add them back. **Never the star closer** — that number is Usamune's own result store, already whole-star, so summing would double-count. Live report 2026-08-03: three CCM bridge warps then a reset read `0'08"93` for a run that took `0'25"06` (194+130+160+268 frames). Replayed both ways over all four journals, **exactly one recorded row moves — that one — with zero successes touched, zero `cleared` flags flipped, and no row added or removed** |
-| Attempt state machine / projection | `tracking/projection.py` — docstrings carry the two-pass clearing, reset-race row, clear-by-anchor-id invariant, active-star retirement (segment-arm / different-course → target None) + segment-target retirement — **an ARMED segment is exempt in EVERY match mode, and the verdict is DEFERRED until the matcher has had the event (2026-08-03)**: the rule runs in `_dispatch`, which is BEFORE `SegmentEngine.feed`, so it can only read "was armed last event" — safe for a loose def, wrong for a strict one, which is why the exemption used to require `match_mode == "loose"` (`_armed_loosely`, deleted with this change: the deferral subsumes it). Flipping all 56 movements to strict took that exemption away from every one of them, so picking `Bowser 1 → WF` and walking into BitDW — **step 1 of its own declared route** — retired the pick, and `stagebanner.js`'s remembered Reds/Pipe default then filled the hand it found empty (that client guard is correct and never got to run). `_dispatch` now records `_pending_target_retire` and the bottom of `feed()` applies it only if the segment is no longer armed. His rule, and the whole of it: *"If I select a segment, it should be selected until it's no longer possible for it to be armed / it gets invalidated by deviating from the path"* — under the path cursor, deviating already cancels the definition on that very event, so **the matcher's disarm IS the invalidation**. Blast radius measured by replaying both journals under the old rule and the new one and diffing every target reading: **172 differences across 15 episodes in his live journal, ALL of them `None → segment` (a pick kept, never one wrongly held or swapped), on exactly two definitions — the two re-entry movements — and 0 differences across the repo journal's 19,211 events.** — since 2026-07-27 the SAME rule as the star's: entering a course that is not the segment's `segment_origin` retires it, hubs and the castle stay transit for both kinds (`_seg_origins`, caveat 12; it replaced `start_level_set`, which was `arm_level`-based and therefore dead for every castle movement); auto-ignores out-of-range successes (DEFAULT_MIN_FRAMES 0.5s + star `time_filters` KV / segment time guards → cleared with `auto:` reason; journaled clear/restore wins via touched_ids); tracks last star grabbed/attempted for the last_star_* guards (game_reset clears); **segment strategy defaults (caveat 17)**: `strat_by_segment` starts PRE-SEEDED from the defs' `default_strat` instead of empty, which is why no consumer (attempt stamping, section banner, `segment_targets`, target payload) needed a call site of its own — and a journaled `strat_set` with a FALSY tag falls back to the default rather than clearing, so "no strategy" is not a reachable state for a defaulted segment; per-attempt strat reclassification (`strat_overrides` pre-pass, caveat 16 — journaled `attempt_strat_set`, last write wins, applied at both strat_tag stamping sites); **route-scoped arming**: a `route_selected` event threads `self._route_segments` (frozenset of member ids, or None) + `self._active_route_id` into every `MatchContext`; `active_route_id()` is REPLAY-DERIVED (mirrors `armed_route_id()`) — no service-side field, so a mid-session restart never loses the active route; **nothing overwrites a segment pick (2026-08-01, superseding caveat 18)**: `_close_by_grab`'s "last valid grab moves the target" rule now fires only when the target is a star or nothing. A segment target is a CLICK; a grab is a thing that happened, and the second may not overwrite the first. Grabbing the star you leave a course with is the ordinary prelude to running that course's exit movement, so it fired at exactly the wrong moment — and since every castle movement is guarded to the target or the active route, losing the target cost the movement its arm, its section and its card together (live report: `WF → SSL` and `Bowser 1 → WF` simply absent). The star's own ATTEMPT is still recorded ("the practice log should still exist for star mode in the history, just that we don't see it"). Caveat 18's narrower restore is DELETED, not kept beside this: it only ever covered waypoint-bearing defs, because for a plain def "still armed after the grab" said nothing about whether the grab belonged to it — which is why it could not save either segment above. `stagebanner.js::ArenaRow`'s auto-select was the other thief and fired on mere ARRIVAL; it now fills an empty hand only |
+| Attempt state machine / projection | `tracking/projection.py` — docstrings carry the two-pass clearing, reset-race row, clear-by-anchor-id invariant, active-star retirement (segment-arm / different-course → target None) + segment-target retirement — **an ARMED segment is exempt in EVERY match mode, and the verdict is DEFERRED until the matcher has had the event (2026-08-03)**: the rule runs in `_dispatch`, which is BEFORE `SegmentEngine.feed`, so it can only read "was armed last event" — safe for a loose def, wrong for a strict one, which is why the exemption used to require `match_mode == "loose"` (`_armed_loosely`, deleted with this change: the deferral subsumes it). Flipping all 56 movements to strict took that exemption away from every one of them, so picking `Bowser 1 → WF` and walking into BitDW — **step 1 of its own declared route** — retired the pick, and `stagebanner.js`'s remembered Reds/Pipe default then filled the hand it found empty (that client guard is correct and never got to run). `_dispatch` now records `_pending_target_retire` and the bottom of `feed()` applies it only if the segment is no longer armed. His rule, and the whole of it: *"If I select a segment, it should be selected until it's no longer possible for it to be armed / it gets invalidated by deviating from the path"* — under the path cursor, deviating already cancels the definition on that very event, so **the matcher's disarm IS the invalidation**. Blast radius measured by replaying both journals under the old rule and the new one and diffing every target reading: **172 differences across 15 episodes in his live journal, ALL of them `None → segment` (a pick kept, never one wrongly held or swapped), on exactly two definitions — the two re-entry movements — and 0 differences across the repo journal's 19,211 events.** — since 2026-07-27 the SAME rule as the star's: entering a course that is not the segment's `segment_origin` retires it, hubs and the castle stay transit for both kinds (`_seg_origins`, caveat 12; it replaced `start_level_set`, which was `arm_level`-based and therefore dead for every castle movement); auto-ignores out-of-range successes (DEFAULT_MIN_FRAMES 0.5s + star `time_filters` KV / segment time guards → cleared with `auto:` reason; journaled clear/restore wins via touched_ids); tracks last star grabbed/attempted for the last_star_* guards (game_reset clears); **segment strategy defaults (caveat 17)**: `strat_by_segment` starts PRE-SEEDED from the defs' `default_strat` instead of empty, which is why no consumer (attempt stamping, section banner, `segment_targets`, target payload) needed a call site of its own — and a journaled `strat_set` with a FALSY tag falls back to the default rather than clearing, so "no strategy" is not a reachable state for a defaulted segment; per-attempt strat reclassification (`strat_overrides` pre-pass, caveat 16 — journaled `attempt_strat_set`, last write wins, applied at both strat_tag stamping sites); **route-scoped arming**: a `route_selected` event threads `self._route_segments` (frozenset of member ids, or None) + `self._active_route_id` into every `MatchContext`; `active_route_id()` is REPLAY-DERIVED (mirrors `armed_route_id()`) — no service-side field, so a mid-session restart never loses the active route; **nothing overwrites a segment pick (2026-08-01, superseding caveat 18)**: `_close_by_grab`'s "last valid grab moves the target" rule now fires only when the target is a star or nothing. A segment target is a CLICK; a grab is a thing that happened, and the second may not overwrite the first. Grabbing the star you leave a course with is the ordinary prelude to running that course's exit movement, so it fired at exactly the wrong moment — and since every castle movement is guarded to the target or the active route, losing the target cost the movement its arm, its section and its card together (live report: `WF → SSL` and `Bowser 1 → WF` simply absent). The star's own ATTEMPT is still recorded ("the practice log should still exist for star mode in the history, just that we don't see it"). Caveat 18's narrower restore is DELETED, not kept beside this: it only ever covered waypoint-bearing defs, because for a plain def "still armed after the grab" said nothing about whether the grab belonged to it — which is why it could not save either segment above. `stagebanner.js::ArenaRow`'s auto-select was the other thief and fired on mere ARRIVAL; it now fills an empty hand only. **THE TARGET QUEUE (round 19, 2026-08-08): the held target is a FIFO of detections — full detail below: [The target queue](#the-target-queue)** |
 | Which 100-coin LADDER a finished run is graded against | `tracking/hundred_coin.py::classify` (pure) + the resolver `tracking/service.py::_hundred_coin_strat` injects into `Projector`/`replay` -- **full detail in `.claude/rules/hundred-coin.md`** |
 | The 100-coin star's attribution -- rule 11 asymmetry, written down per the rule's own terms | `tracking/segments.py::hundred_coin_entity` + `arms_ambiently`, `projection.py`'s reattribution + the generalized caveat-12 fix, `views.py`'s exclusion/stamping -- **full detail in `.claude/rules/hundred-coin.md`** |
 | Ordering attempts anywhere (practice log, "last N successes", the newest-attempt/active-strategy rule) | Sort by `journal_id`, never the raw attempt `id` -- **full detail below: [Attempt ordering must use journal_id, never the raw id](#attempt-ordering-must-use-journalid-never-the-raw-id)** |
@@ -62,140 +62,61 @@ paths:
 
 **Split / merge** (`split_definition`, `merge_definitions`, Task 17 of spec 2026-07-28-multi-step-segments): pure authoring ops, no matcher involvement — split re-expresses ONE definition as two meeting at a caller-supplied boundary (inherits `match_mode`, since flattening a waypoint says nothing about how tolerant either half should be; refuses a def carrying 2+ waypoints, which it would silently drop, and refuses a half lint calls `unfireable`), merge chains two into one KEEPING the seam as a waypoint (refuses a pair that does not meet, checked at castle-SUBAREA resolution — level 6 holds basement/lobby/Upstairs, so "same level" is not a seam, and the corpus really does hold three defs ending `area_enter(6,3)` beside one starting `area_enter(6,2)`). Neither result carries a `seed_key` (a derived def is not the row it came from, and one would make `reconcile_defaults` overwrite it at startup); both are NON-DESTRUCTIVE, the inputs surviving untouched because definitions arm in parallel and the whole plus its halves can all record on one play. Wired by `tracking/service.py::split_segment`/`merge_segments` -> `POST /api/segments/{id}/split` and `/api/segments/merge` (docs/api.md).
 
-## Topological validity
+## The target queue
 
-**`SegmentEngine._flush_move`, spec `2026-08-01-topological-segment-validity`.**
-Live report: standing in the **Bowser 1 arena**, `WF → SSL` read as ACTIVE
-SEGMENT; standing **inside LLL**, `LLL → HMC` read "Step 1 of 1 · Waiting for
-Enter Hazy Maze Cave". Both were the matcher, not a stale card — `armed_detail`
-is re-derived from the armed set on every view fetch. The 56 seeded castle
-movements are `loose`, and loose is transparent to everything but death,
-`game_reset`, `session_started` and the staleness deadline, so a warp into
-another course was invisible to it by design.
+**Round 19, 2026-08-08.** His ruling, verbatim: *"the held target should
+prioritize whatever is hooked into first… It should be held in queue order:
+first in, first out… If there's nothing left in the queue, it's neutral and
+nothing is selected."*
 
-Two rules, judged against `world_connections()` — the SAME table the segment
-builder's dropdown filtering uses, read for a second purpose:
+Two head flavors, split by WHO chose (`Projector._target_hooked`):
 
-1. **A move that is not an edge cancels every armed def.** The Usamune warp
-   menu (or a savestate) fabricated it.
-2. **A legal move that strictly INCREASES the hop count to a def's next
-   required place cancels that def.** Basement → LLL is a real edge, so rule 1
-   waves it through; what makes it a wrong turn is that HMC went from 1 hop
-   away to 2. Strict increase only — equal is sideways, so a route with two
-   shortest paths is never punished for picking either.
+- A **PICKED** head — his click, any `target_set` without `auto` — keeps
+  every pre-queue rule unchanged (origin retirement, the auto-follow retry
+  loop, "nothing overwrites a segment pick") and CLEARS the queue: a
+  deliberate choice supersedes the detected backlog.
+- A **HOOKED** head — a deliberate arm taking an empty hand, a queue
+  promotion, or an `auto`-flagged client fill (the arena row, the lone
+  option) — is EXEMPT from the origin retirement and held by his bounds
+  instead (`_hold_hooked_head`): pop on its own success; FORFEIT on a real
+  non-echo anchor in a foreign COURSE (his 2026-08-01 "genuine kill" —
+  course-granularity, so L-reset spam while transiting a course back to the
+  def's start is the one case that kills, exactly as he ruled); EXPIRY on
+  `SegmentEngine.hold_budget` (the same staleness clock a cancelled arm
+  gets); drop on `game_reset`/`session_started`. His worked example is the
+  reason a mere DISARM does not pop: walking back through BitDW to redo the
+  Bowser 1 fight cancels the arm and must keep the selection.
 
-Both are SILENT (no attempt row, matching `_feed_waypoint`'s off-route cancel —
-a movement that never happened must not bank a failure), and both exempt an arm
-that began **at or after** the move, so warping somewhere to practise still
-arms what lives there.
+**What enters the queue**: a `segment_armed` notice for a def
+`segments.hooks_on_arm` accepts — no presence-type start clause
+(`level_enter`/`area_enter`/`attempt_anchor`/`spawned`). LBLJ (castle
+entry) and the pipe/100-coin families (course entry) never hook and never
+queue, which is also why the lone-option client rule was NOT dissolved into
+this: it fills presence-armed defs, and folding it in would auto-select
+LBLJ on every castle crossing. Queue entries scrub to the armed set every
+event; promotion takes the oldest survivor; all of it is journal-derived so
+replay rebuilds head, flavor and queue.
 
-**This reverses `can_run_from`'s explicit refusal to consult that table.** Its
-objection — "a check derived from that table could only ever be tested against
-the table it came from" — is answered by `tools/measure_topology_cancels.py`,
-which replays both real journals with the rules on and off and reports every
-recorded SUCCESS they would have killed. **Any non-zero count is a missing edge
-or a bug, examined one at a time, never a number to accept.**
+**A stale hooked head YIELDS to a valid star grab** where a pick never does
+(`_grab_may_take_the_hand`) — with the armed-read deferred past the matcher
+via `_pending_grab_take`, exactly the `_pending_target_retire` pattern,
+because a mid-grind grab is itself what cancels the waypoint arm it would
+otherwise bounce off. The first measurement run is what found this: grabs
+bouncing off stale hooks read as star→segment ×8 / star→none ×3 in his real
+journal and would have left grind failures unattributed (prune food); after
+the fix those shapes measure ZERO.
 
-### The three things that keep it from over-firing
-
-- **`tracking/topology.py::node_for` — subareas count only inside the castle
-  interior.** Courses have their own areas (SSL area 2 is the pyramid interior),
-  and the graph does not model them. Keying on `(level, area)` everywhere read
-  **97.9%** of the live journal's settled moves as off-graph against the true
-  **54%** — a silent failure that reads exactly like a broken world table. Has
-  its own mutation-proved test.
-- **The ONE-FRAME DEFER.** Every castle entry loads the lobby for one poll
-  before warping to the real area, all on ONE game frame, so `_pending_move` is
-  judged only once the frame advances, taking the LAST candidate of that frame.
-  Judged raw, a basement course exit reads as the non-edge "SSL → Lobby", and
-  for an upstairs destination the transient lobby is CLOSER than the basement
-  (2 hops vs 3) — both rules would fire on a move that never happened. This is
-  the same per-frame collapse the design's measurement used, deliberately, so
-  the number that justified the feature and the code implementing it cannot
-  drift. Recorded on `area_changed` (whose payload names the level and settled
-  area outright), never `level_changed` (where `ctx.area` is still the old
-  level's); read with `.get()`, since a payload without `level` means position
-  unknown and unknown declines to judge.
-  **The defer needed a CLOCK, and not having one was worth 27.7 seconds
-  (live report 2026-08-02).** "The frame advanced" was only ever observed
-  through the next JOURNALED event, and standing still inside a course journals
-  nothing — so entering Bowser in the Sky from Upstairs cancelled `Bowser 2 →
-  WDW` correctly and the selector kept offering it, the card kept calling it
-  ACTIVE SEGMENT, for **832 frames** (`tools/why_cancelled.py` on his own
-  session; `data/ui_log.jsonl` has the chip drawn for 27.9 s, the same span).
-  Earlier sightings were 96, 116 and 56 frames and read as noise. `SegmentEngine.
-  settle(frame)` is the delivery half — `Projector.settle` → `TrackerService.
-  settle_frame` → the poller's own `on_frame` hook, wired in `main.py`. Same
-  verdict, same silence (no row), so a REPLAY reaching it at the next event
-  lands in the same state; the only visible difference is the resurrection
-  entry's expiry frame. The notice needs no view refetch to land: `store.js`
-  keeps `armedSegs`/`armedOrder` from the notices themselves, and both the
-  selector's chip (`stagecontext.armedSegments`) and the card's pin read that.
-  The report arrived as "I think each segment just needs to know what conditions
-  break it" — the rule that broke it already existed and already fired. **A
-  verdict delivered late is indistinguishable, from the outside, from a rule
-  that was never written.**
-- **Two ways to be unconstrained, neither a special case.**
-  `segments.step_node` answers None for a clause naming no place (`key_grabbed`,
-  `warp_entered`, `star_grabbed`, `reset_game`, an unpinned `level_exit`), and
-  `topology.hops` answers None for an unreachable target; `_next_step_hops`
-  turns either into "no constraint". That is what exempts every Bowser fight and
-  pipe entry without a maintained list. `segments.declared_nodes(d)` is the
-  other: a node the definition names as a step of its own route is never a wrong
-  turn, which is how a route that deliberately re-enters a place says so —
-  Griffin's chosen discriminator over a dwell-time threshold. It is a SET, not a
-  comparison against the arm's live `progress`: the waypoint match and the
-  position judgement land on the same game frame but on DIFFERENT events, so a
-  correctly-followed waypoint read as a move away from whatever came next and
-  the declared re-entry cancelled itself.
-
-### The one disarm the player can undo
-
-`SegmentEngine._cancelled` — `{def id: (_Arm, expiry frame)}`. A topological
-cancel remembers where the arm stood, and a REAL anchor at that position
-re-arms it. Every other disarm in this engine is final.
-
-Found by the measurement, not by design: journal ids 17926–17940, `Bowser 1 →
-WF` armed by the arena exit into the lobby, a 7 s detour into BitDW, back to the
-lobby, reset AT THE ARM POSITION, then lobby → WF in 16 s. Redoing that def's
-start trigger (`level_exit from=30`) means redoing the whole fight, so the reset
-IS how a castle movement is re-run — `_feed_loose` already reads an anchor at the
-arm position that way for a live arm, and the rules were taking the loop away for
-a cancelled one. Two bounds, both Griffin's:
-
-- **FORFEIT** — a real anchor SOMEWHERE ELSE drops the memory permanently: *"if…
-  in the middle of lobby -> wf, I decided to reset to bitdw, I think that's a
-  genuine kill of the segment, because we've now gone out of order in a way that
-  doesn't make sense for practicing… until I get back to Bowser 1 and trigger it
-  from the beginning again"* (2026-08-01). Mirrors `_feed_strict`'s reading of a
-  relocated anchor.
-- **EXPIRY** — the same measured staleness budget a loose arm gets
-  (`budget_frames`), applied to every mode here because a cancelled arm has no
-  cancel rules left to bound it. Without a clock, a movement killed hours ago
-  would re-arm the next time he happened to reset in the same room.
-
-A normal arm pops the memory: the def is live again by its own start condition,
-so the resurrection entry would only be a stale second door.
-
-### Measured 2026-08-02
-
-| journal | events | settled moves | off-graph | successes kept |
-|---|---|---|---|---|
-| installed exe | 17,424 | 419 | 221 (156 course→course) | **82 / 82** |
-| repo checkout | 20,542 | 739 | 341 (235 course→course) | **110 / 112** |
-
-Both losses were read back against the raw journal and ARE the live report,
-banked as times: `LLL → HMC` (ids 13672–13687) exited LLL, warped BACK INTO LLL,
-then warped LLL → HMC (22 → 7, not an edge either) — 23.8 s spanning the round
-trip; `Bowser 2 → Upstairs` (ids 18355–18376) exited the arena to the basement,
-spent 30 s inside BitFS, came out and went upstairs — 83 s mostly detour.
-
-**NOT built, and named so it is not re-derived by guess:** the builder still
-constrains each clause's own `from`/`to` against `connections` but not ACROSS
-steps, so a segment is not yet a valid path by construction. That is Stage 2 of
-the spec and carries one open decision — strict adjacency ("the only valid path
-out of SSL is Basement") would make the 56 shipped two-step movements
-un-editable.
+**Measured before shipping** (`tools/measure_target_queue.py` — replays
+every reachable journal under the shipped code at `2f19630` and the working
+tree, diffing every target reading and every attempt row): **0 rows lost,
+0 rows changed, +24 (repo) / +2 (worktree) retry reset rows gained** — the
+practiced movement staying armable through its loop, the class his
+2026-07-30 retry-row ruling wanted recorded. Every remaining reading diff
+is the ruling itself: none→segment (a formerly-empty hand holding the first
+detection) and segment→none (neutral where a stale hold lingered). The
+`auto` flag rides `target_set` payloads (only when true, so every pre-queue
+payload keeps its shape); `ui/target.js::requestTarget` defaults it from
+`quiet`. Pinned by `tests/test_target_queue.py`.
 
 ## When the clock starts — "trigger" vs "move" (round 15 item 3, 2026-08-08)
 
@@ -478,7 +399,7 @@ exit carries a long pause for exactly the same reason — the menu was open — 
 it fell straight through and read as a player retry.
 
 **The discriminator is the WORLD GRAPH**, which is rule 1's premise (see
-[Topological validity](#topological-validity)) read for a second purpose: a menu
+`.claude/rules/segment-topology.md`) read for a second purpose: a menu
 warp FABRICATES an edge, a pause exit WALKS one. Measured over co-frame anchors
 with a long pause across both journals:
 

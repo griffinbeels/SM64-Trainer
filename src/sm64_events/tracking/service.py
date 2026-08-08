@@ -379,6 +379,7 @@ class TrackerService:
         if self.db is None:
             return
         proj = self._projector
+        target_before = proj.target
         for n in proj.settle(frame):
             await self.broadcaster.publish(Event(
                 type=n["event"], frame=n["frame"], timestamp_utc=_now(),
@@ -391,6 +392,14 @@ class TrackerService:
                          if k not in ("event", "frame")}))
             if self._projector is not proj:
                 return   # a CRUD reproject swapped it; its state is authoritative
+        if proj.target != target_before:
+            # A hooked target can EXPIRE on the clock (round 19's hold
+            # budget), and standing still journals nothing — the same
+            # late-verdict lesson the settle above exists for, applied to
+            # the selection itself.
+            await self.broadcaster.publish(Event(
+                type="target_changed", frame=frame, timestamp_utc=_now(),
+                payload=self.target_payload()))
 
     def _attempt_completed_event(self, a, close_event: Event) -> Event:
         return Event(type="attempt_completed", frame=close_event.frame,
@@ -426,16 +435,21 @@ class TrackerService:
         target_changed broadcasts and the session view (views.py) -- so the
         WS payload and GET /api/session can never drift."""
         tgt = self._projector.target
+        # Detections waiting their turn behind the held target (round 19's
+        # FIFO) — names resolved here so no client re-derives them.
+        queued = [{"segment_id": sid, "segment_name": self._segment_name(sid)}
+                  for sid in self._projector.target_queue()]
         if tgt and tgt[0] == "segment":
             # course_id/star_id stay present-as-None for shape stability:
             # the UI header keys off course_id presence for star targets.
             return {"kind": "segment", "segment_id": tgt[1],
                     "segment_name": self._segment_name(tgt[1]),
                     "course_id": None, "star_id": None,
-                    "strat_tag": self._projector.strat_tag}
+                    "strat_tag": self._projector.strat_tag,
+                    "queued": queued}
         c, s = (tgt[1], tgt[2]) if tgt else (None, None)
         return {"kind": "star", "course_id": c, "star_id": s,
-                "strat_tag": self._projector.strat_tag}
+                "strat_tag": self._projector.strat_tag, "queued": queued}
 
     # -- state ------------------------------------------------------------------
     @property
@@ -546,7 +560,8 @@ class TrackerService:
                              star_id: int | None = None,
                              segment_id: int | None = None,
                              strat_tag: str | None = None,
-                             clear_strat: bool = False) -> dict:
+                             clear_strat: bool = False,
+                             auto: bool = False) -> dict:
         """Set the practice target, or refuse a pick from somewhere else.
 
         You practice what is in front of you: a pick the player is not
@@ -609,17 +624,23 @@ class TrackerService:
                 f"that one is in {node_label(node)}")
         if kind == "segment":
             await self.set_target_segment(segment_id, strat_tag,
-                                          clear_strat=clear_strat)
+                                          clear_strat=clear_strat, auto=auto)
         else:
             await self.set_target(course_id, star_id, strat_tag,
-                                  clear_strat=clear_strat)
+                                  clear_strat=clear_strat, auto=auto)
         return {}
 
     async def set_target(self, course_id: int, star_id: int,
                          strat_tag: str | None = None,
-                         clear_strat: bool = False) -> None:
+                         clear_strat: bool = False,
+                         auto: bool = False) -> None:
         db = self._require_db()
         payload = {"course_id": course_id, "star_id": star_id}
+        if auto:
+            # A convenience fill, not his click (round 19) — the projector
+            # holds the two by different rules. Only ever written when true,
+            # so every pre-queue payload keeps its exact shape.
+            payload["auto"] = True
         # target_set's payload shape is unchanged: strat_tag rides along only
         # when truthy, exactly as before, so no target_set consumer sees a
         # new field. An explicit clear ("(no strategy)" in the picker) is
@@ -638,14 +659,17 @@ class TrackerService:
 
     async def set_target_segment(self, segment_id: int,
                                  strat_tag: str | None = None,
-                                 clear_strat: bool = False) -> None:
+                                 clear_strat: bool = False,
+                                 auto: bool = False) -> None:
         self._require_db()
         if all(d.id != segment_id for d in self._segment_defs):
             raise LookupError(f"segment {segment_id} not found")
+        payload = {"kind": "segment", "segment_id": segment_id}
+        if auto:
+            # See set_target: a fill is detection-flavored, a click is not.
+            payload["auto"] = True
         await self.publish(Event(type="target_set", frame=0,
-                                 timestamp_utc=_now(),
-                                 payload={"kind": "segment",
-                                          "segment_id": segment_id}))
+                                 timestamp_utc=_now(), payload=payload))
         if strat_tag is not None:
             # segment strat memory is written via strat_set (the projector
             # ignores strat_tag inside segment target_set payloads)

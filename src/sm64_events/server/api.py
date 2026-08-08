@@ -45,6 +45,11 @@ class TargetBody(BaseModel):
     star_id: int | None = None
     segment_id: int | None = None
     strat_tag: str | None = None
+    # True when a CLIENT CONVENIENCE posted this (the arena row's
+    # auto-select, the lone option) rather than the player's click — the
+    # projector holds the two by different rules (round 19: a fill is
+    # detection-flavored; a click is sovereign and clears the queue).
+    auto: bool = False
 
 
 class ClearBody(BaseModel):
@@ -1327,7 +1332,7 @@ def create_api_router(service) -> APIRouter:
             result = await service.request_target(
                 body.kind, course_id=body.course_id, star_id=body.star_id,
                 segment_id=body.segment_id, strat_tag=body.strat_tag,
-                clear_strat=clear_strat)
+                clear_strat=clear_strat, auto=body.auto)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True, **result}

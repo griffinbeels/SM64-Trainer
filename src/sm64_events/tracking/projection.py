@@ -250,8 +250,8 @@ from sm64_events.tracking.prune import PRUNE_EVENT
 from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
     SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, arms_ambiently,
-    hundred_coin_entity, origin_course, segment_origin, stage_origin,
-    time_bounds)
+    hooks_on_arm, hundred_coin_entity, origin_course, segment_origin,
+    stage_origin, time_bounds)
 
 
 @dataclass(frozen=True)
@@ -579,6 +579,39 @@ class Projector:
                                    if warp_destinations is not None else {})
         # ("star", course_id, star_id) | ("segment", segment_id) | None
         self.target: tuple | None = None
+        # THE TARGET QUEUE (round 19, 2026-08-08): "the held target should
+        # prioritize whatever is hooked into first... first in, first out...
+        # If there's nothing left in the queue, it's neutral."
+        #
+        # Two flavors of head, split by WHO chose it (his standing gesture
+        # rule): a PICKED head is his click (or an empty-hand convenience
+        # fill) and keeps every pre-queue rule — origin retirement, the
+        # auto-follow retry loop, "nothing overwrites a segment pick". A
+        # HOOKED head is a detection the queue promoted — a deliberate arm
+        # (segments.hooks_on_arm) — and is governed by HIS bounds instead:
+        # held until it completes, forfeits (a real non-echo reset in a
+        # foreign course — his 2026-08-01 "genuine kill"), or expires
+        # (SegmentEngine.hold_budget, the same staleness clock every other
+        # unbounded arm memory gets). A hooked head deliberately IGNORES the
+        # foreign-course origin retirement: his worked example re-enters
+        # BitDW to redo the Bowser 1 fight, and the trip back must not cost
+        # the selection.
+        #
+        # The queue holds segment def ids of deliberate arms that fired while
+        # a head was held; it is scrubbed to the engine's armed set every
+        # event (a detection that died is no longer detected), so promotion
+        # can never select a ghost. All of it is journal-derived — replay
+        # rebuilds head, flavor and queue with no service-side field.
+        self._target_queue: list[int] = []
+        self._target_hooked = False
+        # Where the hooked head's arm stood (level, area) and the last frame
+        # it was seen armed — the forfeit's position and the expiry's clock.
+        self._hook_level: int | None = None
+        self._hook_area: int | None = None
+        # None = not yet sighted on the frame clock (a target_set journals
+        # frame 0, so a fill's own frame would fake an instant expiry); the
+        # first hold check baselines it.
+        self._hook_alive_frame: int | None = None
         # (course_id, star_id) of the active star most recently retired BY
         # LEAVING its course (caveat 12). Re-entering that course with nothing
         # else active reinstates it ("resume the star I just stepped out of");
@@ -641,6 +674,11 @@ class Projector:
         # and the consumer at the bottom of `feed`). Transient within one
         # event -- reset at the top of every `feed`, so replay is unaffected.
         self._pending_target_retire: int | None = None
+        # A grab's claim on a hooked head that read as armed BEFORE the
+        # matcher had the event (see `_close_by_grab`) — applied at the
+        # bottom of `feed` if the matcher cancelled the head on this very
+        # event. Same transient discipline as `_pending_target_retire`.
+        self._pending_grab_take: tuple[int, int] | None = None
         self._runs = RunTracker()
         self.run_notices: list[dict] = []   # live-broadcast queue, drained by service
         self._num_stars: int | None = None
@@ -701,8 +739,93 @@ class Projector:
 
         Returns them rather than filling `self.segment_notices`, which `feed()`
         OVERWRITES on every event — a tick landing between two events must not
-        be able to drop a notice the service has not drained yet."""
-        return self._segments.settle(frame)
+        be able to drop a notice the service has not drained yet.
+
+        The hooked head's EXPIRY is a clock verdict too (the 27.7 s lesson:
+        standing still journals nothing), so it is judged here as well as in
+        feed(); the service diffs the target across this call to broadcast
+        the change. A replay reaches the same state at its next event."""
+        notices = self._segments.settle(frame)
+        if (self._target_hooked and self.target
+                and self.target[0] == "segment"
+                and self.target[1] not in self._segments.armed_ids()
+                and self._hook_alive_frame is not None
+                and frame - self._hook_alive_frame
+                > self._segments.hold_budget(self.target[1])):
+            self._drop_head()
+            self._promote_or_neutral(frame)
+        return notices
+
+    # -- the target queue (round 19, 2026-08-08) -----------------------------
+    def target_queue(self) -> list[int]:
+        """Queued detections in hook order — the segments waiting their turn
+        behind the held target (view/API read; a copy)."""
+        return list(self._target_queue)
+
+    def _drop_head(self) -> None:
+        self.target = None
+        self._target_hooked = False
+
+    def _hook_head(self, sid: int, frame: int) -> None:
+        """A detection takes the hand: the def's own arm supplies the forfeit
+        position, and the hold clock starts now."""
+        self.target = ("segment", sid)
+        self._target_hooked = True
+        arm = self._segments.armed_items().get(sid)
+        self._hook_level = arm.level if arm is not None else self._level
+        self._hook_area = arm.area if arm is not None else self._area
+        self._hook_alive_frame = frame
+
+    def _promote_or_neutral(self, frame: int) -> None:
+        """The hand is empty: the oldest detection that is STILL armed takes
+        it (his FIFO), else the hand stays neutral — never a ghost."""
+        while self._target_queue:
+            sid = self._target_queue.pop(0)
+            if sid in self._segments.armed_ids():
+                self._hook_head(sid, frame)
+                return
+
+    def _hold_hooked_head(self, ev, head_success: bool) -> None:
+        """Round 19's bounds for a HOOKED head, judged after the matcher has
+        had the event. Completed → pop. Armed → alive (and the forfeit
+        position tracks the arm). Disarmed → grace, bounded by his two
+        rules: a real, non-echo reset in a FOREIGN course forfeits it (his
+        2026-08-01 "genuine kill" — resetting into BitDW mid lobby→WF), and
+        silence past the def's own hold budget expires it. A disarm alone is
+        deliberately NOT a pop: his worked example walks back through BitDW
+        — which cancels the arm — to redo the Bowser 1 fight, and the trip
+        must not cost the selection."""
+        if not (self._target_hooked and self.target
+                and self.target[0] == "segment"):
+            return
+        sid = self.target[1]
+        if head_success:
+            self._drop_head()
+            return
+        arm = self._segments.armed_items().get(sid)
+        if arm is not None:
+            self._hook_alive_frame = ev.frame
+            if arm.level is not None:
+                self._hook_level = arm.level
+            if arm.area is not None:
+                self._hook_area = arm.area
+            return
+        if (ev.type in ANCHOR_EVENT_TYPES
+                and not ev.payload.get("area_load")
+                and not ev.payload.get("teleport")
+                and self._level is not None
+                and self._hook_level is not None
+                and course_for_level(self._level)
+                != course_for_level(self._hook_level)
+                and not self._segments.anchor_echo(ev)):
+            self._drop_head()   # forfeit
+            return
+        if (self._hook_alive_frame is None
+                or ev.frame < self._hook_alive_frame):
+            self._hook_alive_frame = ev.frame   # first sighting / clock jump
+            return
+        if ev.frame - self._hook_alive_frame > self._segments.hold_budget(sid):
+            self._drop_head()   # expiry
 
     def _clears_star_target(self, segment_id: int) -> bool:
         """True when `segment_id` just arming should retire the CURRENT star
@@ -797,6 +920,7 @@ class Projector:
                 ev = _CorrectedRow(ev, {**ev.payload, "to": recovered})
         prev_level = self._level  # _dispatch may move it (level_changed)
         self._pending_target_retire = None   # transient, one event only
+        self._pending_grab_take = None       # transient, one event only
         # Snapshotted BEFORE _dispatch (which runs _close_by_grab for a
         # star_collected event) so the grab-steals-the-target restore below
         # can tell "this segment was already my pinned, running focus" from
@@ -816,6 +940,13 @@ class Projector:
             self._num_stars = None  # file can change at the title screen: unknown until the next grab
             self._last_star_grabbed = None
             self._last_star_attempted = None
+            if self._target_hooked:
+                # A console reset ends a detection-held selection the same
+                # way the engine clears its own cancelled-arm memories here:
+                # the world the hook was made in is gone. (A PICKED target
+                # survives, as it always has; the queue empties via the
+                # armed-set scrub below, since a game_reset disarms all.)
+                self._drop_head()
         if ev.type == "route_selected":
             # Journaled route activation (spec 2026-07-23-default-routes-
             # foundation): the route's member segment ids scope the
@@ -858,9 +989,12 @@ class Projector:
         # below reads these; the reasoning is at its own branch.
         held_pick = (self.target[1] if self.target
                      and self.target[0] == "segment" else None)
-        pick_is_closing = (held_pick is not None
-                           and any(a.segment_id == held_pick for a in seg_closed))
+        head_was_hooked = self._target_hooked
+        head_popped = False  # a HOOKED head completing pops at the hold check
         for a in seg_closed:
+            raw_segment_id = a.segment_id  # before the 100-coin reattribution
+            # clears it -- the head-closure test below must see the def's own
+            # identity, exactly as the pre-queue pick_is_closing did.
             # The 100-coin star IS this segment when its def's own sequence
             # includes grabbing that course's 100-coin star (spec 2026-07-28-
             # multi-step-segments, hundred_coin_entity): a closed attempt
@@ -1013,14 +1147,29 @@ class Projector:
                 # different split?? All i know is that MIPs should remain
                 # selected because that's what I'm practicing!"* (2026-08-05,
                 # measured by replaying his journal — target moved
-                # `MIPS Clip` -> `HMC -> DDD` on the touch). His own pick wins
-                # over anything the same event finished.
-                if pick_is_closing and a.segment_id != held_pick:
-                    pass          # his pick closed here too; it keeps the slot
-                elif hc is not None:
-                    self.target = None if entered_stage else ("star", *hc)
+                # `MIPS Clip` -> `HMC -> DDD` on the touch).
+                #
+                # ROUND 19 generalizes that from "his pick wins when it also
+                # closed" to "a held segment head is NEVER stolen by a
+                # neighbouring closure" — FIFO: whatever hooked first keeps
+                # the slot. Only the head's OWN completion moves it: a
+                # picked head keeps the retry loop (or clears into the stage
+                # it just entered, as always), a hooked one pops for the
+                # next detection in line (at the hold check below).
+                if held_pick is not None:
+                    if raw_segment_id == held_pick:
+                        if head_was_hooked:
+                            head_popped = True
+                        elif entered_stage:
+                            self.target = None
                 else:
-                    self.target = None if entered_stage else ("segment", a.segment_id)
+                    # An empty hand — or a star target, which the auto-follow
+                    # has always moved — fills exactly as before the queue.
+                    self._target_hooked = False
+                    if hc is not None:
+                        self.target = None if entered_stage else ("star", *hc)
+                    else:
+                        self.target = None if entered_stage else ("segment", a.segment_id)
                 self._suspended_star = None  # finished a segment: moved on (caveat 13)
             closed.append(a)
         # Caveat 18's grab-steals-the-target restore USED to sit here, and
@@ -1056,6 +1205,43 @@ class Projector:
                         for n in self.segment_notices):
             self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
             self.target = None
+        # THE TARGET QUEUE (round 19). Every DELIBERATE arm this event
+        # produced lines up (segments.hooks_on_arm — a presence arm like
+        # LBLJ's castle entry or a pipe family's course entry never does);
+        # the hooked head is then judged by its own bounds; dead detections
+        # leave the line; and an empty hand takes the oldest survivor. Order
+        # matters: enqueue first so an arm that just cleared a star target
+        # (the block above) can be the very thing promoted onto the empty
+        # hand it made.
+        head_seg = (self.target[1] if self.target
+                    and self.target[0] == "segment" else None)
+        for n in self.segment_notices:
+            if n["event"] != "segment_armed":
+                continue
+            sid = n["segment_id"]
+            armed_def = self._segments.definition(sid)
+            if (armed_def is None or not hooks_on_arm(armed_def.start_triggers)
+                    or sid == head_seg or sid in self._target_queue):
+                continue
+            self._target_queue.append(sid)
+        self._hold_hooked_head(ev, head_popped)
+        armed_now = self._segments.armed_ids()
+        # The grab's deferred claim (see _close_by_grab): the hooked head it
+        # bounced off read as armed on a PRE-event snapshot, and the matcher
+        # has now spoken — if it cancelled the head on this very event, the
+        # grab takes the hand after all.
+        if (self._pending_grab_take is not None
+                and self._target_hooked and self.target
+                and self.target[0] == "segment"
+                and self.target[1] not in armed_now):
+            self.target = ("star", *self._pending_grab_take)
+            self._target_hooked = False
+            self._suspended_star = None
+        self._pending_grab_take = None
+        self._target_queue = [sid for sid in self._target_queue
+                              if sid in armed_now]
+        if self.target is None and self._target_queue:
+            self._promote_or_neutral(ev.frame)
         # Run engine sees the same event + the attempts just closed (star AND
         # segment successes/failures); it owns the run lifecycle independently.
         # ctx is the same MatchContext already built for the segment engine.
@@ -1132,6 +1318,9 @@ class Projector:
             # the first one's fix.
             closed = self._close(ev, outcome="abandoned", igt_frames=None)
             self.target = None
+            self._target_hooked = False
+            self._target_queue.clear()  # a session boundary ends every
+            # queued detection with the focus they were waiting behind
             self._suspended_star = None
             return closed
         if ev.type == "level_changed":
@@ -1202,7 +1391,12 @@ class Projector:
             #
             # So the decision is DEFERRED rather than narrowed: record it, and
             # let the bottom of `feed()` apply it once the matcher has spoken.
+            # A HOOKED head is exempt from the origin rule entirely: its
+            # bounds are round 19's (complete / forfeit / expire), and his
+            # worked example walks INTO a foreign course — BitDW, to redo
+            # the Bowser 1 fight — with the selection expected to hold.
             if (self.target and self.target[0] == "segment"
+                    and not self._target_hooked
                     and to_course is not None
                     ):
                 origin = self._seg_origins.get(self.target[1])
@@ -1232,14 +1426,40 @@ class Projector:
             self._area = ev.payload["to"]
             return []
         if ev.type == "target_set":
+            # `auto` marks a CONVENIENCE FILL (the arena row, the lone
+            # option) rather than his click. Each fill site carries its own
+            # decline rules (the lone option only fires on an empty hand;
+            # the arena row keeps a held target that starts in its own
+            # arena, 2026-08-05) — what none of them can see is a HOOKED
+            # head the server promoted between their read and their write,
+            # and a detection that won its turn must not lose it to a late
+            # offer (round 19). Dropped rather than queued: the queue holds
+            # armed detections, a fill is an offer, and the client re-offers
+            # whenever the hand empties.
+            auto = bool(ev.payload.get("auto"))
+            if auto and self.target is not None and self._target_hooked:
+                return []
             self._suspended_star = None  # explicit focus overrides a resume (caveat 13)
             if ev.payload.get("kind") == "segment":
                 self.target = ("segment", ev.payload["segment_id"])
+                # A fill is detection-flavored: round 19's bounds (complete /
+                # forfeit / expire) govern it, so a finished pipe hands the
+                # turn onward instead of holding forever. His CLICK stays
+                # sovereign under the pre-queue rules, and supersedes the
+                # detected backlog (the round's lean: a deliberate choice
+                # clears the queue).
+                self._target_hooked = auto
+                if auto:
+                    self._hook_level, self._hook_area = self._level, self._area
+                    self._hook_alive_frame = None
             else:  # legacy payloads have no kind: star (caveat 10)
                 c, s = ev.payload["course_id"], ev.payload["star_id"]
                 self.target = ("star", c, s)
+                self._target_hooked = False
                 if "strat_tag" in ev.payload:
                     self.strat_by_star[(c, s)] = ev.payload["strat_tag"]
+            if not auto:
+                self._target_queue.clear()
             return []
         if ev.type == "strat_set":
             # per-target strategy memory write WITHOUT moving the target
@@ -1376,25 +1596,53 @@ class Projector:
             course_id=grabbed[0], star_id=grabbed[1],
             igt_frames=ev.payload.get("igt_frames"), strat=strat)
         self._open = None
-        if not attempt.cleared and not self._segment_targeted():
-            # The last VALID grab moves the practice target — but only when
-            # the target is a star or nothing. A SEGMENT target is a pick he
-            # made with a click; a grab is a thing he did in the game, and
-            # letting the second overwrite the first is how a movement he
-            # deliberately chose disappears (live report 2026-08-01, WF -> SSL
-            # and Bowser 1 -> WF). Grabbing the star you are leaving a course
-            # with is the ORDINARY thing to do immediately before running that
-            # course's exit movement, so this fired at exactly the wrong
-            # moment; and because every castle movement is guarded to the
-            # target or the active route, losing the target also cost it its
-            # arm, its section and its card in one go.
+        if not attempt.cleared and self._grab_may_take_the_hand():
+            # The last VALID grab moves the practice target — but never off a
+            # segment target HE PICKED. A pick is a click; a grab is a thing
+            # he did in the game, and letting the second overwrite the first
+            # is how a movement he deliberately chose disappears (live report
+            # 2026-08-01, WF -> SSL and Bowser 1 -> WF). Grabbing the star
+            # you are leaving a course with is the ORDINARY thing to do
+            # immediately before running that course's exit movement, so this
+            # fired at exactly the wrong moment; and because every castle
+            # movement is guarded to the target or the active route, losing
+            # the target also cost it its arm, its section and its card.
+            #
+            # A HOOKED head is not a click, and a stale one YIELDS to a grab
+            # (round 19, measured before shipping): with a re-entry movement
+            # hooked on every course exit of a route grind, declining the
+            # grab left the whole grind's failures unattributed — and
+            # unlabelled rows are what the startup prune eats. A hooked head
+            # that is still ARMED keeps the slot: a live run in progress is
+            # not stale, and a mid-sequence grab must not steal it (the same
+            # protection the pick has always had).
             #
             # The star's own attempt is still recorded above — his ruling on
             # this same rule, 2026-07-30: "the practice log should still exist
             # for star mode in the history, just that we don't see it".
             self.target = ("star", *grabbed)
+            self._target_hooked = False
             self._suspended_star = None  # committed a new focus (caveat 13)
+        elif (not attempt.cleared and self._target_hooked
+                and self._segment_targeted()):
+            # The hooked head reads as ARMED here, but this runs BEFORE the
+            # matcher has had the event, and a star grab is exactly the kind
+            # of event that cancels a waypoint-bearing arm (major action) —
+            # the same stale-read problem `_pending_target_retire` defers
+            # around, deferred the same way: the bottom of feed() applies
+            # the grab's claim if the matcher cancelled the head on this
+            # very event. Without this, every mid-grind grab in a route
+            # (which cancels the hooked re-entry movement it rode in on)
+            # bounced off a head that was already dead — measured on his
+            # real journal before shipping.
+            self._pending_grab_take = grabbed
         return [attempt]
+
+    def _grab_may_take_the_hand(self) -> bool:
+        if not self._segment_targeted():
+            return True
+        return (self._target_hooked
+                and self.target[1] not in self.armed_segment_ids())
 
     def _segment_targeted(self) -> bool:
         return self.target is not None and self.target[0] == "segment"

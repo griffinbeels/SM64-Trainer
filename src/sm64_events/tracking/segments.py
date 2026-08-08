@@ -1717,6 +1717,35 @@ def arms_ambiently(start_triggers: list) -> bool:
     return False
 
 
+#: Start-trigger types that fire by the player merely BEING somewhere —
+#: standing in a level, resetting where he already is, spawning in — as
+#: opposed to doing something that goes somewhere (an exit, a star, a door
+#: moment). `hooks_on_arm` is the one reader; `arms_ambiently` above answers
+#: a narrower question (presence in a star-bearing COURSE) for a different
+#: consumer and deliberately stays separate.
+_PRESENCE_TRIGGER_TYPES = frozenset(
+    {"level_enter", "area_enter", "attempt_anchor", "spawned"})
+
+
+def hooks_on_arm(start_triggers: list) -> bool:
+    """True when this definition's arming is a DELIBERATE act the target
+    queue may hook (round 19, 2026-08-08: "the held target should prioritize
+    whatever is hooked into first").
+
+    A def whose start can fire by mere presence — entering a level, a reset
+    where the player already stands, a spawn — must never hook the practice
+    target: LBLJ arms on every castle entry and the pipe/100-coin families on
+    every course entry, and a selection nobody caused reads as a bug (his
+    standing rule). A def that fires on going somewhere or doing something —
+    a level exit, a star or key grab, a warp/entrance touch, a named moment,
+    even an F1 reset — is the player performing the segment's own start, and
+    that detection enters the queue. Conservative across any-of clause sets:
+    ONE presence clause disqualifies the def, because the notice does not say
+    which clause fired."""
+    return not any(clause.get("type") in _PRESENCE_TRIGGER_TYPES
+                   for clause in start_triggers)
+
+
 def origin_view(node: str | None) -> dict:
     """{key, label, region, region_label} for one origin node — the shape the
     API stamps on a segment row and the UI groups by. None = "Anywhere"."""
@@ -2753,6 +2782,23 @@ class SegmentEngine:
         """The def for an id, or None (a deleted or never-loaded definition —
         callers must not assume every armed/pending id still has one)."""
         return self._def_by_id.get(sid)
+
+    def hold_budget(self, sid: int) -> int:
+        """How long a HOOKED practice target may outlive its arm, in frames
+        (round 19): the same measured staleness budget a loose arm and a
+        cancelled arm already get (`budget_frames` of this def's best success
+        so far), because a disarmed head has no cancel rules left to bound it
+        — without a clock, a movement he walked away from hours ago would
+        still read as selected."""
+        return budget_frames(self._best_success.get(sid))
+
+    def anchor_echo(self, ev) -> bool:
+        """Public read of `_anchor_echo` for the projector's forfeit rule
+        (round 19): a hooked target forfeits on a REAL reset in a foreign
+        course, and the involuntary IGT-reset echoes (course-entry co-frame
+        anchors, door crossings, save prompts) must not count — there is ONE
+        echo definition and this is its third reader, not a second copy."""
+        return self._anchor_echo(ev)
 
     def settle(self, frame: int) -> list[dict]:
         """Judge a pending position change on the CLOCK, with no event to carry

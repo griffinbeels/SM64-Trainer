@@ -565,18 +565,19 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
   // this function's own docstring for the override that used to sit here.
   const pipeMode = mode === "pipe";
 
-  async function pickStar() {
+  async function pickStar(options) {
     setMode("star");
     writeBowserFamily(stage.level, "reds");
-    await requestTarget(t, { course_id: stage.course_id, star_id: 0 });
+    await requestTarget(t, { course_id: stage.course_id, star_id: 0 }, options);
   }
-  async function pickPipe() {
+  async function pickPipe(options) {
     setMode("pipe");
     writeBowserFamily(stage.level, "reds");
     if (!pipeSeg) return;
     if (!pipeSeg.enabled)
       await send("PUT", `/api/segments/${pipeSeg.segment_id}`, { enabled: true });
-    await requestTarget(t, { kind: "segment", segment_id: pipeSeg.segment_id });
+    await requestTarget(t, { kind: "segment", segment_id: pipeSeg.segment_id },
+                        options);
   }
   // Clicking the CARD selects it in whatever mode is already chosen (user,
   // 2026-07-30, with a mock-up box drawn round the whole cell: "if we just click
@@ -587,9 +588,9 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
   // The "No Reds" cell's own explicit pick -- StandardSegmentCell's onPicked
   // prop (below) already covers the CLICK path; this is the same write for
   // the auto-retarget effect (item 5), which has no cell click to hang off.
-  async function pickNoReds() {
+  async function pickNoReds(options) {
     if (!noRedsSeg) return;
-    await pickSegmentTarget(t, noRedsSeg);
+    await pickSegmentTarget(t, noRedsSeg, options);
     writeBowserFamily(stage.level, "no_reds");
   }
 
@@ -658,10 +659,13 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
     if (!family) return;
     if (redsActive) return;
     if (tgt.kind === "segment") return;
+    // `auto`: the remembered-family retarget is a fill, not a click — the
+    // cell's own onPick path passes nothing and stays sovereign.
     if (family === "reds") {
-      if (bowserModeFor(stage.level) === "pipe") pickPipe(); else pickStar();
+      if (bowserModeFor(stage.level) === "pipe") pickPipe({ auto: true });
+      else pickStar({ auto: true });
     } else if (noRedsSeg) {
-      pickNoReds();
+      pickNoReds({ auto: true });
     }
   }, [stage.level]);
 
@@ -873,7 +877,10 @@ function ArenaRow({ t, v, stage }) {
     (async () => {
       if (!only.enabled)
         await send("PUT", `/api/segments/${only.segment_id}`, { enabled: true });
-      await requestTarget(t, { kind: "segment", segment_id: only.segment_id });
+      // `auto`: an arrival fill, not a click — the server holds it by the
+      // detection rules and refuses to let it steal a promoted detection.
+      await requestTarget(t, { kind: "segment", segment_id: only.segment_id },
+                          { auto: true });
     })();
   }, [stage.level, only && only.segment_id, heldStartsHere]);
 

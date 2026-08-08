@@ -33,6 +33,45 @@ against and which [[personal best]] to compare with.
 - **Lives** — the target rules (`src/sm64_events/tracking/practicable.py`)
   → the [[selector]] and the [[practice log]]
 
+### Target queue
+
+The line of detections waiting behind the held [[target]] — first hooked,
+first held. Performing a [[segment]]'s own start deliberately (a course
+exit, a door [[moment]]) takes an empty hand and becomes a
+[[hooked target]]; a detection that fires while the hand already holds
+something waits its turn; when the front completes or dies, the oldest
+detection still alive takes over, and an empty queue leaves the hand
+neutral. A [[segment]] that
+arms by mere presence — LBLJ on a castle entry, a pipe family on a course
+entry — never enters the queue.
+
+- **Lives** — the projector (`src/sm64_events/tracking/projection.py`)
+  → the [[selector]] and the [[practice log]]
+
+### Hooked target
+
+A [[target]] a detection set: the front of the [[target queue]]. The trainer
+holds it until it completes, until you genuinely abandon it (an [[anchor]]
+landing inside a foreign course), or until its own staleness budget expires
+— walking back through a course to redo its start keeps the hold. A
+[[star]] grab takes the hand from a stale hooked one, never from one the
+matcher still holds armed.
+
+- **Lives** — the projector (`src/sm64_events/tracking/projection.py`)
+  → the [[selector]]
+- **Not** — a [[picked target]]. A click is sovereign; a hook is the
+  trainer following your play.
+
+### Picked target
+
+A [[target]] you clicked. Nothing detected may steal it, a [[star]] grab may
+not move it, choosing one empties the [[target queue]], and it retires only
+by the standing rules (walking into a course it is not practiced in, with
+its arm gone).
+
+- **Lives** — the projector (`src/sm64_events/tracking/projection.py`)
+  → the [[selector]]
+
 ### Star
 
 One of Super Mario 64's collectable stars, identified by its course and its

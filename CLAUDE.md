@@ -50,6 +50,7 @@ uv run python tools/measure_topology_cancels.py       # score those topological 
 uv run python tools/measure_entrance_sweep.py         # replay both journals under the old corpus and the new one: did the topological rules move? (they must not) and which recorded rows did
 
 uv run python tools/measure_reset_stubs.py            # how often a reset's own interrupted action was re-read onto the NEXT attempt (exact), and how fast the reload's spawn ends the hold
+uv run python tools/measure_target_queue.py           # replay the journals under the pre-queue rule and the target queue: diff every target reading and every recorded row (round 19's own gate)
 node .design-sync/facade/build.mjs                   # rebuild the Claude Design bundle from .design-sync/components.mjs (the registry: one row per published component)
 uv run pytest tests/test_design_sync_registry.py -q  # that registry's own gate: does every declared prop still exist on the component
 ```
@@ -86,6 +87,7 @@ automatically when you touch matching files. Zones:
 |---|---|---|
 | Memory reads + detectors + recipes (new event, dust trick, memory hunting) | `memory/`, `detectors/`, `core/snapshot.py`, `core/events.py` | `.claude/rules/memory-detectors.md` |
 | Tracking, storage, stats, routes/runs/segments, defaults corpus | `tracking/`, `storage/`, `stats/`, `data/`, `tools/corpus_*` | `.claude/rules/tracking-storage.md` |
+| The world-graph rules a movement is judged against (topological cancels, the resurrection memory) | `tracking/topology.py`, `tracking/segments.py`, `tools/measure_topology_cancels.py`, `tools/why_cancelled.py`, `tools/topology_map.py` | `.claude/rules/segment-topology.md` |
 | The segment recorder — the journal read back as pointable sentences | `tracking/eventlabel.py`, `tracking/synthesize.py`, `ui/components/segmenttimeline.js` | `.claude/rules/recorder.md` |
 | Server, REST/WS APIs, wiring, paths, perf probes | `server/`, `main.py`, `core/paths.py`, `core/procmem.py`, `core/perfmon.py` | `.claude/rules/server.md` |
 | UI shell, shared primitives, **verification norms** (loads for all of `ui/`) | `ui/` | `.claude/rules/ui-core.md` |
