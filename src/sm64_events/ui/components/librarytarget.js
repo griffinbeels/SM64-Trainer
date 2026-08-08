@@ -12,7 +12,7 @@
 import { h } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { getJSON } from "../api.js";
+import { getJSON, send } from "../api.js";
 import { fmtSeconds } from "../format.js";
 import { entityKey as sectionEntityKey } from "../entitysection.js";
 import { entityIconSrc, genericStarSrc } from "./entityicons.js";
@@ -21,7 +21,7 @@ import { capName, divisionDigit } from "./caps.js";
 import { Disclose } from "./collapsible.js";
 import { Icon } from "./icons.js";
 import {
-  sectionOrder, autoExpandName, bandsOf, matchesRunner, videoSource,
+  sectionOrder, autoExpandName, bandsOf, matchesRunner, videoSource, linkable,
 } from "./librarymodel.js";
 
 const html = htm.bind(h);
@@ -380,13 +380,131 @@ function TocRow({ band, count, you, onJump }) {
 }
 
 /**
+ * ROUND 5 -- the link door. `library/adoptions.py` and its adopt/unadopt
+ * routes shipped with the backend and had NO UI caller (the audit tool was
+ * the only assign surface), which made linking a movement or a subsection to
+ * a segment a capability that did not exist for the user. This is the
+ * one-click door: pick one of YOUR segments and the row's community ladder
+ * becomes that segment's strategy, gradeable like any other.
+ *
+ * Refusals surface VERBATIM where the click landed -- `validate()` already
+ * names every reason (no ladder, exit-star variants, a vetted name
+ * collision) and pre-filtering rows client-side would be a second door on
+ * that judgement. A linked row shows the segment's name and an Unlink, so a
+ * mis-click never dead-ends into the audit tool.
+ */
+function LinkControl({ row, kind, entityKey, adoptable, segments, segmentsError,
+                       onRelink, resolveLabel }) {
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const linked = !!row.adopted;
+  if (!linked && !(adoptable && linkable({ entity_key: entityKey }, row, kind))) {
+    return null;
+  }
+
+  async function act(request) {
+    setBusy(true); setError(null);
+    try { await request(); setOpen(false); onRelink(); }
+    catch (err) { setError(err.message || String(err)); }
+    finally { setBusy(false); }
+  }
+  const adopt = (segmentId) => act(() => send("POST", "/api/library/adopt",
+    { row_key: row.row_key, entity_key: `segment:${segmentId}` }));
+  const unlink = () => act(() => send("POST", "/api/library/unadopt",
+    { row_key: row.row_key }));
+
+  if (linked) {
+    return html`<div class="library-link-state is-linked">
+      <${Icon} name="link" size=${14} />
+      <span>Linked to your segment <b>${resolveLabel(row.adopted)}</b> — it grades there now.</span>
+      <button type="button" class="quiet-button library-unlink" disabled=${busy}
+          onclick=${unlink}>Unlink</button>
+      ${error ? html`<span class="library-link-error">${error}</span>` : ""}
+    </div>`;
+  }
+
+  if (!open) {
+    return html`<div class="library-link-state">
+      <span class="meta">Not graded yet — link one of your segments to grade it.</span>
+      <button type="button" class="quiet-button library-link-button"
+          onclick=${() => setOpen(true)}>
+        <${Icon} name="link" size=${14} /> Link a segment…
+      </button>
+    </div>`;
+  }
+
+  const list = (segments || []).filter((segment) =>
+    !filter || segment.name.toLowerCase().includes(filter.toLowerCase()));
+  return html`<div class="library-link-state">
+    <div class="library-link-menu">
+      <div class="library-link-menu-head">
+        <span>Link to one of your segments</span>
+        <button type="button" class="quiet-button" aria-label="Close"
+            onclick=${() => setOpen(false)}><${Icon} name="close" size=${12} /></button>
+      </div>
+      ${segmentsError
+        ? html`<p class="library-link-error">${segmentsError}</p>`
+        : segments == null
+          ? html`<p class="meta">Loading your segments…</p>`
+          : segments.length === 0
+            ? html`<p class="meta">You have no segments yet — build one in the segment editor first.</p>`
+            : html`
+              ${segments.length > 8
+                ? html`<input class="library-link-filter" type="search"
+                    placeholder="Filter segments…" value=${filter}
+                    oninput=${(inputEvent) => setFilter(inputEvent.target.value)} />` : ""}
+              <div class="library-link-options">
+                ${list.map((segment) => html`<button type="button" key=${segment.id}
+                    class="library-link-option" disabled=${busy}
+                    onclick=${() => adopt(segment.id)}>${segment.name}</button>`)}
+                ${list.length === 0 ? html`<p class="meta">No segment matches.</p>` : ""}
+              </div>`}
+      ${error ? html`<p class="library-link-error">${error}</p>` : ""}
+    </div>
+  </div>`;
+}
+
+/**
+ * ROUND 5: the sheet's subsections -- stretches inside a run that no
+ * strategy section owns -- rendered nowhere until the link door needed a
+ * place to click them. A compact row each (name, best, how many times), not
+ * the full band structure: the link affordance is the ask; the full display
+ * can come later if browsing pieces turns out to matter.
+ */
+function PiecesList({ pieces, query, linkCtx }) {
+  const shown = query
+    ? pieces.filter((piece) =>
+        (piece.entries || []).some((entry) => matchesRunner(entry, query)))
+    : pieces;
+  if (!shown.length) return null;
+  return html`<div class="library-pieces">
+    <h4 class="library-pieces-head">Pieces of this run</h4>
+    ${shown.map((piece) => html`<div class="library-piece" key=${piece.row_key || piece.name}>
+      <div class="library-piece-facts">
+        <span class="library-piece-name">${piece.name}</span>
+        ${piece._target ? html`<span class="meta">${piece._target}</span>` : ""}
+        ${piece.best_cs != null
+          ? html`<span class="meta">Best ${fmtSeconds(piece.best_cs / 100)} · ${piece.best_runner}</span>` : ""}
+        <span class="meta">${(piece.entries || []).length} times</span>
+      </div>
+      <${LinkControl} row=${piece} kind="subsection" entityKey=${piece._entityKey}
+          adoptable=${piece._adoptable} ...${linkCtx} />
+    </div>`)}
+  </div>`;
+}
+
+/**
  * One strategy's section: header (identity, community best, fill rate, your
  * standing), an optional JP/US toggle, the TOC, and the banded example
  * cards. `open` is owned by the PARENT (single-open accordion, so "exactly
  * one section open" is a property of the parent's own state rather than
  * something every section has to negotiate).
  */
-function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey, onAdd }) {
+function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey, onAdd,
+                   linkCtx }) {
   // ROUND 1 (2026-08-07), superseding the round-2 version-badge ruling: the
   // JP/US control is a MODE now, and a mode FILTERS -- "We should have 2
   // modes: JP (shows only JP entries), US (shows only US entries)." An entry
@@ -454,6 +572,9 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
     </button>
     <${Disclose} open=${open} className="library-section-disclose">
       <div class="library-section-body">
+        ${linkCtx ? html`<${LinkControl} row=${approach} kind="approach"
+            entityKey=${approach._entityKey} adoptable=${approach._adoptable}
+            ...${linkCtx} />` : ""}
         ${versioned ? html`<button type="button" class="chip chip-button library-jp-toggle"
             aria-pressed=${version === "jp"}
             title=${hasJp
@@ -531,7 +652,8 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
  * never has to branch on which door it came through.
  */
 export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTier,
-                               fallbackLabel = null }) {
+                               fallbackLabel = null, onRelink = () => {},
+                               resolveEntityLabel = null }) {
   const [query, setQuery] = useState("");
   // The OPEN approach's `approachIdentity` — target-scoped, not just its
   // name, so two sibling targets whose approaches share a name (fix round 1)
@@ -571,8 +693,50 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
   const approaches = useMemo(() => sectionOrder(
     rows.flatMap((target) => (target.approaches || []).map((approach) => (
       { ...approach, _target: rows.length > 1 ? target.label : null,
-        _targetIndex: target.index }))),
+        _targetIndex: target.index,
+        // Round 5: what the link door needs from the OWNING row -- whether
+        // this target has an entity (a star's approaches auto-adopt, so
+        // they never link) and whether this instance mounts the adopt
+        // routes at all.
+        _entityKey: target.entity_key || null,
+        _adoptable: !!target.adoptable }))),
   ), [rows]);
+
+  // Round 5: the sheet's subsections, stamped the same way -- every one is
+  // linkable (they never auto-adopt; the user builds the segment first, his
+  // 2026-08-05 ruling), so they finally render, as the Pieces list below.
+  const pieces = useMemo(() => rows.flatMap((target) =>
+    (target.subsections || []).map((piece) => (
+      { ...piece, _target: rows.length > 1 ? target.label : null,
+        _entityKey: target.entity_key || null,
+        _adoptable: !!target.adoptable }))), [rows]);
+
+  // One fetch serves both halves of the link door: the menu's options and
+  // the linked chip's segment NAME (the session view only names segments
+  // with activity, so `resolveEntityLabel` alone can leave a chip reading
+  // "segment:42"). Fetched only when the page actually shows the door.
+  const wantsSegments = pieces.some((piece) => piece.row_key)
+    || approaches.some((approach) => approach.adopted
+        || (approach._adoptable && linkable({ entity_key: approach._entityKey },
+                                            approach, "approach")));
+  const [segments, setSegments] = useState(null);
+  const [segmentsError, setSegmentsError] = useState(null);
+  useEffect(() => {
+    if (!wantsSegments || segments != null) return;
+    getJSON("/api/segments")
+      .then((list) => { setSegments(list); setSegmentsError(null); })
+      .catch((err) => setSegmentsError(err.message || String(err)));
+  }, [wantsSegments, segments]);
+
+  const resolveLabel = (key) => {
+    const match = /^segment:(\d+)$/.exec(key || "");
+    if (match && segments) {
+      const segment = segments.find((seg) => seg.id === Number(match[1]));
+      if (segment) return segment.name;
+    }
+    return (resolveEntityLabel && resolveEntityLabel(key)) || key;
+  };
+  const linkCtx = { segments, segmentsError, onRelink, resolveLabel };
 
   const activeStrat = activeStratFor(t && t.view, entityKey);
   const stratsData = useEntityStrategies(entityKey);
@@ -724,6 +888,8 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
               prev === approachIdentity(approach) ? null : approachIdentity(approach))}
           query=${query}
           stratInfo=${approach.matched_strategy ? stratByName[approach.matched_strategy] : null}
-          trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd} />`)}
+          trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
+          linkCtx=${linkCtx} />`)}
+    <${PiecesList} pieces=${pieces} query=${query} linkCtx=${linkCtx} />
   </div>`;
 }

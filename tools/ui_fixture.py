@@ -790,7 +790,12 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
     compare = CompareService(compare_importer, service, broadcaster,
                              Path(compare_cache_scratch.name),
                              title_probe=lambda url: None)
-    app = create_app(poller, broadcaster, service=service, compare=compare)
+    # `adoptions_path` into scratch: without it the link door's adopt/unadopt
+    # writes land in the REAL dev data dir (`data/library_adoptions.json`,
+    # cwd-relative from source) and leak state between test runs.
+    app = create_app(poller, broadcaster, service=service, compare=compare,
+                     adoptions_path=Path(compare_cache_scratch.name)
+                     / "library_adoptions.json")
 
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(

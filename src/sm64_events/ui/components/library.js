@@ -284,6 +284,23 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
 
   function backToBrowse() { setStage("browse"); setEntry(null); setEntryError(null); }
 
+  // Round 5: after a link/unlink the open page re-reads its rows, so
+  // `adopted` always comes from the server rather than a client-side guess.
+  // Door-agnostic on purpose: every row carries its own stable `index`
+  // (both doors stamp it identically), so the numeric door can refresh a
+  // page whichever door originally opened it. A failed refresh keeps the
+  // last good rows; the next navigation refetches anyway.
+  function reloadRows() {
+    setEntry((prev) => {
+      if (prev && prev.rows.length) {
+        Promise.all(prev.rows.map((row) => getJSON(`/api/library/target/${row.index}`)))
+          .then((rows) => setEntry((current) => (current ? { ...current, rows } : current)))
+          .catch(() => {});
+      }
+      return prev;
+    });
+  }
+
   // Runs on every activation, not gated on `!active` staying false — an
   // intent may arrive on a tab that is ALREADY open (a click from elsewhere
   // while Library is on screen), and it must still navigate. Auto-open,
@@ -461,7 +478,9 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
               onAdd=${addToTray} trayKeys=${trayKeys}
               focusStrat=${entry ? entry.focusStrat : null}
               focusTier=${entry ? entry.focusTier : null}
-              fallbackLabel=${entry ? entry.fallbackLabel : null} />
+              fallbackLabel=${entry ? entry.fallbackLabel : null}
+              onRelink=${reloadRows}
+              resolveEntityLabel=${(key) => entityLabel(t, key)} />
         </div>`
       : indexError
         ? html`<div class="library-load-error">

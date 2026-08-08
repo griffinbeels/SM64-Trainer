@@ -299,3 +299,21 @@ def test_tray_to_import_reads_the_items_own_entity_key():
             "entity_key": "star:2:5"}
     out = run_js(f"m.trayToImport({json.dumps(item)})")
     assert out["body"]["entity_key"] == "star:2:5"
+
+
+def test_linkable_rows_are_entityless_approaches_and_every_subsection():
+    """Round 5: which rows offer the link-to-segment button. A star's
+    approaches auto-adopt at scrape time, so linking them again is noise;
+    subsections never auto-adopt (the user builds the segment first, his
+    2026-08-05 ruling), so every one is linkable -- on star and movement
+    targets alike. Rows served by an old snapshot without `row_key` get no
+    button: a click that cannot name its row cannot be honest about failing."""
+    movement = json.dumps({"entity_key": None})
+    star = json.dumps({"entity_key": "star:2:4"})
+    keyed = json.dumps({"row_key": "s||t||n||1"})
+    unkeyed = json.dumps({})
+    assert run_js(f"m.linkable({movement}, {keyed}, 'approach')") is True
+    assert run_js(f"m.linkable({star}, {keyed}, 'approach')") is False
+    assert run_js(f"m.linkable({star}, {keyed}, 'subsection')") is True
+    assert run_js(f"m.linkable({movement}, {keyed}, 'subsection')") is True
+    assert run_js(f"m.linkable({movement}, {unkeyed}, 'approach')") is False

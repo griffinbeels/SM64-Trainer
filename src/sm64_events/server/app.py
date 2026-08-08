@@ -249,7 +249,12 @@ def _quiet_connection_resets(loop, context) -> None:
 
 def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, updater=None, compare=None,
-               compilation=None, db_retry=None, debug_hooks: bool = False) -> FastAPI:
+               compilation=None, db_retry=None, debug_hooks: bool = False,
+               adoptions_path=None) -> FastAPI:
+    # `adoptions_path` overrides where the user's library->segment
+    # assignments live -- the UI fixture passes a scratch file so a render
+    # test clicking the link door can never write into the real data dir.
+    # None (production) resolves to core.paths.library_adoptions_path().
     # Observability for long-running sessions: samples self + CHILD (ffmpeg)
     # memory, handle/GDI/USER counts, system pressure, and a per-type heap
     # histogram on a cadence — logs an expanded line, fires one-shot per-class
@@ -391,8 +396,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         from sm64_events.library.adoptions import Adoptions
         qualified = {ek for ek in standards.graded_entities()
                      if standards.exit_variants(ek)}
-        adoptions = Adoptions(library_adoptions_path(), library, standards,
-                              qualified)
+        adoptions = Adoptions(adoptions_path or library_adoptions_path(),
+                              library, standards, qualified)
         adoptions.load()
         app.state.library_adoptions = adoptions
     app.include_router(create_library_router(library, overrides=library_overrides,

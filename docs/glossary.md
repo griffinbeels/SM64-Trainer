@@ -386,6 +386,29 @@ matches only inside the exit its [[runner]]s actually used.
 - **Lives** — the matcher (`src/sm64_events/library/adopt.py`)
   → the "= your …" chip on the [[Library tab]]
 
+### Piece
+
+A stretch inside one way of doing a [[target]] that the [[Ultimate Sheet]] times separately — the
+sheet's own subsection rows, a third kind of row beside whole
+[[approach]]es. A piece grades nobody until you link it (see [[adoption]]):
+the sheet is finer than your [[segment]]s, so you build the [[segment]] first
+and point the piece at it.
+
+- **Lives** — the library builder (`src/sm64_events/library/build.py`)
+  → the Pieces list on the [[Library tab]]'s target page
+
+### Adoption
+
+Your own assignment of a sheet row — a castle-movement [[approach]] or a
+[[piece]] — to a [[segment]] you built, minting that [[segment]] a
+[[strategy]] with the community's [[ladder]] so every [[attempt]] grades there.
+Yours, not the community's: it lives beside your data and survives a
+refresh. The link strip on the [[Library tab]] is the door; unlink reverses
+it.
+
+- **Lives** — the assignments (`src/sm64_events/library/adoptions.py`)
+  → the link strip on the [[Library tab]]'s target page
+
 ---
 
 ## What is on screen
@@ -575,7 +598,7 @@ consecutive pairs to every [[detector]], publish whatever they emit.
 
 ### Snapshot
 
-One coherent read of every piece of game state the [[detector]]s need, taken at
+One coherent read of all the game state the [[detector]]s need, taken at
 one instant so no two fields can straddle a change.
 
 - **Lives** — the snapshot (`src/sm64_events/core/snapshot.py`)

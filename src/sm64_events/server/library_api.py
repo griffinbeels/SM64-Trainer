@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
 from sm64_events.library import adoptions as adoptions_store
+from sm64_events.library.audit import row_key
 from sm64_events.library.source import fetch
 
 
@@ -25,19 +26,45 @@ def create_library_router(store, overrides=None, adoptions=None) -> APIRouter:
     def library_status():
         return store.status()
 
+    def decorated(target: dict) -> dict:
+        # The link button needs three facts per row: its stable key (the
+        # adopt endpoints speak row_key, never indices), whether it is
+        # already assigned, and whether this instance can adopt at all --
+        # a broadcast-only second instance mounts no adoptions store, and a
+        # button that 404s is worse than no button. Both full-target doors
+        # (numeric index and entity key) serve the same decorated shape, so
+        # the page never has to branch on which one it came through.
+        # Decorate COPIES: the store's payload is shared across requests and
+        # a baked-in `adopted` goes stale on the next assignment.
+        assigned = adoptions.rows() if adoptions is not None else {}
+
+        def rows(items):
+            return [{**item,
+                     "row_key": (key := row_key(target, item["name"],
+                                                item["ids"])),
+                     "adopted": assigned.get(key)}
+                    for item in items]
+
+        return {**target,
+                "approaches": rows(target["approaches"]),
+                "subsections": rows(target["subsections"]),
+                "adoptable": adoptions is not None}
+
     @router.get("/target/{index}")
     def library_target(index: int):
         target = store.target(index)
         if target is None:
             raise HTTPException(404, "no such target")
-        return {"index": index, **target}
+        return {"index": index, **decorated(target)}
 
     @router.get("/entity/{entity_key:path}")
     def library_for_entity(entity_key: str):
         """Every target mapped to one entity -- what the objective card's book
         mark jumps to. An entity with none is a 200 carrying an empty list,
         not a 404: "the community has not timed this" is an answer."""
-        return {"entity_key": entity_key, "targets": store.for_entity(entity_key)}
+        return {"entity_key": entity_key,
+                "targets": [decorated(target)
+                            for target in store.for_entity(entity_key)]}
 
     @router.get("/runners")
     def library_runners():

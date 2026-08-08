@@ -81,3 +81,65 @@ def test_a_refresh_that_cannot_reach_the_sheet_says_so(client, monkeypatch):
     response = client.post("/api/library/refresh")
     assert response.status_code == 503
     assert "could not fetch" in response.json()["detail"]
+
+
+def test_target_rows_carry_their_adoption_state(tmp_path):
+    # The Library page's link button needs three facts per row: its stable
+    # key (the adopt endpoints speak row_key, not indices), whether it is
+    # already assigned, and whether this instance can adopt at all.
+    from sm64_events.library import adoptions as ad
+    from sm64_events.ranks.standards import RankStandards
+
+    ladder = {"Mario": 2.76, "Grandmaster": 2.80, "Master": 2.86,
+              "Diamond": 2.93, "Platinum": 3.00, "Gold": 3.10,
+              "Silver": 3.20, "Bronze": 3.40}
+
+    def item(name):
+        return {"ids": ["1"], "name": name, "best_cs": 276, "best_runner": "M",
+                "times": {}, "ideal_cs": None, "fill_rate": 0.2,
+                "ladder": dict(ladder), "ladder_samples": 40,
+                "entries": [{"runner": "r", "time_cs": 276,
+                             "video": None, "version": None}]}
+
+    store = LibraryStore()
+    store._payload = {
+        "schema_version": 1, "sheet_revision": "2026-08-05T09:15:18",
+        "fetched_at": "x", "runners": [], "ladder_model": {}, "targets": [
+            {"entity_key": None, "group": "Castle Movements (Lobby)",
+             "section": "★ BoB", "label": "Lobby door (L) - BoB door",
+             "version": None, "miss_reason": "castle_movement",
+             "approaches": [item("Lobby door (L) - BoB door")],
+             "subsections": [item("First stretch")]}]}
+    standards = RankStandards(tmp_path / "rank_standards.json")
+    standards.load()
+    adoptions = ad.Adoptions(tmp_path / "library_adoptions.json", store, standards)
+    adoptions.load()
+    app = FastAPI()
+    app.include_router(create_library_router(store, adoptions=adoptions))
+    with_adopt = TestClient(app)
+
+    body = with_adopt.get("/api/library/target/0").json()
+    assert body["adoptable"] is True
+    rows = body["approaches"] + body["subsections"]
+    assert all(row["row_key"] for row in rows)
+    assert all(row["adopted"] is None for row in rows)
+
+    key = body["approaches"][0]["row_key"]
+    assert with_adopt.post("/api/library/adopt",
+                           json={"row_key": key,
+                                 "entity_key": "segment:42"}).status_code == 200
+    after = with_adopt.get("/api/library/target/0").json()
+    assert after["approaches"][0]["adopted"] == "segment:42"
+    assert after["subsections"][0]["adopted"] is None
+
+
+def test_a_read_only_instance_still_serves_row_keys_but_says_not_adoptable(client):
+    # `client` mounts no adoptions store (a broadcast-only second instance).
+    body = client.get("/api/library/target/0").json()
+    assert body["adoptable"] is False
+    assert all(row.get("row_key") for row in body["approaches"])
+    # Both full-target doors serve the same decorated shape -- the page never
+    # branches on which one it came through.
+    entity = client.get("/api/library/entity/star:1:0").json()["targets"][0]
+    assert "adoptable" in entity and "index" in entity
+    assert all(row.get("row_key") for row in entity["approaches"])

@@ -296,6 +296,19 @@ export function bandsOf(ladder, entries) {
   return bands.filter((band) => band.entries.length || band.cutoffCs != null);
 }
 
+// Which rows offer the link-to-segment button (round 5). A star's approaches
+// auto-adopt at scrape time, so only approaches on an ENTITY-LESS target
+// (castle movements, stage routes) are linkable; subsections never auto-adopt
+// -- the user builds the segment first (his 2026-08-05 ruling) -- so every
+// one is, on star and movement targets alike. A row without `row_key` (an
+// old snapshot) gets no button: a click that cannot name its row cannot be
+// honest about failing.
+export function linkable(target, item, kind) {
+  if (!item || !item.row_key) return false;
+  if (kind === "subsection") return true;
+  return !target.entity_key;
+}
+
 export function gridShape(n) {
   if (n <= 1) return { rows: 1, cols: 1 };
   if (n === 2) return { rows: 1, cols: 2 };
