@@ -20,6 +20,7 @@ import { courseOptions, levelOptions, parseStarId, segmentOptions, starId,
          starOptionsFromVocab } from "../entities.js";
 import { entityIconSrc, optionIconSrc } from "./entityicons.js";
 import { SegmentTimeline } from "./segmenttimeline.js";
+import { SearchSelect } from "./searchselect.js";
 
 const html = htm.bind(h);
 
@@ -738,31 +739,47 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
       <span class="meta">${iconOverride || "default"} · shown on the course
         quick-select</span>
     </div>`}
-    ${initial && initial.id != null && html`<label class="builder-origin">
+    ${initial && initial.id != null && html`<div class="builder-origin">
       <span class="field-label">Library category</span>
-      <select value=${origin} onchange=${(e) => saveOrigin(e.target.value)}>
-        <option value="">Auto (${detected ? detected.label : "Anywhere"})</option>
-        ${(vocab.origins || []).filter((region) => region.key !== null)
-          .map((region) => html`<optgroup key=${region.key} label=${region.label}>
-            ${region.children.map((place) => html`<option key=${place.key}
-              value=${place.key}>${place.label}</option>`)}
-          </optgroup>`)}
-      </select>
+      <${SearchSelect}
+          value=${origin}
+          valueLabel=${origin
+            ? ((vocab.origins || []).flatMap((region) => region.children || [])
+                 .find((place) => place.key === origin)
+                 || { label: origin }).label
+            : `Auto (${detected ? detected.label : "Anywhere"})`}
+          title="Where the library files this segment"
+          groups=${[{ label: null, options: [{ value: "",
+                      label: `Auto (${detected ? detected.label : "Anywhere"})` }] },
+                    ...(vocab.origins || []).filter((region) => region.key !== null)
+                      .map((region) => ({
+                        label: region.label,
+                        options: (region.children || []).map((place) =>
+                          ({ value: place.key, label: place.label })),
+                      }))]}
+          onChange=${(picked) => saveOrigin(picked)} />
       <span class="meta">where the library files this segment</span>
-    </label>`}
-    ${linkableTargets.length > 0 && html`<label class="builder-liblink">
+    </div>`}
+    ${linkableTargets.length > 0 && html`<div class="builder-liblink">
       <span class="field-label">Sheet library</span>
-      <select value=${initial && initial.id != null
-              ? (linkedTarget ? String(linkedTarget.index) : "")
-              : pendingLink}
-          onchange=${(e) => saveLibraryLink(e.target.value)}>
-        <option value="">Not linked</option>
-        ${linkableTargets.map((group) => html`<optgroup key=${group.label}
-            label=${group.label}>
-          ${group.targets.map((target) => html`<option key=${target.index}
-            value=${String(target.index)}>${target.label}</option>`)}
-        </optgroup>`)}
-      </select>
+      <${SearchSelect}
+          value=${initial && initial.id != null
+            ? (linkedTarget ? String(linkedTarget.index) : "")
+            : pendingLink}
+          valueLabel=${initial && initial.id != null
+            ? (linkedTarget ? linkedTarget.label : "Not linked")
+            : (pendingLink === "" ? "Not linked"
+               : (linkableTargets.flatMap((group) => group.targets)
+                    .find((target) => String(target.index) === pendingLink)
+                    || { label: pendingLink }).label)}
+          title="Link a sheet target"
+          groups=${[{ label: null, options: [{ value: "", label: "Not linked" }] },
+                    ...linkableTargets.map((group) => ({
+                      label: group.label,
+                      options: group.targets.map((target) =>
+                        ({ value: String(target.index), label: target.label })),
+                    }))]}
+          onChange=${(picked) => saveLibraryLink(picked)} />
       <span class="meta">${linkedTarget
         ? `linked — the sheet's strategies for "${linkedTarget.label}" grade this segment`
         : matchedTarget
@@ -770,7 +787,7 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
           : (initial && initial.id != null)
             ? "link a sheet target to grade this segment with the community's ladders"
             : "picked now, linked the moment you save"}</span>
-    </label>`}
+    </div>`}
     ${pickingIcon && html`<${IconPicker}
         identity=${{ kind: "segment", segment_id: initial.id }}
         current=${iconOverride}

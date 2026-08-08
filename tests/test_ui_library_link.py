@@ -111,12 +111,12 @@ def test_link_unlink_round_trip_links_every_strategy_at_once(library_page):
 
     library_page.evaluate(
         "document.querySelector('.library-target-titleline .library-link-button').click()")
-    library_page.wait_for(".library-link-menu", timeout_ms=10000)
-    library_page.wait_for(".library-link-option", timeout_ms=10000)
+    library_page.wait_for(".search-menu", timeout_ms=10000)
+    library_page.wait_for(".search-menu-option", timeout_ms=10000)
 
     picked = library_page.evaluate(f"""
       (() => {{
-        const options = Array.from(document.querySelectorAll('.library-link-option'));
+        const options = Array.from(document.querySelectorAll('.search-menu-option'));
         const mine = options.find((o) => o.textContent === {LINK_SEGMENT_NAME!r});
         if (!mine) return 'no option named ' + {LINK_SEGMENT_NAME!r}
           + ' among ' + options.length;
@@ -218,8 +218,8 @@ def test_linking_shows_a_standing_immediately(library_page):
                           timeout_ms=15000)
     library_page.evaluate(
         "document.querySelector('.library-target-titleline .library-link-button').click()")
-    library_page.wait_for(".library-link-option", timeout_ms=10000)
-    library_page.evaluate(f"""Array.from(document.querySelectorAll('.library-link-option'))
+    library_page.wait_for(".search-menu-option", timeout_ms=10000)
+    library_page.evaluate(f"""Array.from(document.querySelectorAll('.search-menu-option'))
       .find((o) => o.textContent === {LINK_SEGMENT_NAME!r}).click()""")
     library_page.wait_for(".library-target-titleline .library-link-state.is-linked",
                           timeout_ms=15000)
@@ -265,13 +265,30 @@ def test_the_segment_editor_links_from_the_other_side(library_page, library_serv
     }})()""")
     library_page.wait_for(".segment-row-main", timeout_ms=15000)
     library_page.evaluate("document.querySelector('.segment-row-main').click()")
-    library_page.wait_for(".builder-liblink select", timeout_ms=15000)
+    library_page.wait_for(".builder-liblink .search-select-trigger",
+                          timeout_ms=15000)
 
+    # Round 9: the row is the shared filterable popup now -- open it, type
+    # into the filter, click the one option left standing.
+    library_page.evaluate(
+        "document.querySelector('.builder-liblink .search-select-trigger').click()")
+    library_page.wait_for(".builder-liblink .search-menu-filter", timeout_ms=10000)
     library_page.evaluate(f"""(() => {{
-      const select = document.querySelector('.builder-liblink select');
-      select.value = {str(wanted["index"])!r};
-      select.dispatchEvent(new Event('change', {{ bubbles: true }}));
+      const box = document.querySelector('.builder-liblink .search-menu-filter');
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, 'value').set;
+      setter.call(box, {wanted["label"]!r});
+      box.dispatchEvent(new Event('input', {{ bubbles: true }}));
     }})()""")
+    picked_option = library_page.evaluate(f"""(() => {{
+      const options = Array.from(document.querySelectorAll(
+        '.builder-liblink .search-menu-option'));
+      const mine = options.find((o) => o.textContent === {wanted["label"]!r});
+      if (!mine) return 'no option among ' + options.length;
+      mine.click();
+      return 'clicked';
+    }})()""")
+    assert picked_option == "clicked", picked_option
     deadline = time.time() + 15
     while time.time() < deadline:
         linked = api("/api/library/adoptions")["by_entity"].get(

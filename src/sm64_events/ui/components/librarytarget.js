@@ -20,6 +20,7 @@ import { RankIcon } from "./rankicon.js";
 import { capName, divisionDigit } from "./caps.js";
 import { Disclose } from "./collapsible.js";
 import { Icon } from "./icons.js";
+import { SearchMenu } from "./searchselect.js";
 import {
   sectionOrder, autoExpandName, bandsOf, matchesRunner, videoSource, linkable,
   standingOn,
@@ -449,7 +450,6 @@ function TocRow({ band, count, you, onJump }) {
 function LinkDoor({ linkedName, linkedNote, offerNote, doAdopt, doUnlink,
                     segments, segmentsError }) {
   const [open, setOpen] = useState(false);
-  const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -470,12 +470,11 @@ function LinkDoor({ linkedName, linkedNote, offerNote, doAdopt, doUnlink,
     </div>`;
   }
 
-  // The menu OVERLAYS (absolute, below the button, which stays rendered) --
-  // his standing ruling on transient controls: "it causes all the elements
-  // to shift down; this is jarring… it should be overlaid ON TOP so that
-  // none of the UI elements are moved around" (2026-07-26).
-  const list = (segments || []).filter((segment) =>
-    !filter || segment.name.toLowerCase().includes(filter.toLowerCase()));
+  // The menu is the SHARED filterable popup (searchselect.js, round 9 --
+  // "we should basically reuse this anywhere we have a dropdown selector"),
+  // overlaid below the button, which stays rendered: his standing ruling on
+  // transient controls (2026-07-26). This door keeps its own open state so
+  // a failed adopt shows the server's reason in the still-open panel.
   return html`<div class="library-link-state">
     ${offerNote ? html`<span class="meta">${offerNote}</span>` : ""}
     <button type="button" class="quiet-button library-link-button"
@@ -483,31 +482,19 @@ function LinkDoor({ linkedName, linkedNote, offerNote, doAdopt, doUnlink,
         onclick=${() => setOpen((prev) => !prev)}>
       <${Icon} name="link" size=${14} /> Link a segment…
     </button>
-    ${open ? html`<div class="library-link-menu">
-      <div class="library-link-menu-head">
-        <span>Link to one of your segments</span>
-        <button type="button" class="quiet-button" aria-label="Close"
-            onclick=${() => setOpen(false)}><${Icon} name="close" size=${12} /></button>
-      </div>
-      ${segmentsError
-        ? html`<p class="library-link-error">${segmentsError}</p>`
-        : segments == null
-          ? html`<p class="meta">Loading your segments…</p>`
-          : segments.length === 0
-            ? html`<p class="meta">You have no segments yet — build one in the segment editor first.</p>`
-            : html`
-              ${segments.length > 8
-                ? html`<input class="library-link-filter" type="search"
-                    placeholder="Filter segments…" value=${filter}
-                    oninput=${(inputEvent) => setFilter(inputEvent.target.value)} />` : ""}
-              <div class="library-link-options">
-                ${list.map((segment) => html`<button type="button" key=${segment.id}
-                    class="library-link-option" disabled=${busy}
-                    onclick=${() => act(() => doAdopt(segment.id))}>${segment.name}</button>`)}
-                ${list.length === 0 ? html`<p class="meta">No segment matches.</p>` : ""}
-              </div>`}
-      ${error ? html`<p class="library-link-error">${error}</p>` : ""}
-    </div>` : ""}
+    ${open ? html`<${SearchMenu}
+        title="Link to one of your segments"
+        groups=${segments && segments.length
+          ? [{ label: null,
+               options: segments.map((segment) =>
+                 ({ value: segment.id, label: segment.name })) }]
+          : []}
+        emptyNote=${segmentsError ? "Could not load your segments."
+          : segments == null ? "Loading your segments…"
+          : "You have no segments yet — build one in the segment editor first."}
+        busy=${busy} error=${error || segmentsError}
+        onPick=${(segmentId) => act(() => doAdopt(segmentId))}
+        onClose=${() => setOpen(false)} />` : ""}
   </div>`;
 }
 
