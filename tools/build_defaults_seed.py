@@ -48,7 +48,14 @@ def _movement_row(row: dict) -> dict:
             "waypoints": [[clause] for clause in row["via"]],
             "guards": ROUTE_SCOPED, "category": CASTLE_MOVEMENT,
             "default_strat": STANDARD_STRAT,
-            "match_mode": row.get("match_mode") or DEFAULT_MOVEMENT_MATCH_MODE}
+            "match_mode": row.get("match_mode") or DEFAULT_MOVEMENT_MATCH_MODE,
+            # THE MOVE CLOCK, corpus-wide — his ruling 2026-08-08, priced
+            # first (15 of 88 live attempts re-time, 2 saved PBs, all
+            # faster): "I think we should flip to the move clock too, that
+            # sounds good. It works perfectly as far as I can tell." Every
+            # live movement row was seed_dirty=0 at flip time, so reconcile
+            # refreshes them all at the next startup with no migration.
+            "clock_start": "move"}
 
 
 def build() -> dict:

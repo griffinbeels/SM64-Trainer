@@ -72,8 +72,9 @@ it (an area tile answers in one click, a course tile opens its [[star]]s).
 
 Where a [[segment]]'s timer begins, chosen per definition. "At the start
 trigger" counts from the trigger's own [[frame]], fades and all — how every
-definition timed before the move clock existed, and how the seeded corpus
-still times so nobody's recorded history re-times silently. "When Mario can
+definition timed before the move clock existed. The seeded castle movements
+time from the move too: his call, made against the measured re-timing of
+his own history rather than as a silent default. "When Mario can
 move" detects the [[attempt]] at the trigger but counts from where Usamune's
 own timer restarts in the section the trigger led into — open the door, go
 through, and the recorded time matches what Usamune shows. The [[recorder]]

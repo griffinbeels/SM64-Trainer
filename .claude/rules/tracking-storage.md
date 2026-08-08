@@ -199,28 +199,30 @@ un-editable.
 
 ## When the clock starts — "trigger" vs "move" (round 15 item 3, 2026-08-08)
 
-`SegmentDef.clock_start`, migration adding the column (existing rows and the
-seeded corpus stay `"trigger"` — flipping them re-times his recorded
-history, which is a fork owed NUMBERS, not a silent default). Under
+`SegmentDef.clock_start`, migration adding the column (existing rows default
+`"trigger"`). **The 56 seeded movements are `"move"` since 2026-08-08 —
+priced first (15 of 88 live attempts re-time, 2 saved PBs, all faster,
+biggest shift 3.3 s; one 59 s outlier in the repo journal), then HIS call:
+*"I think we should flip to the move clock too, that sounds good."* One
+stamp in `_movement_row` covers all 56; every live movement row was
+seed_dirty=0, so reconcile refreshes them at the next startup. The 10 legacy tricks, the pipe trio and the 100-coin
+engines stay `"trigger"`.** Under
 `"move"` the start trigger DETECTS and the SECTION ENTRY it caused starts
 the clock — his ruling verbatim: *"the timer doesn't actually START until
 mario is able to finally move, aka when Usamune's timer actually resets to
-0 when we go to the new section."* Mechanics: `feed`'s zero-tracking
-rebases an armed move-def's `_Arm.clock_frame` to any counter zero landing
-within `CLOCK_START_WINDOW_FRAMES` (90 — measured gaps: his CCM door's
-room transition +51, a pipe +23, a painting +77, the BBH cage +74; latest
-zero inside the window wins because a load settles across several), and
-`_close` reads its origin from it: the closing event's own igt verbatim
-when the last zero IS the rebase (which makes the recorded number exactly
-what Usamune displays — his CCM entrance touches carry igt 77 where the
-trigger clock recorded the 127-frame delta), else the delta from the
-rebase frame; no rebase = byte-identical to "trigger". The recorder saves
-`clock_start: "move"` (with strict); the builder's blank reads
-`vocab.clock_starts[0]` ("move" first, his default ruling) and its "Clock
-starts" select shows the STORED value like the Matching control. Fixture:
-his own journal ids 3930-3933 verbatim in `tests/test_clock_start.py`, the
-window mutation-proved, the PATCH write path pinned by the field-sample
-completeness gate.
+0 when we go to the new section."* Mechanics: `feed` rebases an armed
+move-def's `_Arm.clock_frame` to any counter zero within
+`CLOCK_START_WINDOW_FRAMES` (90 — measured: his CCM door +51, a pipe +23,
+a painting +77, the cage +74; latest in-window zero wins, a load settles
+across several), and `_close` reads its origin from it: the closing
+event's own igt verbatim when the last zero IS the rebase (= exactly what
+Usamune displays; his CCM touches carry igt 77 where the trigger clock
+recorded 127), else the delta from the rebase; no rebase = byte-identical
+"trigger". The recorder saves `"move"` (with strict); the builder's blank
+reads `vocab.clock_starts[0]` and its "Clock starts" select shows the
+STORED value. Fixture: journal ids 3930-3933 verbatim in
+`tests/test_clock_start.py`, window mutation-proved, PATCH path pinned by
+the field-sample gate.
 
 ## A segment's time is Usamune's IGT
 
