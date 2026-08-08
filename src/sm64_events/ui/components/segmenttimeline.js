@@ -484,10 +484,15 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
       : (synthBody.steps || [])
           .filter((step) => requiredNodes.has(step.node))
           .map((step) => [step.clause]);
+    // STRICT unconditionally since round 15 — his ruling: "They should also
+    // be default Strict." A recorded piece voids when you deviate, stops or
+    // no stops; the old stops-only rule kept a stop-less recording
+    // byte-compatible with the pre-waypoint tool, and that guarantee is
+    // retired on his word. The BUILDER's own blank default is untouched.
     return { name: (name.trim() || synthBody.name), enabled: true,
       start_triggers: [synthBody.start_clause],
       end_triggers: [synthBody.end_clause], guards: [], waypoints,
-      parent, match_mode: waypoints.length ? "strict" : "loose" };
+      parent, match_mode: "strict" };
   }
 
   async function runBacktest(definition) {

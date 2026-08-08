@@ -445,22 +445,27 @@ def test_the_save_builder_guard_can_still_fail():
     assert _saves_through_one_definition_builder(real_code)
 
 
-def _mode_follows_the_declared_stops(source: str) -> bool:
-    return ('match_mode: waypoints.length ? "strict" : "loose"'
-            in strip_comments(source))
+def _recordings_save_strict(source: str) -> bool:
+    return 'match_mode: "strict"' in strip_comments(source)
 
 
-def test_a_recording_with_stops_is_strict_and_one_without_stays_loose():
-    """The rule, in one expression: a declared path is only enforced by the
-    strict matcher's path cursor, and a recording with no stops is byte-for-
-    byte the loose definition this tool has always produced."""
-    assert _mode_follows_the_declared_stops(SEGMENT_TIMELINE_JS_SOURCE)
+def test_a_recording_saves_strict_stops_or_no_stops():
+    """Round 15, his ruling verbatim: "They should also be default Strict."
+    The previous rule (strict only once a stop was declared) kept a stop-less
+    recording byte-compatible with the pre-waypoint tool; that guarantee is
+    retired on his word — a recorded piece voids when you deviate. The
+    BUILDER's blank default is a different control and untouched
+    (vocab.match_modes[0], loose-first, its own test above)."""
+    assert _recordings_save_strict(SEGMENT_TIMELINE_JS_SOURCE)
+    assert 'match_mode: waypoints.length ? "strict" : "loose"' \
+        not in strip_comments(SEGMENT_TIMELINE_JS_SOURCE), (
+        "the retired stops-only rule is back beside the strict default")
 
 
 def test_the_mode_rule_guard_can_still_fail():
-    comment_only = ('// STRICT the moment a stop is required, LOOSE when none\n'
-                    '// is: match_mode: waypoints.length ? "strict" : "loose".\n')
-    assert not _mode_follows_the_declared_stops(comment_only)
+    comment_only = ('// Recordings save STRICT unconditionally:\n'
+                    '// match_mode: "strict" is what save() sends.\n')
+    assert not _recordings_save_strict(comment_only)
 
 
 def _save_button_waits_for_the_backtest(source: str) -> bool:
