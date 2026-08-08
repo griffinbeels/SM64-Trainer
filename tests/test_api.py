@@ -872,6 +872,80 @@ def test_put_segment_persists_a_changed_match_mode(tmp_path):
                     if s["id"] == sid)["match_mode"] == "strict"
 
 
+def test_rerecord_replaces_the_recording_and_keeps_the_identity(tmp_path):
+    """Round 16: the recorder's re-record save is a PUT of the FULL definition
+    it builds (name, triggers, waypoints, parent, match_mode "strict",
+    clock_start "move", enabled) to the EXISTING id — replace, never
+    delete-and-recreate, because everything downstream (route steps, PBs,
+    attempts, strategies) references the segment by id. This drives that
+    exact payload shape and pins both halves: the recording moved, and the
+    identity did not."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments", json={
+            "name": "Recorded Piece", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}],
+            "category": "Main Categories/16 Star",
+            "parent": "star:8:1"})
+        sid = r.json()["id"]
+        rid = client.post("/api/routes", json={"name": "R", "steps": [
+            {"need": 1, "candidates": [{"type": "segment", "segment_id": sid}]},
+        ]}).json()["id"]
+
+        # The byte shape segmenttimeline.js::definitionFor sends on replace.
+        # `category` is deliberately ABSENT: the library filing must survive
+        # untouched (SegmentPatch's exclude_unset).
+        r = client.put(f"/api/segments/{sid}", json={
+            "name": "Recorded Piece", "enabled": True,
+            "start_triggers": [{"type": "level_exit", "from": 16}],
+            "end_triggers": [{"type": "level_enter", "to": 17}],
+            "guards": [], "waypoints": [[{"type": "level_enter", "to": 6}]],
+            "parent": "star:8:1", "match_mode": "strict",
+            "clock_start": "move"})
+        assert r.status_code == 200
+
+        rows = client.get("/api/segments").json()
+        same = [row for row in rows if row["name"] == "Recorded Piece"]
+        assert [row["id"] for row in same] == [sid], (
+            "replace must land on the SAME row — a second id here means "
+            "delete-and-recreate, which orphans every route step and PB")
+        row = same[0]
+        assert row["start_triggers"] == [{"type": "level_exit", "from": 16}]
+        assert row["waypoints"] == [[{"type": "level_enter", "to": 6}]]
+        # The new recording's own defaults win over the stored modes — a
+        # re-record IS a new recording (round 16's stated design call).
+        assert row["match_mode"] == "strict"
+        assert row["clock_start"] == "move"
+        assert row["category"] == "Main Categories/16 Star"
+        # Route membership rode the id through the replace.
+        view = client.get(f"/api/routes/{rid}").json()
+        assert view["steps"][0]["broken"] is False
+
+
+def test_rerecord_put_with_an_explicit_null_parent_clears_it(tmp_path):
+    """The recorder's parent control can be cleared ("Nothing — it stands on
+    its own"), and its save always SENDS parent — so an explicit null must
+    clear the stored parent, or the control shows one thing and the row
+    keeps another. Pydantic counts an explicitly-sent null as set, which is
+    what carries it through update_segment's exclude_unset dump; an OMITTED
+    parent stays untouched (the builder's own save relies on that)."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments", json={
+            "name": "Custom", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}],
+            "parent": "star:8:1"})
+        sid = r.json()["id"]
+        assert client.put(f"/api/segments/{sid}",
+                          json={"enabled": True}).status_code == 200
+        assert next(s for s in db.segment_defs()
+                    if s["id"] == sid)["parent"] == "star:8:1"
+        assert client.put(f"/api/segments/{sid}",
+                          json={"parent": None}).status_code == 200
+        assert next(s for s in db.segment_defs()
+                    if s["id"] == sid)["parent"] is None
+
+
 # -- backtest endpoint (Task 8, spec 2026-07-28-multi-step-segments) --------
 # Contract note: this endpoint's error taxonomy differs from a domain
 # ValueError -> 409, a "definition fails validate_definition" test belongs at

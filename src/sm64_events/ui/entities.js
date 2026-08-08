@@ -456,6 +456,16 @@ export const entityKeyForOption = (optionId) => {
 // Two hand-built copies of a key format is how they drift.
 const rankMapKey = entityKeyForOption;
 
+// The other direction, for a stored parent coming BACK into the picker
+// (re-record pre-fills the row's own parent): the picker highlights by
+// OPTION id, so "star:8:1" must become the bare "8:1" again. Lives beside
+// its inverse so neither can change shape without the other in view.
+export const optionForEntityKey = (entityKey) => {
+  if (entityKey == null) return null;
+  const key = String(entityKey);
+  return key.startsWith("star:") ? key.slice(5) : key;
+};
+
 // build_entity_ranks (GET /api/target/ranks) answers per entity with a FLAT
 // {rank, division, strat} -- the endpoint's own docstring names this shape.
 // PracticeCell, after mario-cap-rank-icons (task 8, 2026-07-26), wants `rank`

@@ -306,10 +306,10 @@ function backtestSummary(report) {
   if (report.unclosed.length > 0)
     return "Never fired — but it DID arm, and never closed. See below.";
   if (report.arms > 0)
-    // "no completion is recorded", not "never completed successfully": unlike
-    // segmenttimeline.js's recordingSummary (which only ever backtests
-    // replaces: null, a brand-new recording), this Builder backtests a real
-    // `replaces` when editing an existing segment -- so arms>0/fires=0 here
+    // "no completion is recorded", not "never completed successfully": like
+    // segmenttimeline.js's recordingSummary in its re-record intent, this
+    // Builder backtests a real `replaces` when editing an existing segment
+    // -- so arms>0/fires=0 here
     // can ALSO mean "it fired, and those attempts were wiped"
     // (tracking/backtest.py replays journaled data_wiped clears against
     // `current`), not only "it never completed". Both readings make this
@@ -320,7 +320,8 @@ function backtestSummary(report) {
   return "Never armed anywhere in your history.";
 }
 
-function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }) {
+function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs,
+                   onRerecord }) {
   // match_mode's own default mirrors the server's (SegmentBody.match_mode =
   // "loose") rather than naming "loose" a second time -- vocab.match_modes
   // is ordered loose-first specifically so a caller that wants "the default"
@@ -666,6 +667,21 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
       <input placeholder="e.g. Lobby to BitDW" value=${d.name}
           oninput=${(e) => setD({ ...d, name: e.target.value })} />
     </label>
+    ${/* The re-record door (round 16): "OH BOY this segment was actually
+         recorded wrong" is noticed FROM the segment, so the editor is where
+         the door lives. It opens the recorder with this row as its
+         `replaces` intent -- picks empty, name his, save replaces in place.
+         Existing rows only: a not-yet-saved definition has nothing to
+         replace. */""}
+    ${initial && initial.id != null && onRerecord && html`<div
+        class="builder-rerecord">
+      <span class="field-label">Recorded wrong?</span>
+      <button type="button" onclick=${() => onRerecord(initial)}>
+        <${Icon} name="bookmark" size=${15} />${" "}Re-record this movement
+      </button>
+      <span class="meta">play it again and point at what you did — routes,
+        PBs and history stay attached</span>
+    </div>`}
     ${initial && initial.seed_key && html`<div
         class="builder-seeded ${initial.seed_dirty ? "is-dirty" : ""}">
       <span class="field-label"><${Icon} name="shield" size=${15} />${" "}
@@ -878,7 +894,10 @@ export function Segments({ t, intent, clearIntent }) {
   const [query, setQuery] = useState("");
   const [vocabData, setVocabData] = useState(null);
   const [editing, setEditing] = useState(null);   // null | "new" | def object
-  const [recording, setRecording] = useState(false);   // the timeline picker
+  // The timeline picker: false, or {replaces: def|null} — the hero button
+  // opens it to CREATE ({replaces: null}), the editor's re-record door opens
+  // it to REPLACE that row (round 16).
+  const [recording, setRecording] = useState(false);
   const editorRef = useRef(null);   // the open Builder's {save, dirty} handle
   const [openGroups, toggleGroup] = useOpenGroups("sm64.segOriginsOpen");
   // Panes cap themselves to the space actually left below them (ui/viewport.js)
@@ -964,19 +983,24 @@ export function Segments({ t, intent, clearIntent }) {
           <p>Define repeatable sections once, then practice and rank them like stars.</p>
         </div>
       </div>
-      <button class="quiet-button" onclick=${() => setRecording(true)}>
+      <button class="quiet-button" onclick=${() => setRecording({ replaces: null })}>
         <${Icon} name="bookmark" size=${16} /> Record a segment
       </button>
       <button class="primary-button" onclick=${() => setEditing("new")}>
         <${Icon} name="plus" size=${17} /> New segment
       </button>
     </header>
+    ${/* Keyed by intent: the recorder seeds name/parent/picks from `replaces`
+         in useState initializers, so swapping intents without a remount would
+         carry one recording's state into the other's. */""}
     ${recording && html`<${SegmentTimeline} t=${t}
+        key=${recording.replaces ? `re-${recording.replaces.id}` : "new"}
+        replaces=${recording.replaces}
         onCancel=${() => setRecording(false)}
         onSaved=${async (savedId) => {
           // Same "stay on what you just saved" rule the Builder's own
-          // onSaved follows (live audit 2026-07-25): land on the new
-          // segment's own editor rather than the empty state.
+          // onSaved follows (live audit 2026-07-25): land on the new (or
+          // re-recorded) segment's own editor rather than the empty state.
           setRecording(false);
           const rowsList = await load();
           setEditing(rowsList.find((row) => row.id === savedId) || null);
@@ -1044,6 +1068,7 @@ export function Segments({ t, intent, clearIntent }) {
           ? html`<${Builder} key=${editing === "new" ? "new" : editing.id}
               vocab=${vocabData} apiRef=${editorRef} t=${t} load=${load}
               allDefs=${defs} initial=${editing === "new" ? null : editing}
+              onRerecord=${(row) => setRecording({ replaces: row })}
               onSaved=${async (savedId) => {
                 // Stay on what you just saved (live audit 2026-07-25): closing
                 // the editor threw the user back to the empty state, and after

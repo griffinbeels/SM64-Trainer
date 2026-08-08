@@ -252,9 +252,10 @@ class SegmentPatch(BaseModel):
     category: str | None = None
     # None = untouched, exactly like waypoints above.
     match_mode: str | None = None
-    # None = untouched. There is deliberately NO way to clear a parent
-    # through this patch shape: promoting a subsection back to a top-level
-    # segment changes what it IS, and nothing in the builder asks for it.
+    # None OMITTED = untouched; an EXPLICIT null clears (exclude_unset keeps
+    # a field the body actually sent, even as null). The builder never sends
+    # it; the recorder's re-record save (round 16) always does, so the parent
+    # control he sees is exactly what lands.
     parent: str | None = None
     # None = untouched, exactly like match_mode above.
     clock_start: str | None = None

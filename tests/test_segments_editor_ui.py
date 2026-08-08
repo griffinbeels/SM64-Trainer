@@ -750,8 +750,10 @@ def _lints_alongside_the_recorder_backtest(source: str) -> bool:
 
 def test_the_recorder_lints_alongside_its_backtest():
     assert _lints_alongside_the_recorder_backtest(SEGMENT_TIMELINE_JS_SOURCE)
-    # Always a brand-new definition in this flow -- nothing on disk to exclude.
-    assert "segment_id: null" in SEGMENT_TIMELINE_JS_SOURCE
+    # A create excludes nothing; a RE-RECORD (round 16) excludes the row it
+    # replaces, or an unchanged walk reports itself as its own duplicate.
+    assert ("segment_id: replaces ? replaces.id : null"
+            in strip_comments(SEGMENT_TIMELINE_JS_SOURCE))
 
 
 def test_the_recorder_lint_guard_can_still_fail():

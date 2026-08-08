@@ -43,7 +43,8 @@ if _MISSING:
 
 from uilab.driver import get_driver          # noqa: E402
 from uilab_project import (PROJECT, STORIES,  # noqa: E402
-                           BOWSER_COURSE, BOWSER_LEVEL)
+                           BOWSER_COURSE, BOWSER_LEVEL,
+                           _script as _ASYNC)
 from ui_fixture import (serve_ui, FIXTURE_COURSE, FIXTURE_LEVEL,  # noqa: E402
                         _seed_target, _target_segment)
 
@@ -767,6 +768,91 @@ def test_a_third_picked_moment_becomes_a_waypoint_the_person_chose(page):
     assert count(page, ".record-mark.role-stop") == 1
     assert count(page, ".record-review .step-picker") == 0
     assert count(page, ".record-review:has-text('Then:')") >= 1
+
+
+def test_the_rerecord_door_opens_the_recorder_carrying_the_row(page):
+    """Round 16. The editor's re-record door is the ONLY entry into the
+    recorder's replace intent — if it is unreachable, or opens a recorder
+    that has forgotten which row it replaces, the feature does not exist
+    (the same rule that produced the parent test above). Three claims, end
+    to end in the real app: the door is on a saved definition's editor;
+    clicking it opens the recorder in Re-record with NOTHING picked (a
+    re-record starts from a fresh recording, not the old picks); and after
+    two picks the name field holds the ROW's name, not the auto-name — the
+    pre-fill arrives pre-marked as his, which is what stops every pick
+    toggle overwriting it. Closes the modal after, so the recorder stories'
+    own idempotent setups never inherit a replace intent."""
+    reach(page, "segments-editor")
+    # The recorder stories above leave the CREATE recorder open (their setups
+    # are idempotent, not self-closing) — a human cannot click the editor's
+    # door through a modal, so close it before this test does.
+    page.evaluate(_ASYNC("""
+const cancel = Array.from(document.querySelectorAll(
+  '.modal .builder-actions button')).find((b) => b.textContent === 'Cancel');
+if (cancel) { cancel.click();
+  await waitFor(() => !document.querySelector('.record-picks')); }
+"""))
+    assert count(page, ".builder-rerecord button") == 1
+    row_name = page.evaluate(
+        "return document.querySelector('.builder-name input').value")
+    page.evaluate(_ASYNC("""
+document.querySelector('.builder-rerecord button').click();
+await waitFor(() => !!document.querySelector('.record-picks'));
+"""))
+    # The Modal renders its title as a bare <h2 id="modal-title-N"> — no
+    # .modal-title class exists to select on, so match by content.
+    assert count(page, ".modal h2:has-text('Re-record')") == 1
+    assert count(page, ".record-row.picked") == 0
+    # Reuse the ONE script that reaches two-picked (the file's own rule) —
+    # it finds this modal already open and picks into it.
+    reach(page, "recorder-review")
+    shown = page.evaluate(
+        "return document.querySelector('.record-review .builder-name input')"
+        + ".value")
+    assert shown == row_name, (
+        f"the recorder shows {shown!r} where the replaced row is named "
+        f"{row_name!r} — the auto-name overwrote the pre-fill, so the save "
+        "would silently rename the segment")
+    assert count(page, ".record-replace-note") == 1
+    save_label = page.evaluate("""
+return Array.from(document.querySelectorAll('.builder-actions button'))
+  .map((b) => b.textContent).join('|')
+""")
+    assert "Replace segment" in save_label, save_label
+    # Drive the save itself: replace must land on the SAME row (the client's
+    # PUT, not a second POST — a duplicate here orphans nothing visibly and
+    # is exactly the silent failure the whole feature exists to avoid), with
+    # the recording actually moved. Safe against the shared page: this is the
+    # file's last test, and the second viewport gets its own fresh server.
+    before = page.evaluate(_ASYNC("""
+const rows = await (await fetch('/api/segments')).json();
+const mine = rows.filter((r) => r.name === %s);
+return JSON.stringify({n: rows.length, ids: mine.map((r) => r.id),
+                       triggers: mine[0].start_triggers});
+""" % json.dumps(row_name)))
+    page.evaluate(_ASYNC("""
+const saveBtn = Array.from(document.querySelectorAll(
+  '.modal .builder-actions button'))
+  .find((b) => b.textContent.includes('Replace segment'));
+saveBtn.click();
+await waitFor(() => !document.querySelector('.record-picks'), 5000);
+"""))
+    after = page.evaluate(_ASYNC("""
+const rows = await (await fetch('/api/segments')).json();
+const mine = rows.filter((r) => r.name === %s);
+return JSON.stringify({n: rows.length, ids: mine.map((r) => r.id),
+                       triggers: mine[0].start_triggers});
+""" % json.dumps(row_name)))
+    was, now = json.loads(before), json.loads(after)
+    assert now["ids"] == was["ids"], (
+        f"row ids for {row_name!r} moved {was['ids']} -> {now['ids']} — the "
+        "save created a new row instead of replacing the old one")
+    assert now["n"] == was["n"], (
+        f"the library grew {was['n']} -> {now['n']} rows — the save POSTed a "
+        "duplicate instead of PUTting the replaced id")
+    assert now["triggers"] != was["triggers"], (
+        "the replaced row still holds its old start triggers — the save "
+        "landed nowhere")
 
 
 def test_a_castle_area_tile_is_a_terminal_parent_pick(page):

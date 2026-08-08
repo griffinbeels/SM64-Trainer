@@ -501,6 +501,25 @@ a move instead.
 - **Not** — the [[recorder]], which captures video. This one captures nothing;
   it reads the [[journal]] you already wrote by playing.
 
+### Re-record
+
+The [[segment recorder]] pointed at a [[segment]] that already exists: play it
+again, point at what you did, and Save replaces that [[segment]]'s recording
+in place. The [[segment]] keeps its identity — same row, so every [[route]] that
+references it, its PBs, each [[attempt]], each [[strategy]]'s [[ladder]] and
+its library filing all stay attached; only the triggers move. The new
+recording's own defaults win over the old row's stored modes (it times from
+the move and saves Strict), and re-recording a shipped movement makes it
+yours, exactly as editing one does. The door lives on the [[segment]]'s own
+editor, where you notice you recorded it wrong.
+
+- **Lives** — the segment editor's "Recorded wrong?" row
+  (`src/sm64_events/ui/components/segments.js`) opening the recording screen
+  (`src/sm64_events/ui/components/segmenttimeline.js`) with the row as its
+  replace intent
+- **Not** — delete-and-recreate, which would orphan every [[route step]] and
+  PB referencing the old row.
+
 ### Practice cell
 
 One clickable thing in the [[selector]] — its art, its [[rank icon]], its name

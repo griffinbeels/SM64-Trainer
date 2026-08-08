@@ -1248,6 +1248,13 @@
   }
   .builder-seeded.is-dirty { border-left-color: #e0803a; }
   .builder-seeded p.meta { margin: .25rem 0 .5rem; }
+  /* The re-record door (round 16) — same one-row shape as .builder-icon:
+     label, action, consequence, at the point where "recorded wrong" is
+     noticed. `flex-wrap` so the meta line drops under the button in a
+     narrow editor pane instead of overflowing it. */
+  .builder-rerecord { display: flex; align-items: center; gap: .6rem;
+    flex-wrap: wrap; margin-bottom: 10px; }
+  .builder-rerecord .field-label { margin: 0; }
   /* Trailing `auto` track added 2026-07-28 for the collapse toggle. Without
      it the button becomes an implicit 5th column at the grid's default size
      and pushes the strategy picker out of the card. */
@@ -2975,16 +2982,21 @@
   /* Match-mode control (spec 2026-07-28-multi-step-segments, final-review
      finding 4) -- boxed like .builder-enabled above; the description wraps
      to its own full-width row beneath the label+select one so a long
-     sentence never fights the select for horizontal room. */
-  .builder-matchmode {
+     sentence never fights the select for horizontal room. The clock-start
+     control (round 15) is the same shape and shares every rule -- it
+     shipped with NO rule at all, and its description overlapped its own
+     select across the 1019-1075px band (the sweep's 52-defect finding,
+     2026-08-08). */
+  .builder-matchmode, .builder-clockstart {
     display: flex; flex-wrap: wrap; align-items: center; gap: .55rem;
     margin: .65rem 0; padding: .65rem .75rem;
     border: 1px solid var(--border-soft); border-radius: 7px;
     background: rgba(8,20,34,.55);
   }
-  .builder-matchmode .field-label { margin: 0; }
-  .builder-matchmode select { min-width: 0; max-width: 20rem; }
-  .builder-matchmode .meta { flex-basis: 100%; }
+  .builder-matchmode .field-label, .builder-clockstart .field-label { margin: 0; }
+  .builder-matchmode select, .builder-clockstart select {
+    min-width: 0; max-width: 20rem; }
+  .builder-matchmode .meta, .builder-clockstart .meta { flex-basis: 100%; }
   .segment-definition-grid {
     display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .65rem;
   }

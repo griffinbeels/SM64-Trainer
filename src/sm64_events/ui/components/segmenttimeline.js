@@ -46,8 +46,8 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
-import { courseUnionGroups, entityKeyForOption, parseSegmentId }
-  from "../entities.js";
+import { courseUnionGroups, entityKeyForOption, optionForEntityKey,
+         parseSegmentId } from "../entities.js";
 import { fmtIgtShort } from "../format.js";
 import { visitCards } from "../visits.js";
 import { Icon } from "./icons.js";
@@ -77,7 +77,7 @@ const RETRACTION_WINDOW = 40;
 // BacktestReport shape, read through the same endpoint. Not a second copy:
 // wording is scoped to "this recording" rather than "this definition",
 // since nothing is saved yet when this renders.
-function recordingSummary(report) {
+function recordingSummary(report, replacing = false) {
   const n = report.attempts.length;
   if (report.fires > 0)
     return `${report.fires} fire${report.fires === 1 ? "" : "s"} out of `
@@ -88,13 +88,15 @@ function recordingSummary(report) {
   if (report.unclosed.length > 0)
     return `It started ${report.arms} time${report.arms === 1 ? "" : "s"} `
       + "before, and is still running as of your most recent history.";
-  // "Never finished" is accurate here ONLY because runBacktest() below
-  // always sends replaces: null (recording only ever CREATES) -- with a
-  // real `replaces`, arms>0/fires=0/unclosed=[] can also mean "it fired,
-  // and those attempts were manually wiped" (backtest.py replays journaled
-  // clears). If a later flow reuses this component to back an EDIT
-  // (split/merge is the shape that would), this wording needs the same
-  // hedge backtestSummary would need for that case.
+  // "Never finished" is accurate for a CREATE because the backtest ran with
+  // replaces: null. Re-recording sends the real id, and there
+  // arms>0/fires=0/unclosed=[] can ALSO mean "it fired, and those attempts
+  // were manually wiped" (backtest.py replays journaled clears) — so the
+  // replacing wording hedges where the create wording may assert.
+  if (replacing)
+    return `It started ${report.arms} time${report.arms === 1 ? "" : "s"} `
+      + "before and finished none we still hold — your END may be wrong, or "
+      + "its earlier attempts were wiped.";
   return `It started ${report.arms} time${report.arms === 1 ? "" : "s"} `
     + "before and never finished — your END may be wrong, or unreachable "
     + "from there.";
@@ -256,7 +258,13 @@ function VisitCard({ card, collapsed, onToggleFold, icon, order, onToggleRow,
   </section>`;
 }
 
-export function SegmentTimeline({ t, onSaved, onCancel }) {
+// `replaces` (round 16): the /api/segments row being RE-RECORDED, or null for
+// an ordinary create. Replace beats delete-and-recreate because the segment's
+// IDENTITY survives — same id, so routes that reference it, its PBs, attempts,
+// strategies and ladders all stay attached; only the recording itself moves.
+// The new recording's own defaults win over the row's stored modes
+// (clock "move" + Strict) — a re-record IS a new recording, stated in copy.
+export function SegmentTimeline({ t, onSaved, onCancel, replaces = null }) {
   // Task 11's own carried concern: the default view (view=steps) is only
   // ~10% of the journal by design, and the rarer reset/spawn-triggered
   // starts are reachable ONLY through view=all -- without this control here
@@ -297,13 +305,16 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   const [folded, setFolded] = useState(new Set());
   const [synth, setSynth] = useState(null);
   const [synthErr, setSynthErr] = useState(null);
-  const [name, setName] = useState("");
+  // A re-record opens carrying the row's own name, PRE-MARKED as his: the
+  // name field keeps HIS name (it already exists), so the auto-name may
+  // never overwrite it. Emptying the field still hands it back.
+  const [name, setName] = useState(replaces ? replaces.name : "");
   // THE AUTO-NAME MAY ONLY FILL A FIELD HE HAS NOT EDITED (round 12 item 4:
   // "once I set the name for the segment name it shouldn't change" — every
   // pick toggle re-derived and overwrote what he typed). A ref, not state:
   // derive()'s .then would otherwise read the value frozen at call time.
   // Emptying the field hands it back to the auto-name; Clear resets both.
-  const nameEditedRef = useRef(false);
+  const nameEditedRef = useRef(!!replaces);
   // Which entity this is a piece of (`SegmentDef.parent`) -- the ONLY way a
   // subsection can be created, and it is asked HERE because this is the
   // moment you know the answer: "nothing asks 'you just recorded this, what
@@ -317,7 +328,8 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   // here would leave every star looking unpicked while segments highlighted
   // fine. `entityKeyForOption` is the one translation, applied where the
   // definition is built.
-  const [parentOption, setParentOption] = useState(null);
+  const [parentOption, setParentOption] = useState(
+    replaces ? optionForEntityKey(replaces.parent) : null);
   const [pickingParent, setPickingParent] = useState(false);
   const parent = parentOption == null ? null
                                       : entityKeyForOption(parentOption);
@@ -326,7 +338,8 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   // Author-time lint (Task 16, spec 2026-07-28-multi-step-segments) --
   // the recorder is where lint pays best: it's what explains a backtest that
   // came back arms=0/fires=0 rather than leaving the user at a dead end.
-  // `segment_id: null` always -- this flow only ever CREATES.
+  // `segment_id` is the replaced row's own id on a re-record, null on a
+  // create (runLint below).
   const [lintFindings, setLintFindings] = useState([]);
   const [lintErr, setLintErr] = useState(null);
   const [saveErr, setSaveErr] = useState(null);
@@ -502,8 +515,10 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   async function runBacktest(definition) {
     setBtReport(null); setBtErr(null);
     try {
+      // A re-record backtests AGAINST the row it replaces, so the report's
+      // gained/lost compares the new recording with the old one's history.
       const report = await send("POST", "/api/segments/backtest",
-        { definition, replaces: null });
+        { definition, replaces: replaces ? replaces.id : null });
       setBtReport(report);
     } catch (err) { setBtErr(String(err)); }
   }
@@ -511,8 +526,10 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   async function runLint(definition) {
     setLintFindings([]); setLintErr(null);
     try {
+      // `segment_id` excludes the row being replaced from the duplicate
+      // rule, or an unchanged walk reports itself as its own duplicate.
       const result = await send("POST", "/api/segments/lint",
-        { definition, segment_id: null });
+        { definition, segment_id: replaces ? replaces.id : null });
       setLintFindings(result.warnings);
     } catch (err) { setLintErr(String(err)); }
   }
@@ -568,7 +585,10 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
 
   function clearPicks() {
     setPickedIds([]); resetDownstream();
-    setName(""); nameEditedRef.current = false;
+    // Clear un-picks the MOMENTS; on a re-record the name is the row's own
+    // and stays his, exactly as it arrived.
+    setName(replaces ? replaces.name : "");
+    nameEditedRef.current = !!replaces;
   }
 
   function toggleFold(key) {
@@ -583,9 +603,19 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
     if (!synth || !btReport) return;   // see Save's disabled= below
     setSaving(true); setSaveErr(null);
     try {
-      const body = await send("POST", "/api/segments",
-                              definitionFor(synth, required));
-      onSaved(body.id);
+      if (replaces) {
+        // Replace, never delete-and-recreate: a PUT to the existing id is
+        // what keeps routes, PBs, attempts, strategies and ladders attached.
+        // `category` is absent from the definition, so the library filing
+        // survives untouched (SegmentPatch's exclude_unset).
+        await send("PUT", `/api/segments/${replaces.id}`,
+                   definitionFor(synth, required));
+        onSaved(replaces.id);
+      } else {
+        const body = await send("POST", "/api/segments",
+                                definitionFor(synth, required));
+        onSaved(body.id);
+      }
     } catch (err) { setSaveErr(String(err)); }
     finally { setSaving(false); }
   }
@@ -623,9 +653,16 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   // disables Save there too; a "warning" one does not.
   const lintHasError = lintFindings.some((finding) => finding.severity === "error");
 
-  return html`<${Modal} title="Record a segment" icon="segments" size="large"
+  return html`<${Modal} title=${replaces ? `Re-record ${replaces.name}`
+                                         : "Record a segment"}
+      icon="segments" size="large"
       onClose=${onCancel}
-      description="Play, then point at what you just did. Pick the moment it started, the moment it finished, and any stops in between.">
+      description=${replaces
+        ? "Play it again, then point at what you just did. Save replaces this "
+          + "movement's recording — its routes, PBs, attempts and strategies "
+          + "stay attached."
+        : "Play, then point at what you just did. Pick the moment it started, "
+          + "the moment it finished, and any stops in between."}>
     ${/* A plain block wrapper, and the only thing it does is give the UI log a
          root to read this surface from. `.modal-body` is block flow, so it
          changes no layout -- the alternative was a `rootRef` prop on the
@@ -711,10 +748,22 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
         onPick=${(id) => { setParentOption(id); setPickingParent(false); }}
         onClose=${() => setPickingParent(false)} />`}
 
+      ${/* What a re-record COSTS, said where the save lands, before it does:
+           the new recording's own defaults (clock "move" + Strict) replace
+           the row's stored modes, and re-recording a shipped movement makes
+           it his (same consequence the editor's seeded panel states; Reset
+           there still puts it back). */""}
+      ${replaces && html`<p class="meta record-replace-note">
+        Saving replaces <b>${replaces.name}</b> — new recording, same segment.
+        It times from the move and voids when you deviate (Strict).${" "}
+        ${replaces.seed_key && !replaces.seed_dirty
+          ? "It is a shipped movement, so re-recording makes it yours; the editor's Reset puts it back."
+          : ""}
+      </p>`}
       ${btErr && html`<p class="badx">${btErr}</p>`}
       ${!btReport && !btErr
         && html`<p class="meta">Testing against your history…</p>`}
-      ${btReport && html`<p class="meta">${recordingSummary(btReport)}</p>`}
+      ${btReport && html`<p class="meta">${recordingSummary(btReport, !!replaces)}</p>`}
       ${lintErr && html`<p class="badx">${lintErr}</p>`}
       ${lintFindings.length > 0 && html`<div class="lint-panel">
         ${lintFindings.map((finding, i) => html`<div key=${i}
@@ -735,7 +784,8 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
            says what to do instead. */""}
       ${pickedIds.length >= 2 && html`<button class="primary-button"
           disabled=${!btReport || saving || lintHasError} onclick=${save}>
-        <${Icon} name="save" size=${16} />${" "}${saving ? "Saving…" : "Save segment"}
+        <${Icon} name="save" size=${16} />${" "}${saving ? "Saving…"
+          : replaces ? "Replace segment" : "Save segment"}
       </button>`}
     </div>
     </div>
