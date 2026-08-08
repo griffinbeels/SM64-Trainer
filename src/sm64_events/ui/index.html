@@ -1374,10 +1374,19 @@
     margin: 0; padding: 0; min-height: 0; border: 0; cursor: pointer;
     appearance: none; opacity: 0;
   }
+  /* Round 10: the rank card's picker is the filterable popup, so its
+     whole-card hit target is a stretched invisible BUTTON instead of a
+     stretched invisible select -- same mechanism, same rules. */
+  .context-select > .context-card-trigger {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    margin: 0; padding: 0; min-height: 0; border: 0; cursor: pointer;
+    background: transparent; opacity: 0;
+  }
   /* An opacity-0 element cannot show its own focus ring, so the card wears
      it — :has(:focus-visible), not :focus-within, so a mouse click does not
      leave a ring behind the way it would on a plain focus. */
-  .context-select:has(> select:focus-visible) {
+  .context-select:has(> select:focus-visible),
+  .context-select:has(> .context-card-trigger:focus-visible) {
     outline: 2px solid #78b9ff; outline-offset: 2px;
   }
   .context-select, button.context-control:not(:disabled) { cursor: pointer; }

@@ -66,7 +66,7 @@ export function SearchMenu({ title, groups, onPick, onClose, busy = false,
               ? html`<div class="search-menu-group-head">${group.label}</div>` : ""}
             ${group.options.map((option) => html`<button type="button"
                 key=${String(option.value)} class="search-menu-option"
-                disabled=${busy}
+                data-value=${String(option.value)} disabled=${busy}
                 onclick=${() => onPick(option.value)}>${option.label}</button>`)}
           </div>`)}
     </div>
