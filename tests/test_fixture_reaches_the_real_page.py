@@ -853,6 +853,43 @@ return JSON.stringify({n: rows.length, ids: mine.map((r) => r.id),
     assert now["triggers"] != was["triggers"], (
         "the replaced row still holds its old start triggers — the save "
         "landed nowhere")
+    # Round 17 item 1: the OPEN editor below must show the server's version.
+    # The Builder is keyed by segment id and the replace keeps the id, so
+    # without a forced remount its `d` state (read from `initial` exactly
+    # once) keeps rendering the PRE-replace definition — which is his report
+    # verbatim: "it doesn't feel like the start/finish fields were changed".
+    # Three comparisons, all against the API row rather than guessed
+    # constants: the start clause's TYPE select, its `to` param when the
+    # clause has one, and the Then section's step count.
+    editor = json.loads(page.evaluate(_ASYNC("""
+await waitFor(() => !!document.querySelector('.segbuilder'), 5000);
+const start = document.querySelector('.seg-start');
+const selects = Array.from(start.querySelectorAll('select'))
+  .map((s) => s.value);
+return JSON.stringify({
+  startType: selects[0] || null,
+  startValues: selects,
+  thenSteps: document.querySelectorAll('.then-step').length,
+});
+""")))
+    row = json.loads(page.evaluate(_ASYNC("""
+const rows = await (await fetch('/api/segments')).json();
+const mine = rows.find((r) => r.name === %s);
+return JSON.stringify({start: mine.start_triggers[0],
+                       waypoints: mine.waypoints.length});
+""" % json.dumps(row_name))))
+    assert editor["startType"] == row["start"]["type"], (
+        f"the editor's Start clause reads {editor['startType']!r} where the "
+        f"server row now holds {row['start']['type']!r} — the Builder kept "
+        "its pre-replace state instead of remounting on the fresh row")
+    if "to" in row["start"]:
+        assert str(row["start"]["to"]) in editor["startValues"], (
+            f"the editor's Start params {editor['startValues']} do not show "
+            f"the replaced clause's to={row['start']['to']} — stale state")
+    assert editor["thenSteps"] == row["waypoints"], (
+        f"the editor's Then section draws {editor['thenSteps']} step(s) "
+        f"where the server row holds {row['waypoints']} — his second "
+        "screenshot exactly (the CCM door stop missing from Then)")
 
 
 def test_a_castle_area_tile_is_a_terminal_parent_pick(page):

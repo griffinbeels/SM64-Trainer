@@ -782,9 +782,15 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null }) {
            control whose reason lives in its own hover is the shape he
            reported as a dead button (2026-08-02). The line above the list
            says what to do instead. */""}
+      ${/* While the backtest is in flight the button is disabled — so the
+           REASON lives on the button itself (his rule: put the reason where
+           the click lands, or do not disable it). A click during that window
+           does nothing silently, which is exactly how a re-record can be
+           believed saved when it never was (round 17 item 1). */""}
       ${pickedIds.length >= 2 && html`<button class="primary-button"
           disabled=${!btReport || saving || lintHasError} onclick=${save}>
         <${Icon} name="save" size=${16} />${" "}${saving ? "Saving…"
+          : !btReport && !btErr ? "Testing your history…"
           : replaces ? "Replace segment" : "Save segment"}
       </button>`}
     </div>

@@ -898,6 +898,14 @@ export function Segments({ t, intent, clearIntent }) {
   // opens it to CREATE ({replaces: null}), the editor's re-record door opens
   // it to REPLACE that row (round 16).
   const [recording, setRecording] = useState(false);
+  // Bumped when the RECORDER writes a row (round 17 item 1). The Builder is
+  // keyed by segment id and a re-record keeps the id, so without this the
+  // open editor never remounts and its `d` state — read from `initial`
+  // exactly once — keeps rendering the PRE-replace definition: "it doesn't
+  // feel like the start/finish fields were changed" (his report, and a
+  // driven test reproduces it). Folded into the Builder key so only a
+  // recorder save forces the remount; ordinary editing is untouched.
+  const [editorEpoch, setEditorEpoch] = useState(0);
   const editorRef = useRef(null);   // the open Builder's {save, dirty} handle
   const [openGroups, toggleGroup] = useOpenGroups("sm64.segOriginsOpen");
   // Panes cap themselves to the space actually left below them (ui/viewport.js)
@@ -1004,6 +1012,7 @@ export function Segments({ t, intent, clearIntent }) {
           setRecording(false);
           const rowsList = await load();
           setEditing(rowsList.find((row) => row.id === savedId) || null);
+          setEditorEpoch((epoch) => epoch + 1);
           t.refresh();
         }} />`}
 
@@ -1065,7 +1074,8 @@ export function Segments({ t, intent, clearIntent }) {
 
       <main class="practice-card workshop-card segment-editor">
         ${editing
-          ? html`<${Builder} key=${editing === "new" ? "new" : editing.id}
+          ? html`<${Builder}
+              key=${editing === "new" ? "new" : `${editing.id}:${editorEpoch}`}
               vocab=${vocabData} apiRef=${editorRef} t=${t} load=${load}
               allDefs=${defs} initial=${editing === "new" ? null : editing}
               onRerecord=${(row) => setRecording({ replaces: row })}
