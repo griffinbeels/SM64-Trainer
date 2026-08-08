@@ -1465,13 +1465,18 @@ def create_api_router(service) -> APIRouter:
         did. Every row that landmark ever appeared in re-labels because the
         browser resolves labels from this map at render time rather than
         baking a string into the row when it arrived.
+
+        Since round 13 it applies to the LANDMARK rather than the key: a star
+        door is two objects, so a rename or an erase moves every key the
+        catalogue currently reads as one thing (same name, same level, same
+        kind) — and naming a second key like an existing one IS the merge
+        gesture, his own rule verbatim.
         """
         if service.db is None:
             raise HTTPException(503, "database unavailable")
         if not body.key.strip():
             raise HTTPException(422, "key is required")
-        service.db.name_landmark(body.key.strip(), body.name)
-        return {"names": service.db.landmark_names()}
+        return {"names": service.rename_landmark(body.key.strip(), body.name)}
 
     @router.post("/pb")
     async def save_pb(body: PbBody):

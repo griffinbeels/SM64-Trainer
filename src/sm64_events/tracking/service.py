@@ -21,6 +21,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 
 from sm64_events.core.events import Event
+from sm64_events.core.landmark import landmark_group
 from sm64_events.core.paths import bundled_defaults_seed
 from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, node_label, star_name
@@ -109,10 +110,16 @@ class TrackerService:
         self.ranks = ranks            # RankStandards | None
         self.session_id: int | None = None
         self._segment_defs = self._load_segment_defs()
+        # The landmark catalogue, cached for the projector's same-name
+        # collapse (round 13): read per FEED through the provider below, so a
+        # full-table SELECT per replayed event would be ruinous — the cache
+        # drops on rename_landmark and at start() (reconcile seeds names).
+        self._landmark_names_cache: dict | None = None
         self._projector = Projector(segments=self._segment_defs,
                                     time_filters=self._time_filters(),
                                     origin_overrides=self._origin_overrides(),
-                                    hundred_coin_strat=self._hundred_coin_strat)
+                                    hundred_coin_strat=self._hundred_coin_strat,
+                                    landmark_names=self._landmark_names)
         self._current_stage = {"course_id": None, "level": None,
                                "area": None, "mode": None}
         self._persisted_runs: list[int] = []
@@ -137,6 +144,28 @@ class TrackerService:
         {} in degraded mode. Segment bounds ride the defs themselves."""
         return self.db.get_state("time_filters", {}) if self.db is not None else {}
 
+    def _landmark_names(self) -> dict:
+        """The catalogue, for the projector's per-feed MatchContext — cached
+        because a moment pin asks on every event and replay feeds thousands."""
+        if self._landmark_names_cache is None:
+            self._landmark_names_cache = (self.db.landmark_names()
+                                          if self.db is not None else {})
+        return self._landmark_names_cache
+
+    def rename_landmark(self, key: str, name: str) -> dict:
+        """His naming gesture, applied to the LANDMARK rather than the key —
+        every key the catalogue currently reads as one thing with `key` moves
+        together (round 13 items 2+3: a star door is TWO objects, so renaming
+        "the 70 Star Door" must move both halves, and a blank erases the whole
+        group). Giving a second key an existing name IS the merge gesture:
+        *"if I rename them to the same name, they should all collapse to the
+        same landmark."* Returns the catalogue as the route answers it."""
+        names = self.db.landmark_names()
+        for member in landmark_group(key, names):
+            self.db.name_landmark(member, name)
+        self._landmark_names_cache = None
+        return self.db.landmark_names()
+
     async def attach_db(self, db: Database) -> None:
         """Late DB attach: upgrade a broadcast-only instance to full
         tracking. A restart handoff that loses the instance-lock race
@@ -149,10 +178,12 @@ class TrackerService:
         2026-07-23: post-update GUI stuck on 'loading…')."""
         self.db = db
         self._segment_defs = self._load_segment_defs()
+        self._landmark_names_cache = None
         self._projector = Projector(segments=self._segment_defs,
                                     time_filters=self._time_filters(),
                                     origin_overrides=self._origin_overrides(),
-                                    hundred_coin_strat=self._hundred_coin_strat)
+                                    hundred_coin_strat=self._hundred_coin_strat,
+                                    landmark_names=self._landmark_names)
         await self.start()
 
     # -- pipeline -------------------------------------------------------------
@@ -169,11 +200,15 @@ class TrackerService:
             log.info("purged %d derived journal row(s) and reclaimed the space",
                      purged)
         events = self.db.events()
+        # Reconcile has just (re)seeded catalogue names by the time start()
+        # replays, so the collapse must not judge pins under a stale cache.
+        self._landmark_names_cache = None
         attempts, self._projector = replay(
             events, segments=self._segment_defs,
             time_filters=self._time_filters(),
             origin_overrides=self._origin_overrides(),
-            hundred_coin_strat=self._hundred_coin_strat)
+            hundred_coin_strat=self._hundred_coin_strat,
+            landmark_names=self._landmark_names)
         self.db.replace_attempts(attempts)
         # Boot repair, same reason as in _reproject: an orphaned pb row keeps
         # GRADING, so a db that already carries some from an older delete or
@@ -1667,7 +1702,8 @@ class TrackerService:
             db.events(), segments=self._segment_defs,
             time_filters=self._time_filters(),
             origin_overrides=self._origin_overrides(),
-            hundred_coin_strat=self._hundred_coin_strat)
+            hundred_coin_strat=self._hundred_coin_strat,
+            landmark_names=self._landmark_names)
         # keep the live session: replayed projector state is authoritative
         self._projector = projector
         db.replace_attempts(attempts)

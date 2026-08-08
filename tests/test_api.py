@@ -2527,3 +2527,32 @@ def test_an_entrance_rows_rename_identity_is_the_entrance_itself(tmp_path):
         assert entrance["label"] == "Touched CCM Painting in Castle Inside"
         names = client.get("/api/landmarks").json()["names"]
         assert names[door_key] == "CCM Door"
+
+
+def test_renaming_one_half_of_a_named_pair_moves_the_whole_door(tmp_path):
+    """Round 13 items 2+3: a star door is TWO objects, and his rule is the
+    spec — "if I rename them to the same name, they should all collapse to
+    the same landmark". Naming the second half like the first IS the merge;
+    after it, a rename through EITHER key moves both, and a blank erases
+    both. A same-named key in another level never moves."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        half_a = "6:2:800eb180:-281,3174,3772"   # his real 70-star-door keys
+        half_b = "6:2:800eb180:-127,3174,3772"
+        elsewhere = "7:1:800eb180:-281,3174,3772"
+        client.post("/api/landmark", json={"key": half_a, "name": "70 Star Door"})
+        client.post("/api/landmark", json={"key": elsewhere, "name": "70 Star Door"})
+        # The merge gesture: the second half takes the same name.
+        client.post("/api/landmark", json={"key": half_b, "name": "70 Star Door"})
+        # One landmark now: renaming through half B moves half A too, and
+        # the same-named door in another level stays put.
+        names = client.post("/api/landmark", json={
+            "key": half_b, "name": "Star Door (70)"}).json()["names"]
+        assert names[half_a] == "Star Door (70)"
+        assert names[half_b] == "Star Door (70)"
+        assert names[elsewhere] == "70 Star Door"
+        # A blank erases the whole group, nothing else.
+        names = client.post("/api/landmark",
+                            json={"key": half_a, "name": ""}).json()["names"]
+        assert half_a not in names and half_b not in names
+        assert names[elsewhere] == "70 Star Door"

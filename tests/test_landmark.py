@@ -129,3 +129,61 @@ def test_a_pointer_that_misses_a_slot_boundary_names_nothing():
     mem.write_u32(A.MARIO_USED_OBJ, slot_address(38) + 0x10)
     mem.write_u32(slot_address(38, A.OBJECT_BEHAVIOR), DOOR_BHV)
     assert SnapshotReader(mem).read().landmark_behaviour == 0
+
+
+# --- same name, same landmark (round 13 items 2+3) --------------------------
+# A star door is TWO OBJECTS — measured 2026-08-08, his 70/50/8-star doors
+# each read as a pair of keys 154 units apart — and his rule is the spec:
+# "if I rename them to the same name, they should all collapse to the same
+# landmark."
+
+from sm64_events.core.landmark import (group_scope, landmark_group,  # noqa: E402
+                                       same_landmark)
+
+HALF_A = "6:2:800eb180:-281,3174,3772"   # the 70 Star Door, left half
+HALF_B = "6:2:800eb180:-127,3174,3772"   # ... right half — his real keys
+NAMED = {HALF_A: "70 Star Door", HALF_B: "70 Star Door",
+         "6:2:800eb180:-127,2253,4762": "50 Star Door"}
+
+
+def test_two_halves_wearing_one_name_are_one_landmark():
+    assert same_landmark(HALF_A, HALF_B, NAMED) is True
+    assert same_landmark(HALF_A, HALF_A, None) is True, "key equality needs no names"
+
+
+def test_the_collapse_never_reaches_across_levels_or_kinds():
+    other_level = "7:1:800eb180:-281,3174,3772"
+    other_kind = "6:2:800ebc8c:-281,3174,3772"
+    names = {**NAMED, other_level: "70 Star Door", other_kind: "70 Star Door"}
+    assert same_landmark(HALF_A, other_level, names) is False
+    assert same_landmark(HALF_A, other_kind, names) is False
+
+
+def test_the_area_is_deliberately_not_in_the_scope():
+    # The basement<->lobby warp door is ONE physical door standing in two
+    # areas; naming both sides alike SHOULD make them one.
+    lobby_side = "6:1:800ebc7c:-1100,-1074,922"
+    basement_side = "6:3:800ebc7c:-1100,-1074,922"
+    names = {lobby_side: "Stairs Door", basement_side: "Stairs Door"}
+    assert same_landmark(lobby_side, basement_side, names) is True
+
+
+def test_different_names_or_no_names_stay_two_landmarks():
+    assert same_landmark(HALF_A, "6:2:800eb180:-127,2253,4762", NAMED) is False
+    assert same_landmark(HALF_A, HALF_B, {}) is False
+    assert same_landmark(HALF_A, HALF_B, None) is False
+
+
+def test_kind_and_entrance_keys_never_group():
+    assert group_scope("kind:800eb180") is None
+    assert group_scope("entrance:6:1:5") is None
+    assert group_scope(None) is None
+    names = {"kind:800eb180": "star door", "kind:800ebc8c": "star door"}
+    assert same_landmark("kind:800eb180", "kind:800ebc8c", names) is False
+
+
+def test_a_rename_applies_to_the_whole_group():
+    assert sorted(landmark_group(HALF_A, NAMED)) == sorted([HALF_A, HALF_B])
+    # An unnamed key is its own group — naming the first half touches only it.
+    assert landmark_group("6:2:800eb180:-281,2253,4762", NAMED) \
+        == ["6:2:800eb180:-281,2253,4762"]

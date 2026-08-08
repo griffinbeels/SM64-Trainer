@@ -543,7 +543,8 @@ class Projector:
                  origin_overrides: dict | None = None,
                  time_corrections: dict[int, dict] | None = None,
                  warp_destinations: dict[int, int] | None = None,
-                 hundred_coin_strat=None):
+                 hundred_coin_strat=None,
+                 landmark_names=None):
         # ((course_id, star_id), exit_star, current_strat) -> the 100-coin
         # strategy this run belongs to, or None for "keep what is remembered"
         # (spec 2026-08-03-hundred-coin-exit-variants). Injected rather than
@@ -552,6 +553,14 @@ class Projector:
         # the pre-2026-08-03 behaviour byte for byte, which is what every test
         # and tool constructing a bare Projector still gets.
         self._hundred_coin_strat = hundred_coin_strat
+        # () -> {landmark key: name}, the catalogue, for the moment pin's
+        # same-name collapse (round 13). A PROVIDER for the same reason
+        # hundred_coin_strat is: the catalogue is db state the projector must
+        # not reach into, it changes on a rename with no journal event, and
+        # None keeps every bare construction byte-for-byte on key equality.
+        # Same "applies backwards" contract as the labels: a replay matches
+        # under the names as they are NOW.
+        self._landmark_names = landmark_names
         self._cleared = cleared if cleared is not None else {}
         # attempt_id -> reclassified strat (caveat 16); shadows the strat
         # remembered at close time.
@@ -828,7 +837,9 @@ class Projector:
                            last_star_grabbed=self._last_star_grabbed,
                            last_star_attempted=self._last_star_attempted,
                            route_segments=self._route_segments,
-                           target_segment=target_seg)
+                           target_segment=target_seg,
+                           landmark_names=(self._landmark_names()
+                                           if self._landmark_names else None))
         seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
         # The origin rule's verdict, applied now that the matcher has had this
         # event (see _dispatch's level_changed branch for the whole argument).
@@ -1721,7 +1732,7 @@ def wipe_matches(a: Attempt, p: dict) -> bool:
 
 
 def replay(events, segments=None, time_filters=None, origin_overrides=None,
-           on_notices=None, hundred_coin_strat=None
+           on_notices=None, hundred_coin_strat=None, landmark_names=None
            ) -> tuple[list[Attempt], Projector]:
     """`on_notices`, default None (spec 2026-07-28-multi-step-segments, the
     backtest arm-count gap): an optional callback invoked with
@@ -1749,7 +1760,8 @@ def replay(events, segments=None, time_filters=None, origin_overrides=None,
                      origin_overrides=origin_overrides,
                      time_corrections=time_corrections(events),
                      warp_destinations=warp_destinations(events),
-                     hundred_coin_strat=hundred_coin_strat)
+                     hundred_coin_strat=hundred_coin_strat,
+                     landmark_names=landmark_names)
     attempts: list[Attempt] = []
     for ev in events:
         if ev.type == "data_wiped":

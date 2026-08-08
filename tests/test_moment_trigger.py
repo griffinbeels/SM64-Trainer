@@ -233,3 +233,25 @@ def test_a_named_landmark_clause_reads_by_its_name():
     assert named == "Open the CCM Door in Castle Inside"
     assert S.clause_sentence(clause) == "Open a door in Castle Inside"
     assert DOOR_KEY not in S.clause_sentence(clause, {})
+
+
+def test_a_pin_fires_on_the_other_half_once_both_wear_his_name():
+    """A star door is TWO objects (round 13: his 70/50/8-star doors each read
+    as a pair of keys), so a definition pinned to one half silently never
+    fired when he pushed the other. Same name = same landmark, through the
+    catalogue the MatchContext now carries; no names in hand = key equality,
+    the pre-collapse behaviour every bare test context still gets."""
+    half_a = "6:1:800eb180:-2598,512,-1517"
+    half_b = "6:1:800eb180:-2706,512,-1409"
+    clause = moment_clause(level=6, landmark=half_a)
+    payload = {"kind": "door_open", "level": 6,
+               "landmark": {"key": half_b, "placed": True, "nameable": True}}
+    named = S.MatchContext(level=6, prev_level=6, num_stars=0,
+                           landmark_names={half_a: "8 Star Door",
+                                           half_b: "8 Star Door"})
+    assert S.TRIGGERS["moment_reached"].match(clause, _Ev(payload), named) is True
+    # Unnamed halves stay two landmarks, and a bare context changes nothing.
+    assert S.TRIGGERS["moment_reached"].match(
+        clause, _Ev(payload),
+        S.MatchContext(level=6, prev_level=6, num_stars=0)) is False
+    assert match(clause, payload) is False

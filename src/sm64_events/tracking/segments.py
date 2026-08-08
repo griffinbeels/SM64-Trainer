@@ -344,6 +344,7 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           region_for_node, star_count,
                                           star_name, world_connections,
                                           world_regions)
+from sm64_events.core.landmark import same_landmark
 from sm64_events.detectors.moment import MOMENTS
 # The verb splice ("Open a door" -> "Open") lives with the row labeller and
 # is borrowed, not copied: a landmark-pinned clause must read exactly like
@@ -462,6 +463,12 @@ class MatchContext:
     # None/empty = no active route.
     route_segments: frozenset | None = None
     target_segment: int | None = None
+    # The landmark catalogue (key -> name), for the moment pin's SAME-NAME
+    # collapse (round 13 items 2+3): a star door is two objects, so a pin on
+    # one half must fire when he pushes the other once both carry his one
+    # name. None = no catalogue in hand (bare test contexts) = key equality
+    # only, byte-for-byte the pre-collapse behaviour.
+    landmark_names: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -804,8 +811,10 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and (p.get("ordinal") is None
                      or ev.payload.get("ordinal") == p["ordinal"])
                 and (p.get("landmark") is None
-                     or (ev.payload.get("landmark") or {}).get("key")
-                     == p["landmark"])
+                     or same_landmark(
+                         p["landmark"],
+                         (ev.payload.get("landmark") or {}).get("key"),
+                         ctx.landmark_names if ctx else None))
                 and (p.get("level") is None
                      or ev.payload.get("level") == p["level"])
                 and (p.get("area") is None

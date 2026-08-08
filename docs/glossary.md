@@ -113,7 +113,11 @@ naming anything. He names one specific landmark in the [[recorder]] and
 every row it ever appeared in takes that name; a name he types always beats
 a shipped one. A recorded [[segment]] can also PIN one: a definition made by
 pointing at "Open the CCM Door" matches that door and no other, instead of
-"whichever door came first".
+"whichever door came first". Some one things wear several keys — the game
+builds a [[star]]-count door from TWO halves, each with its own spawn point — so the
+name is the collapse: keys of the same kind in the same course that carry
+one name ARE one landmark, a rename or an erase moves all of them, and a
+pinned [[segment]] fires on whichever half he pushes.
 
 - **Lives** — `src/sm64_events/core/landmark.py` (the key),
   `tools/corpus_behaviors.py` (every kind, named),
