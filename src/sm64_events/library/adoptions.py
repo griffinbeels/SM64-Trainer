@@ -164,6 +164,23 @@ class Adoptions:
         self._sync()
         return {"adopted": False, "row_key": key, "entity_key": removed}
 
+    def linked_targets(self) -> dict:
+        """{entity key: [{index, label}]} — the REVERSE of the stored rows,
+        for the segment editor's "which library target points at me" view
+        (round 8). Computed from APPROACH assignments only: a piece link is
+        a partial fact and must not present a whole target as linked."""
+        from sm64_events.library.audit import row_key as make_key
+        out = {}
+        for position, target in enumerate(self.store.payload["targets"]):
+            entities = {self._rows[key]
+                        for item in target["approaches"]
+                        if (key := make_key(target, item["name"],
+                                            item["ids"])) in self._rows}
+            for entity in entities:
+                out.setdefault(entity, []).append(
+                    {"index": position, "label": target["label"]})
+        return out
+
     def adopt_target(self, index: int, entity: str) -> dict:
         """Assign EVERY laddered approach of one target to `entity` — round
         7: "If we link a segment, then it should automatically load ALL

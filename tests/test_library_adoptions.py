@@ -238,3 +238,19 @@ def test_adopt_target_refuses_an_unknown_index_and_an_empty_target(wiring):
     with pytest.raises(ad.AdoptionError) as err:
         adoptions.adopt_target(0, "segment:42")
     assert "no approach" in str(err.value)
+
+
+def test_linked_targets_is_the_reverse_view_the_segment_editor_reads():
+    """ROUND 8: the segment builder needs "which library target points at
+    this segment" -- the reverse of the stored rows, computed from APPROACH
+    assignments only (a piece link is a partial fact and must not present a
+    whole target as linked)."""
+    store = LibraryStore()
+    store._payload = _payload()
+    adoptions = ad.Adoptions("nonexistent-adoptions.json", store, None)
+    assert adoptions.linked_targets() == {}
+    target = store.payload["targets"][0]
+    key = row_key(target, "Lobby door (L) - BoB door", ["1"])
+    adoptions._rows = {key: "segment:42"}
+    assert adoptions.linked_targets() == {
+        "segment:42": [{"index": 0, "label": "Lobby door (L) - BoB door"}]}

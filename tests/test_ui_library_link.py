@@ -11,6 +11,7 @@ without writing into the real data dir).
 """
 import json
 import shutil
+import time
 import sys
 import urllib.request
 from pathlib import Path
@@ -229,5 +230,70 @@ def test_linking_shows_a_standing_immediately(library_page):
     assert "no times yet" in standing, standing
     # leave the fixture as found for the other tests
     library_page.evaluate("document.querySelector('.library-unlink').click()")
+    library_page.wait_for(".library-target-titleline .library-link-button",
+                          timeout_ms=15000)
+
+
+def test_the_segment_editor_links_from_the_other_side(library_page, library_server):
+    """ROUND 8: "when we *create* a segment, we should be able to link it to
+    a pre-existing segment in the library. In both scenarios ... we should
+    be able to link the two together." The editor's Sheet-library select
+    drives the SAME adopt_target door: picking a target links it, the
+    Library page then wears the linked chip for that target, and picking
+    "Not linked" clears it."""
+    import urllib.request as request_lib
+
+    def api(path):
+        with request_lib.urlopen(f"{library_server}{path}", timeout=10) as response:
+            return json.loads(response.read())
+
+    index = api("/api/library")
+    wanted = next(
+        target for group in index["groups"] for target in group["targets"]
+        if target["label"] == "Lobby door (L) - CCM wooden door")
+    segment = next(row for row in api("/api/segments")
+                   if row["name"] == LINK_SEGMENT_NAME)
+
+    library_page.evaluate('document.querySelector(\'.nav-item[title="Segments"]\').click()')
+    library_page.wait_for(".segments-page .library-search", timeout_ms=15000)
+    library_page.evaluate(f"""(() => {{
+      const box = document.querySelector('.segments-page .library-search');
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, 'value').set;
+      setter.call(box, {LINK_SEGMENT_NAME!r});
+      box.dispatchEvent(new Event('input', {{ bubbles: true }}));
+    }})()""")
+    library_page.wait_for(".segment-row-main", timeout_ms=15000)
+    library_page.evaluate("document.querySelector('.segment-row-main').click()")
+    library_page.wait_for(".builder-liblink select", timeout_ms=15000)
+
+    library_page.evaluate(f"""(() => {{
+      const select = document.querySelector('.builder-liblink select');
+      select.value = {str(wanted["index"])!r};
+      select.dispatchEvent(new Event('change', {{ bubbles: true }}));
+    }})()""")
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        linked = api("/api/library/adoptions")["by_entity"].get(
+            f"segment:{segment['id']}", [])
+        if linked:
+            break
+        time.sleep(0.3)
+    assert linked and linked[0]["index"] == wanted["index"], linked
+
+    # the OTHER door now shows it: the Library target wears the linked chip
+    library_page.evaluate('document.querySelector(\'.nav-item[title="Library"]\').click()')
+    library_page.wait_for(".library-target", timeout_ms=15000)
+    _navigate_to_target(library_page, "Castle Movements (Lobby)",
+                        "Lobby door (L) - CCM wooden door")
+    library_page.wait_for(".library-target-titleline .library-link-state.is-linked",
+                          timeout_ms=15000)
+    linked_text = library_page.evaluate(
+        "document.querySelector('.library-target-titleline .library-link-state.is-linked').textContent")
+    assert LINK_SEGMENT_NAME in linked_text, linked_text
+
+    # leave the fixture as found
+    library_page.evaluate(
+        "document.querySelector('.library-unlink').click()")
     library_page.wait_for(".library-target-titleline .library-link-button",
                           timeout_ms=15000)

@@ -161,6 +161,13 @@
                     margin: .5rem 0; }
   .builder-origin .field-label { margin: 0; }
   .builder-origin select { min-width: 0; max-width: 16rem; }
+  /* Round 8: the Sheet Library link, same row shape as the origin above --
+     flex-wrap so the linked-state meta line drops below at narrow panes
+     instead of overflowing. */
+  .builder-liblink { display: flex; align-items: center; flex-wrap: wrap;
+                     gap: .6rem; margin: .5rem 0; }
+  .builder-liblink .field-label { margin: 0; }
+  .builder-liblink select { min-width: 0; max-width: 16rem; }
   /* Entity picker (spec 2026-07-25-entity-picker-icons). The trigger reads
      like the select it replaced; the dialog rows carry art. */
   .entity-trigger {

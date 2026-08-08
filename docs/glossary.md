@@ -406,7 +406,11 @@ Yours, not the community's: it lives beside your data and survives a
 refresh. The door sits beside the [[target]]'s own name on the
 [[Library tab]] and links the WHOLE [[target]] — one click adopts every
 laddered [[approach]] as its own [[strategy]] on the [[segment]]; a
-[[piece]] keeps its own row-level door; unlink reverses the whole batch. A [[segment]] whose name equals an entity-less [[target]]'s label
+[[piece]] keeps its own row-level door; unlink reverses the whole batch.
+The [[segment]] builder carries the same door from the other side — pick a
+sheet [[target]] while making or editing a [[segment]], and the link lands
+the moment you save. A [[segment]] whose name equals an entity-less
+[[target]]'s label
 associates by itself — no click — and an associated row shows your standing
 at once: your [[segment]]'s best [[personal best]] graded on the row's own
 displayed [[ladder]], or Capless ([[Iron]]) when you hold no time yet. Where

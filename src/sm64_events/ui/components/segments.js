@@ -347,6 +347,75 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
   const [origin, setOrigin] = useState(
     detected && detected.source === "override" ? detected.key : "");
   const [err, setErr] = useState(null);
+
+  // ROUND 8 (2026-08-08) -- the Sheet Library link, from THIS side too:
+  // "when we *create* a segment, we should be able to link it to a
+  // pre-existing segment in the library. In both scenarios ... we should be
+  // able to link the two together." Same stored fact as the Library page's
+  // own door (adopt_target), reached from where segments are MADE. The
+  // picker lists the sheet's ENTITY-LESS targets (movements, stage RTAs --
+  // a star's rows grade through the star already); an existing segment
+  // links immediately, a new one holds the pick and applies it right after
+  // Save mints the id.
+  const [libraryIndex, setLibraryIndex] = useState(null);
+  const [linkedBy, setLinkedBy] = useState(null);      // adoptions by_entity
+  const [matchedBy, setMatchedBy] = useState({});      // name matches, read-only
+  const [pendingLink, setPendingLink] = useState("");  // new segments only
+  useEffect(() => {
+    let cancelled = false;
+    getJSON("/api/library")
+      .then((data) => { if (!cancelled) setLibraryIndex(data); })
+      .catch(() => { if (!cancelled) setLibraryIndex(null); });
+    getJSON("/api/library/adoptions")
+      .then((data) => {
+        if (cancelled) return;
+        setLinkedBy(data.by_entity || {});
+        setMatchedBy(data.matched_by_name || {});
+      })
+      .catch(() => { if (!cancelled) setLinkedBy(null); });
+    return () => { cancelled = true; };
+  }, []);
+  const linkableTargets = (libraryIndex && libraryIndex.groups
+    ? libraryIndex.groups.map((group) => ({
+        label: group.group,
+        targets: group.targets.filter((target) =>
+          !target.entity_key && target.miss_reason !== "not_a_target"
+          && target.approaches > 0),
+      })).filter((group) => group.targets.length)
+    : []);
+  const linkedTarget = initial && initial.id != null && linkedBy
+    ? ((linkedBy[`segment:${initial.id}`] || [])[0] || null)
+    : null;
+  // The NAME match is the automatic association (round 6) -- shown here so
+  // this surface can never contradict the Library page's own chip with a
+  // bare "Not linked".
+  const matchedTarget = initial && initial.id != null && !linkedTarget
+    ? (matchedBy[`segment:${initial.id}`] || null)
+    : null;
+
+  async function applyLink(entityId, targetIndex, previousIndex) {
+    if (previousIndex != null) {
+      await send("POST", "/api/library/unadopt_target",
+                 { target_index: previousIndex });
+    }
+    if (targetIndex !== "") {
+      await send("POST", "/api/library/adopt_target",
+                 { target_index: Number(targetIndex),
+                   entity_key: `segment:${entityId}` });
+    }
+  }
+
+  async function saveLibraryLink(value) {
+    if (!(initial && initial.id != null)) { setPendingLink(value); return; }
+    try {
+      setErr(null);
+      await applyLink(initial.id, value,
+                      linkedTarget ? linkedTarget.index : null);
+      const fresh = await getJSON("/api/library/adoptions");
+      setLinkedBy(fresh.by_entity || {});
+      if (t) t.refresh();
+    } catch (e) { setErr(String(e)); }
+  }
   // Backtest preview state -- reset for free on every open/switch because
   // Builder remounts (Segments keys it by editing.id/"new"), so a stale
   // report from a different segment can never bleed through.
@@ -433,6 +502,15 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
         savedId = initial.id;
       } else {
         savedId = (await send("POST", "/api/segments", body)).id;
+        // Round 8: a link picked BEFORE the segment existed applies the
+        // moment Save mints the id. The segment itself is saved either way
+        // -- a failed link reports beside Save rather than unsaving it.
+        if (pendingLink !== "") {
+          try { await applyLink(savedId, pendingLink, null); }
+          catch (e) {
+            setErr(`Segment saved, but the library link failed: ${e}`);
+          }
+        }
       }
       onSaved(savedId);
       return true;
@@ -671,6 +749,27 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
           </optgroup>`)}
       </select>
       <span class="meta">where the library files this segment</span>
+    </label>`}
+    ${linkableTargets.length > 0 && html`<label class="builder-liblink">
+      <span class="field-label">Sheet library</span>
+      <select value=${initial && initial.id != null
+              ? (linkedTarget ? String(linkedTarget.index) : "")
+              : pendingLink}
+          onchange=${(e) => saveLibraryLink(e.target.value)}>
+        <option value="">Not linked</option>
+        ${linkableTargets.map((group) => html`<optgroup key=${group.label}
+            label=${group.label}>
+          ${group.targets.map((target) => html`<option key=${target.index}
+            value=${String(target.index)}>${target.label}</option>`)}
+        </optgroup>`)}
+      </select>
+      <span class="meta">${linkedTarget
+        ? `linked — the sheet's strategies for "${linkedTarget.label}" grade this segment`
+        : matchedTarget
+          ? `already matched by name to "${matchedTarget.label}" — no link needed`
+          : (initial && initial.id != null)
+            ? "link a sheet target to grade this segment with the community's ladders"
+            : "picked now, linked the moment you save"}</span>
     </label>`}
     ${pickingIcon && html`<${IconPicker}
         identity=${{ kind: "segment", segment_id: initial.id }}

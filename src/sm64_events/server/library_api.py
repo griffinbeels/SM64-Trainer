@@ -110,8 +110,29 @@ def create_library_router(store, overrides=None, adoptions=None,
     if adoptions is not None:
         @router.get("/adoptions")
         def library_adoptions():
+            # Round 8: `by_entity` is the segment editor's reverse view --
+            # which library target points at which segment. `matched_by_name`
+            # is the same view for the AUTOMATIC association, so the editor
+            # can say "already matched by name" instead of a "Not linked"
+            # that contradicts the Library page's own chip.
+            matched = {}
+            if segment_names is not None:
+                try:
+                    pairs = list(segment_names())
+                    for position, target in enumerate(store.payload["targets"]):
+                        if target.get("entity_key"):
+                            continue
+                        hit = adoptions_store.auto_match(target["label"], pairs)
+                        if hit:
+                            matched.setdefault(hit["entity"],
+                                               {"index": position,
+                                                "label": target["label"]})
+                except Exception:
+                    matched = {}
             return {"rows": adoptions.rows(),
-                    "ladders": adoptions.ladders()}
+                    "ladders": adoptions.ladders(),
+                    "by_entity": adoptions.linked_targets(),
+                    "matched_by_name": matched}
 
         @router.post("/adopt")
         def library_adopt(body: dict = Body(...)):
