@@ -62,6 +62,15 @@ import { StepPicker } from "./steptrack.js";
 
 const html = htm.bind(h);
 
+// How far back the live tail re-asks, in journal ids. A load's verdict is
+// revised by rows that land after it — `eventlabel.level_entry_rows` settles
+// its area edges once the spawn arrives, which the measured window puts up to
+// 60 game frames later — so the tail has to be able to take a row BACK, and
+// it can only do that for rows it re-fetches. Sized generously (the endpoint
+// walks the whole journal either way, so a few extra rows in the response
+// cost nothing) and bounded so the request never becomes the whole list.
+const RETRACTION_WINDOW = 40;
+
 // The same three-way diagnostic segments.js's Builder renders for a hand-
 // authored definition's backtest (backtestSummary) -- recording reaches the
 // IDENTICAL arms/fires/unclosed reasoning because it is the same
@@ -352,12 +361,40 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
     tailing.current = true;
     const epoch = epochRef.current;
     try {
-      const after = held.length ? held[held.length - 1].id : 0;
+      // RE-ASK FOR THE LAST FEW ROWS, and REPLACE them with what comes back.
+      // A pure append cannot be right, because the server's answer about a
+      // row CHANGES after the fact: `eventlabel.level_entry_rows` settles a
+      // load's own area edges RETROACTIVELY, once the spawn that speaks for
+      // the load arrives. Poll during the load and the endpoint honestly says
+      // "Moved to another part of Whomp's Fortress"; poll again after the
+      // spawn and that row is gone and "Started Whomp's Fortress" is there
+      // instead. An append-only tail keeps the first answer forever — which
+      // is his report, twice: *"I'm still getting the 'moved to another part'
+      // event before the 'Started' event"* (2026-08-07), with the stray row
+      // carrying the load's own time.
+      //
+      // So the window is re-fetched rather than skipped, and rows inside it
+      // are taken from the SERVER rather than from what we hold. A row the
+      // server no longer returns is dropped, which is the whole point. It
+      // also picks up the repeat counter and any rename that moved a label
+      // inside the window, for free.
+      const newest = held.length ? held[held.length - 1].id : 0;
+      const after = Math.max(0, newest - RETRACTION_WINDOW);
       const body = await getJSON(
         `/api/segments/timeline?limit=200&view=${viewRef.current}`
         + `&after_id=${after}`);
-      if (!deadRef.current && epoch === epochRef.current && body.rows.length)
-        holdRows([...rowsRef.current, ...body.rows]);
+      if (!deadRef.current && epoch === epochRef.current) {
+        const kept = rowsRef.current.filter((row) => row.id <= after);
+        const next = [...kept, ...body.rows];
+        // Only repaint when something actually differs — the recorder polls
+        // per game event, and a list rebuilt identically would remount every
+        // row and lose the caret in an open rename input.
+        const held_now = rowsRef.current;
+        const same = next.length === held_now.length
+          && next.every((row, index) => row.id === held_now[index].id
+                        && row.label === held_now[index].label);
+        if (!same) holdRows(next);
+      }
     } catch { /* a dropped tail is covered by the next event */ }
     finally {
       tailing.current = false;

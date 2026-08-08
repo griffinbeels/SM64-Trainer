@@ -153,6 +153,77 @@ def test_a_published_event_reaches_the_recorder_within_the_budget(capsys):
             "perceive is a defect, not a cost")
 
 
+def test_a_row_the_server_takes_back_disappears_from_the_list():
+    """His report, twice: *"I'm still getting the 'moved to another part'
+    event before the 'Started' event"* — with the stray row carrying the
+    LOAD's own time, so it is the load's own settling rather than a move he
+    made.
+
+    The endpoint is right about it and the CLIENT was keeping the old answer.
+    `eventlabel.level_entry_rows` settles a load's area edges RETROACTIVELY:
+    poll while the load is in flight and the row honestly reads "Moved to
+    another part of …", poll again once the spawn lands and that row is gone
+    and "Started …" is there instead. An append-only tail — which is what a
+    live feed naturally is — can never take the first answer back.
+
+    Drives exactly that sequence against the real endpoint: publish the level
+    edge and its area edges, let the recorder poll, then publish the spawn."""
+    with serve_ui_live() as (base, service), get_driver().launch() as page:
+        page.goto(f"{base}/ui/index.html")
+        page.wait_for(".log-list-card")
+        assert page.evaluate(_OPEN_THE_RECORDER) is True
+
+        def publish(*events):
+            async def go():
+                for event in events:
+                    await service.publish(event)
+            thread = threading.Thread(target=lambda: asyncio.run(go()))
+            thread.start()
+            thread.join(timeout=10)
+
+        now = dt.datetime.now(dt.timezone.utc)
+        # The load, WITHOUT its spawn: the last area edge is promoted, since
+        # nothing better has arrived to speak for the load yet.
+        publish(
+            Event(type="level_changed", frame=90000, timestamp_utc=now,
+                  payload={"from": 6, "to": 24}),
+            Event(type="area_changed", frame=90000, timestamp_utc=now,
+                  payload={"level": 24, "from": 1, "to": 1}),
+            Event(type="area_changed", frame=90000, timestamp_utc=now,
+                  payload={"level": 24, "from": 1, "to": 2}),
+        )
+        stray = "Moved to another part of Whomp's Fortress"
+        appeared = page.evaluate(
+            "(async () => {"
+            "  const until = Date.now() + 4000;"
+            "  while (Date.now() < until) {"
+            "    if (document.querySelector('.record-rows')"
+            f"        .textContent.includes({stray!r})) return true;"
+            "    await new Promise(r => setTimeout(r, 50));"
+            "  } return false; })()")
+        assert appeared is True, (
+            "the mid-load row never rendered, so this measures nothing — the "
+            "endpoint is supposed to promote it until the spawn arrives")
+
+        # The spawn: the endpoint now settles BOTH area edges and names the
+        # arrival instead. The list must follow.
+        publish(Event(type="spawned", frame=90030, timestamp_utc=now,
+                      payload={"level": 24, "kind": "spawn"}))
+        gone = page.evaluate(
+            "(async () => {"
+            "  const until = Date.now() + 4000;"
+            "  while (Date.now() < until) {"
+            "    const text = document.querySelector('.record-rows').textContent;"
+            f"    if (!text.includes({stray!r})"
+            "        && text.includes('Started Whomp\\'s Fortress')) return true;"
+            "    await new Promise(r => setTimeout(r, 50));"
+            "  } return false; })()")
+        assert gone is True, (
+            "the load's own area edge is still on screen after its arrival "
+            "landed — the tail appended it once and can never take it back, "
+            "which is the row he reported twice")
+
+
 def test_a_burst_of_events_still_paints_the_first_row(capsys):
     """A star is never ONE broadcast — it is a burst (star_collected,
     attempt_completed, rank traffic), and his grab painted 4.7 s late, in the
