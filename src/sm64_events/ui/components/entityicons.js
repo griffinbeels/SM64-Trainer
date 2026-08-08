@@ -69,7 +69,10 @@ function segmentMeta(t) {
   return Object.fromEntries((t.segments || []).map((segment) =>
     [String(segment.id),
      { seedKey: segment.seed_key || null, category: segment.category || null,
-       originRegion: (segment.origin || {}).region || null }]));
+       originRegion: (segment.origin || {}).region || null,
+       // What this is a PIECE of — a subsection wears its parent's art by
+       // default (round 15); entities.js decides what the key means.
+       parent: segment.parent || null }]));
 }
 
 // One-entry memo. The context is derived from six store slots and rebuilding

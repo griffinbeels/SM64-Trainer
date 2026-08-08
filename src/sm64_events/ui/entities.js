@@ -355,14 +355,31 @@ export function entityIcon(entityKey, context = {}) {
   }
   if (kind === "segment") {
     // NOT gated on starIconsMode: see the "classic is a STAR setting" rule
-    // above. Most specific first — this definition's own art, then the stage
-    // it starts in, then what its whole category wears. A Bowser pipe entry is
-    // categorised Castle Movement AND starts in a Bowser stage, and the stage
-    // is the more useful thing to show, which is why LEVEL_ICONS outranks the
-    // category table. A row the corpus never seeded has no category of its
-    // own, so `segmentCategory` infers one from where it starts — see the
-    // registry comments above.
-    const { seedKey, category, originRegion } = segmentMeta[String(id)] || {};
+    // above. Most specific first — this definition's own art, then what it
+    // is a PIECE of, then the stage it starts in, then what its whole
+    // category wears. A Bowser pipe entry is categorised Castle Movement AND
+    // starts in a Bowser stage, and the stage is the more useful thing to
+    // show, which is why LEVEL_ICONS outranks the category table. A row the
+    // corpus never seeded has no category of its own, so `segmentCategory`
+    // infers one from where it starts — see the registry comments above.
+    const { seedKey, category, originRegion, parent } =
+      segmentMeta[String(id)] || {};
+    // A SUBSECTION wears its parent's art by default (round 15: "Default
+    // segment icon for anything added to the castle (in any area) should
+    // use the castle_movement icon automatically. If it's attached to a
+    // specific star, it should use the default star icon"). A piece of a
+    // star resolves THROUGH this same chain, so the star's own override and
+    // his star-icon mode both apply; a piece of a castle area resolves to
+    // the category the table already owns — never a stem named here twice.
+    // Seeded art still wins (a corpus row's hand-picked stem beats
+    // derivation), and the per-entity override above beats everything.
+    if (!SEGMENT_SEED_ICONS[seedKey] && parent) {
+      if (String(parent).startsWith("star:"))
+        return entityIcon(parent, context);
+      if (String(parent).startsWith("area:"))
+        return starIconSrc(
+          SEGMENT_CATEGORY_ICONS[UNCATEGORIZED_SEGMENT_CATEGORY]);
+    }
     const stem = SEGMENT_SEED_ICONS[seedKey]
       || (segmentLevels[String(id)] || [])
            .map((level) => LEVEL_ICONS[level]).find(Boolean)

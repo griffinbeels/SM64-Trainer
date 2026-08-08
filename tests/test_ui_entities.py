@@ -689,3 +689,51 @@ console.log(JSON.stringify([entityKeyForOption("8:1"),
   entityKeyForOption("segment:12"), entityKeyForOption("area:6:1")]));
 """)
     assert keys == ["star:8:1", "segment:12", "area:6:1"]
+
+
+# --- round 15: a subsection wears its parent's art --------------------------
+
+def test_a_star_parented_subsection_wears_its_parents_art():
+    # "If it's attached to a specific star, it should use the default star
+    # icon" — resolved THROUGH the same chain, so the parent star's own
+    # override and his star-icon mode both apply.
+    src = run_node("optionIcon", CONTEXT + """
+const withParent = { ...context,
+  segmentMeta: { "31": { parent: "star:1:2" } } };
+console.log(JSON.stringify(optionIcon("segment", "31", withParent)));
+""")
+    assert src == "/ui/assets/star_icons/bob3.png"
+
+
+def test_the_parent_stars_own_override_reaches_the_subsection():
+    src = run_node("optionIcon", CONTEXT + """
+const withParent = { ...context,
+  iconOverrides: { "star:1:2": "blj" },
+  segmentMeta: { "31": { parent: "star:1:2" } } };
+console.log(JSON.stringify(optionIcon("segment", "31", withParent)));
+""")
+    assert src == "/ui/assets/star_icons/blj.png"
+
+
+def test_an_area_parented_subsection_wears_castle_movement():
+    # "Default segment icon for anything added to the castle (in any area)
+    # should use the castle_movement icon automatically" — through the
+    # category table's own entry, never a stem named twice.
+    src = run_node("optionIcon", CONTEXT + """
+const withParent = { ...context,
+  segmentMeta: { "31": { parent: "area:6:1" } } };
+console.log(JSON.stringify(optionIcon("segment", "31", withParent)));
+""")
+    assert src == "/ui/assets/star_icons/castle_movement.png"
+
+
+def test_seeded_art_still_beats_the_parent():
+    # A corpus row's hand-picked stem is more specific than any derivation.
+    result = run_node("optionIcon, SEGMENT_SEED_ICONS", CONTEXT + """
+const seedKey = Object.keys(SEGMENT_SEED_ICONS)[0];
+const withBoth = { ...context,
+  segmentMeta: { "31": { seedKey, parent: "star:1:2" } } };
+console.log(JSON.stringify([optionIcon("segment", "31", withBoth),
+  "/ui/assets/star_icons/" + SEGMENT_SEED_ICONS[seedKey] + ".png"]));
+""")
+    assert result[0] == result[1]
