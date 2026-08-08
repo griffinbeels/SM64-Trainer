@@ -372,7 +372,7 @@ def test_two_different_recordings_of_the_same_run_do_not_collide_in_the_tray(lib
         const head = heads.find((h) =>
           h.querySelector('.library-section-name').textContent === 'Xiah cycle pipe entry');
         if (!head) return 'no "Xiah cycle pipe entry" section';
-        head.click();
+        if (!head.closest('.library-section').classList.contains('open')) head.click();
         return 'clicked';
       })()
     """)

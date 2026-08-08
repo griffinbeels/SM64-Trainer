@@ -264,9 +264,14 @@ function DivisionGroup({ approach, band, division, query, isYou, trayKeys, entit
   const [open, setOpen] = useState(false);
   const visible = division.entries.filter((entry) => matchesRunner(entry, query));
   const label = `${capName(band.tier)} ${divisionDigit(division.numeral)}`;
-  const bracket = division.slowCs != null && division.fastCs != null
+  // Round 3: every boundary number is DISTINCT (the fast end is exclusive,
+  // one centisecond slower than the next unit's own slow end -- see
+  // librarymodel.js::divisionShells). An `empty` shell owns no whole
+  // centisecond at all -- real on tight vetted ladders -- and says "—".
+  const bracket = division.empty ? "—"
+    : division.slowCs != null && division.fastCs != null
     ? `${fmtSeconds(division.slowCs / 100)} – ${fmtSeconds(division.fastCs / 100)}`
-    : division.fastCs != null ? `slower than ${fmtSeconds(division.fastCs / 100)}` : "";
+    : division.fastCs != null ? `${fmtSeconds(division.fastCs / 100)}+` : "";
   const you = isYou
     ? html`<span class="library-toc-you" title="your current rank on this strategy"> ◀ you</span>` : "";
 
@@ -321,6 +326,24 @@ function DivisionGroup({ approach, band, division, query, isYou, trayKeys, entit
   </div>`;
 }
 
+// The range of displayed times one tier band owns, as a string -- round 3:
+// "the header for each section should be adjusted to show the RANGE for that
+// rank", and the TOC's number column "should also show what the range is ...
+// Capless included (e.g., 59"65+ (the slowest time) to 11"93". Capless has
+// no cutoff, so its slow end is the slowest VISIBLE entry with his own "+"
+// notation; a Capless band with no entries never renders (bandsOf filters
+// it). The fast end is the exclusive bound (librarymodel.js::tierFastBoundCs),
+// so no number repeats between adjacent tiers.
+function bandRangeLabel(band) {
+  if (!band.tier) return "no ladder for this approach";
+  const fast = band.fastCs != null ? fmtSeconds(band.fastCs / 100) : "—";
+  if (band.cutoffCs != null) return `${fmtSeconds(band.cutoffCs / 100)} – ${fast}`;
+  const slowest = band.entries.length ? band.entries[0].time_cs : null;
+  return slowest != null
+    ? `${fmtSeconds(slowest / 100)}+ – ${fast}`
+    : `${fast}+`;
+}
+
 // One tier row of the TOC. `cutoffCs` is null for the Capless floor (no
 // cutoff — the catch-all for anything that has not beaten one yet) and for
 // the tier-less Unranked band a no-ladder approach shows. `you` is the
@@ -342,7 +365,7 @@ function TocRow({ band, count, you, onJump }) {
             ${" "}◀ you${you.division ? ` · ${capName(you.rank)} ${divisionDigit(you.division)}` : ""}</span>`
         : ""}
     </td>
-    <td class="library-toc-cutoff">${band.cutoffCs != null ? fmtSeconds(band.cutoffCs / 100) : "—"}</td>
+    <td class="library-toc-cutoff">${band.tier ? bandRangeLabel(band) : "—"}</td>
     <td class="library-toc-count">${count}</td>
   </tr>`;
 }
@@ -451,8 +474,7 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
             ${band.tier ? html`<span class="rank-icon-slot" style="--icon-size: 18px">
               <${RankIcon} tier=${band.tier} division=${"I"} size=${18} /></span>` : ""}
             ${" "}<b>${band.tier ? capName(band.tier) : "Unranked"}</b>
-            <span class="meta">${band.cutoffCs != null ? fmtSeconds(band.cutoffCs / 100)
-              : band.tier ? "—" : "no ladder for this approach"}</span>
+            <span class="meta">${bandRangeLabel(band)}</span>
           </div>
           ${band.divisions
             ? band.divisions.map((division) => html`<${DivisionGroup}
@@ -679,7 +701,13 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
         </p>`
       : approaches.map((approach) => html`<${Section} key=${approachIdentity(approach)}
           approach=${approach} open=${expanded === approachIdentity(approach)}
-          onOpen=${() => setExpanded(approachIdentity(approach))} query=${query}
+          onOpen=${/* Round 3: clicking the OPEN section's header closes it --
+               the single-open accordion allowed everything-closed on mount
+               but never by gesture ("It seems like we're being forced to
+               have at least one open at a given time"). */
+            () => setExpanded((prev) =>
+              prev === approachIdentity(approach) ? null : approachIdentity(approach))}
+          query=${query}
           stratInfo=${approach.matched_strategy ? stratByName[approach.matched_strategy] : null}
           trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd} />`)}
   </div>`;

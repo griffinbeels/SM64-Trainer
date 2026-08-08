@@ -423,13 +423,29 @@ def test_library_subdivisions_agree_with_the_scoring_curve():
             times.update((max(1, cut - 1), cut, cut + 1))
         for faster, slower in zip(cuts, cuts[1:]):
             times.add((faster + slower) // 2)
+        # ROUND 3: the times that discriminate the boundary RULE -- each
+        # division's rounded floor edge and its neighbours. The raw-score
+        # slice and the displayed-cutoff walk disagree exactly ON these.
+        defined = scoring.defined_tiers(ladder_cs)
+        for tier in ["Iron", *defined]:
+            low, high = scoring.tier_band(tier, defined)
+            width = (high - low) / scoring.DIVISIONS_PER_TIER
+            for div_i in range(scoring.DIVISIONS_PER_TIER):
+                edge = scoring.time_for_score(ladder_cs, low + div_i * width)
+                if edge is not None:
+                    times.update((max(1, edge - 1), edge, edge + 1))
         for time_cs in sorted(times):
             cases.append((ladder_cs, time_cs))
 
+    # progress_for_time, not division_for: the WALK (a step is reached when
+    # the displayed time reaches the step's own displayed cutoff) is what
+    # grades the user's banner, so it is what the library must agree with --
+    # an entry filed one division below the reader's own banner for the same
+    # time is the app contradicting itself.
     python = []
     for ladder_cs, time_cs in cases:
-        score = scoring.score_for(ladder_cs, time_cs)
-        python.append(list(scoring.division_for(score, scoring.defined_tiers(ladder_cs))))
+        progress = scoring.progress_for_time(ladder_cs, time_cs)
+        python.append([progress["tier"], progress["division"]])
 
     js_cases = [[{t: v / 100 for t, v in ladder.items()}, time]
                 for ladder, time in cases]

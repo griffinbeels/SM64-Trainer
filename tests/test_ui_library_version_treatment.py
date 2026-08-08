@@ -171,7 +171,9 @@ def _navigate_to_section(page, group_name, target_name, section_name):
         const head = heads.find((h) =>
           h.querySelector('.library-section-name').textContent === {section_name!r});
         if (!head) return 'no section named ' + {section_name!r};
-        head.click();
+        // Round 3: clicking an OPEN section's head now CLOSES it (the
+        // everything-collapsible rule) -- only click when it is closed.
+        if (!head.closest('.library-section').classList.contains('open')) head.click();
         return 'clicked';
       }})()
     """)

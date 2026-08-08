@@ -196,33 +196,67 @@ function tierBandRange(tier, defined) {
   return [SCORE_ANCHORS[tier], high];
 }
 
-// Which fifth of `tier`'s own band a time falls in -- the same five
-// equal-score slices ranks/scoring.py::division_for cuts, with the tier
-// supplied by bandFor (the two agree on every monotone ladder, which every
-// fitted and vetted ladder is by construction; the clamp keeps a pathological
-// hand-edited ladder from ever indexing off the end).
+// The rounded floor-edge time of each of `tier`'s five divisions, V-first.
+// V's edge is the tier's own cutoff (exact -- an anchor); Iron V's is null
+// (score 0, the asymptote).
+function divisionEdges(tier, ladderCs, defined) {
+  const [low, high] = tierBandRange(tier, defined);
+  const width = (high - low) / DIVISIONS_PER_TIER;
+  return DIVISION_NUMERALS.map((numeral, index) =>
+    timeForScore(ladderCs, low + index * width));
+}
+
+// Which fifth of `tier`'s own band a time falls in -- by the SAME boundary
+// rule ranks/scoring.py::progress_for_time applies when it grades HIM (round
+// 3): a step is reached when the displayed time reaches the step's own
+// DISPLAYED (rounded) cutoff, `<=`. The raw-score slice this used to mirror
+// (division_for) disagrees with the banner for a time sitting exactly on a
+// rounded division edge, which would file an entry one division below the
+// rank his own banner shows for the identical time. Scanning fastest-first
+// over the rounded edges is the walk's fixpoint (edges are monotone
+// non-increasing, so the first `<=` hit is the fastest step reached).
 export function divisionWithin(ladderCs, tier, timeCs) {
   const defined = definedTiers(ladderCs);
   if (!defined.length || !tier) return null;
-  const score = scoreFor(ladderCs, timeCs);
-  const [low, high] = tierBandRange(tier, defined);
-  const span = high - low;
-  if (span <= 0) return DIVISION_NUMERALS[DIVISIONS_PER_TIER - 1];
-  const index = Math.floor((score - low) / span * DIVISIONS_PER_TIER);
-  return DIVISION_NUMERALS[Math.max(0, Math.min(DIVISIONS_PER_TIER - 1, index))];
+  const edges = divisionEdges(tier, ladderCs, defined);
+  for (let index = DIVISIONS_PER_TIER - 1; index > 0; index -= 1) {
+    if (edges[index] != null && timeCs <= edges[index]) {
+      return DIVISION_NUMERALS[index];
+    }
+  }
+  return DIVISION_NUMERALS[0];
 }
 
-// The five subdivision shells of one tier band, slowest (V) first to match
-// band order, each carrying its own time bracket. `slowCs` is null exactly
-// where no slow edge exists (Iron V's edge is score 0, the asymptote).
+// The fastest displayed time `tier` still owns, PLUS ONE -- i.e. the
+// exclusive bound: the next harder tier's cutoff belongs to THAT tier
+// (reaching a cutoff earns the harder rank), so this tier's range stops one
+// centisecond short of it. The hardest tier's bound is the score-100 cap,
+// owned (no +1). Round 3: "each number should be distinct ... There
+// shouldn't be overlap in that way."
+function tierFastBoundCs(tier, ladderCs, defined) {
+  if (tier === "Iron") {
+    return ladderCs[defined[defined.length - 1]] + 1;
+  }
+  const index = defined.indexOf(tier);
+  if (index === 0) return timeForScore(ladderCs, TOP_SCORE);
+  return ladderCs[defined[index - 1]] + 1;
+}
+
+// The five subdivision shells of one tier band, slowest (V) first, each
+// carrying the range of displayed times it OWNS under the boundary rule
+// above: slow end its own rounded floor edge, fast end one centisecond
+// slower than the next unit's -- so no number ever appears on two adjacent
+// rows. A shell whose range holds no whole centisecond (`empty`) is real on
+// tight ladders: this corpus has vetted divisions 2-3cs wide, thinner than
+// one 3.33cs frame.
 function divisionShells(tier, ladderCs, defined) {
-  const [low, high] = tierBandRange(tier, defined);
-  const width = (high - low) / DIVISIONS_PER_TIER;
+  const edges = divisionEdges(tier, ladderCs, defined);
+  const tierBound = tierFastBoundCs(tier, ladderCs, defined);
   return DIVISION_NUMERALS.map((numeral, index) => {
-    const scoreLow = low + index * width;
-    return { numeral,
-             slowCs: timeForScore(ladderCs, scoreLow),
-             fastCs: timeForScore(ladderCs, Math.min(TOP_SCORE, scoreLow + width)),
+    const slowCs = edges[index];
+    const fastCs = index + 1 < DIVISIONS_PER_TIER ? edges[index + 1] + 1 : tierBound;
+    return { numeral, slowCs, fastCs,
+             empty: slowCs != null && fastCs != null && fastCs > slowCs,
              entries: [] };
   });
 }
@@ -236,12 +270,14 @@ export function bandsOf(ladder, entries) {
     return [{ tier: null, cutoffCs: null, divisions: null,
               entries: [...(entries || [])].sort((a, b) => b.time_cs - a.time_cs) }];
   }
-  const bands = [{ tier: "Iron", cutoffCs: null, entries: [],
-                   divisions: divisionShells("Iron", ladderCs, defined) }];
+  const bands = [{ tier: "Iron", cutoffCs: null,
+                   fastCs: tierFastBoundCs("Iron", ladderCs, defined),
+                   entries: [], divisions: divisionShells("Iron", ladderCs, defined) }];
   for (const tier of RANKS) {
     if (ladderCs[tier] != null) {
-      bands.push({ tier, cutoffCs: ladderCs[tier], entries: [],
-                   divisions: divisionShells(tier, ladderCs, defined) });
+      bands.push({ tier, cutoffCs: ladderCs[tier],
+                   fastCs: tierFastBoundCs(tier, ladderCs, defined),
+                   entries: [], divisions: divisionShells(tier, ladderCs, defined) });
     }
   }
   const byTier = Object.fromEntries(bands.map((band) => [band.tier, band]));

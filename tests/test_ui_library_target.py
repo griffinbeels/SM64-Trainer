@@ -117,6 +117,22 @@ def test_auto_open_follows_the_active_strategy_not_the_first_section(library_pag
     assert opened == "Fall onto the Caged Island", opened
 
 
+def test_clicking_the_open_sections_head_closes_it(library_page):
+    """Round 3: "we should be able to fully collapse all of them" -- the
+    single-open accordion allowed zero-open on mount but never by gesture."""
+    library_page.evaluate(
+        "document.querySelector('.library-section.open .library-section-head').click()")
+    deadline = time.time() + 5
+    remaining = 1
+    while time.time() < deadline:
+        remaining = library_page.evaluate(
+            "document.querySelectorAll('.library-section.open').length")
+        if remaining == 0:
+            break
+        time.sleep(0.05)
+    assert remaining == 0, "the open section did not close on its own header's click"
+
+
 def test_matched_strategy_chip_and_your_standing_render(library_page):
     chip = library_page.evaluate(
         "const el = document.querySelector('.library-section.open .library-matched-chip');"
@@ -142,7 +158,7 @@ def test_jp_toggle_switches_the_ladder_and_the_band_cutoffs(library_page):
           b.querySelector('.library-section-name').textContent
             === 'Owl strat w/o speed preservation');
         if (!head) return false;
-        head.click();
+        if (!head.closest('.library-section').classList.contains('open')) head.click();
         return true;
       })()
     """)
@@ -433,7 +449,7 @@ def test_a_click_the_instant_the_header_exists_is_never_reverted(library_server)
           const head = heads.find((h) =>
             h.querySelector('.library-section-name').textContent === {target_name!r});
           if (!head) return false;
-          head.click();
+          if (!head.closest('.library-section').classList.contains('open')) head.click();
           return true;
         }};
         const clicked = await new Promise((resolve) => {{

@@ -87,14 +87,50 @@ def test_every_laddered_band_carries_five_subdivisions_slowest_first():
         assert [d["numeral"] for d in band["divisions"]] == ["V", "IV", "III", "II", "I"]
         # every band entry is in exactly one shell
         assert sum(len(d["entries"]) for d in band["divisions"]) == len(band["entries"])
-        # brackets run slow -> fast within the band (nulls only at Iron V's
-        # open slow edge)
+        # brackets run slow -> fast within the band, EXCEPT a shell whose
+        # exclusive range holds no whole centisecond (round 3's `empty`,
+        # real on tight ladders)
         for division in band["divisions"]:
-            if division["slowCs"] is not None and division["fastCs"] is not None:
+            if (division["slowCs"] is not None and division["fastCs"] is not None
+                    and not division["empty"]):
                 assert division["slowCs"] >= division["fastCs"]
     # the Iron floor's slowest shell has no slow edge (the asymptote)
     assert bands[0]["tier"] == "Iron"
     assert bands[0]["divisions"][0]["slowCs"] is None
+
+
+def test_round3_boundaries_never_share_a_number():
+    # Round 3, his words: "each number should be distinct ... There shouldn't
+    # be overlap in that way." Across every adjacent pair of units (divisions
+    # within a band, and across the band seam), a fast end is strictly faster
+    # than the next-slower unit's slow end -- and the seam itself: a tier's
+    # displayed fast bound is one centisecond slower than the next tier's own
+    # cutoff, which that harder tier keeps (reaching a cutoff earns the rank).
+    ladder = {"Bronze": 34.0, "Silver": 33.0, "Gold": 32.0, "Platinum": 31.5,
+              "Diamond": 31.0, "Master": 30.5, "Grandmaster": 30.0, "Mario": 29.5}
+    bands = run_js(f"m.bandsOf({json.dumps(ladder)}, [])")
+    numbers = []
+    for band in bands:
+        assert band["fastCs"] is not None
+        if band["cutoffCs"] is not None:
+            numbers.append((band["tier"], band["cutoffCs"]))
+        for division in band["divisions"]:
+            if not division["empty"]:
+                if division["slowCs"] is not None:
+                    numbers.append((f"{band['tier']} {division['numeral']} slow",
+                                    division["slowCs"]))
+                numbers.append((f"{band['tier']} {division['numeral']} fast",
+                                division["fastCs"]))
+    # adjacent bands: fast bound of the slower = harder tier's cutoff + 1
+    for slower, faster in zip(bands, bands[1:]):
+        assert slower["fastCs"] == faster["cutoffCs"] + 1, (slower, faster)
+    # and within a band, each division's fast end is the faster one's slow
+    # edge + 1 (never the same number on two rows)
+    for band in bands:
+        shells = band["divisions"]
+        for lower, upper in zip(shells, shells[1:]):
+            if upper["slowCs"] is not None:
+                assert lower["fastCs"] == upper["slowCs"] + 1, (band["tier"], lower, upper)
 
 
 def test_a_ladderless_approach_bands_as_one_unranked_catchall():

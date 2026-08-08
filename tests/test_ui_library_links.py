@@ -87,7 +87,7 @@ CLICK_SECTION_BY_NAME = """
   const head = heads.find((h) =>
     h.querySelector('.library-section-name').textContent === {name!r});
   if (!head) return 'no section named ' + {name!r};
-  head.click();
+  if (!head.closest('.library-section').classList.contains('open')) head.click();
   return 'clicked';
 }})()
 """
