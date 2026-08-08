@@ -180,6 +180,12 @@ def test_an_entity_less_target_carries_its_name_matched_segment(tmp_path):
     # an entity-bearing target never auto-matches -- its rows already grade
     star = api.get("/api/library/target/1").json()
     assert star["matched_segment"] is None
+    # round 8: the segment editor reads the REVERSE of the same fact, so a
+    # name-matched segment never shows a contradicting "Not linked"
+    adoptions_body = api.get("/api/library/adoptions").json()
+    assert adoptions_body["matched_by_name"] == {
+        "segment:3": {"index": 0, "label": "Lakitu skip"}}
+    assert adoptions_body["by_entity"] == {}
 
 
 def test_without_a_segment_list_no_target_claims_a_match(client):
