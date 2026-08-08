@@ -135,7 +135,14 @@ def test_a_movement_group_s_targets_are_marked_browse_only(empty_page):
 
 
 def test_the_refresh_header_is_present(practiced_page):
-    """Title, sheet revision/source, and the Refresh control itself."""
+    """Title, the human-time status line, and the Refresh control itself.
+
+    ROUND 1 (2026-08-07): the status line speaks human time now, never a raw
+    revision stamp — his words: "The text here for Sheet 2026-blah blah is
+    unsettling. I think we should just say 'Last refreshed: [time] ago'."
+    A locally-refreshed copy reads "Last refreshed: …"; the bundled seed
+    reads "Bundled with the app …". A raw ISO stamp in this line is the
+    regression this now guards against."""
     practiced_page.evaluate(CLICK_LIBRARY_TAB)
     practiced_page.wait_for(".library-page", timeout_ms=15000)
     has_refresh = practiced_page.evaluate(
@@ -145,7 +152,11 @@ def test_the_refresh_header_is_present(practiced_page):
     revision_text = practiced_page.evaluate(
         "const el = document.querySelector('.workshop-title p');"
         "return el ? el.textContent : null")
-    assert revision_text and "Sheet" in revision_text, (
-        f"the Library header's revision line reads {revision_text!r} -- "
-        "expected it to name the sheet revision/source "
-        "(GET /api/library/status)")
+    assert revision_text and (
+        revision_text.startswith("Last refreshed:")
+        or revision_text.startswith("Refreshed by you")
+        or revision_text.startswith("Bundled with the app")), (
+        f"the Library header's status line reads {revision_text!r} -- "
+        "expected the round-1 human-time copy (library.js::statusLine)")
+    assert "20" not in revision_text.split(":")[0], (
+        f"a raw timestamp leaked back into the status line: {revision_text!r}")

@@ -35,6 +35,12 @@ from ui_fixture import FIXTURE_SEGMENT, serve_ui  # noqa: E402
 from uilab import driver  # noqa: E402
 
 CLICK_LIBRARY_TAB = 'document.querySelector(\'.nav-item[title="Library"]\').click()'
+# Subdivision groups ship collapsed by default (round 1, 2026-08-07); a test
+# that needs example cards on screen expands every one in the open section.
+EXPAND_DIVISIONS = (
+    "Array.from(document.querySelectorAll("
+    "'.library-section.open .library-division-head')).forEach((head) => "
+    "head.getAttribute('aria-expanded') === 'true' || head.click())")
 
 
 @pytest.fixture(scope="module")
@@ -82,12 +88,18 @@ def test_exactly_one_section_opens_and_it_is_the_first_without_a_selection(libra
 
 
 def test_search_filters_across_sections(library_page):
+    # Expand the subdivisions FIRST and prove cards are on screen -- with
+    # everything collapsed a zero count would pass vacuously.
+    library_page.evaluate(EXPAND_DIVISIONS)
+    library_page.wait_for(".library-section.open .library-example", timeout_ms=10000)
     library_page.evaluate("document.querySelector('.library-target-search').value = 'zzz-nobody'")
     library_page.evaluate(
         "document.querySelector('.library-target-search')"
         ".dispatchEvent(new Event('input', {bubbles: true}))")
     assert library_page.evaluate(
-        "document.querySelectorAll('.library-example:not(.hidden)').length") == 0
+        "document.querySelectorAll('.library-example').length") == 0
+    assert library_page.evaluate(
+        "document.querySelectorAll('.library-plain-entry').length") == 0
 
 
 # ---- supplementary coverage for what the three tests above cannot see ----
@@ -200,6 +212,10 @@ def test_clicking_a_toc_row_scrolls_to_its_band(library_page):
 
 
 def test_plus_adds_to_the_tray_and_then_disables(library_page):
+    # Subdivisions ship collapsed (round 1); example cards only exist inside
+    # an expanded one, so open them all before hunting for a card.
+    library_page.evaluate(EXPAND_DIVISIONS)
+    library_page.wait_for(".library-section.open .library-example", timeout_ms=10000)
     result = library_page.evaluate("""
       (() => {
         const cards = Array.from(document.querySelectorAll(

@@ -17,11 +17,11 @@ import { fmtSeconds } from "../format.js";
 import { entityKey as sectionEntityKey } from "../entitysection.js";
 import { entityIconSrc, genericStarSrc } from "./entityicons.js";
 import { RankIcon } from "./rankicon.js";
-import { capName } from "./caps.js";
+import { capName, divisionDigit } from "./caps.js";
 import { Disclose } from "./collapsible.js";
 import { Icon } from "./icons.js";
 import {
-  sectionOrder, autoExpandName, bandsOf, matchesRunner, youtubeThumb, youtubeEmbed,
+  sectionOrder, autoExpandName, bandsOf, matchesRunner, videoSource,
 } from "./librarymodel.js";
 
 const html = htm.bind(h);
@@ -129,70 +129,108 @@ function useEntityStrategies(entityKey) {
   return data;
 }
 
-function ExampleCard({ entry, tier, hidden, trayKey, entityKey, inTray, showVersion, onAdd }) {
+// One video-bearing entry, as a card big enough to watch (round 1: "each grid
+// element should be much bigger ... I also can't see the times very easily,
+// nor the names for each of the players"). Videoless entries never reach this
+// component any more -- they render as PlainEntry rows, because a play button
+// on a run nobody filmed is what "the videos don't load for most of them"
+// turned out to be (37,268 of 44,701 entries carry no video at all).
+//
+// `videoSource` (librarymodel.js) names the player per format: YouTube shows
+// its real thumbnail and swaps to its embed on click; Twitch/X/Bluesky/
+// Streamable/Drive show a labelled tile that swaps to their own embed on
+// click; a direct media file plays natively; anything unembeddable is an
+// honest "watch on <site>" door that opens a new tab -- never a dead play
+// button. The version pill this card used to wear is GONE (round 1 item 4
+// superseded it: the section's mode now filters entries, so every visible
+// run is the mode's own version).
+function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd }) {
   const [playing, setPlaying] = useState(false);
-  const embed = entry.video ? youtubeEmbed(entry.video) : null;
-  const thumb = entry.video ? youtubeThumb(entry.video) : null;
-  const canOpen = !!embed;
-  const openExternal = !!entry.video && !embed;
+  // Bluesky's embed host takes a DID, and most sheet links carry a handle --
+  // resolved with ONE public-API fetch on the first click (videoSource's own
+  // bsky comment has the measurement). Failure degrades to the link-out door.
+  const [bskyEmbed, setBskyEmbed] = useState(null);
+  const [bskyFailed, setBskyFailed] = useState(false);
+  const src = videoSource(entry.video,
+    typeof location !== "undefined" ? location.hostname : null);
+  const embedSrc = src && (src.embed
+    || (src.kind === "bsky" && !bskyFailed ? bskyEmbed : null));
+  const canEmbed = !!(src && src.kind !== "file" && src.kind !== "image"
+    && src.kind !== "link"
+    && (embedSrc || (src.kind === "bsky" && !bskyFailed)));
+  const label = `${entry.runner} — ${fmtSeconds(entry.time_cs / 100)}`;
 
-  function toggle() {
-    if (canOpen) setPlaying((prev) => !prev);
+  function startPlaying() {
+    if (src.kind === "bsky" && !src.embed && !bskyEmbed && !bskyFailed) {
+      fetch("https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle"
+            + `?handle=${enc(src.actor)}`)
+        .then((resp) => resp.json())
+        .then((body) => {
+          if (!body || !body.did) throw new Error("no did");
+          setBskyEmbed(`https://embed.bsky.app/embed/${body.did}/app.bsky.feed.post/${src.rkey}`);
+        })
+        .catch(() => setBskyFailed(true));
+    }
+    setPlaying(true);
   }
 
-  return html`<div class="library-example ${hidden ? "hidden" : ""}">
-    <div class="library-example-media ${canOpen ? "is-clickable" : ""}"
-        onclick=${canOpen ? toggle : null}
-        title=${canOpen ? (playing ? "Close" : "Play inline") : ""}>
-      ${playing && embed
-        ? html`<iframe class="library-embed" src=${embed}
-            title=${`${entry.runner} — ${fmtSeconds(entry.time_cs / 100)}`}
-            allow="autoplay; encrypted-media" allowfullscreen></iframe>`
-        : thumb
-          ? html`<img class="library-example-thumb" src=${thumb} alt=""
-              loading="lazy" />`
-          : html`<div class="library-example-thumb library-example-placeholder">
-              <${Icon} name="play" size=${20} />
-            </div>`}
-      ${openExternal
+  function media() {
+    if (src.kind === "file") {
+      return html`<video class="library-example-thumb" src=${src.embed}
+          controls preload="metadata" title=${label}></video>`;
+    }
+    if (src.kind === "image") {
+      return html`<img class="library-example-thumb" src=${src.thumb} alt=${label}
+          loading="lazy" />`;
+    }
+    if (src.kind === "link" || bskyFailed) {
+      return html`<a class="library-example-thumb library-example-placeholder"
+          href=${entry.video} target="_blank" rel="noopener"
+          title="opens in a new tab">
+        <${Icon} name="play" size=${22} />
+        <span class="library-example-site">watch on ${src.site}</span>
+      </a>`;
+    }
+    if (playing && embedSrc) {
+      return html`<iframe class="library-embed" src=${embedSrc} title=${label}
+          allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
+    }
+    // The labelled placeholder always renders; a thumbnail (YouTube only)
+    // stacks OVER it and removes itself if the host never answers -- a dead
+    // or still-loading thumb must degrade to the branded tile, never to a
+    // black box that reads as a broken player.
+    return html`<div class="library-example-thumb library-example-placeholder is-clickable"
+        onclick=${startPlaying}>
+      <${Icon} name="play" size=${22} />
+      <span class="library-example-site">${src.site}</span>
+      ${src.thumb
+        ? html`<img class="library-example-thumb library-example-thumb-img"
+            src=${src.thumb} alt="" loading="lazy"
+            onerror=${(errorEvent) => errorEvent.target.remove()} />`
+        : ""}
+    </div>`;
+  }
+
+  return html`<div class="library-example">
+    <div class="library-example-media ${canEmbed ? "is-clickable" : ""}"
+        onclick=${canEmbed && playing ? () => setPlaying(false) : null}
+        title=${canEmbed ? (playing ? "Close" : "Play inline") : ""}>
+      ${media()}
+      ${src.kind !== "youtube" && src.kind !== "file" && src.kind !== "image"
         ? html`<a class="library-example-external" href=${entry.video}
-            target="_blank" rel="noopener" title="open on the runner's site">
+            target="_blank" rel="noopener" title=${`open on ${src.site}`}>
             <${Icon} name="upload" size=${13} /></a>` : null}
     </div>
     <div class="library-example-meta">
-      <span class="library-example-tier"><${RankIcon} tier=${tier} size=${16} /></span>
-      ${/* FINAL REVIEW FIX (HIGH: JP/US band contamination), RULED ROUND 2:
-           a COLUMN, not an exception marker. `.library-example-meta` is a
-           fixed 4-column grid (icon/runner/time/+), so the badge nests
-           INSIDE the runner cell rather than adding a 5th column -- a plain
-           grid child would shift the time and "+" columns for every card
-           that lacks one. `showVersion` (Section's own `mixedVersions`) says
-           whether THIS APPROACH mixes both ROM versions at all -- every row
-           then wears its OWN version, unconditionally, never compared
-           against whichever ladder happens to be showing. The first version
-           of this fix badged only entries disagreeing with the shown ladder
-           and measured 108 of 112 badged in the worst real band -- an
-           exception marker on 96% of a band reads as the SECTION being
-           mislabelled, not the rows being annotated, and the badge set
-           INVERTED every time the JP/US toggle flipped (correct, and looked
-           like a bug). Decoupling from the toggle turns this into a plain
-           fact about the run, independent of the chip below (a statement
-           about the LADDER) -- one attribute plus one statement, not two
-           vocabularies for the same question. */""}
+      <span class="library-example-tier">
+        ${tier ? html`<${RankIcon} tier=${tier} division=${division} size=${20} />` : "–"}</span>
       <span class="library-example-runner-wrap">
         <span class="library-example-runner">${entry.runner}</span>
-        ${showVersion && entry.version
-          ? html`<span class="chip library-example-version"
-              title=${`Recorded on the ${entry.version === "jp" ? "Japanese" : "US"} version of the game.`}>
-              ${entry.version === "jp" ? "JP" : "US"}
-            </span>`
-          : ""}
       </span>
       <span class="library-example-time">${fmtSeconds(entry.time_cs / 100)}</span>
       <button type="button" class="library-example-plus"
-          disabled=${!entry.video || inTray}
-          title=${!entry.video ? "no video for this run"
-            : inTray ? "already in the tray" : "add to the comparison tray"}
+          disabled=${inTray}
+          title=${inTray ? "already in the tray" : "add to the comparison tray"}
           onclick=${(clickEvent) => {
             clickEvent.stopPropagation();
             onAdd({ key: trayKey, runner: entry.runner, time_cs: entry.time_cs,
@@ -202,13 +240,96 @@ function ExampleCard({ entry, tier, hidden, trayKey, entityKey, inTray, showVers
   </div>`;
 }
 
-// One tier row of the TOC. `cutoffCs` is null for "Below Bronze" (no
-// cutoff — the catch-all for anything that has not beaten one yet).
-function TocRow({ band, count, isYou, onJump }) {
+// A run nobody filmed: still evidence (a real runner, a real time, a real
+// subdivision), never a video card. No "+" -- the tray imports videos, and a
+// row with nothing to import must not offer the gesture.
+function PlainEntry({ entry, tier, division }) {
+  return html`<span class="library-plain-entry">
+    ${tier ? html`<${RankIcon} tier=${tier} division=${division} size=${15} />` : ""}
+    <span class="library-plain-runner">${entry.runner}</span>
+    <span class="library-plain-time">${fmtSeconds(entry.time_cs / 100)}</span>
+  </span>`;
+}
+
+// One subdivision of one tier band -- "Wario 3" -- collapsed by default
+// (round 1: "have each subdivision be collapsable by default, and collapsed.
+// So, I would go through and be able to find the exact subdivision I want to
+// look at"). The header is the browse surface: the winged, numbered cap, the
+// name, the time bracket, the count, and YOU when this is where you stand.
+// An empty subdivision renders as a plain dimmed row, NOT a button -- a
+// control that expands to nothing is a dead control, and the reason ("no
+// examples") sits where the click would land.
+function DivisionGroup({ approach, band, division, query, isYou, trayKeys, entityKey, onAdd }) {
+  const [open, setOpen] = useState(false);
+  const visible = division.entries.filter((entry) => matchesRunner(entry, query));
+  const label = `${capName(band.tier)} ${divisionDigit(division.numeral)}`;
+  const bracket = division.slowCs != null && division.fastCs != null
+    ? `${fmtSeconds(division.slowCs / 100)} – ${fmtSeconds(division.fastCs / 100)}`
+    : division.fastCs != null ? `slower than ${fmtSeconds(division.fastCs / 100)}` : "";
+  const you = isYou
+    ? html`<span class="library-toc-you" title="your current rank on this strategy"> ◀ you</span>` : "";
+
+  if (!division.entries.length) {
+    return html`<div class="library-division is-empty">
+      <span class="library-division-label">
+        <${RankIcon} tier=${band.tier} division=${division.numeral} size=${16} /> ${label}</span>
+      <span class="meta">${bracket}</span>
+      <span class="meta library-division-count">no examples</span>${you}
+    </div>`;
+  }
+  const withVideo = visible.filter((entry) => entry.video);
+  const plain = visible.filter((entry) => !entry.video);
+  return html`<div class="library-division ${open ? "open" : ""}">
+    <button type="button" class="library-division-head" aria-expanded=${open}
+        onclick=${() => setOpen((prev) => !prev)}>
+      <span class="library-division-label">
+        <${RankIcon} tier=${band.tier} division=${division.numeral} size=${18} /> ${label}</span>
+      <span class="meta">${bracket}</span>${you}
+      <span class="meta library-division-count">
+        ${withVideo.length ? `${withVideo.length} video${withVideo.length === 1 ? "" : "s"}` : ""}
+        ${withVideo.length && plain.length ? " · " : ""}
+        ${plain.length ? `${plain.length} time${plain.length === 1 ? "" : "s"}` : ""}
+      </span>
+      <${Icon} name="chevron" size=${14} className="library-division-chevron" />
+    </button>
+    <${Disclose} open=${open} className="library-division-disclose">
+      <div class="library-division-body">
+        ${withVideo.length ? html`<div class="library-examples">
+          ${withVideo.map((entry) => {
+            // Same identity as before the subdivision split: approach-scoped
+            // plus runner+time+video (see entryTrayKey's own history above).
+            const trayKey = entryTrayKey(approach, entry);
+            return html`<${ExampleCard} key=${trayKey}
+                entry=${entry} tier=${band.tier} division=${division.numeral}
+                trayKey=${trayKey} entityKey=${entityKey}
+                inTray=${trayKeys.has(trayKey)}
+                onAdd=${onAdd} />`;
+          })}
+        </div>` : ""}
+        ${plain.length ? html`<div class="library-plain-rows">
+          ${plain.map((entry) => html`<${PlainEntry}
+              key=${`${entry.runner}:${entry.time_cs}`}
+              entry=${entry} tier=${band.tier} division=${division.numeral} />`)}
+        </div>` : ""}
+      </div>
+    <//>
+  </div>`;
+}
+
+// One tier row of the TOC. `cutoffCs` is null for the Capless floor (no
+// cutoff — the catch-all for anything that has not beaten one yet) and for
+// the tier-less Unranked band a no-ladder approach shows. `you` is the
+// stratInfo of the reader when this row is their tier, so the marker can name
+// the exact subdivision (round 1: "the 'YOU' display should consider the
+// subdivision").
+function TocRow({ band, count, you, onJump }) {
   return html`<tr class="library-toc-row" onclick=${onJump}>
     <td class="library-toc-tier">
-      <${RankIcon} tier=${band.tier} size=${16} />
-      ${capName(band.tier)}${isYou ? html`<span class="library-toc-you" title="your current tier on this strategy"> ◀ you</span>` : ""}
+      ${band.tier ? html`<${RankIcon} tier=${band.tier} size=${16} />` : ""}
+      ${band.tier ? capName(band.tier) : "Unranked"}${you
+        ? html`<span class="library-toc-you" title="your current rank on this strategy">
+            ${" "}◀ you${you.division ? ` · ${capName(you.rank)} ${divisionDigit(you.division)}` : ""}</span>`
+        : ""}
     </td>
     <td class="library-toc-cutoff">${band.cutoffCs != null ? fmtSeconds(band.cutoffCs / 100) : "—"}</td>
     <td class="library-toc-count">${count}</td>
@@ -223,30 +344,27 @@ function TocRow({ band, count, isYou, onJump }) {
  * something every section has to negotiate).
  */
 function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey, onAdd }) {
-  const [jp, setJp] = useState(false);
+  // ROUND 1 (2026-08-07), superseding the round-2 version-badge ruling: the
+  // JP/US control is a MODE now, and a mode FILTERS -- "We should have 2
+  // modes: JP (shows only JP entries), US (shows only US entries)." An entry
+  // tagged with the other version disappears; an entry never annotated with a
+  // version shows in both modes (the combined-unless-annotated rule, applied
+  // to display). With every visible run being the mode's own version, the
+  // per-entry version pill that used to badge mixed sections had nothing
+  // left to say and is deleted. Bands and counts are computed AFTER the
+  // filter, so every number on screen describes what is actually shown.
+  const [version, setVersion] = useState("us");
   const hasJp = !!approach.ladder_jp;
-  const ladder = (hasJp && jp ? approach.ladder_jp : approach.ladder) || {};
-  // FINAL REVIEW FIX (HIGH: JP/US band contamination), RULED ROUND 2: every
-  // entry of an approach used to band against ONE ladder regardless of which
-  // ROM it was recorded on with nothing on screen saying so -- the ORIGINAL
-  // fix badged an entry only when its version disagreed with whichever ladder
-  // happened to be showing, and measured 108 of 112 badged in the worst real
-  // band (Blast to the Stone Pillar's Mario band). An exception marker on 96%
-  // of a band is not an exception marker -- it reads as the SECTION being
-  // mislabelled, and the badge set inverted every time the JP/US toggle
-  // flipped, correctly, which looked like a bug because it was the same
-  // shape as one. `mixedVersions` decouples the badge from the shown ladder
-  // entirely: whenever an approach's own entries carry BOTH ROM versions,
-  // every entry wears its own, always -- a plain fact about the run (a
-  // COLUMN), independent of the chip below (a statement about the ladder).
-  // An approach with only one version present (or none tagged at all) never
-  // badges anything, matching the combined-unless-annotated rule: nothing to
-  // annotate when there is only one population.
   const mixedVersions = useMemo(() => new Set(
     (approach.entries || []).map((entry) => entry.version).filter(Boolean),
   ).size > 1, [approach.entries]);
-  const bands = useMemo(() => bandsOf(ladder, approach.entries),
-    [ladder, approach.entries]);
+  const versioned = hasJp || mixedVersions;
+  const ladder = (hasJp && version === "jp" ? approach.ladder_jp : approach.ladder) || {};
+  const visibleEntries = useMemo(() => (versioned
+    ? (approach.entries || []).filter((entry) => !entry.version || entry.version === version)
+    : (approach.entries || [])), [approach.entries, versioned, version]);
+  const bands = useMemo(() => bandsOf(ladder, visibleEntries),
+    [ladder, visibleEntries]);
   const marioKey = approach.ladder && approach.ladder.Mario != null
     ? approach.ladder.Mario : -1;   // presentational echo of sectionOrder's own key; -1 (not -Infinity) so it survives JSON round-trips a render probe takes
 
@@ -287,57 +405,68 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
     </button>
     <${Disclose} open=${open} className="library-section-disclose">
       <div class="library-section-body">
-        ${hasJp ? html`<button type="button" class="chip chip-button library-jp-toggle"
-            aria-pressed=${jp} onclick=${() => setJp((prev) => !prev)}>
-            ${jp ? "JP ladder" : "US ladder"} · switch
-          </button>`
-          : /* FINAL REVIEW FIX (medium: ladder_version read nowhere). A row
-               with too few of the OTHER version's times to fit a second
-               ladder still gets ONE, fitted entirely from whichever
-               population it has -- 13 approaches fit from JP-only times, no
-               `ladder_jp` companion (too few US runs to earn one), so no
-               toggle ever existed to say so. `ladder_version` was stamped
-               for exactly this and read by no JS at all until now. */
-          approach.ladder_version
+        ${versioned ? html`<button type="button" class="chip chip-button library-jp-toggle"
+            aria-pressed=${version === "jp"}
+            title=${hasJp
+              ? `Showing only ${version === "jp" ? "JP" : "US"} entries, banded against the ${version === "jp" ? "JP" : "US"} ladder.`
+              : `Showing only ${version === "jp" ? "JP" : "US"} entries. This approach has one ladder for both versions.`}
+            onclick=${() => setVersion((prev) => (prev === "jp" ? "us" : "jp"))}>
+            ${version === "jp" ? "JP" : "US"} mode · switch
+          </button>` : ""}
+        ${/* FINAL REVIEW FIX (medium: ladder_version read nowhere). A row
+             with too few of the OTHER version's times to fit a second ladder
+             still gets ONE, fitted entirely from whichever population it has
+             -- 13 approaches fit from JP-only times, no `ladder_jp` companion
+             (too few US runs to earn one). The chip renders INDEPENDENTLY of
+             the mode toggle since round 1: an approach can mix entry versions
+             (so the toggle shows) while its one ladder is still fitted from a
+             single version's times -- both facts stay on screen. */""}
+        ${!hasJp && approach.ladder_version
           ? html`<span class="chip library-ladder-version-chip"
               title=${`Fitted from ${approach.ladder_version === "jp" ? "JP" : "US"}-only community times -- not enough of the other version's runs to fit a second ladder.`}>
               ${approach.ladder_version === "jp" ? "JP" : "US"} ladder only
             </span>`
           : ""}
         <table class="library-toc"><tbody>
-          ${bands.map((band) => html`<${TocRow} key=${bandAnchorId(approach, band.tier)} band=${band}
+          ${bands.map((band) => html`<${TocRow} key=${bandAnchorId(approach, band.tier || "unranked")} band=${band}
               count=${band.entries.filter((entry) => matchesRunner(entry, query)).length}
-              isYou=${!!(stratInfo && stratInfo.rank === band.tier)}
-              onJump=${() => document.getElementById(bandAnchorId(approach, band.tier))
+              you=${stratInfo && stratInfo.rank === band.tier ? stratInfo : null}
+              onJump=${() => document.getElementById(bandAnchorId(approach, band.tier || "unranked"))
                 ?.scrollIntoView({ block: "start", behavior: "smooth" })} />`)}
         </tbody></table>
-        ${bands.map((band) => html`<div class="library-band" key=${bandAnchorId(approach, band.tier)}
-            data-tier=${band.tier} id=${bandAnchorId(approach, band.tier)}>
+        ${bands.map((band) => html`<div class="library-band" key=${bandAnchorId(approach, band.tier || "unranked")}
+            data-tier=${band.tier || "unranked"} id=${bandAnchorId(approach, band.tier || "unranked")}>
           <div class="library-band-head">
-            <${RankIcon} tier=${band.tier} size=${18} /> <b>${capName(band.tier)}</b>
-            <span class="meta">${band.cutoffCs != null ? fmtSeconds(band.cutoffCs / 100) : "unranked"}</span>
+            ${band.tier ? html`<${RankIcon} tier=${band.tier} size=${18} />` : ""}
+            ${" "}<b>${band.tier ? capName(band.tier) : "Unranked"}</b>
+            <span class="meta">${band.cutoffCs != null ? fmtSeconds(band.cutoffCs / 100)
+              : band.tier ? "—" : "no ladder for this approach"}</span>
           </div>
-          <div class="library-examples">
-            ${band.entries.map((entry) => {
-              const trayKey = entryTrayKey(approach, entry);
-              // FIX (minor: duplicate Preact keys). `entryTrayKey` was
-              // already computed here and is already scoped uniquely per
-              // approach+runner+time+video (fix round 2's own reasoning,
-              // above) -- reusing it as the React key retires the ad hoc
-              // `entry.video || runner:time` fallback, which collided
-              // whenever the same runner posted the same time on both the
-              // JP and US row of a merged approach with neither carrying a
-              // video (measured: 8 bands, most example cards are exactly
-              // that kind of placeholder -- 34,264 of 40,974 entries have no
-              // video at all).
-              return html`<${ExampleCard} key=${trayKey}
-                  entry=${entry} tier=${band.tier} trayKey=${trayKey} entityKey=${entityKey}
-                  hidden=${!matchesRunner(entry, query)}
-                  inTray=${trayKeys.has(trayKey)}
-                  showVersion=${mixedVersions}
-                  onAdd=${onAdd} />`;
-            })}
-          </div>
+          ${band.divisions
+            ? band.divisions.map((division) => html`<${DivisionGroup}
+                key=${`${bandAnchorId(approach, band.tier)}-${division.numeral}`}
+                approach=${approach} band=${band} division=${division} query=${query}
+                isYou=${!!(stratInfo && stratInfo.rank === band.tier
+                           && stratInfo.division === division.numeral)}
+                trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd} />`)
+            : html`<div class="library-division-body">
+                <div class="library-examples">
+                  ${band.entries.filter((entry) => matchesRunner(entry, query) && entry.video)
+                    .map((entry) => {
+                      const trayKey = entryTrayKey(approach, entry);
+                      return html`<${ExampleCard} key=${trayKey}
+                          entry=${entry} tier=${band.tier} division=${null}
+                          trayKey=${trayKey} entityKey=${entityKey}
+                          inTray=${trayKeys.has(trayKey)} onAdd=${onAdd} />`;
+                    })}
+                </div>
+                <div class="library-plain-rows">
+                  ${band.entries.filter((entry) => matchesRunner(entry, query) && !entry.video)
+                    .map((entry) => html`<${PlainEntry}
+                        key=${`${entry.runner}:${entry.time_cs}`}
+                        entry=${entry} tier=${band.tier} division=${null} />`)}
+                </div>
+              </div>`}
         </div>`)}
       </div>
     <//>

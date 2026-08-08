@@ -82,6 +82,26 @@ _ADD_N_EXAMPLES = """
 }})()
 """
 
+# Subdivision groups ship collapsed by default (round 1, 2026-08-07); example
+# cards only exist inside an expanded one, so every card-hunting step first
+# opens them all in the open section.
+EXPAND_DIVISIONS = (
+    "Array.from(document.querySelectorAll("
+    "'.library-section.open .library-division-head')).forEach((head) => "
+    "head.getAttribute('aria-expanded') === 'true' || head.click())")
+
+
+def _expand_divisions(page):
+    page.wait_for(".library-section.open .library-division-head", timeout_ms=10000)
+    page.evaluate(EXPAND_DIVISIONS)
+    page.wait_for(".library-section.open .library-example", timeout_ms=10000)
+
+
+def _add_examples(page, n):
+    _expand_divisions(page)
+    return page.evaluate(_ADD_N_EXAMPLES.format(n=n))
+
+
 # FIX ROUND 2: no longer a fake backend -- everything but ONE optional call
 # passes straight through to the REAL, now-real `/api/compare/*` routes
 # (real import, real db, real `/api/compare/view`). The only override: the
@@ -210,7 +230,7 @@ def test_a_successful_study_opens_every_imported_comparison(library_page):
     count 0, both stuck in "load existing"). Two items, both succeed -- assert
     `.compare-cmp` count equals what was actually imported, not merely that
     the pane became visible."""
-    added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=2))
+    added = _add_examples(library_page, 2)
     assert added == 2, added
     library_page.wait_for(".library-tray-chip", timeout_ms=5000)
 
@@ -241,7 +261,7 @@ def test_a_partial_import_failure_renders_the_line_and_still_studies_the_rest(li
     to the Compare pane for the item that DID import, and (c) that ONE
     comparison is actually OPEN there (FIX ROUND 1 -- content, not just a
     visible pane)."""
-    added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=2))
+    added = _add_examples(library_page, 2)
     assert added == 2, added
     library_page.wait_for(".library-tray-chip", timeout_ms=5000)
 
@@ -280,7 +300,7 @@ def test_a_fully_failed_batch_shows_the_line_and_does_not_navigate(library_page)
     """The other half of "must not sink the batch": when NOTHING imported,
     there is nothing to study, so the page stays on the Library rather than
     routing to an empty Compare pane."""
-    added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=1))
+    added = _add_examples(library_page, 1)
     assert added == 1, added
     library_page.wait_for(".library-tray-chip", timeout_ms=5000)
 
@@ -307,7 +327,7 @@ def test_an_untrimmed_item_is_never_put_to_compare_videos(library_page):
     guard away hits the real, unmocked PUT route and 404s, which reports the
     item as FAILED for the wrong reason and would silently stop proving
     anything the moment a future round also mocks that route)."""
-    added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=1))
+    added = _add_examples(library_page, 1)
     assert added == 1, added
     library_page.wait_for(".library-tray-chip", timeout_ms=5000)
 
@@ -343,7 +363,7 @@ def test_a_mixed_entity_study_names_what_it_is_showing_and_what_else_imported(li
     note names what is shown, says more was imported elsewhere, and that
     `.compare-cmp` only ever shows the ONE entity Compare can actually
     display."""
-    added_first = library_page.evaluate(_ADD_N_EXAMPLES.format(n=1))
+    added_first = _add_examples(library_page, 1)
     assert added_first == 1, added_first
     library_page.wait_for(".library-tray-chip", timeout_ms=5000)
 
@@ -370,9 +390,9 @@ def test_a_mixed_entity_study_names_what_it_is_showing_and_what_else_imported(li
       })()
     """)
     assert picked_target == "clicked", picked_target
-    library_page.wait_for(".library-section.open .library-example", timeout_ms=10000)
+    _expand_divisions(library_page)
 
-    added_second = library_page.evaluate(_ADD_N_EXAMPLES.format(n=1))
+    added_second = _add_examples(library_page, 1)
     assert added_second == 1, added_second
     library_page.wait_for(".library-tray-chip:nth-child(2)", timeout_ms=5000)
 

@@ -28,15 +28,30 @@ import { Icon } from "./icons.js";
 
 const html = htm.bind(h);
 
+// "3 hours ago", off an ISO timestamp -- the header speaks human time, never
+// a raw revision stamp (round 1: "The text here for Sheet 2026-blah blah is
+// unsettling. I think we should just say 'Last refreshed: [time] ago'").
+function agoLabel(iso) {
+  const then = Date.parse(iso || "");
+  if (!Number.isFinite(then)) return null;
+  const seconds = Math.max(0, (Date.now() - then) / 1000);
+  if (seconds < 90) return "just now";
+  if (seconds < 5400) return `${Math.round(seconds / 60)} minutes ago`;
+  if (seconds < 129600) return `${Math.round(seconds / 3600)} hours ago`;
+  return `${Math.round(seconds / 86400)} days ago`;
+}
+
 function statusLine(status, error) {
   // FINAL REVIEW FIX (medium: two fetches fail into a permanent spinner).
   // `error` was not a parameter before -- a dead or slow server were
   // indistinguishable, both reading "Loading the community sheet…" forever.
   if (error) return `Could not load the sheet status: ${error}`;
   if (!status) return "Loading the community sheet…";
-  const revision = status.sheet_revision || "unknown revision";
-  const source = status.source === "local" ? "your last refresh" : "bundled with the app";
-  return `Sheet ${revision} · ${source}`;
+  if (status.source === "local") {
+    const ago = agoLabel(status.fetched_at);
+    return ago ? `Last refreshed: ${ago}` : "Refreshed by you";
+  }
+  return "Bundled with the app — refresh to pull the newest sheet";
 }
 
 // All three /api/library/refresh outcomes render inline -- applied, not
@@ -48,7 +63,7 @@ function RefreshMessage({ state }) {
   if (state.error)
     return html`<p class="library-refresh-msg is-error">Could not refresh: ${state.error}</p>`;
   if (state.applied)
-    return html`<p class="library-refresh-msg is-ok">Updated to ${state.sheet_revision} (${state.targets} targets).</p>`;
+    return html`<p class="library-refresh-msg is-ok">Updated just now — ${state.targets} targets.</p>`;
   return html`<p class="library-refresh-msg">Already up to date — ${state.reason}</p>`;
 }
 

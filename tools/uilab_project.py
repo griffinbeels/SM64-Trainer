@@ -309,6 +309,15 @@ await waitFor(() => !!document.querySelector('.library-target .library-section')
 """
 _LIBRARY_ADD_TWO = """
 if (document.querySelectorAll('.library-tray-chip').length < 2) {
+  // Subdivision groups ship collapsed (round 1, 2026-08-07): expand them all
+  // first, or the card query below finds nothing.
+  await waitFor(() => !!document.querySelector(
+    '.library-section.open .library-division-head'));
+  Array.from(document.querySelectorAll(
+    '.library-section.open .library-division-head')).forEach((head) =>
+    head.getAttribute('aria-expanded') === 'true' || head.click());
+  await waitFor(() => !!document.querySelector(
+    '.library-section.open .library-example'));
   const cards = Array.from(document.querySelectorAll(
     '.library-section.open .library-example'));
   let added = 0;

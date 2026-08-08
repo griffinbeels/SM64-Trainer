@@ -3,15 +3,15 @@
 // Pure rules for the Library page. Import-free of Preact/the DOM ON PURPOSE:
 // node drives these in tests/test_library_model_js.py without a browser,
 // which is what pins section order, band order, the grid math and the trim
-// mapping. `format.js` is the one exception -- it is itself Preact-free (node
-// can already import it, `tests/test_ui_time_format.py` does exactly that),
-// so pulling in `fmtSeconds` costs nothing this file exists to avoid, and
-// buys `trayToImport` the SAME time notation the rest of this page already
-// shows for the entry it came from (the chip, the TOC row, the example
-// card) -- the "one door for a value two surfaces show" rule, applied to a
-// label rather than a colour.
+// mapping. `format.js` and `caps.js` are the two exceptions -- both are
+// themselves Preact-free (node imports each directly in tests), so pulling in
+// `fmtSeconds` and the division registry costs nothing this file exists to
+// avoid. `fmtSeconds` buys `trayToImport` the SAME time notation the rest of
+// this page already shows; `DIVISION_NUMERALS`/`DIVISIONS_PER_TIER` keep the
+// subdivision vocabulary ONE door (caps.js owns it for every rank surface).
 
 import { fmtSeconds } from "../format.js";
+import { DIVISION_NUMERALS, DIVISIONS_PER_TIER } from "./caps.js";
 
 // Slowest -> fastest, Library-only vocabulary: the Library bands times
 // against a fitted or vetted LADDER (library/ladders.py::fit_payload,
@@ -76,27 +76,188 @@ export function bandFor(ladder, timeCs) {
   // matched -- the two are the same answer read in opposite directions
   // (proved for a non-monotonic ladder, not just an ordinary one, by
   // test_band_for_agrees_with_a_hand_walked_non_monotonic_ladder).
+  //
+  // The floor is "Iron" -- the registry KEY, exactly what classify.rank_for
+  // returns for a time that beats nothing, so `capName("Iron")` renders it
+  // as "Capless" everywhere. It said "Below Bronze" until round 1
+  // (2026-08-07), a third name for a tier this project already names twice:
+  // "We shouldn't call it 'Below Bronze' -- it's the CAPLESS rank!"
   let earned = null;
   for (const tier of RANKS) {
     if (ladder[tier] == null) continue;
     if (timeCs <= Math.round(ladder[tier] * 100)) earned = tier;
   }
-  return earned || "Below Bronze";
+  return earned || "Iron";
+}
+
+// ---------------------------------------------------------------------------
+// The scoring twin -- ranks/scoring.py's score curve, mirrored so the page
+// can place an ENTRY in a subdivision ("Wario 3") the same way the server
+// places an ATTEMPT (round 1: "further stratify each of the sections by
+// subdivisions ... it's hard to tell apart Wario 1 from Wario 5").
+//
+// This is a deliberate second copy of a Python implementation the browser
+// cannot round-trip for (44k entries, re-banded per JP/US mode flip), so it
+// follows the standing rule for that case: the duplicate gets a test that
+// COMPARES the two real implementations -- tests/test_cross_language_parity.py
+// drives ranks/scoring.py and this file over the same real ladders and times
+// and asserts identical (tier, division) for every pair. Never restate the
+// curve in a test; the parity run IS the guard.
+export const SCORE_ANCHORS = { Mario: 95, Grandmaster: 90, Master: 80,
+                               Diamond: 70, Platinum: 60, Gold: 45,
+                               Silver: 25, Bronze: 10 };
+const TOP_SCORE = 100;
+const TIERS_HARDEST_FIRST = [...RANKS].reverse();
+
+// Python's round() is half-to-even; Math.round is half-up. The parity test
+// feeds both sides real fitted ladders, where interpolated edges can land on
+// exact halves, so the twin has to round the way the original does.
+function pyRound(value) {
+  const floor = Math.floor(value);
+  const diff = value - floor;
+  if (diff > 0.5) return floor + 1;
+  if (diff < 0.5) return floor;
+  return floor % 2 === 0 ? floor : floor + 1;
+}
+
+export function ladderCsOf(ladder) {
+  const out = {};
+  for (const tier of RANKS) {
+    if (ladder && ladder[tier] != null) out[tier] = Math.round(ladder[tier] * 100);
+  }
+  return out;
+}
+
+function definedTiers(ladderCs) {
+  return TIERS_HARDEST_FIRST.filter((tier) => ladderCs[tier] != null);
+}
+
+// Mirror of ranks/scoring.py::score_for -- piecewise linear in TIME through
+// the anchors; faster than the hardest tier extrapolates (capped at 100),
+// slower than the easiest decays asymptotically (the Iron tail).
+export function scoreFor(ladderCs, timeCs) {
+  const points = definedTiers(ladderCs).map((tier) => [ladderCs[tier], SCORE_ANCHORS[tier]]);
+  if (!points.length) return null;
+  const [hardestCs, hardestScore] = points[0];
+  if (timeCs <= hardestCs) {
+    if (points.length === 1) return hardestScore;
+    const [nextCs, nextScore] = points[1];
+    const slope = (nextScore - hardestScore) / (nextCs - hardestCs);
+    return Math.min(TOP_SCORE, hardestScore + slope * (timeCs - hardestCs));
+  }
+  for (let seg = 0; seg + 1 < points.length; seg += 1) {
+    const [fasterCs, fasterScore] = points[seg];
+    const [slowerCs, slowerScore] = points[seg + 1];
+    if (timeCs <= slowerCs) {
+      const span = slowerCs - fasterCs;
+      if (span <= 0) return slowerScore;
+      return fasterScore + (slowerScore - fasterScore) * (timeCs - fasterCs) / span;
+    }
+  }
+  const [easiestCs, easiestScore] = points[points.length - 1];
+  return easiestScore * easiestCs / timeCs;
+}
+
+// Mirror of ranks/scoring.py::time_for_score -- the algebraic inverse, used
+// here to print each subdivision's own time bracket.
+export function timeForScore(ladderCs, targetScore) {
+  const points = definedTiers(ladderCs).map((tier) => [ladderCs[tier], SCORE_ANCHORS[tier]]);
+  if (!points.length) return null;
+  const [hardestCs, hardestScore] = points[0];
+  if (targetScore >= hardestScore) {
+    if (points.length === 1) return hardestCs;
+    const [nextCs, nextScore] = points[1];
+    const slope = (nextScore - hardestScore) / (nextCs - hardestCs);
+    if (slope === 0) return hardestCs;
+    return pyRound(hardestCs + (targetScore - hardestScore) / slope);
+  }
+  for (let seg = 0; seg + 1 < points.length; seg += 1) {
+    const [fasterCs, fasterScore] = points[seg];
+    const [slowerCs, slowerScore] = points[seg + 1];
+    if (targetScore >= slowerScore) {
+      const span = slowerCs - fasterCs;
+      if (span <= 0) return slowerCs;
+      const frac = (targetScore - fasterScore) / (slowerScore - fasterScore);
+      return pyRound(fasterCs + frac * span);
+    }
+  }
+  const [easiestCs, easiestScore] = points[points.length - 1];
+  if (targetScore <= 0) return null;
+  return pyRound(easiestScore * easiestCs / targetScore);
+}
+
+// Mirror of ranks/scoring.py::tier_band, `defined` hardest-first as there.
+function tierBandRange(tier, defined) {
+  if (tier === "Iron" || !defined.length) {
+    return [0, defined.length ? SCORE_ANCHORS[defined[defined.length - 1]] : TOP_SCORE];
+  }
+  const index = defined.indexOf(tier);
+  const high = index > 0 ? SCORE_ANCHORS[defined[index - 1]] : TOP_SCORE;
+  return [SCORE_ANCHORS[tier], high];
+}
+
+// Which fifth of `tier`'s own band a time falls in -- the same five
+// equal-score slices ranks/scoring.py::division_for cuts, with the tier
+// supplied by bandFor (the two agree on every monotone ladder, which every
+// fitted and vetted ladder is by construction; the clamp keeps a pathological
+// hand-edited ladder from ever indexing off the end).
+export function divisionWithin(ladderCs, tier, timeCs) {
+  const defined = definedTiers(ladderCs);
+  if (!defined.length || !tier) return null;
+  const score = scoreFor(ladderCs, timeCs);
+  const [low, high] = tierBandRange(tier, defined);
+  const span = high - low;
+  if (span <= 0) return DIVISION_NUMERALS[DIVISIONS_PER_TIER - 1];
+  const index = Math.floor((score - low) / span * DIVISIONS_PER_TIER);
+  return DIVISION_NUMERALS[Math.max(0, Math.min(DIVISIONS_PER_TIER - 1, index))];
+}
+
+// The five subdivision shells of one tier band, slowest (V) first to match
+// band order, each carrying its own time bracket. `slowCs` is null exactly
+// where no slow edge exists (Iron V's edge is score 0, the asymptote).
+function divisionShells(tier, ladderCs, defined) {
+  const [low, high] = tierBandRange(tier, defined);
+  const width = (high - low) / DIVISIONS_PER_TIER;
+  return DIVISION_NUMERALS.map((numeral, index) => {
+    const scoreLow = low + index * width;
+    return { numeral,
+             slowCs: timeForScore(ladderCs, scoreLow),
+             fastCs: timeForScore(ladderCs, Math.min(TOP_SCORE, scoreLow + width)),
+             entries: [] };
+  });
 }
 
 export function bandsOf(ladder, entries) {
-  const bands = [{ tier: "Below Bronze", cutoffCs: null, entries: [] }];
+  const ladderCs = ladderCsOf(ladder);
+  const defined = definedTiers(ladderCs);
+  // No ladder at all: one honest catch-all with no tier and no divisions --
+  // "Unranked", never Capless, because there is nothing to be capless AT.
+  if (!defined.length) {
+    return [{ tier: null, cutoffCs: null, divisions: null,
+              entries: [...(entries || [])].sort((a, b) => b.time_cs - a.time_cs) }];
+  }
+  const bands = [{ tier: "Iron", cutoffCs: null, entries: [],
+                   divisions: divisionShells("Iron", ladderCs, defined) }];
   for (const tier of RANKS) {
-    if (ladder && ladder[tier] != null) {
-      bands.push({ tier, cutoffCs: Math.round(ladder[tier] * 100), entries: [] });
+    if (ladderCs[tier] != null) {
+      bands.push({ tier, cutoffCs: ladderCs[tier], entries: [],
+                   divisions: divisionShells(tier, ladderCs, defined) });
     }
   }
-  const byTier = Object.fromEntries(bands.map((b) => [b.tier, b]));
-  for (const entry of entries) {
-    byTier[ladder ? bandFor(ladder, entry.time_cs) : "Below Bronze"].entries.push(entry);
+  const byTier = Object.fromEntries(bands.map((band) => [band.tier, band]));
+  for (const entry of entries || []) {
+    const band = byTier[bandFor(ladder, entry.time_cs)];
+    band.entries.push(entry);
+    const numeral = divisionWithin(ladderCs, band.tier, entry.time_cs);
+    band.divisions[DIVISION_NUMERALS.indexOf(numeral)].entries.push(entry);
   }
-  for (const band of bands) band.entries.sort((a, b) => b.time_cs - a.time_cs);
-  return bands.filter((b) => b.entries.length || b.cutoffCs != null);
+  for (const band of bands) {
+    band.entries.sort((a, b) => b.time_cs - a.time_cs);
+    for (const division of band.divisions) {
+      division.entries.sort((a, b) => b.time_cs - a.time_cs);
+    }
+  }
+  return bands.filter((band) => band.entries.length || band.cutoffCs != null);
 }
 
 export function gridShape(n) {
@@ -122,6 +283,78 @@ export function youtubeEmbed(url, startS) {
   const m = (url || "").match(/[?&]t=(\d+)/);
   const start = Math.floor(startS != null ? startS : (m ? +m[1] : 0));
   return `https://www.youtube-nocookie.com/embed/${id}?start=${start}&enablejsapi=1`;
+}
+
+// ---------------------------------------------------------------------------
+// Which player a video URL gets -- one registry, because "the videos don't
+// load" (round 1) was three different truths at once: 83% of entries carry NO
+// video at all, and of the 7,433 that do, ~12% are not YouTube (census
+// 2026-08-07: YouTube 6,579 · Twitch 397 · X/Twitter 384 · Bluesky 22 ·
+// Discord 21 · Imgur 13 · Streamable 5 · Drive 5 · tail ~8). Every format
+// gets a named handler or an honest link-out -- never a dead play button.
+//
+// `parentHost` is the EMBEDDING page's hostname (Twitch's players refuse to
+// load without a matching `parent=` param); the caller passes
+// location.hostname so this file stays DOM-free.
+export function videoSource(url, parentHost) {
+  if (!url) return null;
+  if (youtubeId(url)) {
+    return { kind: "youtube", site: "YouTube",
+             embed: youtubeEmbed(url), thumb: youtubeThumb(url) };
+  }
+  const host = parentHost || "localhost";
+  let match;
+  if ((match = url.match(/clips\.twitch\.tv\/([\w-]+)/))
+      || (match = url.match(/twitch\.tv\/\w+\/clip\/([\w-]+)/))) {
+    return { kind: "twitch-clip", site: "Twitch", thumb: null,
+             embed: `https://clips.twitch.tv/embed?clip=${match[1]}&parent=${host}&autoplay=false` };
+  }
+  if ((match = url.match(/twitch\.tv\/videos\/(\d+)/))) {
+    return { kind: "twitch", site: "Twitch", thumb: null,
+             embed: `https://player.twitch.tv/?video=${match[1]}&parent=${host}&autoplay=false` };
+  }
+  if ((match = url.match(/(?:x|twitter|vxtwitter|fxtwitter)\.com\/\w+\/status\/(\d+)/))) {
+    return { kind: "tweet", site: "X", thumb: null,
+             embed: `https://platform.twitter.com/embed/Tweet.html?id=${match[1]}&theme=dark&dnt=true` };
+  }
+  if ((match = url.match(/bsky\.app\/profile\/([^/]+)\/post\/([\w.]+)/))) {
+    // embed.bsky.app accepts only a DID, never a handle -- measured live
+    // ("Invalid DID: DID syntax didn't validate via regex", 2026-08-07). A
+    // URL already carrying one embeds directly; a handle URL ships
+    // `embed: null` plus the pieces, and the CARD resolves the DID with one
+    // public-API fetch on the first click (ExampleCard's own bsky branch).
+    const [, actor, rkey] = match;
+    return { kind: "bsky", site: "Bluesky", thumb: null, actor, rkey,
+             embed: actor.startsWith("did:")
+               ? `https://embed.bsky.app/embed/${actor}/app.bsky.feed.post/${rkey}`
+               : null };
+  }
+  if ((match = url.match(/streamable\.com\/(?:e\/)?(\w+)/))) {
+    return { kind: "streamable", site: "Streamable", thumb: null,
+             embed: `https://streamable.com/e/${match[1]}` };
+  }
+  if ((match = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/))) {
+    return { kind: "gdrive", site: "Google Drive", thumb: null,
+             embed: `https://drive.google.com/file/d/${match[1]}/preview` };
+  }
+  if (/\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(url)) {
+    return { kind: "file", site: siteLabel(url), thumb: null, embed: url };
+  }
+  if (/\.(png|jpe?g|gif|webp)(\?|#|$)/i.test(url)) {
+    return { kind: "image", site: siteLabel(url), thumb: url, embed: null };
+  }
+  return { kind: "link", site: siteLabel(url), thumb: null, embed: null };
+}
+
+function siteLabel(url) {
+  const match = (url || "").match(/^https?:\/\/(?:www\.)?([^/]+)/);
+  const host = match ? match[1].toLowerCase() : "";
+  if (host.includes("discord")) return "Discord";
+  if (host.includes("imgur")) return "Imgur";
+  if (host.includes("tiktok")) return "TikTok";
+  if (host.includes("twitch")) return "Twitch";
+  if (host.includes("catbox")) return "Catbox";
+  return host || "the runner's site";
 }
 
 export function matchesRunner(entry, query) {

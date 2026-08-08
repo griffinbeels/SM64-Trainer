@@ -348,8 +348,11 @@ def test_library_band_for_agrees_with_rank_for():
         f"const cases = {json.dumps(js_cases)};\n"
         "console.log(JSON.stringify(cases.map(([ladder, time]) => "
         "bandFor(ladder, time))));")
-    python = ["Below Bronze" if (r := rank_for(ladder, time)) in (None, "Iron") else r
-             for ladder, time in cases]
+    # The floor maps to the registry key "Iron" (rendered as "Capless" via
+    # capName) since round 1, 2026-08-07 -- rank_for's own floor answer,
+    # with None (no ladder) folded into it the way bandFor's `earned || ...`
+    # fallback does.
+    python = [rank_for(ladder, time) or "Iron" for ladder, time in cases]
     disagreements = [(ladder, time, py, node)
                      for (ladder, time), py, node in zip(cases, python, js)
                      if py != node]
@@ -357,6 +360,120 @@ def test_library_band_for_agrees_with_rank_for():
         "librarymodel.js::bandFor and ranks/classify.py::rank_for disagree "
         f"on {len(disagreements)}/{len(cases)} generated (ladder_cs, time_cs) "
         f"pairs. First few: {disagreements[:5]}")
+
+
+# --- 9. the Library page's subdivision placement ----------------------------
+
+def test_library_subdivisions_agree_with_the_scoring_curve():
+    """`librarymodel.js` carries a twin of `ranks/scoring.py`'s score curve
+    (SCORE_ANCHORS, score_for, tier_band, division_for's slicing,
+    time_for_score) so the Library can place a community ENTRY in the same
+    subdivision the server would place an ATTEMPT -- 44k entries, re-banded
+    client-side on every JP/US mode flip, is the round trip the browser
+    cannot afford. Round 1 (2026-08-07): "further stratify each of the
+    sections by subdivisions". This drives BOTH real implementations over the
+    same ladders and times and asserts identical (tier, division) -- monotone
+    ladders only, which every fitted and vetted ladder is by construction
+    (library/ladders.py: "Cutoffs come out strictly increasing").
+
+    Two corpora: generated monotone ladders (runs in a fresh clone), plus a
+    sample of the SHIPPED snapshot's own fitted ladders (the exact inputs the
+    page bands with, including ragged tier sets and JP companions)."""
+    import gzip
+    import random
+
+    from sm64_events.ranks import scoring
+
+    # Anchor tables first: every downstream agreement is vacuous if these two
+    # registries drift.
+    js_anchors = run_node(
+        f"import {{ SCORE_ANCHORS }} from {LIBRARYMODEL_JS.as_uri()!r};\n"
+        "console.log(JSON.stringify(SCORE_ANCHORS));")
+    assert js_anchors == {k: float(v) for k, v in scoring.SCORE_ANCHORS.items()}
+
+    tiers = [r for r in scoring.RANK_NAMES if r != "Iron"]
+    rng = random.Random(20260808)
+
+    ladders = []
+    for _ in range(40):
+        chosen = sorted(rng.sample(range(len(tiers)), rng.randint(1, len(tiers))))
+        # Strictly increasing cutoffs, hardest (lowest index) fastest.
+        cuts = sorted(rng.sample(range(100, 200_00), len(chosen)))
+        ladders.append({tiers[tier_i]: cut for tier_i, cut in zip(chosen, cuts)})
+
+    snapshot = (REPO / "src" / "sm64_events" / "data"
+                / "sheet_library.seed.json.gz")
+    if snapshot.exists():
+        with gzip.open(snapshot, "rt", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        real = []
+        for target in payload["targets"]:
+            for approach in (target.get("approaches") or []):
+                for ladder in (approach.get("ladder"), approach.get("ladder_jp")):
+                    if ladder:
+                        real.append({tier: int(round(sec * 100))
+                                     for tier, sec in ladder.items()})
+        ladders.extend(rng.sample(real, min(80, len(real))))
+
+    cases = []
+    for ladder_cs in ladders:
+        cuts = sorted(ladder_cs.values())
+        times = {max(1, cuts[0] // 2), cuts[-1] * 2, cuts[-1] * 10}
+        for cut in cuts:
+            times.update((max(1, cut - 1), cut, cut + 1))
+        for faster, slower in zip(cuts, cuts[1:]):
+            times.add((faster + slower) // 2)
+        for time_cs in sorted(times):
+            cases.append((ladder_cs, time_cs))
+
+    python = []
+    for ladder_cs, time_cs in cases:
+        score = scoring.score_for(ladder_cs, time_cs)
+        python.append(list(scoring.division_for(score, scoring.defined_tiers(ladder_cs))))
+
+    js_cases = [[{t: v / 100 for t, v in ladder.items()}, time]
+                for ladder, time in cases]
+    js = run_node(
+        f"import {{ bandFor, divisionWithin, ladderCsOf }} from {LIBRARYMODEL_JS.as_uri()!r};\n"
+        f"const cases = {json.dumps(js_cases)};\n"
+        "console.log(JSON.stringify(cases.map(([ladder, time]) => {\n"
+        "  const tier = bandFor(ladder, time);\n"
+        "  return [tier, divisionWithin(ladderCsOf(ladder), tier, time)];\n"
+        "})));")
+
+    disagreements = [(ladder, time, py, node)
+                     for (ladder, time), py, node in zip(cases, python, js)
+                     if py != node]
+    assert not disagreements, (
+        "librarymodel.js and ranks/scoring.py disagree about subdivision "
+        f"placement on {len(disagreements)}/{len(cases)} (ladder, time) "
+        f"pairs. First few: {disagreements[:5]}")
+
+    # And the inverse curve: the subdivision headers print time brackets via
+    # timeForScore, which must agree with time_for_score at every division
+    # edge or a bracket names a time the server would grade elsewhere.
+    edge_cases = []
+    for ladder_cs in ladders[:40]:
+        defined = scoring.defined_tiers(ladder_cs)
+        for tier in ["Iron", *defined]:
+            low, high = scoring.tier_band(tier, defined)
+            width = (high - low) / scoring.DIVISIONS_PER_TIER
+            for div_i in range(scoring.DIVISIONS_PER_TIER):
+                edge = low + div_i * width
+                if edge > 0:
+                    edge_cases.append((ladder_cs, edge))
+    py_edges = [scoring.time_for_score(ladder_cs, edge)
+                for ladder_cs, edge in edge_cases]
+    js_edges = run_node(
+        f"import {{ timeForScore, ladderCsOf }} from {LIBRARYMODEL_JS.as_uri()!r};\n"
+        f"const cases = {json.dumps([[{t: v / 100 for t, v in lc.items()}, e] for lc, e in edge_cases])};\n"
+        "console.log(JSON.stringify(cases.map(([ladder, edge]) => "
+        "timeForScore(ladderCsOf(ladder), edge))));")
+    edge_disagreements = [(lc, edge, py, node) for (lc, edge), py, node
+                          in zip(edge_cases, py_edges, js_edges) if py != node]
+    assert not edge_disagreements, (
+        f"timeForScore drift on {len(edge_disagreements)}/{len(edge_cases)} "
+        f"division edges. First few: {edge_disagreements[:5]}")
 
 
 # --- the guards themselves --------------------------------------------------

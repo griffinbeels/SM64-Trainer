@@ -49,6 +49,26 @@ _ADD_N_EXAMPLES = """
 """
 
 
+# Subdivision groups ship collapsed by default (round 1, 2026-08-07); example
+# cards only exist inside an expanded one, so every card-hunting step first
+# opens them all in the open section.
+EXPAND_DIVISIONS = (
+    "Array.from(document.querySelectorAll("
+    "'.library-section.open .library-division-head')).forEach((head) => "
+    "head.getAttribute('aria-expanded') === 'true' || head.click())")
+
+
+def _expand_divisions(page):
+    page.wait_for(".library-section.open .library-division-head", timeout_ms=10000)
+    page.evaluate(EXPAND_DIVISIONS)
+    page.wait_for(".library-section.open .library-example", timeout_ms=10000)
+
+
+def _add_examples(page, n):
+    _expand_divisions(page)
+    return page.evaluate(_ADD_N_EXAMPLES.format(n=n))
+
+
 @pytest.fixture(scope="module")
 def library_server():
     with serve_ui(arm_segment=FIXTURE_SEGMENT, seed_editor_fixtures=True) as base:
@@ -76,7 +96,7 @@ def test_study_in_compare_is_enabled_once_the_tray_has_an_item(library_page):
     disabled control must explain itself where the click lands), now checked
     from the other side: a control that CAN act must not still claim it
     can't, which is exactly the bug a stale disabled-by-default would be."""
-    added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=1))
+    added = _add_examples(library_page, 1)
     assert added == 1, added
     library_page.wait_for(".library-tray-chip", timeout_ms=5000)
     result = library_page.evaluate("""
@@ -96,7 +116,7 @@ def test_study_in_compare_is_enabled_once_the_tray_has_an_item(library_page):
 
 
 def test_adding_examples_docks_the_tray_with_one_chip_each(library_page):
-    added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=3))
+    added = _add_examples(library_page, 3)
     assert added == 3, f"only {added} example cards had an enabled + button"
     library_page.wait_for(".library-tray-chip", timeout_ms=5000)
     assert library_page.evaluate(
@@ -104,7 +124,7 @@ def test_adding_examples_docks_the_tray_with_one_chip_each(library_page):
 
 
 def test_play_all_opens_a_grid_shaped_by_gridshape_of_the_tray_count(library_page):
-    added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=3))
+    added = _add_examples(library_page, 3)
     assert added == 3, added
     library_page.wait_for(".library-tray-chip", timeout_ms=5000)
 
@@ -121,7 +141,7 @@ def test_play_all_opens_a_grid_shaped_by_gridshape_of_the_tray_count(library_pag
 
 
 def test_the_overlay_carries_the_honesty_line_verbatim(library_page):
-    added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=1))
+    added = _add_examples(library_page, 1)
     assert added == 1, added
     library_page.evaluate("document.querySelector('.library-tray-playall').click()")
     library_page.wait_for(".library-grid-honesty", timeout_ms=5000)
@@ -132,7 +152,7 @@ def test_the_overlay_carries_the_honesty_line_verbatim(library_page):
 
 
 def test_setting_a_trim_start_and_restarting_updates_the_first_iframe_src(library_page):
-    added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=2))
+    added = _add_examples(library_page, 2)
     assert added == 2, added
     library_page.wait_for(".library-tray-chip", timeout_ms=5000)
 
@@ -181,14 +201,14 @@ _ENABLED_PLUS_COUNT = (
 
 def test_removing_a_chip_shrinks_the_tray_and_re_enables_its_plus_button(library_page):
     # Counts, not "the first + button": librarytarget.js disables every card
-    # whose own tray key is already in the tray, and some cards start
-    # disabled for the unrelated reason of carrying no video at all --
-    # library.md's "not every video link resolves" -- so a query for THE
-    # first `.library-example-plus` can land on an always-disabled card this
-    # test never touched.
+    # whose own tray key is already in the tray, so a query for THE first
+    # `.library-example-plus` can land on a card this test never touched.
+    # Expand the subdivisions BEFORE the baseline count -- reading it against
+    # a collapsed section counts zero cards and inverts the assertion.
+    _expand_divisions(library_page)
     enabled_before = library_page.evaluate(_ENABLED_PLUS_COUNT)
 
-    added = library_page.evaluate(_ADD_N_EXAMPLES.format(n=1))
+    added = _add_examples(library_page, 1)
     assert added == 1, added
     library_page.wait_for(".library-tray-chip", timeout_ms=5000)
     enabled_after_add = library_page.evaluate(_ENABLED_PLUS_COUNT)
@@ -222,6 +242,7 @@ def test_a_video_shared_across_sibling_entities_does_not_collide_in_the_tray(lib
     `entry.video` alone, so adding star:2:4's entry silently disabled
     star:2:5's OWN entry for the same runner -- a different star, refused
     with no way to add it."""
+    _expand_divisions(library_page)
     added_first = library_page.evaluate("""
       (() => {
         // Scoped to `.library-target`, not a bare query: the tray persists
@@ -272,7 +293,7 @@ def test_a_video_shared_across_sibling_entities_does_not_collide_in_the_tray(lib
     # flips (collapsible.js's own docstring), so a bare `.library-section`
     # wait can win a race against an empty body and read as "no thumb"
     # rather than as the disabled-button signal this test is actually after.
-    library_page.wait_for(".library-section.open .library-example", timeout_ms=10000)
+    _expand_divisions(library_page)
 
     # The sibling star's OWN entry for the same video must not read as
     # already added.
@@ -356,23 +377,29 @@ def test_two_different_recordings_of_the_same_run_do_not_collide_in_the_tray(lib
       })()
     """)
     assert opened_section == "clicked", opened_section
-    library_page.wait_for(".library-section.open .library-example", timeout_ms=10000)
+    _expand_divisions(library_page)
 
-    def benji_cards_script(index, extra):
+    # ROUND 1 UPDATE (2026-08-07): Benji's two recordings of this run are one
+    # US and one JP, and the section's mode now FILTERS entries -- so the two
+    # cards can never be on screen together any more. The collision this test
+    # guards (approach+runner+time identical, different videos) is now
+    # crossed via the mode toggle: add the US recording, switch to JP mode,
+    # and the JP recording's OWN card must not read as already-in-tray.
+    def benji_card_script(extra):
         return f"""
           (() => {{
             const cards = Array.from(document.querySelectorAll(
               '.library-section.open .library-example'))
               .filter((c) => c.querySelector('.library-example-runner')
                 ?.textContent === 'Benji');
-            if (cards.length !== 2) return `expected 2 Benji cards, found ${{cards.length}}`;
+            if (cards.length !== 1) return `expected 1 Benji card, found ${{cards.length}}`;
             {extra}
           }})()
         """
 
-    add_first = library_page.evaluate(benji_cards_script(0, """
+    add_first = library_page.evaluate(benji_card_script("""
             const btn = cards[0].querySelector('.library-example-plus');
-            if (!btn || btn.disabled) return 'first Benji card has no enabled + button';
+            if (!btn || btn.disabled) return 'the US Benji card has no enabled + button';
             btn.click();
             return 'clicked';
     """))
@@ -381,13 +408,19 @@ def test_two_different_recordings_of_the_same_run_do_not_collide_in_the_tray(lib
     assert library_page.evaluate(
         "document.querySelectorAll('.library-tray-chip').length") == 1
 
-    # The causal check: adding the FIRST recording must not disable the
+    # Switch the section to JP mode and re-expand (a rebuilt band list mounts
+    # its subdivisions collapsed again).
+    library_page.evaluate(
+        "document.querySelector('.library-section.open .library-jp-toggle').click()")
+    _expand_divisions(library_page)
+
+    # The causal check: adding the first recording must not disable the
     # second -- a fresh evaluate() call, after Preact has had a tick to
-    # commit the first add (ui-core.md: reading in the same tick as the
-    # dispatch sees the PRE-render value).
-    add_second = library_page.evaluate(benji_cards_script(1, """
-            const btn = cards[1].querySelector('.library-example-plus');
-            if (!btn) return 'no plus button on the second Benji card';
+    # commit (ui-core.md: reading in the same tick as the dispatch sees the
+    # PRE-render value).
+    add_second = library_page.evaluate(benji_card_script("""
+            const btn = cards[0].querySelector('.library-example-plus');
+            if (!btn) return 'no plus button on the JP Benji card';
             if (btn.disabled) return 'disabled -- the collision is back';
             btn.click();
             return 'clicked';

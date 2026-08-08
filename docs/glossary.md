@@ -215,11 +215,16 @@ it.
 
 ### Division
 
-One step inside a [[MARELO]] [[tier]], written as a roman numeral — the fine
-half of the rating, and the thing that moves often enough to feel like
-progress.
+One step inside a [[tier]], written as a roman numeral — the fine half of a
+[[MARELO]] rating, and since round 1 of the [[Library tab]] also how that
+page files every community [[entry]] ("Wario 3"), so a reader can tell the
+top of a [[tier]] from its bottom at a glance.
 
-- **Lives** — the scorer (`src/sm64_events/ranks/scoring.py`)
+- **Lives** — the scorer (`src/sm64_events/ranks/scoring.py`), with a
+  pinned twin for the [[Library tab]]
+  (`src/sm64_events/ui/components/librarymodel.js`,
+  compared implementation-to-implementation by
+  `tests/test_cross_language_parity.py`)
 
 ### Scope
 
@@ -407,7 +412,10 @@ The screen for browsing every [[approach]] the [[Ultimate Sheet]] documents.
 Opens straight on whichever [[star]] or [[segment]] you last practiced,
 otherwise a course grid to browse into; open one and its [[approach]]es lay
 out beginner to expert, each one's community times banded by the [[rank]]
-they earn. The [[tray]] collects [[entry]] rows to compare side by side.
+they earn, and each [[rank]] band split into its five [[division]]s —
+collapsed until you open the exact one you want to study. An [[entry]] with a
+video draws a playable card; one without draws a compact [[runner]]-and-time
+row. The [[tray]] collects [[entry]] rows to compare side by side.
 
 - **Lives** — the tab (`src/sm64_events/ui/components/library.js`,
   `src/sm64_events/ui/components/librarynav.js`,

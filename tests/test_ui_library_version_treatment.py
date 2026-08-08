@@ -1,36 +1,26 @@
-"""Guards the JP/US treatment on the Library target page (librarytarget.js) —
-the per-entry version badge (`.library-example-version`) and the no-toggle
-`ladder_version` chip (`.library-ladder-version-chip`). Final whole-branch
-review, HIGH finding: entries were banded against a ladder fitted from the
-OTHER ROM version with nothing on screen saying so. The fix had no guard at
-all until the first round of this file (`grep library-example-version
-tests/` found zero hits) — the most user-visible change in the round,
-protected only by a one-off render check that would not survive the next
-person who touches `bandsOf`, `Section` or `ExampleCard`.
+"""Guards the JP/US treatment on the Library target page (librarytarget.js).
 
-ROUND 2 (team-lead ruling): the badge is now a COLUMN, not an exception
-marker. It no longer compares an entry's version against whichever ladder
-happens to be showing (round 1 measured that at 108-of-112 badged in the
-worst real band — an exception marker on 96% of a band reads as the section
-being mislabelled, and the set inverted every time the JP/US toggle flipped).
-`Section::mixedVersions` now decides per APPROACH: whenever an approach's own
-entries carry BOTH ROM versions, every entry with a version wears its own,
-always.
+ROUND 1 (2026-08-07) superseded the version-badge design this file used to
+pin. His ruling, verbatim: "I have US mode enabled, but I see JP entries?
+Same for JP (I see US entries). We should have 2 modes: JP (shows only JP
+entries), US (shows only US entries)." So the JP/US control is a MODE that
+FILTERS now: an entry tagged with the other version disappears, an entry
+never annotated with a version shows in both modes (the combined-unless-
+annotated rule applied to display), and the per-entry version pill
+(`.library-example-version`) is DELETED — with every visible run being the
+mode's own version, it had nothing left to annotate.
 
-ROUND 2 ALSO fixes this file's own first-round mistake: pinning `mario_cards
-== 112` / `len(badged) == 108` against TODAY's community spreadsheet, which
-this project's own rule says never to do —
+The expectations are DERIVED from the shipped snapshot at test time (this
+project's own rule against pinning today's community sheet as an equality),
+re-deriving the same predicate `Section::visibleEntries` computes, and
+compared against the real rendered DOM in both modes.
 
-    Measured 2026-08-04 and asserted as FLOORS ... never as equalities —
-    the sheet gains rows daily and an exact count would go red for the
-    community doing exactly what we want. (.claude/rules/library.md)
-
-So the expectation is now DERIVED from the shipped snapshot at test time
-(same predicate `Section::mixedVersions`/badge-per-entry computes, re-derived
-here in ~4 lines rather than imported, the same shape
-`tests/test_log_card_name_fits.py` uses for its own corpus-driven floor) and
-compared against the real rendered DOM, with `> 0` as the anti-vacuity floor
-that catches a candidate-selection bug or a since-emptied corpus."""
+Also still guarded here: the no-toggle `ladder_version` chip — a row fitted
+from one ROM's times with too few of the other to earn a `ladder_jp`
+companion. Since round 1 the chip renders INDEPENDENTLY of the mode toggle
+(an approach can mix entry versions while its one ladder is still
+single-version-fitted; both facts stay on screen).
+"""
 import gzip
 import json
 import shutil
@@ -56,6 +46,16 @@ from uilab import driver  # noqa: E402
 
 SNAPSHOT = REPO / "src" / "sm64_events" / "data" / "sheet_library.seed.json.gz"
 CLICK_LIBRARY_TAB = 'document.querySelector(\'.nav-item[title="Library"]\').click()'
+# Subdivision groups ship collapsed by default (round 1); entries only render
+# inside expanded ones, so the DOM counts below expand everything first.
+EXPAND_DIVISIONS = (
+    "Array.from(document.querySelectorAll("
+    "'.library-section.open .library-division-head')).forEach((head) => "
+    "head.getAttribute('aria-expanded') === 'true' || head.click())")
+# Every rendered entry in the open section, cards and plain rows both.
+COUNT_VISIBLE = (
+    "document.querySelectorAll('.library-section.open .library-example').length"
+    " + document.querySelectorAll('.library-section.open .library-plain-entry').length")
 
 
 def _load_payload():
@@ -63,26 +63,23 @@ def _load_payload():
         return json.load(handle)
 
 
-def _badge_count(entries):
+def _mode_count(entries, mode):
     """The SAME predicate `librarytarget.js::Section` computes as
-    `mixedVersions` + "every entry with a version badges" -- re-derived here
-    so the expectation comes from TODAY's snapshot, never a number copied out
-    of a past run."""
+    `visibleEntries` -- re-derived here so the expectation comes from TODAY's
+    snapshot, never a number copied out of a past run."""
     entries = entries or []
-    versions_present = {e.get("version") for e in entries if e.get("version")}
-    if len(versions_present) <= 1:
-        return 0
-    return sum(1 for e in entries if e.get("version"))
+    return sum(1 for e in entries
+               if not e.get("version") or e.get("version") == mode)
+
+
+def _mixes(entries):
+    return len({e.get("version") for e in (entries or []) if e.get("version")}) > 1
 
 
 def _unique_target_labels(payload):
-    """(group, label) pairs that name exactly ONE target. The seam review's
-    own LOW finding: Big Boo's Haunt opens two targets both labelled "Go on a
-    Ghost Hunt" (one JP, one US) -- `_navigate_to_section`'s target click
-    matches on `textContent`, so a candidate drawn from a DUPLICATE-labelled
-    target can silently click the WRONG one and assert against data that
-    never rendered. Restricting candidates to unique labels sidesteps a
-    pre-existing bug this file is not the one to fix."""
+    """(group, label) pairs that name exactly ONE target — a duplicate-labelled
+    target (BBH's two Ghost Hunts) can make the textContent-matched click land
+    on the wrong page."""
     counts = {}
     for target in payload["targets"]:
         key = (target["group"], target["label"])
@@ -91,11 +88,9 @@ def _unique_target_labels(payload):
 
 
 def _pick_worst_mixed_approach(payload):
-    """The approach anywhere in the corpus whose badge count is largest --
-    the clearest real demonstration available today, found by scanning
-    rather than named by hand, so a sheet refresh that renames or retires
-    "Blast to the Stone Pillar" cannot silently turn this into a test of a
-    target that no longer exists."""
+    """The approach whose two mode counts DIFFER the most -- the clearest
+    real demonstration that the filter actually filters, found by scanning
+    rather than named by hand."""
     unique = _unique_target_labels(payload)
     best = None
     for target in payload["targets"]:
@@ -105,27 +100,26 @@ def _pick_worst_mixed_approach(payload):
         names = [approach["name"] for approach in approaches]
         for approach in approaches:
             if names.count(approach["name"]) > 1:
-                continue  # ambiguous section click -- same reasoning as above
-            count = _badge_count(approach.get("entries"))
-            if count and (best is None or count > best["expected_badges"]):
+                continue  # ambiguous section click
+            entries = approach.get("entries")
+            if not _mixes(entries):
+                continue
+            us_count, jp_count = _mode_count(entries, "us"), _mode_count(entries, "jp")
+            spread = abs(us_count - jp_count)
+            if best is None or spread > best["spread"]:
                 best = {"group": target["group"], "target_label": target["label"],
-                        "approach_name": approach["name"], "expected_badges": count}
+                        "approach_name": approach["name"], "spread": spread,
+                        "us": us_count, "jp": jp_count,
+                        "total": len(entries or [])}
     return best
 
 
 def _pick_jp_only_chip_approach(payload):
-    """An approach with a `ladder_version` but no `ladder_jp` companion --
-    hasJp is false, so no toggle renders and the chip is the only thing that
-    can tell a reader which ROM population graded them. Picks the one with
-    the most entries among the qualifying rows, for a robust real target."""
+    """An approach with a `ladder_version` but no `ladder_jp` companion.
+    Prefers one that ALSO mixes entry versions, so the toggle-plus-chip
+    coexistence (round 1's own new rule) is what gets exercised."""
     unique = _unique_target_labels(payload)
-    # (has-any-badge, entry count) -- a `ladder_version` can be stamped with
-    # NO second population at all (row_times sets it for a single explicitly-
-    # tagged group too, not only a genuine jp/us split), so "most entries"
-    # alone can pick a candidate that never mixes and makes the badge half of
-    # this test pass vacuously. Prefer a real mix first.
-    best = None
-    best_key = (-1, -1)
+    best, best_key = None, (-1, -1)
     for target in payload["targets"]:
         if (target["group"], target["label"]) not in unique:
             continue
@@ -133,57 +127,42 @@ def _pick_jp_only_chip_approach(payload):
         names = [approach["name"] for approach in approaches]
         for approach in approaches:
             if names.count(approach["name"]) > 1:
-                continue  # ambiguous section click -- same reasoning as above
+                continue
             if approach.get("ladder_version") and not approach.get("ladder_jp"):
                 entries = approach.get("entries") or []
-                badges = _badge_count(entries)
-                key = (1 if badges else 0, len(entries))
+                key = (1 if _mixes(entries) else 0, len(entries))
                 if key > best_key:
                     best_key = key
                     best = {"group": target["group"], "target_label": target["label"],
                             "approach_name": approach["name"],
                             "ladder_version": approach["ladder_version"],
-                            "expected_badges": badges}
+                            "mixes": _mixes(entries)}
     return best
 
 
 def _navigate_to_section(page, group_name, target_name, section_name):
     """Course grid -> a group's target grid -> the named target -> the named
-    section, opened. `librarynav.js` renders each cell as a `<button>` with
-    no stable class to query by other than its containing `.entity-grid`, so
-    this matches on `textContent` the same way `test_ui_library_links.py`'s
-    own `CLICK_SECTION_BY_NAME` already does for section heads."""
+    section, opened."""
     page.evaluate(CLICK_LIBRARY_TAB)
     page.wait_for(".library-page", timeout_ms=15000)
-    # Auto-open (lastPracticed) may have already landed on a DIFFERENT
-    # target's page -- back out to the browse grid unconditionally.
     page.evaluate(
         "(() => { const b = document.querySelector('.entity-back'); "
         "if (b) b.click(); })()")
     page.wait_for(".entity-grid button", timeout_ms=15000)
 
-    group_result = page.evaluate(f"""
-      (() => {{
-        const cell = Array.from(document.querySelectorAll('.entity-grid button'))
-          .find((el) => el.textContent.includes({group_name!r}));
-        if (!cell) return 'no group cell for ' + {group_name!r};
-        cell.click();
-        return 'clicked';
-      }})()
-    """)
-    assert group_result == "clicked", group_result
-    page.wait_for(".entity-grid button", timeout_ms=15000)
-
-    target_result = page.evaluate(f"""
-      (() => {{
-        const cell = Array.from(document.querySelectorAll('.entity-grid button'))
-          .find((el) => el.textContent.includes({target_name!r}));
-        if (!cell) return 'no target cell for ' + {target_name!r};
-        cell.click();
-        return 'clicked';
-      }})()
-    """)
-    assert target_result == "clicked", target_result
+    for label, name in (("group", group_name), ("target", target_name)):
+        result = page.evaluate(f"""
+          (() => {{
+            const cell = Array.from(document.querySelectorAll('.entity-grid button'))
+              .find((el) => el.textContent.includes({name!r}));
+            if (!cell) return 'no {label} cell for ' + {name!r};
+            cell.click();
+            return 'clicked';
+          }})()
+        """)
+        assert result == "clicked", result
+        if label == "group":
+            page.wait_for(".entity-grid button", timeout_ms=15000)
     page.wait_for(".library-target .library-section", timeout_ms=15000)
 
     section_result = page.evaluate(f"""
@@ -213,67 +192,57 @@ def library_server():
 
 @pytest.fixture
 def fresh_page(library_server):
-    """A fresh page per test (same isolation reasoning test_ui_library_target.py's
-    own `library_page` fixture gives -- a clicked-open section or a scrolled
-    band must not leak into whatever runs after it)."""
     with driver.get_driver().launch(headless=True) as page:
         page.goto(f"{library_server}/ui/index.html")
         page.wait_for(".log-list-card", timeout_ms=20000)
         yield page
 
 
-def test_every_row_in_the_corpus_worst_mixed_section_wears_its_own_badge(payload, fresh_page):
-    """"Every row in a mixed section carries its own version" -- checked
-    against whichever approach the LIVE snapshot makes the clearest
-    demonstration of that today, not a name or count copied out of a past
-    run."""
+def test_each_mode_shows_only_its_own_versions_entries(payload, fresh_page):
     candidate = _pick_worst_mixed_approach(payload)
     assert candidate, "no approach in the shipped snapshot mixes JP and US entries"
-    assert candidate["expected_badges"] > 0, candidate  # anti-vacuity floor
+    # Anti-vacuity: the filter must actually REMOVE something in each mode,
+    # or a broken filter that shows everything passes both counts.
+    assert candidate["us"] < candidate["total"], candidate
+    assert candidate["jp"] < candidate["total"], candidate
 
     _navigate_to_section(fresh_page, candidate["group"], candidate["target_label"],
                          candidate["approach_name"])
+    fresh_page.wait_for(".library-section.open .library-jp-toggle", timeout_ms=10000)
+    fresh_page.evaluate(EXPAND_DIVISIONS)
 
-    badged = fresh_page.evaluate(
-        "Array.from(document.querySelectorAll("
-        "'.library-section.open .library-example-version')).map((el) => el.textContent.trim())")
-    assert len(badged) == candidate["expected_badges"], (
-        f"expected {candidate['expected_badges']} badges on "
-        f"{candidate['approach_name']!r} (derived from today's snapshot), found "
-        f"{len(badged)}: {badged[:10]}")
-    assert set(badged) <= {"JP", "US"}, set(badged)
+    label = fresh_page.evaluate(
+        "document.querySelector('.library-section.open .library-jp-toggle')"
+        ".textContent.trim()")
+    assert label.startswith("US mode"), label
+    us_shown = fresh_page.evaluate(COUNT_VISIBLE)
+    assert us_shown == candidate["us"], (
+        f"US mode shows {us_shown} entries; the snapshot says "
+        f"{candidate['us']} are US-or-untagged on {candidate['approach_name']!r}")
 
-    # And the section-level property itself, not just the count: no entry may
-    # sit in a mixed section with a version tag and NO badge.
-    unbadged_with_version = fresh_page.evaluate("""
-      Array.from(document.querySelectorAll(
-        '.library-section.open .library-example')).filter((card) =>
-        !card.querySelector('.library-example-version')).length
-    """)
-    total_cards = fresh_page.evaluate(
-        "document.querySelectorAll('.library-section.open .library-example').length")
-    assert total_cards - unbadged_with_version == len(badged), (
-        "badge count disagrees with itself between two independent queries")
+    fresh_page.evaluate(
+        "document.querySelector('.library-section.open .library-jp-toggle').click()")
+    fresh_page.evaluate(EXPAND_DIVISIONS)  # a fresh band list mounts collapsed again
+    label_after = fresh_page.evaluate(
+        "document.querySelector('.library-section.open .library-jp-toggle')"
+        ".textContent.trim()")
+    assert label_after.startswith("JP mode"), label_after
+    jp_shown = fresh_page.evaluate(COUNT_VISIBLE)
+    assert jp_shown == candidate["jp"], (
+        f"JP mode shows {jp_shown} entries; the snapshot says "
+        f"{candidate['jp']} are JP-or-untagged on {candidate['approach_name']!r}")
+
+    # The pill is gone WITH the mixed display, not merely restyled.
+    assert fresh_page.evaluate(
+        "document.querySelectorAll('.library-example-version').length") == 0
 
 
-def test_a_jp_only_ladder_wears_an_inert_chip_with_no_toggle(payload, fresh_page):
-    """An approach that fits a ladder from only one ROM version's times, with
-    too few of the other to earn a `ladder_jp` companion, has no toggle at
-    all -- the chip is the ONLY thing on screen that can tell a reader which
-    population they are graded against. Picks the corpus's own best real
-    example rather than a name copied out of a past review."""
+def test_a_jp_only_ladder_wears_its_chip_beside_the_mode_toggle(payload, fresh_page):
     candidate = _pick_jp_only_chip_approach(payload)
-    assert candidate, "no JP-only/US-only (no ladder_jp) approach in the shipped snapshot"
-    assert candidate["expected_badges"] > 0, (
-        "picked a no-toggle approach that never mixes versions -- the badge "
-        f"assertion below would pass vacuously: {candidate}")  # anti-vacuity floor
+    assert candidate, "no single-version-fitted (no ladder_jp) approach in the snapshot"
 
     _navigate_to_section(fresh_page, candidate["group"], candidate["target_label"],
                          candidate["approach_name"])
-
-    toggle = fresh_page.evaluate(
-        "!!document.querySelector('.library-section.open .library-jp-toggle')")
-    assert not toggle, "a JP/US toggle rendered where none should -- this approach has no ladder_jp"
 
     chip = fresh_page.evaluate(
         "(() => { const el = document.querySelector("
@@ -282,8 +251,8 @@ def test_a_jp_only_ladder_wears_an_inert_chip_with_no_toggle(payload, fresh_page
     expected_chip = ("JP" if candidate["ladder_version"] == "jp" else "US") + " ladder only"
     assert chip == expected_chip, chip
 
-    badged = fresh_page.evaluate(
-        "Array.from(document.querySelectorAll("
-        "'.library-section.open .library-example-version')).map((el) => el.textContent.trim())")
-    assert len(badged) == candidate["expected_badges"], (
-        candidate["expected_badges"], len(badged), badged)
+    # Round 1's coexistence rule: mixed entries earn the mode toggle even
+    # with no second ladder to switch to, and the chip stays beside it.
+    toggle = fresh_page.evaluate(
+        "!!document.querySelector('.library-section.open .library-jp-toggle')")
+    assert toggle == candidate["mixes"], (toggle, candidate)

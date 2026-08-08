@@ -571,10 +571,15 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            star's real, populated one. One card, one ladder, and now one
            Library identity -- never two doors to the same standings. */""}
       <div class="log-card-actions">
+        ${/* Wears the LIBRARY (open book) icon, the same glyph the nav's own
+             Library entry and the standards table's per-tier links wear -- a
+             door into the Library is the library icon everywhere (round 1,
+             2026-08-07: "the icon for the library should be... the book
+             icon"). `bookmark` is the marker glyph and stays on markers. */""}
         ${openLibrary && html`<button type="button" class="log-card-library-link"
             onclick=${() => openLibrary({ kind: "target", entity: standards.entity, strat: sec.last_strat })}
             title=${`Open ${named.name} in the Library`}>
-          <${Icon} name="bookmark" size=${15} />
+          <${Icon} name="library" size=${15} />
         </button>`}
         <button type="button" class="log-card-fold" onclick=${() => onSetOpen(!isOpen)}
             aria-expanded=${isOpen ? "true" : "false"}

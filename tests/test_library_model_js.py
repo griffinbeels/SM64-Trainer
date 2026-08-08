@@ -70,8 +70,39 @@ def test_bands_run_slowest_first_and_sort_slowest_within():
     entries = [{"runner": "a", "time_cs": 1500}, {"runner": "b", "time_cs": 1390},
                {"runner": "c", "time_cs": 1180}, {"runner": "d", "time_cs": 1395}]
     bands = run_js(f"m.bandsOf({json.dumps(ladder)}, {json.dumps(entries)})")
-    assert [b["tier"] for b in bands] == ["Below Bronze", "Bronze", "Mario"]
+    assert [b["tier"] for b in bands] == ["Iron", "Bronze", "Mario"]
     assert [e["runner"] for e in bands[1]["entries"]] == ["d", "b"]  # slowest first
+
+
+def test_every_laddered_band_carries_five_subdivisions_slowest_first():
+    # Round 1 (2026-08-07): each tier band splits into five subdivision
+    # shells, V (slowest) -> I, each entry filed into exactly one, brackets
+    # coming from the scoring twin (pinned against the real Python curve by
+    # test_cross_language_parity.py -- this test pins only the SHAPE).
+    ladder = {"Bronze": 14.0, "Mario": 12.0}
+    entries = [{"runner": "a", "time_cs": 1500}, {"runner": "b", "time_cs": 1390},
+               {"runner": "c", "time_cs": 1180}]
+    bands = run_js(f"m.bandsOf({json.dumps(ladder)}, {json.dumps(entries)})")
+    for band in bands:
+        assert [d["numeral"] for d in band["divisions"]] == ["V", "IV", "III", "II", "I"]
+        # every band entry is in exactly one shell
+        assert sum(len(d["entries"]) for d in band["divisions"]) == len(band["entries"])
+        # brackets run slow -> fast within the band (nulls only at Iron V's
+        # open slow edge)
+        for division in band["divisions"]:
+            if division["slowCs"] is not None and division["fastCs"] is not None:
+                assert division["slowCs"] >= division["fastCs"]
+    # the Iron floor's slowest shell has no slow edge (the asymptote)
+    assert bands[0]["tier"] == "Iron"
+    assert bands[0]["divisions"][0]["slowCs"] is None
+
+
+def test_a_ladderless_approach_bands_as_one_unranked_catchall():
+    entries = [{"runner": "a", "time_cs": 1500}, {"runner": "b", "time_cs": 1390}]
+    bands = run_js(f"m.bandsOf(null, {json.dumps(entries)})")
+    assert len(bands) == 1
+    assert bands[0]["tier"] is None and bands[0]["divisions"] is None
+    assert [e["runner"] for e in bands[0]["entries"]] == ["a", "b"]
 
 
 def test_band_for_agrees_with_a_hand_walked_non_monotonic_ladder():
@@ -83,10 +114,46 @@ def test_band_for_agrees_with_a_hand_walked_non_monotonic_ladder():
     # A deliberately non-monotonic ladder (Silver's own cutoff looser than
     # Bronze's) is the case that would catch either scan getting this wrong,
     # unlike an ordinary ladder where "first" and "last" trivially coincide.
+    # The floor is the registry key "Iron" (capName renders "Capless") since
+    # round 1, 2026-08-07.
     ladder = {"Bronze": 20.0, "Silver": 25.0, "Mario": 5.0}
     assert run_js(f"m.bandFor({json.dumps(ladder)}, 1000)") == "Silver"
     assert run_js(f"m.bandFor({json.dumps(ladder)}, 300)") == "Mario"
-    assert run_js(f"m.bandFor({json.dumps(ladder)}, 3000)") == "Below Bronze"
+    assert run_js(f"m.bandFor({json.dumps(ladder)}, 3000)") == "Iron"
+
+
+def test_video_source_names_a_player_for_every_format_in_the_census():
+    # One case per format family the 2026-08-07 census found in the shipped
+    # snapshot. The kinds with an `embed` are the ones a click can play
+    # inline; "link" is the honest fallback and must never carry an embed.
+    cases = {
+        "https://youtu.be/abc123XYZ_-": ("youtube", True),
+        "https://www.twitch.tv/videos/2112223334?t=1h2m": ("twitch", True),
+        "https://clips.twitch.tv/BraveClipSlug-abc123": ("twitch-clip", True),
+        "https://www.twitch.tv/runnername/clip/BraveClipSlug-abc123": ("twitch-clip", True),
+        "https://x.com/runner/status/1811111111111111111": ("tweet", True),
+        "https://twitter.com/runner/status/1811111111111111111?s=20": ("tweet", True),
+        # embed.bsky.app takes only a DID (measured live, 2026-08-07): a
+        # handle URL ships embed=null and the CARD resolves the DID on click;
+        # a did URL embeds directly.
+        "https://bsky.app/profile/runner.bsky.social/post/3kabc123def": ("bsky", False),
+        "https://bsky.app/profile/did:plc:abc123/post/3kabc123def": ("bsky", True),
+        "https://streamable.com/abc123": ("streamable", True),
+        "https://drive.google.com/file/d/1AbCdEf/view?usp=sharing": ("gdrive", True),
+        "https://cdn.discordapp.com/attachments/1/2/run.mp4": ("file", True),
+        "https://files.catbox.moe/abc.mp4": ("file", True),
+        "https://i.imgur.com/abc123.png": ("image", False),
+        "https://discord.com/channels/1/2/3": ("link", False),
+        "https://www.tiktok.com/@runner/video/7222": ("link", False),
+    }
+    for url, (kind, has_embed) in cases.items():
+        got = run_js(f"m.videoSource({json.dumps(url)}, '127.0.0.1')")
+        assert got["kind"] == kind, (url, got)
+        assert bool(got["embed"]) == has_embed, (url, got)
+    # Twitch embeds refuse to load without the embedding page's own host.
+    twitch = run_js("m.videoSource('https://www.twitch.tv/videos/123', '127.0.0.1')")
+    assert "parent=127.0.0.1" in twitch["embed"]
+    assert run_js("m.videoSource(null, 'x')") is None
 
 
 def test_grid_shapes():
