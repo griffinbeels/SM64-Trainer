@@ -20,11 +20,13 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from sm64_events.core import uilog
+from sm64_events.core import diagnostics, uilog
 from sm64_events.core.events import Event
-from sm64_events.core.paths import pidfile_path
+from sm64_events.core.paths import (data_root, diagnostics_dir, is_frozen,
+                                    logs_dir, pidfile_path, server_port)
 from sm64_events.core.perfmon import PerfMonitor
 from sm64_events.core.relaunch import spawn_replacement
+from sm64_events.core.version import __version__
 from sm64_events.server.api import create_api_router
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
@@ -108,8 +110,8 @@ async def _db_reattach_loop(service, db_retry) -> None:
             log.exception("db attach failed - staying broadcast-only")
             return
         log.warning("instance lock freed - database attached, tracking "
-                    "enabled (was broadcast-only; the compare tab appears "
-                    "after the next restart)")
+                    "enabled (was broadcast-only; compare/compilation were "
+                    "mounted at boot and answer normally from here)")
         return
 
 
@@ -464,6 +466,28 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
             "session_id": service.session_id if service is not None else None,
             "memory": monitor.latest,
         }
+
+    @app.post("/api/diagnostics")
+    def make_debug_report():
+        """One-button debug report (task 0092): capped tails of everything
+        the app already logs, one markdown file under replays/diagnostics
+        so the existing /api/replay/reveal can open it. Lives HERE like
+        /api/pause: it reads poller + broadcaster + service + monitor,
+        which only this composition surface holds together."""
+        def _events():
+            if service is None or service.db is None:
+                raise RuntimeError("journal unavailable (no db attached)")
+            return service.db.events()
+        report = diagnostics.build_report(
+            version=__version__, frozen=is_frozen(), port=server_port(),
+            data_dir=str(data_root().resolve()),
+            log_file=logs_dir() / "sm64_events.log",
+            ui_log_file=uilog.log_path(),
+            perf_log_file=monitor.log_path
+            or data_root() / "data" / "perf_log.jsonl",
+            health=health, events=_events)
+        out = diagnostics.write_report(diagnostics_dir(), report)
+        return {"path": str(out), "size_bytes": out.stat().st_size}
 
     @app.get("/state")
     def state():

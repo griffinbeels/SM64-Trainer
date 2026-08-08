@@ -159,6 +159,107 @@ def test_the_pending_warp_flag_clearing_does_NOT_end_the_wait():
     assert event.frame == 2000
 
 
+def test_a_menu_out_pipe_releases_when_its_countdown_freezes():
+    """THE live bug, 2026-08-07. His pipe-segment flow touches the bowser pipe
+    and goes straight into the Usamune menu -- the run is over, the fight is
+    not wanted. The menu freezes the delayed warp's 20-frame countdown, so
+    sWarpDest is never written and no edge ever comes; the touch sat on
+    HOLD_CAP_FRAMES and the practice-log row landed 8.0 s after the touch
+    (journal ids 27310 and 27384, both released by the cap).
+
+    A countdown of at most 20 frames cannot still be ARMED at 26 with the
+    counter frozen: that shape is a pause, and no destination can arrive
+    until it ends. Release on it -- the honest destination is None."""
+    detector = WarpDetector()
+    detector.process(snap(global_timer=1998, igt_overall=1076),
+                     snap(global_timer=1999, igt_overall=1077))
+    detector.process(snap(global_timer=1999, igt_overall=1077),
+                     snap(global_timer=2000, igt_overall=1078,
+                          mario_action=ACT_DISAPPEARED))
+    # seven frames of fade, counter ticking, countdown armed
+    for offset in range(1, 8):
+        assert detector.process(
+            snap(global_timer=2000 + offset - 1, igt_overall=1078 + offset - 1,
+                 mario_action=ACT_DISAPPEARED, pending_warp_op=0x04),
+            snap(global_timer=2000 + offset, igt_overall=1078 + offset,
+                 mario_action=ACT_DISAPPEARED, pending_warp_op=0x04)) == []
+    # the menu opens: global frames advance, the counter does not, the
+    # countdown stays armed forever
+    events, offset = [], 7
+    for offset in range(8, 400):
+        events = detector.process(
+            snap(global_timer=2000 + offset - 1, igt_overall=1085,
+                 mario_action=ACT_DISAPPEARED, pending_warp_op=0x04),
+            snap(global_timer=2000 + offset, igt_overall=1085,
+                 mario_action=ACT_DISAPPEARED, pending_warp_op=0x04))
+        if events:
+            break
+    assert len(events) == 1
+    assert offset == WarpDetector.RIDE_WINDOW_FRAMES, \
+        "released the moment a ride is ruled out, not at the cap"
+    assert events[0].payload["to"] is None
+    assert events[0].frame == 2000, "the touch frame, not the release"
+    assert events[0].payload["igt_frames"] == 1078 + IgtClock.DISPLAY_TICK
+    assert events[0].payload["released_by"] == "pause"
+    assert events[0].payload["held_frames"] == WarpDetector.RIDE_WINDOW_FRAMES
+
+
+def test_a_running_countdown_is_never_read_as_a_pause():
+    """The adversarial twin of the menu-out release. Whether Usamune's counter
+    ticks during a pipe fade has never been measured -- if it freezes at the
+    touch, a pause release with no floor would fire at the confirm threshold,
+    BEFORE the countdown's write at +20, and every ridden pipe would lose its
+    destination. The floor keeps every measured ride shape (write +20, level
+    edge +23) winning first."""
+    detector = WarpDetector()
+    detector.process(snap(global_timer=1998, igt_overall=1076),
+                     snap(global_timer=1999, igt_overall=1077))
+    detector.process(snap(global_timer=1999, igt_overall=1077),
+                     snap(global_timer=2000, igt_overall=1078,
+                          mario_action=ACT_DISAPPEARED))
+    for offset in range(1, 21):
+        assert detector.process(
+            snap(global_timer=2000 + offset - 1, igt_overall=1078,
+                 mario_action=ACT_DISAPPEARED, pending_warp_op=0x04),
+            snap(global_timer=2000 + offset, igt_overall=1078,
+                 mario_action=ACT_DISAPPEARED, pending_warp_op=0x04)) == [], \
+            f"pause-released at +{offset} while the countdown was running"
+    [event] = detector.process(
+        snap(global_timer=2020, igt_overall=1078, mario_action=ACT_DISAPPEARED,
+             pending_warp_op=0x04),
+        snap(global_timer=2021, igt_overall=1078, mario_action=ACT_DISAPPEARED,
+             pending_warp_op=0x04, **dest(level=34)))
+    assert event.payload["to"] == 34, "the write, on time, names the arena"
+    assert event.payload["released_by"] == "destination"
+
+
+def test_an_armed_countdown_with_the_counter_ticking_still_holds():
+    """The frozen-counter condition's own pin: armed past the floor is NOT
+    enough -- the counter must have stopped. A countdown longer than the floor
+    that is still RUNNING has its edge coming, and publishing None there would
+    be the 2026-08-05 bug wearing a new trigger."""
+    detector = WarpDetector()
+    detector.process(snap(global_timer=1998, igt_overall=1076),
+                     snap(global_timer=1999, igt_overall=1077))
+    detector.process(snap(global_timer=1999, igt_overall=1077),
+                     snap(global_timer=2000, igt_overall=1078,
+                          mario_action=ACT_DISAPPEARED))
+    for offset in range(1, 60):
+        assert detector.process(
+            snap(global_timer=2000 + offset - 1, igt_overall=1078 + offset - 1,
+                 mario_action=ACT_DISAPPEARED, pending_warp_op=0x08),
+            snap(global_timer=2000 + offset, igt_overall=1078 + offset,
+                 mario_action=ACT_DISAPPEARED, pending_warp_op=0x08)) == [], \
+            f"pause-released at +{offset} with the counter running"
+    [event] = detector.process(
+        snap(global_timer=2059, igt_overall=1137, mario_action=ACT_DISAPPEARED,
+             pending_warp_op=0x08),
+        snap(global_timer=2060, igt_overall=1138, mario_action=ACT_DISAPPEARED,
+             curr_level=23))
+    assert event.payload["to"] == 23
+    assert event.payload["released_by"] == "level"
+
+
 def test_a_destination_free_touch_is_still_journaled():
     """Nothing that fired before the hold may stop firing. An in-level
     teleporter (CCM broken bridge, WDW corners) relocates Mario inside his own

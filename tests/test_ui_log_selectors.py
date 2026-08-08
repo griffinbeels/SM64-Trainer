@@ -28,14 +28,13 @@ READER = UI / "uilog.js"
 RENDERERS = (UI / "components" / "stagebanner.js",
              UI / "components" / "practicecell.js",
              UI / "components" / "practice.js",
-             # `.seg-waiting` moved out of practice.js on 2026-08-03 when the
-             # step track became one shared component for the card AND the
-             # segment editor. This guard caught the move immediately, which is
-             # what it is for: a class the reader hunts and nothing renders
-             # empties the UI log SILENTLY, and an empty log is indistinguish-
-             # able from "nothing was on screen" — the one answer it exists to
-             # give.
-             UI / "components" / "steptrack.js",
+             # steptrack.js was here for `.seg-waiting`, which the reader
+             # hunted until 2026-08-06. The card's step row is deleted and the
+             # reader's `step` field went with it, so neither side names that
+             # class any more and this entry has nothing left to authorise.
+             # Kept as a comment rather than silently dropped: this guard
+             # caught the class MOVING on 2026-08-03 and is exactly what makes
+             # a reader-vs-renderer drift loud instead of an empty log.
              # readLogs' own renderers, repointed at THIS branch's page-level
              # practice log: `.log-card`/`.log-card-name` (practicelog.js)
              # replaced the deleted per-section `.attempts-card`, and

@@ -195,3 +195,26 @@ def test_audio_pump_tracks_loud_for_deaf_watchdog():
         time.sleep(0.01)
     pump.stop()
     assert pump.last_loud_t > 0.0                  # loud: bumped
+
+
+def test_endpoint_scan_survives_a_com_naive_thread(caplog):
+    """The endpoint-by-pid scan runs on watchdog/rescan threads that never
+    called CoInitialize — comtypes only auto-initializes the thread that first
+    IMPORTS it. The frozen exe logged 33x "audio session scan failed:
+    CoInitialize has not been called" (2026-06-17), so the endpoint fallback
+    silently never engaged. The scan must initialize COM for itself."""
+    import logging
+    import os
+
+    pytest.importorskip("comtypes")   # the import side effect lands on THIS
+    # thread, so the scan thread below gets no free initialization — exactly
+    # the frozen exe's situation.
+    result = {}
+    scan_thread = threading.Thread(
+        target=lambda: result.update(
+            name=audio_mod.device_name_hosting_pid(os.getpid())))
+    with caplog.at_level(logging.ERROR, logger="sm64.replay"):
+        scan_thread.start()
+        scan_thread.join(timeout=15)
+    assert not scan_thread.is_alive(), "endpoint scan hung"
+    assert "audio session scan failed" not in caplog.text

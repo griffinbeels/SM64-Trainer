@@ -4906,102 +4906,28 @@
     grid-area: identity;
     min-width: 0; display: flex; flex-direction: row; align-items: center; gap: .5rem;
   }
-  /* The step track sits ON the identity line (practicelog.js). It keeps its
-     own `.step-row` layout -- one module owns that markup, steptrack.js --
-     and only its FLOW changes here: no top margin (it is no longer a row of
-     its own), and it never grows, so the name still takes the slack and
-     ellipsises first exactly as it did before this moved. */
-  /* WAS "OWED, NOT DONE" -- re-measured 2026-08-06 and BOTH halves of that
-     note were wrong, so it is replaced rather than carried forward.
-     The claim was that the chip's place name rides visibly above
-     "Step 1 of 1" and that `align-items: center` on
-     `.log-card-identity .step-chip` fixes it at the cost of a wrap. On the
-     rendered page today the chip's own text sits 0.5px off the counter's at
-     1500px and at 900px, and centring closes that to 0.0px -- half a pixel is
-     not what he was looking at. What he WAS looking at is the offset this
-     rule's `align-self` now fixes: the whole track against the NAME, which
-     was 9.8px and is the report both notes were really about.
-     The stated blocker does not hold either, and it is worth knowing why
-     before anyone re-runs the experiment: `.step-track` never sets
-     `flex-wrap`, so its chips are `nowrap` and CANNOT be on two lines.
-     `test_every_seeded_route_stays_on_one_line` counts distinct chip `top`
-     values, which a cross-axis alignment change moves without any wrapping --
-     so centring turns EVERY two-step route red (34 of them, not "the three
-     longest"), and the gate's own message names a wrap that did not happen.
-     The gate is left alone -- it still catches a track that outgrows its row,
-     which is the failure that matters -- but read a failure from it as "the
-     chips stopped sharing a top", not as "the route wrapped". */
-  /* THE PICKER TAKES THE SLACK, so a segment card puts it where a star card
-     does: "the drop down for 'Standard' there should be all the way to the
-     right, like for a star's card" (2026-08-06). `.log-card-select` gives up
-     its own growth when a track shares the line, which leaves nothing in the
-     row growing and collapses the picker back against the track.
-     `margin-left` on the PICKER rather than `margin-right` on the track,
-     measured rather than assumed: the track carries `flex-shrink: 0` so it
-     can wrap instead of ellipsising a place name, and an auto margin before
-     that wrap boundary consumed the room the longest seeded routes need --
-     `tests/test_step_track_fits.py` went red at 900px and 850px. An auto
-     margin AFTER it only ever eats slack that already exists. */
+  /* NO STEP TRACK ON THIS ROW ANY MORE (2026-08-06). Everything that used to
+     live here -- the track's own placement, the `align-self` baseline pair
+     that put it on the name's line, `flex-wrap: wrap` so a long route could
+     take a second line, and `:has(.step-row)` stopping the name from growing
+     -- is DELETED with the element, not left dormant. Griffin's ruling after
+     two rounds of trying to seat it: "we should just remove the step
+     indicator entirely from the display here. It's too cramped."
+     The identity row is therefore back to what it was before the track
+     arrived: `nowrap`, one growing name button, the picker on the right. Do
+     not re-add a wrap here for a future third item without measuring what it
+     does to the head's height -- an item that wraps inside this row grows the
+     card, and every card in the log is meant to be the same height.
+     The `.step-row`/`.step-chip`/`.step-mark` rules near the top of this file
+     STAY: the segment recorder's own review row (`StepPicker`) still draws
+     them, and that is the surviving consumer. */
+  /* The picker sits hard right. `.log-card-select` grows into the row, so
+     this margin is belt-and-braces rather than the mechanism -- it is what
+     keeps the picker right-aligned if the name button ever stops growing.
+     From "the drop down for 'Standard' there should be all the way to the
+     right, like for a star's card" (2026-08-06). */
   .log-card-identity .log-card-strat-picker,
   .log-card-identity .log-card-strat { margin-left: auto; }
-  .log-card-identity .step-row {
-    margin-top: 0; flex: 0 0 auto;
-    /* CENTRED INSIDE ITSELF, not baseline -- `.step-row`'s own default is
-       `baseline`, which is right in the segment editor where it sits among
-       plain text and wrong here: the counter and the chips are different
-       heights, so aligning their TEXT baselines left the track's own contents
-       ragged (Griffin, 2026-08-05: "we should vertically center the text").
-       Where the track sits AGAINST THE NAME is the separate question the
-       `align-self` pair below answers. */
-    align-items: center;
-    /* ON THE NAME'S LINE, and this is why it is a baseline and not a centre.
-       The identity row centres its items, and `.log-card-select` is a
-       TWO-LINE block (the course eyebrow above the name), so its centre is
-       the gap BETWEEN those lines -- a track centred on the row is therefore
-       centred on nothing you can read. Measured before the change: the
-       counter's glyphs sat 9.8px above the name's, which is what Griffin
-       reported ("the step indicator should be moved downward to be in line
-       with the '100 Coins' here, which generally is the name of the star /
-       segment", 2026-08-06).
-       LAST baseline, not first: `.log-card-select`'s first baseline is the
-       eyebrow's, which is the line he is explicitly not asking for. Both
-       sides of the pair are required -- a lone `align-self: baseline` item
-       forms a baseline group of one and falls back to start alignment, which
-       parks the track at the top of the row instead. Cross-axis only, so no
-       chip's width moves and `tests/test_step_track_fits.py`'s wrap guard
-       measures exactly what it did before. */
-    align-self: last baseline;
-  }
-  /* The name hugs its own width when a step track shares the line, instead of
-     growing into the whole identity column and pushing the track to the far
-     side of it. Griffin: "the course identity button takes up most of the
-     header; we should reduce this to, say, 20%... and make sure the step
-     indicator is to the right of that." The COLUMN is already 20fr with a
-     measured floor (`--log-identity-floor`); what made it read as "most of
-     the header" is `.log-card-select`'s own `flex: 1 1 auto` filling it. It
-     still SHRINKS (flex-shrink stays 1), so the name ellipsises before
-     anything else gives way, exactly as that rule's own comment describes --
-     only the growing stops, and only on a card that has a track to sit
-     beside. */
-  /* `align-self` is the OTHER half of the pair described on `.step-row`
-     above: baseline alignment is a group property, so the name has to opt in
-     for the track's opt-in to mean anything. Scoped to a card that actually
-     has a track -- an ordinary card has nothing to align its name against and
-     keeps the row's plain centring. */
-  .log-card-identity:has(.step-row) .log-card-select {
-    flex: 0 1 auto; align-self: last baseline;
-  }
-  /* WRAPS RATHER THAN ELLIPSISES, and that is the whole reason `flex-shrink`
-     is 0 above. The chips carry `min-width: 0` and per-name ellipsis of their
-     own, so a shrinkable track would quietly clip a place name instead of
-     asking for a second line -- measured, not guessed: inline-and-shrinkable
-     truncated the three longest seeded routes (HMC>Lobby>Upstairs>RR and both
-     4-stop BitFS runs) at 900px and 850px, which is exactly the guarantee
-     `tests/test_step_track_fits.py` exists to hold. Refusing to shrink turns
-     that into a wrap: a short track ("Step 1 of 1 > Key", his own case) stays
-     on the identity line at every width, and only a track that genuinely
-     cannot fit takes a line of its own. */
-  .log-card-identity { flex-wrap: wrap; }
   .log-card-select {
     /* `flex: 1 1 auto` -- the identity row's other item
        (`.log-card-strat-picker`/`.log-card-strat`) carries a fixed

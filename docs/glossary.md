@@ -397,7 +397,9 @@ the CCM entrance once renamed the CCM door instead.
   the entrance's own name key in `src/sm64_events/tracking/eventlabel.py`
 - **Not** — the [[frame]] the course loads. A painting or portal records where
   it leads as Mario touches it, so the [[detector]] publishes on that same
-  [[frame]]; only a pipe makes it wait.
+  [[frame]]; only a pipe makes it wait, and a pipe the player pauses out of —
+  the [[attempt]] ends at the touch, the fight unwanted — publishes as soon as
+  the frozen countdown rules a ride out, not at the eight-second backstop.
 - **Not** — a [[moment]]. A [[moment]] reads Mario's own action; an entrance
   touch reads what he collided with.
 
@@ -722,3 +724,14 @@ broadcasting but writes nothing, so two of them polling one emulator can never
 record every [[event]] twice.
 
 - **Lives** — the lock (`src/sm64_events/storage/instance_lock.py`)
+
+### Debug report
+
+One markdown file capturing what the trainer was doing when something went
+wrong: capped tails of the server log, the [[journal]], the [[UI log]] and the
+perf samples, plus the server's health readout and install facts. The Debug report
+button in the settings drawer writes one and opens Explorer with it selected,
+so a user can attach evidence to a bug report instead of a description of it.
+
+- **Lives** — the report builder (`src/sm64_events/core/diagnostics.py`) → the
+  settings drawer (`src/sm64_events/ui/components/header.js`)

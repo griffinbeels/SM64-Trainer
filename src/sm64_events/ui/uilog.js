@@ -59,14 +59,19 @@ export function readSelector(root) {
 // express that as an absence, which is not something an append-only log can
 // write down.
 //
-// No `state` field any more (one-line-heads round, 2026-08-04): the
-// Ready/Running word this used to read off `.log-card-state` is deleted from
-// the card itself -- the gold `.log-card-active` highlight already says
-// "this is what you're practicing", and StepTrack's own `.seg-waiting` row
-// (still read below) already answers "running", in more detail, for an armed
-// entity. Reading a class nothing renders any more is exactly the SILENT
-// FALLBACK this module's own header warns about, so the field goes with it
-// rather than being left to report empty forever.
+// Two fields have been RETIRED here, both for the same reason and both when
+// the thing they read stopped being drawn. Reading a class nothing renders is
+// exactly the SILENT FALLBACK this module's own header warns about: the field
+// reports empty forever, and empty is indistinguishable from "nothing was on
+// screen", which is the one answer this log exists to give.
+//   * `state` (2026-08-04) -- the Ready/Running word off `.log-card-state`.
+//     The gold `.log-card-active` highlight says "this is what you're
+//     practicing" on its own.
+//   * `step` (2026-08-06) -- the armed row off `.seg-waiting`, deleted from
+//     the card by Griffin ("we should just remove the step indicator entirely
+//     from the display here"). What the RUN is doing is still answerable, just
+//     not from the screen: `armed_detail` is on every section in
+//     `/api/session`, and `tools/what_happened.py` reads the journal side.
 export function readTargets(root) {
   return {
     surface: "target",
@@ -75,7 +80,6 @@ export function readTargets(root) {
       name: text(card.querySelector(".log-card-name")),
       strat: text(card.querySelector(".log-card-strat-picker select")
                   || card.querySelector(".log-card-strat")),
-      step: text(card.querySelector(".seg-waiting")),
     })),
   };
 }

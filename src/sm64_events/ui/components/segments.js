@@ -889,7 +889,11 @@ function originLevels(taxonomy) {
   ];
 }
 
-export function Segments({ t, intent, clearIntent }) {
+// `intent`/`clearIntent` are GONE (2026-08-06): an id could be handed over
+// here to open a definition straight from the practice card's step track, and
+// that track is deleted, so the prop pair had no writer left anywhere. See
+// `app.js`, which owned the other end.
+export function Segments({ t }) {
   const [defs, setDefs] = useState(null);
   const [query, setQuery] = useState("");
   const [vocabData, setVocabData] = useState(null);
@@ -921,17 +925,6 @@ export function Segments({ t, intent, clearIntent }) {
   };
   useEffect(() => { load();
     getJSON("/api/segments/vocab").then(setVocabData); }, []);
-  // An id handed over by the practice card's step track (app.js::openSegment,
-  // the same intent-plus-tab shape openCompare uses). Waits for `defs`, since
-  // the intent arrives on the same render the tab switches and the library may
-  // not have loaded yet; clears itself so re-opening the tab later does not
-  // silently reopen an editor the user closed.
-  useEffect(() => {
-    if (intent == null || !defs) return;
-    const wanted = defs.find((row) => row.id === intent);
-    if (wanted) setEditing(wanted);
-    clearIntent();
-  }, [intent, defs]);
   if (!defs || !vocabData) return html`<${PageState}
       kind=${t.connected ? "loading" : "offline"}
       title="Preparing the segment workshop" />`;

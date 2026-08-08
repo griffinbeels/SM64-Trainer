@@ -42,6 +42,17 @@ def test_every_context_card_is_one_hit_target():
     assert "opacity: 0" in rule, rule
 
 
+def test_the_settings_drawer_offers_a_debug_report():
+    # Task 0092: one button that writes the report and reveals it in
+    # Explorer. Reveal is BEST-EFFORT (the failcomp pattern): a dev server
+    # with no replay service has no reveal route, and the report must not
+    # look failed because Explorer did not open.
+    code = strip_comments(HEADER_JS)
+    assert '"/api/diagnostics"' in code
+    assert '"/api/replay/reveal"' in code
+    assert "Debug report" in code
+
+
 def test_the_rank_card_names_the_scope_it_is_rating():
     # "the M 25.6 and C 16% feels like worthless AI slop information to me. It
     # should just be clear that this is the OVERALL RANKING FOR THE ROUTE THAT

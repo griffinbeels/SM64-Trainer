@@ -267,3 +267,31 @@ def test_build_joins_the_boundary_hook_to_the_moment_detector(monkeypatch):
     caused._counts["switch_press"] = 2
     hook()
     assert moment._counts == {} and caused._counts == {}
+def test_dbless_boot_still_mounts_compare_and_compilation(monkeypatch):
+    """A boot that loses the instance-lock race (the reload-handoff race,
+    live 2026-07-30 and 2026-08-06) must still mount the compare and
+    compilation routers. Both services read tracker.db per call and answer
+    503 "database unavailable" until the reattach loop lands the db — but a
+    router that was never mounted 404s forever, which the Compare tab
+    swallows silently: the whole tab reads as "videos don't load" with
+    nothing in any log (task 0053)."""
+    monkeypatch.setattr(
+        "sm64_events.storage.instance_lock.acquire_instance_lock",
+        lambda path: None)                    # lock held elsewhere: db-less boot
+    monkeypatch.setattr(
+        "sm64_events.replay.encoder.pick_video_codec", lambda: "libx264")
+    import importlib
+    import sm64_events.main as main_mod
+    importlib.reload(main_mod)
+    # ffmpeg must "exist" for the importer; a fake path is fine — the replay
+    # sink's -version probe fails closed to the in-process encoder.
+    monkeypatch.setattr(main_mod, "bundled_ffmpeg",
+                        lambda: "C:/nonexistent/ffmpeg.exe")
+    app = main_mod.build()
+    paths = {r.path for r in app.routes}
+    assert "/api/compare/view" in paths
+    assert "/api/compilation" in paths
+    from fastapi.testclient import TestClient
+    r = TestClient(app).get("/api/compare/view",
+                            params={"entity": "star:16:0", "strat": None})
+    assert r.status_code == 503              # honest "not yet", never a 404

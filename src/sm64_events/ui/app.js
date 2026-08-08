@@ -168,12 +168,15 @@ function App() {
   // through -> back to default.
   const [tab, setTabState] = useState("Practice");
   const [compareIntent, setCompareIntent] = useState(null);
-  // Same intent-plus-tab shape as openCompare below, deliberately: a
-  // second mechanism for "go to that tab and open that thing" is how the
-  // two drift. Noticing a wrong STEP happens while playing, and until
-  // this existed the only way into the definition was the Segments tab
-  // plus a hunt through the library.
-  const [segmentIntent, setSegmentIntent] = useState(null);
+  // There was a SECOND intent here -- `segmentIntent`, plus an
+  // `openSegment(id)` that jumped to the Segments tab with that definition
+  // already selected. Its only trigger was the practice card's step track,
+  // which Griffin deleted on 2026-08-06 ("I don't see a need to display it to
+  // the user"), so the whole chain became a capability nothing could reach --
+  // and an unreachable route is indistinguishable from a missing feature from
+  // inside the code. Deleted with it, here and in `segments.js`. The Segments
+  // tab's own library is the way in again; re-add this exact shape (never a
+  // second one) if a new trigger ever wants it.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   useEffect(() => {
@@ -184,7 +187,6 @@ function App() {
   }, [moreOpen]);
   const setTab = (name) => { setTabState(name); setMoreOpen(false); };
   const openCompare = (intent) => { setCompareIntent(intent); setTab("Compare"); };
-  const openSegment = (id) => { setSegmentIntent(id); setTab("Segments"); };
 
   return html`<div class="app-shell">
     <${Sidebar} t=${t} tab=${tab} setTab=${setTab}
@@ -201,10 +203,9 @@ function App() {
             clearIntent=${() => setCompareIntent(null)} active=${tab === "Compare"} />
         </div>
         ${tab === "Practice" ? html`<div class="view-pane"><${Practice} t=${t}
-            openCompare=${openCompare} openSegment=${openSegment} /></div>`
-          : tab === "Segments" ? html`<div class="view-pane"><${Segments} t=${t}
-              intent=${segmentIntent}
-              clearIntent=${() => setSegmentIntent(null)} /></div>`
+            openCompare=${openCompare} /></div>`
+          : tab === "Segments" ? html`<div class="view-pane">
+              <${Segments} t=${t} /></div>`
           : tab === "Routes" ? html`<div class="view-pane"><${Routes} t=${t} /></div>`
           : tab === "Run" ? html`<div class="view-pane"><${Run} t=${t} /></div>`
           : tab === "Rank" ? html`<div class="view-pane"><${RankPage} t=${t} /></div>`

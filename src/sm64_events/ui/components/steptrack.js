@@ -1,16 +1,17 @@
 // src/sm64_events/ui/components/steptrack.js — a segment's route, as chips.
 //
-// ONE chip, two consumers, and that is the whole point of the module: the row
-// you READ while running a movement and the row you EDIT while defining one
-// are the same row. He learned to read `✓ BitFS › ✓ Lobby › ▸ Upstairs › · BitS`
-// on the practice card; the editor asks him to click the chips in a row that
-// looks exactly like it, so authoring needs no second vocabulary.
-//
-// `StepTrack` is the read-only card version, driven by the arm's own cursor.
-// `StepPicker` is the editable one: every place the journal says you walked
+// ONE consumer now, and that is a deliberate narrowing. This module used to
+// carry two: `StepTrack`, the read-only row an armed practice card drew, and
+// `StepPicker`, the editable one in the recorder's review. Griffin deleted the
+// read-only half on 2026-08-06 — "the PURPOSE of that indicator was to make it
+// clear that the segment logic was working for me during development, but now
+// that it is indeed working, I don't think we really need this anymore" — so
+// what survives is the AUTHORING row: every place the journal says you walked
 // through, each toggling between a REQUIRED stop and one you merely passed.
-// Markup and CSS classes are shared, so the two can never drift into looking
-// like different concepts.
+//
+// The `StepChip`/`StepMark` vocabulary stays as it is rather than being folded
+// into the picker, because it is the readable unit and a second consumer would
+// otherwise be tempted to draw its own.
 import { h } from "preact";
 import htm from "htm";
 
@@ -50,57 +51,25 @@ export function StepChip({ label, state, title, onToggle, pressed }) {
     : html`<li class=${`step-chip ${state}`} title=${title}>${body}</li>`;
 }
 
-// The step track an ARMED multi-step thing draws below its metrics row — the
-// WHOLE route as short place chips, with the one you are on marked. ONE
-// component for the star card and the segment card (rule 11): this was two
-// byte-identical copies of the markup until 2026-08-03, which is the shape
-// that drifts, and it is a single component precisely because a 100-coin star
-// is the one star that has steps at all.
+// DELETED HERE, 2026-08-06: `StepTrack({detail, onEdit})` — the read-only row
+// an armed practice card drew ("Step 3 of 4 · ✓ BitFS › ✓ Lobby › ▸ Upstairs").
+// It reported the arm cursor while playing, which is a DEVELOPMENT question,
+// and Griffin's ruling is that the answer is no longer worth screen space:
+// "they will know how to do the strat, no need to display the steps".
 //
-// Places rather than sentences, and always ONE LINE, is Griffin's own pick
-// from a two-option contact of the shapes (2026-08-03) — the card is
-// fixed-height, so a track that can grow to four rows would clip whatever sits
-// under it (`.claude/rules/ui-core.md`'s wrapping-inside-a-fixed-height-card
-// trap). The full imperative for the CURRENT step ("Enter Castle Inside Lobby
-// coming from Bowser in the Fire Sea") is not thrown away, it rides the row's
-// own `title` — the qualifier a chip has no room for is one hover away rather
-// than deleted.
+// Nothing about the server changed with it. `views.py::_armed_detail_for` ->
+// `segments.py::card_step_labels` still ships `steps`/`progress`/`total` on
+// every section, the projector still advances the cursor, and
+// `tools/what_happened.py` still reads it back — so the state is queryable
+// when debugging, just not painted.
 //
-// `steps` is server truth (`views.py::_armed_detail_for` -> `segments.py::
-// card_step_labels`) and `progress` indexes straight into it, so nothing here
-// re-derives what a step IS. Chips paint by comparing an index against that
-// one number; there is no second notion of done-ness to disagree with it.
-//
-// `onEdit`, when given, makes the row a doorway into the definition it is
-// describing. Noticing a wrong step happens WHILE PLAYING, and until this
-// existed the only way in was the Segments tab plus a hunt through the library
-// — the reason the whole class of "I can see it's wrong and can't reach it"
-// report exists (`.claude/rules/acceptance.md`: put the reason where the click
-// lands).
-export function StepTrack({ detail, onEdit }) {
-  if (!detail) return null;
-  const steps = detail.steps || [];
-  const waiting = detail.waiting_for ? `Waiting for ${detail.waiting_for}` : null;
-  const hint = onEdit
-    ? `${waiting || "This segment's route"} — click to edit these steps`
-    : waiting;
-  const track = html`<ol class="step-track">
-    ${steps.map((label, index) => html`<${StepChip} key=${index} label=${label}
-        state=${index < detail.progress ? "done"
-          : index === detail.progress ? "now" : "ahead"} />`)}
-  </ol>`;
-  return html`<div class="seg-waiting step-row" title=${hint}>
-    <span class="seg-waiting-step">Step${" "}
-      ${detail.progress + 1}${" "}of${" "}${detail.total + 1}</span>
-    ${onEdit
-      ? html`<button type="button" class="step-track-door" onclick=${onEdit}
-            title=${hint}>${track}</button>`
-      : track}
-  </div>`;
-}
+// Its `onEdit` doorway into the definition went with it, and so did the
+// `openSegment`/`segmentIntent` chain that served it (app.js, segments.js).
+// The Segments tab's library is the way into a definition again.
 
-// The editable half: the places the journal says you walked through, each a
-// toggle between a REQUIRED stop and one you merely passed.
+// The editable half, and now the only one: the places the journal says you
+// walked through, each a toggle between a REQUIRED stop and one you merely
+// passed.
 //
 // A toggle, never add/remove, and that is the design: the walk is ground truth,
 // so the question is never "which places exist" — it is "which of them does

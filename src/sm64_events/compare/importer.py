@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.tracking.comparisons import cache_name_for
 
 log = logging.getLogger("sm64.compare")
@@ -44,7 +45,7 @@ def _default_downloader(source_ref: str, dest_dir: Path) -> Path:
 def _default_runner(cmd: list[str]) -> None:
     try:
         subprocess.run(cmd, check=True, capture_output=True,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                       **quiet_spawn_kwargs())
     except subprocess.CalledProcessError as e:
         # capture_output swallows ffmpeg's stderr; log it and fold the tail into
         # the message so the RuntimeError names the real reason, not just a code.
