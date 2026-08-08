@@ -743,6 +743,48 @@ def test_a_third_picked_moment_becomes_a_waypoint_the_person_chose(page):
     assert count(page, ".record-review:has-text('Then:')") >= 1
 
 
+def test_a_castle_area_tile_is_a_terminal_parent_pick(page):
+    """Round 14, his ruling: "for the castle areas, those are the high level
+    areas, so it shouldn't have a further drill down". Clicking the Lobby
+    tile in "What is this a piece of?" IS the answer — the dialog closes on
+    it (no star grid, no third screen of any kind) and the trigger reads the
+    area's name. Course tiles still drill; only the region tiles are
+    terminal."""
+    reach(page, "recorder-review")
+    verdict = page.evaluate("""
+(async () => {
+  const waitFor = async (test, ms = 4000) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      if (test()) return true;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return false;
+  };
+  document.querySelector('.record-parent .entity-trigger').click();
+  if (!await waitFor(() => !!document.querySelector('.entity-grid')))
+    return 'the parent dialog never opened';
+  const tiles = Array.from(document.querySelectorAll('.entity-grid button'));
+  const lobby = tiles.find((b) => b.textContent.includes('Lobby'));
+  if (!lobby) return 'no Lobby tile: ' +
+    JSON.stringify(tiles.map((b) => b.textContent.trim()).slice(-8));
+  lobby.click();
+  if (!await waitFor(() => !document.querySelector('.entity-grid')))
+    return 'the dialog stayed open — the tile drilled instead of picking';
+  const trigger = document.querySelector('.record-parent .entity-trigger');
+  if (!trigger.textContent.includes('Lobby'))
+    return 'the trigger reads ' + trigger.textContent.trim();
+  // Leave the parent as it was found, through the dialog's own clear cell.
+  trigger.click();
+  await waitFor(() => !!document.querySelector('.entity-clear'));
+  document.querySelector('.entity-clear').click();
+  await waitFor(() => !document.querySelector('.entity-grid'));
+  return 'ok';
+})()
+""")
+    assert verdict == "ok", verdict
+
+
 def test_a_typed_segment_name_survives_a_pick_change(page):
     """Round 12 item 4: "once I set the name for the segment name it
     shouldn't change". Every pick toggle re-derives the definition and used

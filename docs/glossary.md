@@ -54,10 +54,14 @@ than [[in-game time]].
 
 ### Subsection
 
-A piece of a [[star]] or of a [[segment]], practiced on its own — the climb
-rather than the whole [[star]]. A subsection IS a [[segment]], and names the
-[[target]] it belongs to, so it carries its own [[personal best]], its own
-[[ladder]] and its own rows in the [[practice log]].
+A piece of a [[star]], of a [[segment]], or of a castle area, practiced on
+its own — the climb rather than the whole [[star]]. A subsection IS a
+[[segment]], and names what it belongs to, so it carries its own
+[[personal best]], its own [[ladder]] and its own rows in the
+[[practice log]]. Inside a course a piece always belongs to something
+specific; a castle-side piece belongs to its area, which is as high as the
+castle goes — his own split, and the [[recorder]]'s parent picker follows
+it (an area tile answers in one click, a course tile opens its [[star]]s).
 
 - **Lives** — the trigger vocabulary and matcher
   (`src/sm64_events/tracking/segments.py`) → the [[selector]]

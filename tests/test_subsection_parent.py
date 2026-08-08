@@ -50,6 +50,17 @@ def test_no_parent_validates():
     validate_definition(definition(parent=None))
 
 
+def test_a_castle_area_parent_validates():
+    """Round 14, his ruling on the parent picker: "for the castle areas,
+    those are the high level areas, so it shouldn't have a further drill
+    down… Or, it's a castle movement which is high level" — a castle-side
+    piece parents to its AREA, so the area is a parent kind of its own.
+    Both shapes: a castle subarea node ("area:6:1", the Lobby) and a
+    whole-level node ("area:16", the Grounds)."""
+    validate_definition(definition(parent="area:6:1"))
+    validate_definition(definition(parent="area:16"))
+
+
 @pytest.mark.parametrize("bad", [
     "whomps fortress",       # a name, not a key
     "star:2",                # a star key needs both course and slot
@@ -58,6 +69,9 @@ def test_no_parent_validates():
     "segment:abc",           # not an id
     "Star:2:1",              # the prefix is lower-case
     "route:3",               # a route is not a practiced entity
+    "area:",                 # no node
+    "area:6:1:2",            # too many parts for a node
+    "area:lobby",            # a node is numeric, not a name
     7,                       # a bare id says nothing about which kind
 ])
 def test_a_malformed_parent_is_refused(bad):

@@ -137,7 +137,24 @@ translated once by `entities.js::entityKeyForOption` — the same translation th
 picker's rank-badge lookup uses, because two hand-built copies of a key format
 is how they drift. Keep `parent` (which entity this is a piece of — the sheet's
 mapping key) and `origin` (where the library files it) distinct: they answer
-different questions.
+different questions. **Three parent grains since round 14** (his ruling, asked
+and answered 2026-08-08: *"for the castle areas, those are the high level
+areas, so it shouldn't have a further drill down. For the individual stars, we
+should be able to drill into a specific star… within a course, we're always
+doing something as a subsection of something else. Or, it's a castle movement
+which is high level"*): a castle-AREA tile is a TERMINAL pick — `area:<node>`,
+via PickerDialog's `group.pick` capability, marked at the RECORDER's call site
+because the target picker reads the same groups and must keep drilling into a
+region — a course tile drills to its stars and segments, and there is no third
+screen of any kind here (this dialog never had a `nextStep`).
+`entityKeyForOption` passes `area:` ids through, `_PARENT_KEY` accepts all
+three kinds, and an area-parented row matches no entity in `ui/subsections.js`
+so it renders top-level, which is what "high level" means there. **The
+AUTO-NAME speaks his language (round 14)**: `suggest_name` takes the landmark
+catalogue, so a landmark he named leads with that name and places read in
+`node_short_label`'s route notation — "CCM Door → CCM", his example verbatim —
+and only the two ENDS ever enter the name (the signature takes nothing else,
+which is the proof of his "first and last step" rule).
 
 **Save is ABSENT below two picks, not disabled.** A start with no end can never
 complete, and a control whose reason lives in its own hover is the shape he

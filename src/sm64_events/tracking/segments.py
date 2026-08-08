@@ -525,7 +525,10 @@ class SegmentDef:
     parent: str | None = None
 
 
-_PARENT_KEY = re.compile(r"^(?:star:\d+:\d+|segment:\d+)$")
+# `area:<level>` / `area:<level>:<subarea>` — a castle-area parent, the
+# recorder's terminal tile (round 14: "for the castle areas, those are the
+# high level areas, so it shouldn't have a further drill down").
+_PARENT_KEY = re.compile(r"^(?:star:\d+:\d+|segment:\d+|area:\d+(?::\d+)?)$")
 
 
 @dataclass(frozen=True)
@@ -2106,8 +2109,8 @@ def validate_definition(d: dict) -> None:
     if parent is not None and (not isinstance(parent, str)
                                or not _PARENT_KEY.match(parent)):
         raise ValueError(
-            "parent must be a star or segment key like 'star:2:1' or "
-            f"'segment:7', got {parent!r}")
+            "parent must be a star, segment or castle-area key like "
+            f"'star:2:1', 'segment:7' or 'area:6:1', got {parent!r}")
     mode = d.get("match_mode", "strict")
     if mode not in MATCH_MODES:
         raise ValueError(

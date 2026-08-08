@@ -424,9 +424,15 @@ function segmentCourse(segment, courseByLevel) {
 // a segment option's id already IS "segment:12". Get this translation wrong
 // and every star silently shows no rank while every segment works, which
 // reads as missing data rather than as a bug.
-export const entityKeyForOption = (optionId) =>
-  String(optionId).startsWith("segment:") ? String(optionId)
-                                          : `star:${optionId}`;
+export const entityKeyForOption = (optionId) => {
+  const id = String(optionId);
+  // "segment:12" and "area:6:1" already ARE entity keys; a bare composite
+  // ("8:1") is a star's. An `area:` id is the recorder's terminal castle
+  // tile (round 14) — prefixing it with star: would save a parent no row
+  // could ever resolve.
+  return id.startsWith("segment:") || id.startsWith("area:") ? id
+                                                             : `star:${id}`;
+};
 // The rank map's key IS the entity key -- one name for the translation, used
 // for the badge lookup here and by the recorder to say which entity a new
 // subsection is a piece of (`SegmentDef.parent`, the sheet's own mapping key).

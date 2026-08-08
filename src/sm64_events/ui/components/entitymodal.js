@@ -137,12 +137,22 @@ export function PickerDialog({ groups, value, allow, title, iconFor, depth,
           <span class="entity-clear-mark">×</span>
           <span class="entity-clear-label">${placeholder}</span>
         </button>` : null}
+        ${/* A group carrying `pick` is TERMINAL: clicking the tile IS the
+             answer, no drill-in. Round 14, his ruling on the parent picker:
+             "for the castle areas, those are the high level areas, so it
+             shouldn't have a further drill down" — a piece of the Lobby is
+             a piece of the LOBBY, not of some movement inside it. The
+             caller marks the groups (the same call-site-owns-the-policy
+             rule `allow` follows); an unmarked group drills exactly as
+             before. */""}
         ${shown.map((group) => html`<${PracticeCell} key=${group.key}
           iconSrc=${group.icon || iconFor(group.options[0].id)}
           name=${group.label}
-          sub=${`${group.options.length} to practice`}
+          sub=${group.pick ? group.sub || "" : `${group.options.length} to practice`}
           title=${group.label}
-          onPick=${() => setOpenGroupKey(group.key)} />`)}
+          active=${group.pick != null && group.pick === value}
+          onPick=${group.pick ? () => handlePick(group.pick)
+                              : () => setOpenGroupKey(group.key)} />`)}
       </div>
     <//>`;
 

@@ -585,15 +585,29 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   // server keeps the journal's own order.
   const shown = rows ? [...rows].reverse() : [];
   const cards = visitCards(shown);
-  const parentGroups = t && t.view ? courseUnionGroups(
+  // A castle-AREA tile is a TERMINAL parent pick (round 14, his ruling:
+  // "for the castle areas, those are the high level areas, so it shouldn't
+  // have a further drill down… Or, it's a castle movement which is high
+  // level") — a castle-side piece parents to its AREA, while a course tile
+  // still drills to the specific star or segment it is a piece of. Marked
+  // HERE, not in courseUnionGroups: the target picker reads the same groups
+  // and must keep drilling into a region to pick a practice target.
+  const parentGroups = (t && t.view ? courseUnionGroups(
     t.view.catalog, (t.segments || []).filter((s) => !s.is_hundred_coin_engine),
     (t.vocab || {}).course_by_level || {}, {},
-    (t.vocab || {}).origins || null) : [];
+    (t.vocab || {}).origins || null) : []
+  ).map((group) => {
+    const region = group.key.startsWith("castle-")
+      && group.key !== "castle-segments" ? group.key.slice(7) : null;
+    return region ? { ...group, pick: `area:${region}` } : group;
+  });
   const parentName = (() => {
     if (parentOption == null) return null;
-    for (const group of parentGroups)
+    for (const group of parentGroups) {
+      if (group.pick === parentOption) return group.label;
       for (const option of group.options)
         if (option.id === parentOption) return option.name;
+    }
     return parent;
   })();
   // Same name/shape as segments.js's Builder -- an "error" severity finding

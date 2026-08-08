@@ -679,3 +679,13 @@ const picked = { ...context, iconOverrides: { "segment:20": "toad1" } };
 console.log(JSON.stringify(entityIcon("segment:20", picked)));
 """)
     assert src == "/ui/assets/star_icons/toad1.png"
+
+
+def test_entity_key_for_option_passes_area_and_segment_keys_through():
+    # "area:6:1" is the recorder's terminal castle tile (round 14); wrapping
+    # it as star:area:6:1 would save a parent no row could ever resolve.
+    keys = run_node("entityKeyForOption", """
+console.log(JSON.stringify([entityKeyForOption("8:1"),
+  entityKeyForOption("segment:12"), entityKeyForOption("area:6:1")]));
+""")
+    assert keys == ["star:8:1", "segment:12", "area:6:1"]
