@@ -780,3 +780,57 @@ def test_the_recorder_save_disable_guard_can_still_fail():
     assert not _recorder_save_waits_for_lint(comment_only)
     assert _recorder_save_waits_for_lint(
         'disabled=${!btReport || saving || lintHasError} onclick=${save}')
+
+
+# --- round 18: the pin wears his name, and Save says it saved ---------------
+
+def _pin_reads_the_landmark_name(source: str) -> bool:
+    """Item 1: the editor's pinned-moment control renders the CATALOGUE name
+    ("✕ CCM Wooden Door"), falling back to the generic wording only for a
+    key he never named. Both halves scanned: the lookup and the render."""
+    stripped = strip_comments(source)
+    return ('(vocab.landmark_names || {})[value]' in stripped
+            and '${pinName || "this specific one"}' in stripped)
+
+
+def test_the_pinned_moment_wears_his_landmark_name():
+    assert _pin_reads_the_landmark_name(SEGMENTS_JS_SOURCE)
+    # The names have to actually ARRIVE: the page fetches the same store the
+    # recorder's rows read and threads it in on vocab.
+    assert '"/api/landmarks"' in SEGMENTS_JS_SOURCE
+    assert "landmark_names: landmarkNames" in SEGMENTS_JS_SOURCE
+
+
+def test_the_pin_name_guard_can_still_fail():
+    comment_only = ('// (vocab.landmark_names || {})[value] feeds the pin\n'
+                    '// ${pinName || "this specific one"} renders it\n')
+    assert not _pin_reads_the_landmark_name(comment_only)
+    real = ('const pinName = (vocab.landmark_names || {})[value];\n'
+            'x = `${pinName || "this specific one"}`;\n')
+    assert _pin_reads_the_landmark_name(real)
+
+
+def _save_flashes_saved(source: str) -> bool:
+    """Item 2: ✓ + "Saved" for ~2 s, set only AFTER the write resolves —
+    the flash call sits after onSaved in the source, which only runs once
+    the PUT/POST returned."""
+    stripped = strip_comments(source)
+    save_site = stripped.find("setSavedFlash(true)")
+    return (save_site != -1
+            and stripped.rfind("onSaved(savedId)", 0, save_site) != -1
+            and '${savedFlash ? "Saved" : "Save segment"}' in stripped
+            and 'name=${savedFlash ? "check" : "save"}' in stripped)
+
+
+def test_the_save_button_confirms_an_actual_save():
+    assert _save_flashes_saved(SEGMENTS_JS_SOURCE)
+
+
+def test_the_save_flash_guard_can_still_fail():
+    comment_only = ('// setSavedFlash(true) after onSaved(savedId)\n'
+                    '// ${savedFlash ? "Saved" : "Save segment"}\n')
+    assert not _save_flashes_saved(comment_only)
+    real = ('onSaved(savedId);\nsetSavedFlash(true);\n'
+            'label = `${savedFlash ? "Saved" : "Save segment"}`;\n'
+            'icon = `name=${savedFlash ? "check" : "save"}`;\n')
+    assert _save_flashes_saved(real)

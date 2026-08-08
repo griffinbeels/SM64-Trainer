@@ -131,10 +131,17 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange, t }) 
     // pin go; unset it renders nothing, because typing a key by hand is not
     // a thing (the fallback below is a NUMBER input, which would show a
     // string key as an empty box -- the exact trap the moment branch names).
+    //
+    // THE PIN WEARS HIS NAME (round 18 item 1): "I named them 'Lobby to
+    // Grounds Door' and 'CCM Wooden Door' for a reason. We should see
+    // those." The catalogue (`GET /api/landmarks`, threaded in on vocab by
+    // the page) is the same names the recorder's rows read; a key he never
+    // named keeps the generic wording rather than printing a raw key.
     if (value == null) return null;
+    const pinName = (vocab.landmark_names || {})[value];
     return html`<button type="button" class="quiet-button"
-        title=${`Pinned to one specific thing (${value}). Click to match any of its kind here.`}
-        onclick=${() => onChange(null)}>✕ this specific one</button>`;
+        title=${`Pinned to ${pinName || `one specific thing (${value})`}. Click to match any of its kind here.`}
+        onclick=${() => onChange(null)}>✕ ${pinName || "this specific one"}</button>`;
   }
   if (schema.kind === "course")
     // Grouped the same way, so a course picker and a level picker read alike.
@@ -374,6 +381,14 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs,
   const [origin, setOrigin] = useState(
     detected && detected.source === "override" ? detected.key : "");
   const [err, setErr] = useState(null);
+  // "I need visual confirmation that we saved" (round 18 item 2): a check
+  // mark + "Saved" for ~2 s, set only AFTER the write resolves. Held here
+  // rather than on the page because an EDIT save never remounts this
+  // Builder (same id, same key); a CREATE does remount, and there the
+  // editor swapping to the saved row is its own confirmation.
+  const [savedFlash, setSavedFlash] = useState(false);
+  const savedTimer = useRef(null);
+  useEffect(() => () => clearTimeout(savedTimer.current), []);
   // Backtest preview state -- reset for free on every open/switch because
   // Builder remounts (Segments keys it by editing.id/"new"), so a stale
   // report from a different segment can never bleed through.
@@ -462,6 +477,9 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs,
         savedId = (await send("POST", "/api/segments", body)).id;
       }
       onSaved(savedId);
+      setSavedFlash(true);
+      clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSavedFlash(false), 2000);
       return true;
     } catch (e) { setErr(String(e)); return false; }
   }
@@ -821,7 +839,7 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs,
       <button onclick=${onCancel}>Cancel</button>
       <button class="primary-button" onclick=${save} disabled=${lintHasError}
           title=${lintHasError ? "Fix the error above before saving" : ""}>
-        <${Icon} name="save" size=${16} /> Save segment
+        <${Icon} name=${savedFlash ? "check" : "save"} size=${16} />${" "}${savedFlash ? "Saved" : "Save segment"}
       </button>
     </div>
     ${btErr && html`<div class="badx backtest-panel">${btErr}</div>`}
@@ -897,6 +915,11 @@ export function Segments({ t }) {
   const [defs, setDefs] = useState(null);
   const [query, setQuery] = useState("");
   const [vocabData, setVocabData] = useState(null);
+  // His landmark names, for the editor's pinned-moment clauses (round 18
+  // item 1) -- the SAME store the recorder's rows read, keyed by catalogue
+  // key. Threaded to ParamInput on the vocab object so no clause-row prop
+  // chain grows a new argument.
+  const [landmarkNames, setLandmarkNames] = useState({});
   const [editing, setEditing] = useState(null);   // null | "new" | def object
   // The timeline picker: false, or {replaces: def|null} — the hero button
   // opens it to CREATE ({replaces: null}), the editor's re-record door opens
@@ -924,7 +947,10 @@ export function Segments({ t }) {
     return rows;
   };
   useEffect(() => { load();
-    getJSON("/api/segments/vocab").then(setVocabData); }, []);
+    getJSON("/api/segments/vocab").then(setVocabData);
+    getJSON("/api/landmarks")
+      .then((body) => setLandmarkNames(body.names || {}))
+      .catch(() => {}); }, []);
   if (!defs || !vocabData) return html`<${PageState}
       kind=${t.connected ? "loading" : "offline"}
       title="Preparing the segment workshop" />`;
@@ -1069,7 +1095,8 @@ export function Segments({ t }) {
         ${editing
           ? html`<${Builder}
               key=${editing === "new" ? "new" : `${editing.id}:${editorEpoch}`}
-              vocab=${vocabData} apiRef=${editorRef} t=${t} load=${load}
+              vocab=${{ ...vocabData, landmark_names: landmarkNames }}
+              apiRef=${editorRef} t=${t} load=${load}
               allDefs=${defs} initial=${editing === "new" ? null : editing}
               onRerecord=${(row) => setRecording({ replaces: row })}
               onSaved=${async (savedId) => {

@@ -649,6 +649,29 @@ def test_the_merge_panel_is_offered(page):
     assert count(page, ".builder-merge") == 1
 
 
+def test_the_save_button_flashes_saved_after_a_real_save(page):
+    """Round 18 item 2, driven end to end: click Save on the open editor and
+    the button reads "Saved" (with the check icon) once the PUT resolves,
+    then returns to "Save segment". Saving the untouched fixture definition
+    is a no-op PUT, so the shared page's later tests see the same rows."""
+    reach(page, "segments-editor")
+    # `waitFor` RESOLVES false on timeout — it never throws (its own source,
+    # tools/uilab_project.py). The first version of this test wrapped it in
+    # try/catch and returned 'ok' unconditionally: green with the flash
+    # mutated off, the exact vacuous-guard shape ui-core.md warns about.
+    verdict = page.evaluate(_ASYNC("""
+const saveBtn = Array.from(document.querySelectorAll('.builder-actions button'))
+  .find((b) => b.textContent.includes('Save segment'));
+saveBtn.click();
+if (!await waitFor(() => saveBtn.textContent.includes('Saved'), 4000))
+  return 'never flashed: ' + saveBtn.textContent;
+if (!await waitFor(() => !saveBtn.textContent.includes('Saved'), 4000))
+  return 'stuck on: ' + saveBtn.textContent;
+return 'ok';
+"""))
+    assert verdict == "ok", verdict
+
+
 def test_the_recorder_opens_onto_history_with_pickable_rows(page):
     """The ARRIVAL state, and it is the whole of property 2: the recorder
     opens onto what you just did, never an empty screen waiting for input.
