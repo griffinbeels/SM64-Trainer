@@ -208,6 +208,10 @@ def _moment_src(c: dict) -> str:
     for name in ("level", "area", "ordinal"):
         if c.get(name) is not None:
             args.append(f"{name}={c[name]}")
+    # A recorded pin (round 18): a string catalogue key, repr'd -- dropping
+    # it silently is exactly what the round-trip gate refuses.
+    if c.get("landmark") is not None:
+        args.append(f"landmark={c['landmark']!r}")
     return f"moment({', '.join(args)})"
 
 
