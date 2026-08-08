@@ -269,12 +269,30 @@ castle" lets walking into HMC record a false MIPS Clip.
 
 Publish order: the struct was just written (`to` = its level — the touch frame
 for a painting, touch+20 for a pipe) → a level edge (`to` = the new level) → an
-area edge (`to` = the unchanged level) → two bounds that guarantee nothing that
-fired before this can stop firing, each publishing `to: None` — a backward
-`global_timer` (console reset) and `HOLD_CAP_FRAMES` 240, which is also what
-covers an in-level teleporter (it relocates Mario inside his own area, so no
-edge ever arrives). `frame` and the igt trio stay the TOUCH's however late the
-publish lands.
+area edge (`to` = the unchanged level) → three bounds that guarantee nothing
+that fired before this can stop firing, each publishing `to: None` — a backward
+`global_timer` (console reset), **a FROZEN countdown (2026-08-07)**, and
+`HOLD_CAP_FRAMES` 240, which is also what covers an in-level teleporter (it
+relocates Mario inside his own area, so no edge ever arrives). `frame` and the
+igt trio stay the TOUCH's however late the publish lands.
+
+**The frozen-countdown release is the bowser-pipe fix (2026-08-07).** His
+pipe-segment flow touches the pipe and goes straight into the Usamune menu —
+the fight is not wanted — which freezes the 20-frame countdown, so the write
+never comes, no edge follows, and both such touches that night sat the full
+cap: the practice-log row landed **8.0 s** after the touch (journal ids 27310,
+27384; "extremely slow… delaying it by way too much"). A countdown is at most
+20 frames, so `pending_warp_op` still ARMED past `RIDE_WINDOW_FRAMES` (26)
+with Usamune's counter frozen `PAUSE_CONFIRM_FRAMES` (6) is a countdown that
+stopped. Three conditions, each load-bearing: the armed op is the exact
+opposite of the 2026-08-05 quiet-flag bug (a painting's flag clears mid-fade —
+this fires only while it stays loud, so that regression test still pins
+silence); the floor keeps every measured ride shape (write +20, edge +23)
+winning first even if the counter freezes during fades — deliberately
+unmeasured, the rule is correct under both answers; the frozen counter keeps a
+longer countdown still running held. Every published touch now carries
+`released_by` + `held_frames` (inert, the star-grab telemetry pattern), so the
+next latency report is a journal query.
 
 **`pending_warp_op` is not one of those bounds, and believing it could be cost
 a live round (2026-08-05).** A grace window on that flag looked like the precise

@@ -290,7 +290,9 @@ The trainer ends a movement at the touch instead.
 - **Lives** — the warp detector (`src/sm64_events/detectors/warp.py`)
 - **Not** — the moment the course loads. A painting or portal records where it
   leads as Mario touches it, so the [[detector]] publishes on that same
-  [[frame]]; only a pipe makes it wait.
+  [[frame]]; only a pipe makes it wait, and a pipe the player pauses out of —
+  the [[attempt]] ends at the touch, the fight unwanted — publishes the moment
+  the frozen countdown rules a ride out, not at the eight-second backstop.
 
 ### Death
 
