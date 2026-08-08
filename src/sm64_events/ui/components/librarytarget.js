@@ -201,8 +201,8 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd 
     // black box that reads as a broken player.
     return html`<div class="library-example-thumb library-example-placeholder is-clickable"
         onclick=${startPlaying}>
-      <${Icon} name="play" size=${22} />
-      <span class="library-example-site">${src.site}</span>
+      <${Icon} name="play" size=${30} />
+      <span class="library-example-site">Play on ${src.site}</span>
       ${src.thumb
         ? html`<img class="library-example-thumb library-example-thumb-img"
             src=${src.thumb} alt="" loading="lazy"
@@ -222,7 +222,7 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd 
             <${Icon} name="upload" size=${13} /></a>` : null}
     </div>
     <div class="library-example-meta">
-      <span class="library-example-tier">
+      <span class="rank-icon-slot library-example-tier" style="--icon-size: 20px">
         ${tier ? html`<${RankIcon} tier=${tier} division=${division} size=${20} />` : "–"}</span>
       <span class="library-example-runner-wrap">
         <span class="library-example-runner">${entry.runner}</span>
@@ -245,7 +245,8 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd 
 // row with nothing to import must not offer the gesture.
 function PlainEntry({ entry, tier, division }) {
   return html`<span class="library-plain-entry">
-    ${tier ? html`<${RankIcon} tier=${tier} division=${division} size=${15} />` : ""}
+    ${tier ? html`<span class="rank-icon-slot" style="--icon-size: 15px">
+      <${RankIcon} tier=${tier} division=${division} size=${15} /></span>` : ""}
     <span class="library-plain-runner">${entry.runner}</span>
     <span class="library-plain-time">${fmtSeconds(entry.time_cs / 100)}</span>
   </span>`;
@@ -272,7 +273,9 @@ function DivisionGroup({ approach, band, division, query, isYou, trayKeys, entit
   if (!division.entries.length) {
     return html`<div class="library-division is-empty">
       <span class="library-division-label">
-        <${RankIcon} tier=${band.tier} division=${division.numeral} size=${16} /> ${label}</span>
+        <span class="rank-icon-slot" style="--icon-size: 16px">
+          <${RankIcon} tier=${band.tier} division=${division.numeral} size=${16} /></span>
+        ${label}</span>
       <span class="meta">${bracket}</span>
       <span class="meta library-division-count">no examples</span>${you}
     </div>`;
@@ -283,7 +286,9 @@ function DivisionGroup({ approach, band, division, query, isYou, trayKeys, entit
     <button type="button" class="library-division-head" aria-expanded=${open}
         onclick=${() => setOpen((prev) => !prev)}>
       <span class="library-division-label">
-        <${RankIcon} tier=${band.tier} division=${division.numeral} size=${18} /> ${label}</span>
+        <span class="rank-icon-slot" style="--icon-size: 18px">
+          <${RankIcon} tier=${band.tier} division=${division.numeral} size=${18} /></span>
+        ${label}</span>
       <span class="meta">${bracket}</span>${you}
       <span class="meta library-division-count">
         ${withVideo.length ? `${withVideo.length} video${withVideo.length === 1 ? "" : "s"}` : ""}
@@ -323,9 +328,15 @@ function DivisionGroup({ approach, band, division, query, isYou, trayKeys, entit
 // the exact subdivision (round 1: "the 'YOU' display should consider the
 // subdivision").
 function TocRow({ band, count, you, onJump }) {
+  // Tier-level surfaces wear the DIVISION-I cap (round 2: "the OVERALL
+  // symbol for each overall tier should be the highest level cap symbol ...
+  // the empty cap kinda looks weird") -- numeral + full wings, with Capless
+  // keeping its own no-wings law. Inside a `.rank-icon-slot` so the wings
+  // reserve their spill instead of crowding the name (ui-ranks.md).
   return html`<tr class="library-toc-row" onclick=${onJump}>
     <td class="library-toc-tier">
-      ${band.tier ? html`<${RankIcon} tier=${band.tier} size=${16} />` : ""}
+      ${band.tier ? html`<span class="rank-icon-slot" style="--icon-size: 16px">
+        <${RankIcon} tier=${band.tier} division=${"I"} size=${16} /></span>` : ""}
       ${band.tier ? capName(band.tier) : "Unranked"}${you
         ? html`<span class="library-toc-you" title="your current rank on this strategy">
             ${" "}◀ you${you.division ? ` · ${capName(you.rank)} ${divisionDigit(you.division)}` : ""}</span>`
@@ -437,7 +448,8 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
         ${bands.map((band) => html`<div class="library-band" key=${bandAnchorId(approach, band.tier || "unranked")}
             data-tier=${band.tier || "unranked"} id=${bandAnchorId(approach, band.tier || "unranked")}>
           <div class="library-band-head">
-            ${band.tier ? html`<${RankIcon} tier=${band.tier} size=${18} />` : ""}
+            ${band.tier ? html`<span class="rank-icon-slot" style="--icon-size: 18px">
+              <${RankIcon} tier=${band.tier} division=${"I"} size=${18} /></span>` : ""}
             ${" "}<b>${band.tier ? capName(band.tier) : "Unranked"}</b>
             <span class="meta">${band.cutoffCs != null ? fmtSeconds(band.cutoffCs / 100)
               : band.tier ? "—" : "no ladder for this approach"}</span>

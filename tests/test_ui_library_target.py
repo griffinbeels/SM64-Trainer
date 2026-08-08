@@ -154,8 +154,12 @@ def test_jp_toggle_switches_the_ladder_and_the_band_cutoffs(library_page):
           (() => {
             const rows = Array.from(document.querySelectorAll(
               '.library-section.open .library-toc-row'));
+            // includes, not startsWith: the tier cell leads with the
+            // division-I cap since round 2, and the cap's own numeral glyph
+            // ("1") is part of textContent. "Mario" is substring-unique among
+            // tier names (unlike Toad/Toadsworth), so includes is safe here.
             const row = rows.find((r) =>
-              r.querySelector('.library-toc-tier').textContent.trim().startsWith('Mario'));
+              r.querySelector('.library-toc-tier').textContent.includes('Mario'));
             return row ? row.querySelector('.library-toc-cutoff').textContent.trim() : null;
           })()
         """)
