@@ -298,6 +298,12 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   const [synth, setSynth] = useState(null);
   const [synthErr, setSynthErr] = useState(null);
   const [name, setName] = useState("");
+  // THE AUTO-NAME MAY ONLY FILL A FIELD HE HAS NOT EDITED (round 12 item 4:
+  // "once I set the name for the segment name it shouldn't change" — every
+  // pick toggle re-derived and overwrote what he typed). A ref, not state:
+  // derive()'s .then would otherwise read the value frozen at call time.
+  // Emptying the field hands it back to the auto-name; Clear resets both.
+  const nameEditedRef = useRef(false);
   // Which entity this is a piece of (`SegmentDef.parent`) -- the ONLY way a
   // subsection can be created, and it is asked HERE because this is the
   // moment you know the answer: "nothing asks 'you just recorded this, what
@@ -537,7 +543,7 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
       // produced before, which is the outcome this whole pass exists to change.
       const walked = new Set((body.steps || []).map((step) => step.node));
       setSynth(body);
-      setName(body.name);
+      if (!nameEditedRef.current) setName(body.name);
       setRequired(walked);
       recheck(body, walked);
     } catch (err) { setSynthErr(String(err)); }
@@ -551,7 +557,10 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
     derive(next);
   }
 
-  function clearPicks() { setPickedIds([]); resetDownstream(); }
+  function clearPicks() {
+    setPickedIds([]); resetDownstream();
+    setName(""); nameEditedRef.current = false;
+  }
 
   function toggleFold(key) {
     setFolded((held) => {
@@ -645,7 +654,10 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
     ${synth && html`<div class="record-review">
       <label class="builder-name">
         <span class="field-label">Segment name</span>
-        <input value=${name} oninput=${(e) => setName(e.target.value)} />
+        <input value=${name} oninput=${(e) => {
+          setName(e.target.value);
+          nameEditedRef.current = e.target.value.trim() !== "";
+        }} />
       </label>
       <p class="meta">Starts when: <b>${synth.start_sentence}</b></p>
       ${(synth.picked || []).map((step, i) => html`<p key=${i} class="meta">

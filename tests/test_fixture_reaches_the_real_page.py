@@ -743,6 +743,34 @@ def test_a_third_picked_moment_becomes_a_waypoint_the_person_chose(page):
     assert count(page, ".record-review:has-text('Then:')") >= 1
 
 
+def test_a_typed_segment_name_survives_a_pick_change(page):
+    """Round 12 item 4: "once I set the name for the segment name it
+    shouldn't change". Every pick toggle re-derives the definition and used
+    to overwrite the name field with the fresh auto-name — the auto-fill may
+    only fill a field he has not edited."""
+    reach(page, "recorder-review")
+    typed = page.evaluate(
+        "const input = document.querySelector('.builder-name input');"
+        "input.value = 'My Own Name';"
+        "input.dispatchEvent(new Event('input', { bubbles: true }));"
+        "return input.value;")
+    assert typed == "My Own Name"
+    page.evaluate(
+        "document.querySelector('.record-row:not(.picked)').click();")
+    page.wait_ms(600)   # derive() round-trips /api/segments/synthesize
+    held = page.evaluate(
+        "return document.querySelector('.builder-name input').value;")
+    assert held == "My Own Name", (
+        f"the pick change re-derived the auto-name over his ({held!r})")
+    # Put the third pick back so later stories start from their own setup
+    # with nothing extra picked (Story setups are idempotent, but this click
+    # was ours, not theirs).
+    page.evaluate(
+        "const picked = document.querySelectorAll('.record-row.picked');"
+        "picked[1].click();")
+    page.wait_ms(200)
+
+
 def test_the_page_story_returns_to_practice_after_the_segments_tab(page):
     """The sweep's own self-healing guard (uilab_project.py's `_EXPAND_ALL`):
     without it, whichever Segments-tab story ran last in a viewport's pass
