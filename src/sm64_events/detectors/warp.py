@@ -53,12 +53,34 @@ PUBLISH, in the order checked:
   * a level edge -> `to` = the new level;
   * an area edge -> `to` = the (unchanged) level, an in-level warp;
   * `global_timer` jumping backward (console reset) -> `to` = None;
+  * the countdown FROZE (live report 2026-08-07) -> `to` = None. His
+    pipe-segment flow touches the bowser pipe and goes straight into the
+    Usamune menu — the run is over at the touch and the fight is not wanted.
+    The menu freezes the delayed warp's countdown, so the write never comes
+    and no edge ever follows; both such touches that night sat on the cap and
+    the practice-log row landed 8.0 s after the touch (journal ids 27310 and
+    27384, his report: "extremely slow… delaying it by way too much"). A
+    countdown is at most 20 frames, so `pending_warp_op` still ARMED past
+    RIDE_WINDOW_FRAMES with Usamune's counter frozen for
+    PAUSE_CONFIRM_FRAMES is a countdown that stopped, and nothing can arrive
+    until the player unpauses — which in this flow is a menu warp somewhere
+    else entirely. All three conditions carry weight: the ARMED op is what a
+    painting's cleared flag fails (the 2026-08-05 bug published on that
+    flag's QUIET; this fires only while it stays loud), the floor keeps
+    every measured ride shape (write +20, level edge +23) winning first even
+    if the counter turns out to freeze during fades, and the frozen counter
+    keeps a longer countdown that is still running held. Whether the counter
+    ticks during a pipe fade is deliberately not assumed either way — the
+    rule is correct under both answers, and `released_by`/`held_frames` on
+    every published touch record which clause fired so the next latency
+    report is a journal query, not an inference;
   * HOLD_CAP_FRAMES elapsed -> `to` = None. This is what covers an in-level
     teleporter (CCM broken bridge, WDW corners; every one
     ACT_TELEPORT_FADE_OUT), which relocates Mario inside his own area and so
-    produces no edge to wait for at all.
+    produces no edge to wait for at all — its op cleared ~40 frames in, so
+    the pause release cannot see it.
 
-The last four bounds are why nothing that fired before this change can stop
+The last five bounds are why nothing that fired before this change can stop
 firing: a hold with no clock is how an event disappears. `to` is therefore
 `int | None` — the level Mario ended up in, or None when the warp kept him
 where he was or was aborted.
@@ -117,20 +139,42 @@ def _destination(snapshot: GameSnapshot) -> tuple[int, int, int, int]:
 class WarpDetector:
     HOLD_CAP_FRAMES = 240
     FRESH_WINDOW_FRAMES = 4
+    # A delayed warp's countdown is 20 frames (probe_warp_block, both pipes),
+    # so a ride resolves itself by +20 (the write) or +23 (the level edge).
+    # An op still ARMED past this floor is a countdown that stopped.
+    RIDE_WINDOW_FRAMES = 26   # 20 + FRESH_WINDOW_FRAMES poller slack + margin
+    # Usamune's counter ticks every frame game logic runs; the 12-call
+    # snapshot's read skew is ±1 at each window end (verify_death_clock), so a
+    # 6-frame silence cannot be a torn read -- it is a pause or a dialog stop.
+    PAUSE_CONFIRM_FRAMES = 6
 
     def __init__(self):
         self._clock = IgtClock()
         self._held: dict | None = None
         self._dest: tuple[int, int, int, int] | None = None
         self._dest_written_at: int | None = None
+        self._igt_ticked_at: int | None = None
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         if self._clock.empty():
             self._clock.observe(prev)
         self._watch_destination(curr)
+        self._watch_igt_tick(prev, curr)
         events = self._release(prev, curr) + self._touch(prev, curr)
         self._clock.observe(curr)
         return events
+
+    def _watch_igt_tick(self, prev: GameSnapshot, curr: GameSnapshot) -> None:
+        """Stamp the frame Usamune's counter last MOVED. The gap since then is
+        the pause streak: the counter ticks every frame game logic runs, so a
+        sustained silence while global_timer advances means a pause menu or a
+        dialog time-stop (anchors.py reads the same signal). A backward
+        global_timer restamps -- domain rule 4, nothing extrapolates across a
+        console reset."""
+        if (self._igt_ticked_at is None
+                or curr.igt_overall != prev.igt_overall
+                or curr.global_timer < self._igt_ticked_at):
+            self._igt_ticked_at = curr.global_timer
 
     def _watch_destination(self, curr: GameSnapshot) -> None:
         """Stamp the frame `sWarpDest` last changed — the freshness test.
@@ -170,7 +214,7 @@ class WarpDetector:
                       "igt_frames": igt_frames, "igt_source": source,
                       "wall_time_utc": curr.wall_time_utc}
         if self._destination_is_live(curr):
-            return self._publish(curr.warp_dest_level)
+            return self._publish(curr.warp_dest_level, "destination", curr)
         return []
 
     def _release(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
@@ -178,18 +222,25 @@ class WarpDetector:
         if held is None:
             return []
         if self._destination_is_live(curr):
-            return self._publish(curr.warp_dest_level)
+            return self._publish(curr.warp_dest_level, "destination", curr)
         if curr.curr_level != prev.curr_level:
-            return self._publish(curr.curr_level)
+            return self._publish(curr.curr_level, "level", curr)
         if curr.curr_area != prev.curr_area:
-            return self._publish(curr.curr_level)
+            return self._publish(curr.curr_level, "area", curr)
         if curr.global_timer < held["frame"]:
-            return self._publish(None)
+            return self._publish(None, "reset", curr)
+        if (curr.global_timer - held["frame"] >= self.RIDE_WINDOW_FRAMES
+                and curr.pending_warp_op != 0
+                and self._igt_ticked_at is not None
+                and curr.global_timer - self._igt_ticked_at
+                >= self.PAUSE_CONFIRM_FRAMES):
+            return self._publish(None, "pause", curr)
         if curr.global_timer - held["frame"] >= self.HOLD_CAP_FRAMES:
-            return self._publish(None)
+            return self._publish(None, "cap", curr)
         return []
 
-    def _publish(self, to: int | None) -> list[Event]:
+    def _publish(self, to: int | None, released_by: str,
+                 curr: GameSnapshot) -> list[Event]:
         held, self._held = self._held, None
         return [Event(type="warp_entered", frame=held["frame"],
                       timestamp_utc=held["wall_time_utc"],
@@ -197,4 +248,10 @@ class WarpDetector:
                                "action": held["action"], "to": to,
                                "igt_frames": held["igt_frames"],
                                "igt": format_igt(held["igt_frames"]),
-                               "igt_source": held["igt_source"]})]
+                               "igt_source": held["igt_source"],
+                               # inert telemetry, the star-grab pattern: the
+                               # next latency report is answerable from the
+                               # journal instead of from inference
+                               "released_by": released_by,
+                               "held_frames":
+                                   curr.global_timer - held["frame"]})]
