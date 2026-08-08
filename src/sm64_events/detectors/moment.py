@@ -95,6 +95,16 @@ MOMENTS: tuple[Moment, ...] = (
     # `tools/score_moment_clock.py` settles it from one screenshot, the same
     # way a door's did, and until then a cannon carries the door's constant.
     Moment("cannon_enter", A.CANNON_ACTIONS, "Enter a cannon"),
+    # Round 11: kinds with an EMPTY action set are CAUSED moments — the
+    # player made something happen and the OBJECT recorded it, so
+    # detectors/caused.py supplies the events off the pool and this detector
+    # never matches them (an empty set matches no byte). The rows live here
+    # anyway because this tuple is THE kind registry: labels, the builder's
+    # dropdown and the timeline all read it, and a kind absent here is a kind
+    # no surface can say. Which behaviours may fire each kind, and the
+    # measured rule per behaviour: addresses.CAUSED_BEHAVIOURS.
+    Moment("switch_press", frozenset(), "Press a switch"),
+    Moment("enemy_defeated", frozenset(), "Defeat an enemy"),
 )
 
 

@@ -21,6 +21,27 @@ _POINTERS_SIZE = max(A.MARIO_OBJECT_POINTERS) + 4 - _POINTERS_AT
 
 
 @dataclass(frozen=True)
+class CausedState:
+    """One watched object's own state this tick — what a CAUSED moment diffs.
+
+    Only behaviours in `addresses.CAUSED_BEHAVIOURS` are carried (a handful of
+    slots per level), because the pool's full change stream is mostly scenery:
+    his 2026-08-07 capture logged 1,386 changes in one session, 9 of them
+    player gestures. `health` rides along un-read by any shipped rule — it is
+    one of the three fields the pool probe watches and the next candidate rows
+    (bosses count hits on it) will need it; carrying it now spares those rows
+    a snapshot-contract change.
+    """
+
+    slot: int
+    behaviour: int
+    action: int          # s32 oAction — THE legible field (addresses.py)
+    health: int          # s32 oHealth — hitbox arming/proximity, NOT defeats
+    home: tuple[float, float, float]
+    pos: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
 class GameSnapshot:
     wall_time_utc: datetime
     global_timer: int
@@ -55,6 +76,11 @@ class GameSnapshot:
     landmark_behaviour: int = 0   # 0 = nothing engaged this frame
     landmark_home: tuple[float, float, float] = (0.0, 0.0, 0.0)
     landmark_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    # Watched-object states for the caused-moment detector — a switch is
+    # pressed by its OWN behaviour code watching Mario's position and never
+    # reaches the engagement pointers above (measured, round 10), so what the
+    # player caused has to be read off the object.
+    caused: tuple = ()
 
 
 class SnapshotReader:
@@ -86,6 +112,37 @@ class SnapshotReader:
                     struct.unpack_from(">fff", found, 0))
         return 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)
 
+    def _caused_states(self) -> tuple:
+        """Every watched behaviour's state, in ONE pool read.
+
+        One `ReadProcessMemory` of the whole pool then a local behaviour scan,
+        the same shape `tools/probe_objects.py --pool` runs live at 120 Hz
+        beside his sessions — 240 separate reads would cost more than the
+        poll interval, one block read costs ~a tenth of a millisecond.
+        """
+        pool = self._mem.read_block(A.OBJECT_POOL,
+                                    A.OBJECT_COUNT * A.OBJECT_SIZE)
+        found = []
+        for slot in range(A.OBJECT_COUNT):
+            base = slot * A.OBJECT_SIZE
+            behaviour = int.from_bytes(
+                pool[base + A.OBJECT_BEHAVIOR:base + A.OBJECT_BEHAVIOR + 4],
+                "big")
+            if behaviour not in A.CAUSED_POINTERS:
+                continue
+            found.append(CausedState(
+                slot=slot, behaviour=behaviour,
+                action=int.from_bytes(
+                    pool[base + A.OBJECT_ACTION:base + A.OBJECT_ACTION + 4],
+                    "big", signed=True),
+                health=int.from_bytes(
+                    pool[base + A.OBJECT_HEALTH:base + A.OBJECT_HEALTH + 4],
+                    "big", signed=True),
+                home=struct.unpack_from(">fff", pool,
+                                        base + A.OBJECT_HOME_POS),
+                pos=struct.unpack_from(">fff", pool, base + A.OBJECT_POS)))
+        return tuple(found)
+
     def read(self) -> GameSnapshot:
         m = self._mem
         landmark_behaviour, landmark_home, landmark_pos = self._engaged_object()
@@ -110,4 +167,5 @@ class SnapshotReader:
             landmark_behaviour=landmark_behaviour,
             landmark_home=landmark_home,
             landmark_pos=landmark_pos,
+            caused=self._caused_states(),
         )

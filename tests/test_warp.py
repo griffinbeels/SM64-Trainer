@@ -4,7 +4,10 @@ from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.core.timefmt import format_igt
 from sm64_events.detectors.igt_clock import IgtClock
 from sm64_events.detectors.warp import WarpDetector
-from sm64_events.memory.addresses import ACT_DISAPPEARED, ACT_TELEPORT_FADE_OUT
+from sm64_events.memory.addresses import (ACT_BBH_ENTER_JUMP,
+                                          ACT_BBH_ENTER_SPIN,
+                                          ACT_DISAPPEARED,
+                                          ACT_TELEPORT_FADE_OUT)
 
 ACT_IDLE = 0x0C400201
 
@@ -321,6 +324,47 @@ def test_teleport_fade_out_also_emits_warp_entered():
 def test_exit_from_warp_action_is_silent():
     # savestate-load mid-warp: prev=warp, curr=idle -> no edge-in, no event
     assert WarpDetector().process(snap(mario_action=ACT_DISAPPEARED), snap()) == []
+
+
+def test_the_bbh_cage_is_an_entrance_like_any_painting():
+    """The one course entrance that fires NO generic warp action (his probe
+    run, 2026-08-07: five entrances produced clean touches, BBH produced
+    nothing). The cage plays its own pair — ENTER_JUMP then ENTER_SPIN 14
+    frames later, level byte at +74 — and the JUMP is the commit moment, so
+    the touch is its edge and `to` comes from the level edge exactly like a
+    struct-silent painting. Repairs `seg:ccm->bbh`, whose entrance_touched
+    end could never fire before this."""
+    detector = WarpDetector()
+    prev = snap(global_timer=2000, curr_level=26)          # the courtyard
+    jump = snap(global_timer=2001, curr_level=26,
+                mario_action=ACT_BBH_ENTER_JUMP)
+    assert detector.process(prev, jump) == [], "held until it knows where"
+    spin = snap(global_timer=2015, curr_level=26,
+                mario_action=ACT_BBH_ENTER_SPIN)
+    assert detector.process(jump, spin) == [], "the pair is ONE touch"
+    arrived = snap(global_timer=2075, curr_level=4,
+                   mario_action=ACT_BBH_ENTER_SPIN)
+    events = detector.process(spin, arrived)
+    assert len(events) == 1
+    assert events[0].type == "warp_entered"
+    assert events[0].frame == 2001, "the moment is the jump, not the load"
+    assert events[0].payload["to"] == 4
+    assert events[0].payload["level"] == 26
+
+
+def test_the_spin_alone_is_not_a_touch():
+    """ACT_BBH_ENTER_SPIN is deliberately outside the entry set — it is the
+    second action of the pair, and the one a leaving-BBH probe window also
+    caught (addresses.py has the arithmetic). A spin with no jump before it
+    must not invent an entrance."""
+    detector = WarpDetector()
+    prev = snap(global_timer=2000, curr_level=26)
+    spin = snap(global_timer=2001, curr_level=26,
+                mario_action=ACT_BBH_ENTER_SPIN)
+    assert detector.process(prev, spin) == []
+    assert detector.process(
+        spin, snap(global_timer=2075, curr_level=4,
+                   mario_action=ACT_BBH_ENTER_SPIN)) == []
 
 
 def test_the_touch_carries_WHICH_warp_it_was():

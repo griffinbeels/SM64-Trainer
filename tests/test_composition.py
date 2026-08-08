@@ -254,9 +254,16 @@ def test_build_joins_the_boundary_hook_to_the_moment_detector(monkeypatch):
 
     hook = captured["sink"].on_attempt_boundary
     assert hook is not None, "the service was built with no boundary hook"
-    wired = [d for d in captured["detectors"]
-             if type(d).__name__ == "MomentDetector"]
-    assert len(wired) == 1
-    # The hook must be THAT detector's reset -- not another instance's, which
-    # would leave the running counter untouched while looking correct.
-    assert hook.__self__ is wired[0]
+    # BOTH moment detectors count ordinals (Mario-action moments and caused
+    # moments), so the hook must clear both — and it must clear the INSTANCES
+    # the poller got, not another pair's, which would leave the running
+    # counters untouched while looking correct. Proven by driving them: seed
+    # each counter directly, fire the hook, require both empty.
+    moment = next(d for d in captured["detectors"]
+                  if type(d).__name__ == "MomentDetector")
+    caused = next(d for d in captured["detectors"]
+                  if type(d).__name__ == "CausedMomentDetector")
+    moment._counts["door_open"] = 4
+    caused._counts["switch_press"] = 2
+    hook()
+    assert moment._counts == {} and caused._counts == {}

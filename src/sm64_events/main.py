@@ -16,6 +16,7 @@ from sm64_events.core.updater import UpdateService
 from sm64_events.core.version import __version__
 from sm64_events.detectors.anchors import AnchorDetector
 from sm64_events.detectors.area import AreaChangeDetector
+from sm64_events.detectors.caused import CausedMomentDetector
 from sm64_events.detectors.death import DeathDetector
 from sm64_events.detectors.dust import DustTrickDetector
 from sm64_events.detectors.key import KeyGrabDetector
@@ -149,7 +150,11 @@ def build_detectors(target_active=None) -> list:
     """
     moments = (MomentDetector() if target_active is None
                else MomentDetector(target_active=target_active))
+    # CausedMomentDetector emits the same event on the frame it happened —
+    # not a held emit — so like MomentDetector it sits behind the two held
+    # leaders and ahead of everything that closes attempts.
     detectors = [StarGrabDetector(), WarpDetector(), moments,
+                 CausedMomentDetector(),
                  GameResetDetector(), LevelChangeDetector(),
                  AreaChangeDetector(), StageChangeDetector(),
                  AnchorDetector(), DeathDetector(), DustTrickDetector(),
@@ -300,10 +305,20 @@ def build():
     # when it is used — see `build_detectors`' docstring and moment.py's.
     detectors = build_detectors()
     # An ordinal means "the Nth since this attempt opened", so the counter
-    # restarts when one does. The service sees every event and the detector
-    # sees only snapshots, so this is the one place that can join them.
-    service.on_attempt_boundary = next(
+    # restarts when one does. The service sees every event and the detectors
+    # see only snapshots, so this is the one place that can join them. BOTH
+    # moment detectors count ordinals; a boundary that reset only one would
+    # leave "the 2nd switch press" counting across attempts.
+    _moment_reset = next(
         d for d in detectors if isinstance(d, MomentDetector)).reset
+    _caused_reset = next(
+        d for d in detectors if isinstance(d, CausedMomentDetector)).reset
+
+    def _reset_moment_ordinals():
+        _moment_reset()
+        _caused_reset()
+
+    service.on_attempt_boundary = _reset_moment_ordinals
     if replay is not None:
         # Poll-thread tap (emits no events): tells the recorder the player
         # is providing input so the buffer pauses while idle (activity.py).

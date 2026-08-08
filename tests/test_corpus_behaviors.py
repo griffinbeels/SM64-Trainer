@@ -83,3 +83,16 @@ def test_the_sentences_his_report_was_about():
         == "Trigger Whomp King in Whomp's Fortress"
     assert label_event(_moment("pole_grab", 24, 0x800EDC24), names) \
         == "Grab a tree in Whomp's Fortress"
+
+
+def test_the_caused_kinds_speak_through_the_same_grammar():
+    """Round 11: a caused moment is the SAME event through the SAME labeller,
+    so the switch he ruled on and the defeats he asked for read as sentences
+    with no new code path — the exact strings his recorder will draw."""
+    names = _seed_kind_names()
+    assert label_event(_moment("switch_press", 24, 0x800ED6E8), names) \
+        == "Press a blue coin switch in Whomp's Fortress"
+    assert label_event(_moment("enemy_defeated", 9, 0x800EF8AC), names) \
+        == "Defeat a goomba in Bob-omb Battlefield"
+    assert label_event(_moment("enemy_defeated", 9, 0x800EE2F4), names) \
+        == "Defeat a bob-omb in Bob-omb Battlefield"

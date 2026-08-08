@@ -130,12 +130,62 @@ OBJECT_POS = 0xA0            # Vec3f oPos (current x/y/z) within a slot
 # `oPosX` reads 0x0A0 and `oHomeX` reads 0x164, which is exactly what
 # OBJECT_POS and OBJECT_HOME_POS above were measured to be. Two hits means
 # the field table lines up with the layout we actually read.
-# VERIFY (live gate): none of the four has been watched in RAM yet — that is
-# what `tools/probe_objects.py --pool` exists to do.
+# ANSWERED 2026-08-07 (his `--pool` run, 1,386 changes): `oAction` is THE
+# legible field — a switch presses 0 -> 1, an enemy dies into a death action.
+# `oInteractStatus` is DEAD to a poll (8 non-zero reads in 1,386; the engine
+# clears it within the frame — do not build on it). And `oHealth` is NOT a
+# defeat signal: the hitbox struct inits `health: 0` (decomp bobomb.inc.c),
+# written when the object's logic first runs with Mario in range, so a health
+# transition means PROXIMITY — six far-apart bob-ombs "died" inside 50 frames
+# of his capture while Mario flew past them, and the ledger's "goomba
+# 2048 -> 0" defeats were pool initialisation at a level load.
 OBJECT_INTERACT_TYPE = 0x130   # u32 oInteractType: what it offers Mario
-OBJECT_INTERACT_STATUS = 0x134 # s32 oInteractStatus: what Mario just did
-OBJECT_ACTION = 0x14C          # s32 oAction: its own state machine
-OBJECT_HEALTH = 0x184          # s32 oHealth
+OBJECT_INTERACT_STATUS = 0x134 # s32 oInteractStatus: cleared within the frame
+OBJECT_ACTION = 0x14C          # s32 oAction: its own state machine — THE read
+OBJECT_HEALTH = 0x184          # s32 oHealth: hitbox arming, NOT defeats
+
+# WHAT THE PLAYER CAUSED — the behaviours a caused moment may fire on, and
+# the rule that reads each one (detectors/caused.py owns the rules; the kind
+# must also be a MOMENTS row so every label/vocab surface can say it).
+# Griffin's framing is the design (2026-08-07): *"the switch press is the
+# switch's, but that switch press never occurs without mario. by association,
+# it's therefore mario's action."*
+#
+# ADDING A BEHAVIOUR IS ONE ROW HERE — with a capture first. Every shipped
+# row is measured from `data/object_pool_probe.jsonl` (his 2026-08-07 run),
+# never reasoned from the decomp alone: the switch was reasoned about twice
+# and measured once, and only the measurement was right (round 10). Next
+# candidates (cap/purple switches, bosses) each want one `--pool` capture.
+#
+# The POINTERS restate `tools/corpus_behaviors.py`'s derivation (segment base
+# + STROOP offset). src cannot import tools/ — the frozen exe does not carry
+# it — so the copy is COMPARED instead of shared:
+# tests/test_caused.py::test_the_pointer_table_matches_the_shipped_catalogue.
+#   symbol -> (US RAM behaviour pointer, moment kind, legibility rule)
+CAUSED_BEHAVIOURS = {
+    # BLUE_COIN_SWITCH_ACT: IDLE 0 -> RECEDING 1 on the press (-> TICKING 2
+    # as it stays down). 3 presses in his capture, all 0 -> 1 at one stable
+    # coordinate — his ruling: "We need to support blue coin switch presses
+    # for sure".
+    "bhvBlueCoinSwitch": (0x800ED6E8, "switch_press", "press"),
+    # Dies into the engine's SHARED attacked actions (100/101/102); its own
+    # walk/aggro/jump cycle is 0/1/2. 4 squishes (-> 102) in his capture.
+    "bhvGoomba": (0x800EF8AC, "enemy_defeated", "attacked"),
+    # Dies into ITS OWN explode state (BOBOMB_ACT_EXPLODE): chase -> 3 and
+    # thrown -> 3 both measured. The fuse detonation counts too — a bob-omb
+    # only fuses while chasing, which the player caused by aggroing it.
+    "bhvBobomb": (0x800EE2F4, "enemy_defeated", "explode"),
+}
+CAUSED_POINTERS = frozenset(row[0] for row in CAUSED_BEHAVIOURS.values())
+
+# Generic object death actions — decomp include/object_constants.h, fetched
+# 2026-08-07. NOTE the deliberate collision in the decomp itself:
+# OBJ_ACT_LAVA_DEATH is ALSO 100 and OBJ_ACT_DEATH_PLANE_DEATH is ALSO 101,
+# so an enemy walking into lava unaided reads as "attacked". No shipped
+# course pairs a watched enemy with lava close enough to matter; if a phantom
+# defeat is ever reported in LLL or BBH, this collision is the first suspect.
+OBJECT_ATTACKED_ACTIONS = frozenset({100, 101, 102})
+BOBOMB_ACT_EXPLODE = 3         # decomp object_constants.h, same fetch
 
 # Mario actions entered the moment a star (or key) is grabbed — decomp sm64.h.
 ACT_STAR_DANCE_EXIT = 0x00001302               # live-verified 2026-06-10
@@ -437,7 +487,31 @@ ACT_DISAPPEARED = 0x00001300       # generic "Mario left the world" (pipes, some
 # then KEEPS reading 0x1337 for well over a hundred frames, which is why
 # detectors/anchors.py keys on fade-out RECENCY rather than on the action.
 ACT_TELEPORT_FADE_OUT = 0x00001336  # teleporter/cap-warp fade; also fires for in-level teleporters elsewhere
-WARP_ENTRY_ACTIONS = frozenset({ACT_DISAPPEARED, ACT_TELEPORT_FADE_OUT})
+# THE BIG BOO'S HAUNT CAGE — the one course entrance that fires neither of
+# the two actions above (his probe run, 2026-08-07: five entrances produced
+# clean touches, BBH produced nothing). The cage plays its own two-action
+# animation: ENTER_JUMP then ENTER_SPIN 14 frames later, level byte +74/-75
+# after the jump on both measured entries — so the JUMP is the commit moment,
+# the same role ACT_DISAPPEARED plays at a painting, and the fade constant
+# (~74) is a painting's (~77) almost exactly. Verified against decomp
+# include/sm64.h 2026-08-07, same fetch returning ACT_IN_CANNON,
+# ACT_DISAPPEARED and ACT_TELEPORT_FADE_OUT byte-identical (the version
+# check the cannon constant passed).
+#
+# ACT_BBH_ENTER_SPIN (0x00001535) is deliberately NOT in the set: it is the
+# second action of the pair, and the one his second probe run also caught in
+# a LEAVING window (level 4 -> 6, d_frame -149). That sighting is the
+# entry's own tail, not an exit signal — a quick enter-then-menu-warp-out
+# puts the spin at exactly -(89+60) inside the probe's 150-frame lookback
+# while the jump at -163 falls just outside it, which is why only the spin
+# appeared — but the edge into the JUMP alone is sufficient and unambiguous,
+# so the set takes only the commit moment.
+# VERIFY (live gate): entering BBH through the cage journals a warp_entered
+# with to=4, ~74 frames before the level byte.
+ACT_BBH_ENTER_JUMP = 0x00001934
+ACT_BBH_ENTER_SPIN = 0x00001535     # named so its EXCLUSION is explicit
+WARP_ENTRY_ACTIONS = frozenset({ACT_DISAPPEARED, ACT_TELEPORT_FADE_OUT,
+                                ACT_BBH_ENTER_JUMP})
 
 # Spawn actions — same decomp fetch. Live-verified 2026-06-12:
 # - FRESH file start: ACT_INTRO_CUTSCENE plays through Lakitu's dialogue;

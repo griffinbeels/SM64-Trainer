@@ -66,15 +66,35 @@ rather than the whole [[star]]. A subsection IS a [[segment]], and names the
 
 ### Moment
 
-Something Mario does that a [[subsection]] can start or end on — opening a
-door, triggering a textbox, grabbing a pole or a tree, picking up a bob-omb.
-The [[detector]] reads Mario's own action rather
-than where he stands, which is why a [[subsection]] begins and ends inside one
-course where every other trigger needs him to travel. It records whenever you
-play, with or without a [[target]] set: the [[segment recorder]] exists to let
-you point at what you just did, and you do the thing before you name it.
+Something the player does that a [[subsection]] can start or end on — opening
+a door, triggering a textbox, grabbing a pole or a tree, picking up a bob-omb,
+pressing a switch, defeating an enemy. Most kinds read Mario's own action; a
+[[caused moment]] reads the object he acted on instead. Either way a moment
+happens inside one course, which is why a [[subsection]] begins and ends where
+every other trigger needs him to travel. It records whenever you play, with or
+without a [[target]] set: the [[segment recorder]] exists to let you point at
+what you just did, and you do the thing before you name it.
 
 - **Lives** — the moment registry (`src/sm64_events/detectors/moment.py`)
+
+### Caused moment
+
+A [[moment]] the player caused without Mario's own action saying so — pressing
+a blue coin switch, defeating a goomba or a bob-omb. The switch presses itself
+by watching Mario's position, and an enemy records its defeat on itself, so
+the [[detector]] reads the object's state out of the game's object list
+instead of Mario's action. Every one still names its [[landmark]] — WHICH switch, WHICH
+goomba — and speaks through the same sentence a door does. Which objects may
+fire one, and the measured rule for each, is one registry row; a new object
+kind earns its row with a capture from the pool probe, never from reading the
+game's source alone.
+
+- **Lives** — the caused-moment detector
+  (`src/sm64_events/detectors/caused.py`), its registry
+  (`src/sm64_events/memory/addresses.py`)
+- **Not** — a health change. The game arms an object's hitbox when Mario
+  comes near, which reads as a health write; a defeat is the object entering
+  its own defeat action.
 
 ### Landmark
 
@@ -329,10 +349,11 @@ x-cam starts rather than when the game finishes writing its own result.
 
 ### Entrance touch
 
-The [[frame]] Mario collides with the painting, portal, hole or pipe that
+The [[frame]] Mario commits to the painting, portal, hole, pipe or cage that
 leads into a course. The game loads that course 77 [[frame]]s later — 23 at a
-pipe — so a [[segment]] measured to the load counts the fade as travelling.
-The trainer ends a movement at the touch instead.
+pipe, 74 at Big Boo's Haunt's cage, whose entering jump is the commit — so a
+[[segment]] measured to the load counts the fade as travelling. The trainer
+ends a movement at the touch instead.
 
 - **Lives** — the warp detector (`src/sm64_events/detectors/warp.py`)
 - **Not** — the [[frame]] the course loads. A painting or portal records where

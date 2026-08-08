@@ -24,9 +24,9 @@ uv run python -m sm64_events.main                    # run from repo root (data/
 uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM)
 uv run python tools/verify_death_clock.py            # live gate, ANSWERED 2026-08-01 (raw counter); re-run only to re-check
 uv run python tools/probe_warp_block.py              # live gate, ANSWERED 2026-08-05: a painting writes sWarpDest AT the touch, a pipe 20 frames later (read-only, safe beside a live session)
-uv run python tools/probe_warp_block.py --entries    # live gate, OPEN (round 10): for an entrance that fires NO touch (Big Boo's Haunt cage) -- triggers on the LEVEL CHANGE and prints the run-up, naming the action to watch
+uv run python tools/probe_warp_block.py --entries    # live gate, ANSWERED 2026-08-07: the BBH cage's own ACT_BBH_ENTER_JUMP is the commit moment (+74 to the level byte) and ships in WARP_ENTRY_ACTIONS; re-run only for a future entrance that fires no touch
 uv run python tools/probe_objects.py                 # live gate, ANSWERED 2026-08-05: WHICH door/pole/enemy is its SPAWN POINT, not its pool slot; --report lists the distinct things touched (read-only, safe beside a live session)
-uv run python tools/probe_objects.py --pool          # live gate, OPEN (round 10): what the PLAYER CAUSED, read off the whole object pool (oInteractStatus/oAction/oHealth) rather than off Mario's own pointers -- the switch he pounds never reaches those (read-only, safe beside a live session)
+uv run python tools/probe_objects.py --pool          # live gate, ANSWERED 2026-08-07 (1,386 changes): oAction is THE signal, oHealth is proximity noise -- detectors/caused.py ships on it; re-run to earn a NEW behaviour its CAUSED_BEHAVIOURS row (read-only, safe beside a live session)
 uv run python tools/verify_star_stop.py              # live gate, ANSWERED 2026-08-01: the screen is Usamune's RESULT store once it SETTLES (10/10)
 uv run python tools/derive_xcam.py                   # live gate, ANSWERED + now the REGRESSION gate: scores what we journal against Usamune (just play; MIDAIR grabs are the ones that measure)
 uv run python tools/score_moment_clock.py            # a door writes no Usamune result, so ONE screenshot of the emulator is the ground truth: --usamune 1'06"83 names the row and the offset from the RAW COUNTER (comparable across any flip of the constant)
