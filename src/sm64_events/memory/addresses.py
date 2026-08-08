@@ -513,6 +513,12 @@ ACT_TELEPORT_FADE_OUT = 0x00001336  # teleporter/cap-warp fade; also fires for i
 # exit signal", which was never the right question.)
 ACT_BBH_ENTER_JUMP = 0x00001934
 ACT_BBH_ENTER_SPIN = 0x00001535
+# The pair exists ONLY for the boo cage (decomp interact_bbh_entrance), so
+# the ACTION names the destination — no address read can, since the cage
+# writes no sWarpDest before the edge. warp.py publishes `to = BBH_LEVEL`
+# the moment the SPIN is observed (round 13 item 1).
+BBH_LEVEL = 4
+BBH_ENTER_ACTIONS = frozenset({ACT_BBH_ENTER_JUMP, ACT_BBH_ENTER_SPIN})
 WARP_ENTRY_ACTIONS = frozenset({ACT_DISAPPEARED, ACT_TELEPORT_FADE_OUT,
                                 ACT_BBH_ENTER_JUMP, ACT_BBH_ENTER_SPIN})
 

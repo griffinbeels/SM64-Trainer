@@ -107,7 +107,9 @@ from sm64_events.core.landmark import landmark_at
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.core.timefmt import format_igt
 from sm64_events.detectors.igt_clock import IgtClock
-from sm64_events.memory.addresses import WARP_ENTRY_ACTIONS
+from sm64_events.memory.addresses import (ACT_BBH_ENTER_SPIN,
+                                          BBH_ENTER_ACTIONS, BBH_LEVEL,
+                                          WARP_ENTRY_ACTIONS)
 
 
 def _destination(snapshot: GameSnapshot) -> tuple[int, int, int, int]:
@@ -120,6 +122,10 @@ _UNSEEN = object()   # engagement never observed -- distinct from "nothing held"
 
 class WarpDetector:
     HOLD_CAP_FRAMES = 240
+    # The ceiling on the cage-animation deferral below — 4x the cap, far past
+    # any real entry (the longest observed, his paused one, ran 482 frames)
+    # while still guaranteeing a lingering action byte cannot strand a touch.
+    HOLD_ABSOLUTE_CAP_FRAMES = 960
     FRESH_WINDOW_FRAMES = 4
     # The engaged-object pointer LINGERS: it holds the last thing Mario
     # interacted with until something else overwrites it, and a painting or
@@ -237,6 +243,11 @@ class WarpDetector:
                       "wall_time_utc": curr.wall_time_utc}
         if self._destination_is_live(curr):
             return self._publish(curr.warp_dest_level)
+        # A rollout enters the cage airborne and its FIRST action is the
+        # SPIN — the commit is on this very tick (see _release's spin
+        # branch for the whole argument).
+        if curr.mario_action == ACT_BBH_ENTER_SPIN:
+            return self._publish(BBH_LEVEL)
         return []
 
     def _release(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
@@ -257,13 +268,32 @@ class WarpDetector:
                 held["landmark"] = found.payload()
         if self._destination_is_live(curr):
             return self._publish(curr.warp_dest_level)
+        # THE CAGE'S SPIN NAMES ITS OWN DESTINATION (round 13 item 1). The
+        # BBH pair exists only for the boo cage, so the ACTION is the
+        # destination and waiting for the level byte (+74) put the row on
+        # screen as BBH loaded — *"the 'entered a boo cage' doesn't appear
+        # until after i enter BBH"*, his second round on this surface. The
+        # SPIN rather than the JUMP: the jump can still be walked away from
+        # via the pause menu (his journal has one), the spin is the
+        # animation's own commit, and a rollout entry opens ON the spin.
+        if curr.mario_action == ACT_BBH_ENTER_SPIN:
+            return self._publish(BBH_LEVEL)
         if curr.curr_level != prev.curr_level:
             return self._publish(curr.curr_level)
         if curr.curr_area != prev.curr_area:
             return self._publish(curr.curr_level)
         if curr.global_timer < held["frame"]:
             return self._publish(None)
-        if curr.global_timer - held["frame"] >= self.HOLD_CAP_FRAMES:
+        elapsed = curr.global_timer - held["frame"]
+        # The cap DEFERS while the cage animation is visibly still playing
+        # (his 16 s entry: jump, pause menu open past the cap, unpause, spin
+        # — the old cap published `to: None` mid-pause and the REAL entry
+        # then had no held touch left to name). Bounded absolutely so a
+        # lingering action byte can never hold a touch forever.
+        if curr.mario_action in BBH_ENTER_ACTIONS \
+                and elapsed < self.HOLD_ABSOLUTE_CAP_FRAMES:
+            return []
+        if elapsed >= self.HOLD_CAP_FRAMES:
             return self._publish(None)
         return []
 

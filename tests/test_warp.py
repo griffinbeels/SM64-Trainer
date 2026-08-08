@@ -339,15 +339,17 @@ def test_the_bbh_cage_is_an_entrance_like_any_painting():
     jump = snap(global_timer=2001, curr_level=26,
                 mario_action=ACT_BBH_ENTER_JUMP)
     assert detector.process(prev, jump) == [], "held until it knows where"
+    # ROUND 13 ITEM 1: the row published at the level edge (+74), which is
+    # the moment BBH starts LOADING — "the 'entered a boo cage' doesn't
+    # appear until after i enter BBH". The pair exists only for the boo
+    # cage, so the SPIN names the destination itself and the row lands ~60
+    # frames earlier, while he is still in the courtyard.
     spin = snap(global_timer=2015, curr_level=26,
                 mario_action=ACT_BBH_ENTER_SPIN)
-    assert detector.process(jump, spin) == [], "the pair is ONE touch"
-    arrived = snap(global_timer=2075, curr_level=4,
-                   mario_action=ACT_BBH_ENTER_SPIN)
-    events = detector.process(spin, arrived)
+    events = detector.process(jump, spin)
     assert len(events) == 1
     assert events[0].type == "warp_entered"
-    assert events[0].frame == 2001, "the moment is the jump, not the load"
+    assert events[0].frame == 2001, "the moment is the jump, not the spin"
     assert events[0].payload["to"] == 4
     assert events[0].payload["level"] == 26
 
@@ -356,21 +358,65 @@ def test_an_airborne_cage_entry_fires_at_the_spin():
     """Round 12, his first real entry: a ROLLOUT into the cage is airborne,
     and `interact_bbh_entrance` sends an airborne Mario STRAIGHT to
     ENTER_SPIN — no jump ever occurs (journal id 3708: the arrival anchor
-    latched 0x1535, and no warp row exists before the 26→4 edge). A
-    jump-only set recorded nothing for exactly the entry he made. The spin's
-    own edge is the commit moment when it comes first."""
+    latched 0x1535, and no warp row exists before the 26→4 edge). The spin
+    IS the commit, so the row publishes on its own tick (round 13 item 1)."""
     detector = WarpDetector()
     prev = snap(global_timer=2000, curr_level=26)          # rolled out: airborne
     spin = snap(global_timer=2001, curr_level=26,
                 mario_action=ACT_BBH_ENTER_SPIN)
-    assert detector.process(prev, spin) == [], "held until it knows where"
-    arrived = snap(global_timer=2061, curr_level=4,
-                   mario_action=ACT_BBH_ENTER_SPIN)
-    events = detector.process(spin, arrived)
+    events = detector.process(prev, spin)
     assert len(events) == 1
     assert events[0].frame == 2001, "the moment is the spin's own edge"
     assert events[0].payload["to"] == 4
     assert events[0].payload["level"] == 26
+
+
+def test_a_cage_entry_paused_past_the_cap_still_names_bbh():
+    """His journal, 2026-08-08 (id 4081): jump, pause menu open for ~16
+    seconds, unpause, spin, edge at +482. The old cap published `to: None`
+    mid-pause and the REAL entry then had no held touch left — one of his
+    two BBH entries that evening recorded as a warp to nowhere. While the
+    cage animation is visibly still playing the cap defers (bounded by the
+    absolute cap), and the spin then names BBH as usual."""
+    detector = WarpDetector()
+    detector.process(snap(global_timer=2000, curr_level=26),
+                     snap(global_timer=2001, curr_level=26,
+                          mario_action=ACT_BBH_ENTER_JUMP))
+    for offset in range(2, 470):    # paused: the byte holds the jump
+        held_still = detector.process(
+            snap(global_timer=2000 + offset - 1, curr_level=26,
+                 mario_action=ACT_BBH_ENTER_JUMP),
+            snap(global_timer=2000 + offset, curr_level=26,
+                 mario_action=ACT_BBH_ENTER_JUMP))
+        assert held_still == [], f"published at +{offset}, mid-animation"
+    events = detector.process(
+        snap(global_timer=2469, curr_level=26,
+             mario_action=ACT_BBH_ENTER_JUMP),
+        snap(global_timer=2470, curr_level=26,
+             mario_action=ACT_BBH_ENTER_SPIN))
+    assert len(events) == 1
+    assert events[0].payload["to"] == 4
+    assert events[0].frame == 2001, "the touch is still the jump's frame"
+
+
+def test_a_walked_away_cage_jump_still_caps_to_nowhere():
+    """The abort is real (his journal has one): a jump the pause menu warps
+    away from never spins, the action byte stops reading the pair, and the
+    cap fires exactly as before — `to: None`, never a fabricated BBH entry."""
+    detector = WarpDetector()
+    detector.process(snap(global_timer=2000, curr_level=26),
+                     snap(global_timer=2001, curr_level=26,
+                          mario_action=ACT_BBH_ENTER_JUMP))
+    events = []
+    for offset in range(2, 400):    # menu-warped away: byte back to idle
+        events = detector.process(
+            snap(global_timer=2000 + offset - 1, curr_level=26),
+            snap(global_timer=2000 + offset, curr_level=26))
+        if events:
+            break
+    assert len(events) == 1
+    assert events[0].payload["to"] is None
+    assert offset <= WarpDetector.HOLD_CAP_FRAMES + 1
 
 
 def test_the_touch_carries_WHICH_warp_it_was():

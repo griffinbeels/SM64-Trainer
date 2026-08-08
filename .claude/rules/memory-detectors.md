@@ -301,6 +301,24 @@ such a row were measured over the real journal and both are wrong: refusing it
 vanishes 54 of 106 recorded segment successes, waving it through fabricates
 105.
 
+**THE CAGE'S SPIN NAMES ITS OWN DESTINATION — round 13 item 1, 2026-08-08.**
+Round 12 published the cage at the level edge (+74), which put the row on
+screen exactly as BBH loaded — *"the 'entered a boo cage' doesn't appear
+until after i enter BBH"*, his second round on this surface, and a
+perceivable hold is a defect by his standing rule. The BBH pair exists only
+for the boo cage (decomp `interact_bbh_entrance`), so the ACTION names the
+destination: `warp.py` publishes `to = BBH_LEVEL` the moment the SPIN is
+observed — the animation's own commit, ~60 frames earlier, while he still
+stands in the courtyard; a rollout entry opens ON the spin and publishes on
+its own tick. The JUMP deliberately does not publish: his journal holds a
+jump the pause menu walked away from, and that shape still caps to
+`to: None`, never a fabricated entry. The HOLD CAP also DEFERS while the
+cage animation is visibly still playing, bounded by
+`HOLD_ABSOLUTE_CAP_FRAMES` (4x) — his 16 s paused entry (id 4081: jump,
+pause past the cap, unpause, spin, edge at +482) used to consume the held
+touch mid-pause as `to: None` and the REAL entry then recorded nothing.
+All four shapes pinned in `test_warp.py`.
+
 **AN ENTRANCE CAN FIRE NO GENERIC WARP ACTION, and Big Boo's Haunt is the
 one — ANSWERED and SHIPPED 2026-08-07 (round 11 item 4).** His probe runs:
 five entrances produced clean touches — 2 paintings (`sWarpDest` at +0, level
