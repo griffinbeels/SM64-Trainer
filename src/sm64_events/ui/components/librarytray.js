@@ -164,7 +164,7 @@ function GridTile({ item, restartNonce }) {
             allow="autoplay; encrypted-media" allowfullscreen></iframe>`
         : src && src.kind === "file"
           ? html`<video key=${`${item.key}::${restartNonce}`} class="library-example-thumb"
-              src=${src.embed} controls preload="metadata"></video>`
+              src=${src.embed} controls muted preload="metadata"></video>`
         : src && src.thumb
           ? html`<img class="library-example-thumb" src=${src.thumb} alt="" loading="lazy" />`
           : html`<div class="library-example-thumb library-example-placeholder">

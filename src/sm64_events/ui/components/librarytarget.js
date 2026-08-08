@@ -177,7 +177,7 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd 
   function media() {
     if (src.kind === "file") {
       return html`<video class="library-example-thumb" src=${src.embed}
-          controls preload="metadata" title=${label}></video>`;
+          controls muted preload="metadata" title=${label}></video>`;
     }
     if (src.kind === "image") {
       return html`<img class="library-example-thumb" src=${src.thumb} alt=${label}
@@ -263,6 +263,15 @@ function PlainEntry({ entry, tier, division }) {
 function DivisionGroup({ approach, band, division, query, isYou, trayKeys, entityKey, onAdd }) {
   const [open, setOpen] = useState(false);
   const visible = division.entries.filter((entry) => matchesRunner(entry, query));
+  // ROUND 4: a live query filters the STRUCTURE, not just the cards --
+  // "hide the subdivisions / ranks that don't show up for the search ...
+  // and open any dropdowns to show it". A subdivision with no match
+  // disappears; one with matches is FORCED open for the query's duration.
+  // The manual open/closed choice survives underneath (`open` still
+  // toggles) and returns the moment the query clears.
+  const searching = !!query;
+  if (searching && !visible.length) return null;
+  const effectiveOpen = searching || open;
   const label = `${capName(band.tier)} ${divisionDigit(division.numeral)}`;
   // Round 3: every boundary number is DISTINCT (the fast end is exclusive,
   // one centisecond slower than the next unit's own slow end -- see
@@ -287,8 +296,8 @@ function DivisionGroup({ approach, band, division, query, isYou, trayKeys, entit
   }
   const withVideo = visible.filter((entry) => entry.video);
   const plain = visible.filter((entry) => !entry.video);
-  return html`<div class="library-division ${open ? "open" : ""}">
-    <button type="button" class="library-division-head" aria-expanded=${open}
+  return html`<div class="library-division ${effectiveOpen ? "open" : ""}">
+    <button type="button" class="library-division-head" aria-expanded=${effectiveOpen}
         onclick=${() => setOpen((prev) => !prev)}>
       <span class="library-division-label">
         <span class="rank-icon-slot" style="--icon-size: 18px">
@@ -302,7 +311,7 @@ function DivisionGroup({ approach, band, division, query, isYou, trayKeys, entit
       </span>
       <${Icon} name="chevron" size=${14} className="library-division-chevron" />
     </button>
-    <${Disclose} open=${open} className="library-division-disclose">
+    <${Disclose} open=${effectiveOpen} className="library-division-disclose">
       <div class="library-division-body">
         ${withVideo.length ? html`<div class="library-examples">
           ${withVideo.map((entry) => {
@@ -399,6 +408,12 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
     : (approach.entries || [])), [approach.entries, versioned, version]);
   const bands = useMemo(() => bandsOf(ladder, visibleEntries),
     [ladder, visibleEntries]);
+  // ROUND 4: a live query hides every band with no matching runner -- TOC
+  // row and band section both -- so the page shows "only the actual
+  // results". The full structure returns when the query clears.
+  const shownBands = query
+    ? bands.filter((band) => band.entries.some((entry) => matchesRunner(entry, query)))
+    : bands;
   const marioKey = approach.ladder && approach.ladder.Mario != null
     ? approach.ladder.Mario : -1;   // presentational echo of sectionOrder's own key; -1 (not -Infinity) so it survives JSON round-trips a render probe takes
 
@@ -462,13 +477,13 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
             </span>`
           : ""}
         <table class="library-toc"><tbody>
-          ${bands.map((band) => html`<${TocRow} key=${bandAnchorId(approach, band.tier || "unranked")} band=${band}
+          ${shownBands.map((band) => html`<${TocRow} key=${bandAnchorId(approach, band.tier || "unranked")} band=${band}
               count=${band.entries.filter((entry) => matchesRunner(entry, query)).length}
               you=${stratInfo && stratInfo.rank === band.tier ? stratInfo : null}
               onJump=${() => document.getElementById(bandAnchorId(approach, band.tier || "unranked"))
                 ?.scrollIntoView({ block: "start", behavior: "smooth" })} />`)}
         </tbody></table>
-        ${bands.map((band) => html`<div class="library-band" key=${bandAnchorId(approach, band.tier || "unranked")}
+        ${shownBands.map((band) => html`<div class="library-band" key=${bandAnchorId(approach, band.tier || "unranked")}
             data-tier=${band.tier || "unranked"} id=${bandAnchorId(approach, band.tier || "unranked")}>
           <div class="library-band-head">
             ${band.tier ? html`<span class="rank-icon-slot" style="--icon-size: 18px">

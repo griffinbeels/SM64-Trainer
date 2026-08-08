@@ -318,7 +318,9 @@ export function youtubeEmbed(url, startS) {
   if (!id) return null;
   const m = (url || "").match(/[?&]t=(\d+)/);
   const start = Math.floor(startS != null ? startS : (m ? +m[1] : 0));
-  return `https://www.youtube-nocookie.com/embed/${id}?start=${start}&enablejsapi=1`;
+  // mute=1 (round 4): every player that can start muted does -- and this is
+  // the ONE door for YouTube embeds, so the tray's vibes grid inherits it.
+  return `https://www.youtube-nocookie.com/embed/${id}?start=${start}&mute=1&enablejsapi=1`;
 }
 
 // ---------------------------------------------------------------------------
@@ -343,11 +345,11 @@ export function videoSource(url, parentHost) {
   if ((match = url.match(/clips\.twitch\.tv\/([\w-]+)/))
       || (match = url.match(/twitch\.tv\/\w+\/clip\/([\w-]+)/))) {
     return { kind: "twitch-clip", site: "Twitch", thumb: null,
-             embed: `https://clips.twitch.tv/embed?clip=${match[1]}&parent=${host}&autoplay=false` };
+             embed: `https://clips.twitch.tv/embed?clip=${match[1]}&parent=${host}&autoplay=false&muted=true` };
   }
   if ((match = url.match(/twitch\.tv\/videos\/(\d+)/))) {
     return { kind: "twitch", site: "Twitch", thumb: null,
-             embed: `https://player.twitch.tv/?video=${match[1]}&parent=${host}&autoplay=false` };
+             embed: `https://player.twitch.tv/?video=${match[1]}&parent=${host}&autoplay=false&muted=true` };
   }
   if ((match = url.match(/(?:x|twitter|vxtwitter|fxtwitter)\.com\/\w+\/status\/(\d+)/))) {
     return { kind: "tweet", site: "X", thumb: null,
@@ -367,7 +369,7 @@ export function videoSource(url, parentHost) {
   }
   if ((match = url.match(/streamable\.com\/(?:e\/)?(\w+)/))) {
     return { kind: "streamable", site: "Streamable", thumb: null,
-             embed: `https://streamable.com/e/${match[1]}` };
+             embed: `https://streamable.com/e/${match[1]}?muted=1` };
   }
   if ((match = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/))) {
     return { kind: "gdrive", site: "Google Drive", thumb: null,

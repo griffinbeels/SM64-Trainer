@@ -190,6 +190,16 @@ def test_video_source_names_a_player_for_every_format_in_the_census():
     twitch = run_js("m.videoSource('https://www.twitch.tv/videos/123', '127.0.0.1')")
     assert "parent=127.0.0.1" in twitch["embed"]
     assert run_js("m.videoSource(null, 'x')") is None
+    # Round 4: every player that can start muted does. X/Bluesky/Drive
+    # expose no mute knob (X already autoplays muted by browser policy);
+    # native <video> carries the `muted` attribute component-side.
+    assert "muted=true" in twitch["embed"]
+    clip = run_js("m.videoSource('https://clips.twitch.tv/Slug-abc', '127.0.0.1')")
+    assert "muted=true" in clip["embed"]
+    streamable = run_js("m.videoSource('https://streamable.com/abc123', 'x')")
+    assert "muted=1" in streamable["embed"]
+    yt = run_js("m.youtubeEmbed('https://youtu.be/abc123XYZ_-', null)")
+    assert "mute=1" in yt
 
 
 def test_grid_shapes():

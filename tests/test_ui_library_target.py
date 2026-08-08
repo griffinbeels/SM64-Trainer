@@ -117,6 +117,59 @@ def test_auto_open_follows_the_active_strategy_not_the_first_section(library_pag
     assert opened == "Fall onto the Caged Island", opened
 
 
+def test_search_filters_the_structure_and_opens_the_hits(library_page):
+    """Round 4: "hide the subdivisions / ranks that don't show up for the
+    search ... and open any dropdowns to show it." Searches a runner the
+    fixture actually carries (read off the page, never hard-coded), then
+    asserts every REMAINING band and subdivision holds a match and every
+    remaining subdivision is open -- no manual expansion anywhere."""
+    runner = library_page.evaluate("""
+      (() => {
+        const heads = document.querySelectorAll(
+          '.library-section.open .library-division-head');
+        if (heads.length) heads[0].click();
+        return null;
+      })()
+    """)
+    library_page.wait_for(
+        ".library-section.open .library-example-runner, "
+        ".library-section.open .library-plain-runner", timeout_ms=10000)
+    runner = library_page.evaluate(
+        "(document.querySelector('.library-section.open .library-example-runner')"
+        " || document.querySelector('.library-section.open .library-plain-runner'))"
+        ".textContent.trim()")
+    assert runner
+    library_page.evaluate(
+        f"document.querySelector('.library-target-search').value = {runner!r}")
+    library_page.evaluate(
+        "document.querySelector('.library-target-search')"
+        ".dispatchEvent(new Event('input', {bubbles: true}))")
+    result = library_page.evaluate(f"""
+      (() => {{
+        const open = document.querySelector('.library-section.open');
+        const bands = Array.from(open.querySelectorAll('.library-band'));
+        const divisions = Array.from(open.querySelectorAll('.library-division'));
+        const matches = (root) => Array.from(root.querySelectorAll(
+          '.library-example-runner, .library-plain-runner'))
+          .filter((el) => el.textContent.toLowerCase()
+            .includes({runner!r}.toLowerCase())).length;
+        return {{
+          bands: bands.length,
+          bandsWithoutMatch: bands.filter((b) => matches(b) === 0).length,
+          divisions: divisions.length,
+          divisionsClosed: divisions.filter((d) =>
+            !d.classList.contains('open')).length,
+          emptyRows: open.querySelectorAll('.library-division.is-empty').length,
+          totalMatches: matches(open),
+        }};
+      }})()
+    """)
+    assert result["totalMatches"] > 0, result           # anti-vacuity
+    assert result["bands"] > 0 and result["bandsWithoutMatch"] == 0, result
+    assert result["divisions"] > 0 and result["divisionsClosed"] == 0, result
+    assert result["emptyRows"] == 0, result
+
+
 def test_clicking_the_open_sections_head_closes_it(library_page):
     """Round 3: "we should be able to fully collapse all of them" -- the
     single-open accordion allowed zero-open on mount but never by gesture."""
