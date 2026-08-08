@@ -115,23 +115,67 @@ def _destination(snapshot: GameSnapshot) -> tuple[int, int, int, int]:
             snapshot.warp_dest_area, snapshot.warp_dest_node)
 
 
+_UNSEEN = object()   # engagement never observed -- distinct from "nothing held"
+
+
 class WarpDetector:
     HOLD_CAP_FRAMES = 240
     FRESH_WINDOW_FRAMES = 4
+    # The engaged-object pointer LINGERS: it holds the last thing Mario
+    # interacted with until something else overwrites it, and a painting or
+    # an in-level teleporter is level geometry that never does. Measured in
+    # his own journal (2026-08-08, round 12 items 5+6): three CCM painting
+    # entries each carried the LOBBY DOOR he had opened 38 frames earlier
+    # (ids 3908/3933/3943), so the entrance row's rename pencil edited the
+    # door -- "it ended up renaming the CCM door segment". A landmark is
+    # therefore taken only when the engagement CHANGED within
+    # ENGAGE_FRESH_FRAMES of the touch (an interaction writes the pointer on
+    # the touch frame itself), and a held publish may still ADOPT a change
+    # landing within ENGAGE_ADOPT_FRAMES after it -- the pointer lags the
+    # action byte by one poll (detectors/moment.py holds one poll for the
+    # same reason). Stale degrades to NO landmark, never a foreign name.
+    ENGAGE_FRESH_FRAMES = 4
+    ENGAGE_ADOPT_FRAMES = 6
 
     def __init__(self):
         self._clock = IgtClock()
         self._held: dict | None = None
         self._dest: tuple[int, int, int, int] | None = None
         self._dest_written_at: int | None = None
+        self._engaged = _UNSEEN
+        self._engaged_changed_at: int | None = None
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         if self._clock.empty():
             self._clock.observe(prev)
+        if self._engaged is _UNSEEN:
+            # Baseline from prev, same pattern as the clock's seed above: a
+            # touch on the very first pair is still a real CHANGE if prev was
+            # engaged with nothing, while a detector built mid-session reads
+            # whatever the pointer already held as unstamped -- i.e. stale,
+            # the safe direction (mirrors _watch_destination's first-value
+            # rule).
+            self._observe_engagement(prev)
+        self._observe_engagement(curr)
         self._watch_destination(curr)
         events = self._release(prev, curr) + self._touch(prev, curr)
         self._clock.observe(curr)
         return events
+
+    def _observe_engagement(self, snapshot: GameSnapshot) -> None:
+        """Stamp the frame the engaged-object pointer last RETARGETED.
+
+        Identity is (behaviour, where) -- the same coordinate the landmark is
+        keyed by -- not the live position, which moves every frame on a
+        carried bob-omb and would read as perpetually fresh."""
+        found = landmark_at(snapshot)
+        identity = None if found is None else (found.behaviour, found.where)
+        if self._engaged is _UNSEEN:
+            self._engaged = identity
+            return
+        if identity != self._engaged:
+            self._engaged = identity
+            self._engaged_changed_at = snapshot.global_timer
 
     def _watch_destination(self, curr: GameSnapshot) -> None:
         """Stamp the frame `sWarpDest` last changed — the freshness test.
@@ -174,7 +218,18 @@ class WarpDetector:
         # renamed (2026-08-06: every `warp_entered` in the journal carried
         # `landmark: null`, because the landmark work reached moments and
         # never reached warps).
+        #
+        # Taken ONLY when the engagement is FRESH — see ENGAGE_FRESH_FRAMES
+        # above. A pipe's own interaction writes the pointer at (or one poll
+        # after) the touch; a painting writes nothing, and reading the
+        # lingering pointer anyway is how three CCM entries wore the lobby
+        # door's key. A late write is adopted in _release.
         found = landmark_at(curr)
+        fresh = (found is not None
+                 and self._engaged_changed_at is not None
+                 and 0 <= curr.global_timer - self._engaged_changed_at
+                 <= self.ENGAGE_FRESH_FRAMES)
+        found = found if fresh else None
         self._held = {"frame": curr.global_timer, "level": curr.curr_level,
                       "area": curr.curr_area, "action": curr.mario_action,
                       "igt_frames": igt_frames, "igt_source": source,
@@ -188,6 +243,18 @@ class WarpDetector:
         held = self._held
         if held is None:
             return []
+        # The one-poll-late engagement write: a pipe's object can land in the
+        # pointer on the tick AFTER the action edge (the same lag
+        # detectors/moment.py holds a poll for). A touch that read nothing
+        # adopts a retarget landing just after it; anything later is the
+        # destination's own spawn machinery and stays out.
+        if (held["landmark"] is None
+                and self._engaged_changed_at is not None
+                and held["frame"] < self._engaged_changed_at
+                <= held["frame"] + self.ENGAGE_ADOPT_FRAMES):
+            found = landmark_at(curr)
+            if found is not None:
+                held["landmark"] = found.payload()
         if self._destination_is_live(curr):
             return self._publish(curr.warp_dest_level)
         if curr.curr_level != prev.curr_level:

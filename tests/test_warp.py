@@ -401,3 +401,46 @@ def test_a_touch_that_engages_nothing_names_nothing():
     assert detector.process(snap(), touching) == []
     [event] = land(detector, touching)
     assert event.payload["landmark"] is None
+
+
+def test_a_stale_engagement_is_not_the_touched_warp():
+    """The engaged-object pointer LINGERS, and a painting never writes it —
+    so a painting touch used to inherit the last thing Mario interacted with.
+    His journal, 2026-08-08 (round 12 items 5+6): three CCM painting entries
+    each carried the LOBBY DOOR opened 38 frames earlier (ids 3908/3933/3943),
+    and the entrance row's rename pencil therefore edited the door. An
+    engagement that predates the touch by more than ENGAGE_FRESH_FRAMES is
+    someone else's landmark; the row degrades to None instead."""
+    detector = WarpDetector()
+    door = dict(landmark_behaviour=0x800EBC8C,
+                landmark_home=(-2303.0, 0.0, -1074.0))
+    opened = snap(global_timer=2000, curr_level=6, **door)
+    detector.process(snap(global_timer=1999, curr_level=6), opened)
+    idle = snap(global_timer=2037, curr_level=6, **door)
+    detector.process(opened, idle)
+    touching = snap(global_timer=2038, curr_level=6,
+                    mario_action=ACT_DISAPPEARED, **door)
+    assert detector.process(idle, touching) == []
+    [event] = land(detector, touching, to=5)
+    assert event.payload["landmark"] is None, (
+        "a 38-frame-old engagement is the door he opened, not the painting")
+
+
+def test_a_pipes_engagement_lands_one_poll_after_the_touch_and_is_adopted():
+    """The pointer lags the action byte by a read (the same lag
+    detectors/moment.py holds one poll for), and a pipe's publish waits ~20
+    frames anyway — a retarget landing just after the touch belongs to it."""
+    detector = WarpDetector()
+    detector.process(snap(global_timer=1999, curr_level=9),
+                     snap(global_timer=2000, curr_level=9))
+    touching = snap(global_timer=2001, curr_level=9,
+                    mario_action=ACT_DISAPPEARED)
+    assert detector.process(snap(global_timer=2000, curr_level=9),
+                            touching) == []
+    settled = snap(global_timer=2002, curr_level=9,
+                   mario_action=ACT_DISAPPEARED,
+                   landmark_behaviour=0x800EB900,
+                   landmark_home=(100.0, 0.0, 200.0))
+    assert detector.process(touching, settled) == []
+    [event] = land(detector, settled)
+    assert event.payload["landmark"]["key"] == "9:1:800eb900:100,0,200"
