@@ -489,29 +489,32 @@ ACT_DISAPPEARED = 0x00001300       # generic "Mario left the world" (pipes, some
 ACT_TELEPORT_FADE_OUT = 0x00001336  # teleporter/cap-warp fade; also fires for in-level teleporters elsewhere
 # THE BIG BOO'S HAUNT CAGE — the one course entrance that fires neither of
 # the two actions above (his probe run, 2026-08-07: five entrances produced
-# clean touches, BBH produced nothing). The cage plays its own two-action
-# animation: ENTER_JUMP then ENTER_SPIN 14 frames later, level byte +74/-75
-# after the jump on both measured entries — so the JUMP is the commit moment,
-# the same role ACT_DISAPPEARED plays at a painting, and the fade constant
-# (~74) is a painting's (~77) almost exactly. Verified against decomp
-# include/sm64.h 2026-08-07, same fetch returning ACT_IN_CANNON,
-# ACT_DISAPPEARED and ACT_TELEPORT_FADE_OUT byte-identical (the version
-# check the cannon constant passed).
+# clean touches, BBH produced nothing). The cage plays its own animation, and
+# WHICH action opens it depends on how Mario arrives — decomp
+# `interaction.c::interact_bbh_entrance`, fetched verbatim 2026-08-07:
+# `m->action & ACT_FLAG_AIR` → ENTER_SPIN directly, else ENTER_JUMP (which
+# then transitions into the spin). So the commit moment is the FIRST of the
+# pair to occur, which is what the edge INTO this set expresses with both
+# members present: a ground entry fires at the jump (jump → spin is in-set,
+# no second touch), an airborne entry fires at the spin. Level byte follows
+# the jump by +74/75 (both probe entries) — a painting's ~77 almost exactly.
+# Both values verified against decomp include/sm64.h, same fetch returning
+# ACT_IN_CANNON, ACT_DISAPPEARED and ACT_TELEPORT_FADE_OUT byte-identical.
 #
-# ACT_BBH_ENTER_SPIN (0x00001535) is deliberately NOT in the set: it is the
-# second action of the pair, and the one his second probe run also caught in
-# a LEAVING window (level 4 -> 6, d_frame -149). That sighting is the
-# entry's own tail, not an exit signal — a quick enter-then-menu-warp-out
-# puts the spin at exactly -(89+60) inside the probe's 150-frame lookback
-# while the jump at -163 falls just outside it, which is why only the spin
-# appeared — but the edge into the JUMP alone is sufficient and unambiguous,
-# so the set takes only the commit moment.
-# VERIFY (live gate): entering BBH through the cage journals a warp_entered
-# with to=4, ~74 frames before the level byte.
+# THE SPIN'S FIRST DAY OUT OF THE SET COST A LIVE ROUND (round 12). The
+# probe's two entries were both GROUND entries, so the jump looked like "the
+# commit moment" rather than "the ground half of a fork" — and his first
+# real entry was a ROLLOUT, airborne, so no jump edge ever occurred and the
+# entry recorded nothing: journal id 3708's arrival anchor latched action
+# 0x1535 with no warp row anywhere before the 26→4 edge. One live entry
+# falsified what two probe entries had agreed on. (The old exclusion
+# reasoning — a leaving-window 0x1535 sighting explained as the entry's own
+# probe tail — was correct as far as it went; it answered "is the spin an
+# exit signal", which was never the right question.)
 ACT_BBH_ENTER_JUMP = 0x00001934
-ACT_BBH_ENTER_SPIN = 0x00001535     # named so its EXCLUSION is explicit
+ACT_BBH_ENTER_SPIN = 0x00001535
 WARP_ENTRY_ACTIONS = frozenset({ACT_DISAPPEARED, ACT_TELEPORT_FADE_OUT,
-                                ACT_BBH_ENTER_JUMP})
+                                ACT_BBH_ENTER_JUMP, ACT_BBH_ENTER_SPIN})
 
 # Spawn actions — same decomp fetch. Live-verified 2026-06-12:
 # - FRESH file start: ACT_INTRO_CUTSCENE plays through Lakitu's dialogue;

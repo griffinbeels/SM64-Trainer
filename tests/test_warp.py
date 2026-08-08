@@ -329,11 +329,11 @@ def test_exit_from_warp_action_is_silent():
 def test_the_bbh_cage_is_an_entrance_like_any_painting():
     """The one course entrance that fires NO generic warp action (his probe
     run, 2026-08-07: five entrances produced clean touches, BBH produced
-    nothing). The cage plays its own pair — ENTER_JUMP then ENTER_SPIN 14
-    frames later, level byte at +74 — and the JUMP is the commit moment, so
-    the touch is its edge and `to` comes from the level edge exactly like a
-    struct-silent painting. Repairs `seg:ccm->bbh`, whose entrance_touched
-    end could never fire before this."""
+    nothing). A GROUND entry opens with ENTER_JUMP, transitions to
+    ENTER_SPIN, and the level byte follows at +74 — the touch is the jump's
+    edge, the pair is one touch, and `to` comes from the level edge exactly
+    like a struct-silent painting. Repairs `seg:ccm->bbh`, whose
+    entrance_touched end could never fire before this."""
     detector = WarpDetector()
     prev = snap(global_timer=2000, curr_level=26)          # the courtyard
     jump = snap(global_timer=2001, curr_level=26,
@@ -352,19 +352,25 @@ def test_the_bbh_cage_is_an_entrance_like_any_painting():
     assert events[0].payload["level"] == 26
 
 
-def test_the_spin_alone_is_not_a_touch():
-    """ACT_BBH_ENTER_SPIN is deliberately outside the entry set — it is the
-    second action of the pair, and the one a leaving-BBH probe window also
-    caught (addresses.py has the arithmetic). A spin with no jump before it
-    must not invent an entrance."""
+def test_an_airborne_cage_entry_fires_at_the_spin():
+    """Round 12, his first real entry: a ROLLOUT into the cage is airborne,
+    and `interact_bbh_entrance` sends an airborne Mario STRAIGHT to
+    ENTER_SPIN — no jump ever occurs (journal id 3708: the arrival anchor
+    latched 0x1535, and no warp row exists before the 26→4 edge). A
+    jump-only set recorded nothing for exactly the entry he made. The spin's
+    own edge is the commit moment when it comes first."""
     detector = WarpDetector()
-    prev = snap(global_timer=2000, curr_level=26)
+    prev = snap(global_timer=2000, curr_level=26)          # rolled out: airborne
     spin = snap(global_timer=2001, curr_level=26,
                 mario_action=ACT_BBH_ENTER_SPIN)
-    assert detector.process(prev, spin) == []
-    assert detector.process(
-        spin, snap(global_timer=2075, curr_level=4,
-                   mario_action=ACT_BBH_ENTER_SPIN)) == []
+    assert detector.process(prev, spin) == [], "held until it knows where"
+    arrived = snap(global_timer=2061, curr_level=4,
+                   mario_action=ACT_BBH_ENTER_SPIN)
+    events = detector.process(spin, arrived)
+    assert len(events) == 1
+    assert events[0].frame == 2001, "the moment is the spin's own edge"
+    assert events[0].payload["to"] == 4
+    assert events[0].payload["level"] == 26
 
 
 def test_the_touch_carries_WHICH_warp_it_was():
