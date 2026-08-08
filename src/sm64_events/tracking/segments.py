@@ -523,6 +523,20 @@ class SegmentDef:
     # creates is directly mappable from the community sheet with no bridge on
     # either side.
     parent: str | None = None
+    # WHEN THE CLOCK STARTS (round 15 item 3, his ruling): "trigger" times
+    # from the start trigger's own frame — every definition before
+    # 2026-08-08, and the honest default for existing rows — while "move"
+    # times from the moment Mario can actually MOVE in the section the
+    # trigger led into: *"it's DETECTED when the specific event occurs (e.g.,
+    # touching the CCM door), but the timer doesn't actually START until
+    # mario is able to finally move, aka when Usamune's timer actually
+    # resets to 0 when we go to the new section."* Mechanically the engine
+    # rebases the arm's clock to the counter zero the start caused (see
+    # CLOCK_START_WINDOW_FRAMES and _close); a "move" def whose start causes
+    # no section change times exactly like "trigger", because Mario never
+    # stopped being able to move. Defaulted for the same reason every field
+    # above is.
+    clock_start: str = "trigger"
 
 
 # `area:<level>` / `area:<level>:<subarea>` — a castle-area parent, the
@@ -1977,6 +1991,35 @@ MATCH_MODES = {
 }
 
 
+# WHEN THE CLOCK STARTS (round 15 item 3) — the builder renders these the way
+# it renders MATCH_MODES, and "move" sits FIRST because he ruled it the
+# default for new definitions: "I think generally most start triggers should
+# *actually* start timing when Mario's able to move, so this should be the
+# default." Existing rows keep "trigger" until the seeded-flip is priced with
+# numbers (retiming the corpus retimes his recorded history).
+CLOCK_STARTS = [
+    {
+        "key": "move",
+        "label": "When Mario can move",
+        "description": ("The start trigger DETECTS the attempt, but the "
+                        "clock starts when Mario can actually move in the "
+                        "section it led into — the moment Usamune's own "
+                        "timer resets to 0. Open the door, go through: the "
+                        "door animation and the fade cost nothing, and the "
+                        "recorded time matches what Usamune shows."),
+    },
+    {
+        "key": "trigger",
+        "label": "At the start trigger",
+        "description": ("The clock starts on the start trigger's own frame, "
+                        "fades and all — how every definition timed before "
+                        "the move clock existed, and what the seeded corpus "
+                        "still uses."),
+    },
+]
+_CLOCK_START_KEYS = frozenset(entry["key"] for entry in CLOCK_STARTS)
+
+
 def _check_clause(clause: dict, registry: dict, what: str) -> None:
     if not isinstance(clause, dict):
         raise ValueError(f"each clause in {what} must be a dict,"
@@ -2116,6 +2159,11 @@ def validate_definition(d: dict) -> None:
         raise ValueError(
             f"unknown match_mode {mode!r}; expected one of "
             f"{sorted(MATCH_MODES)}")
+    clock_start = d.get("clock_start", "trigger")
+    if clock_start not in _CLOCK_START_KEYS:
+        raise ValueError(
+            f"unknown clock_start {clock_start!r}; expected one of "
+            f"{sorted(_CLOCK_START_KEYS)}")
     guards = d.get("guards") or []
     if not isinstance(guards, list):
         raise ValueError("guards must be a list")
@@ -2156,6 +2204,9 @@ def vocab() -> dict:
         # position 0 stays loose.
         "match_modes": [MATCH_MODES["loose"], MATCH_MODES["strict"],
                         MATCH_MODES["exclusive"]],
+        # When the clock starts, "move" first — the default for NEW
+        # definitions (round 15 item 3, his ruling).
+        "clock_starts": CLOCK_STARTS,
         # The moment vocabulary a `moment_reached` clause's `kind` selects
         # from. Served rather than hard-coded in the builder for the same
         # reason levels and courses are: detectors/moment.py owns the list,
@@ -2295,6 +2346,7 @@ def split_definition(d: SegmentDef, mid: list[dict],
         "guards": list(d.guards),
         "default_strat": d.default_strat,
         "match_mode": d.match_mode,
+        "clock_start": d.clock_start,
         "seed_key": None,
     }
     second = {
@@ -2306,6 +2358,7 @@ def split_definition(d: SegmentDef, mid: list[dict],
         "guards": list(d.guards),
         "default_strat": d.default_strat,
         "match_mode": d.match_mode,
+        "clock_start": d.clock_start,
         "seed_key": None,
     }
     for half in (first, second):
@@ -2483,6 +2536,7 @@ def merge_definitions(first: SegmentDef, second: SegmentDef,
         "guards": [],
         "default_strat": default_strat,
         "match_mode": match_mode,
+        "clock_start": first.clock_start,
         "seed_key": None,
     }
 
@@ -2535,6 +2589,14 @@ class _Arm:
     # from the SAME number the matcher does — the engine only notices on the
     # next event, and a card must not keep saying "Running" until one arrives.
     deadline_frame: int | None = None
+    # The MOVE clock's origin (round 15 item 3): the frame of the counter
+    # zero the start trigger CAUSED — the section entry — set by feed while
+    # the zero lands inside CLOCK_START_WINDOW_FRAMES of the arm, latest such
+    # zero winning (a load settles its area byte across several zeroing
+    # events; the counter measures from the last of them). None = no section
+    # change followed the start, and a "move" def times from the arm exactly
+    # like a "trigger" one — Mario never stopped being able to move.
+    clock_frame: int | None = None
 
 
 def _at_arm_position(arm: _Arm, ctx: MatchContext) -> bool:
@@ -2563,6 +2625,16 @@ def _is_major_action(ev) -> bool:
 # on consecutive frames (31 of 31 of his door runs), and the two are one event
 # as far as Usamune's counter is concerned.
 IGT_ARM_SKEW_FRAMES = 1
+
+# How long after a "move" def's arm a counter zero still counts as the
+# section entry the START caused (round 15 item 3). Every measured
+# trigger-to-zero gap sits inside it: his CCM door's own room transition at
+# ~49 frames (the 0'04"23-recorded vs 0'02"57-Usamune gap), a pipe's level
+# load at +23, a painting/portal's at +77, the BBH cage's at +74/75. A zero
+# LATER than this is a transition mid-piece — a different leg, which must
+# not re-base the clock (the delta from the real origin is the honest
+# fallback there, same as every multi-zero case before this mode existed).
+CLOCK_START_WINDOW_FRAMES = 90
 
 
 def _zeroes_usamune_igt(ev) -> bool:
@@ -2766,6 +2838,19 @@ class SegmentEngine:
             self._last_igt_zero_frame = None
         elif _zeroes_usamune_igt(ev):
             self._last_igt_zero_frame = ev.frame
+            # THE MOVE-CLOCK REBASE (round 15 item 3): a zero landing inside
+            # the window of a "move" arm IS the section entry its start
+            # trigger caused — the moment Mario can actually move — and the
+            # clock's origin moves there. Latest zero inside the window wins
+            # (a load settles across several zeroing events and the counter
+            # measures from the last); one outside it is a mid-piece leg and
+            # must not touch the origin.
+            for def_id, arm in list(self._armed.items()):
+                d = self._def_by_id.get(def_id)
+                if (d is not None and d.clock_start == "move"
+                        and 0 <= ev.frame - arm.start_frame
+                        <= CLOCK_START_WINDOW_FRAMES):
+                    self._armed[def_id] = replace(arm, clock_frame=ev.frame)
         if ev.type == "area_changed":
             if _real_edge(ev):
                 self._last_area_edge_frame = ev.frame  # cross-area relocation
@@ -3690,9 +3775,22 @@ class SegmentEngine:
         # frame in all 31. One frame is the poll's own skew, not slack: a zero
         # from a DIFFERENT load is hundreds of frames away, so nothing this
         # rule exists to reject gets in.
+        # THE CLOCK'S ORIGIN (round 15 item 3): a "move" def whose start
+        # caused a section entry times from that entry's counter zero — the
+        # moment Mario could move — so its close-igt precondition below holds
+        # by construction (the rebase tracked the load's own last zero) and
+        # the recorded number IS what Usamune shows. His case, measured
+        # before building: the CCM entrance touches carry igt 77/78
+        # (0'02"57-60, Usamune's display) while the door-armed delta recorded
+        # 0'04"23+ — the door animation and fade. A "move" def with no
+        # rebase, and every "trigger" def, times from the arm exactly as
+        # before this field existed.
+        clock_origin = (arm.clock_frame
+                        if d.clock_start == "move" and arm.clock_frame is not None
+                        else arm.start_frame)
         igt = ev.payload.get("igt_frames")
         if igt is not None and self._last_igt_zero_frame is not None and abs(
-                self._last_igt_zero_frame - arm.start_frame) <= IGT_ARM_SKEW_FRAMES:
+                self._last_igt_zero_frame - clock_origin) <= IGT_ARM_SKEW_FRAMES:
             rta, timed_by = igt, "igt"
         else:
             # Which branch ran is itself a fact the display needs (ruling 6):
@@ -3700,7 +3798,7 @@ class SegmentEngine:
             # ~1-2 frames CHEAP and an identical igt-timed run cannot beat it.
             # Recorded rather than inferred later, because nothing downstream
             # can reconstruct which of the two conditions failed.
-            rta, timed_by = ev.frame - arm.start_frame, "delta"
+            rta, timed_by = ev.frame - clock_origin, "delta"
             if rta < 0:
                 if outcome == "success":
                     return None  # genuine anomaly: end before arm (self-heal)

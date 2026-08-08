@@ -1475,7 +1475,10 @@ _SEGMENT_FIELD_SAMPLES = {
     "name": "Renamed", "start_triggers": [{"type": "spawned"}],
     "end_triggers": [{"type": "level_enter", "to": 6}],
     "guards": [], "enabled": False, "waypoints": [],
-    "category": "Cat", "match_mode": "strict",
+    "category": "Cat",
+    # round 15 item 3: when the clock starts — "move" is the non-default of
+    # the db column, so the round trip proves the write path carries it.
+    "clock_start": "move", "match_mode": "strict",
     # A subsection's parent entity (task 0087). Must be a WELL-FORMED key --
     # validate_definition rejects anything else, so a placeholder string here
     # would fail the write for the wrong reason and read as this guard

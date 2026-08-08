@@ -629,6 +629,32 @@ def test_the_matching_control_shows_the_definition_s_STORED_mode(page):
         "that segments.js still seeds the select from `initial`.")
 
 
+def test_the_clock_start_control_is_on_the_open_definition(page):
+    """Round 15 item 3: a stored `clock_start` invisible in the editor is the
+    exact shape match_mode shipped in for a day — the branch's central
+    concept, unseeable and unchangeable from the app. The control must exist
+    and show the STORED value (the fixture's definitions predate the field,
+    so they read "trigger")."""
+    reach(page, "segments-editor")
+    assert count(page, ".builder-clockstart select") == 1
+    # Against the ROW, never a literal: the fixture's definitions arrive
+    # through whichever creation path it uses (the API body defaults "move"
+    # since this round; a db-default row reads "trigger"), and the claim
+    # here is only that the control shows the STORED value.
+    verdict = page.evaluate("""
+(async () => {
+  const shown = document.querySelector('.builder-clockstart select').value;
+  const name = document.querySelector('.builder-name input').value;
+  const rows = await (await fetch('/api/segments')).json();
+  const row = rows.find((r) => r.name === name);
+  if (!row) return 'no row named ' + name;
+  return shown === (row.clock_start || 'trigger')
+    ? 'ok' : `control ${shown} != stored ${row.clock_start}`;
+})()
+""")
+    assert verdict == "ok", verdict
+
+
 def test_the_lint_panel_has_a_real_finding(page):
     """A definition with NO lint finding renders no `.lint-panel` at all
     (`${lintFindings.length > 0 && html...}` in segments.js) -- so opening a

@@ -197,6 +197,31 @@ the spec and carries one open decision — strict adjacency ("the only valid pat
 out of SSL is Basement") would make the 56 shipped two-step movements
 un-editable.
 
+## When the clock starts — "trigger" vs "move" (round 15 item 3, 2026-08-08)
+
+`SegmentDef.clock_start`, migration adding the column (existing rows and the
+seeded corpus stay `"trigger"` — flipping them re-times his recorded
+history, which is a fork owed NUMBERS, not a silent default). Under
+`"move"` the start trigger DETECTS and the SECTION ENTRY it caused starts
+the clock — his ruling verbatim: *"the timer doesn't actually START until
+mario is able to finally move, aka when Usamune's timer actually resets to
+0 when we go to the new section."* Mechanics: `feed`'s zero-tracking
+rebases an armed move-def's `_Arm.clock_frame` to any counter zero landing
+within `CLOCK_START_WINDOW_FRAMES` (90 — measured gaps: his CCM door's
+room transition +51, a pipe +23, a painting +77, the BBH cage +74; latest
+zero inside the window wins because a load settles across several), and
+`_close` reads its origin from it: the closing event's own igt verbatim
+when the last zero IS the rebase (which makes the recorded number exactly
+what Usamune displays — his CCM entrance touches carry igt 77 where the
+trigger clock recorded the 127-frame delta), else the delta from the
+rebase frame; no rebase = byte-identical to "trigger". The recorder saves
+`clock_start: "move"` (with strict); the builder's blank reads
+`vocab.clock_starts[0]` ("move" first, his default ruling) and its "Clock
+starts" select shows the STORED value like the Matching control. Fixture:
+his own journal ids 3930-3933 verbatim in `tests/test_clock_start.py`, the
+window mutation-proved, the PATCH write path pinned by the field-sample
+completeness gate.
+
 ## A segment's time is Usamune's IGT
 
 `SegmentEngine._close` takes the CLOSING EVENT's own `igt_frames` as the

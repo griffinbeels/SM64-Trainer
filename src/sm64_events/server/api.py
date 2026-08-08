@@ -227,6 +227,12 @@ class SegmentBody(BaseModel):
     # The entity this is a SUBSECTION of; None (the default) = a top-level
     # segment, which is what every definition was before task 0087.
     parent: str | None = None
+    # When the clock starts (round 15 item 3). "move" by DEFAULT for new
+    # definitions — his ruling: "I think generally most start triggers
+    # should *actually* start timing when Mario's able to move, so this
+    # should be the default." Existing rows stay "trigger" (the db column's
+    # own default) until the corpus retiming is priced with numbers.
+    clock_start: str = "move"
 
 
 class SegmentPatch(BaseModel):
@@ -250,6 +256,8 @@ class SegmentPatch(BaseModel):
     # through this patch shape: promoting a subsection back to a top-level
     # segment changes what it IS, and nothing in the builder asks for it.
     parent: str | None = None
+    # None = untouched, exactly like match_mode above.
+    clock_start: str | None = None
 
 
 class SegmentSplitBody(BaseModel):
@@ -811,7 +819,8 @@ def create_api_router(service) -> APIRouter:
             start_triggers=definition["start_triggers"],
             end_triggers=definition["end_triggers"],
             guards=definition["guards"], waypoints=definition["waypoints"],
-            match_mode=definition["match_mode"])
+            match_mode=definition["match_mode"],
+            clock_start=definition.get("clock_start", "trigger"))
         current = None
         if body.replaces is not None:
             row = next((r for r in service.db.segment_defs()
@@ -875,7 +884,8 @@ def create_api_router(service) -> APIRouter:
             start_triggers=definition["start_triggers"],
             end_triggers=definition["end_triggers"],
             guards=definition["guards"], waypoints=definition["waypoints"],
-            match_mode=definition["match_mode"])
+            match_mode=definition["match_mode"],
+            clock_start=definition.get("clock_start", "trigger"))
         return {"warnings": lint_definition(candidate, service.segment_defs)}
 
     @router.get("/segments/synthesize")

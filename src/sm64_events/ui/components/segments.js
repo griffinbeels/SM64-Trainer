@@ -269,7 +269,7 @@ export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove, t })
 // which is exactly why the editor must always send the FULL list — sending a
 // partial one would clear the rest.
 const SAVE_FIELDS = ["name", "enabled", "start_triggers", "end_triggers",
-                     "guards", "match_mode", "waypoints"];
+                     "guards", "match_mode", "clock_start", "waypoints"];
 
 // The full definition shape POST /api/segments/backtest validates against
 // (server/api.py's SegmentBody) -- a SUPERSET of SAVE_FIELDS, deliberately:
@@ -329,7 +329,12 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
     start_triggers: [{ type: "level_enter" }],
     end_triggers: [{ type: "level_enter" }], guards: [],
     match_mode: (vocab.match_modes && vocab.match_modes[0]
-                 && vocab.match_modes[0].key) || "loose" };
+                 && vocab.match_modes[0].key) || "loose",
+    // "move" leads vocab.clock_starts because he ruled it the default for
+    // NEW definitions (round 15 item 3) -- read positionally like
+    // match_modes above, never a JS literal a registry change would strand.
+    clock_start: (vocab.clock_starts && vocab.clock_starts[0]
+                  && vocab.clock_starts[0].key) || "trigger" };
   const [d, setD] = useState(initial || blank);
   const [resetting, setResetting] = useState(false);
   const [resetErr, setResetErr] = useState(null);
@@ -574,6 +579,9 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
   // its stored value has bitten this app before).
   const matchModes = vocab.match_modes || [];
   const matchModeInfo = matchModes.find((mode) => mode.key === d.match_mode);
+  const clockStarts = vocab.clock_starts || [];
+  const clockStartInfo = clockStarts.find(
+    (mode) => mode.key === d.clock_start);
 
   // One bordered group per side; each alternative clause inside gets its
   // own tinted card (cycling) so "new color = new alternative" reads at a
@@ -711,6 +719,16 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
           ? html`<option value=${d.match_mode}>${d.match_mode}</option>` : null}
       </select>
       <span class="meta">${matchModeInfo ? matchModeInfo.description : ""}</span>
+    </label>
+    <label class="builder-clockstart">
+      <span class="field-label">Clock starts</span>
+      <select value=${d.clock_start || "trigger"}
+          onchange=${(e) => setD({ ...d, clock_start: e.target.value })}>
+        ${clockStarts.map((mode) => html`<option value=${mode.key}>${mode.label}</option>`)}
+        ${!clockStartInfo && d.clock_start
+          ? html`<option value=${d.clock_start}>${d.clock_start}</option>` : null}
+      </select>
+      <span class="meta">${clockStartInfo ? clockStartInfo.description : ""}</span>
     </label>
     <div class="segment-definition-grid">
       ${section("Start", "Arm when any one of these happens.", "play",

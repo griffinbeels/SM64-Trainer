@@ -489,10 +489,14 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
     // no stops; the old stops-only rule kept a stop-less recording
     // byte-compatible with the pre-waypoint tool, and that guarantee is
     // retired on his word. The BUILDER's own blank default is untouched.
+    // clock_start "move" (round 15 item 3): the trigger detects, the
+    // section entry it causes starts the clock -- "the timer doesn't
+    // actually START until mario is able to finally move". His default for
+    // everything this tool records.
     return { name: (name.trim() || synthBody.name), enabled: true,
       start_triggers: [synthBody.start_clause],
       end_triggers: [synthBody.end_clause], guards: [], waypoints,
-      parent, match_mode: "strict" };
+      parent, match_mode: "strict", clock_start: "move" };
   }
 
   async function runBacktest(definition) {

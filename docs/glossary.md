@@ -68,6 +68,24 @@ it (an area tile answers in one click, a course tile opens its [[star]]s).
 - **Not** — a [[route step]]. A [[route step]] names [[target]]s to complete in
   order; a subsection is one [[target]].
 
+### Clock start
+
+Where a [[segment]]'s timer begins, chosen per definition. "At the start
+trigger" counts from the trigger's own [[frame]], fades and all — how every
+definition timed before the move clock existed, and how the seeded corpus
+still times so nobody's recorded history re-times silently. "When Mario can
+move" detects the [[attempt]] at the trigger but counts from where Usamune's
+own timer restarts in the section the trigger led into — open the door, go
+through, and the recorded time matches what Usamune shows. The [[recorder]]
+saves every recording with the move clock; the matcher rebases to the
+section entry the start caused and never to a later one mid-piece.
+
+- **Lives** — the trigger vocabulary and matcher
+  (`src/sm64_events/tracking/segments.py`) → the segment builder's "Clock
+  starts" control
+- **Not** — a [[strategy]]. A [[strategy]] says how you play the piece; the
+  clock start says which [[frame]] the trainer measures the piece from.
+
 ### Moment
 
 Something the player does that a [[subsection]] can start or end on — opening

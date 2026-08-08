@@ -548,6 +548,16 @@ MIGRATIONS = [
         updated_utc TEXT
     );
     """,
+    # WHEN THE CLOCK STARTS (round 15 item 3): "trigger" (the start trigger's
+    # own frame — every row written before 2026-08-08) or "move" (the counter
+    # zero the start caused; the moment Mario can move). NOT NULL with an
+    # explicit default like v13/v15: absence and "trigger" mean the same
+    # thing for every existing row, and the seeded corpus stays "trigger"
+    # until the retiming of his recorded history is priced with numbers
+    # rather than flipped silently.
+    """
+    ALTER TABLE segment_defs ADD COLUMN clock_start TEXT NOT NULL DEFAULT 'trigger';
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -822,6 +832,7 @@ class Database:
                  "default_strat": r["default_strat"],
                  "match_mode": r["match_mode"],
                  "parent": r["parent"],
+                 "clock_start": r["clock_start"],
                  "created_utc": r["created_utc"]} for r in rows]
 
     def insert_segment_def(self, name: str, start_triggers: list,
@@ -832,17 +843,19 @@ class Database:
                            seed_key: str | None = None,
                            default_strat: str | None = None,
                            match_mode: str = "strict",
-                           parent: str | None = None) -> int:
+                           parent: str | None = None,
+                           clock_start: str = "trigger") -> int:
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO segment_defs (name, enabled, start_triggers,"
                 " end_triggers, waypoints, guards, category, seed_key,"
-                " default_strat, match_mode, parent, created_utc)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                " default_strat, match_mode, parent, clock_start,"
+                " created_utc)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (name, int(enabled), json.dumps(start_triggers),
                  json.dumps(end_triggers), json.dumps(waypoints or []),
                  json.dumps(guards), category, seed_key, default_strat,
-                 match_mode, parent, created_utc))
+                 match_mode, parent, clock_start, created_utc))
             self._conn.commit()
             return cur.lastrowid
 
@@ -852,7 +865,8 @@ class Database:
                 "waypoints": json.dumps, "guards": json.dumps,
                 "category": lambda v: v, "seed_key": lambda v: v,
                 "default_strat": lambda v: v, "seed_dirty": int,
-                "match_mode": lambda v: v, "parent": lambda v: v}
+                "match_mode": lambda v: v, "parent": lambda v: v,
+                "clock_start": lambda v: v}
         if set(fields) - set(cols):
             raise ValueError(f"unknown fields {sorted(set(fields) - set(cols))}")
         sets, vals = [], []
