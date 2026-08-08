@@ -455,8 +455,16 @@ const rankMapKey = entityKeyForOption;
  *                 until a later task wires the fetch) keeps working unchanged.
  *                 An option's own `rank` comes back NESTED {rank,division} --
  *                 see withRank below for why.
+ *   origins       vocab.origins (the server's ordered region taxonomy),
+ *                 optional -- with it the castle segments split into one tile
+ *                 per REGION (round 12 item 2: "we should show all of the
+ *                 castle areas (lobby, grounds, courtyard, basement,
+ *                 upstairs)" against ONE "Castle" tile holding 20 movements);
+ *                 without it they stay one trailing Castle group, byte-
+ *                 identical to before the parameter existed.
  */
-export function courseUnionGroups(catalog, segments, courseByLevel, ranksByKey = {}) {
+export function courseUnionGroups(catalog, segments, courseByLevel,
+                                  ranksByKey = {}, origins = null) {
   const byCourse = new Map();
   for (const segment of segments || []) {
     const course = segmentCourse(segment, courseByLevel);
@@ -522,12 +530,42 @@ export function courseUnionGroups(catalog, segments, courseByLevel, ranksByKey =
     ],
   })).filter((group) => group.options.length > 0);
   if (castleSegments.length === 0) return courseCells;
-  return [...courseCells, {
-    key: "castle-segments", label: "Castle",
-    options: castleSegments.map((segment) => withRank({
-      id: `segment:${segment.id}`, name: segment.name, sub: "segment",
-    })),
-  }];
+  const segmentOption = (segment) => withRank({
+    id: `segment:${segment.id}`, name: segment.name, sub: "segment",
+  });
+  if (!origins) {
+    return [...courseCells, {
+      key: "castle-segments", label: "Castle",
+      options: castleSegments.map(segmentOption),
+    }];
+  }
+  // One tile per castle REGION, grouped by each segment's own server-stamped
+  // `origin.region` and ordered by the taxonomy the library already reads --
+  // never a second hand-written region table (the duplicated-domain-fact
+  // class this file exists to prevent). A segment whose origin names no
+  // region (an "Anywhere" definition) keeps the trailing Castle tile.
+  const regionRank = new Map(origins.map((region, index) => [region.key, index]));
+  const byRegion = new Map();
+  for (const segment of castleSegments) {
+    const region = (segment.origin || {}).region || null;
+    const key = regionRank.has(region) ? region : null;
+    if (!byRegion.has(key)) byRegion.set(key, []);
+    byRegion.get(key).push(segment);
+  }
+  const regionLabel = new Map(origins.map((region) => [region.key, region.label]));
+  const regionCells = [...byRegion.entries()]
+    .filter(([region]) => region !== null)
+    .sort(([left], [right]) => regionRank.get(left) - regionRank.get(right))
+    .map(([region, members]) => ({
+      key: `castle-${region}`, label: regionLabel.get(region),
+      options: members.map(segmentOption),
+    }));
+  const homeless = byRegion.get(null) || [];
+  return [...courseCells, ...regionCells,
+          ...(homeless.length ? [{
+            key: "castle-segments", label: "Castle",
+            options: homeless.map(segmentOption),
+          }] : [])];
 }
 
 /** "segment:12" -> 12, or null for a star id. The target picker's two kinds

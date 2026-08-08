@@ -420,6 +420,52 @@ console.log(JSON.stringify(courseUnionGroups(catalog, segments, { "9": 1 })));
         {"id": "segment:9", "name": "LBLJ", "sub": "segment"}]
 
 
+def test_castle_segments_split_into_region_tiles_when_origins_are_in_hand():
+    """Round 12 item 2: "for the 'what is this a piece of' display, we should
+    show all of the castle areas (lobby, grounds, courtyard, basement,
+    upstairs)" — against ONE "Castle" tile holding every movement. Grouping
+    reads each segment's server-stamped origin.region and orders by the
+    vocab's own taxonomy, never a second hand-written region table. A
+    region-less segment keeps the trailing Castle tile."""
+    groups = run_node("courseUnionGroups", """
+const catalog = { courses: [{ id: 1, name: "BoB", stars: ["Big Bob-omb"] }] };
+const segments = [
+  { id: 9, name: "LBLJ", origin: { key: "6:1", region: "6:1" } },
+  { id: 10, name: "Basement -> DDD", origin: { key: "6:3", region: "6:3" } },
+  { id: 11, name: "Lobby -> Upstairs", origin: { key: "6:1", region: "6:1" } },
+  { id: 12, name: "Anywhere Trick", origin: { key: null, region: null } },
+];
+const origins = [
+  { key: "16", label: "Castle Grounds", children: [] },
+  { key: "6:1", label: "Lobby", children: [] },
+  { key: "26", label: "Courtyard", children: [] },
+  { key: "6:3", label: "Basement", children: [] },
+  { key: "6:2", label: "Upstairs", children: [] },
+];
+console.log(JSON.stringify(courseUnionGroups(
+  catalog, segments, {}, {}, origins)));
+""")
+    assert [group["label"] for group in groups] == [
+        "BoB", "Lobby", "Basement", "Castle"]
+    lobby = next(group for group in groups if group["label"] == "Lobby")
+    assert [option["name"] for option in lobby["options"]] == [
+        "LBLJ", "Lobby -> Upstairs"]
+    castle = next(group for group in groups if group["label"] == "Castle")
+    assert [option["name"] for option in castle["options"]] == [
+        "Anywhere Trick"]
+
+
+def test_without_origins_the_castle_stays_one_group():
+    # The old call shape must come back byte-identical -- a caller that has
+    # no vocab in hand yet must not lose the castle tile.
+    groups = run_node("courseUnionGroups", """
+const catalog = { courses: [] };
+const segments = [{ id: 9, name: "LBLJ", origin: { key: "6:1", region: "6:1" } }];
+console.log(JSON.stringify(courseUnionGroups(catalog, segments, {})));
+""")
+    assert [group["label"] for group in groups] == ["Castle"]
+
+
 def test_segment_levels_come_from_the_origin_in_one_place():
     # Two call sites need this derivation; a second copy is where the header's
     # missing segment art came from.

@@ -587,7 +587,8 @@ export function SegmentTimeline({ t, onSaved, onCancel }) {
   const cards = visitCards(shown);
   const parentGroups = t && t.view ? courseUnionGroups(
     t.view.catalog, (t.segments || []).filter((s) => !s.is_hundred_coin_engine),
-    (t.vocab || {}).course_by_level || {}) : [];
+    (t.vocab || {}).course_by_level || {}, {},
+    (t.vocab || {}).origins || null) : [];
   const parentName = (() => {
     if (parentOption == null) return null;
     for (const group of parentGroups)
