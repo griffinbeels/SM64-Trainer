@@ -29,6 +29,7 @@ after:
 |---|---|---|
 | Memory reads, detectors, event recipes | `memory/`, `detectors/`, `core/snapshot.py`, `core/events.py`, `tools/find_timer.py`, `tools/hunt_value.py` | `.claude/rules/memory-detectors.md` |
 | Tracking, storage, stats, routes/runs/segments, defaults corpus | `tracking/`, `storage/`, `stats/`, `data/`, `tools/corpus_*.py`, `tools/build_defaults_seed.py` | `.claude/rules/tracking-storage.md` |
+| The world-graph rules a movement is judged against (topological cancels, resurrection) | `tracking/topology.py`, `tracking/segments.py`, `tools/measure_topology_cancels.py`, `tools/why_cancelled.py`, `tools/topology_map.py` | `.claude/rules/segment-topology.md` |
 | The segment recorder — the journal read back as pointable sentences | `tracking/eventlabel.py`, `tracking/synthesize.py`, `ui/components/segmenttimeline.js` | `.claude/rules/recorder.md` |
 | Server, REST/WS APIs, wiring, paths | `server/`, `main.py`, `core/paths.py`, `core/logging_setup.py` | `.claude/rules/server.md` |
 | UI — always `ui-core.md`, plus the narrowest that matches | `ui/`, `links.py`, `tests/test_ui_*.py` | `.claude/rules/ui-core.md` **and** one of `ui-practice.md` / `ui-ranks.md` / `ui-climb.md` / `replay-compare.md` |
