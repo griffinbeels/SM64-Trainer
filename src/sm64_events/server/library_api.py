@@ -137,4 +137,28 @@ def create_library_router(store, overrides=None, adoptions=None,
                 raise HTTPException(400, "row_key is required")
             return adoptions.unadopt(key)
 
+        @router.post("/adopt_target")
+        def library_adopt_target(body: dict = Body(...)):
+            """Round 7: link a WHOLE target -- every laddered approach
+            becomes a strategy on the segment in one request, so a
+            half-linked target is unreachable by a failed batch."""
+            index, entity = body.get("target_index"), body.get("entity_key")
+            if not isinstance(index, int) or not entity:
+                raise HTTPException(400,
+                                    "target_index and entity_key are required")
+            try:
+                return adoptions.adopt_target(index, entity)
+            except adoptions_store.AdoptionError as err:
+                raise HTTPException(409, str(err)) from err
+
+        @router.post("/unadopt_target")
+        def library_unadopt_target(body: dict = Body(...)):
+            index = body.get("target_index")
+            if not isinstance(index, int):
+                raise HTTPException(400, "target_index is required")
+            try:
+                return adoptions.unadopt_target(index)
+            except adoptions_store.AdoptionError as err:
+                raise HTTPException(409, str(err)) from err
+
     return router

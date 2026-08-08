@@ -204,3 +204,37 @@ def test_auto_match_pairs_by_normalized_name_only():
         "entity": "segment:3", "name": "Lakitu Skip"}
     assert ad.auto_match("Lobby door (L) - BoB door", segments) is None
     assert ad.auto_match("", segments) is None
+
+
+def test_adopt_target_links_every_laddered_approach_and_reports_skips(wiring):
+    """ROUND 7: "If we link a segment, then it should automatically load ALL
+    strategies for that segment." One request adopts every laddered approach
+    of the target; a row with no ladder skips WITH its reason and never
+    sinks the batch; unadopt_target reverses all of it."""
+    adoptions, standards, keys, _ = wiring
+    result = adoptions.adopt_target(0, "segment:42")
+    assert [row["strategy"] for row in result["adopted"]] == [ad.DEFAULT_STRATEGY]
+    assert result["entity_key"] == "segment:42"
+    assert result["skipped"] and result["skipped"][0]["name"] == "Thin one"
+    assert "recorded times" in result["skipped"][0]["reason"]
+    assert adoptions.rows() == {keys["Lobby door (L) - BoB door"]: "segment:42"}
+    assert standards.strategies("segment:42") == [ad.DEFAULT_STRATEGY]
+
+    undone = adoptions.unadopt_target(0)
+    assert undone["removed"] == 1
+    assert adoptions.rows() == {}
+    assert standards.strategies("segment:42") == []
+
+
+def test_adopt_target_refuses_an_unknown_index_and_an_empty_target(wiring):
+    adoptions, _, _, _ = wiring
+    with pytest.raises(ad.AdoptionError):
+        adoptions.adopt_target(99, "segment:42")
+    # a target whose every approach lacks a ladder must refuse loudly --
+    # "linked" with zero strategies is indistinguishable from working
+    adoptions.store.payload["targets"][0]["approaches"] = [
+        row for row in adoptions.store.payload["targets"][0]["approaches"]
+        if not row.get("ladder")]
+    with pytest.raises(ad.AdoptionError) as err:
+        adoptions.adopt_target(0, "segment:42")
+    assert "no approach" in str(err.value)

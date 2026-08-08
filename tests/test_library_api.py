@@ -185,3 +185,44 @@ def test_an_entity_less_target_carries_its_name_matched_segment(tmp_path):
 def test_without_a_segment_list_no_target_claims_a_match(client):
     body = client.get("/api/library/target/0").json()
     assert body.get("matched_segment") is None
+
+
+def test_adopt_target_route_links_the_batch_and_names_refusals(tmp_path):
+    from sm64_events.library import adoptions as ad
+    from sm64_events.ranks.standards import RankStandards
+
+    store = LibraryStore()
+    store._payload = {
+        "schema_version": 1, "sheet_revision": "2026-08-05T09:15:18",
+        "fetched_at": "x", "runners": [], "ladder_model": {}, "targets": [
+            {"entity_key": None, "group": "Castle Movements (Lobby)",
+             "section": "★ BoB", "label": "Lobby door (L) - BoB door",
+             "version": None, "miss_reason": "castle_movement",
+             "approaches": [
+                 {"ids": ["1"], "name": "Lobby door (L) - BoB door",
+                  "best_cs": 276, "best_runner": "M", "times": {},
+                  "ideal_cs": None, "fill_rate": 0.2,
+                  "ladder": {"Mario": 2.76, "Gold": 3.10},
+                  "ladder_samples": 40, "entries": []}],
+             "subsections": []}]}
+    standards = RankStandards(tmp_path / "rank_standards.json")
+    standards.load()
+    adoptions = ad.Adoptions(tmp_path / "library_adoptions.json", store, standards)
+    adoptions.load()
+    app = FastAPI()
+    app.include_router(create_library_router(store, adoptions=adoptions))
+    api = TestClient(app)
+
+    ok = api.post("/api/library/adopt_target",
+                  json={"target_index": 0, "entity_key": "segment:9"})
+    assert ok.status_code == 200 and len(ok.json()["adopted"]) == 1
+    after = api.get("/api/library/target/0").json()
+    assert after["approaches"][0]["adopted"] == "segment:9"
+
+    undone = api.post("/api/library/unadopt_target", json={"target_index": 0})
+    assert undone.status_code == 200 and undone.json()["removed"] == 1
+
+    assert api.post("/api/library/adopt_target",
+                    json={"target_index": 99,
+                          "entity_key": "segment:9"}).status_code == 409
+    assert api.post("/api/library/adopt_target", json={}).status_code == 400

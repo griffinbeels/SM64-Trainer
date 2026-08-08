@@ -446,53 +446,44 @@ function TocRow({ band, count, you, onJump }) {
  * that judgement. A linked row shows the segment's name and an Unlink, so a
  * mis-click never dead-ends into the audit tool.
  */
-function LinkControl({ row, kind, entityKey, adoptable, segments, segmentsError,
-                       onRelink, resolveLabel }) {
+function LinkDoor({ linkedName, linkedNote, offerNote, doAdopt, doUnlink,
+                    segments, segmentsError }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
-  const linked = !!row.adopted;
-  if (!linked && !(adoptable && linkable({ entity_key: entityKey }, row, kind))) {
-    return null;
-  }
-
   async function act(request) {
     setBusy(true); setError(null);
-    try { await request(); setOpen(false); onRelink(); }
+    try { await request(); setOpen(false); }
     catch (err) { setError(err.message || String(err)); }
     finally { setBusy(false); }
   }
-  const adopt = (segmentId) => act(() => send("POST", "/api/library/adopt",
-    { row_key: row.row_key, entity_key: `segment:${segmentId}` }));
-  const unlink = () => act(() => send("POST", "/api/library/unadopt",
-    { row_key: row.row_key }));
 
-  if (linked) {
+  if (linkedName) {
     return html`<div class="library-link-state is-linked">
       <${Icon} name="link" size=${14} />
-      <span>Linked to your segment <b>${resolveLabel(row.adopted)}</b> — it grades there now.</span>
+      <span>Linked to your segment <b>${linkedName}</b>${linkedNote}</span>
       <button type="button" class="quiet-button library-unlink" disabled=${busy}
-          onclick=${unlink}>Unlink</button>
+          onclick=${() => act(doUnlink)}>Unlink</button>
       ${error ? html`<span class="library-link-error">${error}</span>` : ""}
     </div>`;
   }
 
-  if (!open) {
-    return html`<div class="library-link-state">
-      <span class="meta">Not graded yet — link one of your segments to grade it.</span>
-      <button type="button" class="quiet-button library-link-button"
-          onclick=${() => setOpen(true)}>
-        <${Icon} name="link" size=${14} /> Link a segment…
-      </button>
-    </div>`;
-  }
-
+  // The menu OVERLAYS (absolute, below the button, which stays rendered) --
+  // his standing ruling on transient controls: "it causes all the elements
+  // to shift down; this is jarring… it should be overlaid ON TOP so that
+  // none of the UI elements are moved around" (2026-07-26).
   const list = (segments || []).filter((segment) =>
     !filter || segment.name.toLowerCase().includes(filter.toLowerCase()));
   return html`<div class="library-link-state">
-    <div class="library-link-menu">
+    ${offerNote ? html`<span class="meta">${offerNote}</span>` : ""}
+    <button type="button" class="quiet-button library-link-button"
+        aria-expanded=${open}
+        onclick=${() => setOpen((prev) => !prev)}>
+      <${Icon} name="link" size=${14} /> Link a segment…
+    </button>
+    ${open ? html`<div class="library-link-menu">
       <div class="library-link-menu-head">
         <span>Link to one of your segments</span>
         <button type="button" class="quiet-button" aria-label="Close"
@@ -512,12 +503,79 @@ function LinkControl({ row, kind, entityKey, adoptable, segments, segmentsError,
               <div class="library-link-options">
                 ${list.map((segment) => html`<button type="button" key=${segment.id}
                     class="library-link-option" disabled=${busy}
-                    onclick=${() => adopt(segment.id)}>${segment.name}</button>`)}
+                    onclick=${() => act(() => doAdopt(segment.id))}>${segment.name}</button>`)}
                 ${list.length === 0 ? html`<p class="meta">No segment matches.</p>` : ""}
               </div>`}
       ${error ? html`<p class="library-link-error">${error}</p>` : ""}
-    </div>
+    </div>` : ""}
   </div>`;
+}
+
+// A PIECE's own row-level door (round 5, narrowed round 7: approaches no
+// longer carry one -- the whole-target door in the page header covers them).
+function LinkControl({ row, kind, entityKey, adoptable, segments, segmentsError,
+                       onRelink, resolveLabel }) {
+  const linked = !!row.adopted;
+  if (!linked && !(adoptable && linkable({ entity_key: entityKey }, row, kind))) {
+    return null;
+  }
+  return html`<${LinkDoor}
+      linkedName=${linked ? resolveLabel(row.adopted) : null}
+      linkedNote=${" — it grades there now."}
+      offerNote="Not graded yet — link one of your segments to grade it."
+      doAdopt=${async (segmentId) => {
+        await send("POST", "/api/library/adopt",
+          { row_key: row.row_key, entity_key: `segment:${segmentId}` });
+        onRelink();
+      }}
+      doUnlink=${async () => {
+        await send("POST", "/api/library/unadopt", { row_key: row.row_key });
+        onRelink();
+      }}
+      segments=${segments} segmentsError=${segmentsError} />`;
+}
+
+/**
+ * ROUND 7 -- the whole-target door, beside the target's own name: "the link
+ * a segment button should be moved near the top, next to the name ... as an
+ * 'overarching' thing. If we link a segment, then it should automatically
+ * load ALL strategies for that segment." One click adopts every laddered
+ * approach onto the segment (`POST /api/library/adopt_target`), so the
+ * segment's picker gains every documented way at once; Unlink reverses the
+ * whole batch. A name-matched target wears the chip instead -- the match
+ * already IS the association.
+ */
+function TargetLinkControl({ rows, approaches, linkCtx }) {
+  if (!linkCtx) return null;
+  const target = rows.length === 1 ? rows[0] : null;
+  // Entity pages (stars) never link -- their approaches auto-adopt.
+  if (!target || target.entity_key || !target.adoptable) return null;
+  const linkedEntity = (approaches.find((approach) => approach.adopted) || {}).adopted
+    || null;
+  if (!linkedEntity && target.matched_segment) {
+    return html`<span class="chip library-matched-chip"
+        title="This target matches a segment you already have, by name — no linking needed.">
+        = your segment "${target.matched_segment.name}"</span>`;
+  }
+  if (!linkedEntity && !approaches.some((approach) =>
+      approach.row_key && approach.ladder)) {
+    return null;                 // nothing gradeable to link
+  }
+  return html`<${LinkDoor}
+      linkedName=${linkedEntity ? linkCtx.resolveLabel(linkedEntity) : null}
+      linkedNote=${" — every strategy here grades there now."}
+      offerNote=${null}
+      doAdopt=${async (segmentId) => {
+        await send("POST", "/api/library/adopt_target",
+          { target_index: target.index, entity_key: `segment:${segmentId}` });
+        linkCtx.onRelink();
+      }}
+      doUnlink=${async () => {
+        await send("POST", "/api/library/unadopt_target",
+          { target_index: target.index });
+        linkCtx.onRelink();
+      }}
+      segments=${linkCtx.segments} segmentsError=${linkCtx.segmentsError} />`;
 }
 
 /**
@@ -637,10 +695,10 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
             ? html`<span class="meta library-section-target">${approach._target}</span>` : ""}
           ${approach.matched_strategy
             ? html`<span class="chip library-matched-chip">= your "${approach.matched_strategy}"</span>` : ""}
-          ${assoc && assoc.source === "matched"
-            ? html`<span class="chip library-matched-chip"
-                title="This movement matches a segment you already have, by name — no linking needed.">
-                = your segment "${assoc.name}"</span>` : ""}
+          ${/* Round 7: the "= your segment" chip lives beside the page's
+               own name now (TargetLinkControl) -- the association is
+               target-level and repeating it per section was noise. The
+               section keeps only its STANDING. */""}
         </div>
         <div class="library-section-facts">
           ${approach.best_cs != null
@@ -660,14 +718,9 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
     </button>
     <${Disclose} open=${open} className="library-section-disclose">
       <div class="library-section-body">
-        ${/* Round 6: an auto-matched row's offer strip would contradict the
-             "= your segment" chip right above it -- the match already IS the
-             association, so only an explicit assignment (which outranks the
-             match and carries Unlink) still renders a control here. */""}
-        ${linkCtx && !(assoc && assoc.source === "matched")
-          ? html`<${LinkControl} row=${approach} kind="approach"
-              entityKey=${approach._entityKey} adoptable=${approach._adoptable}
-              ...${linkCtx} />` : ""}
+        ${/* Round 7: approaches carry NO row-level door -- the whole-target
+             control beside the page's name owns linking now ("moved near
+             the top ... as an 'overarching' thing"). Pieces keep theirs. */""}
         ${versioned ? html`<button type="button" class="chip chip-button library-jp-toggle"
             aria-pressed=${version === "jp"}
             title=${hasJp
@@ -971,7 +1024,11 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
     <div class="library-target-header">
       <img class="library-target-icon" src=${iconSrc} alt="" draggable="false" />
       <div class="library-target-heading">
-        <h3>${label}</h3>
+        <div class="library-target-titleline">
+          <h3>${label}</h3>
+          <${TargetLinkControl} rows=${rows} approaches=${approaches}
+              linkCtx=${linkCtx} />
+        </div>
         ${activeStratInfo && activeStratInfo.rank
           ? html`<span class="chip library-reminder-chip">
               <${RankIcon} tier=${activeStratInfo.rank} division=${activeStratInfo.division} size=${14} />

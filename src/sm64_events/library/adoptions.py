@@ -164,6 +164,63 @@ class Adoptions:
         self._sync()
         return {"adopted": False, "row_key": key, "entity_key": removed}
 
+    def adopt_target(self, index: int, entity: str) -> dict:
+        """Assign EVERY laddered approach of one target to `entity` — round
+        7: "If we link a segment, then it should automatically load ALL
+        strategies for that segment." One save + one sync, so a half-linked
+        target is unreachable; a row with no ladder skips WITH its reason
+        and never sinks the batch. Approaches only — a subsection is a PART
+        and keeps its own row-level link (round 6's ruling for the match,
+        applied to the assignment)."""
+        targets = self.store.payload["targets"]
+        target = targets[index] if 0 <= index < len(targets) else None
+        if target is None:
+            raise AdoptionError(f"no library target at index {index}")
+        if entity in self.qualified:
+            raise AdoptionError(
+                f"{entity} names its strategies by exit-star variant, and the "
+                f"sheet rows do not say which exit star they ran")
+        from sm64_events.library.audit import row_key as make_key
+        adopted, skipped = [], []
+        for item in target["approaches"]:
+            if not item.get("ladder"):
+                samples = item.get("ladder_samples", len(item["entries"]))
+                skipped.append({"name": item["name"],
+                                "reason": f"only {samples} recorded times -- "
+                                          f"no rank standards to grade with"})
+                continue
+            key = make_key(target, item["name"], item["ids"])
+            self._rows[key] = entity
+            adopted.append({"row_key": key,
+                            "strategy": strategy_name(target["label"],
+                                                      item["name"])})
+        if not adopted:
+            raise AdoptionError(
+                f"{target['label']!r} has no approach with rank standards -- "
+                f"linking it would grade nothing")
+        save(self.path, self._rows)
+        self._sync()
+        return {"adopted": adopted, "skipped": skipped,
+                "entity_key": entity, "target": target["label"]}
+
+    def unadopt_target(self, index: int) -> dict:
+        """Remove every one of this target's own approach assignments —
+        never a piece's, and never another target's rows on the same
+        segment."""
+        targets = self.store.payload["targets"]
+        target = targets[index] if 0 <= index < len(targets) else None
+        if target is None:
+            raise AdoptionError(f"no library target at index {index}")
+        from sm64_events.library.audit import row_key as make_key
+        removed = 0
+        for item in target["approaches"]:
+            key = make_key(target, item["name"], item["ids"])
+            if self._rows.pop(key, None) is not None:
+                removed += 1
+        save(self.path, self._rows)
+        self._sync()
+        return {"removed": removed, "target": target["label"]}
+
 
 def validate(payload: dict, key: str, entity: str, qualified=()):
     """Raise unless this row can be assigned to this entity.

@@ -403,8 +403,10 @@ Your own assignment of a sheet row — a castle-movement [[approach]] or a
 [[piece]] — to a [[segment]] you built, minting that [[segment]] a
 [[strategy]] with the community's [[ladder]] so every [[attempt]] grades there.
 Yours, not the community's: it lives beside your data and survives a
-refresh. The link strip on the [[Library tab]] is the door; unlink reverses
-it. A [[segment]] whose name equals an entity-less [[target]]'s label
+refresh. The door sits beside the [[target]]'s own name on the
+[[Library tab]] and links the WHOLE [[target]] — one click adopts every
+laddered [[approach]] as its own [[strategy]] on the [[segment]]; a
+[[piece]] keeps its own row-level door; unlink reverses the whole batch. A [[segment]] whose name equals an entity-less [[target]]'s label
 associates by itself — no click — and an associated row shows your standing
 at once: your [[segment]]'s best [[personal best]] graded on the row's own
 displayed [[ladder]], or Capless ([[Iron]]) when you hold no time yet. Where
