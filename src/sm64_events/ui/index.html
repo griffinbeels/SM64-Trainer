@@ -951,10 +951,16 @@
     position: sticky; top: 0; z-index: 24; padding: 14px 0 8px;
     background: linear-gradient(180deg, rgba(5,12,22,.98) 70%, rgba(5,12,22,.82));
   }
+  /* THREE columns since 2026-08-08: session / route rank card / Grading. The
+     Clock card's column went to the rank card when its select moved into the
+     settings drawer (user: the default is always Usamune IGT, so a control
+     nobody changes should not spend a column) -- the rank card's fr is the
+     sum of its old share and the clock's, so the neighbours keep their
+     proportions. */
   .context-bar {
     min-height: 56px; display: grid;
-    grid-template-columns: minmax(170px,.75fr) minmax(250px,1.45fr)
-                           minmax(180px,.9fr) minmax(140px,.7fr);
+    grid-template-columns: minmax(170px,.75fr) minmax(250px,2.35fr)
+                           minmax(140px,.7fr);
     gap: 10px; width: calc(100% - 28px); max-width: 1472px; margin: 0 auto;
   }
   .context-control {
@@ -4067,8 +4073,8 @@
     .recording-status .recording-light { display: none; }
 
     .context-bar {
-      grid-template-columns: minmax(145px,.8fr) minmax(210px,1.35fr)
-                             minmax(155px,.9fr) minmax(130px,.65fr);
+      grid-template-columns: minmax(145px,.8fr) minmax(210px,2.25fr)
+                             minmax(130px,.65fr);
     }
   }
 
@@ -4350,6 +4356,10 @@
       width: 100%; max-width: none;
       grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px;
     }
+    /* Three cards in a two-column grid would leave a hole; the rank card
+       takes a full-width row of its own instead, and order:-1 puts it first
+       so auto-placement pairs the two selects on the row below. */
+    .context-bar .marelo-slot { grid-column: 1 / -1; order: -1; }
     .context-control {
       width: 100%; min-width: 0; min-height: 48px;
       padding: .32rem .55rem; gap: .45rem;
@@ -4597,21 +4607,15 @@
     .compare-stage-card { min-height: 0; }
   }
 
-  /* Context bar: four cards in one row need 684px, and `main.app-main` is only
-     670px at viewport 761 -- the narrowest window that still carries the 76px
-     rail. The row overflowed by 14px through the whole 761..775 band and the
-     Grading select hung past the edge. Measured: app-main is viewport - 91
-     while the rail is present, so four-across stops fitting below 775.
-
-     A VIEWPORT query on purpose, and it has to be at TOP LEVEL. `.context-bar`
-     lives in the header, OUTSIDE `.view-pane`, so it has no size container
-     above it -- when the Wave 2 conversion swept this rule into
-     `@container (max-width: 1060px)` the query could never match and the same
-     overflow came back on all seven tabs at once (2026-07-28). A shell element
-     cannot be gated on a container it is not inside. */
-  @media (max-width: 775px) {
-    .context-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  }
+  /* A `@media (max-width: 775px)` two-column override for .context-bar stood
+     here until 2026-08-08. Its measured reason -- FOUR cards need 684px and
+     app-main is viewport - 91 with the rail, so four-across stops fitting
+     below 775 -- expired when the Clock card left the bar: three cards need
+     505px at the rail-block minimums, which fits every rail width (the rail
+     ends at 761). If the bar grows a card again, that block comes back, and
+     it must be a VIEWPORT query at TOP LEVEL -- .context-bar lives outside
+     .view-pane, so a container query above it can never match (2026-07-28:
+     the Wave 2 conversion learned that on all seven tabs at once). */
 
   /* ===================================================================
      Card collapse

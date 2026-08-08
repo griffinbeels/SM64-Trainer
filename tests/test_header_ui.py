@@ -26,11 +26,12 @@ def test_every_context_card_is_one_hit_target():
     # stretched <select> plus the value + chevron we draw ourselves) and half
     # CSS; either half alone silently restores the small hit target.
     #
-    # FOUR cards since 2026-07-28: session, route rank, clock, grading. The
-    # fourth is the route rank card, and it must go through the SAME
-    # mechanism rather than hand-rolling one -- which is what CardSelect is
-    # for, and why the count below is of CardSelect and not of markup.
-    assert strip_comments(HEADER_JS).count("<${ContextSelect}") == 3
+    # THREE cards since 2026-08-08: session, route rank, grading (the Clock
+    # card moved into the settings drawer -- see the test below). The route
+    # rank card must go through the SAME mechanism rather than hand-rolling
+    # one -- which is what CardSelect is for, and why the count below is of
+    # CardSelect and not of markup.
+    assert strip_comments(HEADER_JS).count("<${ContextSelect}") == 2
     assert strip_comments(CONTEXT_JS).count("<${CardSelect}") == 1
     assert strip_comments(MARELO_JS).count("<${CardSelect}") == 1
     rule = context_select_rule(INDEX_HTML)
@@ -100,21 +101,40 @@ def test_the_rank_bar_sits_in_the_context_grid_not_a_row_of_its_own():
     assert body.count("<${RouteRankCard}") == 1
     assert "marelo-row" not in body and "marelo-row" not in strip_comments(INDEX_HTML)
     # The wrapper carries container-type: inline-size for the card's own
-    # @container rules -- without it the clock card would slide into this
-    # column and the whole bar would shift left for a beat.
+    # @container rules -- without it the card would measure the viewport,
+    # whose width is not monotonic in the column's (the sidebar's 1180 step).
     assert 'class="marelo-slot"' in body
     assert ".marelo-slot" in strip_comments(INDEX_HTML)
 
 
 def test_the_rank_mode_card_is_not_also_called_rank():
-    # It sets HOW a rank is graded and now sits two cards from the MARELO bar,
-    # which shows what your rank IS. Two cards reading RANK side by side, one
-    # of them a mode, is the correct-but-unexplained pairing that reads as a
-    # rendering fault. The wire contract (id/name/endpoint) is unchanged.
+    # It sets HOW a rank is graded and sits directly beside the route rank
+    # card, which shows what your rank IS. Two cards reading RANK side by
+    # side, one of them a mode, is the correct-but-unexplained pairing that
+    # reads as a rendering fault. The wire contract (id/name/endpoint) is
+    # unchanged.
     body = strip_comments(HEADER_JS)
     assert 'label="Grading"' in body
     assert 'label="Rank"' not in body
     assert 'id="rankmode-select"' in body and "/api/ranks/mode" in body
+
+
+def test_the_clock_left_the_bar_for_the_settings_drawer():
+    # 2026-08-08 (user): "the default should always be Usamune IGT... there's
+    # no reason to ever change this, which means it shouldn't be there." The
+    # card is gone from the context bar and the route rank card absorbed its
+    # column; the choice itself survives as a settings field for whoever
+    # wants star-grab (anchor) timing back.
+    body = strip_comments(HEADER_JS)
+    assert 'id="clock-select"' not in body
+    assert 'label="Clock"' not in body
+    # Still reachable, not deleted: the settings drawer renders the same
+    # CLOCK_OPTIONS through the same store hook.
+    assert "CLOCK_OPTIONS.map" in body
+    assert "t.pickClock" in body
+    # And the default a fresh client boots with IS Usamune IGT.
+    store = strip_comments((UI / "store.js").read_text(encoding="utf-8"))
+    assert 'localStorage.getItem("clock") || "igt"' in store
 
 
 def test_the_picker_is_triggered_from_the_practice_logs_header_row():
