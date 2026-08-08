@@ -372,3 +372,68 @@ def test_a_direct_hop_has_no_steps_at_all():
         jev(3, "level_changed", 1500, {"from": 6, "to": 17, "from_area": 1}),
     ]
     assert walked_steps(rows, rows[0], rows[-1]) == []
+
+
+# --- round 12 item 3: the clauses must be the rows he picked ---------------
+
+def test_an_entrance_row_synthesizes_the_entrance_not_the_pipe():
+    """TWO trigger types read the one `warp_entered` journal event, and
+    clause_for used to take whichever sat first in the registry -- so picking
+    "Touched the Cool, Cool Mountain entrance" as the FINISH synthesized the
+    legacy pipe clause and the panel read "Ends when: Touch the pipe in
+    Castle Inside" (his screenshot, round 12 item 3). `to != level` IS the
+    entrance test, the same one sentence eventlabel labels rows by."""
+    entrance = jev(1, "warp_entered", 0, {"level": 6, "area": 1, "to": 5})
+    assert clause_for(entrance, "end") == {"type": "entrance_touched", "to": 5}
+    assert clause_for(entrance, "start") \
+        == {"type": "entrance_touched", "to": 5}
+
+
+def test_an_intra_course_warp_still_synthesizes_the_warp_clause():
+    # to == level never leaves the course, so it has no entrance to name --
+    # the three legacy pipe defs are exactly this shape.
+    intra = jev(1, "warp_entered", 0, {"level": 9, "area": 1, "to": 9})
+    assert clause_for(intra, "end") == {"type": "warp_entered", "level": 9}
+
+
+def test_an_aborted_warp_synthesizes_the_warp_clause():
+    # to: None went nowhere; it cannot describe an entrance.
+    aborted = jev(1, "warp_entered", 0, {"level": 9, "area": 1, "to": None})
+    assert clause_for(aborted, "end") == {"type": "warp_entered", "level": 9}
+
+
+def test_a_named_landmark_beats_the_ordinal():
+    """He picks a row BY its landmark's name -- "Open the CCM Door in Castle
+    Inside (5)" -- and the clause used to pin kind+ordinal instead: "#1" is
+    the attempt-scoped ordinal, the "(5)" he saw is the session repeat
+    counter, and neither is the door. A nameable landmark IS the identity;
+    the ordinal is dropped with it (the 2026-08-05 ruling that demoted
+    ordinals, applied to synthesis)."""
+    door = jev(1, "moment_reached", 0, {
+        "kind": "door_open", "level": 6, "ordinal": 1,
+        "landmark": {"key": "6:1:800ebc8c:-2303,0,-1074",
+                     "kind_key": "kind:800ebc8c", "placed": True,
+                     "nameable": True}})
+    assert clause_for(door, "start") == {
+        "type": "moment_reached", "kind": "door_open", "level": 6,
+        "landmark": "6:1:800ebc8c:-2303,0,-1074"}
+
+
+def test_an_unnameable_landmark_keeps_the_ordinal():
+    # A shared key (neither coordinate) cannot carry a name, so pinning it
+    # would be meaningless; the ordinal is still the only discriminator.
+    textbox = jev(1, "moment_reached", 0, {
+        "kind": "textbox", "level": 4, "ordinal": 2,
+        "landmark": {"key": "4:1:800eb1c8:0,0,0", "kind_key": "kind:800eb1c8",
+                     "placed": False, "nameable": False}})
+    assert clause_for(textbox, "start") == {
+        "type": "moment_reached", "kind": "textbox", "level": 4, "ordinal": 2}
+
+
+def test_the_suggested_name_names_the_entrance_destination():
+    # "Castle Inside -> Cool, Cool Mountain", never "-> Anywhere":
+    # entrance_touched has no _ORIGIN_PARAMS row (its firing place is
+    # derived), and falling through read Anywhere for the most place-ful
+    # clause in the registry.
+    assert _place_name({"type": "entrance_touched", "to": 5}) \
+        == LEVEL_NAMES[5]

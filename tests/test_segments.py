@@ -145,7 +145,11 @@ def test_every_trigger_template_resolves_cleanly():
                     # a moment kind is a NAME out of the registry, not
                     # an id -- read from MOMENTS so removing a moment
                     # can never leave this probe pointing at a ghost.
-                    "int": 3, "moment": MOMENTS[0].kind}
+                    "int": 3, "moment": MOMENTS[0].kind,
+                    # a landmark is a catalogue KEY; with no names in hand
+                    # the renderer must fall back to the kind's own wording
+                    # rather than printing this string at a human.
+                    "landmark": "6:1:800ebc8c:-2303,0,-1074"}
     for spec in TRIGGERS.values():
         card_named = set(re.findall(r"\{(\w+)\}", spec.card_template or spec.template))
         assert card_named <= set(spec.params), \
@@ -187,7 +191,11 @@ def test_every_card_fallback_param_resolves_cleanly_when_unset():
                     # a moment kind is a NAME out of the registry, not
                     # an id -- read from MOMENTS so removing a moment
                     # can never leave this probe pointing at a ghost.
-                    "int": 3, "moment": MOMENTS[0].kind}
+                    "int": 3, "moment": MOMENTS[0].kind,
+                    # a landmark is a catalogue KEY; with no names in hand
+                    # the renderer must fall back to the kind's own wording
+                    # rather than printing this string at a human.
+                    "landmark": "6:1:800ebc8c:-2303,0,-1074"}
     fallback_specs = [s for s in TRIGGERS.values() if s.card_fallbacks]
     assert fallback_specs, "no TriggerType declares card_fallbacks -- update this probe"
     for spec in fallback_specs:
@@ -1766,6 +1774,15 @@ def test_warp_ping_pong_never_double_arms():
 # duplicate must fail CI, not render a broken builder row.
 # ---------------------------------------------------------------------------
 
+# Params deliberately ABSENT from their type's template, each with the reason.
+# moment_reached.landmark renders THROUGH {kind} instead of a placeholder of
+# its own (segments._resolve_param's moment branch): named, the sentence reads
+# "Open the CCM Door"; unnamed, printing the raw catalogue key at a human is
+# worse than the kind's own wording. A new row here needs the same shape of
+# reason — a param that is merely forgotten from its template is still a bug.
+TEMPLATE_EXEMPT_PARAMS = {("moment_reached", "landmark")}
+
+
 def test_every_trigger_and_guard_template_matches_its_params():
     """A template typo must fail CI, not render a broken builder row. A
     zero-param entry (e.g. in_active_route) has nothing to interpolate, so
@@ -1778,9 +1795,11 @@ def test_every_trigger_and_guard_template_matches_its_params():
             assert len(found) == len(set(found)), (
                 f"{t.key}: duplicated placeholder in template")
             placeholders = set(found)
-            assert placeholders == set(t.params), (
+            expected = {name for name in t.params
+                        if (t.key, name) not in TEMPLATE_EXEMPT_PARAMS}
+            assert placeholders == expected, (
                 f"{t.key}: template placeholders {placeholders}"
-                f" != params {set(t.params)}")
+                f" != params {expected}")
 
 
 def test_vocab_serializes_templates():

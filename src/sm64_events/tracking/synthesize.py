@@ -123,6 +123,16 @@ def _moment_params(payload: dict) -> dict | None:
     `level` is likewise pinned rather than left open: a moment synthesized
     from real play happened somewhere, and an unpinned clause answers None
     from step_node, which means UNCONSTRAINED to the topological cancel.
+
+    THE LANDMARK BEATS THE ORDINAL (round 12 item 3). He picks a row BY its
+    landmark's name — "Open the CCM Door in Castle Inside (5)" — and a
+    clause pinning kind+ordinal reads back "Open a door #1 in Castle
+    Inside": the #1 is the attempt-scoped ordinal, the (5) he saw is the
+    session-scoped repeat counter, and neither is the door. A nameable
+    landmark is pinned instead and the ordinal is dropped — the landmark IS
+    the identity, the same ruling that demoted ordinals on 2026-08-05. The
+    ordinal survives only on a row whose landmark cannot carry a name
+    (shared key), where it is still the only discriminator there is.
     """
     kind = payload.get("kind")
     if kind is None:
@@ -130,7 +140,11 @@ def _moment_params(payload: dict) -> dict | None:
     params = {"kind": kind}
     if payload.get("level") is not None:
         params["level"] = payload["level"]
-    if payload.get("ordinal"):
+    landmark = payload.get("landmark") or {}
+    if landmark.get("key") \
+            and landmark.get("nameable", landmark.get("placed", False)):
+        params["landmark"] = landmark["key"]
+    elif payload.get("ordinal"):
         params["ordinal"] = payload["ordinal"]
     return params
 
@@ -165,6 +179,17 @@ def _entrance_params(payload: dict) -> dict | None:
     return None if destination is None else {"to": destination}
 
 
+def _leaves_the_level(payload: dict) -> bool:
+    """`to != level` is the whole entrance test, the same one sentence
+    `eventlabel._warp_entered` labels rows by. TWO trigger types read the one
+    `warp_entered` journal event, and until round 12 item 3 `clause_for`
+    took whichever sat first in the registry — so picking "Touched the Cool,
+    Cool Mountain entrance" as the FINISH synthesized the legacy pipe clause
+    and the panel read "Ends when: Touch the pipe in Castle Inside"."""
+    destination = payload.get("to")
+    return destination is not None and destination != payload.get("level")
+
+
 _SYNTH_PARAMS: dict[str, dict] = {
     "level_exit": {"journal_type": "level_changed", "role": "start",
                    "build": _level_changed_start},
@@ -173,8 +198,10 @@ _SYNTH_PARAMS: dict[str, dict] = {
     "area_enter": {"journal_type": "area_changed", "role": None,
                    "build": _area_changed_params},
     "warp_entered": {"journal_type": "warp_entered", "role": None,
+                     "applies": lambda payload: not _leaves_the_level(payload),
                      "build": _level_field_params},
     "entrance_touched": {"journal_type": "warp_entered", "role": None,
+                         "applies": _leaves_the_level,
                          "build": _entrance_params},
     "key_grabbed": {"journal_type": "key_grabbed", "role": None,
                     "build": _level_field_params},
@@ -210,6 +237,9 @@ def clause_for(row, role: str) -> dict | None:
         if spec["journal_type"] != row.type:
             continue
         if spec["role"] is not None and spec["role"] != role:
+            continue
+        applies = spec.get("applies")
+        if applies is not None and not applies(row.payload):
             continue
         params = spec["build"](row.payload)
         if params is None:
@@ -372,6 +402,14 @@ def _place_name(clause: dict) -> str:
             else name
     if kind == "reset_game":
         return "Reset"
+    if kind == "entrance_touched":
+        # The place an entrance clause is ABOUT is where it leads —
+        # _ORIGIN_PARAMS has no row for it (its firing place is derived
+        # through topology), and falling through read "Anywhere" for the
+        # most place-ful clause in the registry.
+        destination = clause.get("to")
+        return LEVEL_NAMES.get(destination, _NO_PLACE_LABEL) \
+            if destination is not None else _NO_PLACE_LABEL
     params = _ORIGIN_PARAMS.get(kind)
     if params is None:
         return _NO_PLACE_LABEL

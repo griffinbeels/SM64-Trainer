@@ -124,6 +124,18 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange, t }) 
     // to (live report 2026-08-05, with a screenshot of exactly that).
     return dropdown((vocab.moments || []).map((m) => [m.key, m.label]),
                     "Any moment", "— pick a moment —");
+  if (schema.kind === "landmark") {
+    // A RECORDED clause pins THE specific thing (this door, this pole) by
+    // its catalogue key -- the recorder writes it, and there is no
+    // hand-authoring picker for one. The editor's whole offer is letting the
+    // pin go; unset it renders nothing, because typing a key by hand is not
+    // a thing (the fallback below is a NUMBER input, which would show a
+    // string key as an empty box -- the exact trap the moment branch names).
+    if (value == null) return null;
+    return html`<button type="button" class="quiet-button"
+        title=${`Pinned to one specific thing (${value}). Click to match any of its kind here.`}
+        onclick=${() => onChange(null)}>✕ this specific one</button>`;
+  }
   if (schema.kind === "course")
     // Grouped the same way, so a course picker and a level picker read alike.
     return html`<${EntityPicker} groups=${courseOptions(vocab)}

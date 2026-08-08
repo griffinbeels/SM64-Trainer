@@ -142,6 +142,30 @@ def _star_collected(payload: dict) -> str | None:
     return f"Grabbed {star_name(course_id, star_id)} in {course_name(course_id)}"
 
 
+def entrance_key(payload: dict) -> str:
+    """The identity an ENTRANCE row renames — the entrance ITSELF, derived
+    from where it stands and where it leads, never the payload's landmark.
+
+    The payload landmark on an entrance row is whatever object Mario last
+    engaged: a painting is level geometry and never touches the pointer, so
+    his three CCM entries carried the lobby DOOR's key and the rename pencil
+    edited the door (round 12 items 5+6, journal ids 3908/3933/3943 —
+    *"If I'm setting the name for a specific row, I would expect THAT row to
+    change"*). Deriving the key from (level, area, to) works for every
+    historical row too, which no detector fix could reach."""
+    area = payload.get("area")
+    return (f"entrance:{payload.get('level')}"
+            f":{area if area is not None else 0}:{payload.get('to')}")
+
+
+def entrance_landmark(payload: dict) -> dict:
+    """The landmark fields a timeline ENTRANCE row serves in place of its
+    payload's — shaped like `core/landmark.py::Landmark.payload()` where it
+    matters to the client (key + nameable drive the rename pencil)."""
+    return {"key": entrance_key(payload), "kind_key": None,
+            "placed": True, "nameable": True}
+
+
 def _warp_entered(payload: dict, names: dict) -> str | None:
     """Three different things wear this one event type, and the row has to
     say WHICH -- a player reading his own history recognises the thing he
@@ -174,6 +198,12 @@ def _warp_entered(payload: dict, names: dict) -> str | None:
         return None
     destination = payload.get("to")
     if destination is not None and destination != level:
+        # An entrance's own name comes from the catalogue under its DERIVED
+        # key (see entrance_key above), never the payload landmark's — that
+        # one belongs to whatever he touched last.
+        named = names.get(entrance_key(payload))
+        if named:
+            return f"Touched {named} in {_level_name(level)}"
         return (f"Touched the {_level_name(destination)} entrance in "
                 f"{_level_name(level)}")
     named, kind_named = _landmark_names(payload, names)

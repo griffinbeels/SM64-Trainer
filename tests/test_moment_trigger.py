@@ -191,3 +191,45 @@ def test_a_course_subarea_clause_places_for_the_topological_cancel():
     and not a gap: it keeps the wrong-turn rule working at level
     granularity rather than switching it off."""
     assert S.step_node({"type": "area_enter", "level": 8, "area": 2}) is not None
+
+
+# -- the landmark pin (round 12 item 3) ----------------------------------------
+
+DOOR_KEY = "6:1:800ebc8c:-2303,0,-1074"
+
+
+def door_payload(key=DOOR_KEY, ordinal=1):
+    return {"kind": "door_open", "ordinal": ordinal, "level": 6, "area": 1,
+            "landmark": {"key": key, "kind_key": "kind:800ebc8c",
+                         "placed": True, "nameable": True}}
+
+
+def test_a_landmark_pin_matches_that_thing_and_nothing_else():
+    """The recorder writes the pin: a picked row means THAT door, never
+    "some first door" -- "Open a door #1" was neither the landmark he picked
+    nor the ordinal he saw (his screenshot, round 12 item 3)."""
+    clause = moment_clause(level=6, landmark=DOOR_KEY)
+    assert match(clause, door_payload()) is True
+    assert match(clause, door_payload(key="6:1:800ebc8c:256,0,-1074")) is False
+    assert match(clause, {"kind": "door_open", "ordinal": 1, "level": 6,
+                          "landmark": None}) is False
+
+
+def test_a_landmark_pin_survives_validation():
+    S.validate_definition(definition(
+        start_triggers=[moment_clause(level=6, landmark=DOOR_KEY)]))
+    with pytest.raises(ValueError, match="landmark key string"):
+        S.validate_definition(definition(
+            start_triggers=[moment_clause(level=6, landmark=7)]))
+
+
+def test_a_named_landmark_clause_reads_by_its_name():
+    """The synthesize panel's sentence must be the row he picked: "Open the
+    CCM Door in Castle Inside", through the catalogue, never "Open a door #1"
+    -- and with no catalogue in hand it falls back to the kind's own wording
+    rather than printing a raw key at a human."""
+    clause = moment_clause(level=6, landmark=DOOR_KEY)
+    named = S.clause_sentence(clause, {DOOR_KEY: "CCM Door"})
+    assert named == "Open the CCM Door in Castle Inside"
+    assert S.clause_sentence(clause) == "Open a door in Castle Inside"
+    assert DOOR_KEY not in S.clause_sentence(clause, {})

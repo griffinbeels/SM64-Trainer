@@ -2477,3 +2477,53 @@ def test_timeline_labels_follow_a_rename_through_the_memo(tmp_path):
                    for r in after), (
             "the rename never reached the row -- the label memo is serving a "
             "sentence from before the catalogue changed")
+
+
+def test_an_entrance_rows_rename_identity_is_the_entrance_itself(tmp_path):
+    """Round 12 items 5+6, one cause: an entrance row's PAYLOAD landmark is
+    whatever object Mario last engaged -- his three CCM painting entries each
+    carried the lobby DOOR's key, so the pencil autofilled "CCM Door" on the
+    entrance and committing renamed the door ("If I'm setting the name for a
+    specific row, I would expect THAT row to change"). The row's rename
+    identity is DERIVED from the row's own place + destination instead,
+    which also covers every historical row, and renaming it must touch the
+    entrance alone."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        door_key = "6:1:800ebc8c:-2303,0,-1074"
+
+        async def go():
+            await service.publish(Event(
+                type="moment_reached", frame=1000, timestamp_utc=T0,
+                payload={"kind": "door_open", "level": 6, "ordinal": 1,
+                         "landmark": {"key": door_key, "placed": True,
+                                      "nameable": True}}))
+            # The touch 38 frames later still wears the door -- the exact
+            # journal shape (ids 3908/3933/3943) this exists to survive.
+            await service.publish(Event(
+                type="warp_entered", frame=1038, timestamp_utc=T0,
+                payload={"level": 6, "area": 1, "to": 5,
+                         "landmark": {"key": door_key, "placed": True,
+                                      "nameable": True}}))
+        asyncio.run(go())
+        client.post("/api/landmark", json={"key": door_key, "name": "CCM Door"})
+        rows = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        [entrance] = [r for r in rows if r["type"] == "warp_entered"]
+        assert entrance["landmark"] == "entrance:6:1:5", (
+            "the entrance row still offers the payload's foreign landmark -- "
+            "renaming it edits the door he opened on the way in")
+        assert entrance["landmark_nameable"] is True
+        assert entrance["landmark_name"] is None, (
+            "a new entrance must start unnamed -- 'CCM Door' autofilling here "
+            "is item 5 verbatim")
+        # Naming the ENTRANCE lands on the entrance: the row re-labels, and
+        # the door's own name is untouched.
+        client.post("/api/landmark",
+                    json={"key": "entrance:6:1:5", "name": "CCM Painting"})
+        rows = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        [entrance] = [r for r in rows if r["type"] == "warp_entered"]
+        assert entrance["label"] == "Touched CCM Painting in Castle Inside"
+        names = client.get("/api/landmarks").json()["names"]
+        assert names[door_key] == "CCM Door"

@@ -3190,11 +3190,23 @@
   .record-row-wrap:hover .record-rename,
   .record-rename:focus-visible { opacity: 1; }
   .record-rename:hover { color: var(--gold); border-color: rgba(255,196,84,.55); }
+  .record-rename-edit { display: flex; align-items: center; gap: .3rem; }
   .record-rename-input {
     flex: 0 0 11rem; min-width: 0; padding: .35rem .5rem;
     border: 1px solid rgba(255,196,84,.55); border-radius: 7px;
     background: rgba(8,20,34,.8); color: var(--text); font: inherit;
   }
+  /* The visible commit/cancel pair — the cancel affordance he asked for
+     (round 12 item 5); Escape still works but a key is not an affordance. */
+  .record-rename-ok, .record-rename-cancel {
+    flex: 0 0 auto; width: 1.8rem; padding: .3rem 0;
+    border: 1px solid var(--border-soft); border-radius: 7px;
+    background: rgba(8,20,34,.48); color: var(--muted);
+    cursor: pointer; font-size: .85rem; line-height: 1;
+    transition: color 140ms ease, border-color 140ms ease;
+  }
+  .record-rename-ok:hover { color: var(--good, #7dd97d); border-color: rgba(125,217,125,.55); }
+  .record-rename-cancel:hover { color: var(--bad, #ff7d7d); border-color: rgba(255,125,125,.55); }
   .record-role {
     flex: 0 0 auto; font-size: .7rem; letter-spacing: .04em;
     text-transform: uppercase; color: var(--gold);

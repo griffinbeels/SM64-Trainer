@@ -111,13 +111,19 @@ is — and we ship a name for every kind in the game, derived from the
 decompilation's symbol table, so a row says "a bob-omb" without anyone
 naming anything. He names one specific landmark in the [[recorder]] and
 every row it ever appeared in takes that name; a name he types always beats
-a shipped one.
+a shipped one. A recorded [[segment]] can also PIN one: a definition made by
+pointing at "Open the CCM Door" matches that door and no other, instead of
+"whichever door came first".
 
 - **Lives** — `src/sm64_events/core/landmark.py` (the key),
   `tools/corpus_behaviors.py` (every kind, named),
   `src/sm64_events/data/defaults.seed.json` (the names we ship)
 - **Not** — the count in a [[moment]]'s name. "The 5th door you opened" counts
   doors; a landmark IS the door, and the count is something it has.
+- **Not** — the thing an [[entrance touch]] row renames. Mario collides with
+  level geometry there, not with an object, so the row's landmark reading
+  lingered from whatever he touched last — the entrance carries its own
+  identity instead, made from where it stands and where it leads.
 
 ### Attempt
 
@@ -355,7 +361,13 @@ pipe, 74 at Big Boo's Haunt's cage, whose entering jump is the commit — so a
 [[segment]] measured to the load counts the fade as travelling. The trainer
 ends a movement at the touch instead.
 
-- **Lives** — the warp detector (`src/sm64_events/detectors/warp.py`)
+An entrance carries a name of its own: the [[recorder]]'s pencil on one of
+these rows names THE ENTRANCE — keyed by where it stands and where it leads —
+never the [[landmark]] Mario last touched on the way in, which is how naming
+the CCM entrance once renamed the CCM door instead.
+
+- **Lives** — the warp detector (`src/sm64_events/detectors/warp.py`);
+  the entrance's own name key in `src/sm64_events/tracking/eventlabel.py`
 - **Not** — the [[frame]] the course loads. A painting or portal records where
   it leads as Mario touches it, so the [[detector]] publishes on that same
   [[frame]]; only a pipe makes it wait.

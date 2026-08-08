@@ -154,18 +154,35 @@ function RenameControl({ row, renaming, onStart, onCommit, onCancel }) {
       onclick=${() => onStart(row)}>✎</button>`;
 }
 
+// The ✓/✕ pair is the CANCEL AFFORDANCE he asked for (round 12 item 5:
+// "we should be able to cancel the name change easily (there's no clear way
+// to do this)") — Escape already cancelled, and a key nobody can see is not
+// an affordance. `onmousedown` preventDefault keeps the input focused, so
+// clicking either button never fires the input's own blur-commit first.
 function RenameInput({ row, onCommit, onCancel }) {
   const [draft, setDraft] = useState(row.landmark_name || "");
-  return html`<input class="record-rename-input" type="text" autofocus
+  const inputRef = useRef(null);
+  const commit = () => onCommit(row, inputRef.current ? inputRef.current.value
+                                                      : draft);
+  return html`<span class="record-rename-edit"
+      onclick=${(e) => e.stopPropagation()}>
+    <input class="record-rename-input" type="text" autofocus ref=${inputRef}
       value=${draft}
       placeholder="name this one"
-      onclick=${(e) => e.stopPropagation()}
       oninput=${(e) => setDraft(e.target.value)}
       onblur=${(e) => onCommit(row, e.target.value)}
       onkeydown=${(e) => {
         if (e.key === "Enter") { e.preventDefault(); onCommit(row, e.target.value); }
         if (e.key === "Escape") { e.preventDefault(); onCancel(); }
-      }} />`;
+      }} />
+    <button type="button" class="record-rename-ok" title="Save this name"
+      onmousedown=${(e) => e.preventDefault()}
+      onclick=${commit}>✓</button>
+    <button type="button" class="record-rename-cancel"
+      title="Keep the old name (Esc)"
+      onmousedown=${(e) => e.preventDefault()}
+      onclick=${onCancel}>✕</button>
+  </span>`;
 }
 
 function TimelineRows({ rows, order, onToggle, renamingId,

@@ -345,6 +345,10 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           star_name, world_connections,
                                           world_regions)
 from sm64_events.detectors.moment import MOMENTS
+# The verb splice ("Open a door" -> "Open") lives with the row labeller and
+# is borrowed, not copied: a landmark-pinned clause must read exactly like
+# the row it was picked from, and two copies of the rule is how they drift.
+from sm64_events.tracking.eventlabel import _verb
 from sm64_events.tracking import topology
 
 # The moment vocabulary, read as a SET for validation. detectors/moment.py's
@@ -778,9 +782,19 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
     # test names this type explicitly and asserts the moment's own label leads
     # the sentence instead -- the guard keeps its teeth rather than passing by
     # accident.
+    # `landmark` (round 12 item 3) pins WHICH one — the catalogue key of the
+    # specific door/pole/pickup, matched against the payload's own
+    # `landmark.key`. The recorder writes it (a picked row means THAT door,
+    # never "some first door"); there is no hand-authoring control for one,
+    # the same way nobody hand-types a spawn coordinate. It renders through
+    # the catalogue's name where the caller has one (see _resolve_param's
+    # `names`), and it is deliberately NOT in the template: with no name the
+    # sentence falls back to the kind's own wording rather than printing a
+    # raw key at a human.
     TriggerType("moment_reached", "A moment happens", "",
                 {"kind": {"kind": "moment", "required": True},
                  "ordinal": {"kind": "int", "required": False},
+                 "landmark": {"kind": "landmark", "required": False},
                  "level": {"kind": "level", "required": False},
                  "area": {"kind": "subarea", "required": False,
                           "only_when": _only_castle("level")}},
@@ -789,6 +803,9 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and ev.payload.get("kind") == p["kind"]
                 and (p.get("ordinal") is None
                      or ev.payload.get("ordinal") == p["ordinal"])
+                and (p.get("landmark") is None
+                     or (ev.payload.get("landmark") or {}).get("key")
+                     == p["landmark"])
                 and (p.get("level") is None
                      or ev.payload.get("level") == p["level"])
                 and (p.get("area") is None
@@ -831,12 +848,14 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
 ]}
 
 
-def _resolve_param(kind: str, value, clause: dict) -> str:
+def _resolve_param(kind: str, value, clause: dict,
+                   names: dict | None = None) -> str:
     """Display text for one clause param, by the vocabulary's own KIND — the
-    four TRIGGERS params ever carry. `star` also reads the clause's `course`
+    few TRIGGERS params ever carry. `star` also reads the clause's `course`
     (a star's name is meaningless without one; a course-less star clause
     falls back to the generic "Star N" addresses.star_name itself uses for
-    an unrecognised course)."""
+    an unrecognised course). `names` is the landmark catalogue where the
+    caller has one — see _render_clause."""
     if kind == "level":
         return LEVEL_NAMES.get(value, f"Level {value}")
     if kind == "subarea":
@@ -851,14 +870,21 @@ def _resolve_param(kind: str, value, clause: dict) -> str:
         # The moment's own label, never its wire key: detectors/moment.py
         # owns the wording, so "Open a door" cannot drift from what the
         # builder's dropdown and the timeline's sentence already say.
-        return _MOMENT_LABELS.get(value, str(value))
+        #
+        # A clause pinning a NAMED landmark reads by that name — "Open the
+        # CCM Door", through the same verb splice eventlabel's rows use, so
+        # the sentence he saves matches the row he picked (round 12 item 3).
+        # Unnamed (or no catalogue in hand), the kind's own wording stands.
+        label = _MOMENT_LABELS.get(value, str(value))
+        named = (names or {}).get(clause.get("landmark"))
+        return f"{_verb(label)} the {named}" if named else label
     return str(value)
 
 
 _TEMPLATE_TOKENS = re.compile(r"(\{\w+\})")
 
 
-def _render_clause(clause: dict) -> str:
+def _render_clause(clause: dict, names: dict | None = None) -> str:
     """One trigger clause -> plain English for the practice card, through
     TRIGGERS[type].card_label + .card_template (spec 2026-07-28-multi-step-
     segments; card_waiting_for_sentence below is the only caller). Until
@@ -898,7 +924,13 @@ def _render_clause(clause: dict) -> str:
     ui/components/segments.js's, which builds its own editor sentence
     straight from the label/template vocab() ships raw — see
     card_waiting_for_sentence's docstring for why that is not a second
-    door."""
+    door.
+
+    `names` is the landmark catalogue (db.landmark_names()), passed by the
+    one caller that has a db in hand (the synthesize endpoint) so a
+    landmark-pinned moment clause reads "Open the CCM Door" — the sentence
+    he picked the row by. Without it the kind's own wording stands, which is
+    vague but never wrong."""
     spec = TRIGGERS[clause["type"]]
     template = spec.card_template or spec.template
     tokens = _TEMPLATE_TOKENS.split(template)
@@ -915,7 +947,8 @@ def _render_clause(clause: dict) -> str:
             value = clause.get(name)
             if value is not None:
                 parts.append(literal_before)
-                parts.append(_resolve_param(meta["kind"], value, clause))
+                parts.append(_resolve_param(meta["kind"], value, clause,
+                                            names))
             elif name in spec.card_fallbacks:
                 parts.append(literal_before)
                 parts.append(spec.card_fallbacks[name])
@@ -924,15 +957,16 @@ def _render_clause(clause: dict) -> str:
     return f"{spec.card_label} {''.join(parts)}".strip()
 
 
-def clause_sentence(clause: dict) -> str:
+def clause_sentence(clause: dict, names: dict | None = None) -> str:
     """Public entry point onto `_render_clause`, for callers OUTSIDE
     `tracking/` (Task 13's synthesize-preview API endpoint, behind the
     "record what I just did" timeline picker). Same card_label/card_template
     rendering `card_waiting_for_sentence` uses for an armed segment's
     "waiting for" line, so a synthesized-but-unsaved clause reads in the
     IDENTICAL voice a saved one would -- a one-line alias, not a second
-    template walk."""
-    return _render_clause(clause)
+    template walk. `names` (the landmark catalogue) lets a landmark-pinned
+    clause read by the name he gave the thing."""
+    return _render_clause(clause, names)
 
 
 def card_waiting_for_sentence(d: SegmentDef, progress: int) -> str:
@@ -1957,6 +1991,15 @@ def _check_clause(clause: dict, registry: dict, what: str) -> None:
                 raise ValueError(
                     f"{kind}: unknown moment {clause[name]!r} — known moments "
                     f"are {sorted(_MOMENT_KINDS)}")
+        elif meta["kind"] == "landmark":
+            # A catalogue key, written by the recorder (round 12 item 3) —
+            # a string, never an id. Content is not validated against the
+            # catalogue: an unnamed landmark is a legal pin (the key is the
+            # identity; the name is display), and a key for a thing never
+            # touched again simply never matches.
+            if not isinstance(clause[name], str) or not clause[name].strip():
+                raise ValueError(
+                    f"{kind}: param {name!r} must be a landmark key string")
         elif not isinstance(clause[name], int):
             raise ValueError(f"{kind}: param {name!r} must be an integer")
     extras = set(clause) - {"type"} - set(spec.params)

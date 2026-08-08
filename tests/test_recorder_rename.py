@@ -213,3 +213,49 @@ def test_typing_a_name_survives_a_live_event(capsys):
         assert held == "Volcano P", (
             f"the repaint ate his draft (input now holds {held!r}) — the "
             "mysterious timer he reported racing against")
+
+
+_CANCEL_VIA_X = """
+(async () => {
+  const waitFor = async (test, ms = 4000) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      if (test()) return true;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return false;
+  };
+  const wrap = Array.from(document.querySelectorAll('.record-row-wrap'))
+    .find((w) => w.querySelector('.record-rename'));
+  wrap.querySelector('.record-rename').click();
+  if (!await waitFor(() => !!wrap.querySelector('.record-rename-input')))
+    return 'the input never appeared';
+  const input = wrap.querySelector('.record-rename-input');
+  input.value = 'SHOULD NOT PERSIST';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  const cancel = wrap.querySelector('.record-rename-cancel');
+  if (!cancel) return 'no visible cancel control';
+  cancel.click();
+  if (!await waitFor(() => !wrap.querySelector('.record-rename-input')))
+    return 'the input never closed';
+  const names = await (await fetch('/api/landmarks')).json();
+  if (JSON.stringify(names).includes('SHOULD NOT PERSIST'))
+    return 'cancel WROTE the draft';
+  return 'ok';
+})()
+"""
+
+
+def test_the_visible_cancel_discards_the_draft_without_writing():
+    """Round 12 item 5: "we should be able to cancel the name change easily
+    (there's no clear way to do this)". Escape always cancelled, but a key
+    nobody can see is not an affordance — the ✕ must exist, close the input,
+    and write NOTHING (its mousedown is prevented so the input's own
+    blur-commit cannot fire first, which is the one ordering that would turn
+    a cancel into a save)."""
+    fixture = serve_ui_live(arm_segment=FIXTURE_SEGMENT)
+    with fixture as (base, _service), get_driver().launch() as page:
+        page.goto(f"{base}/ui/index.html")
+        page.wait_for(".log-list-card")
+        assert page.evaluate(_OPEN_THE_RECORDER) is True
+        assert page.evaluate(_CANCEL_VIA_X) == "ok"

@@ -23,7 +23,8 @@ from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
 from sm64_events.tracking import topology
 from sm64_events.tracking.backtest import backtest
-from sm64_events.tracking.eventlabel import (label_event, label_level_entry,
+from sm64_events.tracking.eventlabel import (entrance_landmark, label_event,
+                                             label_level_entry,
                                              level_entry_rows)
 from sm64_events.tracking.lint import lint_definition
 from sm64_events.tracking.segments import (SegmentDef, clause_sentence,
@@ -728,6 +729,16 @@ def create_api_router(service) -> APIRouter:
             if label is None:
                 continue
             landmark = (row.payload.get("landmark") or {}) if row.payload else {}
+            # An ENTRANCE row is ABOUT the entrance, and its payload landmark
+            # is whatever Mario last ENGAGED — a painting writes the pointer
+            # never, so his CCM entries carried the lobby door's key and the
+            # pencil renamed the door (round 12 items 5+6). The rename
+            # identity is derived from the row's own place + destination
+            # instead, which also covers every historical row.
+            if (row.type == "warp_entered"
+                    and row.payload.get("to") is not None
+                    and row.payload.get("to") != row.payload.get("level")):
+                landmark = entrance_landmark(row.payload)
             if (view == "steps" and entry_level is None
                     and not _is_default_timeline_row(row)):
                 continue
@@ -944,6 +955,11 @@ def create_api_router(service) -> APIRouter:
                 "carry enough information to define a trigger from (for "
                 "example, a reset with no recorded place).")
         start_clause, end_clause = result
+        # The landmark catalogue rides every sentence here: a clause pinning
+        # a named landmark must read by that name — "Open the CCM Door", the
+        # sentence he picked the row by — or the panel contradicts his own
+        # picks (round 12 item 3).
+        names = service.db.landmark_names()
         # `steps` (2026-08-03): every place actually walked between the two
         # picked moments, so the recorder can propose the definition's ORDERED
         # STEPS instead of only its two ends. The path was always in the
@@ -951,7 +967,7 @@ def create_api_router(service) -> APIRouter:
         # could not be made in the app at all. Each carries the sentence its
         # clause renders as, through the same `clause_sentence` the two ends
         # use — one voice for the whole definition, not a third renderer.
-        steps = [{**step, "sentence": clause_sentence(step["clause"])}
+        steps = [{**step, "sentence": clause_sentence(step["clause"], names)}
                  for step in walked_steps(rows_by_id.values(),
                                           start_row, end_row)]
         # The middles the PERSON picked, as opposed to `steps`, which is the
@@ -970,10 +986,10 @@ def create_api_router(service) -> APIRouter:
                     "doesn't carry enough information to define a trigger "
                     "from (for example, a reset with no recorded place).")
             picked.append({"id": row.id, "clause": clause,
-                           "sentence": clause_sentence(clause)})
+                           "sentence": clause_sentence(clause, names)})
         return {"start_clause": start_clause, "end_clause": end_clause,
-                "start_sentence": clause_sentence(start_clause),
-                "end_sentence": clause_sentence(end_clause),
+                "start_sentence": clause_sentence(start_clause, names),
+                "end_sentence": clause_sentence(end_clause, names),
                 "steps": steps, "picked": picked,
                 "name": suggest_name(start_clause, end_clause)}
 
