@@ -1133,7 +1133,9 @@ def test_synthesize_endpoint_builds_a_clause_pair_a_name_and_sentences(tmp_path)
         assert body["end_clause"] == {"type": "level_enter", "to": 19}
         assert body["start_sentence"] == "Exit Dire, Dire Docks"
         assert body["end_sentence"] == "Enter Bowser in the Fire Sea"
-        assert body["name"] == "Dire, Dire Docks → Bowser in the Fire Sea"
+        # Route notation since round 14 ("Cool Cool Mountain becomes CCM") —
+        # the step track's own vocabulary, one door (node_short_label).
+        assert body["name"] == "DDD → BitFS"
 
 
 def test_synthesize_endpoint_404s_on_an_unknown_event_id(tmp_path):

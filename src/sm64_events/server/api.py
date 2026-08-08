@@ -991,7 +991,7 @@ def create_api_router(service) -> APIRouter:
                 "start_sentence": clause_sentence(start_clause, names),
                 "end_sentence": clause_sentence(end_clause, names),
                 "steps": steps, "picked": picked,
-                "name": suggest_name(start_clause, end_clause)}
+                "name": suggest_name(start_clause, end_clause, names)}
 
     @router.post("/segments/merge")
     async def merge_segments(body: SegmentMergeBody):

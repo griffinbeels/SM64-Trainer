@@ -206,16 +206,14 @@ def test_synthesize_refuses_when_either_end_cannot_be_built():
 # --- suggest_name ------------------------------------------------------
 
 def test_the_suggested_name_reads_like_the_movement():
-    # NOTE the brief's own sketch expected "DDD -> BitFS", built from an
-    # abbreviation table that does not exist anywhere in this codebase
-    # (tools/corpus_movements.py's short names are hand-written strings, not
-    # derived from an id) and would be an instant second source of truth for
-    # place names beside LEVEL_NAMES/COURSE_NAMES. The suggestion only has to
-    # be recognisable -- the user renames it -- so this reads the canonical
-    # full names instead.
+    # Route notation since round 14 — his ask: "For stages, we should
+    # generally use the shorthand abbreviation for each (e.g., Cool Cool
+    # Mountain becomes CCM)". The vocabulary is node_short_label /
+    # COURSE_ABBREV, the ONE table the step track already speaks (the
+    # original Task-12 objection was to inventing a second one, and stands).
     assert suggest_name({"type": "level_exit", "from": 23},
                         {"type": "level_enter", "to": 19}) \
-        == "Dire, Dire Docks → Bowser in the Fire Sea"
+        == "DDD → BitFS"
 
 
 def test_suggest_name_covers_a_star_grab_and_a_placeless_clause():
@@ -246,12 +244,12 @@ def test_place_name_reads_a_star_through_course_names_never_level_names():
 
 def test_place_name_reads_a_level_exit_through_level_names_never_course_names():
     """The mirror trap: a level_exit/level_enter clause carries a LEVEL id.
-    id 24 disagrees too -- LEVEL_NAMES[24] is "Whomp's Fortress",
-    COURSE_NAMES[24] is "The Secret Aquarium"."""
-    assert LEVEL_NAMES[24] != COURSE_NAMES[24]
-    name = _place_name({"type": "level_exit", "from": 24})
-    assert name == "Whomp's Fortress"
-    assert name != COURSE_NAMES[24]
+    Level 9 is Bob-omb Battlefield; COURSE id 9 is Dire, Dire Docks — an
+    implementation that fed the level id to a course lookup would answer
+    "DDD", a wrong but plausible abbreviation."""
+    name = _place_name({"type": "level_exit", "from": 9})
+    assert name == "BoB"
+    assert name != "DDD"
 
 
 # --- walked_steps: the path is already recorded ------------------------
@@ -431,9 +429,26 @@ def test_an_unnameable_landmark_keeps_the_ordinal():
 
 
 def test_the_suggested_name_names_the_entrance_destination():
-    # "Castle Inside -> Cool, Cool Mountain", never "-> Anywhere":
+    # "-> CCM", never "-> Anywhere":
     # entrance_touched has no _ORIGIN_PARAMS row (its firing place is
     # derived), and falling through read Anywhere for the most place-ful
     # clause in the registry.
-    assert _place_name({"type": "entrance_touched", "to": 5}) \
-        == LEVEL_NAMES[5]
+    assert _place_name({"type": "entrance_touched", "to": 5}) == "CCM"
+
+
+def test_the_round_14_name_is_his_exact_example():
+    """Round 14, verbatim: "I renamed the door to CCM Door, so I would
+    expect CCM door to be the first word… this segment would be
+    automatically named CCM Door -> CCM." A landmark he named leads with
+    that name; a stage reads in route notation; and the two ENDS are the
+    whole name regardless of how many steps sit between (suggest_name's
+    signature takes only the two ends — that is the proof of item 3)."""
+    door_key = "6:1:800ebc8c:-2303,0,-1074"
+    start = {"type": "moment_reached", "kind": "door_open", "level": 6,
+             "landmark": door_key}
+    end = {"type": "entrance_touched", "to": 5}
+    assert suggest_name(start, end, {door_key: "CCM Door"}) \
+        == "CCM Door → CCM"
+    # With no catalogue in hand the door falls back to its place, in the
+    # same route notation.
+    assert suggest_name(start, end) == "Castle Inside → CCM"

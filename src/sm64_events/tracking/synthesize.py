@@ -60,9 +60,8 @@ or an explicit addition to `_NOT_SYNTHESIZABLE`.
 `test_every_trigger_type_has_a_synthesis_row_or_is_explicitly_unreachable`
 keeps the two sets covering `TRIGGERS` exactly.
 """
-from sm64_events.memory.addresses import (CASTLE_AREA_NAMES, LEVEL_NAMES,
-                                          course_name, node_short_label,
-                                          star_name)
+from sm64_events.memory.addresses import (LEVEL_CASTLE_INSIDE, course_name,
+                                          node_short_label, star_name)
 from sm64_events.tracking import topology
 from sm64_events.tracking.segments import (_ORIGIN_PARAMS, _real_edge,
                                            step_node)
@@ -376,11 +375,33 @@ def synthesize(start_row, end_row) -> tuple[dict, dict] | None:
 # --- suggest_name --------------------------------------------------------
 # A recognisable starting point for the definition's name -- the user renames
 # it, so this only has to read like the movement, not describe it precisely.
+#
+# ROUND 14: it reads like HIS movement now. A clause pinning a landmark he
+# named leads with that name, and a place reads in route notation — the same
+# `node_short_label` vocabulary the step track already speaks ("CCM Door →
+# CCM", never "Castle Inside → Cool, Cool Mountain"). His words: *"if we
+# renamed anything, it should use those renamed names… For stages, we should
+# also generally use the shorthand abbreviation for each (e.g., Cool Cool
+# Mountain becomes CCM)"* — and the abbreviations are COURSE_ABBREV, the one
+# table this project already owns, not a second one transcribed from the
+# Usamune menu (his own example "CCM" is identical in both).
 
 _NO_PLACE_LABEL = "Anywhere"
 
 
-def _place_name(clause: dict) -> str:
+def _short_place(level: int, area: int | None = None) -> str:
+    """Route notation for a place: 'CCM', 'BitFS', 'Lobby' — the step
+    track's own vocabulary, through the same one door. A subarea is a NODE
+    only inside the castle (topology.node_for's rule); a course's own area
+    says so plainly instead — the old rendering pushed a course area through
+    the castle room names and called SSL's pyramid "Upstairs"."""
+    if area is not None and level == LEVEL_CASTLE_INSIDE:
+        return node_short_label(f"{level}:{area}")
+    short = node_short_label(str(level))
+    return f"{short} (area {area})" if area is not None else short
+
+
+def _place_name(clause: dict, names: dict | None = None) -> str:
     """The place a single clause names, through the SAME per-type param
     registry (_ORIGIN_PARAMS) segments.py's start_origin reads to answer
     "where does this clause happen" -- reusing it here rather than
@@ -389,9 +410,14 @@ def _place_name(clause: dict) -> str:
     TRAP has already cost this codebase twice. star_grabbed and reset_game
     are handled separately because _ORIGIN_PARAMS does not cover them
     (star_grabbed's place is course-shaped, not level-shaped; reset_game
-    names no place at all).
+    names no place at all). `names` is the landmark catalogue: a clause
+    pinned to a landmark he named IS that name.
     """
     kind = clause.get("type")
+    named = (names or {}).get(clause.get("landmark")) \
+        if kind == "moment_reached" else None
+    if named:
+        return named
     if kind == "star_grabbed":
         course = clause.get("course")
         if course is None:
@@ -408,7 +434,7 @@ def _place_name(clause: dict) -> str:
         # through topology), and falling through read "Anywhere" for the
         # most place-ful clause in the registry.
         destination = clause.get("to")
-        return LEVEL_NAMES.get(destination, _NO_PLACE_LABEL) \
+        return _short_place(destination) \
             if destination is not None else _NO_PLACE_LABEL
     params = _ORIGIN_PARAMS.get(kind)
     if params is None:
@@ -417,12 +443,15 @@ def _place_name(clause: dict) -> str:
     level = clause.get(level_param)
     if level is None:
         return _NO_PLACE_LABEL
-    name = LEVEL_NAMES.get(level, f"Level {level}")
     area = clause.get(area_param) if area_param else None
-    if area is not None:
-        name = f"{name} ({CASTLE_AREA_NAMES.get(area, f'Area {area}')})"
-    return name
+    return _short_place(level, area)
 
 
-def suggest_name(start_clause: dict, end_clause: dict) -> str:
-    return f"{_place_name(start_clause)} → {_place_name(end_clause)}"
+def suggest_name(start_clause: dict, end_clause: dict,
+                 names: dict | None = None) -> str:
+    """First and last, whatever sits between: the two ends are the name, and
+    the middles never enter it — his rule ("it should just use the first and
+    last step as the name, regardless of number of steps") stated here
+    because the signature is the proof."""
+    return (f"{_place_name(start_clause, names)} → "
+            f"{_place_name(end_clause, names)}")
