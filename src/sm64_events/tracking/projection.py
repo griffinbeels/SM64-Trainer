@@ -1721,7 +1721,9 @@ class Projector:
         """What a segment's SUCCESS moves an unheld hand onto (round 21): a
         top-level segment follows onto itself, exactly as it always has; a
         SUBSECTION follows onto its parent — the current target when it is
-        already one of the piece's parents, else the primary (parents[0]).
+        already one of the piece's parents, else the primary (parents[0]) ONLY
+        when there is exactly one; a piece belonging to several stars leaves
+        the hand alone rather than guessing between them (round 27).
         A castle-area parent ("area:...") is a place, not a target, so an
         area-parented piece keeps the old behavior and follows onto
         itself."""
@@ -1730,6 +1732,27 @@ class Projector:
         if not parents:
             return ("segment", segment_id)
         current = target_entity_key(self.target)
+        # AMBIGUITY DOES NOT GET RESOLVED BY GUESSING (round 27, 2026-08-09).
+        # Round 21 fell back to `parents[0]` when the hand named none of them,
+        # which is a real answer only when there IS one parent. His LLL case is
+        # the other shape: "Volcano Entry" belongs to BOTH volcano stars and
+        # completes the moment he drops into the volcano, so walking in there
+        # for fun while practicing 8-Coin Puzzle moved his target onto
+        # Hot-Foot-It -- a star he had not chosen and might not be doing.
+        #
+        # "No star should be selected by default, because you cannot
+        # confidently claim that I'm practicing one of the stars. We definitely
+        # are doing *one of* the subsections, but you can't confidently claim
+        # that I'm doing one star over the other... We will still detect the
+        # stars/subsections WHEN THEY FINISH, and then select the correct star
+        # once detected (or manually selected)."
+        #
+        # So a piece with SEVERAL parents and no matching hand leaves the hand
+        # exactly as it found it. A piece with ONE parent is unambiguous and
+        # still follows, which is round 21 item 1's own case ("swap to the
+        # correct list") and the reason this is not a blanket refusal.
+        if current not in parents and len(parents) > 1:
+            return self.target
         chosen = current if current in parents else parents[0]
         kind, _, rest = chosen.partition(":")
         if kind == "star":

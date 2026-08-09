@@ -150,6 +150,20 @@ patched):
    star + its subsections". A top-level segment still follows onto
    itself; an area-parented piece too (an area is a place, not a target).
    The held-pick branch is untouched: nothing steals a pick.
+   **ONLY WHEN THE PIECE IS EXCLUSIVE TO ONE STAR** (round 27, 2026-08-09).
+   `parents[0]` is a real answer only where there is one parent, and round
+   20's plural parents made the other shape common: "Volcano Entry" belongs
+   to BOTH volcano stars and completes the instant he drops into the volcano,
+   so walking in while practicing 8-Coin Puzzle put Hot-Foot-It in his hand.
+   His rule, verbatim: *"We shouldn't automatically select a star based on the
+   SUBSECTION... UNLESS that subsection is owned entirely and exclusively by
+   exactly one star... Completing a subsection doesn't necessarily mean you're
+   doing that star, unless it's exclusive to that star."* With several parents
+   and no matching hand the target is left exactly as found. Measured over his
+   journal: **0 attempt rows lost, gained or changed** (detection is
+   untouched, which is the half he explicitly kept) and 9 target readings
+   move — `star:7:4 -> none` x7 and `star:7:4 -> star:7:2` x2, his own 8-Coin
+   hand staying put. Mutation-proved in `tests/test_family_dance.py`.
 4. **A PICKED piece survives its parent star's grab** — his call,
    verbatim: *"'picked piece should survive its parent's grab' is
    probably the right approach"* — so `_grab_may_take_the_hand` never

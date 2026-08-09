@@ -212,3 +212,40 @@ def test_a_hooked_piece_still_yields_to_its_parents_grab():
     p.feed(jev(5, "star_collected", 2000,
                {"course_id": 2, "star_id": 1, "igt_frames": 900}))
     assert p.target == STAR
+
+
+def test_a_SHARED_piece_never_guesses_between_its_parents():
+    """Round 27, and the whole of it. "Volcano Entry" belongs to BOTH volcano
+    stars and completes the moment he drops into the volcano, so walking in
+    there for fun while practicing 8-Coin Puzzle moved his hand onto
+    Hot-Foot-It -- a star he had not chosen.
+
+    "No star should be selected by default, because you cannot confidently
+    claim that I'm practicing one of the stars. We definitely are doing *one
+    of* the subsections, but you can't confidently claim that I'm doing one
+    star over the other."
+
+    So the hand stays exactly where it was. Round 21's fallback to parents[0]
+    survives only where there IS one parent (the test above this one), which
+    is the case it was actually written for.
+    """
+    p = Projector(segments=[piece(41, into_area=2, out_area=3,
+                                  parents=("star:2:0", "star:2:5"))])
+    start(p)                               # target star:2:1 -- NEITHER parent
+    enter_area(p, 4, 1000, 1, 2)
+    enter_area(p, 5, 1500, 2, 3)           # the shared piece completes
+    assert p.target == STAR, (
+        "a piece belonging to several stars must not pick one of them")
+
+
+def test_a_SHARED_piece_on_an_EMPTY_hand_still_selects_nothing():
+    """The same rule with nothing held: "No star should be selected by
+    default." Detection still happens -- the piece records -- it just does not
+    claim a star."""
+    p = Projector(segments=[piece(41, into_area=2, out_area=3,
+                                  parents=("star:2:0", "star:2:5"))])
+    p.feed(jev(1, "level_changed", 900, {"from": 16, "to": 24}))
+    p.feed(jev(2, "area_changed", 900, {"level": 24, "from": 1, "to": 1}))
+    enter_area(p, 3, 1000, 1, 2)
+    enter_area(p, 4, 1500, 2, 3)
+    assert p.target is None
