@@ -110,11 +110,25 @@ def test_it_falls_through_to_a_LATER_parent_when_the_first_has_no_card():
 
 # --- the cases that must NOT nest -------------------------------------------
 
-def test_a_piece_whose_parents_are_all_absent_stays_top_level():
-    # Also covers item 5 for free: an `area:`-parented piece names no section
-    # at all, so a castle movement "works the same as today, as a standalone
-    # top level practice log entry."
+def test_an_AREA_parented_piece_stays_top_level():
+    # Round 22 item 5: an `area:` parent is a PLACE, names no section at all,
+    # so a castle movement "works the same as today, as a standalone top level
+    # practice log entry."
     assert nest([seg(90, ["area:6:3"])]) == [("segment:90", ())]
+
+
+def test_a_STAR_parented_piece_with_no_parent_card_is_not_shown_at_all():
+    # Round 28, and round 22's "promote it rather than hide it" reversed on his
+    # ruling: "this type of segment... should never be a top level entry in the
+    # practice log, because it's associated with a specific star... (But in
+    # this case, since I didn't select Hot Foot It, it shouldn't appear at all,
+    # because we didn't select or grab that star)."
+    assert nest([seg(90, ["star:7:4"])]) == []
+
+
+def test_a_piece_reappears_the_moment_its_parent_earns_a_card():
+    rows = nest([star(7, 4), seg(90, ["star:7:4"])])
+    assert rows == [("star:7:4", ("segment:90",))]
 
 
 def test_a_disabled_piece_leaves_the_log_entirely():

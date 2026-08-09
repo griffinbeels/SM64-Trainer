@@ -44,11 +44,20 @@ import { entityKey } from "./entitysection.js";
  *    that silently omits one of its own pieces is wrong, and the duplicate
  *    pickers are harmless — both write the same definition and both re-read it
  *    on the next view.
- *  - **A piece whose parents are all absent stays TOP-LEVEL.** That covers
- *    item 5 for free -- an `area:`-parented piece names no section at all, so
- *    a castle movement "works the same as today, as a standalone top level
- *    practice log entry" -- and it is also the safe answer for a genuinely
- *    missing parent: showing a card in the wrong place beats hiding it.
+ *  - **An AREA-parented piece stays top-level; an ENTITY-parented one with no
+ *    card DISAPPEARS.** Round 22 promoted any piece whose parents were absent,
+ *    on the grounds that showing a card in the wrong place beats hiding it.
+ *    Griffin's ruling (round 28) splits that in two, and he is right about
+ *    both halves: *"this type of segment, like Inside the Volcano down below,
+ *    should never be a top level entry in the practice log, because it's
+ *    associated with a specific star. So, it should always be under *that
+ *    star's* practice log as a subentry. (But in this case, since I didn't
+ *    select Hot Foot It, it shouldn't appear at all, because we didn't select
+ *    or grab that star)."* A piece of a star is only ever meaningful beside
+ *    that star; loose at the top level it claims to be a thing he practised.
+ *    An `area:` parent is a PLACE rather than an entity, names no section, and
+ *    keeps the round-22 behaviour -- that is item 5 of that round and is
+ *    untouched.
  *  - **A parent with a nesting child EARNS a card**, whether or not it earned
  *    one itself. Practicing only the piece would otherwise orphan it back to
  *    the top level on the very run that proves the association.
@@ -60,6 +69,14 @@ export function nestSubsections(sections, earned = () => true) {
   // castle movement and a parent that earned no card of its own.
   const homesOf = (sec) => (sec.parents || []).filter(
     (parent) => present.has(parent) && parent !== entityKey(sec));
+  // A parent that names an ENTITY -- a star or another segment -- as opposed
+  // to a castle AREA, which is a place and can never have a card.
+  // A SELF-reference is not a parent: it names no other entity, so such a row
+  // behaves like an unparented segment and stays visible. That guard exists to
+  // stop infinite nesting, never to decide whether a card is shown.
+  const wantsAParent = (sec) => (sec.parents || []).some(
+    (parent) => !String(parent).startsWith("area:")
+                && parent !== entityKey(sec));
   const nested = new Map();          // parent key -> [child sec]
   for (const sec of sections) {
     if (sec.enabled === false) continue;
@@ -76,6 +93,11 @@ export function nestSubsections(sections, earned = () => true) {
     const children = nested.get(key) || [];
     // Drawn inside at least one parent, so not ALSO at the top level.
     if (homesOf(sec).length && earned(sec)) continue;
+    // ...and a piece of a STAR with no parent card on screen is not promoted
+    // to the top level, it simply is not shown (round 28). Its own children,
+    // if it somehow had any, would go with it -- a piece of a piece is already
+    // impossible (nesting is one level), so there is nothing to strand.
+    if (wantsAParent(sec) && !homesOf(sec).length) continue;
     if (!children.length && !earned(sec)) continue;
     groups.push({ sec, children });
   }
