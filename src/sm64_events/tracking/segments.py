@@ -2779,6 +2779,9 @@ class SegmentEngine:
         # global_timer restarts there and a stale frame number could otherwise
         # collide with a fresh arm's.
         self._last_igt_zero_frame: int | None = None
+        # How much of the star's clock was banked BEFORE that zero (round 25);
+        # 0 unless the zero was an involuntary warp deeper into a course.
+        self._banked_before_zero: int = 0
         # Best successful rta per definition, as seen SO FAR in this feed
         # (spec 2026-07-28-multi-step-segments). Deterministic under replay
         # (same journal -> same answer) and monotonically improving, which is
@@ -2940,7 +2943,35 @@ class SegmentEngine:
         # updating first can never let an event validate its own close.
         if ev.type == "session_started":
             self._last_igt_zero_frame = None
+            self._banked_before_zero = 0
         elif _zeroes_usamune_igt(ev):
+            # WHAT THE COUNTER READ ON ITS WAY OUT (round 25, 2026-08-09).
+            # An INVOLUNTARY zero -- an area warp deeper into a course -- does
+            # not end the star's clock: `IgtClock.carried_igt_at_xcam` banks
+            # the leg and adds it back, so the grab reports the whole star.
+            # Remembering the banked amount is what lets `_close` hand a piece
+            # its OWN portion of that number instead of falling back to a
+            # wall-frame delta. A VOLUNTARY zero (a reset, a level edge)
+            # starts the star over, so nothing is banked across it.
+            #
+            # Read off the zeroing event's own payload: an `area_changed`
+            # deeper into a course carries the counter just before it wrapped
+            # (his volcano entry: 289). A reset carries no igt at all, which
+            # is exactly the "nothing banked" case and needs no branch.
+            # THE LOAD'S OWN RESET MUST NOT WIPE THE BANK, and it did in the
+            # first version, which measured as zero rows changed on his whole
+            # journal. An in-course area load fires a `practice_reset` on the
+            # SAME FRAME as the area edge (anchors.py: 496 of 825 measured), so
+            # the bank was set and cleared within one frame, every time. A zero
+            # at the same frame is part of the same load; only a LATER one is
+            # the player starting over.
+            carried = ev.payload.get("igt_frames")
+            deeper = (ev.type == "area_changed"
+                      and (ev.payload.get("to") or 1) > 1)
+            if deeper and carried:
+                self._banked_before_zero = carried
+            elif ev.frame != self._last_igt_zero_frame:
+                self._banked_before_zero = 0
             self._last_igt_zero_frame = ev.frame
             # THE MOVE-CLOCK REBASE (round 15 item 3): a zero landing inside
             # the window of a "move" arm IS the section entry its start
@@ -3918,10 +3949,33 @@ class SegmentEngine:
         # reported 276 against a span of 274 -- where a carried leg is 297
         # frames over. Two orders of magnitude apart, which is why a small
         # fixed slack separates them rather than a tuned threshold.
+        # SUBTRACT WHAT WAS BANKED BEFORE THIS PIECE BEGAN (round 25). Round 24
+        # refused a carried igt and fell back to the wall-frame delta, which is
+        # honest but is NOT what Usamune shows: a delta counts the star dance
+        # and every paused frame, so his volcano piece read 16"60 against the
+        # emulator's own 13"60 in the same screenshot -- "I would expect 13\"60
+        # to be displayed here, but we displayed 16\"60."
+        #
+        # His run, and the arithmetic closes to a single display tick: the grab
+        # reported 696 (the whole star), 289 was banked when he warped into the
+        # volcano, and 696 - 289 = 407 against the 408 on screen. The delta was
+        # 498 -- 90 frames of star dance and fall the counter never counted.
+        #
+        # So the carried case is not a refusal any more, it is a subtraction,
+        # and the round-24 guard becomes the TEST for whether one is needed:
+        # an igt longer than the span it covers has a prefix that is not this
+        # piece's. Only an INVOLUNTARY zero banks (`_banked_before_zero`), so a
+        # run he started by resetting INSIDE the subarea has nothing to
+        # subtract and is untouched -- which is exactly the half he reported as
+        # already correct.
         igt = ev.payload.get("igt_frames")
+        span = ev.frame - clock_origin
+        if (igt is not None and self._banked_before_zero
+                and igt > span + IGT_CARRY_SLACK_FRAMES
+                and igt - self._banked_before_zero > 0):
+            igt -= self._banked_before_zero
         starts_here = (igt is None
-                       or igt <= (ev.frame - clock_origin)
-                       + IGT_CARRY_SLACK_FRAMES)
+                       or igt <= span + IGT_CARRY_SLACK_FRAMES)
         if igt is not None and starts_here and (
                 self._last_igt_zero_frame is not None and abs(
                 self._last_igt_zero_frame - clock_origin) <= IGT_ARM_SKEW_FRAMES):

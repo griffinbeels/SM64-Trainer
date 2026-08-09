@@ -530,3 +530,61 @@ def test_an_igt_a_frame_or_two_over_the_span_is_still_taken():
                               close_igt=276, zero_frame=2408721)
     assert attempt.rta_frames == 276
     assert attempt.timed_by == "igt"
+
+
+def test_a_carried_prefix_is_SUBTRACTED_rather_than_refused():
+    """Round 25. Round 24 refused a carried igt and fell back to the delta,
+    which is honest and is not what Usamune shows: a delta counts the star
+    dance and every paused frame. His screenshot holds both numbers at once --
+    the emulator reading 0'13"60 while the row read 0'16"60.
+
+    His run: the grab reported 696 (the whole star), 289 was banked when he
+    warped into the volcano, and 696 - 289 = 407 against the 408 on screen --
+    one display tick, the standing relationship. The delta was 498.
+    """
+    from sm64_events.storage.db import Attempt
+    from sm64_events.tracking import segments as seg
+
+    engine = seg.SegmentEngine([])
+    ctx = seg.MatchContext(level=22, prev_level=22, num_stars=None, area=2)
+    # The warp deeper into the course banks the leg it interrupts...
+    engine.feed(ctx=ctx, ev=EventRow(
+        id=1, session_id=1, seq=1, type="area_changed", frame=2550851,
+        wall_time_utc="2026-08-09T00:00:00Z",
+        payload={"level": 22, "from": 1, "to": 2, "igt_frames": 289}))
+    # ...and the load's own co-frame reset must NOT wipe it (the first version
+    # of this did, and measured as zero rows changed on his whole journal).
+    engine.feed(ctx=ctx, ev=EventRow(
+        id=2, session_id=1, seq=2, type="practice_reset", frame=2550851,
+        wall_time_utc="2026-08-09T00:00:00Z", payload={}))
+    assert engine._banked_before_zero == 289
+
+    arm = seg._Arm(jid=3, session_id=1, start_frame=2550851,
+                   anchor_type="spawned", started_utc="2026-08-09T00:00:00Z")
+    definition = seg.SegmentDef(
+        id=87, name="Inside the Volcano", enabled=True,
+        start_triggers=[], end_triggers=[], guards=[])
+    grab = EventRow(id=4, session_id=1, seq=4, type="star_collected",
+                    frame=2551349, wall_time_utc="2026-08-09T00:00:00Z",
+                    payload={"igt_frames": 696})
+    attempt = engine._close(Attempt, definition, arm, grab, "success", None)
+    assert attempt.rta_frames == 407, "the piece's own portion of the star"
+    assert attempt.timed_by == "igt"
+
+
+def test_a_reset_INSIDE_the_subarea_banks_nothing():
+    """The half he reported as already correct, and the one that must not
+    move: a run begun by resetting inside the subarea has no prefix to
+    subtract, so its close is timed exactly as before."""
+    from sm64_events.tracking import segments as seg
+
+    engine = seg.SegmentEngine([])
+    ctx = seg.MatchContext(level=22, prev_level=22, num_stars=None, area=2)
+    engine.feed(ctx=ctx, ev=EventRow(
+        id=1, session_id=1, seq=1, type="area_changed", frame=2550851,
+        wall_time_utc="2026-08-09T00:00:00Z",
+        payload={"level": 22, "from": 1, "to": 2, "igt_frames": 289}))
+    engine.feed(ctx=ctx, ev=EventRow(   # a LATER reset -- his, not the load's
+        id=2, session_id=1, seq=2, type="practice_reset", frame=2551000,
+        wall_time_utc="2026-08-09T00:00:00Z", payload={}))
+    assert engine._banked_before_zero == 0

@@ -97,14 +97,37 @@ measured from the same moment (it counts paused frames the counter does not),
 so an igt exceeding it started earlier and the delta is the only honest number
 left. `IGT_CARRY_SLACK_FRAMES` (5) keeps the legitimate over-run: his run has
 the two cases 2 frames apart and 297 frames apart, so this separates them by
-two orders of magnitude rather than by tuning. **Measured with
-`tools/measure_target_queue.py --before HEAD` over both journals: 0 target
-readings differ, 0 rows lost or gained, and exactly 4 rows re-time** — his two
-"Inside the Volcano (Elevator Tour)" successes 676→379 and 684→383 (12.6 s and
-12.8 s, which is the ~13 s he expected), and two repo-journal rows sharing one
-close at 1008→989. Both halves mutation-proved in `tests/test_segment_igt.py`
-(drop the guard and the carried case comes back; drop the slack and ten tests
-go red).
+two orders of magnitude rather than by tuning.
+
+**AND THE PREFIX IS SUBTRACTED, NOT REFUSED** (round 25, the next day, off his
+next session). Falling back to the delta is honest and is NOT what Usamune
+shows — a delta counts the star dance and every paused frame, so his volcano
+piece read `0'16"60` against the emulator's own `0'13"60` in the same
+screenshot. `_banked_before_zero` remembers what the counter read on its way
+out of an INVOLUNTARY zero (an `area_changed` deeper into a course, whose
+payload carries it), and `_close` subtracts that from a carried igt instead of
+discarding it: his grab reported 696, the volcano entry banked 289, and
+696 − 289 = **407** against the 408 on screen — one display tick, the standing
+relationship. Only an involuntary zero banks, so a run he began by resetting
+INSIDE the subarea has nothing to subtract, which is the half he reported as
+already correct.
+
+**THE CO-FRAME LOAD RESET MUST NOT WIPE THE BANK**, and the first version let
+it: an in-course area load fires a `practice_reset` on the SAME FRAME as the
+area edge (anchors.py measured 496 of 825), so the bank was set and cleared
+within one frame and the change measured as **zero rows moved on his entire
+journal**. A zero at the same frame belongs to that load; only a later one is
+him starting over.
+
+**Measured with `tools/measure_target_queue.py --before HEAD`, both journals:
+0 target readings differ, 0 rows lost or gained.** Round 24's guard alone
+moved 4 rows (676→379, 684→383, and two repo rows 1008→989); the subtraction
+on top moves the same LLL rows again to their Usamune numbers — 498→**407**
+(the reported one) and three others by exactly +1 frame, which is the
+documented amount a delta runs cheap against an igt. Every half is
+mutation-proved in `tests/test_segment_igt.py`: drop the guard and the carried
+case comes back, drop the slack and ten tests go red, let the co-frame reset
+clear the bank and the subtraction silently stops happening.
 
 Forward-only for the pipe family: historical `warp_entered` rows carry no
 `igt_frames` and the raw counter at those frames was never journaled, so
