@@ -610,6 +610,34 @@ def _publish_bowser_stage(service, course_id: int, level: int) -> None:
     asyncio.run(go())
 
 
+def _publish_castle_stage(service, area: int) -> None:
+    """Publish a `stage_changed` naming a CASTLE INTERIOR subarea (1 lobby /
+    2 upstairs / 3 basement) -- the mode `SegmentRow` draws, and the one no
+    gate had ever rendered.
+
+    That gap shipped a hard crash. Round 22 dropped one `const` while editing
+    `SegmentRow`, which `node --check` passes and every test passed too,
+    because the whole matrix only ever renders `mode="stars"` and
+    `"bowser_course"`. On his machine the first walk out of a course into the
+    castle threw inside Preact's render and FROZE THE ENTIRE PAGE -- listeners
+    still fired, so it read as "I can't interact with ANY of the dropdowns on
+    this page" (2026-08-09; his journal recorded 48 further events while the
+    screen posted nothing).
+
+    Same additive shape as `_publish_bowser_stage`: broadcast-only, retires
+    nothing, so whatever target the fixture set survives underneath it.
+    """
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    async def go() -> None:
+        await service.publish(Event(
+            type="stage_changed", frame=5300, timestamp_utc=now,
+            payload={"course_id": None, "level": 6, "area": area,
+                     "mode": "castle", "settling": False}))
+
+    asyncio.run(go())
+
+
 def _enter_level(service, level: int, frame: int = 9000) -> None:
     """Publish ONE real `level_changed` entering `level`, arming whatever
     real definition(s) key off it and leaving them ARMED -- no closing event
@@ -847,6 +875,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               seed_subsections: bool = False,
               reconcile_full_corpus: bool = False,
               bowser_stage: tuple[int, int] | None = None,
+              castle_stage: int | None = None,
               enter_level: int | None = None,
               arm_hundred_coin: tuple[int, int] | None = None,
               pad_journal: int = 0):
@@ -1028,6 +1057,8 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                 # already be armed (arm_segment), or there is no `armed_
                 # detail` for the resulting card to carry.
                 _target_segment(base, target_segment)
+            if castle_stage is not None:
+                _publish_castle_stage(service, castle_stage)
             if bowser_stage is not None:
                 # AFTER _seed_target, not instead of it: broadcast-only and
                 # retires nothing (see _publish_bowser_stage), so the star

@@ -934,6 +934,8 @@ function SegmentRow({ t, v, stage }) {
   const inRoute = routeSegs
     ? here.filter((s) => routeSegs.has(s.segment_id)) : here;
 
+  const offered = inRoute.length ? inRoute : here;   // never empty the row
+
   // A PIECE IS A BADGE ON ITS PARENT, NEVER A CELL (round 22 — the same rule
   // the star row follows, and the same reason: rule 11, one implementation).
   // Here the parent is a castle MOVEMENT rather than a star, so `segs` is the
