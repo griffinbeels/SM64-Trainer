@@ -568,7 +568,15 @@ def test_a_carried_prefix_is_SUBTRACTED_rather_than_refused():
                     frame=2551349, wall_time_utc="2026-08-09T00:00:00Z",
                     payload={"igt_frames": 696})
     attempt = engine._close(Attempt, definition, arm, grab, "success", None)
-    assert attempt.rta_frames == 407, "the piece's own portion of the star"
+    # 696 - 289 + DISPLAY_TICK = 408, exactly the number on his screen.
+    #
+    # THE TICK IS NOT A FUDGE. Both numbers already carry it, so a bare
+    # subtraction removes it twice and lands one frame -- 0.03 s -- under
+    # Usamune. He reported that separately, with two more samples: 12"93 on
+    # the emulator against 12"90 in the log, and 24"76 against 24"73 --
+    # "Looks like we're one frame too early?". Three independent readings,
+    # every one exactly one frame, which is why this is a named constant.
+    assert attempt.rta_frames == 408, "the piece's own portion of the star"
     assert attempt.timed_by == "igt"
 
 

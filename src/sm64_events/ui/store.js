@@ -16,6 +16,14 @@ const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   "star_collected", "strat_set", "rank_standards_changed",
   "rank_mode_changed", "icons_changed", "marelo_changed", "route_selected",
   "segment_progress",
+  // `spawned` joined in round 26 for ONE derived field: `stage`'s
+  // `on_the_star_select`, which opens on a grab and closes on the next spawn
+  // (tracking/service.py). `star_collected` was already here, so only the
+  // CLOSING edge was unreachable -- the row stayed wide after he landed
+  // somewhere, which is the mirror of the bug it was added to fix. A spawn is
+  // roughly one per reset, and this is the same view fetch every other entry
+  // in this set costs.
+  "spawned",
 ]);
 const RUN_REFRESH_ON = new Set(["run_started", "run_progress",
   "run_finished", "run_aborted", "game_reset"]);
@@ -451,7 +459,13 @@ export function useTracker() {
           // without a reload — the picker reads t.segments.
           loadSegments();
         } else if (ev.type === "stage_changed") {
-          setStage(ev.payload);
+          // MERGED, not replaced (round 26). The detector's payload knows
+          // nothing about `on_the_star_select` -- that is stamped by the
+          // service from journaled events (tracking/service.py) and arrives on
+          // the VIEW. Assigning the raw payload here would drop it every time
+          // the stage re-emitted, which is once per area change: the flag
+          // would flicker off in exactly the window it exists for.
+          setStage((prev) => ({ ...(prev || {}), ...ev.payload }));
         }
       };
     }

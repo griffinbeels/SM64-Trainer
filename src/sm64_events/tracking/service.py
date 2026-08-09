@@ -122,6 +122,11 @@ class TrackerService:
                                     landmark_names=self._landmark_names)
         self._current_stage = {"course_id": None, "level": None,
                                "area": None, "mode": None}
+        # True from a star grab until the next spawn: the window the course's
+        # own star-select screen occupies, during which the area byte is stale
+        # (see `current_stage`). Derived from journaled events rather than
+        # from memory, so replay and a live session agree.
+        self._grab_since_spawn = False
         self._persisted_runs: list[int] = []
         # Zero-arg callable -> attempt ids with a saved replay clip, which the
         # startup prune must never delete (tracking/prune.py). Injected by
@@ -257,6 +262,10 @@ class TrackerService:
         if (event.type in ("practice_reset", "state_loaded")
                 and self.on_attempt_boundary is not None):
             self.on_attempt_boundary()
+        if event.type == "star_collected":
+            self._grab_since_spawn = True
+        elif event.type == "spawned":
+            self._grab_since_spawn = False
         if event.type == "stage_changed":
             # Live presentation signal: cache for the session view's initial
             # load and NEVER journal it (recomputable from curr_level; a
@@ -473,8 +482,23 @@ class TrackerService:
         """The quick-select banner context the player is standing in (payload's
         `mode`: stars / bowser_course / arena / castle / None), cached from the
         broadcast-only stage_changed event for the session view's initial load.
-        See detectors/stage.py."""
-        return self._current_stage
+        See detectors/stage.py.
+
+        `on_the_star_select` is stamped HERE rather than in the detector,
+        because the detector only sees snapshots and this is a fact about
+        EVENTS. It is true from a star grab until the next spawn — the window
+        the course's own star-select screen occupies — and the selector reads
+        it to stop narrowing the row to a subarea Mario has already left.
+
+        WHY (round 26, and the third report of one symptom): the area byte
+        holds whatever area he was last in, and nothing moves it while the
+        star select is up. He grabbed a star in the volcano at 09:07:40 and
+        the next spawn landed at 09:07:52 — **twelve seconds** of star-select
+        screen offering the volcano's two stars where the route has five. Both
+        earlier attempts at this aimed at a LEVEL-LOAD transient, which is a
+        different window entirely and is not the one he was photographing."""
+        return {**self._current_stage,
+                "on_the_star_select": self._grab_since_spawn}
 
     @property
     def segment_defs(self) -> list[SegmentDef]:

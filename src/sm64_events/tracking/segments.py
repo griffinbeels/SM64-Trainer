@@ -346,6 +346,7 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           COURSE_SUBAREA_STARS,
                                           world_connections, world_regions)
 from sm64_events.core.landmark import same_landmark
+from sm64_events.detectors.igt_clock import IgtClock
 from sm64_events.detectors.moment import MOMENTS
 # The verb splice ("Open a door" -> "Open") lives with the row labeller and
 # is borrowed, not copied: a landmark-pinned clause must read exactly like
@@ -3970,10 +3971,18 @@ class SegmentEngine:
         # already correct.
         igt = ev.payload.get("igt_frames")
         span = ev.frame - clock_origin
+        # THE DISPLAY TICK SURVIVES THE SUBTRACTION (his third pair of
+        # samples, 2026-08-09). Both numbers already carry
+        # `IgtClock.DISPLAY_TICK`, so subtracting one from the other removes it
+        # twice and the piece lands exactly one frame -- 0.03 s -- under what
+        # Usamune shows. Three independent readings, every one 1 frame:
+        # 407 against 408, `0'12"90` against `0'12"93`, `0'24"73` against
+        # `0'24"76`. "Looks like we're one frame too early?" -- yes, exactly
+        # one, which is why this is a named constant and not a fudge.
         if (igt is not None and self._banked_before_zero
                 and igt > span + IGT_CARRY_SLACK_FRAMES
                 and igt - self._banked_before_zero > 0):
-            igt -= self._banked_before_zero
+            igt = igt - self._banked_before_zero + IgtClock.DISPLAY_TICK
         starts_here = (igt is None
                        or igt <= span + IGT_CARRY_SLACK_FRAMES)
         if igt is not None and starts_here and (

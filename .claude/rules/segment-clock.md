@@ -119,6 +119,16 @@ within one frame and the change measured as **zero rows moved on his entire
 journal**. A zero at the same frame belongs to that load; only a later one is
 him starting over.
 
+**AND THE DISPLAY TICK SURVIVES THE SUBTRACTION.** Both numbers already carry
+`IgtClock.DISPLAY_TICK`, so subtracting one from the other removes it twice and
+the piece lands exactly one frame — 0.03 s — under Usamune. He reported it with
+two samples on top of the first: *"12"93 in usamune, 12"90 in the practice
+log... 24"76 for Hot-Foot-It Into the Volcano, but it's detected in our log as
+24"73. Looks like we're one frame too early?"* Three independent readings, all
+exactly one frame, so the term is the named constant rather than a fudge —
+`igt - banked + DISPLAY_TICK`. Re-measured: 3 more rows move, every one by +1,
+and `742 → 743` IS his `0'24"73 → 0'24"76`.
+
 **Measured with `tools/measure_target_queue.py --before HEAD`, both journals:
 0 target readings differ, 0 rows lost or gained.** Round 24's guard alone
 moved 4 rows (676→379, 684→383, and two repo rows 1008→989); the subtraction

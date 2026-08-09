@@ -100,3 +100,73 @@ def test_inside_the_volcano_the_row_narrows_to_the_volcano_stars(tmp_path):
     assert inside == 3, (
         f"inside the volcano only its stars (4, 5, 100c) belong, drew {inside}")
     assert back_out == 7, "walking back out must restore the full row"
+
+
+@pytest.mark.skipif(bool(_MISSING), reason=_MISSING or "")
+def test_the_star_select_screen_shows_the_whole_course_again(tmp_path):
+    """Round 26, and the THIRD report of one symptom -- "on the star select
+    menu for a course, ONLY the subareas are visible... I've mentioned this
+    like 3 times."
+
+    The narrowing above is correct and stays. What nothing moves is the area
+    byte while the course's own star-select screen is up: he grabbed a star
+    inside the volcano and the next spawn landed TWELVE SECONDS later, all of
+    it offering the volcano's stars where his route has five. `star_collected`
+    opens that window and `spawned` closes it (tracking/service.py).
+
+    Driven through the REAL service, because the whole point is that the two
+    events and the stage payload agree -- a unit test on the flag alone would
+    have passed for both of the earlier, wrong fixes.
+    """
+    with serve_ui_live(tmp_path / "starselect.db",
+                       stage=(LLL_COURSE, LLL_LEVEL),
+                       target=(LLL_COURSE, 2)) as (base, service), \
+            driver.get_driver().launch(headless=True) as page:
+
+        def publish(event_type, payload, frame):
+            async def go():
+                await service.publish(Event(
+                    type=event_type, frame=frame,
+                    timestamp_utc=datetime(2026, 6, 10, 12, 5,
+                                           tzinfo=timezone.utc),
+                    payload=payload))
+            worker = threading.Thread(target=lambda: asyncio.run(go()))
+            worker.start()
+            worker.join(timeout=10)
+
+        def cells_settle():
+            """Poll rather than sleep a fixed 2 s. This test drives three real
+            events through the service and each one costs a websocket hop plus
+            a view fetch, so a fixed wait is a race that passes alone and fails
+            under load -- which is exactly how it first behaved."""
+            last = -1
+            for _ in range(40):
+                page.evaluate("new Promise(r => setTimeout(r, 150))")
+                now = page.evaluate(COUNT_CELLS)
+                if now == last and now:
+                    return now
+                last = now
+            return last
+
+        page.goto(base)
+        cells_settle()
+        publish("stage_changed", {"course_id": LLL_COURSE, "level": LLL_LEVEL,
+                                  "area": VOLCANO, "mode": "stars"}, 95000)
+        inside = cells_settle()
+
+        # The grab he takes in the volcano: the star select comes up and the
+        # area byte does not move.
+        publish("star_collected", {"course_id": LLL_COURSE, "star_id": 5,
+                                   "igt_frames": 400}, 95100)
+        on_star_select = cells_settle()
+
+        # He picks a star and lands somewhere: the area is his again.
+        publish("spawned", {"level": LLL_LEVEL, "kind": "spawn",
+                            "area": VOLCANO}, 95200)
+        back_in = cells_settle()
+
+    assert inside == 3, f"the volcano narrows as before, drew {inside}"
+    assert on_star_select == 7, (
+        "the star select must offer the whole course again -- it drew "
+        f"{on_star_select}, which is the bug he reported three times")
+    assert back_in == 3, "spawning back in the volcano narrows again"

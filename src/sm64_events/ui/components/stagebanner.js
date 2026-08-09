@@ -434,6 +434,17 @@ function StarRow({ t, v, stage }) {
   // route filter with the same never-empty fallback that filter has: a
   // route narrowed to stars outside this subarea must not blank the row.
   //
+  // AND NOT WHILE THE STAR SELECT IS UP (round 26, and the THIRD report of
+  // one symptom -- "I've mentioned this like 3 times"). The two earlier fixes
+  // aimed at a LEVEL-LOAD transient, and the UI log says the narrowing tracks
+  // the area byte exactly as designed at every other moment: 2 cells inside
+  // the volcano, 5 in the main area, flipping correctly all session. What
+  // nothing moves is the area byte while the course's own star-select screen
+  // is showing -- he grabbed a star in the volcano at 09:07:40 and the next
+  // spawn landed at 09:07:52, TWELVE SECONDS of that screen offering the
+  // volcano's two stars. `on_the_star_select` (tracking/service.py) is true
+  // from a grab until the next spawn, which is exactly that window.
+  //
   // NOT WHILE THE AREA IS STILL THE LOAD'S (round 23, 2026-08-08). A course
   // load walks the area byte through a transient -- entering LLL reads the
   // volcano for 1.74 s, measured on his own journal -- and the STAR-SELECT
@@ -445,7 +456,7 @@ function StarRow({ t, v, stage }) {
   // somewhere himself. Showing everything is the safe side of this, and the
   // same side `COURSE_SUBAREA_STARS` already takes for a subarea it has no
   // row for.
-  const subareaStars = course && !stage.settling
+  const subareaStars = course && !stage.settling && !stage.on_the_star_select
     ? ((t.vocab || {}).subarea_stars || {})[`${stage.level}:${stage.area}`]
     : null;
   const routeShown = course
