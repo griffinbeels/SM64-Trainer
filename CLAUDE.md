@@ -88,6 +88,7 @@ automatically when you touch matching files. Zones:
 | Memory reads + detectors + recipes (new event, dust trick, memory hunting) | `memory/`, `detectors/`, `core/snapshot.py`, `core/events.py` | `.claude/rules/memory-detectors.md` |
 | Tracking, storage, stats, routes/runs/segments, defaults corpus | `tracking/`, `storage/`, `stats/`, `data/`, `tools/corpus_*` | `.claude/rules/tracking-storage.md` |
 | The world-graph rules a movement is judged against (topological cancels, the resurrection memory) | `tracking/topology.py`, `tracking/segments.py`, `tools/measure_topology_cancels.py`, `tools/why_cancelled.py`, `tools/topology_map.py` | `.claude/rules/segment-topology.md` |
+| When a segment's clock STARTS, and what number it records when it stops | `tracking/segments.py`, `detectors/igt_clock.py`, `detectors/counter_epoch.py` | `.claude/rules/segment-clock.md` |
 | The segment recorder — the journal read back as pointable sentences | `tracking/eventlabel.py`, `tracking/synthesize.py`, `ui/components/segmenttimeline.js` | `.claude/rules/recorder.md` |
 | Server, REST/WS APIs, wiring, paths, perf probes | `server/`, `main.py`, `core/paths.py`, `core/procmem.py`, `core/perfmon.py` | `.claude/rules/server.md` |
 | UI shell, shared primitives, **verification norms** (loads for all of `ui/`) | `ui/` | `.claude/rules/ui-core.md` |

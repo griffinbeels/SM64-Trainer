@@ -473,3 +473,60 @@ def test_a_subsection_armed_ON_the_zeroing_event_does_take_usamunes_number():
     attempt = one_success(rows, from_anchor)
     assert attempt.timed_by == "igt"
     assert attempt.rta_frames == DOOR_DISPLAY
+
+
+# --- a carried IGT is not this piece's time (round 24, 2026-08-09) ----------
+#
+# The star clock CARRIES a leg across an area warp and adds it back
+# (`IgtClock.carried_igt_at_xcam`, 2026-08-02), so a grab inside a subarea
+# reports the WHOLE STAR. A subsection that armed on the spawn into that
+# subarea passes `_close`'s zero-frame precondition honestly -- Usamune really
+# did zero on its arm frame -- and used to bank the star's number as its own.
+#
+# His report, off his own screen: "it's incorrectly counting THE ENTIRE STAR
+# TIME as the segment time... I would expect the timer to begin when the
+# segment actually starts -- that is, it should be about ~13 seconds long."
+#
+# His run, from the journal, is the fixture below: armed at frame 2409018 (the
+# spawn into the volcano), closed on the grab at 2409397 -- 379 frames, 12.6 s
+# -- while the grab reported igt 676, which is the 296 banked before the warp
+# plus this piece's own 380.
+
+def _close_directly(*, arm_frame, close_frame, close_igt, zero_frame):
+    """`SegmentEngine._close` over a hand-built arm, which is the only way to
+    drive this branch without synthesising a whole subarea run."""
+    from sm64_events.storage.db import Attempt
+    from sm64_events.tracking import segments as seg
+
+    engine = seg.SegmentEngine([])
+    engine._last_igt_zero_frame = zero_frame
+    arm = seg._Arm(jid=1, session_id=1, start_frame=arm_frame,
+                   anchor_type="spawned", started_utc="2026-08-09T00:00:00Z")
+    definition = seg.SegmentDef(
+        id=87, name="Inside the Volcano", enabled=True,
+        start_triggers=[], end_triggers=[], guards=[])
+    event = EventRow(id=9, session_id=1, seq=9, type="star_collected",
+                     frame=close_frame, wall_time_utc="2026-08-09T00:00:00Z",
+                     payload={"igt_frames": close_igt})
+    return engine._close(Attempt, definition, arm, event, "success", None)
+
+
+def test_an_igt_longer_than_the_span_it_covers_is_refused():
+    attempt = _close_directly(arm_frame=2409018, close_frame=2409397,
+                              close_igt=676, zero_frame=2409018)
+    assert attempt.rta_frames == 379, (
+        "a piece must time from its own arm, not adopt the star's carried "
+        "whole-run number")
+    assert attempt.timed_by == "delta"
+
+
+def test_an_igt_a_frame_or_two_over_the_span_is_still_taken():
+    """The legitimate case, and the reason this is a slack rather than a
+    strict comparison: a close event's igt runs a frame or two over the delta
+    through the display tick and the arm's own poll alignment. His "Volcano
+    Entry", closed by its own warp touch, reported 276 against a span of 274
+    -- where the carried leg above is 297 frames over."""
+    attempt = _close_directly(arm_frame=2408721, close_frame=2408995,
+                              close_igt=276, zero_frame=2408721)
+    assert attempt.rta_frames == 276
+    assert attempt.timed_by == "igt"

@@ -2707,6 +2707,12 @@ def _is_major_action(ev) -> bool:
 # as far as Usamune's counter is concerned.
 IGT_ARM_SKEW_FRAMES = 1
 
+# How much LONGER than the wall-frame span a closing event's IGT may be before
+# it is judged to have started somewhere this segment did not (round 24; see
+# `SegmentEngine._close`). His two cases are 2 frames over and 297 frames over,
+# so this separates them by two orders of magnitude rather than by tuning.
+IGT_CARRY_SLACK_FRAMES = 5
+
 # How long after a "move" def's arm a counter zero still counts as the
 # section entry the START caused (round 15 item 3). Every measured
 # trigger-to-zero gap sits inside it: his CCM door's own room transition at
@@ -3886,9 +3892,39 @@ class SegmentEngine:
         clock_origin = (arm.clock_frame
                         if d.clock_start == "move" and arm.clock_frame is not None
                         else arm.start_frame)
+        # AN IGT LONGER THAN THE SPAN IT COVERS DID NOT START HERE (round 24,
+        # 2026-08-09). The zero-frame test above is necessary and, since
+        # 2026-08-02, no longer sufficient: the star clock CARRIES a leg across
+        # an area warp and adds it back (`IgtClock.carried_igt_at_xcam`), so a
+        # grab inside a subarea reports the WHOLE STAR. A piece that armed on
+        # the spawn into that subarea passes the zero test -- Usamune really
+        # did zero on its arm frame -- and then banks the star's number as its
+        # own.
+        #
+        # His run, and the arithmetic closes to the frame: "Inside the Volcano
+        # (Elevator Tour)" armed at frame 2409018 (the spawn into the volcano)
+        # and closed on the grab at 2409397 -- a span of 379 -- while the grab
+        # reported igt 676, which is the 296 banked before the warp plus this
+        # piece's own 380. He read it straight off the screen: "it's
+        # incorrectly counting THE ENTIRE STAR TIME as the segment time... it
+        # should be about ~13 seconds long" (379 frames is 12.6 s).
+        #
+        # THE DELTA IS AN UPPER BOUND on any igt measured from the same moment,
+        # because it counts paused frames the counter does not. So an igt that
+        # EXCEEDS it started earlier, and the delta is the only honest number
+        # left. The slack keeps the legitimate case: a close event's igt runs a
+        # frame or two OVER the delta through the display tick and the arm's
+        # own poll alignment -- "Volcano Entry", closed by its own warp touch,
+        # reported 276 against a span of 274 -- where a carried leg is 297
+        # frames over. Two orders of magnitude apart, which is why a small
+        # fixed slack separates them rather than a tuned threshold.
         igt = ev.payload.get("igt_frames")
-        if igt is not None and self._last_igt_zero_frame is not None and abs(
-                self._last_igt_zero_frame - clock_origin) <= IGT_ARM_SKEW_FRAMES:
+        starts_here = (igt is None
+                       or igt <= (ev.frame - clock_origin)
+                       + IGT_CARRY_SLACK_FRAMES)
+        if igt is not None and starts_here and (
+                self._last_igt_zero_frame is not None and abs(
+                self._last_igt_zero_frame - clock_origin) <= IGT_ARM_SKEW_FRAMES):
             rta, timed_by = igt, "igt"
         else:
             # Which branch ran is itself a fact the display needs (ruling 6):
