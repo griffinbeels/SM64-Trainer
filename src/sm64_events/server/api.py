@@ -229,9 +229,10 @@ class SegmentBody(BaseModel):
     waypoints: list = []
     category: str | None = None
     match_mode: str = "loose"
-    # The entity this is a SUBSECTION of; None (the default) = a top-level
-    # segment, which is what every definition was before task 0087.
-    parent: str | None = None
+    # The entities this is a SUBSECTION of; [] (the default) = a top-level
+    # segment, which is what every definition was before task 0087. Plural
+    # since round 20 — one piece can belong to several stars.
+    parents: list[str] = []
     # When the clock starts (round 15 item 3). "move" by DEFAULT for new
     # definitions — his ruling: "I think generally most start triggers
     # should *actually* start timing when Mario's able to move, so this
@@ -257,11 +258,11 @@ class SegmentPatch(BaseModel):
     category: str | None = None
     # None = untouched, exactly like waypoints above.
     match_mode: str | None = None
-    # None OMITTED = untouched; an EXPLICIT null clears (exclude_unset keeps
-    # a field the body actually sent, even as null). The builder never sends
-    # it; the recorder's re-record save (round 16) always does, so the parent
-    # control he sees is exactly what lands.
-    parent: str | None = None
+    # None OMITTED = untouched; an EXPLICIT [] clears (exclude_unset keeps
+    # a field the body actually sent, even empty). The builder never sends
+    # it; the recorder's re-record save (round 16) always does, so the
+    # parent controls he sees are exactly what lands. Plural since round 20.
+    parents: list[str] | None = None
     # None = untouched, exactly like match_mode above.
     clock_start: str | None = None
 
@@ -735,7 +736,10 @@ def create_api_router(service) -> APIRouter:
                 continue          # the load's own settling, not a move he made
             entry_level = entry_spawns.get(row.id)
             if entry_level is not None:
-                label = label_level_entry(entry_level)
+                # the row's own payload says WHERE the spawn put him — a
+                # subarea restart reads "Spawned into LLL: Volcano" rather
+                # than claiming the whole course started (round 20 item 3)
+                label = label_level_entry(entry_level, row.payload)
             elif row.id in memo:
                 label = memo[row.id]
             else:

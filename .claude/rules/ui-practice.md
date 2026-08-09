@@ -122,21 +122,28 @@ them is a preference:
    order would let a list drawn newest-first author a definition whose steps
    run backwards through a walk that only ever happened one way.
 
-**`parent` is asked HERE and nowhere else** — "what is this a piece of?", at
+**`parents` is asked HERE and nowhere else** — "what is this a piece of?", at
 Save time. This is the ONLY door into a [[subsection]] in the whole app:
-`SegmentBody.parent`/`SegmentPatch.parent` have been real server-side since
-migration v22 and the corpus can set one, but `SAVE_FIELDS` in `segments.js`
+the server side has been real since migration v22 (PLURAL since round 20 /
+v26), but `SAVE_FIELDS` in `segments.js`
 omits it and no editor control writes one, which is exactly why he asked *"what
 star has subsections? I don't see a way to define that?"* (2026-08-05). Putting
 it in the library editor instead was rejected: his own spec says *"nothing asks
 'you just recorded this, what is it a piece of?' when you would want to
 answer"*, and a control in the editor answers at the wrong moment AND becomes a
-second door the day the recorder grows its own. Held as the PICKER's option id
+second door the day the recorder grows its own. Held as a LIST of the PICKER's
+option ids
 (`"8:1"`/`"segment:12"`) so `value=` can highlight the chosen cell, and
 translated once by `entities.js::entityKeyForOption` — the same translation the
 picker's rank-badge lookup uses, because two hand-built copies of a key format
-is how they drift. Keep `parent` (which entity this is a piece of — the sheet's
-mapping key) and `origin` (where the library files it) distinct: they answer
+is how they drift. **One pill per chosen parent, and the + to the right
+appends another (round 20 item 1: *"sometimes the same subsection might be
+practicable in multiple stars... We need to just add a + button to the right
+and allow multiple selections"*); re-picking a pill changes that slot, the
+"Nothing" placeholder on a pill removes it, and a duplicate pick collapses to
+a no-op (`commitParentPick`).** Keep `parents` (which entities this is a
+piece of — the sheet's
+mapping keys) and `origin` (where the library files it) distinct: they answer
 different questions. **Three parent grains since round 14** (his ruling, asked
 and answered 2026-08-08: *"for the castle areas, those are the high level
 areas, so it shouldn't have a further drill down. For the individual stars, we

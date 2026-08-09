@@ -1192,3 +1192,42 @@ def test_delete_empty_sessions_never_reuses_a_purged_id(tmp_path):
     db.replace_attempts([])
     db.delete_empty_sessions(active)
     assert db.insert_session("2026-06-10T15:00:00Z") > active > empty
+
+
+# -- migration v26: the parent goes plural (round 20 item 1) -----------------
+
+def test_migration_v26_backfills_a_scalar_parent_into_the_list(tmp_path):
+    """His live db really holds this shape — "Volcano Entry" carries
+    parent='star:22:0'-style scalars written under v22 — so the backfill is
+    the migration's whole job, not a defensive extra. A fresh db never
+    exercises it (no shipped seed row has a parent), which is why this test
+    builds the OLD schema by hand: MIGRATIONS[:25] is the last state where
+    the `parent` column exists."""
+    import sqlite3
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    for script in MIGRATIONS[:25]:
+        conn.executescript(script)
+    conn.execute(
+        "INSERT INTO segment_defs (name, enabled, start_triggers,"
+        " end_triggers, waypoints, guards, parent, created_utc)"
+        " VALUES ('Volcano Entry', 1, '[]', '[]', '[]', '[]',"
+        " 'star:22:0', '2026-08-08T00:00:00Z')")
+    conn.execute(
+        "INSERT INTO segment_defs (name, enabled, start_triggers,"
+        " end_triggers, waypoints, guards, parent, created_utc)"
+        " VALUES ('Top Level', 1, '[]', '[]', '[]', '[]',"
+        " NULL, '2026-08-08T00:00:00Z')")
+    conn.execute("PRAGMA user_version = 25")
+    conn.commit()
+    conn.close()
+
+    db = Database(path)
+    rows = {r["name"]: r for r in db.segment_defs()}
+    assert rows["Volcano Entry"]["parents"] == ["star:22:0"]
+    assert rows["Top Level"]["parents"] == []
+    # The scalar column is GONE — a reader left pointing at it must break
+    # loudly, never read a stale second door.
+    cols = [c[1] for c in db._conn.execute(
+        "PRAGMA table_info(segment_defs)").fetchall()]
+    assert "parent" not in cols and "parents" in cols

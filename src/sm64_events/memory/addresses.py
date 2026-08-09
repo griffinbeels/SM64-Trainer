@@ -623,6 +623,40 @@ CANNON_ACTIONS = frozenset({ACT_IN_CANNON})
 CURR_AREA = 0x8033BACA               # s16 gCurrAreaIndex
 CASTLE_AREA_NAMES = {1: "Lobby", 2: "Upstairs", 3: "Basement"}  # live-verified 2026-06-12 (same hunt)
 
+# COURSE subarea names, keyed (level, gCurrAreaIndex) — what a "Spawned into
+# Lethal Lava Land: Volcano" row calls the place (round 20 item 3). Courses
+# spawn in area 1 (counter_epoch.COURSE_START_AREA), so only the areas a warp
+# goes DEEPER into are named. CONFIDENT rows only, from decomp level layouts;
+# an unnamed (level, area) renders "Area N" rather than a guessed name — a
+# confident wrong name reads as finished work (his standing canonical-form
+# rule). VERIFY (live): each name is confirmed the first time he spawns there
+# and the row reads right; SSL 2/3 and LLL 2 are the ones his sessions reach.
+COURSE_SUBAREA_NAMES = {
+    (8, 2): "Pyramid",              # SSL: inside the ancient pyramid
+    (8, 3): "Eyerok's Chamber",     # SSL: the boss room under the pyramid
+    (22, 2): "Volcano",             # LLL: inside the volcano
+    (5, 2): "Slide",                # CCM: the cabin slide
+    (11, 2): "Downtown",            # WDW: the sunken town
+    (23, 2): "Submarine Bay",       # DDD: the second chamber, with the sub
+    (12, 2): "Inside the Ship",     # JRB: the sunken ship interior
+}
+
+
+def subarea_name(level: int | None, area: int | None) -> str | None:
+    """The display name a SUBAREA spawn carries, or None when the place is
+    just the level itself — area 1 (every course's start), an unknown, or a
+    level with no distinct subareas. The castle interior answers through
+    CASTLE_AREA_NAMES (where even area 1, the Lobby, is a named place);
+    everything else through COURSE_SUBAREA_NAMES with an honest "Area N"
+    fallback for a subarea no table names yet."""
+    if level is None or area is None:
+        return None
+    if level == LEVEL_CASTLE_INSIDE:
+        return CASTLE_AREA_NAMES.get(area, f"Area {area}")
+    if area <= 1:
+        return None
+    return COURSE_SUBAREA_NAMES.get((level, area), f"Area {area}")
+
 # The castle-region levels the segment builder's "enter area" condition offers
 # (tracking/segments.py): the interior (6, whose CASTLE_AREA_NAMES subareas
 # the builder exposes) plus the two subarea-less hub levels. Ordered

@@ -32,7 +32,7 @@ paths:
 | The step LIST an armed card draws | `tracking/segments.py::card_step_labels(d)` — one short label per step (waypoints then end), stamped onto `armed_detail.steps` beside the existing `waiting_for`; `len(steps) == total + 1` by construction, since `progress` indexes into it. Each label is `addresses.node_short_label(step_node(clause))` where the clause names a place, else `star_name` for a `star_grabbed`, else the registry's own `TriggerType.chip_label` (a THIRD voice after `label` and `card_label`: "Pipe"/"Key" where the card voice is a verb phrase, `None` = fall back to `card_label`). A clause SET is an any-of, so members collapse to their distinct labels; the one multi-member shape in the shipped corpus is the 100-coin exit's end (six `star_grabbed` alternatives in one course = "leave with anything"), which reads **Any star** — stated as a rule about the clauses (same type, same course, more than two), never as a lookup for that family. `card_waiting_for_sentence` is unchanged and still answers the different question (the FULL imperative for the step you are on, including "coming from …", which the card keeps on hover) |
 | Whether an event type belongs in the JOURNAL at all | `tracking/service.py::BROADCAST_ONLY` — `attempt_completed`, `target_changed`, `attempts_invalidated` are published to the browser and never written, the discipline `stage_changed` and the segment notices already followed. Each restates something already stored (an attempts row; a value re-derived from `target_set` plus the projection rules; a bare "refetch" ping with no payload), and nothing reads any of them back — not `replay()`, not `GET /api/segments/timeline` (its membership rule names five real trigger types), and `tracking/eventlabel.py` already called them derived bookkeeping. **Proven, not argued**: dropping all three from the live journal replays byte-identical — all 3,576 attempts and every run — while removing 3,884 of 23,063 rows, 4.97 MB → 3.42 MB. `storage/db.py::purge_event_types` clears rows written before the rule existed, called once at the top of `start()`; after that it deletes 0 every boot and skips the VACUUM. **VACUUM alone does not shrink the file here and the checkpoint is not a flourish** — this db is WAL, so VACUUM's rebuilt pages sit in the `-wal` sidecar and the size does not move until something checkpoints; `wal_checkpoint(TRUNCATE)` is what makes the reclaim visible, and both halves are mutation-proved separately in `tests/test_prune.py`. **This deliberately stops short of erasing a pruned attempt's OWN events, which was measured and rejected**: the projector is a state machine, so removing an attempt's events rewrites its neighbours — a span-based cut over the live journal lost 221 surviving attempts, resurrected 141 pruned ones and **changed the `course_id`/`star_id`/`strat_tag` of 288 survivors**. The space is welded to the surviving history; the only thing that separates them is giving up replay entirely, which the user ruled against 2026-08-02 ("being able to analyze the journal is extremely important") |
 | SQLite journal + derived tables | `storage/db.py` |
-| Whether a segment is a SUBSECTION of something | `tracking/segments.py::SegmentDef.parent` — an entity key (`star:<course>:<slot>` / `segment:<id>`) or None for top-level, which is every definition before 2026-08-05. ONE field rather than a third kind: attempts, PBs, strategies, ladders, the practice log and the matcher are all already kind-dispatched (rule 11). The same field carries a subsection of a STAR and of a castle MOVEMENT, so the movement case needs no mechanism. Format matches what `library/mapping.py` emits, so the sheet's 145 unmappable Castle Movement rows become mappable as subsections exist. Migration v22, no default and no repair — absence and "not set yet" mean the same thing here, unlike v13/v15. Stamped on BOTH segment sections and `segment_targets` (the selector reads the latter); `ui/subsections.js` is the progressive-disclosure rule, one level deep |
+| Whether a segment is a SUBSECTION of something | `tracking/segments.py::SegmentDef.parents` — a LIST of entity keys (`star:<course>:<slot>` / `segment:<id>` / `area:<node>`), `[]` for top-level, which is every definition before 2026-08-05. PLURAL since round 20 (migration v26 backfills v22's scalar and DROPS the column): "sometimes the same subsection might be practicable in multiple stars" — his LLL pair, Hot-Foot-It and Elevator Tour both owning Volcano Entry. Order is his pick order and `parents[0]` is the primary (the icon fallback reads it). ONE field rather than a third kind: attempts, PBs, strategies, ladders, the practice log and the matcher are all already kind-dispatched (rule 11). The same field carries a subsection of a STAR and of a castle MOVEMENT, so the movement case needs no mechanism. Per-element format matches what sheet-library's mapper emits, so the sheet's 145 unmappable Castle Movement rows become mappable as subsections exist. Stamped on BOTH segment sections and `segment_targets` (the selector reads the latter); `ui/subsections.js` is the progressive-disclosure rule, one level deep — membership is `parents.includes(root)`, so a shared piece appears under EACH parent's expansion, with a `preferredRoot` tiebreak keeping the family you drilled in from. **THE FAMILY DANCE (round 20 items 2+4) — full detail below: [The family dance](#the-family-dance)** |
 | Route defs (ordered star/segment plans), cumulative success, import/export | `tracking/routes.py` — pure: `validate_route`, `route_stats` (best-K product, no-data=0), `export_route` (embeds segment defs), `resolve_import` (reuse exact match / create rest). Steps are a uniform `{label?, need:K, candidates:[star\|segment]}` shape; a route also carries a `start_condition` trigger (default `reset_game`) that arms the run clock. `export_route`/`resolve_import`/`_segment_matches` carry `waypoints` as part of the embedded segment's identity — an imported re-entry segment with matching waypoints reuses the exact local def instead of duplicating |
 | Route view payload | `tracking/views.py::build_route_view` — resolves candidate names + per-step/cumulative success + broken flag (deleted segment) |
 | Route CRUD + import/export commands | `tracking/service.py` — create/update/delete_route (segment-existence check), export_route, import_route (dry-run preview; forwards `waypoints`/`category` when creating a missing segment — Task 10 fix); broadcast-only `routes_changed`. `select_route(route_id\|None)` journals `route_selected {route_id, segment_ids}` (member snapshot via `_route_member_segments`, same self-containment trick `_arm_run` uses); `update_route` re-emits it with fresh membership when the ACTIVE route's steps change, and `delete_route` clears it when the deleted route was active. `reset_route`/`reset_segment` restore a seeded row from the bundled seed by `seed_key` and clear `seed_dirty` (LookupError → 404 for a user-created row or an orphaned seed_key). A user edit to a seeded row flips `seed_dirty=1` via `db.set_seed_dirty` — protecting it from the next reconcile refresh until Reset clears it; reconcile writes through `db.update_segment_def`/`update_route` directly and never touches this flag |
@@ -117,6 +117,54 @@ detection) and segment→none (neutral where a stale hold lingered). The
 `auto` flag rides `target_set` payloads (only when true, so every pre-queue
 payload keeps its shape); `ui/target.js::requestTarget` defaults it from
 `quiet`. Pinned by `tests/test_target_queue.py`.
+
+## The family dance
+
+**Round 20 items 2+4, 2026-08-08.** His asks, designed as ONE mechanism on
+top of the target queue (his own naming: *"using the queue system, the first
+subsection should be active, then the second subsection that gets detected,
+etc, until we finally END on the actual star being grabbed"*).
+
+Family membership is `SegmentDef.parents` containing the held target's
+entity key — `projection.target_entity_key(target)` is the one translation,
+`Projector._family_member_of` the one check. Five rules, all in
+`projection.py`:
+
+1. **A piece ARMING takes the hand from its own parent** (picked or hooked,
+   presence-typed or not — a subsection routinely starts on `area_enter`,
+   which `hooks_on_arm` rightly refuses for everything else). The displaced
+   target waits as `_family_anchor` = (target tuple, hooked flag).
+2. **Family members bypass `hooks_on_arm` for QUEUE admission** while the
+   dance runs; a sibling arming behind the active piece queues FIFO.
+3. **A pop with no queued survivor RESTORES the anchor** instead of going
+   neutral (`_promote_or_neutral`'s tail), so the whole never goes missing
+   between pieces. Expiry restores too (the piece went stale, not the
+   whole); FORFEIT — his "genuine kill", a real anchor in a foreign
+   course — clears the anchor with the head.
+4. **A grab of the held piece's PARENT star always takes the hand**
+   (`_grab_may_take_the_hand(grabbed)`) — picked or hooked, ARMED OR NOT,
+   which is the half round 19 could not reach: his screenshot's Volcano
+   Entry is a plain strict def with no star-grab cancel branch, so it was
+   still armed when Hot-Foot-It's grab landed and the old rule bounced
+   off it. The parent SEGMENT's own success closure takes the hand back
+   the same way (the seg_closed loop's anchor branch). "When we detect
+   the subsection again, re-select" is rule 1 firing again.
+5. **The dance ends** on the parent's completion (above), an explicit pick,
+   `session_started`, and `game_reset` (where a picked-flavor anchor
+   survives by restoring — a click always survives a console reset — while
+   a hooked-flavor one dies with the world).
+
+The suspend-star-on-arm block (`_clears_star_target`) exempts a CHILD of
+the star target — the take replaces it there, or the anchor would be lost
+the moment the dance began.
+
+**Measured before landing** (`tools/measure_target_queue.py --before
+61a0bbb`, both journals): the repo journal replays **byte-identical — 0
+reading diffs, 0 rows moved** (no shipped def has parents), and his own
+Volcano Entry session moves **exactly 4 target readings, all the rulings
+themselves** — piece→star at his two Hot-Foot-It grabs, star→piece on
+re-detection, none→piece on a detection taking an empty hand — with **0
+attempt rows lost, gained or changed**. Pinned by `tests/test_family_dance.py`.
 
 ## When the clock starts — "trigger" vs "move" (round 15 item 3, 2026-08-08)
 

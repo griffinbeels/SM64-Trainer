@@ -41,7 +41,7 @@
 // enable/disable) -- the same endpoints the rest of the UI uses, so the normal
 // target_changed flow updates the header, the pinned section, and this.
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { CellRow, SurfaceExchange } from "./cellrow.js";
 import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
@@ -370,13 +370,19 @@ const startsInLevel = (level) => (s) => (s.start_levels || []).includes(level);
 // practicing means "practice this", the same as any other cell.
 function useFamilyView(keyed, activeKey) {
   const [foldedRoot, setFoldedRoot] = useState(null);
-  const root = familyRoot(keyed, activeKey);
-  const hasFamily = isExpanded(keyed, activeKey);
+  // The family the row is ALREADY showing. A piece can carry several parents
+  // (round 20), and selecting it must keep the family he drilled in from on
+  // screen rather than snapping to the piece's primary parent — a ref, not
+  // state, because it only ever records what this render already decided.
+  const heldRootRef = useRef(null);
+  const root = familyRoot(keyed, activeKey, heldRootRef.current);
+  heldRootRef.current = root;
+  const hasFamily = isExpanded(keyed, activeKey, root);
   const folded = root != null && foldedRoot === root;
   const shownKey = folded ? null : activeKey;
   return {
-    segs: visibleEntities(keyed, shownKey),
-    expanded: isExpanded(keyed, shownKey),
+    segs: visibleEntities(keyed, shownKey, root),
+    expanded: isExpanded(keyed, shownKey, root),
     familyRootKey: root,
     toggleFamily: hasFamily && root === activeKey
       ? () => setFoldedRoot(folded ? null : root) : null,
@@ -442,12 +448,13 @@ function StarRow({ t, v, stage }) {
   // ordinary segment that starts in this level, so it is offered here on the
   // same terms an armed one already was.
   const subsections = (v.segment_targets || [])
-    .filter((s) => s.enabled && s.parent != null
+    .filter((s) => s.enabled && (s.parents || []).length > 0
                    && startsInLevel(stage.level)(s));
   const keyed = [
     ...shown.map(({ name, i }) => ({ key: starKey(stage.course_id, i),
-                                     parent: null, star: i, name })),
-    ...subsections.map((s) => ({ key: segKey(s), parent: s.parent, seg: s })),
+                                     parents: [], star: i, name })),
+    ...subsections.map((s) => ({ key: segKey(s), parents: s.parents || [],
+                                 seg: s })),
   ];
   const { segs, expanded, familyRootKey, toggleFamily } =
     useFamilyView(keyed, targetEntityKey(v));
@@ -470,7 +477,7 @@ function StarRow({ t, v, stage }) {
         if (entity.seg) {
           return html`<${StandardSegmentCell} key=${`seg:${entity.seg.segment_id}`}
             t=${t} s=${entity.seg} setPicking=${setPicking}
-            subsection=${entity.parent != null} />`;
+            subsection=${(entity.parents || []).length > 0} />`;
         }
         const i = entity.star;
         return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
@@ -963,7 +970,7 @@ function SegmentRow({ t, v, stage }) {
     <${CellRow} class="starrow segcells">
       ${segs.map((s) => html`<${StandardSegmentCell}
         key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking}
-        subsection=${s.parent != null}
+        subsection=${(s.parents || []).length > 0}
         onPickOverride=${toggleFamily && s.key === familyRootKey
           ? toggleFamily : null} />`)}
       ${extras}

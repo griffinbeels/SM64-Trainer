@@ -22,13 +22,14 @@ pytestmark = pytest.mark.skipif(shutil.which("node") is None,
 
 # One star, one of its subsections, a castle movement, one of ITS subsections,
 # and an unrelated top-level segment. Covers both parent kinds at once, which
-# is the point of the parent field being one shape.
+# is the point of the parents field being one shape. Plural since round 20 --
+# [] is top-level, and one piece may list several parents.
 CORPUS = [
-    {"key": "star:2:1", "parent": None},
-    {"key": "segment:90", "parent": "star:2:1"},
-    {"key": "segment:12", "parent": None},
-    {"key": "segment:91", "parent": "segment:12"},
-    {"key": "segment:13", "parent": None},
+    {"key": "star:2:1", "parents": []},
+    {"key": "segment:90", "parents": ["star:2:1"]},
+    {"key": "segment:12", "parents": []},
+    {"key": "segment:91", "parents": ["segment:12"]},
+    {"key": "segment:13", "parents": []},
 ]
 
 
@@ -58,7 +59,7 @@ def test_a_subsection_is_never_loose_in_the_row():
     """The crowding progressive disclosure exists to solve: a star can own
     many subsections, and the selector's job is that you never hunt."""
     drawn = call("visibleEntities", CORPUS, None)
-    assert all(row["parent"] is None for row in drawn)
+    assert all(not row["parents"] for row in drawn)
 
 
 def test_selecting_a_star_draws_it_and_its_subsections_only():
@@ -89,7 +90,7 @@ def test_selecting_a_subsection_keeps_its_parent_and_its_siblings():
     """The dead end this rule exists to avoid, reached by using the feature
     correctly: practice one subsection and the row would collapse to that one
     cell, with no way back to the parent or to the others."""
-    siblings = CORPUS + [{"key": "segment:93", "parent": "star:2:1"}]
+    siblings = CORPUS + [{"key": "segment:93", "parents": ["star:2:1"]}]
     assert keys(call("visibleEntities", siblings, "segment:90")) == [
         "star:2:1", "segment:90", "segment:93"]
 
@@ -118,7 +119,7 @@ def test_an_off_list_key_is_its_own_root():
 def test_a_subsection_of_a_subsection_is_not_offered():
     """One row cannot show two levels of nesting without becoming the
     scrolling hunt this exists to prevent."""
-    nested = CORPUS + [{"key": "segment:92", "parent": "segment:90"}]
+    nested = CORPUS + [{"key": "segment:92", "parents": ["segment:90"]}]
     assert keys(call("visibleEntities", nested, "star:2:1")) == [
         "star:2:1", "segment:90"]
 
@@ -142,8 +143,8 @@ def test_an_absent_parent_still_shows_its_children():
     """The reverse case, and the reason the fallback checks BOTH: a target
     off-list whose subsections are here must still expand, or selecting it
     silently collapses the row under the user."""
-    orphaned = [{"key": "segment:90", "parent": "star:2:1"},
-                {"key": "segment:13", "parent": None}]
+    orphaned = [{"key": "segment:90", "parents": ["star:2:1"]},
+                {"key": "segment:13", "parents": []}]
     assert keys(call("visibleEntities", orphaned, "star:2:1")) == ["segment:90"]
 
 
@@ -163,3 +164,43 @@ def test_expanded_is_true_when_it_does():
 def test_subsections_of_returns_children_without_the_parent():
     assert keys(call("subsectionsOf", CORPUS, "star:2:1")) == ["segment:90"]
     assert call("subsectionsOf", CORPUS, "segment:13") == []
+
+
+# -- plural parents (round 20 item 1) -----------------------------------------
+# His example pair: LLL's Hot-Foot-It and Elevator Tour both own "Volcano
+# Entry", so the piece appears under EACH star's expansion.
+
+SHARED = [
+    {"key": "star:22:0", "parents": []},
+    {"key": "star:22:1", "parents": []},
+    {"key": "segment:95", "parents": ["star:22:0", "star:22:1"]},
+]
+
+
+def test_a_shared_piece_appears_under_each_parents_expansion():
+    assert keys(call("visibleEntities", SHARED, "star:22:0")) == [
+        "star:22:0", "segment:95"]
+    assert keys(call("visibleEntities", SHARED, "star:22:1")) == [
+        "star:22:1", "segment:95"]
+
+
+def test_selecting_a_shared_piece_keeps_the_family_you_drilled_in_from():
+    """preferredRoot breaks the tie: drilling in from the SECOND parent must
+    not snap the row to the first one's family."""
+    assert call("familyRoot", SHARED, "segment:95", "star:22:1") == "star:22:1"
+    assert keys(call("visibleEntities", SHARED, "segment:95",
+                     "star:22:1")) == ["star:22:1", "segment:95"]
+
+
+def test_a_shared_piece_with_no_preference_uses_its_primary_parent():
+    assert call("familyRoot", SHARED, "segment:95") == "star:22:0"
+
+
+def test_a_stale_preference_falls_back_to_the_primary():
+    """A preferredRoot that is not one of the piece's parents (the row was
+    showing some other family) must not leak in as the root."""
+    assert call("familyRoot", SHARED, "segment:95", "segment:13") == "star:22:0"
+
+
+def test_subsections_of_counts_shared_membership():
+    assert keys(call("subsectionsOf", SHARED, "star:22:1")) == ["segment:95"]

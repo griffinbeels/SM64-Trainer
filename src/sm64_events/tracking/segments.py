@@ -342,8 +342,8 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           LEVEL_NAMES, node_key, node_label,
                                           node_short_label,
                                           region_for_node, star_count,
-                                          star_name, world_connections,
-                                          world_regions)
+                                          star_name, subarea_name,
+                                          world_connections, world_regions)
 from sm64_events.core.landmark import same_landmark
 from sm64_events.detectors.moment import MOMENTS
 # The verb splice ("Open a door" -> "Open") lives with the row labeller and
@@ -504,7 +504,7 @@ class SegmentDef:
     # "loose" by db.insert_segment_def — an authoring default, not a claim
     # about existing data.
     match_mode: str = "strict"
-    # The entity this is a SUBSECTION of, or None for a top-level segment --
+    # The entities this is a SUBSECTION of -- [] for a top-level segment,
     # which is every definition that existed before 2026-08-05 (task 0087).
     # Defaulted for the same reason waypoints/default_strat/match_mode are: a
     # non-default field would TypeError every existing construction.
@@ -518,11 +518,20 @@ class SegmentDef:
     # and a castle MOVEMENT owns subsections through the identical field
     # ("segment:<id>"), which is why that case needs no mechanism of its own.
     #
-    # The key format is the one sheet-library's mapping module already emits
-    # ("star:<course>:<slot>" / "segment:<id>"), so a subsection this tooling
-    # creates is directly mappable from the community sheet with no bridge on
-    # either side.
-    parent: str | None = None
+    # PLURAL since round 20 (his ask, from the first real star-subsection
+    # session: "sometimes the same subsection might be practicable in
+    # multiple stars -- in LLL, both Hot Foot it Into The Volcano and
+    # Elevator Tour into the Volcano would do volcano entry in the same
+    # way"). ONE list rather than a scalar beside it: a second field
+    # carrying the same fact is the divergence class this repo keeps
+    # paying for. Order is his pick order; parents[0] is the primary
+    # (icon fallback reads it).
+    #
+    # The key format per element is the one sheet-library's mapping module
+    # already emits ("star:<course>:<slot>" / "segment:<id>"), so a
+    # subsection this tooling creates is directly mappable from the
+    # community sheet with no bridge on either side.
+    parents: list = field(default_factory=list)
     # WHEN THE CLOCK STARTS (round 15 item 3, his ruling): "trigger" times
     # from the start trigger's own frame — every definition before
     # 2026-08-08, and the honest default for existing rows — while "move"
@@ -841,12 +850,31 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 # answers first, and this is the fallback for one that does
                 # not pin a level.
                 chip_label="Moment"),
+    # A spawn can pin its SUBAREA and its SPAWN POINT (round 20 item 3):
+    # "I need to be able to start a segment when the player spawns into the
+    # SUBAREA, and be able to annotate it as such... ideally we would be
+    # able to identify *which* spawn we came through" (SSL's pyramid has a
+    # top and a bottom entry — different sWarpDest node ids, stamped by
+    # detectors/spawn.py). Both optional; a level-only clause matches
+    # exactly what it always did. A pinned area/node FAILS on a historical
+    # row without the key — an old row cannot prove it was the pyramid, and
+    # conservative here means a recorded subarea start never fires from the
+    # course's front door. The area's only_when is builder-display only
+    # (the castle is the one level with a subarea DROPDOWN); the recorder
+    # pins course subareas straight off the journal row.
     TriggerType("spawned", "You spawn into the game", "Spawn",
-                {"level": {"kind": "level", "required": False}},
-                "in {level}",
+                {"level": {"kind": "level", "required": False},
+                 "area": {"kind": "subarea", "required": False,
+                          "only_when": _only_castle("level")},
+                 "spawn_node": {"kind": "int", "required": False}},
+                "in {level} {area} via spawn {spawn_node}",
                 lambda p, ev, ctx: ev.type == "spawned"
                 and (p.get("level") is None
-                     or ev.payload["level"] == p["level"])),
+                     or ev.payload["level"] == p["level"])
+                and (p.get("area") is None
+                     or ev.payload.get("area") == p["area"])
+                and (p.get("spawn_node") is None
+                     or ev.payload.get("spawn_node") == p["spawn_node"])),
     TriggerType("attempt_anchor", "Practice reset / savestate load",
                 "Reset or reload",
                 {"level": {"kind": "level", "required": True},
@@ -885,6 +913,13 @@ def _resolve_param(kind: str, value, clause: dict,
     if kind == "level":
         return LEVEL_NAMES.get(value, f"Level {value}")
     if kind == "subarea":
+        # A clause that names a COURSE level beside its subarea (a spawned
+        # clause pinning the pyramid) reads the course-subarea table; every
+        # castle-gated subarea param keeps reading the castle names (its
+        # companion level is 6, which subarea_name routes there anyway).
+        level = clause.get("level")
+        if level is not None:
+            return subarea_name(level, value) or f"Area {value}"
         return CASTLE_AREA_NAMES.get(value, f"Area {value}")
     if kind == "course":
         return COURSE_NAMES.get(value, f"Course {value}")
@@ -2177,12 +2212,21 @@ def validate_definition(d: dict) -> None:
         # strategy" everywhere while still suppressing the blank option in
         # the picker, leaving no way to express either.
         raise ValueError("default_strat must be a non-empty string or absent")
-    parent = d.get("parent")
-    if parent is not None and (not isinstance(parent, str)
-                               or not _PARENT_KEY.match(parent)):
-        raise ValueError(
-            "parent must be a star, segment or castle-area key like "
-            f"'star:2:1', 'segment:7' or 'area:6:1', got {parent!r}")
+    parents = d.get("parents")
+    if parents is not None:
+        if not isinstance(parents, list):
+            raise ValueError(
+                "parents must be a list of entity keys, got "
+                f"{parents!r}")
+        for parent in parents:
+            if not isinstance(parent, str) or not _PARENT_KEY.match(parent):
+                raise ValueError(
+                    "each parent must be a star, segment or castle-area key "
+                    f"like 'star:2:1', 'segment:7' or 'area:6:1', got "
+                    f"{parent!r}")
+        if len(set(parents)) != len(parents):
+            duplicate = next(p for p in parents if parents.count(p) > 1)
+            raise ValueError(f"parents lists {duplicate} twice")
     mode = d.get("match_mode", "strict")
     if mode not in MATCH_MODES:
         raise ValueError(

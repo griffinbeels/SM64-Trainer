@@ -315,24 +315,30 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null }) {
   // derive()'s .then would otherwise read the value frozen at call time.
   // Emptying the field hands it back to the auto-name; Clear resets both.
   const nameEditedRef = useRef(!!replaces);
-  // Which entity this is a piece of (`SegmentDef.parent`) -- the ONLY way a
-  // subsection can be created, and it is asked HERE because this is the
+  // Which entities this is a piece of (`SegmentDef.parents`) -- the ONLY way
+  // a subsection can be created, and it is asked HERE because this is the
   // moment you know the answer: "nothing asks 'you just recorded this, what
   // is it a piece of?' when you would want to answer" (spec). Distinct from
   // `origin`, which is where the LIBRARY files it; a subsection of a JRB star
   // is parented to that star and filed under JRB.
   //
-  // Held as the PICKER's own option id ("8:1" / "segment:12"), never as the
-  // entity key, so `value=` can highlight the chosen cell -- a star option's
+  // PLURAL since round 20 -- "sometimes the same subsection might be
+  // practicable in multiple stars... We need to just add a + button to the
+  // right and allow multiple selections." A LIST of picks; the + appends,
+  // re-picking a pill changes that slot, and picking the "Nothing"
+  // placeholder on a pill removes it.
+  //
+  // Held as the PICKER's own option ids ("8:1" / "segment:12"), never as
+  // entity keys, so `value=` can highlight the chosen cell -- a star option's
   // id is the bare composite and the key is "star:8:1", and storing the key
   // here would leave every star looking unpicked while segments highlighted
   // fine. `entityKeyForOption` is the one translation, applied where the
   // definition is built.
-  const [parentOption, setParentOption] = useState(
-    replaces ? optionForEntityKey(replaces.parent) : null);
-  const [pickingParent, setPickingParent] = useState(false);
-  const parent = parentOption == null ? null
-                                      : entityKeyForOption(parentOption);
+  const [parentOptions, setParentOptions] = useState(
+    replaces ? (replaces.parents || []).map(optionForEntityKey) : []);
+  // null = closed; an index = re-picking that pill; "add" = the + button.
+  const [pickingParentAt, setPickingParentAt] = useState(null);
+  const parents = parentOptions.map(entityKeyForOption);
   const [btReport, setBtReport] = useState(null);
   const [btErr, setBtErr] = useState(null);
   // Author-time lint (Task 16, spec 2026-07-28-multi-step-segments) --
@@ -509,7 +515,7 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null }) {
     return { name: (name.trim() || synthBody.name), enabled: true,
       start_triggers: [synthBody.start_clause],
       end_triggers: [synthBody.end_clause], guards: [], waypoints,
-      parent, match_mode: "strict", clock_start: "move" };
+      parents, match_mode: "strict", clock_start: "move" };
   }
 
   async function runBacktest(definition) {
@@ -640,15 +646,30 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null }) {
       && group.key !== "castle-segments" ? group.key.slice(7) : null;
     return region ? { ...group, pick: `area:${region}` } : group;
   });
-  const parentName = (() => {
-    if (parentOption == null) return null;
+  const parentNameFor = (optionId) => {
+    if (optionId == null) return null;
     for (const group of parentGroups) {
-      if (group.pick === parentOption) return group.label;
+      if (group.pick === optionId) return group.label;
       for (const option of group.options)
-        if (option.id === parentOption) return option.name;
+        if (option.id === optionId) return option.name;
     }
-    return parent;
-  })();
+    return entityKeyForOption(optionId);
+  };
+  // A pill's pick REPLACES its slot; the + APPENDS; the "Nothing" placeholder
+  // on a pill REMOVES it (and on the +, changes nothing). Picking an entity
+  // already listed collapses to a no-op rather than a duplicate row.
+  const commitParentPick = (id) => {
+    setParentOptions((held) => {
+      const at = pickingParentAt;
+      const next = held.filter((_, index) => index !== at);
+      if (id == null || next.includes(id)) return next;
+      if (at === "add" || at == null || at >= held.length)
+        return [...held, id];
+      next.splice(at, 0, id);
+      return next;
+    });
+    setPickingParentAt(null);
+  };
   // Same name/shape as segments.js's Builder -- an "error" severity finding
   // disables Save there too; a "warning" one does not.
   const lintHasError = lintFindings.some((finding) => finding.severity === "error");
@@ -728,25 +749,42 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null }) {
         && html`<${StepPicker} steps=${synth.steps} required=${required}
           onToggle=${toggleStep} />`}
 
-      ${/* The ONLY door into a subsection. `parent` is absent from
+      ${/* The ONLY door into a subsection. `parents` is absent from
            segments.js's SAVE_FIELDS and no other control writes one, which
            is why he asked "what star has subsections? I don't see a way to
-           define that?" */""}
+           define that?" One pill per chosen parent, and the + to the right
+           appends another (round 20: the same piece can belong to several
+           stars). */""}
       <div class="record-parent">
         <span class="field-label">What is this a piece of?</span>
-        <button type="button" class="entity-trigger"
-            onclick=${() => setPickingParent(true)}>
-          ${parentName || "Nothing — it stands on its own"}
-        </button>
+        ${parentOptions.length === 0
+          ? html`<button type="button" class="entity-trigger"
+                onclick=${() => setPickingParentAt("add")}>
+              Nothing — it stands on its own
+            </button>`
+          : parentOptions.map((optionId, index) => html`<button
+                type="button" key=${optionId} class="entity-trigger"
+                onclick=${() => setPickingParentAt(index)}>
+              ${parentNameFor(optionId)}
+            </button>`)}
+        ${parentOptions.length > 0 && html`<button type="button"
+            class="quiet-button record-parent-add"
+            title="It is a piece of another star or segment too"
+            onclick=${() => setPickingParentAt("add")}>
+          <${Icon} name="plus" size=${14} /> Add
+        </button>`}
       </div>
-      ${pickingParent && html`<${PickerDialog} groups=${parentGroups}
-        value=${parentOption} title="What is this a piece of?" depth=${2}
-        placeholder="Nothing — it stands on its own"
+      ${pickingParentAt != null && html`<${PickerDialog} groups=${parentGroups}
+        value=${typeof pickingParentAt === "number"
+          ? parentOptions[pickingParentAt] : null}
+        title="What is this a piece of?" depth=${2}
+        placeholder=${typeof pickingParentAt === "number"
+          ? "Nothing — remove this one" : "Nothing — it stands on its own"}
         iconFor=${(id) => optionIconSrc(t,
           parseSegmentId(id) == null ? "star" : "segment",
           parseSegmentId(id) == null ? id : parseSegmentId(id))}
-        onPick=${(id) => { setParentOption(id); setPickingParent(false); }}
-        onClose=${() => setPickingParent(false)} />`}
+        onPick=${commitParentPick}
+        onClose=${() => setPickingParentAt(null)} />`}
 
       ${/* What a re-record COSTS, said where the save lands, before it does:
            the new recording's own defaults (clock "move" + Strict) replace

@@ -1,5 +1,5 @@
 # tests/test_subsection_parent.py
-"""`SegmentDef.parent` — the one field that makes a segment a subsection.
+"""`SegmentDef.parents` — the one field that makes a segment a subsection.
 
 Not a third kind of practiced thing. Attempts, personal bests, strategies,
 ladders, ranks, the practice log and the matcher are all already
@@ -7,6 +7,12 @@ kind-dispatched between stars and segments (rule 11); a third kind fans out
 across roughly twenty files and buys nothing. This field is the whole
 difference, and it is what the selector filters on for progressive disclosure
 and what lets a castle MOVEMENT own subsections of its own.
+
+PLURAL since round 20 — his ask, from the first real star-subsection session:
+"sometimes the same subsection might be practicable in multiple stars (e.g.,
+in LLL, both Hot Foot it Into The Volcano and Elevator Tour into the Volcano
+would do volcano entry in the same way)". [] and absence both mean top-level,
+exactly as None did for the scalar.
 """
 import pytest
 
@@ -24,30 +30,37 @@ def definition(**overrides) -> dict:
     return d
 
 
-def test_a_definition_without_a_parent_is_top_level():
+def test_a_definition_without_parents_is_top_level():
     """Every definition that existed before 2026-08-05 is one of these, which
     is why the field is defaulted rather than positional -- a non-default
     field would TypeError every existing SegmentDef(...) construction, the
     same reason waypoints, default_strat and match_mode are defaulted."""
     d = SegmentDef(id=1, name="x", enabled=True, start_triggers=[],
                    end_triggers=[], guards=[])
-    assert d.parent is None
+    assert d.parents == []
 
 
 def test_a_star_parent_validates():
-    validate_definition(definition(parent="star:2:1"))
+    validate_definition(definition(parents=["star:2:1"]))
 
 
 def test_a_segment_parent_validates():
     """A castle MOVEMENT owns subsections through the identical field --
     "castle movement sometimes is a specific subsection of castle movement
     rather than movement between courses only" (task 0087)."""
-    validate_definition(definition(parent="segment:7"))
+    validate_definition(definition(parents=["segment:7"]))
 
 
-def test_no_parent_validates():
+def test_no_parents_validates():
     validate_definition(definition())
-    validate_definition(definition(parent=None))
+    validate_definition(definition(parents=[]))
+    validate_definition(definition(parents=None))
+
+
+def test_two_parents_validate():
+    """Round 20 item 1, his example pair: LLL's Hot-Foot-It and Elevator Tour
+    both own "Volcano Entry", so one piece lists both stars."""
+    validate_definition(definition(parents=["star:22:0", "star:22:1"]))
 
 
 def test_a_castle_area_parent_validates():
@@ -57,8 +70,8 @@ def test_a_castle_area_parent_validates():
     piece parents to its AREA, so the area is a parent kind of its own.
     Both shapes: a castle subarea node ("area:6:1", the Lobby) and a
     whole-level node ("area:16", the Grounds)."""
-    validate_definition(definition(parent="area:6:1"))
-    validate_definition(definition(parent="area:16"))
+    validate_definition(definition(parents=["area:6:1"]))
+    validate_definition(definition(parents=["area:16"]))
 
 
 @pytest.mark.parametrize("bad", [
@@ -76,13 +89,27 @@ def test_a_castle_area_parent_validates():
 ])
 def test_a_malformed_parent_is_refused(bad):
     with pytest.raises(ValueError, match="parent"):
-        validate_definition(definition(parent=bad))
+        validate_definition(definition(parents=[bad]))
+
+
+def test_a_bare_string_is_refused():
+    """The scalar form is GONE; a caller still sending one gets told, not
+    silently iterated character by character."""
+    with pytest.raises(ValueError, match="list"):
+        validate_definition(definition(parents="star:2:1"))
+
+
+def test_a_duplicate_parent_is_refused():
+    """Listing one star twice says nothing a single listing does not, and a
+    membership check that counts would double it."""
+    with pytest.raises(ValueError, match="twice"):
+        validate_definition(definition(parents=["star:2:1", "star:2:1"]))
 
 
 def test_the_error_names_the_value_it_refused():
     """A 409 that does not say WHAT was wrong sends the user back to guessing."""
     with pytest.raises(ValueError, match="whomps"):
-        validate_definition(definition(parent="whomps fortress"))
+        validate_definition(definition(parents=["whomps fortress"]))
 
 
 def test_the_parent_key_format_matches_what_the_library_maps_to():
@@ -91,5 +118,5 @@ def test_the_parent_key_format_matches_what_the_library_maps_to():
     branches meet with no bridge: this tooling makes the entities, that
     mapper already knows how to name them. Pinned so a format drift here
     breaks loudly rather than silently orphaning 145 unmapped sheet rows."""
-    validate_definition(definition(parent="star:15:6"))
-    validate_definition(definition(parent="segment:84"))
+    validate_definition(definition(parents=["star:15:6"]))
+    validate_definition(definition(parents=["segment:84"]))

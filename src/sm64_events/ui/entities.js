@@ -362,7 +362,7 @@ export function entityIcon(entityKey, context = {}) {
     // show, which is why LEVEL_ICONS outranks the category table. A row the
     // corpus never seeded has no category of its own, so `segmentCategory`
     // infers one from where it starts — see the registry comments above.
-    const { seedKey, category, originRegion, parent } =
+    const { seedKey, category, originRegion, parents } =
       segmentMeta[String(id)] || {};
     // A SUBSECTION wears its parent's art by default (round 15: "Default
     // segment icon for anything added to the castle (in any area) should
@@ -373,10 +373,13 @@ export function entityIcon(entityKey, context = {}) {
     // the category the table already owns — never a stem named here twice.
     // Seeded art still wins (a corpus row's hand-picked stem beats
     // derivation), and the per-entity override above beats everything.
-    if (!SEGMENT_SEED_ICONS[seedKey] && parent) {
-      if (String(parent).startsWith("star:"))
-        return entityIcon(parent, context);
-      if (String(parent).startsWith("area:"))
+    // parents[0] is the PRIMARY parent (round 20 made the field plural, in
+    // his pick order) — a piece of two stars wears the first one's art.
+    const primaryParent = (parents || [])[0];
+    if (!SEGMENT_SEED_ICONS[seedKey] && primaryParent) {
+      if (String(primaryParent).startsWith("star:"))
+        return entityIcon(primaryParent, context);
+      if (String(primaryParent).startsWith("area:"))
         return starIconSrc(
           SEGMENT_CATEGORY_ICONS[UNCATEGORIZED_SEGMENT_CATEGORY]);
     }
@@ -452,7 +455,7 @@ export const entityKeyForOption = (optionId) => {
 };
 // The rank map's key IS the entity key -- one name for the translation, used
 // for the badge lookup here and by the recorder to say which entity a new
-// subsection is a piece of (`SegmentDef.parent`, the sheet's own mapping key).
+// subsection is a piece of (`SegmentDef.parents`, the sheet's own mapping keys).
 // Two hand-built copies of a key format is how they drift.
 const rankMapKey = entityKeyForOption;
 

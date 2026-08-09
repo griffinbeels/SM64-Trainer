@@ -874,7 +874,7 @@ def test_put_segment_persists_a_changed_match_mode(tmp_path):
 
 def test_rerecord_replaces_the_recording_and_keeps_the_identity(tmp_path):
     """Round 16: the recorder's re-record save is a PUT of the FULL definition
-    it builds (name, triggers, waypoints, parent, match_mode "strict",
+    it builds (name, triggers, waypoints, parents, match_mode "strict",
     clock_start "move", enabled) to the EXISTING id — replace, never
     delete-and-recreate, because everything downstream (route steps, PBs,
     attempts, strategies) references the segment by id. This drives that
@@ -886,7 +886,7 @@ def test_rerecord_replaces_the_recording_and_keeps_the_identity(tmp_path):
             "name": "Recorded Piece", "start_triggers": [{"type": "spawned"}],
             "end_triggers": [{"type": "level_enter", "to": 6}],
             "category": "Main Categories/16 Star",
-            "parent": "star:8:1"})
+            "parents": ["star:8:1"]})
         sid = r.json()["id"]
         rid = client.post("/api/routes", json={"name": "R", "steps": [
             {"need": 1, "candidates": [{"type": "segment", "segment_id": sid}]},
@@ -900,7 +900,7 @@ def test_rerecord_replaces_the_recording_and_keeps_the_identity(tmp_path):
             "start_triggers": [{"type": "level_exit", "from": 16}],
             "end_triggers": [{"type": "level_enter", "to": 17}],
             "guards": [], "waypoints": [[{"type": "level_enter", "to": 6}]],
-            "parent": "star:8:1", "match_mode": "strict",
+            "parents": ["star:8:1"], "match_mode": "strict",
             "clock_start": "move"})
         assert r.status_code == 200
 
@@ -922,28 +922,28 @@ def test_rerecord_replaces_the_recording_and_keeps_the_identity(tmp_path):
         assert view["steps"][0]["broken"] is False
 
 
-def test_rerecord_put_with_an_explicit_null_parent_clears_it(tmp_path):
+def test_rerecord_put_with_an_explicit_empty_parents_clears_them(tmp_path):
     """The recorder's parent control can be cleared ("Nothing — it stands on
-    its own"), and its save always SENDS parent — so an explicit null must
-    clear the stored parent, or the control shows one thing and the row
-    keeps another. Pydantic counts an explicitly-sent null as set, which is
-    what carries it through update_segment's exclude_unset dump; an OMITTED
-    parent stays untouched (the builder's own save relies on that)."""
+    its own"), and its save always SENDS parents — so an explicit [] must
+    clear the stored parents, or the control shows one thing and the row
+    keeps another. Pydantic counts an explicitly-sent value as set, which is
+    what carries it through update_segment's exclude_unset dump; OMITTED
+    parents stay untouched (the builder's own save relies on that)."""
     client, service, db = make_client(tmp_path)
     with client:
         r = client.post("/api/segments", json={
             "name": "Custom", "start_triggers": [{"type": "spawned"}],
             "end_triggers": [{"type": "level_enter", "to": 6}],
-            "parent": "star:8:1"})
+            "parents": ["star:8:1"]})
         sid = r.json()["id"]
         assert client.put(f"/api/segments/{sid}",
                           json={"enabled": True}).status_code == 200
         assert next(s for s in db.segment_defs()
-                    if s["id"] == sid)["parent"] == "star:8:1"
+                    if s["id"] == sid)["parents"] == ["star:8:1"]
         assert client.put(f"/api/segments/{sid}",
-                          json={"parent": None}).status_code == 200
+                          json={"parents": []}).status_code == 200
         assert next(s for s in db.segment_defs()
-                    if s["id"] == sid)["parent"] is None
+                    if s["id"] == sid)["parents"] == []
 
 
 # -- backtest endpoint (Task 8, spec 2026-07-28-multi-step-segments) --------
@@ -1553,11 +1553,11 @@ _SEGMENT_FIELD_SAMPLES = {
     # round 15 item 3: when the clock starts — "move" is the non-default of
     # the db column, so the round trip proves the write path carries it.
     "clock_start": "move", "match_mode": "strict",
-    # A subsection's parent entity (task 0087). Must be a WELL-FORMED key --
-    # validate_definition rejects anything else, so a placeholder string here
-    # would fail the write for the wrong reason and read as this guard
-    # working when it was not.
-    "parent": "segment:7",
+    # A subsection's parent entities (task 0087; plural round 20). Must be
+    # WELL-FORMED keys -- validate_definition rejects anything else, so a
+    # placeholder string here would fail the write for the wrong reason and
+    # read as this guard working when it was not.
+    "parents": ["segment:7"],
 }
 
 

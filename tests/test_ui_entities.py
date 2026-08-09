@@ -699,7 +699,7 @@ def test_a_star_parented_subsection_wears_its_parents_art():
     # override and his star-icon mode both apply.
     src = run_node("optionIcon", CONTEXT + """
 const withParent = { ...context,
-  segmentMeta: { "31": { parent: "star:1:2" } } };
+  segmentMeta: { "31": { parents: ["star:1:2"] } } };
 console.log(JSON.stringify(optionIcon("segment", "31", withParent)));
 """)
     assert src == "/ui/assets/star_icons/bob3.png"
@@ -709,7 +709,7 @@ def test_the_parent_stars_own_override_reaches_the_subsection():
     src = run_node("optionIcon", CONTEXT + """
 const withParent = { ...context,
   iconOverrides: { "star:1:2": "blj" },
-  segmentMeta: { "31": { parent: "star:1:2" } } };
+  segmentMeta: { "31": { parents: ["star:1:2"] } } };
 console.log(JSON.stringify(optionIcon("segment", "31", withParent)));
 """)
     assert src == "/ui/assets/star_icons/blj.png"
@@ -721,10 +721,21 @@ def test_an_area_parented_subsection_wears_castle_movement():
     # category table's own entry, never a stem named twice.
     src = run_node("optionIcon", CONTEXT + """
 const withParent = { ...context,
-  segmentMeta: { "31": { parent: "area:6:1" } } };
+  segmentMeta: { "31": { parents: ["area:6:1"] } } };
 console.log(JSON.stringify(optionIcon("segment", "31", withParent)));
 """)
     assert src == "/ui/assets/star_icons/castle_movement.png"
+
+
+def test_a_shared_piece_wears_its_primary_parents_art():
+    # Round 20 made parents plural; the FIRST is the primary (his pick
+    # order), so a piece of two stars wears the first one's art.
+    src = run_node("optionIcon", CONTEXT + """
+const withParents = { ...context,
+  segmentMeta: { "31": { parents: ["star:1:2", "star:1:0"] } } };
+console.log(JSON.stringify(optionIcon("segment", "31", withParents)));
+""")
+    assert src == "/ui/assets/star_icons/bob3.png"
 
 
 def test_seeded_art_still_beats_the_parent():
@@ -732,7 +743,7 @@ def test_seeded_art_still_beats_the_parent():
     result = run_node("optionIcon, SEGMENT_SEED_ICONS", CONTEXT + """
 const seedKey = Object.keys(SEGMENT_SEED_ICONS)[0];
 const withBoth = { ...context,
-  segmentMeta: { "31": { seedKey, parent: "star:1:2" } } };
+  segmentMeta: { "31": { seedKey, parents: ["star:1:2"] } } };
 console.log(JSON.stringify([optionIcon("segment", "31", withBoth),
   "/ui/assets/star_icons/" + SEGMENT_SEED_ICONS[seedKey] + ".png"]));
 """)

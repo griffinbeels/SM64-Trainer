@@ -41,9 +41,13 @@ exit, a door [[moment]]) takes an empty hand and becomes a
 [[hooked target]]; a detection that fires while the hand already holds
 something waits its turn; when the front completes or dies, the oldest
 detection still alive takes over, and an empty queue leaves the hand
-neutral. A [[segment]] that
+neutral — unless a [[subsection]] displaced its own parent, in which case
+the parent takes the hand back instead. A [[segment]] that
 arms by mere presence — LBLJ on a castle entry, a pipe family on a course
-entry — never enters the queue.
+entry — never enters the queue, except a [[subsection]] of the held
+[[target]]: the piece routinely starts by entering its subarea, and while
+you practice the whole, its pieces arming IS the signal the queue exists
+for.
 
 - **Lives** — the projector (`src/sm64_events/tracking/projection.py`)
   → the [[selector]] and the [[practice log]]
@@ -55,7 +59,8 @@ holds it until it completes, until you genuinely abandon it (an [[anchor]]
 landing inside a foreign course), or until its own staleness budget expires
 — walking back through a course to redo its start keeps the hold. A
 [[star]] grab takes the hand from a stale hooked one, never from one the
-matcher still holds armed.
+matcher still holds armed — except its own [[subsection]], which yields to
+its parent [[star]]'s grab armed or not.
 
 - **Lives** — the projector (`src/sm64_events/tracking/projection.py`)
   → the [[selector]]
@@ -95,12 +100,17 @@ than [[in-game time]].
 
 A piece of a [[star]], of a [[segment]], or of a castle area, practiced on
 its own — the climb rather than the whole [[star]]. A subsection IS a
-[[segment]], and names what it belongs to, so it carries its own
-[[personal best]], its own [[ladder]] and its own rows in the
-[[practice log]]. Inside a course a piece always belongs to something
-specific; a castle-side piece belongs to its area, which is as high as the
-castle goes — his own split, and the [[recorder]]'s parent picker follows
-it (an area tile answers in one click, a course tile opens its [[star]]s).
+[[segment]], and names what it belongs to — several [[star]]s when the same
+piece serves them all, the way both of LLL's volcano [[star]]s enter the
+volcano identically — so it carries its own [[personal best]], its own [[ladder]] and
+its own rows in the [[practice log]]. While its parent is the [[target]],
+detecting the piece hands it the [[target]] slot, and the parent takes the
+hand back when you complete it — the [[star]]'s own grab closes the loop.
+Inside a course a piece always belongs to something specific; a castle-side
+piece belongs to its area, which is as high as the castle goes — his own
+split, and the [[recorder]]'s parent picker follows it (an area tile
+answers in one click, a course tile opens its [[star]]s, and the + beside a
+chosen parent adds another).
 
 - **Lives** — the trigger vocabulary and matcher
   (`src/sm64_events/tracking/segments.py`) → the [[selector]]
@@ -164,8 +174,8 @@ The specific thing in the world a [[moment]] happened to — that door, that
 pole, that bob-omb — and that warp, since a warp inside a course leads nowhere
 new and so has no destination to name it. The game rebuilds its object list every time an area
 loads, so we name a landmark by where it SPAWNED rather than by which slot of
-that list holds it: the slot changes and the spawn point does not. A thing the
-game creates with no spawn point of its own — a pole, a tree — takes the place
+that list holds it: the slot changes and the spawn position does not. A thing the
+game creates with no spawn position of its own — a pole, a tree — takes the place
 it STANDS in instead, which never moves either, so one specific pole can carry
 a name. Every
 landmark also belongs to a KIND — the game's own script for what the thing
@@ -176,7 +186,7 @@ every row it ever appeared in takes that name; a name he types always beats
 a shipped one. A recorded [[segment]] can also PIN one: a definition made by
 pointing at "Open the CCM Door" matches that door and no other, instead of
 "whichever door came first". Some one things wear several keys — the game
-builds a [[star]]-count door from TWO halves, each with its own spawn point — so the
+builds a [[star]]-count door from TWO halves, each with its own spawn position — so the
 name is the collapse: keys of the same kind in the same course that carry
 one name ARE one landmark, a rename or an erase moves all of them, and a
 pinned [[segment]] fires on whichever half he pushes.
@@ -441,6 +451,22 @@ the CCM entrance once renamed the CCM door instead.
   the frozen countdown rules a ride out, not at the eight-second backstop.
 - **Not** — a [[moment]]. A [[moment]] reads Mario's own action; an entrance
   touch reads what he collided with.
+
+### Spawn point
+
+WHICH entry placed Mario when he spawned — the warp node the game itself
+routed the spawn through, read back off the same warp struct the
+[[entrance touch]] watches. The pyramid's top and bottom entries are two
+spawn points into one subarea, so a [[subsection]] recorded from one of
+them starts only there; a spawn the struct cannot vouch for (a save state,
+a stale write) carries none rather than a wrong one. A spawn into a
+subarea reads "Spawned into Lethal Lava Land: Volcano" — the place, not
+just the level.
+
+- **Lives** — the spawn detector (`src/sm64_events/detectors/spawn.py`);
+  the subarea names in `src/sm64_events/memory/addresses.py`
+- **Not** — an [[anchor]]. An [[anchor]] says an [[attempt]] boundary
+  happened; the spawn point says where the game put Mario when it did.
 
 ### Death
 

@@ -337,8 +337,8 @@ def _asks_what_the_recording_is_a_piece_of(source: str) -> bool:
     to define that?" (2026-08-05).
     """
     stripped = strip_comments(source)
-    return ("setParentOption(id)" in stripped
-            and re.search(r"waypoints,\s+parent,", stripped) is not None)
+    return ("setParentOptions(" in stripped
+            and re.search(r"waypoints,\s+parents,", stripped) is not None)
 
 
 def _offers_a_view_toggle(source: str) -> bool:
@@ -379,9 +379,9 @@ def test_the_timeline_guards_can_still_fail():
         '// Fetches /api/segments/timeline?limit=200&view=steps and lets a\n'
         '// row click do pickedIds.filter((id) => id !== row.id) or else\n'
         '// [...pickedIds, row.id].sort(); the toggle flips setView between\n'
-        '// "all" and "steps", and setParentOption(id) rides the definition\n'
+        '// "all" and "steps", and setParentOptions(next) rides the definition\n'
         '// beside waypoints,\n'
-        '// parent, so a subsection can be made.\n')
+        '// parents, so a subsection can be made.\n')
     assert not _fetches_the_timeline_with_the_view(comment_only)
     assert not _a_row_click_toggles_the_pick(comment_only)
     assert not _asks_what_the_recording_is_a_piece_of(comment_only)
@@ -394,9 +394,9 @@ def test_the_timeline_guards_can_still_fail():
         '  ? pickedIds.filter((id) => id !== row.id)\n'
         '  : [...pickedIds, row.id].sort((l, r) => l - r);')
     assert _asks_what_the_recording_is_a_piece_of(
-        'onPick=${(id) => { setParentOption(id); }}\n'
+        'onPick=${(id) => { setParentOptions((held) => [...held, id]); }}\n'
         'return { start_triggers: [], waypoints,\n'
-        '  parent, match_mode: "loose" };')
+        '  parents, match_mode: "loose" };')
     assert _offers_a_view_toggle(
         'onchange=${(e) => setView(e.target.checked ? "all" : "steps")}')
 

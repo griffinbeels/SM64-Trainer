@@ -161,6 +161,24 @@ def _no_params(payload: dict) -> dict:
     return {}  # TRIGGERS["reset_game"] takes none.
 
 
+def _spawned_params(payload: dict) -> dict | None:
+    """A spawn pins WHERE it put Mario, at the finest grain the row can
+    vouch for (round 20 item 3): the level, the subarea, and — when the
+    warp struct named it — WHICH spawn point, so the pyramid's top and
+    bottom entries synthesize into two different start conditions. A
+    historical row without the keys pins the level alone, exactly what it
+    used to."""
+    level = payload.get("level")
+    if level is None:
+        return None
+    params = {"level": level}
+    if payload.get("area") is not None:
+        params["area"] = payload["area"]
+    if payload.get("spawn_node") is not None:
+        params["spawn_node"] = payload["spawn_node"]
+    return params
+
+
 # trig key -> {journal_type, role, build}. `role` is None when the clause is
 # equally valid at either end (a castle secret star can open a movement OR
 # close one; see tools/corpus_movements.py's own "may start on a star_grabbed
@@ -207,7 +225,7 @@ _SYNTH_PARAMS: dict[str, dict] = {
     "star_grabbed": {"journal_type": "star_collected", "role": None,
                      "build": _star_collected_params},
     "spawned": {"journal_type": "spawned", "role": None,
-                "build": _level_field_params},
+                "build": _spawned_params},
     "moment_reached": {"journal_type": "moment_reached", "role": None,
                        "build": _moment_params},
     "reset_game": {"journal_type": "game_reset", "role": None,

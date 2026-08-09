@@ -70,9 +70,10 @@ function segmentMeta(t) {
     [String(segment.id),
      { seedKey: segment.seed_key || null, category: segment.category || null,
        originRegion: (segment.origin || {}).region || null,
-       // What this is a PIECE of — a subsection wears its parent's art by
-       // default (round 15); entities.js decides what the key means.
-       parent: segment.parent || null }]));
+       // What this is a PIECE of — a subsection wears its primary parent's
+       // art by default (round 15; plural round 20); entities.js decides
+       // what the keys mean.
+       parents: segment.parents || [] }]));
 }
 
 // One-entry memo. The context is derived from six store slots and rebuilding

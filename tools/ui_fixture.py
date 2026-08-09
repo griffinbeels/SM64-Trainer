@@ -761,7 +761,7 @@ def _seed_subsections(base: str) -> None:
 
     star_key = f"star:{FIXTURE_COURSE}:{FIXTURE_STAR}"
     for ordinal, name in enumerate(("Tower Climb", "Owl Drop"), start=1):
-        post("/api/segments", {"name": name, "parent": star_key,
+        post("/api/segments", {"name": name, "parents": [star_key],
                                **_subsection_definition(ordinal)})
 
 

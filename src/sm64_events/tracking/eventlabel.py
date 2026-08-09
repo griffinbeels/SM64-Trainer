@@ -79,7 +79,7 @@ from sm64_events.detectors.counter_epoch import (COURSE_START_AREA,
 from sm64_events.detectors.moment import MOMENTS
 from sm64_events.memory.addresses import (CASTLE_AREA_NAMES, LEVEL_CASTLE_INSIDE,
                                           LEVEL_NAMES, course_name, star_name,
-                                          warp_word)
+                                          subarea_name, warp_word)
 
 
 def _level_name(level_id) -> str:
@@ -312,17 +312,35 @@ def _verb(label: str) -> str:
     return label
 
 
+def _spawn_place(level, payload: dict) -> str:
+    """Where a spawn put Mario, at the finest grain the row can say —
+    "Lethal Lava Land: Volcano" for a subarea spawn (round 20 item 3: "we
+    should actually have a special 'Spawned into Lethal Lava Land [Subarea
+    Name]' event"), the plain level name otherwise (including every
+    historical row, which carries no area)."""
+    sub = subarea_name(level, payload.get("area"))
+    return f"{_level_name(level)}: {sub}" if sub else _level_name(level)
+
+
 def _spawned(payload: dict) -> str | None:
     level = payload.get("level")
     if level is None:
         return None
     if payload.get("kind") == "intro":
         return f"Started the file in {_level_name(level)}"
-    return f"Spawned into {_level_name(level)}"
+    return f"Spawned into {_spawn_place(level, payload)}"
 
 
-def label_level_entry(level) -> str:
-    """The one sentence for ARRIVING somewhere — see `level_entry_rows`."""
+def label_level_entry(level, payload: dict | None = None) -> str:
+    """The one sentence for ARRIVING somewhere — see `level_entry_rows`.
+
+    A restart INSIDE a subarea is "different than spawning into the starting
+    position of the entire course" (round 20 item 3), so a promoted spawn
+    whose area is a named subarea says where it actually put him instead of
+    claiming the whole level started over."""
+    sub = subarea_name(level, (payload or {}).get("area"))
+    if sub:
+        return f"Spawned into {_level_name(level)}: {sub}"
     return f"Started {_level_name(level)}"
 
 

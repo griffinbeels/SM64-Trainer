@@ -1468,12 +1468,13 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # 2026-07-24-segment-default-strat). Stars carry no such key —
             # the documented rule 11 asymmetry.
             "default_strat": meta.get("default_strat"),
-            # The entity this is a SUBSECTION of, or None for a top-level
-            # segment (task 0087). Stamped rather than derived client-side
-            # for the same reason `course_id` is: the selector asks "what has
-            # this target as its parent" on every render, and a second
-            # derivation in JS is how two surfaces start disagreeing.
-            "parent": meta.get("parent"),
+            # The entities this is a SUBSECTION of, [] for a top-level
+            # segment (task 0087; plural round 20). Stamped rather than
+            # derived client-side for the same reason `course_id` is: the
+            # selector asks "what has this target as a parent" on every
+            # render, and a second derivation in JS is how two surfaces
+            # start disagreeing.
+            "parents": meta.get("parents") or [],
             # igt present-as-None: same shape-stability rule as the target
             # payload — UI code reading sec.pb.igt gets null, not undefined.
             "pb": {"igt": None,
@@ -1635,12 +1636,13 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "segment_targets": [
             {"segment_id": d.id, "name": d.name, "enabled": d.enabled,
              "start_areas": areas, "start_levels": levels,
-             # The entity this is a SUBSECTION of, or None (task 0087). The
-             # SELECTOR reads this payload, not the sections, so the field is
-             # needed in both places -- a subsection missing it here would
-             # simply sit loose in the row beside its own parent, which is
-             # the crowding progressive disclosure exists to prevent.
-             "parent": d.parent,
+             # The entities this is a SUBSECTION of, [] for none (task 0087;
+             # plural round 20). The SELECTOR reads this payload, not the
+             # sections, so the field is needed in both places -- a
+             # subsection missing it here would simply sit loose in the row
+             # beside its own parent, which is the crowding progressive
+             # disclosure exists to prevent.
+             "parents": d.parents,
              # True for the seg:reds->pipe:<abbrev> half of a Bowser Reds
              # pairing -- the discriminator stagebanner.js needs to tell it
              # apart from the legacy exclusive "no reds" pipe-only segment,

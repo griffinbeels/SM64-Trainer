@@ -74,7 +74,7 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
                     # default and every existing row rather than the insert
                     # function's own now-gone "loose" default.
                     match_mode=srow.get("match_mode", "strict"),
-                    parent=srow.get("parent"),
+                    parents=srow.get("parents"),
                     # "trigger" until the corpus retiming is priced (round
                     # 15 item 3) — a seed row may carry its own value later.
                     clock_start=srow.get("clock_start", "trigger"))
@@ -94,7 +94,7 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
                         # ALREADY-installed, untouched row must also pick up a
                         # later seed conversion, not just a fresh install.
                         match_mode=srow.get("match_mode", "strict"),
-                        parent=srow.get("parent"),
+                        parents=srow.get("parents"),
                         clock_start=srow.get("clock_start", "trigger"))
         except _SEED_ERRORS as exc:
             problems.append(f"segment {key}: {exc}")
