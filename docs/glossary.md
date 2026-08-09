@@ -546,7 +546,10 @@ The row of [[practice cell]]s across the top of the [[Practice tab]], showing
 what you can practice where you currently stand — and no finer: standing
 inside a subarea narrows the row to that subarea's own [[star]]s (inside
 the volcano, the volcano's), while a subarea the trainer does not know
-keeps every [[star]] rather than hiding one wrongly. Clicking a cell sets your
+keeps every [[star]] rather than hiding one wrongly. It narrows only once you
+have arrived: a course load moves the game through a subarea on its way in, so
+the row keeps every [[star]] until you walk somewhere yourself, which is what
+the course's own entry screen shows. Clicking a cell sets your
 [[target]]. A cell shows every [[subsection]] it owns as a [[cell toggle]]
 inside its own art, so the row draws [[star]]s and castle movements at all times, never a [[subsection]] beside
 its parent.

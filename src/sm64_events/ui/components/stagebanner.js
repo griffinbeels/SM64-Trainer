@@ -433,7 +433,19 @@ function StarRow({ t, v, stage }) {
   // because hiding a valid star is the worse failure. Applied AFTER the
   // route filter with the same never-empty fallback that filter has: a
   // route narrowed to stars outside this subarea must not blank the row.
-  const subareaStars = course
+  //
+  // NOT WHILE THE AREA IS STILL THE LOAD'S (round 23, 2026-08-08). A course
+  // load walks the area byte through a transient -- entering LLL reads the
+  // volcano for 1.74 s, measured on his own journal -- and the STAR-SELECT
+  // SCREEN sits inside that window, so the row narrowed to the volcano's two
+  // stars on the screen where he picks which star to do: "On the star select,
+  // we should show the same options as when we spawn normally." `settling`
+  // (detectors/stage.py) marks exactly the emit that rode the level edge; the
+  // very next area change clears it, which is precisely the moment he walked
+  // somewhere himself. Showing everything is the safe side of this, and the
+  // same side `COURSE_SUBAREA_STARS` already takes for a subarea it has no
+  // row for.
+  const subareaStars = course && !stage.settling
     ? ((t.vocab || {}).subarea_stars || {})[`${stage.level}:${stage.area}`]
     : null;
   const routeShown = course

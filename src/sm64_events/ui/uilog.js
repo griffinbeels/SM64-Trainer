@@ -122,6 +122,18 @@ export function readLogs(root) {
       const rows = Array.from(card.querySelectorAll(".attempt-table tr"));
       return {
         name: text(card.querySelector(".log-card-name")),
+        // OPEN OR CLOSED, added 2026-08-08 for a report nothing could answer:
+        // "I can no longer close the overall dropdown for each star/segment."
+        // Seven experiments failed to reproduce it -- the fixture, a snapshot
+        // of his own db, his window width, with a live refetch, with focus on
+        // the nested piece -- and the row count alone cannot tell "he never
+        // clicked" from "it closed and sprang back", because a card that
+        // reopens within the same render paints no intermediate state and its
+        // row count never moves. This field does: a fold that does not stick
+        // writes closed-then-open in a pair of records milliseconds apart,
+        // and `tools/what_happened.py` puts them on the clock beside whatever
+        // event reopened it. Cheap, and it turns the next report into a query.
+        open: !card.classList.contains("is-closed"),
         rows: rows.slice(0, LOG_ROWS)
           .map((row) => text(row.querySelector(".attempt-result"))),
         total: rows.length,

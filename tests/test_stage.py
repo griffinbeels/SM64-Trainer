@@ -14,6 +14,18 @@ def snap(**overrides) -> GameSnapshot:
     return GameSnapshot(**defaults)
 
 
+def payload(event, *keys):
+    """The fields a test OWNS, never the whole dict.
+
+    Whole-dict equality here claimed ownership of a shape other work extends:
+    adding `settling` (round 23) turned eleven green tests red without a single
+    behaviour changing. Each test now names what it is about; `settling` has
+    its own tests below.
+    """
+    keys = keys or ("course_id", "level", "area", "mode")
+    return {k: event.payload[k] for k in keys}
+
+
 # --- star context (main courses) ------------------------------------------
 
 def test_entering_a_main_course_emits_stars_mode():
@@ -22,14 +34,14 @@ def test_entering_a_main_course_emits_stars_mode():
     events = d.process(snap(curr_level=6), snap(curr_level=8))   # -> SSL (course 8)
     assert len(events) == 1
     assert events[0].type == "stage_changed"
-    assert events[0].payload == {"course_id": 8, "level": 8, "area": 1,
+    assert payload(events[0]) == {"course_id": 8, "level": 8, "area": 1,
                                  "mode": "stars"}
 
 
 def test_first_pair_establishes():
     events = StageChangeDetector().process(snap(curr_level=8), snap(curr_level=8))
     assert len(events) == 1
-    assert events[0].payload == {"course_id": 8, "level": 8, "area": 1,
+    assert payload(events[0]) == {"course_id": 8, "level": 8, "area": 1,
                                  "mode": "stars"}
 
 
@@ -42,7 +54,7 @@ def test_in_course_area_switch_re_emits_with_the_new_area():
     events = d.process(snap(curr_level=8, curr_area=1),
                        snap(curr_level=8, curr_area=2))
     assert len(events) == 1
-    assert events[0].payload == {"course_id": 8, "level": 8, "area": 2,
+    assert payload(events[0]) == {"course_id": 8, "level": 8, "area": 2,
                                  "mode": "stars"}
 
 
@@ -57,7 +69,7 @@ def test_the_area_a_course_load_settles_on_supersedes_the_transient():
                         snap(curr_level=22, curr_area=1))
     assert entering[0].payload["area"] == 2
     assert len(settled) == 1
-    assert settled[0].payload == {"course_id": 7, "level": 22, "area": 1,
+    assert payload(settled[0]) == {"course_id": 7, "level": 22, "area": 1,
                                   "mode": "stars"}
 
 
@@ -73,7 +85,7 @@ def test_reattach_gap_to_a_new_course_is_caught():
     d.process(snap(curr_level=6), snap(curr_level=6))           # emitted: castle lobby
     events = d.process(snap(curr_level=9), snap(curr_level=9))  # reattached in BoB
     assert len(events) == 1
-    assert events[0].payload == {"course_id": 1, "level": 9, "area": 1,
+    assert payload(events[0]) == {"course_id": 1, "level": 9, "area": 1,
                                  "mode": "stars"}
 
 
@@ -93,7 +105,7 @@ def test_entering_a_bowser_course_emits_bowser_course_mode():
     d.process(snap(curr_level=8), snap(curr_level=8))            # SSL (course 8)
     events = d.process(snap(curr_level=8), snap(curr_level=17))  # -> BitDW
     assert len(events) == 1
-    assert events[0].payload == {"course_id": 16, "level": 17, "area": 1,
+    assert payload(events[0]) == {"course_id": 16, "level": 17, "area": 1,
                                  "mode": "bowser_course"}
 
 
@@ -104,7 +116,7 @@ def test_moving_between_two_bowser_courses_re_emits():
     d.process(snap(curr_level=17), snap(curr_level=17))            # BitDW
     events = d.process(snap(curr_level=17), snap(curr_level=19))   # -> BitFS
     assert len(events) == 1
-    assert events[0].payload == {"course_id": 17, "level": 19, "area": 1,
+    assert payload(events[0]) == {"course_id": 17, "level": 19, "area": 1,
                                  "mode": "bowser_course"}
 
 
@@ -117,7 +129,7 @@ def test_entering_a_bowser_arena_emits_arena_mode():
     d.process(snap(curr_level=17), snap(curr_level=17))           # BitDW
     events = d.process(snap(curr_level=17), snap(curr_level=30))  # -> Bowser 1 arena
     assert len(events) == 1
-    assert events[0].payload == {"course_id": None, "level": 30, "area": 1,
+    assert payload(events[0]) == {"course_id": None, "level": 30, "area": 1,
                                  "mode": "arena"}
 
 
@@ -139,7 +151,7 @@ def test_entering_castle_inside_emits_castle_mode():
     d.process(snap(curr_level=8), snap(curr_level=8))                       # SSL
     events = d.process(snap(curr_level=8), snap(curr_level=6, curr_area=1))  # -> lobby
     assert len(events) == 1
-    assert events[0].payload == {"course_id": None, "level": 6, "area": 1,
+    assert payload(events[0]) == {"course_id": None, "level": 6, "area": 1,
                                  "mode": "castle"}
 
 
@@ -151,7 +163,7 @@ def test_castle_subarea_switch_emits():
     events = d.process(snap(curr_level=6, curr_area=1),
                        snap(curr_level=6, curr_area=2))
     assert len(events) == 1
-    assert events[0].payload == {"course_id": None, "level": 6, "area": 2,
+    assert payload(events[0]) == {"course_id": None, "level": 6, "area": 2,
                                  "mode": "castle"}
 
 
@@ -172,7 +184,7 @@ def test_castle_grounds_is_no_context():
     events = d.process(snap(curr_level=6, curr_area=1),
                        snap(curr_level=16, curr_area=1))                          # -> grounds
     assert len(events) == 1
-    assert events[0].payload == {"course_id": None, "level": 16, "area": 1,
+    assert payload(events[0]) == {"course_id": None, "level": 16, "area": 1,
                                  "mode": None}
 
 
@@ -183,3 +195,36 @@ def test_no_event_between_two_cap_levels():
     d = StageChangeDetector()
     d.process(snap(curr_level=18), snap(curr_level=18))           # Vanish Cap (None)
     assert d.process(snap(curr_level=18), snap(curr_level=20)) == []  # -> Metal Cap
+
+
+# --- settling: is this area the LOAD's, or his? ----------------------------
+# Round 23. A course load walks the area byte through a transient (measured on
+# his own journal: entering LLL read the volcano for 1.74s), and the star-select
+# screen sits inside that window -- "On the star select, we should show the same
+# options as when we spawn normally." The flag lets the selector decline to
+# narrow on an area nobody has stood in yet, with nothing having to WAIT.
+
+def test_the_emit_that_rides_a_level_edge_is_marked_settling():
+    d = StageChangeDetector()
+    d.process(snap(curr_level=6), snap(curr_level=6))
+    entering = d.process(snap(curr_level=6), snap(curr_level=22, curr_area=2))
+    assert entering[0].payload["settling"] is True
+
+
+def test_walking_into_a_subarea_yourself_is_not_settling():
+    d = StageChangeDetector()
+    d.process(snap(curr_level=22, curr_area=1), snap(curr_level=22, curr_area=1))
+    walked = d.process(snap(curr_level=22, curr_area=1),
+                       snap(curr_level=22, curr_area=2))
+    assert walked[0].payload["settling"] is False
+
+
+def test_the_settle_after_a_load_is_not_settling_either():
+    # The load's own 2 -> 1 correction: a real area edge, one tick after the
+    # level edge, so it clears the flag and the row narrows normally again.
+    d = StageChangeDetector()
+    d.process(snap(curr_level=6), snap(curr_level=6))
+    d.process(snap(curr_level=6), snap(curr_level=22, curr_area=2))
+    settled = d.process(snap(curr_level=22, curr_area=2),
+                        snap(curr_level=22, curr_area=1))
+    assert settled[0].payload["settling"] is False

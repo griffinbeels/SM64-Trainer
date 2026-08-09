@@ -5142,15 +5142,34 @@
      No `Disclose` of its own: this block sits INSIDE the parent's, so the
      parent's fold animates it for free -- "if the parent star closes the
      card, these close with it". */
+  /* ALIGNED WITH THE CARD'S OWN CONTENT, not indented again on top of it
+     (round 23, 2026-08-08). Griffin: "all of the segment cards should be
+     in-line with the rank standards card above it (aka they should be
+     expanded to the left a bit to be in line with the rest of the elements
+     above)." `.log-card-body` already carries `--log-body-indent`, so an
+     extra margin here indented the pieces TWICE -- which is also why their
+     attempt rows wrapped where the parent's identical rows fit ("some
+     elements may bleed into two rows (like the checkbox next to the 12\"20")):
+     a child had ~70px less width than its parent at the same window size.
+     The guide line stays, pulled into the body's own left padding by the
+     negative margin, so the content edge lands exactly on the Rank standards
+     panel's while the line still says "owned by the parent". Content x is
+     therefore unchanged by the border -- the two values must stay equal. */
   .log-card-children {
     display: flex; flex-direction: column; gap: .3rem;
-    margin: .5rem 0 .1rem 1rem; padding-left: .7rem;
+    margin: .5rem 0 .1rem -.75rem; padding-left: .75rem;
     border-left: 1px solid var(--border-soft);
   }
   /* Pieces read as belonging to the card around them rather than as a second
      list of top-level cards: no gold "active" border of their own (the parent
      already carries it for the pair) and a quieter surface. */
   .log-card-children .log-card { background: rgba(255,255,255,.02); }
+  /* NOT here: a rule zeroing `--log-body-indent` inside a nested card. It was
+     written for the wrap in round 23 and MEASURED not to cause it -- with the
+     indent restored, a piece's result cell is 44px against its parent's 44px
+     at the 850px floor. The wrap was entirely the double LEFT OFFSET above.
+     A child's rows keep lining up under the child's own name, the same way
+     every other card's do. */
   .log-list-footer { display: flex; justify-content: center; margin-top: .3rem; }
   /* The rank wash (`.rank-banner::before`, near the top of this file) bleeds
      -8px top / -12px bottom / -16px left assuming it lands in a CARD's own

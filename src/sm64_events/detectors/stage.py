@@ -63,8 +63,6 @@ class StageChangeDetector:
         # last EMITTED context (see module docstring) | None | _UNSET
         self._last = _UNSET
 
-    # prev unused: the _UNSET sentinel covers the establishing case (level/area
-    # siblings use prev for a 'from' field; stage has none).
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         level = curr.curr_level
         course = course_for_level(level)
@@ -79,6 +77,20 @@ class StageChangeDetector:
             mode, course_id, context = "castle", None, ("castle", curr.curr_area)
         else:
             mode, course_id, context = None, None, None
+        # IS THIS AREA THE LOAD'S, OR HIS? A course load walks the area byte
+        # through a transient before it settles (measured on his own journal,
+        # 2026-08-09: entering LLL read area 2 -- the volcano -- for 1.74s),
+        # and the emit that rides the LEVEL edge samples it mid-walk. Marking
+        # that one emit lets the selector decline to narrow on an area nobody
+        # has stood in yet, without anything having to WAIT for the settle
+        # (round 23; a wait he can see is a defect by his own rule).
+        #
+        # True on exactly the tick the level changed, and nothing else clears
+        # it -- because nothing has to: the next area change re-emits with
+        # settling False, which is precisely the moment he walked somewhere
+        # himself. A visit whose area never changes stays unnarrowed, which is
+        # the right answer (he is standing where the course starts).
+        settling = prev is not None and prev.curr_level != curr.curr_level
         if self._last is not _UNSET and context == self._last:
             return []
         self._last = context
@@ -87,4 +99,5 @@ class StageChangeDetector:
                       payload={"course_id": course_id,
                                "level": level,
                                "area": curr.curr_area,
+                               "settling": settling,
                                "mode": mode})]

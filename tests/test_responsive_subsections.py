@@ -179,3 +179,100 @@ def test_a_piece_closes_with_its_parent():
         page.wait_ms(700)
         assert page.evaluate(visible_height) == 0, (
             "closing the parent must take its pieces with it")
+
+
+def test_a_piece_lines_up_with_the_rank_standards_card_above_it():
+    """"all of the segment cards should be in-line with the rank standards
+    card above it (aka they should be expanded to the left a bit to be in line
+    with the rest of the elements above)."
+
+    Measured in PIXELS rather than asserted from the CSS, because the value
+    that matters is the sum of four paddings and a negative margin, and every
+    one of them is legal on its own. Mutation-proved by restoring the extra
+    `margin-left: 1rem`.
+    """
+    with SUBSECTION_PROJECT.open() as url, get_driver().launch() as page:
+        page.goto(url)
+        page.wait_for(SUBSECTION_PROJECT.ready_selector)
+        page.wait_ms(400)
+        edges = page.evaluate(
+            "(() => { const card = document.querySelector("
+            "'.log-card-children > .log-card');"
+            " const panel = card.closest('.log-card-body')"
+            ".querySelector(':scope > .stdpanel');"
+            " return [card.getBoundingClientRect().left,"
+            " panel.getBoundingClientRect().left]; })()")
+        assert abs(edges[0] - edges[1]) <= 1, (
+            f"a piece's left edge is {edges[0]} and the Rank standards panel's "
+            f"is {edges[1]} -- they must line up")
+
+
+def test_a_piece_s_attempt_row_fits_on_one_line_at_the_narrowest_width():
+    """"need to make sure that the scaling is correct, because otherwise some
+    elements may bleed into two rows (like the checkbox next to the 12\"20."
+
+    The cause was the indent being paid TWICE (the body's own
+    `--log-body-indent` stacking inside the parent's), so a child's result cell
+    had ~70px less than its parent's identical cell. Asserted at the supported
+    FLOOR, which is where it showed. Mutation-proved by restoring the nested
+    body's indent.
+    """
+    floor = SUBSECTION_PROJECT.min_viewport_width
+    with SUBSECTION_PROJECT.open() as url, get_driver().launch(
+            viewport=(floor, 1200)) as page:
+        page.goto(url)
+        page.wait_for(SUBSECTION_PROJECT.ready_selector)
+        page.wait_ms(400)
+        # A piece is CLOSED by default (it has not earned the one auto-open
+        # slot), so its table is not in the DOM until asked for.
+        page.evaluate(
+            "document.querySelector("
+            "'.log-card-children > .log-card .log-card-fold').click()")
+        page.wait_ms(600)
+        cells = page.evaluate(
+            "(() => { const h = (sel) => Array.from("
+            "document.querySelectorAll(sel)).map(c =>"
+            " c.getBoundingClientRect().height);"
+            " return [h('.log-card-children .attempt-table .attempt-result'),"
+            " h('.log-list > .log-card > .log-card-disclose"
+            " .attempt-table .attempt-result')]; })()")
+        piece_rows, parent_rows = cells
+        assert piece_rows, "no piece rows rendered -- the fixture missed the state"
+        assert parent_rows, "no parent rows to calibrate against"
+        # SELF-CALIBRATING: the parent's identical cell at the identical width
+        # is the control, so this cannot go red for a font or padding change.
+        # Mutation-proved by restoring the extra `margin-left: 1rem` above --
+        # which is what the wrap actually was. Restoring the nested card's own
+        # `--log-body-indent` does NOT reproduce it (44px vs 44px, measured),
+        # so that second rule was written and then deleted rather than kept on
+        # a hunch.
+        assert max(piece_rows) <= max(parent_rows) + 2, (
+            f"a piece's result cell is {max(piece_rows):.0f}px where its "
+            f"parent's is {max(parent_rows):.0f}px at {floor}px -- it wrapped")
+
+
+def test_a_piece_with_no_strategies_does_not_shout_for_one():
+    """"If a segment doesn't have a ranked ladder (aka there are no strategies
+    to select), it should not be blinking red (there's nothing to select...)."
+
+    The control stays enabled -- "+ new strat..." is a real action -- so this
+    asserts the GLOW is gone, not the picker. Mutation-proved by dropping the
+    `nothingToPick` clause in stratpicker.js.
+    """
+    with SUBSECTION_PROJECT.open() as url, get_driver().launch() as page:
+        page.goto(url)
+        page.wait_for(SUBSECTION_PROJECT.ready_selector)
+        page.wait_ms(400)
+        pickers = page.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.log-card-children .log-card-strat-picker select')).map(s => ["
+            "s.className.includes('needs-strat'), s.options.length,"
+            "s.disabled])")
+        assert pickers, "no piece pickers rendered -- the fixture missed the state"
+        for shouts, options, disabled in pickers:
+            assert options <= 2, (
+                "this guard only means anything on a picker with nothing to "
+                f"choose; this one has {options} options")
+            assert not shouts, "a piece with no strategies must not glow red"
+            assert not disabled, (
+                "it must stay usable -- '+ new strat...' is a real action")
