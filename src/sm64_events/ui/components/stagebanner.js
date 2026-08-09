@@ -424,11 +424,25 @@ function StarRow({ t, v, stage }) {
   // an empty row: an empty selector reads as "broken", and standing somewhere
   // your route skips is a normal thing to do.
   const routeStars = course ? routeStarFilter(v, stage.course_id) : null;
-  const shown = course
+  // INSIDE A SUBAREA, only that subarea's stars (round 21 item 5: "I'm
+  // inside the volcano, so I can only do stars inside there"). The map is
+  // server-vocab (`subarea_stars`, measured off his own grabs — see
+  // addresses.COURSE_SUBAREA_STARS); a subarea with no row filters nothing,
+  // because hiding a valid star is the worse failure. Applied AFTER the
+  // route filter with the same never-empty fallback that filter has: a
+  // route narrowed to stars outside this subarea must not blank the row.
+  const subareaStars = course
+    ? ((t.vocab || {}).subarea_stars || {})[`${stage.level}:${stage.area}`]
+    : null;
+  const routeShown = course
     ? course.stars
         .map((name, i) => ({ name, i }))
         .filter(({ i }) => !routeStars || routeStars.has(`${stage.course_id}:${i}`))
     : [];
+  const hereShown = subareaStars
+    ? routeShown.filter(({ i }) => subareaStars.includes(i))
+    : routeShown;
+  const shown = hereShown.length ? hereShown : routeShown;
 
   // Task 0025 — DDD during 16 Star offers exactly one star, so pick it.
   // Computed BEFORE the `!course` early return because a hook may not run

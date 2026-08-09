@@ -625,18 +625,18 @@ class Projector:
         # frame 0, so a fill's own frame would fake an instant expiry); the
         # first hold check baselines it.
         self._hook_alive_frame: int | None = None
-        # THE FAMILY DANCE (round 20 items 2+4). While the target names an
-        # entity that owns subsections, a member of that family ARMING takes
-        # the hand — the piece refines the whole — and the displaced target
-        # is remembered here as (target tuple, hooked flag): the FAMILY
-        # ANCHOR. A pop with no queued successor RETURNS the hand to the
-        # anchor instead of going neutral, so the whole never goes missing
-        # between pieces; a grab of the anchor star (or the parent segment's
-        # own success) ends the dance — his ruling: "the first subsection
-        # should be active, then the second subsection that gets detected,
-        # etc, until we finally END on the actual star being grabbed".
-        # Journal-derived like the queue, so replay rebuilds it.
-        self._family_anchor: tuple | None = None
+        # THE STAR OWNS THE HAND (round 21, superseding round 20's
+        # family-take): a SUBSECTION is selected by CLICK only. Round 20
+        # briefly made a piece's arming take the hand from its parent, and
+        # one live session corrected it — "the STAR's practice log should
+        # be prioritized... The subsections are still ongoing and still get
+        # entries, but the main star that they're a part of should be the
+        # priority. The EXCEPTION would be if the user manually selects a
+        # subsection." So pieces arm and record UNDERNEATH the star: they
+        # never hook, never queue, and their success follows onto their
+        # PARENT star (see the seg_closed loop) — the one family-shaped
+        # move detection is still allowed to make, because it points the
+        # hand at the WHOLE, never the piece.
         # (course_id, star_id) of the active star most recently retired BY
         # LEAVING its course (caveat 12). Re-entering that course with nothing
         # else active reinstates it ("resume the star I just stepped out of");
@@ -803,22 +803,12 @@ class Projector:
 
     def _promote_or_neutral(self, frame: int) -> None:
         """The hand is empty: the oldest detection that is STILL armed takes
-        it (his FIFO); with none left, a family dance RETURNS the hand to
-        the displaced parent (round 20 — the whole must not go missing
-        between its pieces); else the hand stays neutral — never a ghost."""
+        it (his FIFO), else the hand stays neutral — never a ghost."""
         while self._target_queue:
             sid = self._target_queue.pop(0)
             if sid in self._segments.armed_ids():
                 self._hook_head(sid, frame)
                 return
-        if self._family_anchor is not None:
-            self.target, self._target_hooked = self._family_anchor
-            self._family_anchor = None
-            if self._target_hooked:
-                # a restored detection-flavored head starts a fresh hold
-                # clock — the time its piece held the hand was not silence
-                self._hook_level, self._hook_area = self._level, self._area
-                self._hook_alive_frame = frame
 
     def _hold_hooked_head(self, ev, head_success: bool) -> None:
         """Round 19's bounds for a HOOKED head, judged after the matcher has
@@ -854,12 +844,6 @@ class Projector:
                 != course_for_level(self._hook_level)
                 and not self._segments.anchor_echo(ev)):
             self._drop_head()   # forfeit
-            # his "genuine kill" ends the family dance too — resetting in a
-            # foreign course means doing something else, and restoring the
-            # displaced parent there would hand back a selection nothing he
-            # is doing can satisfy (expiry, by contrast, restores: the piece
-            # went stale, not the whole)
-            self._family_anchor = None
             return
         if (self._hook_alive_frame is None
                 or ev.frame < self._hook_alive_frame):
@@ -988,11 +972,6 @@ class Projector:
                 # survives, as it always has; the queue empties via the
                 # armed-set scrub below, since a game_reset disarms all.)
                 self._drop_head()
-            if self._family_anchor is not None and self._family_anchor[1]:
-                # a detection-held anchor dies with the world exactly as the
-                # head above does; a PICKED anchor is his click and survives
-                # by restoring at the bottom of this feed
-                self._family_anchor = None
         if ev.type == "route_selected":
             # Journaled route activation (spec 2026-07-23-default-routes-
             # foundation): the route's member segment ids scope the
@@ -1208,26 +1187,22 @@ class Projector:
                             head_popped = True
                         elif entered_stage:
                             self.target = None
-                    elif (self._family_anchor is not None
-                          and self._family_anchor[0]
-                          == ("segment", raw_segment_id)):
-                        # The PARENT movement itself completed while one of
-                        # its pieces held the hand — the whole subsumes the
-                        # piece (round 20 item 2's segment half, the same
-                        # rule the star's grab applies): the hand returns to
-                        # the parent, ending the dance.
-                        self.target, self._target_hooked = self._family_anchor
-                        self._family_anchor = None
-                        if entered_stage:
-                            self.target = None
                 else:
                     # An empty hand — or a star target, which the auto-follow
                     # has always moved — fills exactly as before the queue.
+                    # A SUBSECTION's success follows onto its PARENT, never
+                    # onto itself (round 21: "the main star that they're a
+                    # part of should be the priority", and item 1's "swap to
+                    # the correct list... showing a different star + its
+                    # subsections") — the completed piece's family takes the
+                    # row with the STAR active, and the piece's entry still
+                    # records underneath it.
                     self._target_hooked = False
                     if hc is not None:
                         self.target = None if entered_stage else ("star", *hc)
                     else:
-                        self.target = None if entered_stage else ("segment", a.segment_id)
+                        self.target = (None if entered_stage
+                                       else self._follow_target(a.segment_id))
                 self._suspended_star = None  # finished a segment: moved on (caveat 13)
             closed.append(a)
         # Caveat 18's grab-steals-the-target restore USED to sit here, and
@@ -1257,53 +1232,41 @@ class Projector:
         # comparison is by COURSE, not by family or by exact star, and for
         # the live regression this closes (any star 0-5 losing its target on
         # entry to its own course, not just star 6).
-        # THE FAMILY (round 20): a def whose `parents` name the held target
-        # is a piece of the thing being practiced, and its arming is the
-        # dance's own signal even when the clause shape is presence-typed
-        # (a subsection routinely STARTS on entering its subarea, which
-        # `hooks_on_arm` rightly refuses for everything else).
+        # A CHILD of the star target arming never suspends it (round 20,
+        # kept by round 21 as the rule that keeps the star LIT while its
+        # pieces run underneath): the piece is the star being practiced,
+        # not a different activity starting.
         head_key = target_entity_key(self.target)
-        anchor_key = (target_entity_key(self._family_anchor[0])
-                      if self._family_anchor is not None else None)
         if self.target and self.target[0] == "star" \
                 and any(n["event"] == "segment_armed"
                         and self._clears_star_target(n["segment_id"])
                         and not self._family_member_of(n["segment_id"],
                                                       head_key)
                         for n in self.segment_notices):
-            # a CHILD of the star target arming is the family take below,
-            # never this rule — suspending the star here would lose the
-            # anchor the dance returns the hand to
             self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
             self.target = None
-            head_key = None
         # THE TARGET QUEUE (round 19). Every DELIBERATE arm this event
         # produced lines up (segments.hooks_on_arm — a presence arm like
-        # LBLJ's castle entry or a pipe family's course entry never does,
-        # EXCEPT a family member, above); the hooked head is then judged by
-        # its own bounds; dead detections leave the line; and an empty hand
-        # takes the oldest survivor. Order matters: enqueue first so an arm
-        # that just cleared a star target (the block above) can be the very
-        # thing promoted onto the empty hand it made.
+        # LBLJ's castle entry or a pipe family's course entry never does);
+        # the hooked head is then judged by its own bounds; dead detections
+        # leave the line; and an empty hand takes the oldest survivor. Order
+        # matters: enqueue first so an arm that just cleared a star target
+        # (the block above) can be the very thing promoted onto the empty
+        # hand it made. A SUBSECTION never hooks or queues WHATEVER its
+        # clause shape (round 21, superseding round 20's family bypass):
+        # "how do you know for sure I'm going to practice anything? You
+        # don't" — a piece is selected by click, and detection speaks
+        # through its PARENT (the suspend exemption above, and the
+        # follow-onto-the-parent rule in the seg_closed loop).
         head_seg = (self.target[1] if self.target
                     and self.target[0] == "segment" else None)
-        family_take: int | None = None
         for n in self.segment_notices:
             if n["event"] != "segment_armed":
                 continue
             sid = n["segment_id"]
             armed_def = self._segments.definition(sid)
-            if armed_def is None:
-                continue
-            parents = armed_def.parents or []
-            if (head_key is not None and head_key in parents
-                    and sid != head_seg and family_take is None):
-                # a piece of the HELD entity takes the hand (applied below,
-                # once the hold check has judged the current head)
-                family_take = sid
-                continue
-            in_family = anchor_key is not None and anchor_key in parents
-            if (not (hooks_on_arm(armed_def.start_triggers) or in_family)
+            if (armed_def is None or not hooks_on_arm(armed_def.start_triggers)
+                    or (armed_def.parents or [])
                     or sid == head_seg or sid in self._target_queue):
                 continue
             self._target_queue.append(sid)
@@ -1320,23 +1283,10 @@ class Projector:
             self.target = ("star", *self._pending_grab_take)
             self._target_hooked = False
             self._suspended_star = None
-            self._family_anchor = None
         self._pending_grab_take = None
-        # THE FAMILY TAKE (round 20 item 4): the piece becomes the active
-        # selection the moment it is detected — "the first subsection should
-        # be active" — and the displaced whole waits as the anchor. Only
-        # from its OWN parent: a sibling arming while a piece holds the hand
-        # queues behind it (round 19's FIFO, which his ask names).
-        if family_take is not None and family_take in armed_now:
-            if self.target is not None and self._family_anchor is None:
-                self._family_anchor = (self.target, self._target_hooked)
-            self._target_queue = [sid for sid in self._target_queue
-                                  if sid != family_take]
-            self._hook_head(family_take, ev.frame)
         self._target_queue = [sid for sid in self._target_queue
                               if sid in armed_now]
-        if self.target is None and (self._target_queue
-                                    or self._family_anchor is not None):
+        if self.target is None and self._target_queue:
             self._promote_or_neutral(ev.frame)
         # Run engine sees the same event + the attempts just closed (star AND
         # segment successes/failures); it owns the run lifecycle independently.
@@ -1418,7 +1368,6 @@ class Projector:
             self._target_queue.clear()  # a session boundary ends every
             # queued detection with the focus they were waiting behind
             self._suspended_star = None
-            self._family_anchor = None
             return closed
         if ev.type == "level_changed":
             closed = self._close(ev, outcome="abandoned", igt_frames=None)
@@ -1537,7 +1486,6 @@ class Projector:
             if auto and self.target is not None and self._target_hooked:
                 return []
             self._suspended_star = None  # explicit focus overrides a resume (caveat 13)
-            self._family_anchor = None   # a new focus ends the family dance
             if ev.payload.get("kind") == "segment":
                 self.target = ("segment", ev.payload["segment_id"])
                 # A fill is detection-flavored: round 19's bounds (complete /
@@ -1721,7 +1669,6 @@ class Projector:
             self.target = ("star", *grabbed)
             self._target_hooked = False
             self._suspended_star = None  # committed a new focus (caveat 13)
-            self._family_anchor = None   # the dance ends on the star's grab
         elif (not attempt.cleared and self._target_hooked
                 and self._segment_targeted()):
             # The hooked head reads as ARMED here, but this runs BEFORE the
@@ -1740,21 +1687,24 @@ class Projector:
     def _grab_may_take_the_hand(self, grabbed: tuple[int, int]) -> bool:
         if not self._segment_targeted():
             return True
+        if not self._target_hooked:
+            # A PICKED segment never yields — including a picked
+            # SUBSECTION to its own parent's grab (round 21, his call:
+            # "'picked piece should survive its parent's grab' is probably
+            # the right approach", superseding round 20's unconditional
+            # whole-subsumes-the-piece). "Explicit user choices take
+            # priority."
+            return False
         held_def = self._segments.definition(self.target[1])
         if (held_def is not None
                 and target_entity_key(("star", *grabbed))
                 in (held_def.parents or [])):
-            # Round 20 item 2: THE WHOLE SUBSUMES THE PIECE. Grabbing the
-            # held subsection's own PARENT star always takes the hand —
-            # picked or hooked, armed or not: "when we complete the star
-            # that's associated with a subsection... it should
-            # automatically re-select the STAR". His screenshot is the
-            # armed case exactly: Volcano Entry (a plain strict def, no
-            # star-grab cancel branch) stayed selected through the
-            # Hot-Foot-It grab.
+            # A HOOKED piece still yields to its parent star's grab, armed
+            # or not (round 20 item 2's surviving half): a detection-held
+            # piece is the trainer following your play, and the whole
+            # subsumes the piece.
             return True
-        return (self._target_hooked
-                and self.target[1] not in self.armed_segment_ids())
+        return self.target[1] not in self.armed_segment_ids()
 
     def _segment_targeted(self) -> bool:
         return self.target is not None and self.target[0] == "segment"
@@ -1766,6 +1716,28 @@ class Projector:
             return False
         d = self._segments.definition(sid)
         return d is not None and entity_key in (d.parents or [])
+
+    def _follow_target(self, segment_id: int) -> tuple:
+        """What a segment's SUCCESS moves an unheld hand onto (round 21): a
+        top-level segment follows onto itself, exactly as it always has; a
+        SUBSECTION follows onto its parent — the current target when it is
+        already one of the piece's parents, else the primary (parents[0]).
+        A castle-area parent ("area:...") is a place, not a target, so an
+        area-parented piece keeps the old behavior and follows onto
+        itself."""
+        d = self._segments.definition(segment_id)
+        parents = (d.parents or []) if d is not None else []
+        if not parents:
+            return ("segment", segment_id)
+        current = target_entity_key(self.target)
+        chosen = current if current in parents else parents[0]
+        kind, _, rest = chosen.partition(":")
+        if kind == "star":
+            course_str, _, star_str = rest.partition(":")
+            return ("star", int(course_str), int(star_str))
+        if kind == "segment":
+            return ("segment", int(rest))
+        return ("segment", segment_id)
 
     def _close_by_death(self, ev) -> list[Attempt]:
         if self._unacted_open():

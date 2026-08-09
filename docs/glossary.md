@@ -41,13 +41,11 @@ exit, a door [[moment]]) takes an empty hand and becomes a
 [[hooked target]]; a detection that fires while the hand already holds
 something waits its turn; when the front completes or dies, the oldest
 detection still alive takes over, and an empty queue leaves the hand
-neutral — unless a [[subsection]] displaced its own parent, in which case
-the parent takes the hand back instead. A [[segment]] that
+neutral. A [[segment]] that
 arms by mere presence — LBLJ on a castle entry, a pipe family on a course
-entry — never enters the queue, except a [[subsection]] of the held
-[[target]]: the piece routinely starts by entering its subarea, and while
-you practice the whole, its pieces arming IS the signal the queue exists
-for.
+entry — never enters the queue, and neither does a [[subsection]] whatever
+its clause shape: only your click selects a piece, and its detection
+speaks through its parent [[star]] instead.
 
 - **Lives** — the projector (`src/sm64_events/tracking/projection.py`)
   → the [[selector]] and the [[practice log]]
@@ -59,8 +57,9 @@ holds it until it completes, until you genuinely abandon it (an [[anchor]]
 landing inside a foreign course), or until its own staleness budget expires
 — walking back through a course to redo its start keeps the hold. A
 [[star]] grab takes the hand from a stale hooked one, never from one the
-matcher still holds armed — except its own [[subsection]], which yields to
-its parent [[star]]'s grab armed or not.
+matcher still holds armed — except a hooked [[subsection]], which yields
+to its parent [[star]]'s grab armed or not; a PICKED one holds even
+through that grab, because explicit choices take priority.
 
 - **Lives** — the projector (`src/sm64_events/tracking/projection.py`)
   → the [[selector]]
@@ -103,10 +102,12 @@ its own — the climb rather than the whole [[star]]. A subsection IS a
 [[segment]], and names what it belongs to — several [[star]]s when the same
 piece serves them all, the way both of LLL's volcano [[star]]s enter the
 volcano identically — so it carries its own [[personal best]], its own [[ladder]] and
-its own rows in the [[practice log]]. While its parent is the [[target]],
-detecting the piece hands it the [[target]] slot, and the parent takes the
-hand back when you complete it — the [[star]]'s own grab closes the loop.
-Inside a course a piece always belongs to something specific; a castle-side
+its own rows in the [[practice log]]. The [[star]] owns the hand: a piece arms
+and records underneath its parent without ever taking the [[target]] slot
+by detection — its completion points the slot at the parent [[star]], never
+at itself — and only clicking a piece makes it the [[target]], where it
+then holds even through its parent's grab. Inside a course a piece always
+belongs to something specific; a castle-side
 piece belongs to its area, which is as high as the castle goes — his own
 split, and the [[recorder]]'s parent picker follows it (an area tile
 answers in one click, a course tile opens its [[star]]s, and the + beside a
@@ -539,10 +540,14 @@ pill]], the [[scope]] control, and your [[rank]]s across everything.
 ### Selector
 
 The row of [[practice cell]]s across the top of the [[Practice tab]], showing
-what you can practice where you currently stand. Clicking a cell sets your
+what you can practice where you currently stand — and no finer: standing
+inside a subarea narrows the row to that subarea's own [[star]]s (inside
+the volcano, the volcano's), while a subarea the trainer does not know
+keeps every [[star]] rather than hiding one wrongly. Clicking a cell sets your
 [[target]]. Picking something that owns [[subsection]]s EXPANDS the row into
 that family — the parent and its [[subsection]]s, nothing else — and tapping the
-parent again returns the full row.
+parent again returns the full row; [[subsection]]s never appear before
+you choose their parent.
 
 - **Lives** — the quick-select row
   (`src/sm64_events/ui/components/stagebanner.js`), whose disclosure rule is

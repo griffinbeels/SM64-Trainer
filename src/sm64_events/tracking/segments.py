@@ -343,6 +343,7 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           node_short_label,
                                           region_for_node, star_count,
                                           star_name, subarea_name,
+                                          COURSE_SUBAREA_STARS,
                                           world_connections, world_regions)
 from sm64_events.core.landmark import same_landmark
 from sm64_events.detectors.moment import MOMENTS
@@ -2297,6 +2298,13 @@ def vocab() -> dict:
         # destinations) — the builder filters flow-annotated level/subarea
         # dropdowns to world-possible moves (addresses.WORLD_EDGES_*)
         "connections": world_connections(),
+        # Which stars a course SUBAREA hosts ("22:2" -> [4, 5, 6]) — the
+        # selector narrows its star row to these while the player stands
+        # inside one (round 21 item 5); a subarea with no row shows every
+        # star. addresses.COURSE_SUBAREA_STARS carries the measurement.
+        "subarea_stars": {f"{level}:{area}": list(stars)
+                          for (level, area), stars
+                          in COURSE_SUBAREA_STARS.items()},
         # Ordered region -> place tree for the segment library's grouping and
         # the editor's origin override (spec 2026-07-24-segment-origin-
         # categories). Domain-free shape: {key, label, children:[...]}.

@@ -642,6 +642,29 @@ COURSE_SUBAREA_NAMES = {
 }
 
 
+# Which STARS a course subarea hosts, keyed (level, gCurrAreaIndex) — the
+# selector's "I'm inside the volcano, so I can only do stars inside there"
+# filter (round 21 item 5). MEASURED FIRST, authored second: walking every
+# journal and reading the settled area at each star grab (2026-08-08) proves
+# LLL 22:2 = stars 4+5 (his 41 volcano grabs, nothing else ever grabbed
+# there), SSL 8:2 = star 2 (58 grabs), CCM 5:2 = the slide (his 6 hundred-
+# coin grabs INSIDE it — which is also why star 6 rides every row: the
+# 100-coin star completes wherever you cross 100). Stars beyond his play
+# come from the community's level layouts, and a subarea whose FULL set is
+# not confidently known gets NO row at all — an absent row shows every star
+# (never hide wrongly, his dead-control rule), which is why DDD/THI/TTM/JRB
+# subareas are deliberately missing.
+COURSE_SUBAREA_STARS = {
+    (22, 2): (4, 5, 6),      # LLL volcano: Hot-Foot-It, Elevator Tour (both measured)
+    (8, 2): (2, 3, 5, 6),    # SSL pyramid: Inside the Pyramid (measured),
+                             # Stand Tall (Eyerok, entered through here),
+                             # Pyramid Puzzle
+    (8, 3): (3, 6),          # SSL Eyerok's chamber
+    (5, 2): (2, 6),          # CCM slide: Big Penguin Race (100c measured here)
+    (11, 2): (4, 5, 6),      # WDW downtown: reds + Quick Race
+}
+
+
 def subarea_name(level: int | None, area: int | None) -> str | None:
     """The display name a SUBAREA spawn carries, or None when the place is
     just the level itself — area 1 (every course's start), an unknown, or a

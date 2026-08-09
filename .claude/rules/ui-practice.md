@@ -136,12 +136,10 @@ option ids
 (`"8:1"`/`"segment:12"`) so `value=` can highlight the chosen cell, and
 translated once by `entities.js::entityKeyForOption` — the same translation the
 picker's rank-badge lookup uses, because two hand-built copies of a key format
-is how they drift. **One pill per chosen parent, and the + to the right
-appends another (round 20 item 1: *"sometimes the same subsection might be
-practicable in multiple stars... We need to just add a + button to the right
-and allow multiple selections"*); re-picking a pill changes that slot, the
-"Nothing" placeholder on a pill removes it, and a duplicate pick collapses to
-a no-op (`commitParentPick`).** Keep `parents` (which entities this is a
+is how they drift. **One pill per chosen parent, and the + appends another (round 20
+item 1: *"the same subsection might be practicable in multiple stars"*);
+re-picking a pill changes it, the "Nothing" placeholder removes it, and a
+duplicate pick collapses to a no-op (`commitParentPick`).** Keep `parents` (which entities this is a
 piece of — the sheet's
 mapping keys) and `origin` (where the library files it) distinct: they answer
 different questions. **Three parent grains since round 14** (his ruling, asked
