@@ -1,10 +1,18 @@
 # tests/test_ui_subsections.py
-"""Progressive disclosure: which entities the selector draws.
+"""Which practice-log card owns which piece.
 
-`ui/subsections.js` is import-free so node can drive the REAL module, the same
-arrangement tests/test_cross_language_parity.py uses -- a Python
-reimplementation of the rule would be a second copy of exactly the thing this
-feature exists to have one of.
+REWRITTEN 2026-08-08 (round 22). This file used to drive progressive
+disclosure -- `familyRoot`/`visibleEntities`/`isExpanded`, the selector's
+expand-into-a-family rule -- and that whole model was retired by Griffin's
+"complete redesign / upgrade": a subsection is a badge inside its parent's
+art now, never a cell, so there is no family to expand and no fold to return
+from. What is left of the module is the mapping it always really held, and
+these are its tests.
+
+`ui/subsections.js` imports only `entitysection.js` (itself node-driven for
+the same reason), so node drives the REAL rule -- a Python reimplementation
+would be a second copy of exactly the thing this feature exists to have one
+of.
 """
 import json
 import shutil
@@ -20,187 +28,122 @@ SUBSECTIONS_JS = Path(sm64_events.__file__).parent / "ui" / "subsections.js"
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node not on PATH")
 
-# One star, one of its subsections, a castle movement, one of ITS subsections,
-# and an unrelated top-level segment. Covers both parent kinds at once, which
-# is the point of the parents field being one shape. Plural since round 20 --
-# [] is top-level, and one piece may list several parents.
-CORPUS = [
-    {"key": "star:2:1", "parents": []},
-    {"key": "segment:90", "parents": ["star:2:1"]},
-    {"key": "segment:12", "parents": []},
-    {"key": "segment:91", "parents": ["segment:12"]},
-    {"key": "segment:13", "parents": []},
-]
+
+def star(course, slot, **extra):
+    return {"course_id": course, "star_id": slot, "attempts": [], **extra}
 
 
-def call(fn: str, *args):
-    script = (f"import {{ {fn} }} from {SUBSECTIONS_JS.as_uri()!r};\n"
-              f"console.log(JSON.stringify({fn}("
-              + ", ".join(json.dumps(a) for a in args) + ")));")
+def seg(seg_id, parents=(), **extra):
+    return {"kind": "segment", "segment_id": seg_id, "course_id": 7,
+            "parents": list(parents), "attempts": [], **extra}
+
+
+def nest(sections, earned_keys=None):
+    """`nestSubsections(sections, earned)` as [(key, [child keys])].
+
+    `earned_keys` None means everything earned a card; a list restricts it,
+    which is how the interaction with `hasEarnedACard` is exercised without
+    importing that (Preact-bound) module.
+    """
+    earned = ("(() => true)" if earned_keys is None
+              else "((sec) => " + json.dumps(list(earned_keys))
+                   + ".includes(sec.kind === 'segment'"
+                     " ? 'segment:' + sec.segment_id"
+                     " : 'star:' + sec.course_id + ':' + sec.star_id))")
+    script = (
+        f"import {{ nestSubsections }} from {SUBSECTIONS_JS.as_uri()!r};\n"
+        f"const key = (s) => s.kind === 'segment' ? 'segment:' + s.segment_id"
+        f" : 'star:' + s.course_id + ':' + s.star_id;\n"
+        f"const out = nestSubsections({json.dumps(sections)}, {earned});\n"
+        "console.log(JSON.stringify(out.map("
+        "(g) => [key(g.sec), g.children.map(key)])));")
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True,
-                            encoding="utf-8", timeout=60)
+                            encoding="utf-8")
     assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
+    return [(k, tuple(kids)) for k, kids in json.loads(result.stdout)]
 
 
-def keys(rows):
-    return [r["key"] for r in rows]
+# --- the ordinary case ------------------------------------------------------
+
+def test_a_piece_draws_inside_its_parent_and_not_beside_it():
+    # "the subsection should appear WITHIN the star's practice log entry as a
+    # sub-entry... very very very clear that this subsection was associated
+    # with the star it was a subsection for."
+    assert nest([star(7, 4), seg(90, ["star:7:4"])]) == [
+        ("star:7:4", ("segment:90",))]
 
 
-# -- the two states -----------------------------------------------------------
-
-def test_nothing_selected_draws_only_top_level_entities():
-    assert keys(call("visibleEntities", CORPUS, None)) == [
-        "star:2:1", "segment:12", "segment:13"]
+def test_a_top_level_segment_is_untouched():
+    assert nest([star(7, 4), seg(12)]) == [
+        ("star:7:4", ()), ("segment:12", ())]
 
 
-def test_a_subsection_is_never_loose_in_the_row():
-    """The crowding progressive disclosure exists to solve: a star can own
-    many subsections, and the selector's job is that you never hunt."""
-    drawn = call("visibleEntities", CORPUS, None)
-    assert all(not row["parents"] for row in drawn)
+def test_order_is_the_order_given():
+    rows = nest([seg(12), star(7, 4), seg(90, ["star:7:4"])])
+    assert [key for key, _ in rows] == ["segment:12", "star:7:4"]
 
 
-def test_selecting_a_star_draws_it_and_its_subsections_only():
-    assert keys(call("visibleEntities", CORPUS, "star:2:1")) == [
-        "star:2:1", "segment:90"]
+# --- his own LLL shape: one piece, two parents ------------------------------
+
+def test_a_piece_with_two_parents_draws_under_the_first_one_present():
+    # Round 20's plural parents, his own case: "Volcano Entry" belongs to both
+    # Hot-Foot-It and Elevator Tour. It must appear ONCE -- two cards for one
+    # entity means two strategy pickers writing one piece of state.
+    rows = nest([star(7, 4), star(7, 5),
+                 seg(90, ["star:7:4", "star:7:5"])])
+    assert rows == [("star:7:4", ("segment:90",)), ("star:7:5", ())]
 
 
-def test_selecting_a_castle_movement_works_identically():
-    """The same field carries both parent kinds, so this needs no mechanism
-    of its own -- "castle movement sometimes is a specific subsection of
-    castle movement rather than movement between courses only" (task 0087)."""
-    assert keys(call("visibleEntities", CORPUS, "segment:12")) == [
-        "segment:12", "segment:91"]
+def test_it_falls_through_to_a_LATER_parent_when_the_first_has_no_card():
+    rows = nest([star(7, 5), seg(90, ["star:7:4", "star:7:5"])])
+    assert rows == [("star:7:5", ("segment:90",))]
 
 
-def test_selecting_something_with_no_subsections_leaves_the_row_alone():
-    """No children, no expansion. Hiding the other options is only worth doing
-    when there is something to hide them FOR -- and the first version of this
-    rule collapsed a whole course's row down to the one ordinary star you had
-    just picked, with no gesture anywhere that brought the other six back."""
-    assert keys(call("visibleEntities", CORPUS, "segment:13")) == [
-        "star:2:1", "segment:12", "segment:13"]
+# --- the cases that must NOT nest -------------------------------------------
+
+def test_a_piece_whose_parents_are_all_absent_stays_top_level():
+    # Also covers item 5 for free: an `area:`-parented piece names no section
+    # at all, so a castle movement "works the same as today, as a standalone
+    # top level practice log entry."
+    assert nest([seg(90, ["area:6:3"])]) == [("segment:90", ())]
 
 
-# -- the family, not the selection --------------------------------------------
-
-def test_selecting_a_subsection_keeps_its_parent_and_its_siblings():
-    """The dead end this rule exists to avoid, reached by using the feature
-    correctly: practice one subsection and the row would collapse to that one
-    cell, with no way back to the parent or to the others."""
-    siblings = CORPUS + [{"key": "segment:93", "parents": ["star:2:1"]}]
-    assert keys(call("visibleEntities", siblings, "segment:90")) == [
-        "star:2:1", "segment:90", "segment:93"]
+def test_a_disabled_piece_leaves_the_log_entirely():
+    # The display half of the dimmed badge: "If the subsection is disabled,
+    # then it doesn't appear in the parent star's practice log (which means it
+    # will continue to look like how it does today)."
+    assert nest([star(7, 4), seg(90, ["star:7:4"], enabled=False)]) == [
+        ("star:7:4", ())]
 
 
-def test_a_selected_subsection_still_reads_as_expanded():
-    assert call("isExpanded", CORPUS, "segment:90") is True
+def test_a_piece_can_never_nest_inside_itself():
+    assert nest([seg(90, ["segment:90"])]) == [("segment:90", ())]
 
 
-def test_the_family_root_of_a_top_level_entity_is_itself():
-    assert call("familyRoot", CORPUS, "star:2:1") == "star:2:1"
-    assert call("familyRoot", CORPUS, None) is None
+def test_nesting_is_ONE_level_deep():
+    # A piece of a piece draws under the middle one and the middle one still
+    # draws at the top -- never a group inside a group, which is what keeps
+    # PracticeLog's own renderer from recursing.
+    rows = nest([star(7, 4), seg(90, ["star:7:4"]), seg(91, ["segment:90"])])
+    assert rows == [("star:7:4", ("segment:90",))]
 
 
-def test_the_family_root_of_a_subsection_is_its_parent():
-    assert call("familyRoot", CORPUS, "segment:90") == "star:2:1"
+# --- interaction with hasEarnedACard ---------------------------------------
+
+def test_a_parent_that_earned_nothing_still_gets_a_card_for_its_child():
+    # Practising ONLY the piece must not orphan it back to the top level on
+    # the very run that proves the association.
+    rows = nest([star(7, 4), seg(90, ["star:7:4"])],
+                earned_keys=["segment:90"])
+    assert rows == [("star:7:4", ("segment:90",))]
 
 
-def test_an_off_list_key_is_its_own_root():
-    """We cannot read a parent off an entity we do not have, and this is what
-    keeps the two off-list fallbacks below working."""
-    assert call("familyRoot", CORPUS, "star:9:9") == "star:9:9"
+def test_a_piece_that_earned_nothing_is_dropped_rather_than_nested():
+    rows = nest([star(7, 4), seg(90, ["star:7:4"])],
+                earned_keys=["star:7:4"])
+    assert rows == [("star:7:4", ())]
 
 
-# -- one level deep -----------------------------------------------------------
-
-def test_a_subsection_of_a_subsection_is_not_offered():
-    """One row cannot show two levels of nesting without becoming the
-    scrolling hunt this exists to prevent."""
-    nested = CORPUS + [{"key": "segment:92", "parents": ["segment:90"]}]
-    assert keys(call("visibleEntities", nested, "star:2:1")) == [
-        "star:2:1", "segment:90"]
-
-
-# -- degenerate inputs --------------------------------------------------------
-
-def test_an_empty_list_draws_nothing():
-    assert call("visibleEntities", [], None) == []
-    assert call("visibleEntities", [], "star:2:1") == []
-
-
-def test_a_target_absent_from_the_list_falls_back_to_the_top_level():
-    """The target may be practicable somewhere the player is not standing, or
-    may have just been deleted. Returning an EMPTY row there would blank the
-    selector; falling back is what keeps something on screen."""
-    assert keys(call("visibleEntities", CORPUS, "star:9:9")) == [
-        "star:2:1", "segment:12", "segment:13"]
-
-
-def test_an_absent_parent_still_shows_its_children():
-    """The reverse case, and the reason the fallback checks BOTH: a target
-    off-list whose subsections are here must still expand, or selecting it
-    silently collapses the row under the user."""
-    orphaned = [{"key": "segment:90", "parents": ["star:2:1"]},
-                {"key": "segment:13", "parents": []}]
-    assert keys(call("visibleEntities", orphaned, "star:2:1")) == ["segment:90"]
-
-
-# -- the expanded-state signal ------------------------------------------------
-
-def test_expanded_is_false_when_the_target_has_no_subsections():
-    """Selecting something with no subsections must look exactly like the
-    plain row -- not like a collapsed row with one item in it."""
-    assert call("isExpanded", CORPUS, "segment:13") is False
-    assert call("isExpanded", CORPUS, None) is False
-
-
-def test_expanded_is_true_when_it_does():
-    assert call("isExpanded", CORPUS, "star:2:1") is True
-
-
-def test_subsections_of_returns_children_without_the_parent():
-    assert keys(call("subsectionsOf", CORPUS, "star:2:1")) == ["segment:90"]
-    assert call("subsectionsOf", CORPUS, "segment:13") == []
-
-
-# -- plural parents (round 20 item 1) -----------------------------------------
-# His example pair: LLL's Hot-Foot-It and Elevator Tour both own "Volcano
-# Entry", so the piece appears under EACH star's expansion.
-
-SHARED = [
-    {"key": "star:22:0", "parents": []},
-    {"key": "star:22:1", "parents": []},
-    {"key": "segment:95", "parents": ["star:22:0", "star:22:1"]},
-]
-
-
-def test_a_shared_piece_appears_under_each_parents_expansion():
-    assert keys(call("visibleEntities", SHARED, "star:22:0")) == [
-        "star:22:0", "segment:95"]
-    assert keys(call("visibleEntities", SHARED, "star:22:1")) == [
-        "star:22:1", "segment:95"]
-
-
-def test_selecting_a_shared_piece_keeps_the_family_you_drilled_in_from():
-    """preferredRoot breaks the tie: drilling in from the SECOND parent must
-    not snap the row to the first one's family."""
-    assert call("familyRoot", SHARED, "segment:95", "star:22:1") == "star:22:1"
-    assert keys(call("visibleEntities", SHARED, "segment:95",
-                     "star:22:1")) == ["star:22:1", "segment:95"]
-
-
-def test_a_shared_piece_with_no_preference_uses_its_primary_parent():
-    assert call("familyRoot", SHARED, "segment:95") == "star:22:0"
-
-
-def test_a_stale_preference_falls_back_to_the_primary():
-    """A preferredRoot that is not one of the piece's parents (the row was
-    showing some other family) must not leak in as the root."""
-    assert call("familyRoot", SHARED, "segment:95", "segment:13") == "star:22:0"
-
-
-def test_subsections_of_counts_shared_membership():
-    assert keys(call("subsectionsOf", SHARED, "star:22:1")) == ["segment:95"]
+def test_a_pair_that_earned_nothing_at_all_leaves_no_card_behind():
+    assert nest([star(7, 4), seg(90, ["star:7:4"])], earned_keys=[]) == []

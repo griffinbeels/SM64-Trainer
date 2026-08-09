@@ -33,13 +33,32 @@ def test_first_pair_establishes():
                                  "mode": "stars"}
 
 
-def test_no_event_on_in_course_area_switch():
-    # Keyed on context, not raw area: an SSL area switch (level stays 8) is
-    # silent, unlike a castle subarea switch.
+def test_in_course_area_switch_re_emits_with_the_new_area():
+    # Inverted 2026-08-08. A subarea hosts a DIFFERENT set of stars
+    # (addresses.COURSE_SUBAREA_STARS), so walking into SSL's pyramid changes
+    # what the banner offers and has to re-emit.
     d = StageChangeDetector()
     d.process(snap(curr_level=8, curr_area=1), snap(curr_level=8, curr_area=1))
-    assert d.process(snap(curr_level=8, curr_area=1),
-                     snap(curr_level=8, curr_area=2)) == []
+    events = d.process(snap(curr_level=8, curr_area=1),
+                       snap(curr_level=8, curr_area=2))
+    assert len(events) == 1
+    assert events[0].payload == {"course_id": 8, "level": 8, "area": 2,
+                                 "mode": "stars"}
+
+
+def test_the_area_a_course_load_settles_on_supersedes_the_transient():
+    # THE BUG (his journal, 2026-08-09 03:15): entering LLL stamped the load's
+    # transient area 2, the settle to area 1 emitted nothing, and the selector
+    # filtered the main area down to the volcano's stars. Both edges emit now.
+    d = StageChangeDetector()
+    d.process(snap(curr_level=6), snap(curr_level=6))                 # castle
+    entering = d.process(snap(curr_level=6), snap(curr_level=22, curr_area=2))
+    settled = d.process(snap(curr_level=22, curr_area=2),
+                        snap(curr_level=22, curr_area=1))
+    assert entering[0].payload["area"] == 2
+    assert len(settled) == 1
+    assert settled[0].payload == {"course_id": 7, "level": 22, "area": 1,
+                                  "mode": "stars"}
 
 
 def test_no_event_while_course_stable():

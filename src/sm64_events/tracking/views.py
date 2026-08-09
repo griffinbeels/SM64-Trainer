@@ -1475,6 +1475,15 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # render, and a second derivation in JS is how two surfaces
             # start disagreeing.
             "parents": meta.get("parents") or [],
+            # Whether this definition is TRACKED at all -- the selector's
+            # subsection badge writes it (round 22, 2026-08-08: "If you click
+            # on the button, it should be dimmed out and then we no longer
+            # track the practice log entry for that subsection"). Shipped
+            # beside `parents` because the same surface asks both questions
+            # in one breath: a piece nests under its parent's card only while
+            # it is on. A section still EXISTS for a disabled definition --
+            # its history is real and the badge is how it comes back.
+            "enabled": bool(meta.get("enabled", True)),
             # igt present-as-None: same shape-stability rule as the target
             # payload — UI code reading sec.pb.igt gets null, not undefined.
             "pb": {"igt": None,

@@ -62,13 +62,20 @@ def main(argv: list[str]) -> int:
             story = next(s for s in STORIES if s.name == name)
             selector = selector or ".modal"
 
-    # The selector's expanded state needs a fixture with a `parent` in it --
-    # no shipped definition has one, so the default project literally cannot
-    # draw this surface. `--folded` shoots the same fixture after the fold.
+    # A star wearing its pieces as badges needs a fixture with a `parent` in
+    # it -- no shipped definition has one, so the default project literally
+    # cannot draw this surface. `--folded` shoots the same fixture with one
+    # badge switched OFF (the name predates round 22's redesign and is kept so
+    # the flag in CLAUDE.md keeps working).
     project = PROJECT
+    if "--nested" in argv:
+        project = SUBSECTION_PROJECT
+        story = next(s for s in SUBSECTION_STORIES if s.name == "page")
+        selector = selector or ".log-card"
     if "--subsections" in argv or "--folded" in argv:
         project = SUBSECTION_PROJECT
-        wanted = "selector-folded" if "--folded" in argv else "selector-expanded"
+        wanted = ("selector-piece-off" if "--folded" in argv
+                  else "selector-pieces-on")
         story = next(s for s in SUBSECTION_STORIES if s.name == wanted)
         selector = selector or ".stagebanner"
 

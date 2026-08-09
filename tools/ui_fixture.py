@@ -139,7 +139,7 @@ def _place_time(payload: dict, igt_frames: int) -> dict:
 def seed_practice(service, course_id: int = FIXTURE_COURSE,
                   star_id: int = FIXTURE_STAR,
                   level: int = FIXTURE_LEVEL, attempts: bool = True,
-                  strat: str | None = None) -> None:
+                  strat: str | None = None, moments: bool = False) -> None:
     """Give the fixture an ACTIVE TARGET and a few attempts.
 
     Without this the Practice page renders only its empty states -- the
@@ -206,6 +206,24 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
             await service.publish(Event(
                 type="practice_reset", frame=1000 + index * 1000,
                 timestamp_utc=now, payload={"igt_frames_before": 0}))
+            # TWO DOORS PER RUN, when asked -- the start triggers
+            # `_subsection_definition` uses (`moment_reached door_open`,
+            # ordinals 1 and 2). Without these the seeded subsections exist as
+            # DEFINITIONS and record nothing, so the practice log has no piece
+            # to nest inside its parent's card and that whole surface renders
+            # zero times (round 22, 2026-08-08 -- the same "the fixture never
+            # reaches the state" failure this file has now paid for four
+            # times). Ordinals reset at every attempt boundary, which is why
+            # they are published INSIDE the loop rather than once.
+            if moments:
+                for ordinal in (1, 2):
+                    await service.publish(Event(
+                        type="moment_reached", frame=1100 + index * 1000 + ordinal,
+                        timestamp_utc=now,
+                        payload=_place_time({
+                            "kind": "door_open", "ordinal": ordinal,
+                            "landmark": None, "level": level, "area": 1,
+                            "action": 0}, 60 + ordinal)))
             await service.publish(Event(
                 type="star_collected", frame=1350 + index * 1000,
                 timestamp_utc=now,
@@ -744,7 +762,8 @@ def _subsection_definition(ordinal: int) -> dict:
 
 def _seed_subsections(base: str) -> None:
     """POST a parent movement in the fixture's level plus two subsections of
-    the fixture STAR -- the state `visibleEntities` expands into."""
+    the fixture STAR -- the state the selector draws badges for, and the one
+    the practice log nests cards inside (`ui/subsections.js`)."""
     import urllib.error
     import urllib.request
 
@@ -873,8 +892,9 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     fixture state provided.
 
     `seed_subsections` additionally POSTs two subsections of the fixture STAR
-    (see `_seed_subsections`) -- the only way to reach the selector's EXPANDED
-    state, since nothing in the shipped corpus carries a `parent`.
+    (see `_seed_subsections`) -- the only way to reach a star wearing
+    subsection BADGES, or a practice-log card with pieces nested inside it,
+    since nothing in the shipped corpus carries a `parent`.
 
     `reconcile_full_corpus` additionally applies the bundled 84-segment
     default corpus (`tracking/defaults.reconcile_defaults` against `data/
@@ -997,7 +1017,8 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
             seed_practice(service, course_id=course, level=level,
                           star_id=(target or (0, FIXTURE_STAR))[1],
                           attempts=target is None,
-                          strat=FIXTURE_STRAT if target is None else None)
+                          strat=FIXTURE_STRAT if target is None else None,
+                          moments=seed_subsections)
             _seed_target(base, *(target or (FIXTURE_COURSE, FIXTURE_STAR)),
                          with_pb=target is None)
             if target_segment is not None:

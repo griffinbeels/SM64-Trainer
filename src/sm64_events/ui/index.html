@@ -56,27 +56,18 @@
   .starcell:hover { background: #20242b; }
   .starcell:focus-visible { outline: 2px solid #6fa8ff; outline-offset: 2px; }
   .starcell.active-star { border-color: #e0c36a; background: #211f14; }
-  /* PROGRESSIVE DISCLOSURE (task 0087). While a row is expanded it shows ONE
-     parent and its subsections, and without a treatment those read as three
-     peer options -- correct and unexplained, which this project treats as a
-     defect rather than a nicety. `.selector-expanded` was on the section from
-     the day the feature shipped and styled NOWHERE, so the expanded row was
-     pixel-identical to an ordinary one.
-     The children share a faint tray, which is what a horizontal row has
-     instead of the indent a vertical list would use ("any time we have child
-     rows that imply a parent/child relationship, we should indent the child
-     one level", 2026-07-25). A pseudo-element divider was tried first and
-     dropped: it paints outside the cell it belongs to, which is a real
-     `decoration` defect rather than a styling choice. The gold active
-     highlight still wins over the tray -- which one you are PRACTICING
-     outranks which ones are children. Both directions animate off the one
-     `transition` on `.starcell` above; `:hover` sets values only, never its
-     own transition. */
-  .selector-expanded .starcell.subsection-cell {
-    background: #131b26; border-color: #223247; }
-  .selector-expanded .starcell.subsection-cell:hover { background: #18202c; }
-  .selector-expanded .starcell.subsection-cell.active-star {
-    border-color: #e0c36a; background: #211f14; }
+  /* PROGRESSIVE DISCLOSURE is GONE (round 22, 2026-08-08), and its whole
+     treatment with it: `.selector-expanded` and `.starcell.subsection-cell`
+     styled the child-tray look a row wore while expanded into one parent and
+     its subsections. A subsection is never a cell now -- it is a badge inside
+     its parent's own art (`.cell-toggles`, below) -- so there is no child cell
+     left for a tray to group, and the classes are deleted rather than left
+     unused. Griffin: "as a complete redesign / upgrade, we should actually
+     re-use the same exact design we use as the Pipe/Star selector for the
+     Bowser stages." The indent rule those styles were answering ("any time we
+     have child rows that imply a parent/child relationship, we should indent
+     the child one level") now lands on `.log-card-children` instead, which is
+     a vertical list and can honour it literally. */
   /* Round 2 (2026-07-30): a segment cell used to ALSO carry its own
      `.armed` green highlight for "the timer is running now", which fought
      this gold one whenever a segment was both armed and targeted -- the
@@ -339,18 +330,29 @@
   .strat-current { font-size: .68rem; color: var(--gold-soft); }
   .strat-pb { font-size: .7rem; }
   .starsub .strat.none { opacity: .6; }
-  /* Bowser Reds cell (spec 2026-07-28-multi-step-segments, star/pipe toggle):
-     the star/pipe icon buttons + clock + arrows overlay the cell's own art,
-     bottom-centred (mock-up). Not a .starcell BUTTON itself (see
-     stagebanner.js's RedsCell docstring) -- position:relative is scoped to
-     THIS cell's .starholder only, never the shared base rule, since every
-     other cell has exactly one child and needs no positioning context. */
-  .reds-cell .starholder { position: relative; }
-  .reds-toggle {
+  /* CELL TOGGLES -- the small icon buttons overlaying a practice cell's own
+     art, bottom-centred (his mock-up). TWO consumers since round 22
+     (2026-08-08): the Bowser Reds cell's exclusive star/pipe pair, and a
+     star's own [[subsection]] switches, which are MULTI-select. One class set,
+     one component (components/celltoggles.js) -- his instruction was to reuse
+     the Bowser system rather than build a second one beside it.
+     A hosting cell is never a .starcell BUTTON (a button may not contain a
+     button, see practicecell.js), and position:relative is scoped to hosting
+     cells only, never the shared base rule: every other cell has exactly one
+     child and needs no positioning context. */
+  .reds-cell .starholder,
+  .starcell.has-toggles .starholder { position: relative; }
+  .cell-toggles {
     position: absolute; left: 50%; bottom: 6%; transform: translateX(-50%);
     display: flex; align-items: center; gap: .18rem; z-index: 1;
   }
-  .reds-toggle-btn {
+  /* "if there are only 2 options, then it's 2 in a row; if there are 4, then
+     it's a 2x2 grid" -- three draws 2 + 1, centred. */
+  .cell-toggles.is-grid {
+    display: grid; grid-template-columns: repeat(2, auto);
+    gap: .18rem; justify-items: center;
+  }
+  .cell-toggle-btn {
     display: flex; align-items: center; justify-content: center;
     width: 24px; height: 24px; padding: 3px; border-radius: 6px;
     background: rgba(10,23,38,.85); border: 1px solid var(--border-soft);
@@ -358,16 +360,21 @@
     /* ONE declaration for both directions -- a `.is-selected` rule below
        must never declare its own `transition`, or it would WHOLESALE
        replace this one while selected and the glow-in/glow-out would snap
-       on one side (ui-core.md's standing CSS trap). */
-    transition: background .18s ease, border-color .18s ease, box-shadow .18s ease;
+       on one side (ui-core.md's standing CSS trap). Opacity rides it too,
+       because an UNSELECTED subsection toggle is the dimmed state he asked
+       for ("it should be dimmed out"), not merely an unlit one. */
+    transition: background .18s ease, border-color .18s ease,
+                box-shadow .18s ease, opacity .18s ease;
+    opacity: .45;
   }
-  .reds-toggle-btn img { width: 100%; height: 100%; object-fit: contain;
+  .cell-toggle-btn img { width: 100%; height: 100%; object-fit: contain;
                           -webkit-user-select: none; user-select: none; }
-  /* No :disabled rule -- neither half can be disabled since the route lock was
-     deleted (2026-08-02, stagebanner.js's BowserCourseRow docstring). */
-  .reds-toggle-btn.is-selected {
+  /* No :disabled rule -- neither Bowser half can be disabled since the route
+     lock was deleted (2026-08-02, stagebanner.js's BowserCourseRow docstring). */
+  .cell-toggle-btn.is-selected {
     border-color: #ffd75f; background: rgba(64,50,10,.92);
     box-shadow: 0 0 6px rgba(255,215,95,.85), 0 0 2px rgba(255,215,95,.9);
+    opacity: 1;
   }
   .reds-toggle-clock { display: flex; align-items: center; color: var(--muted);
                         opacity: .8; }
@@ -5123,6 +5130,27 @@
     background: rgba(0, 0, 0, var(--log-body-tint, 0.16));
   }
   .log-card-body .attempt-table tr { height: var(--log-row-height, 40px); }
+  /* A STAR'S PIECES, inside its own card (round 22, 2026-08-08): "the
+     subsection should appear WITHIN the star's practice log entry as a
+     sub-entry... indented a bit so it's clear that it's owned by the parent
+     card." Indent is the machine-level rule -- anything implying parent/child
+     indents the child ONE level -- and it is expressed by the DOM nesting
+     itself (a margin on this wrapper), never by a depth custom property,
+     matching `.lib-group`'s own treatment. The guide line is the same
+     vocabulary the library groups use, so "owned by the parent" reads the
+     same way in both places.
+     No `Disclose` of its own: this block sits INSIDE the parent's, so the
+     parent's fold animates it for free -- "if the parent star closes the
+     card, these close with it". */
+  .log-card-children {
+    display: flex; flex-direction: column; gap: .3rem;
+    margin: .5rem 0 .1rem 1rem; padding-left: .7rem;
+    border-left: 1px solid var(--border-soft);
+  }
+  /* Pieces read as belonging to the card around them rather than as a second
+     list of top-level cards: no gold "active" border of their own (the parent
+     already carries it for the pair) and a quieter surface. */
+  .log-card-children .log-card { background: rgba(255,255,255,.02); }
   .log-list-footer { display: flex; justify-content: center; margin-top: .3rem; }
   /* The rank wash (`.rank-banner::before`, near the top of this file) bleeds
      -8px top / -12px bottom / -16px left assuming it lands in a CARD's own

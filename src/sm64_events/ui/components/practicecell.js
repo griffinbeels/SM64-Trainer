@@ -64,6 +64,14 @@ const html = htm.bind(h);
  *            unchanged look.
  * onEdit     optional; omit and the ✎ affordance is not rendered at all (the
  *            picker has no per-cell icon override — that lives on the banner)
+ * toggles    optional node (components/celltoggles.js's `CellToggles`) drawn
+ *            INSIDE the art — a star's [[subsection]] switches, or the Bowser
+ *            cell's star/pipe pair. **Passing one changes the element** from
+ *            `<button>` to `<div role="button">`, because a button may not
+ *            contain a button and every toggle is one. Omit it and the markup
+ *            is byte-for-byte what it was before this prop existed, which is
+ *            what keeps the other ~20 call sites on a real `<button>` with the
+ *            browser's own keyboard and focus behaviour (round 22, 2026-08-08)
  * caveat     optional CAVEAT key (components/marks.js) — "the time behind this
  *            cell's rank does not mean what the rank implies". Server-derived
  *            (tracking/views.py), never computed here. This surface is the
@@ -77,7 +85,7 @@ export function PracticeCell({ active, iconSrc, fallbackSlot = 0,
                               rank, hasStandards = false, strat, name, sub,
                               title, dimIdle = false,
                               rankBadge = false, onPick, onEdit,
-                              caveat = null, subsection = false }) {
+                              caveat = null, toggles = null }) {
   const mark = caveatOf(caveat);
   // Unranked but RANKABLE draws the ladder floor rather than a bare "-",
   // so it reads as "bottom of the ladder" instead of "not a thing that
@@ -118,14 +126,24 @@ export function PracticeCell({ active, iconSrc, fallbackSlot = 0,
   const badgeTitle = rank
     ? (strat ? `${capName(rank.rank)} · best on ${strat}` : capName(rank.rank))
     : null;
-  return html`<button
-      class="starcell ${active ? "active-star" : ""} ${subsection ? "subsection-cell" : ""}"
+  // Enter/Space on the div variant — the browser gives a real <button> both
+  // for free, and gives a role="button" div neither.
+  const pickKey = (keyEvent) => {
+    if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
+    keyEvent.preventDefault(); onPick();
+  };
+  const Cell = toggles ? "div" : "button";
+  const hostProps = toggles
+    ? { role: "button", tabindex: "0", onkeydown: pickKey } : {};
+  return html`<${Cell} ...${hostProps}
+      class="starcell ${active ? "active-star" : ""} ${toggles ? "has-toggles" : ""}"
       title=${title || name} onclick=${onPick}>
     <span class="starholder">
       <img class="starimg ${isGenericArt(iconSrc) ? "" : "courseicon"} ${dimIdle && !active ? "dim" : ""}"
            src=${iconSrc}
            onerror=${(errorEvent) => fallbackToGenericStar(errorEvent, fallbackSlot)}
            alt="" draggable="false" />
+      ${toggles}
     </span>
     ${mark ? cellBadge(mark) : null}
     ${rankBadge
@@ -141,5 +159,5 @@ export function PracticeCell({ active, iconSrc, fallbackSlot = 0,
           title="Choose icon…" aria-label="Choose icon"
           onclick=${(clickEvent) => { clickEvent.stopPropagation(); onEdit(); }}
           onkeydown=${editKey}>✎</span>` : null}
-  </button>`;
+  <//>`;
 }

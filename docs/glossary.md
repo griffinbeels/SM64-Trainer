@@ -102,11 +102,14 @@ its own — the climb rather than the whole [[star]]. A subsection IS a
 [[segment]], and names what it belongs to — several [[star]]s when the same
 piece serves them all, the way both of LLL's volcano [[star]]s enter the
 volcano identically — so it carries its own [[personal best]], its own [[ladder]] and
-its own rows in the [[practice log]]. The [[star]] owns the hand: a piece arms
+its own rows in the [[practice log]], drawn INSIDE its parent's own card and
+indented under it. The [[star]] owns the hand: a piece arms
 and records underneath its parent without ever taking the [[target]] slot
 by detection — its completion points the slot at the parent [[star]], never
-at itself — and only clicking a piece makes it the [[target]], where it
-then holds even through its parent's grab. Inside a course a piece always
+at itself. Its [[cell toggle]] on the [[selector]] says whether the trainer
+tracks it at all; dimming one stops it recording and takes its card out of
+the [[practice log]] everywhere, since a piece serving several [[star]]s is
+still one definition with one timer. Inside a course a piece always
 belongs to something specific; a castle-side
 piece belongs to its area, which is as high as the castle goes — his own
 split, and the [[recorder]]'s parent picker follows it (an area tile
@@ -544,14 +547,24 @@ what you can practice where you currently stand — and no finer: standing
 inside a subarea narrows the row to that subarea's own [[star]]s (inside
 the volcano, the volcano's), while a subarea the trainer does not know
 keeps every [[star]] rather than hiding one wrongly. Clicking a cell sets your
-[[target]]. Picking something that owns [[subsection]]s EXPANDS the row into
-that family — the parent and its [[subsection]]s, nothing else — and tapping the
-parent again returns the full row; [[subsection]]s never appear before
-you choose their parent.
+[[target]]. A cell shows every [[subsection]] it owns as a [[cell toggle]]
+inside its own art, so the row draws [[star]]s and castle movements at all times, never a [[subsection]] beside
+its parent.
 
 - **Lives** — the quick-select row
-  (`src/sm64_events/ui/components/stagebanner.js`), whose disclosure rule is
-  its own module (`src/sm64_events/ui/subsections.js`)
+  (`src/sm64_events/ui/components/stagebanner.js`)
+
+### Cell toggle
+
+A small icon button the [[selector]] draws inside a [[practice cell]]'s own
+art. Two kinds share one implementation: a Bowser course's [[practice cell]]
+carries a pair choosing whether the trainer times the grab alone or everything
+up to the pipe, and any cell that owns [[subsection]]s carries one per piece saying
+whether the trainer tracks that piece. Clicking one never moves your
+[[target]] — the cell around it still does that.
+
+- **Lives** — the overlay
+  (`src/sm64_events/ui/components/celltoggles.js`)
 
 ### Segment recorder
 
@@ -642,10 +655,12 @@ practicing right now, which leads regardless of its own recency: one card per
 [[target]] you have earned one for (a recorded [[attempt]], or you still
 stand where you set it), each carrying its own [[personal best]], its
 [[strategy rank]] and [[entity rank]], its [[standards ladder]], its
-[[caveat mark]] and its own [[attempt]]s. It highlights the card for whatever
-you are practicing right now, and a Bowser course's Reds/Pipe pair never
-shows both halves at once — only the one matching how you are currently
-grading it.
+[[caveat mark]] and its own [[attempt]]s. A [[subsection]] draws inside its
+parent's card rather than beside it, indented and folding with it, so the
+piece you just ran names the [[star]] it belongs to. It highlights the card
+for whatever you are practicing right now, and a Bowser course's Reds/Pipe
+pair never shows both halves at once — only the one matching how you are
+currently grading it.
 
 - **Lives** — the log
   (`src/sm64_events/ui/components/practicelog.js`)

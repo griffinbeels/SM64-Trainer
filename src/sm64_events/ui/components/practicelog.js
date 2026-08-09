@@ -36,6 +36,7 @@ import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
 import { logTuning, logTuningVars, logTuningClasses, rankPlacementFor,
          nextStepModeFor, NARROW_CONTAINER_PX } from "../logtuning.js";
 import { bowserModeFor } from "./stagebanner.js";
+import { nestSubsections } from "../subsections.js";
 
 const html = htm.bind(h);
 
@@ -296,7 +297,7 @@ export function isCardOpen(overrides, topKey, key) {
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, pick, selected, onSelect, forceOpen,
                           open, onSetOpen,
-                          active = false,
+                          active = false, pieces = null,
                           nameOverflow = "ellipsis", rankIconSize = 24,
                           rankPlacement = "head", nextStepMode = "classic" }) {
   const [showHidden, setShowHidden] = useState(false);
@@ -599,6 +600,21 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
         sectionRank=${sec.rank} sectionPb=${sec.pb}
         family=${standards.family}
         onChanged=${t.refresh} defaultOpen=${false} />
+      ${/* THE PIECES OF THIS ENTITY, inside its own card and indented one
+           level (round 22). They sit INSIDE the `Disclose` body deliberately,
+           which is what buys "These should follow the visibility of the
+           parent (e.g., if the parent star closes the card, these close with
+           it), and should animate as expected" with no second mechanism --
+           the parent's own fold already animates this subtree.
+           A child is a full `LogCard`, not a reduced row: "These cards should
+           work exactly the same way as normal." Its own fold, page and
+           selection all run through the SAME page-level maps the parent's do
+           (`pieces` arrive pre-wired from PracticeLog), so a piece can be
+           browsed, paginated and PB-jumped exactly like a top-level card.
+           ONE LEVEL, structurally: `nestSubsections` never nests a group
+           inside a group, so a piece cannot host pieces of its own. */""}
+      ${pieces && pieces.length
+        ? html`<div class="log-card-children">${pieces}</div>` : null}
       </div>
     <//>
   </section>`;
@@ -837,10 +853,17 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
     return level != null ? bowserModeFor(level) : null;
   };
   const ordered = orderedSections(v, activeKey);
-  const sections = enforceMembership
-    ? applyRedsPipeExclusivity(
-        ordered.filter((sec) => hasEarnedACard(sec, activeKey)), modeForCourse)
-    : ordered;
+  // NESTING RUNS BEFORE MEMBERSHIP, not after, and the order is load-bearing:
+  // `nestSubsections` has to see a parent that earned no card of its own so it
+  // can KEEP it for the sake of a child that did (round 22 -- practising only
+  // the piece must not orphan it back to the top level). So the earned test is
+  // injected rather than pre-applied.
+  const groups = nestSubsections(
+    applyRedsPipeExclusivity(ordered, modeForCourse),
+    enforceMembership ? (sec) => hasEarnedACard(sec, activeKey) : () => true);
+  const sections = groups.map((group) => group.sec);
+  const childrenOf = new Map(
+    groups.map((group) => [entityKey(group.sec), group.children]));
   // The focused entity (the active target, by default, or a manual browse
   // pick) is not necessarily among the first CARDS_PER_PAGE cards -- recency
   // order is by `last_activity`, and the active target is routinely NOT the
@@ -862,6 +885,39 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   // cost to learn that those are two different lists.
   const topKey = autoOpenKey(sections, activeKey, playedKeys);
   const page = sections.slice(0, shown);
+  // ONE renderer, used for a top-level card and for a nested [[subsection]]
+  // alike (round 22) -- his "These cards should work exactly the same way as
+  // normal" is structural here rather than a promise: a child goes through
+  // this same call, so its fold, its row pagination, its PB jump and its
+  // selection all run on the page-level maps a top-level card already uses.
+  // Nesting is one level deep by construction (`nestSubsections` never groups
+  // a group), so this cannot recurse forever -- a child's own `children` is
+  // always empty.
+  const cardFor = (sec) => {
+    const ek = entityKey(sec);
+    // Resolved here, per section, and handed to LogCard as plain strings --
+    // see this component's own comment above for why this (unlike
+    // nameOverflow/rankIconSize) cannot be a single page-level value.
+    // `twoLadder` is computed a second time (LogCard also computes its own,
+    // for the `log-card-two-ladder`/`-one-ladder` class) rather than threaded
+    // down -- both calls are the same pure, cheap function of `sec`, and
+    // keeping LogCard's own computation is what lets it stay a self-contained
+    // component a test can render with no page-level wiring at all.
+    const twoLadder = showsEntityBanner(sec);
+    const kids = (childrenOf.get(ek) || []).map(cardFor);
+    return html`<${LogCard} key=${ek} sec=${sec} t=${t} ui=${ui}
+      freshIds=${freshIds} openCompare=${openCompare}
+      focus=${focus} clearFocus=${clearFocus} pick=${pick}
+      selected=${ek === focusKey} onSelect=${onSelect}
+      forceOpen=${ek === focusKey}
+      open=${isCardOpen(openOverrides, topKey, ek)}
+      onSetOpen=${(next) => setCardOpen(ek, next)}
+      active=${activeKey != null && ek === activeKey}
+      pieces=${kids}
+      nameOverflow=${nameOverflow} rankIconSize=${rankIconSize}
+      rankPlacement=${rankPlacementFor(tuning, { isNarrow, twoLadder })}
+      nextStepMode=${nextStepModeFor(tuning, { isNarrow, twoLadder })} />`;
+  };
   const listRef = useRef(null);
   useFeedMotion(listRef, [...page.map(entityKey), "unassigned"]);
   return html`<section class="practice-card log-list-card ${logClasses}"
@@ -906,31 +962,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
          not an entity, but it is a card in this list and it gets pushed down
          like any other physical object in the space. */""}
     <div class="log-list" ref=${listRef}>
-      ${page.map((sec) => {
-        const ek = entityKey(sec);
-        // Resolved here, per section, and handed to LogCard as plain
-        // strings -- see this component's own comment above for why this
-        // (unlike nameOverflow/rankIconSize) cannot be a single page-level
-        // value. `twoLadder` is computed a second time (LogCard also
-        // computes its own, for the `log-card-two-ladder`/`-one-ladder`
-        // class) rather than threaded down -- both calls are the same pure,
-        // cheap function of `sec`, and keeping LogCard's own computation is
-        // what lets it stay a self-contained component a test can render
-        // with no page-level wiring at all.
-        const twoLadder = showsEntityBanner(sec);
-        const rankPlacement = rankPlacementFor(tuning, { isNarrow, twoLadder });
-        const nextStepMode = nextStepModeFor(tuning, { isNarrow, twoLadder });
-        return html`<${LogCard} key=${ek} sec=${sec} t=${t} ui=${ui}
-          freshIds=${freshIds} openCompare=${openCompare}
-          focus=${focus} clearFocus=${clearFocus} pick=${pick}
-          selected=${ek === focusKey} onSelect=${onSelect}
-          forceOpen=${ek === focusKey}
-          open=${isCardOpen(openOverrides, topKey, ek)}
-          onSetOpen=${(next) => setCardOpen(ek, next)}
-          active=${activeKey != null && ek === activeKey}
-          nameOverflow=${nameOverflow} rankIconSize=${rankIconSize}
-          rankPlacement=${rankPlacement} nextStepMode=${nextStepMode} />`;
-      })}
+      ${page.map((sec) => cardFor(sec))}
       <${UnassignedLogCard} v=${v} t=${t} ui=${ui} freshIds=${freshIds}
         openCompare=${openCompare} />
     </div>
