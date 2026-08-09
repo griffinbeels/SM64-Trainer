@@ -86,13 +86,21 @@ def test_order_is_the_order_given():
 
 # --- his own LLL shape: one piece, two parents ------------------------------
 
-def test_a_piece_with_two_parents_draws_under_the_first_one_present():
+def test_a_piece_with_two_parents_draws_under_BOTH():
     # Round 20's plural parents, his own case: "Volcano Entry" belongs to both
-    # Hot-Foot-It and Elevator Tour. It must appear ONCE -- two cards for one
-    # entity means two strategy pickers writing one piece of state.
+    # volcano stars. Round 22 drew it under the first only and he rejected
+    # that -- "every segment enabled should appear as a subentry in the
+    # practice log" -- because a card omitting one of its own pieces is wrong.
     rows = nest([star(7, 4), star(7, 5),
                  seg(90, ["star:7:4", "star:7:5"])])
-    assert rows == [("star:7:4", ("segment:90",)), ("star:7:5", ())]
+    assert rows == [("star:7:4", ("segment:90",)),
+                    ("star:7:5", ("segment:90",))]
+
+
+def test_a_piece_drawn_under_its_parents_is_never_ALSO_top_level():
+    rows = nest([star(7, 4), star(7, 5),
+                 seg(90, ["star:7:4", "star:7:5"])])
+    assert "segment:90" not in [key for key, _ in rows]
 
 
 def test_it_falls_through_to_a_LATER_parent_when_the_first_has_no_card():

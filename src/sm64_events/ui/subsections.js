@@ -33,11 +33,17 @@ import { entityKey } from "./entitysection.js";
  *    which is the display half of the badge he dims ("we no longer track the
  *    practice log entry for that subsection"), and it leaves the parent card
  *    looking exactly as it does today.
- *  - **A piece with SEVERAL parents nests under the first one PRESENT** --
- *    round 20's plural parents, resolved by list membership rather than by
- *    always taking `parents[0]`, so a piece whose primary parent has no card
- *    still lands somewhere sensible. It is never drawn twice: two cards for
- *    one entity means two strategy pickers writing one piece of state.
+ *  - **A piece with SEVERAL parents nests under EVERY parent that has a card.**
+ *    Round 22 drew it under the first one only, on the grounds that two cards
+ *    for one entity means two strategy pickers writing one piece of state.
+ *    Griffin overruled that from his own LLL data, where "Volcano Entry"
+ *    belongs to both volcano stars: *"I don't see the Volcano Entry segment
+ *    inside of the Practice Log card for Elevator Tour in the Volcano, it only
+ *    shows up here [Hot-Foot-It] -- every segment enabled should appear as a
+ *    subentry in the practice log."* He is right about what it costs: a card
+ *    that silently omits one of its own pieces is wrong, and the duplicate
+ *    pickers are harmless — both write the same definition and both re-read it
+ *    on the next view.
  *  - **A piece whose parents are all absent stays TOP-LEVEL.** That covers
  *    item 5 for free -- an `area:`-parented piece names no section at all, so
  *    a castle movement "works the same as today, as a standalone top level
@@ -49,22 +55,27 @@ import { entityKey } from "./entitysection.js";
  */
 export function nestSubsections(sections, earned = () => true) {
   const present = new Set(sections.map(entityKey));
-  const homeOf = (sec) => (sec.parents || []).find(
-    (parent) => present.has(parent) && parent !== entityKey(sec)) || null;
+  // EVERY parent with a card, not the first one (round 24). A piece with no
+  // such parent stays top-level, which is what covers an `area:`-parented
+  // castle movement and a parent that earned no card of its own.
+  const homesOf = (sec) => (sec.parents || []).filter(
+    (parent) => present.has(parent) && parent !== entityKey(sec));
   const nested = new Map();          // parent key -> [child sec]
   for (const sec of sections) {
     if (sec.enabled === false) continue;
-    const home = homeOf(sec);
-    if (home == null || !earned(sec)) continue;
-    if (!nested.has(home)) nested.set(home, []);
-    nested.get(home).push(sec);
+    if (!earned(sec)) continue;
+    for (const home of homesOf(sec)) {
+      if (!nested.has(home)) nested.set(home, []);
+      nested.get(home).push(sec);
+    }
   }
   const groups = [];
   for (const sec of sections) {
     const key = entityKey(sec);
     if (sec.enabled === false) continue;
     const children = nested.get(key) || [];
-    if (homeOf(sec) != null && earned(sec)) continue;   // drawn inside its parent
+    // Drawn inside at least one parent, so not ALSO at the top level.
+    if (homesOf(sec).length && earned(sec)) continue;
     if (!children.length && !earned(sec)) continue;
     groups.push({ sec, children });
   }

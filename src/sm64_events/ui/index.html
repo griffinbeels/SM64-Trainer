@@ -2683,7 +2683,20 @@
      HAT_LAYOUT_WIDTH_RATIO/HAT_WING_SPILL_RATIO for where these numbers
      come from. */
   .attempt-medal { width: 54px; text-align: center; }
-  .attempt-result { min-width: 0; }
+  /* NEVER WRAPS, at any width and at any nesting depth (round 24). The
+     narrow-container variant far below has said `nowrap` since it was
+     written; the WIDE one did not, so a result cell squeezed by anything
+     other than the viewport broke its check away from its time onto a second
+     line -- and a nested card is exactly that: its column is narrow while the
+     `@container` query, which measures `.practice-page`, still reports wide.
+     Griffin, on the second round of it: "the checkmark is spanning two
+     lines... it should be one line, checkmark side by side with the time...
+     each entry line should be exactly ONE row's worth of height. We need to
+     make sure elements look the same for a row regardless of whether it's in
+     a subentry or a top level entry." A wrap also breaks the row's own
+     `--log-row-height`, which is where "one row's worth of height" comes
+     from. */
+  .attempt-result { min-width: 0; white-space: nowrap; }
   .attempt-delta { width: 72px; white-space: nowrap; font-weight: 700; }
   .attempt-strategy { width: 150px; white-space: nowrap; }
   .attempt-strategy select { max-width: 120px; min-width: 0; height: 30px; min-height: 30px; }

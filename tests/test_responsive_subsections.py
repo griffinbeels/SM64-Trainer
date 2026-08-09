@@ -217,7 +217,16 @@ def test_a_piece_s_attempt_row_fits_on_one_line_at_the_narrowest_width():
     FLOOR, which is where it showed. Mutation-proved by restoring the nested
     body's indent.
     """
-    floor = SUBSECTION_PROJECT.min_viewport_width
+    # BOTH ENDS, and the WIDE one is the one that matters. Below the narrow
+    # `@container` threshold the row is already a grid with its own `nowrap`,
+    # so a floor-only check is green for a reason that has nothing to do with
+    # the bug -- which is exactly how round 23's version passed while he was
+    # looking at a wrapped row on a ~1300px window.
+    for floor in (SUBSECTION_PROJECT.min_viewport_width, 1500):
+        _one_line_at(floor)
+
+
+def _one_line_at(floor):
     with SUBSECTION_PROJECT.open() as url, get_driver().launch(
             viewport=(floor, 1200)) as page:
         page.goto(url)
@@ -229,27 +238,44 @@ def test_a_piece_s_attempt_row_fits_on_one_line_at_the_narrowest_width():
             "document.querySelector("
             "'.log-card-children > .log-card .log-card-fold').click()")
         page.wait_ms(600)
-        cells = page.evaluate(
+        rows = page.evaluate(
             "(() => { const h = (sel) => Array.from("
             "document.querySelectorAll(sel)).map(c =>"
-            " c.getBoundingClientRect().height);"
+            " c.closest('tr').getBoundingClientRect().height);"
             " return [h('.log-card-children .attempt-table .attempt-result'),"
             " h('.log-list > .log-card > .log-card-disclose"
             " .attempt-table .attempt-result')]; })()")
-        piece_rows, parent_rows = cells
+        piece_rows, parent_rows = rows
         assert piece_rows, "no piece rows rendered -- the fixture missed the state"
         assert parent_rows, "no parent rows to calibrate against"
-        # SELF-CALIBRATING: the parent's identical cell at the identical width
-        # is the control, so this cannot go red for a font or padding change.
-        # Mutation-proved by restoring the extra `margin-left: 1rem` above --
-        # which is what the wrap actually was. Restoring the nested card's own
-        # `--log-body-indent` does NOT reproduce it (44px vs 44px, measured),
-        # so that second rule was written and then deleted rather than kept on
-        # a hunch.
-        assert max(piece_rows) <= max(parent_rows) + 2, (
-            f"a piece's result cell is {max(piece_rows):.0f}px where its "
-            f"parent's is {max(parent_rows):.0f}px at {floor}px -- it wrapped")
-
+        # HIS RULE, and it is stronger than "does not wrap": "each entry line
+        # should be exactly ONE row's worth of height. We need to make sure
+        # elements look the same for a row regardless of whether it's in a
+        # subentry or a top level entry." The parent's own row at the same
+        # width is the control, so this cannot go red for a font change, and a
+        # wrap anywhere shows up as a taller child row.
+        # Round 23 measured the RESULT CELL with a 2px tolerance and passed
+        # while he was looking at a wrapped one -- the cell is not the row, and
+        # a tolerance is where a one-line difference hides.
+        # Mutation-proved by dropping `white-space: nowrap` from
+        # `.attempt-result`.
+        assert abs(max(piece_rows) - max(parent_rows)) <= 1, (
+            f"a piece's row is {max(piece_rows):.0f}px where its parent's is "
+            f"{max(parent_rows):.0f}px at {floor}px -- it wrapped")
+        # THE MECHANISM, asserted directly, because the comparison above has
+        # NO TEETH IN THIS FIXTURE and saying so is the point: its seeded rows
+        # are short enough that they do not wrap even with the rule removed,
+        # at any width from 850 to 1500. Round 23 shipped a version of that
+        # comparison and it passed while he was looking at a wrapped row. The
+        # PAINTED value can still be pinned, which is what `.claude/rules/
+        # ui-core.md` prescribes whenever a style is the whole claim -- and
+        # this one goes red the moment the rule is dropped.
+        assert page.evaluate(
+            "getComputedStyle(document.querySelector("
+            "'.log-card-children .attempt-table .attempt-result'))"
+            ".whiteSpace") == "nowrap", (
+            "a piece's result cell must never be allowed to wrap -- its check "
+            "and its time belong on one line at every width and every depth")
 
 def test_a_piece_with_no_strategies_does_not_shout_for_one():
     """"If a segment doesn't have a ranked ladder (aka there are no strategies

@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from sm64_events.core.snapshot import GameSnapshot
+from sm64_events.detectors.counter_epoch import LEVEL_LOAD_TAIL_FRAMES
 from sm64_events.detectors.stage import StageChangeDetector
 
 
@@ -219,12 +220,46 @@ def test_walking_into_a_subarea_yourself_is_not_settling():
     assert walked[0].payload["settling"] is False
 
 
-def test_the_settle_after_a_load_is_not_settling_either():
-    # The load's own 2 -> 1 correction: a real area edge, one tick after the
-    # level edge, so it clears the flag and the row narrows normally again.
+def test_the_whole_LOAD_WALK_is_settling_not_just_its_first_frame():
+    """The fix's own correction. Entering LLL from the basement emits
+    (22, area 3) on the level edge and (22, area 2) a beat later -- and it was
+    that SECOND emit the star-select screen showed, which is why marking only
+    the first frame did nothing for him ("consistently, we show the SUBAREA
+    stars on the star select menu... This is a bug")."""
     d = StageChangeDetector()
-    d.process(snap(curr_level=6), snap(curr_level=6))
-    d.process(snap(curr_level=6), snap(curr_level=22, curr_area=2))
-    settled = d.process(snap(curr_level=22, curr_area=2),
-                        snap(curr_level=22, curr_area=1))
-    assert settled[0].payload["settling"] is False
+    d.process(snap(curr_level=6, curr_area=3, global_timer=1000),
+              snap(curr_level=6, curr_area=3, global_timer=1000))
+    edge = d.process(snap(curr_level=6, curr_area=3, global_timer=1000),
+                     snap(curr_level=22, curr_area=3, global_timer=1001))
+    walk = d.process(snap(curr_level=22, curr_area=3, global_timer=1001),
+                     snap(curr_level=22, curr_area=2, global_timer=1030))
+    assert edge[0].payload["settling"] is True
+    assert walk[0].payload["settling"] is True, (
+        "the load's own area walk is still the LOAD's, not his")
+
+
+def test_the_window_EXPIRES_so_a_later_walk_narrows_normally():
+    """Past the measured load tail the area is his, and the row narrows again
+    -- otherwise entering the volcano on foot would never filter anything."""
+    d = StageChangeDetector()
+    d.process(snap(curr_level=6, global_timer=1000),
+              snap(curr_level=6, global_timer=1000))
+    d.process(snap(curr_level=6, global_timer=1000),
+              snap(curr_level=22, curr_area=1, global_timer=1001))
+    later = d.process(
+        snap(curr_level=22, curr_area=1, global_timer=1001 + LEVEL_LOAD_TAIL_FRAMES),
+        snap(curr_level=22, curr_area=2, global_timer=1001 + LEVEL_LOAD_TAIL_FRAMES))
+    assert later[0].payload["settling"] is False
+
+
+def test_a_console_reset_clears_the_window_rather_than_arming_it_forever():
+    """`global_timer` runs backward on a console reset, and an unguarded
+    subtraction there would read as "still loading" for two billion frames."""
+    d = StageChangeDetector()
+    d.process(snap(curr_level=6, global_timer=9000),
+              snap(curr_level=6, global_timer=9000))
+    d.process(snap(curr_level=6, global_timer=9000),
+              snap(curr_level=22, curr_area=1, global_timer=9001))
+    after = d.process(snap(curr_level=22, curr_area=1, global_timer=5),
+                      snap(curr_level=22, curr_area=2, global_timer=6))
+    assert after[0].payload["settling"] is False

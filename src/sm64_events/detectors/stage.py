@@ -48,6 +48,7 @@ he can see is a defect by his standing rule. The transient window is spent in
 the level fade, and the correction lands before control returns."""
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
+from sm64_events.detectors.counter_epoch import LEVEL_LOAD_TAIL_FRAMES
 from sm64_events.memory.addresses import (
     BOWSER_1_ARENA, BOWSER_2_ARENA, BOWSER_3_ARENA,
     LEVEL_BITDW, LEVEL_BITFS, LEVEL_BITS, LEVEL_CASTLE_INSIDE,
@@ -62,6 +63,8 @@ class StageChangeDetector:
     def __init__(self):
         # last EMITTED context (see module docstring) | None | _UNSET
         self._last = _UNSET
+        # frame of the last LEVEL change, for the settling window below
+        self._entered_at: int | None = None
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         level = curr.curr_level
@@ -78,19 +81,34 @@ class StageChangeDetector:
         else:
             mode, course_id, context = None, None, None
         # IS THIS AREA THE LOAD'S, OR HIS? A course load walks the area byte
-        # through a transient before it settles (measured on his own journal,
-        # 2026-08-09: entering LLL read area 2 -- the volcano -- for 1.74s),
-        # and the emit that rides the LEVEL edge samples it mid-walk. Marking
-        # that one emit lets the selector decline to narrow on an area nobody
-        # has stood in yet, without anything having to WAIT for the settle
-        # (round 23; a wait he can see is a defect by his own rule).
+        # through several values before it settles, and the course's own
+        # star-select screen sits inside that walk -- so an area sampled there
+        # is the LOAD's, not a place he has stood. Marking those emits lets the
+        # selector decline to narrow on such an area, with nothing having to
+        # WAIT for the settle (round 23; a wait he can see is a defect by his
+        # own rule).
         #
-        # True on exactly the tick the level changed, and nothing else clears
-        # it -- because nothing has to: the next area change re-emits with
-        # settling False, which is precisely the moment he walked somewhere
-        # himself. A visit whose area never changes stays unnarrowed, which is
-        # the right answer (he is standing where the course starts).
-        settling = prev is not None and prev.curr_level != curr.curr_level
+        # THE WINDOW IS THE MEASURED LOAD TAIL, not one tick. Round 23 shipped
+        # `prev.curr_level != curr.curr_level` -- true only on the frame the
+        # level byte moved -- and it did not work, because the walk CONTINUES
+        # after that frame: entering LLL from the basement emits (22, area 3)
+        # on the edge, then (22, area 2) a beat later, and it was that second
+        # emit the star-select screen showed. `LEVEL_LOAD_TAIL_FRAMES`
+        # (counter_epoch.py) is the same 60 the epoch tracker and caused.py
+        # already use, and it is measured rather than chosen: across 911 level
+        # entries the load's LAST area edge lands at 44-47 frames every time,
+        # and the earliest genuine warp deeper into a level appears at 60.
+        # Sitting on the star-select screen past that costs nothing -- the area
+        # has stopped changing by then, so no further emit fires and the row
+        # keeps showing everything until he walks somewhere himself.
+        if prev is not None and prev.curr_level != curr.curr_level:
+            self._entered_at = curr.global_timer
+        elif (self._entered_at is not None
+              and curr.global_timer < self._entered_at):
+            self._entered_at = None      # console reset: the clock went back
+        settling = (self._entered_at is not None
+                    and curr.global_timer - self._entered_at
+                    < LEVEL_LOAD_TAIL_FRAMES)
         if self._last is not _UNSET and context == self._last:
             return []
         self._last = context
