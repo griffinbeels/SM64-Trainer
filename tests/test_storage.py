@@ -267,6 +267,42 @@ def test_migration_v4_seeds_ten_segment_definitions(tmp_path):
     assert lblj["end_triggers"] == [{"type": "entrance_touched", "to": 17}]
 
 
+def test_migration_v23_moves_a_frozen_lakitu_skip_to_the_door(tmp_path):
+    """His instruction, 2026-08-05: "Lakitu should be determined by 'move it to
+    the door' (when Mario touches the door)."
+
+    The corpus already ends it on the door; a row he has EDITED carries
+    `seed_dirty=1`, which blocks reconcile's update branch permanently, so
+    only a migration reaches it. v4 seeds the old `level_enter to=6` shape and
+    v23 repairs it on the way through, exactly as v21 does for LBLJ above --
+    so a FRESH db lands on the repaired shape too, and reading the
+    post-migration state is the point.
+    """
+    db = make_db(tmp_path)
+    lakitu = next(d for d in db.segment_defs() if d["name"] == "Lakitu Skip")
+    assert lakitu["end_triggers"] == [
+        {"type": "moment_reached", "kind": "door_open",
+         "level": 16, "ordinal": 1}]
+
+
+def test_migration_v23_does_not_spend_his_own_edits(tmp_path):
+    """The v21 rule, applied again: a repair may fix the thing it is about, it
+    may NOT clear `seed_dirty` on the way past. Clearing it would hand the row
+    back to reconcile, which would then discard every OTHER edit he made to
+    it -- and this row is frozen precisely because he edited it."""
+    db = make_db(tmp_path)
+    lakitu = next(d for d in db.segment_defs() if d["name"] == "Lakitu Skip")
+    other = next(d for d in db.segment_defs() if d["name"] == "LBLJ")
+    # A fresh db has never been edited, so both read clean -- what this pins
+    # is that v23 does not TOUCH the flag, which a fresh db can only show by
+    # the repaired row being no different from an unrepaired one.
+    assert lakitu["seed_dirty"] == other["seed_dirty"]
+    # And it left the start alone. `spawned` in level 16 is the canonical
+    # Lakitu-skip timing start (addresses.py, live-verified 2026-06-12); the
+    # plan that said this had to move was corrected before it shipped.
+    assert lakitu["start_triggers"] == [{"type": "spawned", "level": 16}]
+
+
 def test_fresh_db_seeds_bowser3_ending_on_key_grabbed(tmp_path):
     # Regression: the ORIGINAL v4 seed (commit c9a03cd) ended Bowser 3 on
     # star_grabbed, which the grand star can NEVER fire (it enters
@@ -1156,3 +1192,42 @@ def test_delete_empty_sessions_never_reuses_a_purged_id(tmp_path):
     db.replace_attempts([])
     db.delete_empty_sessions(active)
     assert db.insert_session("2026-06-10T15:00:00Z") > active > empty
+
+
+# -- migration v26: the parent goes plural (round 20 item 1) -----------------
+
+def test_migration_v26_backfills_a_scalar_parent_into_the_list(tmp_path):
+    """His live db really holds this shape — "Volcano Entry" carries
+    parent='star:22:0'-style scalars written under v22 — so the backfill is
+    the migration's whole job, not a defensive extra. A fresh db never
+    exercises it (no shipped seed row has a parent), which is why this test
+    builds the OLD schema by hand: MIGRATIONS[:25] is the last state where
+    the `parent` column exists."""
+    import sqlite3
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    for script in MIGRATIONS[:25]:
+        conn.executescript(script)
+    conn.execute(
+        "INSERT INTO segment_defs (name, enabled, start_triggers,"
+        " end_triggers, waypoints, guards, parent, created_utc)"
+        " VALUES ('Volcano Entry', 1, '[]', '[]', '[]', '[]',"
+        " 'star:22:0', '2026-08-08T00:00:00Z')")
+    conn.execute(
+        "INSERT INTO segment_defs (name, enabled, start_triggers,"
+        " end_triggers, waypoints, guards, parent, created_utc)"
+        " VALUES ('Top Level', 1, '[]', '[]', '[]', '[]',"
+        " NULL, '2026-08-08T00:00:00Z')")
+    conn.execute("PRAGMA user_version = 25")
+    conn.commit()
+    conn.close()
+
+    db = Database(path)
+    rows = {r["name"]: r for r in db.segment_defs()}
+    assert rows["Volcano Entry"]["parents"] == ["star:22:0"]
+    assert rows["Top Level"]["parents"] == []
+    # The scalar column is GONE — a reader left pointing at it must break
+    # loudly, never read a stale second door.
+    cols = [c[1] for c in db._conn.execute(
+        "PRAGMA table_info(segment_defs)").fetchall()]
+    assert "parent" not in cols and "parents" in cols

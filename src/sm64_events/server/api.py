@@ -8,6 +8,7 @@ not the current PB), RuntimeError -> 503 (database unavailable / degraded
 mode)."""
 import dataclasses
 import re
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -16,11 +17,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from sm64_events.core.paths import user_icons_dir
 from sm64_events.links import star_links
+from sm64_events.memory.addresses import node_label
 from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
+from sm64_events.tracking import topology
 from sm64_events.tracking.backtest import backtest
-from sm64_events.tracking.eventlabel import label_event
+from sm64_events.tracking.eventlabel import (entrance_landmark, label_event,
+                                             label_level_entry,
+                                             level_entry_rows)
 from sm64_events.tracking.lint import lint_definition
 from sm64_events.tracking.segments import (SegmentDef, clause_sentence,
                                            origin_taxonomy,
@@ -40,6 +45,11 @@ class TargetBody(BaseModel):
     star_id: int | None = None
     segment_id: int | None = None
     strat_tag: str | None = None
+    # True when a CLIENT CONVENIENCE posted this (the arena row's
+    # auto-select, the lone option) rather than the player's click — the
+    # projector holds the two by different rules (round 19: a fill is
+    # detection-flavored; a click is sovereign and clears the queue).
+    auto: bool = False
 
 
 class ClearBody(BaseModel):
@@ -49,6 +59,11 @@ class ClearBody(BaseModel):
 class PbBody(BaseModel):
     attempt_id: int
     timer_mode: str
+
+
+class LandmarkNameBody(BaseModel):
+    key: str          # a landmark key, or `kind:<behaviour>` to name a family
+    name: str = ""    # blank erases the name rather than storing one
 
 
 class WipeBody(BaseModel):
@@ -214,6 +229,16 @@ class SegmentBody(BaseModel):
     waypoints: list = []
     category: str | None = None
     match_mode: str = "loose"
+    # The entities this is a SUBSECTION of; [] (the default) = a top-level
+    # segment, which is what every definition was before task 0087. Plural
+    # since round 20 — one piece can belong to several stars.
+    parents: list[str] = []
+    # When the clock starts (round 15 item 3). "move" by DEFAULT for new
+    # definitions — his ruling: "I think generally most start triggers
+    # should *actually* start timing when Mario's able to move, so this
+    # should be the default." Existing rows stay "trigger" (the db column's
+    # own default) until the corpus retiming is priced with numbers.
+    clock_start: str = "move"
 
 
 class SegmentPatch(BaseModel):
@@ -233,6 +258,13 @@ class SegmentPatch(BaseModel):
     category: str | None = None
     # None = untouched, exactly like waypoints above.
     match_mode: str | None = None
+    # None OMITTED = untouched; an EXPLICIT [] clears (exclude_unset keeps
+    # a field the body actually sent, even empty). The builder never sends
+    # it; the recorder's re-record save (round 16) always does, so the
+    # parent controls he sees are exactly what lands. Plural since round 20.
+    parents: list[str] | None = None
+    # None = untouched, exactly like match_mode above.
+    clock_start: str | None = None
 
 
 class SegmentSplitBody(BaseModel):
@@ -401,7 +433,7 @@ def _http(e: Exception) -> HTTPException:
 # type the corpus doesn't back.
 _TIMELINE_STEP_TYPES = frozenset(
     {"level_changed", "star_collected", "warp_entered", "key_grabbed",
-     "area_changed"})
+     "area_changed", "moment_reached"})
 
 
 def _is_default_timeline_row(row) -> bool:
@@ -418,6 +450,36 @@ def _is_default_timeline_row(row) -> bool:
 
 def create_api_router(service) -> APIRouter:
     router = APIRouter(prefix="/api")
+    # The timeline's label memo — one per router, so tests building several
+    # apps never share it. Shape and invalidation: the timeline route.
+    timeline_memo: dict = {}
+    # The JOURNAL CACHE — the fetched-and-decoded `db.events()` list, extended
+    # by `id > cached max` instead of re-read whole. Re-fetching was ~68 ms at
+    # 23k rows, 90% of a timeline poll, unbounded in journal size, and the
+    # poll fires per game event while the recorder is open (round 8 item 1,
+    # approved: "we definitely shouldn't be re-reading the journal from disk
+    # on every poll"). Append-only is what makes this sound: the one runtime
+    # writer is `append_event`, `dedupe_journal --fix` only runs
+    # server-stopped, and replay never rewrites journal rows. Keyed on the db
+    # OBJECT (same rule as timeline_memo): a reattach after a db-less boot
+    # swaps `service.db`, and another file's rows must not answer for it.
+    # The lock covers concurrent polls (FastAPI runs sync endpoints in a
+    # threadpool); the returned list is a snapshot copy so an extension can
+    # never grow a list a caller is mid-walk through.
+    journal_lock = threading.Lock()
+    journal_cache: dict = {}
+
+    def journal_events():
+        with journal_lock:
+            if journal_cache.get("db") is not service.db:
+                journal_cache.clear()
+                journal_cache.update(db=service.db,
+                                     events=service.db.events())
+            else:
+                held = journal_cache["events"]
+                newest = held[-1].id if held else 0
+                held.extend(service.db.events(after_id=newest))
+            return list(journal_cache["events"])
 
     @router.get("/session")
     def session(clock: str = "igt", scope: str = "session"):
@@ -493,9 +555,58 @@ def create_api_router(service) -> APIRouter:
         order wins — fastapi-patterns)."""
         return vocab()
 
+    def _timeline_places(events) -> dict[int, str]:
+        """`{event id: world node key}` — where each journal row happened.
+
+        Two rules, both BORROWED rather than invented, and the borrowing is the
+        point: `SegmentEngine.feed` and `tracking/synthesize.py::walked_steps`
+        already collapse a walk into settled positions, so the recorder's cards
+        and the matcher's own judgement cannot disagree about where you were.
+
+        1. **Read `area_changed` and NOTHING else.** An area payload names the
+           level AND the settled area outright, where a level payload's context
+           is still the OLD level's. Reading `level_changed` too — the obvious
+           reading — puts a one-frame "Castle Inside" card between the course
+           you left and the basement you are standing in, for a place nobody
+           was ever in.
+        2. **Take the LAST candidate per FRAME, and apply it to the NEXT
+           frame.** Every castle entry loads the Lobby for one poll before
+           warping to the real area, all on ONE game frame; judged raw that
+           transient Lobby is a card nobody visited.
+
+        The consequence of (2) is that a row is filed under WHERE ITS FRAME
+        BEGAN, which is also the reading its own sentence wants: "Exited Hazy
+        Maze Cave into Castle Inside" closes HMC's card rather than opening the
+        castle's.
+
+        Rows before the first `area_changed` in the journal map to nothing —
+        position genuinely unknown, not a place to invent. In practice that is
+        the first frames of a fresh database only, since this walks the WHOLE
+        journal while the timeline shows its last 200 rows.
+        """
+        places: dict[int, str] = {}
+        settled: str | None = None
+        pending: str | None = None
+        frame = None
+        for row in events:
+            if row.frame != frame:
+                if pending is not None:
+                    settled = pending
+                pending = None
+                frame = row.frame
+            if settled is not None:
+                places[row.id] = settled
+            if row.type == "area_changed":
+                node = topology.node_for(row.payload.get("level"),
+                                         row.payload.get("to"))
+                if node is not None:
+                    pending = node
+        return places
+
     @router.get("/segments/timeline")
     def segments_timeline(limit: int = Query(default=200, ge=1, le=500),
-                          view: str = "steps"):
+                          view: str = "steps",
+                          after_id: int | None = None):
         """The recent journal, as rows a human can point at to define a
         segment from what they just did (`GET /api/segments/timeline`) --
         the endpoint behind Task 10's `tracking/eventlabel.py::label_event`.
@@ -528,20 +639,155 @@ def create_api_router(service) -> APIRouter:
         its ONLY route in or out. 422 on an unrecognised `view`, matching
         /api/session's own clock/scope validation. `limit` caps at 500 rows
         (422 above it) and is applied AFTER filtering, to the most recent
-        rows in the selected view. 503 in degraded mode."""
+        rows in the selected view. 503 in degraded mode.
+
+        `after_id` is the LIVE TAIL: it drops every row at or below that id,
+        so a surface already holding the list can ask for only what has
+        happened since. That is what makes the recorder live without a second
+        implementation of `label_event` in the browser — a broadcast event
+        carries `seq`, never the journal `id` this endpoint's rows are picked
+        by, so the client has to come back for the id regardless, and asking
+        for the tail costs one localhost round trip instead of the whole list.
+
+        Each row carries `igt_frames` when its own payload does — the number
+        Usamune had on screen at that moment. Surfaced, never derived:
+        `star_collected`, `key_grabbed`, `warp_entered` and `moment_reached`
+        are all stamped from the shared `detectors/igt_clock.py` when they are
+        journaled, and a type that carries none (a level change) reports null
+        rather than a computed stand-in.
+
+        FRAMES, not the payload's own pre-formatted `igt` string, even though
+        several of these events carry one. Frames is the quantity; the browser
+        renders it through `ui/format.js::fmtIgtShort`, which is THE display
+        form every other time on screen goes through. Shipping the string
+        would put a second formatter's output on the page beside it — and the
+        two really do differ, since the display form drops an empty minutes
+        field (`06"03`, not `0'06"03`) and the payload's does not.
+
+        Each row also carries WHERE IT HAPPENED — `place` (a world node key),
+        `place_label` and `place_level` — so the recorder can cut its list into
+        one card per area (his ask, 2026-08-05: *"we should segment each of the
+        events by the course / area that the event occurred in… if I move
+        between HMC and LLL, both HMC and LLL get their own cards"*). This is
+        DERIVED HERE and cannot be derived in the browser: most rows do not say
+        where they are (`practice_reset` and `game_reset` name nothing at all),
+        so position is a running total over the whole journal, and the browser
+        holds only a windowed tail with no beginning to walk from. The walk is
+        `_timeline_places` below."""
         if view not in ("steps", "all"):
             raise HTTPException(422, "view must be steps or all")
         if service.db is None:
             raise HTTPException(503, "database unavailable")
+        events = journal_events()               # ORDER BY id -- oldest first
+        places = _timeline_places(events)
+        # ONE ROW PER ARRIVAL. A level load walks the area byte and each step
+        # is a real `area_changed`, so entering a course drew two or three
+        # "Moved to another part of Shifting Sand Land" rows and the `spawned`
+        # that actually names the arrival was filtered out. Both halves are one
+        # rule, and it lives beside the sentences: `eventlabel.level_entry_rows`.
+        settled, entry_spawns = level_entry_rows(events)
+        # The catalogue is read ONCE per fetch and applied at LABEL time, which
+        # is what makes a rename apply backwards: every row that landmark ever
+        # appeared in re-labels on the next fetch, because no row ever stored
+        # the name it was drawn with.
+        names = service.db.landmark_names()
+        # LABELS ARE MEMOISED PER ROW ID, because the repeat counter below
+        # forces this loop over the WHOLE journal on every poll — the live
+        # tail included, which fires per game event while the recorder is
+        # open. Measured on the 23k-row journal (2026-08-06, review): the
+        # labelling pass alone went 0.44 ms -> 7.68 ms per tail poll when the
+        # counter landed, and the journal only grows. A journal row's payload
+        # is immutable, so its sentence changes for exactly one reason — a
+        # landmark RENAME — and the memo is dropped whole when the catalogue
+        # differs (which is also the documented mechanism for "a rename
+        # applies backwards"). Keyed on the db OBJECT too: a reattach after a
+        # db-less boot swaps `service.db`, and row ids from another file must
+        # not answer for this one. Arrival rows are deliberately NOT memoised:
+        # `entry_spawns` can claim a row retroactively (a load's spawn lands
+        # after its edges), and `label_level_entry` is two dict lookups.
+        if timeline_memo.get("names") != names \
+                or timeline_memo.get("db") is not service.db:
+            timeline_memo.clear()
+            timeline_memo.update(db=service.db, names=names, labels={})
+        memo: dict = timeline_memo["labels"]
         rows = []
-        for row in service.db.events():  # ORDER BY id -- oldest first
-            label = label_event(row)
+        # HOW MANY TIMES HE HAS ALREADY DONE THIS, counted over the whole
+        # journal walk and stamped per row -- his ask, 2026-08-06, against
+        # EIGHT consecutive rows reading "Open the Maze Door in Hazy Maze
+        # Cave": *"if we've already recorded that specific landmark, it should
+        # show as a duplicate… we simply see a counter rising"*. Naming the
+        # door correctly is what removed the one thing that used to separate
+        # two rows, so the count is what puts it back.
+        #
+        # THE KEY IS THE SENTENCE, which is stronger than keying on the
+        # landmark and needs no per-type rule: rows that read identically are
+        # exactly the rows he cannot tell apart, which is the complaint. That
+        # covers a named door, an unnamed one, a warp and an arrival at once
+        # (item 7 asked for the counter on spawns too, and this is why nothing
+        # extra was needed for them).
+        #
+        # SCOPED TO THE SESSION, so the number means "this sitting" rather
+        # than "since June" -- his screenshot is eight in one sitting and reads
+        # 2..8 here. Counted BEFORE the `after_id` skip, or the live tail would
+        # restart the count at 1 on every poll.
+        repeats: dict[tuple, int] = {}
+        for row in events:
+            if row.id in settled:
+                continue          # the load's own settling, not a move he made
+            entry_level = entry_spawns.get(row.id)
+            if entry_level is not None:
+                # the row's own payload says WHERE the spawn put him — a
+                # subarea restart reads "Spawned into LLL: Volcano" rather
+                # than claiming the whole course started (round 20 item 3)
+                label = label_level_entry(entry_level, row.payload)
+            elif row.id in memo:
+                label = memo[row.id]
+            else:
+                label = memo[row.id] = label_event(row, names)
             if label is None:
                 continue
-            if view == "steps" and not _is_default_timeline_row(row):
+            landmark = (row.payload.get("landmark") or {}) if row.payload else {}
+            # An ENTRANCE row is ABOUT the entrance, and its payload landmark
+            # is whatever Mario last ENGAGED — a painting writes the pointer
+            # never, so his CCM entries carried the lobby door's key and the
+            # pencil renamed the door (round 12 items 5+6). The rename
+            # identity is derived from the row's own place + destination
+            # instead, which also covers every historical row.
+            if (row.type == "warp_entered"
+                    and row.payload.get("to") is not None
+                    and row.payload.get("to") != row.payload.get("level")):
+                landmark = entrance_landmark(row.payload)
+            if (view == "steps" and entry_level is None
+                    and not _is_default_timeline_row(row)):
                 continue
+            key = (row.session_id, label)
+            repeat = repeats[key] = repeats.get(key, 0) + 1
+            if after_id is not None and row.id <= after_id:
+                continue
+            place = places.get(row.id)
             rows.append({"id": row.id, "frame": row.frame, "type": row.type,
-                        "label": label, "wall_time_utc": row.wall_time_utc})
+                        "label": label if repeat < 2 else f"{label} ({repeat})",
+                        "repeat": repeat, "wall_time_utc": row.wall_time_utc,
+                        "igt_frames": row.payload.get("igt_frames"),
+                        "place": place,
+                        "place_label": node_label(place) if place else None,
+                        "place_level": (int(str(place).partition(":")[0])
+                                        if place else None),
+                        # What the row's rename control edits. `nameable` is
+                        # the question the pencil asks: does a name typed here
+                        # land on THIS thing and nothing else. A pole reads
+                        # `placed` False (no level script wrote it a spawn
+                        # point) and is still nameable, because it is keyed by
+                        # where it stands -- core/landmark.py. `placed` rides
+                        # along for a historical row, which carries no
+                        # `nameable` key of its own and whose unplaced key
+                        # really is shared.
+                        "landmark": landmark.get("key"),
+                        "landmark_kind": landmark.get("kind_key"),
+                        "landmark_name": names.get(landmark.get("key")),
+                        "landmark_placed": landmark.get("placed", False),
+                        "landmark_nameable": landmark.get(
+                            "nameable", landmark.get("placed", False))})
         return {"rows": rows[-limit:]}
 
     @router.post("/segments")
@@ -583,7 +829,8 @@ def create_api_router(service) -> APIRouter:
             start_triggers=definition["start_triggers"],
             end_triggers=definition["end_triggers"],
             guards=definition["guards"], waypoints=definition["waypoints"],
-            match_mode=definition["match_mode"])
+            match_mode=definition["match_mode"],
+            clock_start=definition.get("clock_start", "trigger"))
         current = None
         if body.replaces is not None:
             row = next((r for r in service.db.segment_defs()
@@ -596,7 +843,7 @@ def create_api_router(service) -> APIRouter:
             # default_strat, created_utc, ...).
             keys = [f.name for f in dataclasses.fields(SegmentDef)]
             current = SegmentDef(**{k: row[k] for k in keys})
-        report = backtest(service.db.events(), candidate, current)
+        report = backtest(journal_events(), candidate, current)
         return dataclasses.asdict(report)
 
     @router.post("/segments/lint")
@@ -647,33 +894,52 @@ def create_api_router(service) -> APIRouter:
             start_triggers=definition["start_triggers"],
             end_triggers=definition["end_triggers"],
             guards=definition["guards"], waypoints=definition["waypoints"],
-            match_mode=definition["match_mode"])
+            match_mode=definition["match_mode"],
+            clock_start=definition.get("clock_start", "trigger"))
         return {"warnings": lint_definition(candidate, service.segment_defs)}
 
     @router.get("/segments/synthesize")
-    def synthesize_from_timeline(start_id: int, end_id: int):
-        """Turn two picked `GET /api/segments/timeline` row ids into the
-        (start_clause, end_clause) pair a new segment would be defined by,
-        plus a suggested name and a plain-English sentence for each end --
-        the hinge behind "record what I just did" (`tracking/synthesize.py`,
-        Task 12) wired up for the timeline picker (Task 13). Declared BEFORE
-        /segments/{segment_id} -- same declaration-order rule as
-        /segments/vocab above (fastapi-patterns).
+    def synthesize_from_timeline(ids: str):
+        """Turn the picked `GET /api/segments/timeline` row ids into the
+        clauses a new segment would be defined by, plus a suggested name and a
+        plain-English sentence for each -- the hinge behind "record what I just
+        did" (`tracking/synthesize.py`, Task 12) wired up for the timeline
+        picker (Task 13). Declared BEFORE /segments/{segment_id} -- same
+        declaration-order rule as /segments/vocab above (fastapi-patterns).
 
-        Looks the two ids up directly in the journal (`service.db.events()`,
+        `ids` is a comma-separated list of at least two row ids. **The SERVER
+        sorts them, and that is the contract** (2026-08-05, replacing the
+        `start_id`/`end_id` pair this took until then): the earliest is the
+        start, the latest is the end, and everything between is a waypoint in
+        journal order. His words were "select any number of the events, IN
+        CHRONOLOGICAL ORDER" — and chronological is a property the events
+        already have, so reading it off the click order instead would let a
+        list drawn newest-first author a definition whose steps run backwards
+        through a walk that only ever happened one way. 422 on fewer than two
+        ids or on anything that is not a number.
+
+        A middle id becomes a waypoint through `clause_for(row, "end")`: a
+        waypoint is a place you REACH, which is the same role the end fills,
+        and the ASYMMETRY in synthesize.py's docstring is exactly about a
+        `level_changed` meaning two different clauses at the two ends.
+
+        Looks every id up directly in the journal (`service.db.events()`,
         the SAME source `/segments/timeline` reads) rather than trusting a
         client-supplied payload -- the picker only ever holds row IDS, never
-        the raw event. 404 when either id names no journal event.
+        the raw event. 404 when any id names no journal event.
 
-        409 when the pair can't become a segment, naming WHICH problem:
-        picking the SAME event for both ends (it would arm and close on the
-        identical tick -- segments.py's documented COROLLARY), or a row
-        whose type carries no synthesis rule for the role it was picked for
-        (`attempt_anchor`'s `practice_reset`/`state_loaded` source carries no
-        level/course at all -- the matcher resolves that from live
-        MatchContext, never the event, so a bare row can't supply it -- see
-        synthesize.py's module docstring). `synthesize()` itself can't say
-        which of the two failure shapes occurred (both return `None`), so on
+        Because the ids are DEDUPED before they are counted, picking one
+        moment twice is not a pair at all and reports the 422 above rather
+        than segments.py's documented COROLLARY (a definition armed and closed
+        on the identical tick) -- the same refusal, reached one step earlier
+        and worded for what the person actually did.
+
+        409 when a picked row's type carries no synthesis rule for the role it
+        was picked for (`attempt_anchor`'s `practice_reset`/`state_loaded`
+        source carries no level/course at all -- the matcher resolves that from
+        live MatchContext, never the event, so a bare row can't supply it --
+        see synthesize.py's module docstring). `synthesize()` itself can't say
+        which of the two ends failed (it returns `None` either way), so on
         failure this re-checks with `clause_for` to report the specific one --
         diagnosis, not a second decision.
 
@@ -687,23 +953,33 @@ def create_api_router(service) -> APIRouter:
         endpoint."""
         if service.db is None:
             raise HTTPException(503, "database unavailable")
-        rows_by_id = {row.id: row for row in service.db.events()}
-        start_row, end_row = rows_by_id.get(start_id), rows_by_id.get(end_id)
-        if start_row is None or end_row is None:
+        try:
+            picked_ids = sorted({int(part) for part in ids.split(",") if part})
+        except ValueError:
+            raise HTTPException(422, "ids must be a comma-separated list of "
+                                     "timeline row ids")
+        if len(picked_ids) < 2:
+            raise HTTPException(422, "pick at least two moments — one to start "
+                                     "on and one to finish on")
+        rows_by_id = {row.id: row for row in journal_events()}
+        picked_rows = [rows_by_id.get(row_id) for row_id in picked_ids]
+        if any(row is None for row in picked_rows):
             raise HTTPException(404, "unknown timeline event id")
+        start_row, end_row = picked_rows[0], picked_rows[-1]
+        middle_rows = picked_rows[1:-1]
         result = synthesize(start_row, end_row)
         if result is None:
-            if start_row.id == end_row.id:
-                raise HTTPException(409,
-                    "That's the same moment for both start and end — a "
-                    "segment can't arm and finish on the same event. Pick "
-                    "two different moments.")
             role = "start" if clause_for(start_row, "start") is None else "end"
             raise HTTPException(409,
                 f"That moment can't be this segment's {role} — it doesn't "
                 "carry enough information to define a trigger from (for "
                 "example, a reset with no recorded place).")
         start_clause, end_clause = result
+        # The landmark catalogue rides every sentence here: a clause pinning
+        # a named landmark must read by that name — "Open the CCM Door", the
+        # sentence he picked the row by — or the panel contradicts his own
+        # picks (round 12 item 3).
+        names = service.db.landmark_names()
         # `steps` (2026-08-03): every place actually walked between the two
         # picked moments, so the recorder can propose the definition's ORDERED
         # STEPS instead of only its two ends. The path was always in the
@@ -711,14 +987,31 @@ def create_api_router(service) -> APIRouter:
         # could not be made in the app at all. Each carries the sentence its
         # clause renders as, through the same `clause_sentence` the two ends
         # use — one voice for the whole definition, not a third renderer.
-        steps = [{**step, "sentence": clause_sentence(step["clause"])}
+        steps = [{**step, "sentence": clause_sentence(step["clause"], names)}
                  for step in walked_steps(rows_by_id.values(),
                                           start_row, end_row)]
+        # The middles the PERSON picked, as opposed to `steps`, which is the
+        # walk we derived for them. Both ship on every answer and the caller
+        # chooses: picking exactly two moments leaves `picked` empty and the
+        # derived walk is what fills the middle (the two-click case this tool
+        # has always had), and picking more says the walk is not the answer.
+        # A middle whose row carries no clause for the role is a 409 like
+        # either end -- a definition cannot hold a step it cannot express.
+        picked = []
+        for row in middle_rows:
+            clause = clause_for(row, "end")
+            if clause is None:
+                raise HTTPException(409,
+                    f"That moment can't be a step of this segment — it "
+                    "doesn't carry enough information to define a trigger "
+                    "from (for example, a reset with no recorded place).")
+            picked.append({"id": row.id, "clause": clause,
+                           "sentence": clause_sentence(clause, names)})
         return {"start_clause": start_clause, "end_clause": end_clause,
-                "start_sentence": clause_sentence(start_clause),
-                "end_sentence": clause_sentence(end_clause),
-                "steps": steps,
-                "name": suggest_name(start_clause, end_clause)}
+                "start_sentence": clause_sentence(start_clause, names),
+                "end_sentence": clause_sentence(end_clause, names),
+                "steps": steps, "picked": picked,
+                "name": suggest_name(start_clause, end_clause, names)}
 
     @router.post("/segments/merge")
     async def merge_segments(body: SegmentMergeBody):
@@ -1043,7 +1336,7 @@ def create_api_router(service) -> APIRouter:
             result = await service.request_target(
                 body.kind, course_id=body.course_id, star_id=body.star_id,
                 segment_id=body.segment_id, strat_tag=body.strat_tag,
-                clear_strat=clear_strat)
+                clear_strat=clear_strat, auto=body.auto)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True, **result}
@@ -1170,6 +1463,40 @@ def create_api_router(service) -> APIRouter:
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}
+
+    @router.get("/landmarks")
+    def landmarks():
+        """The catalogue: every name we know, kinds and instances in one map.
+
+        One map rather than two endpoints because the browser resolves a row's
+        label from BOTH -- the instance name if he has given one, else the kind
+        name plus where it spawned -- and two fetches would let a row render
+        with half the answer.
+        """
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        return {"names": service.db.landmark_names()}
+
+    @router.post("/landmark")
+    def name_landmark(body: LandmarkNameBody):
+        """HIS naming gesture, and it applies BACKWARDS.
+
+        Nothing is written into the journal: a name is not something the game
+        did. Every row that landmark ever appeared in re-labels because the
+        browser resolves labels from this map at render time rather than
+        baking a string into the row when it arrived.
+
+        Since round 13 it applies to the LANDMARK rather than the key: a star
+        door is two objects, so a rename or an erase moves every key the
+        catalogue currently reads as one thing (same name, same level, same
+        kind) — and naming a second key like an existing one IS the merge
+        gesture, his own rule verbatim.
+        """
+        if service.db is None:
+            raise HTTPException(503, "database unavailable")
+        if not body.key.strip():
+            raise HTTPException(422, "key is required")
+        return {"names": service.rename_landmark(body.key.strip(), body.name)}
 
     @router.post("/pb")
     async def save_pb(body: PbBody):

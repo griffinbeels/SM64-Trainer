@@ -47,7 +47,8 @@ docstring is not a test, so nothing failed while it drifted.
 """
 from corpus_vocab import (BOWSER_FIGHTS, CASTLE_MOVEMENT, STANDARD_STRAT,
                           TRICKS, UPSTAIRS, anchor, enter_area, enter_entrance,
-                          enter_level, enter_warp, exit_level, grab_key, spawn)
+                          enter_level, enter_warp, exit_level, grab_key,
+                          moment, spawn)
 
 
 def _seg(seed_key, name, start, end, category, match_mode=None,
@@ -69,8 +70,24 @@ SEGMENTS = [
     _seg("seg:mips-clip", "MIPS Clip",
          [exit_level(7, to=6)], [enter_entrance(23)], TRICKS,
          default_strat=STANDARD_STRAT),
+    # LAKITU SKIP ENDS AT THE DOOR, not at the castle load (task 0026).
+    # We read 7"33 where the community reads 6"13, because entering level 6
+    # is the LOAD and the community's split is Mario grabbing the door.
+    #
+    # The START is unchanged and that is deliberate: task 0026 says "timer
+    # starts when mario can move around", and `spawn(16)` already IS that
+    # frame -- `spawned` fires on the edge OUT of ACT_INTRO_CUTSCENE, which
+    # addresses.py calls "the canonical Lakitu-skip timing start"
+    # (live-verified 2026-06-12). Moving it would have shifted a number that
+    # is already right and left the live gate scoring two changes at once.
+    #
+    # Ordinal 1: the front door is the first door of the run. Pinning it
+    # means a practice attempt that opens some other door first records
+    # nothing rather than a wrong time, which is the stated preference --
+    # "we should fail if we deviate from the steps".
     _seg("seg:lakitu-skip", "Lakitu Skip",
-         [spawn(16)], [enter_level(6)], TRICKS, default_strat=STANDARD_STRAT),
+         [spawn(16)], [moment("door_open", level=16, ordinal=1)],
+         TRICKS, default_strat=STANDARD_STRAT),
     _seg("seg:bits-entry", "BitS Entry",
          [enter_area(UPSTAIRS)], [enter_entrance(21)], CASTLE_MOVEMENT,
          default_strat=STANDARD_STRAT),

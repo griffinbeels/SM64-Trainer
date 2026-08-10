@@ -60,9 +60,8 @@ or an explicit addition to `_NOT_SYNTHESIZABLE`.
 `test_every_trigger_type_has_a_synthesis_row_or_is_explicitly_unreachable`
 keeps the two sets covering `TRIGGERS` exactly.
 """
-from sm64_events.memory.addresses import (CASTLE_AREA_NAMES, LEVEL_NAMES,
-                                          course_name, node_short_label,
-                                          star_name)
+from sm64_events.memory.addresses import (LEVEL_CASTLE_INSIDE, course_name,
+                                          node_short_label, star_name)
 from sm64_events.tracking import topology
 from sm64_events.tracking.segments import (_ORIGIN_PARAMS, _real_edge,
                                            step_node)
@@ -111,6 +110,44 @@ def _star_collected_params(payload: dict) -> dict | None:
     return {"course": course_id, "star": star_id}
 
 
+def _moment_params(payload: dict) -> dict | None:
+    """A moment you pointed at -> the clause that requires it.
+
+    The ORDINAL is carried through DELIBERATELY. A recorded moment means the
+    Nth one the player actually did, and dropping it would silently re-point
+    a synthesized subsection at the FIRST occurrence instead of theirs -- the
+    difference between "from the 5th door in Big Boo's Haunt" and "from the
+    first door", which is the whole reason ordinals exist.
+
+    `level` is likewise pinned rather than left open: a moment synthesized
+    from real play happened somewhere, and an unpinned clause answers None
+    from step_node, which means UNCONSTRAINED to the topological cancel.
+
+    THE LANDMARK BEATS THE ORDINAL (round 12 item 3). He picks a row BY its
+    landmark's name — "Open the CCM Door in Castle Inside (5)" — and a
+    clause pinning kind+ordinal reads back "Open a door #1 in Castle
+    Inside": the #1 is the attempt-scoped ordinal, the (5) he saw is the
+    session-scoped repeat counter, and neither is the door. A nameable
+    landmark is pinned instead and the ordinal is dropped — the landmark IS
+    the identity, the same ruling that demoted ordinals on 2026-08-05. The
+    ordinal survives only on a row whose landmark cannot carry a name
+    (shared key), where it is still the only discriminator there is.
+    """
+    kind = payload.get("kind")
+    if kind is None:
+        return None
+    params = {"kind": kind}
+    if payload.get("level") is not None:
+        params["level"] = payload["level"]
+    landmark = payload.get("landmark") or {}
+    if landmark.get("key") \
+            and landmark.get("nameable", landmark.get("placed", False)):
+        params["landmark"] = landmark["key"]
+    elif payload.get("ordinal"):
+        params["ordinal"] = payload["ordinal"]
+    return params
+
+
 def _level_field_params(payload: dict) -> dict | None:
     # warp_entered / key_grabbed / spawned all pin the SAME single field --
     # TRIGGERS gives each of them exactly one param, named "level".
@@ -122,6 +159,24 @@ def _level_field_params(payload: dict) -> dict | None:
 
 def _no_params(payload: dict) -> dict:
     return {}  # TRIGGERS["reset_game"] takes none.
+
+
+def _spawned_params(payload: dict) -> dict | None:
+    """A spawn pins WHERE it put Mario, at the finest grain the row can
+    vouch for (round 20 item 3): the level, the subarea, and — when the
+    warp struct named it — WHICH spawn point, so the pyramid's top and
+    bottom entries synthesize into two different start conditions. A
+    historical row without the keys pins the level alone, exactly what it
+    used to."""
+    level = payload.get("level")
+    if level is None:
+        return None
+    params = {"level": level}
+    if payload.get("area") is not None:
+        params["area"] = payload["area"]
+    if payload.get("spawn_node") is not None:
+        params["spawn_node"] = payload["spawn_node"]
+    return params
 
 
 # trig key -> {journal_type, role, build}. `role` is None when the clause is
@@ -141,6 +196,17 @@ def _entrance_params(payload: dict) -> dict | None:
     return None if destination is None else {"to": destination}
 
 
+def _leaves_the_level(payload: dict) -> bool:
+    """`to != level` is the whole entrance test, the same one sentence
+    `eventlabel._warp_entered` labels rows by. TWO trigger types read the one
+    `warp_entered` journal event, and until round 12 item 3 `clause_for`
+    took whichever sat first in the registry — so picking "Touched the Cool,
+    Cool Mountain entrance" as the FINISH synthesized the legacy pipe clause
+    and the panel read "Ends when: Touch the pipe in Castle Inside"."""
+    destination = payload.get("to")
+    return destination is not None and destination != payload.get("level")
+
+
 _SYNTH_PARAMS: dict[str, dict] = {
     "level_exit": {"journal_type": "level_changed", "role": "start",
                    "build": _level_changed_start},
@@ -149,15 +215,19 @@ _SYNTH_PARAMS: dict[str, dict] = {
     "area_enter": {"journal_type": "area_changed", "role": None,
                    "build": _area_changed_params},
     "warp_entered": {"journal_type": "warp_entered", "role": None,
+                     "applies": lambda payload: not _leaves_the_level(payload),
                      "build": _level_field_params},
     "entrance_touched": {"journal_type": "warp_entered", "role": None,
+                         "applies": _leaves_the_level,
                          "build": _entrance_params},
     "key_grabbed": {"journal_type": "key_grabbed", "role": None,
                     "build": _level_field_params},
     "star_grabbed": {"journal_type": "star_collected", "role": None,
                      "build": _star_collected_params},
     "spawned": {"journal_type": "spawned", "role": None,
-                "build": _level_field_params},
+                "build": _spawned_params},
+    "moment_reached": {"journal_type": "moment_reached", "role": None,
+                       "build": _moment_params},
     "reset_game": {"journal_type": "game_reset", "role": None,
                    "build": _no_params},
 }
@@ -184,6 +254,9 @@ def clause_for(row, role: str) -> dict | None:
         if spec["journal_type"] != row.type:
             continue
         if spec["role"] is not None and spec["role"] != role:
+            continue
+        applies = spec.get("applies")
+        if applies is not None and not applies(row.payload):
             continue
         params = spec["build"](row.payload)
         if params is None:
@@ -320,11 +393,33 @@ def synthesize(start_row, end_row) -> tuple[dict, dict] | None:
 # --- suggest_name --------------------------------------------------------
 # A recognisable starting point for the definition's name -- the user renames
 # it, so this only has to read like the movement, not describe it precisely.
+#
+# ROUND 14: it reads like HIS movement now. A clause pinning a landmark he
+# named leads with that name, and a place reads in route notation — the same
+# `node_short_label` vocabulary the step track already speaks ("CCM Door →
+# CCM", never "Castle Inside → Cool, Cool Mountain"). His words: *"if we
+# renamed anything, it should use those renamed names… For stages, we should
+# also generally use the shorthand abbreviation for each (e.g., Cool Cool
+# Mountain becomes CCM)"* — and the abbreviations are COURSE_ABBREV, the one
+# table this project already owns, not a second one transcribed from the
+# Usamune menu (his own example "CCM" is identical in both).
 
 _NO_PLACE_LABEL = "Anywhere"
 
 
-def _place_name(clause: dict) -> str:
+def _short_place(level: int, area: int | None = None) -> str:
+    """Route notation for a place: 'CCM', 'BitFS', 'Lobby' — the step
+    track's own vocabulary, through the same one door. A subarea is a NODE
+    only inside the castle (topology.node_for's rule); a course's own area
+    says so plainly instead — the old rendering pushed a course area through
+    the castle room names and called SSL's pyramid "Upstairs"."""
+    if area is not None and level == LEVEL_CASTLE_INSIDE:
+        return node_short_label(f"{level}:{area}")
+    short = node_short_label(str(level))
+    return f"{short} (area {area})" if area is not None else short
+
+
+def _place_name(clause: dict, names: dict | None = None) -> str:
     """The place a single clause names, through the SAME per-type param
     registry (_ORIGIN_PARAMS) segments.py's start_origin reads to answer
     "where does this clause happen" -- reusing it here rather than
@@ -333,9 +428,14 @@ def _place_name(clause: dict) -> str:
     TRAP has already cost this codebase twice. star_grabbed and reset_game
     are handled separately because _ORIGIN_PARAMS does not cover them
     (star_grabbed's place is course-shaped, not level-shaped; reset_game
-    names no place at all).
+    names no place at all). `names` is the landmark catalogue: a clause
+    pinned to a landmark he named IS that name.
     """
     kind = clause.get("type")
+    named = (names or {}).get(clause.get("landmark")) \
+        if kind == "moment_reached" else None
+    if named:
+        return named
     if kind == "star_grabbed":
         course = clause.get("course")
         if course is None:
@@ -346,6 +446,14 @@ def _place_name(clause: dict) -> str:
             else name
     if kind == "reset_game":
         return "Reset"
+    if kind == "entrance_touched":
+        # The place an entrance clause is ABOUT is where it leads —
+        # _ORIGIN_PARAMS has no row for it (its firing place is derived
+        # through topology), and falling through read "Anywhere" for the
+        # most place-ful clause in the registry.
+        destination = clause.get("to")
+        return _short_place(destination) \
+            if destination is not None else _NO_PLACE_LABEL
     params = _ORIGIN_PARAMS.get(kind)
     if params is None:
         return _NO_PLACE_LABEL
@@ -353,12 +461,15 @@ def _place_name(clause: dict) -> str:
     level = clause.get(level_param)
     if level is None:
         return _NO_PLACE_LABEL
-    name = LEVEL_NAMES.get(level, f"Level {level}")
     area = clause.get(area_param) if area_param else None
-    if area is not None:
-        name = f"{name} ({CASTLE_AREA_NAMES.get(area, f'Area {area}')})"
-    return name
+    return _short_place(level, area)
 
 
-def suggest_name(start_clause: dict, end_clause: dict) -> str:
-    return f"{_place_name(start_clause)} → {_place_name(end_clause)}"
+def suggest_name(start_clause: dict, end_clause: dict,
+                 names: dict | None = None) -> str:
+    """First and last, whatever sits between: the two ends are the name, and
+    the middles never enter it — his rule ("it should just use the first and
+    last step as the name, regardless of number of steps") stated here
+    because the signature is the proof."""
+    return (f"{_place_name(start_clause, names)} → "
+            f"{_place_name(end_clause, names)}")

@@ -286,11 +286,12 @@ def test_the_backtest_button_guard_can_still_fail():
     assert not _has_backtest_button_label(ternary_in_a_comment)
 
 
-# --- the timeline picker: "record what I just did" (Task 13, spec
-# 2026-07-28-multi-step-segments) -------------------------------------------
-# Three states in one modal (pick start -> pick end -> review): the user
-# points at what they just did instead of hand-authoring TRIGGERS clauses.
-# Consumes Task 8 (backtest), Task 11 (timeline), Task 12 (synthesize).
+# --- the RECORDER: "record what I just did" (Task 13, spec 2026-07-28-multi-
+# step-segments; rewritten 2026-08-05) --------------------------------------
+# ONE surface: a live list of moments, newest first, of which any number can
+# be picked to define a segment. The user points at what they just did
+# instead of hand-authoring TRIGGERS clauses. Consumes Task 8 (backtest),
+# Task 11 (timeline), Task 12 (synthesize).
 
 SEGMENT_TIMELINE_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
                        / "ui" / "components" / "segmenttimeline.js")
@@ -311,9 +312,33 @@ def _fetches_the_timeline_with_the_view(source: str) -> bool:
                           stripped))
 
 
-def _a_row_click_sets_each_end(source: str) -> bool:
+def _a_row_click_toggles_the_pick(source: str) -> bool:
+    """A row click TOGGLES membership of the selection, both ways.
+
+    Replaced `setStartRow(row)`/`setEndRow(row)` on 2026-08-05 along with the
+    stepper those belonged to. With N picks there is no next step to advance
+    to, so un-picking has to be the same gesture as picking -- and pinning
+    only the ADD half would stay green against a list you can fill and never
+    empty, which is a dead end reached by using the feature correctly.
+    """
     stripped = strip_comments(source)
-    return "setStartRow(row)" in stripped and "setEndRow(row)" in stripped
+    return ("pickedIds.filter((id) => id !== row.id)" in stripped
+            and "[...pickedIds, row.id].sort(" in stripped)
+
+
+def _asks_what_the_recording_is_a_piece_of(source: str) -> bool:
+    """The ONLY door into a subsection, and it must reach the DEFINITION.
+
+    Two halves, both load-bearing: a control that writes the state, and that
+    state riding the object `definitionFor` builds. A control writing a value
+    nothing sends is exactly the shape of the bug this closes -- `SegmentBody.
+    parent` has been real server-side the whole time and no control ever wrote
+    one, which is why he asked "what star has subsections? I don't see a way
+    to define that?" (2026-08-05).
+    """
+    stripped = strip_comments(source)
+    return ("setParentOptions(" in stripped
+            and re.search(r"waypoints,\s+parents,", stripped) is not None)
 
 
 def _offers_a_view_toggle(source: str) -> bool:
@@ -333,8 +358,12 @@ def test_the_timeline_component_fetches_the_recent_journal():
     assert _fetches_the_timeline_with_the_view(SEGMENT_TIMELINE_JS_SOURCE)
 
 
-def test_a_row_click_sets_the_start_or_the_end():
-    assert _a_row_click_sets_each_end(SEGMENT_TIMELINE_JS_SOURCE)
+def test_a_row_click_toggles_that_moment_in_and_out_of_the_pick():
+    assert _a_row_click_toggles_the_pick(SEGMENT_TIMELINE_JS_SOURCE)
+
+
+def test_the_recorder_asks_what_the_recording_is_a_piece_of():
+    assert _asks_what_the_recording_is_a_piece_of(SEGMENT_TIMELINE_JS_SOURCE)
 
 
 def test_the_view_toggle_reaches_view_all():
@@ -348,21 +377,35 @@ def test_the_timeline_guards_can_still_fail():
     """
     comment_only = (
         '// Fetches /api/segments/timeline?limit=200&view=steps and lets a\n'
-        '// row click call setStartRow(row) / setEndRow(row); the toggle\n'
-        '// flips setView between "all" and "steps".\n')
+        '// row click do pickedIds.filter((id) => id !== row.id) or else\n'
+        '// [...pickedIds, row.id].sort(); the toggle flips setView between\n'
+        '// "all" and "steps", and setParentOptions(next) rides the definition\n'
+        '// beside waypoints,\n'
+        '// parents, so a subsection can be made.\n')
     assert not _fetches_the_timeline_with_the_view(comment_only)
-    assert not _a_row_click_sets_each_end(comment_only)
+    assert not _a_row_click_toggles_the_pick(comment_only)
+    assert not _asks_what_the_recording_is_a_piece_of(comment_only)
     assert not _offers_a_view_toggle(comment_only)
 
     assert _fetches_the_timeline_with_the_view(
         'getJSON(`/api/segments/timeline?limit=200&view=${view}`)')
-    assert _a_row_click_sets_each_end(
-        'onclick=${() => { setStartRow(row); setEndRow(row); }}')
+    assert _a_row_click_toggles_the_pick(
+        'const next = pickedIds.includes(row.id)\n'
+        '  ? pickedIds.filter((id) => id !== row.id)\n'
+        '  : [...pickedIds, row.id].sort((l, r) => l - r);')
+    assert _asks_what_the_recording_is_a_piece_of(
+        'onPick=${(id) => { setParentOptions((held) => [...held, id]); }}\n'
+        'return { start_triggers: [], waypoints,\n'
+        '  parents, match_mode: "loose" };')
     assert _offers_a_view_toggle(
         'onchange=${(e) => setView(e.target.checked ? "all" : "steps")}')
 
     # The specific weakness each replacement closes: the OLD assertions all
     # pass against these, the new ones must not.
+    assert not _a_row_click_toggles_the_pick(
+        'const next = [...pickedIds, row.id].sort((l, r) => l - r);')
+    assert not _asks_what_the_recording_is_a_piece_of(
+        'onPick=${(id) => { setParentOption(id); }}   // written, never sent')
     assert not _fetches_the_timeline_with_the_view(
         'getJSON("/api/segments/timeline?limit=200&view=steps")')
     assert not _offers_a_view_toggle(
@@ -402,22 +445,27 @@ def test_the_save_builder_guard_can_still_fail():
     assert _saves_through_one_definition_builder(real_code)
 
 
-def _mode_follows_the_declared_stops(source: str) -> bool:
-    return ('match_mode: waypoints.length ? "strict" : "loose"'
-            in strip_comments(source))
+def _recordings_save_strict(source: str) -> bool:
+    return 'match_mode: "strict"' in strip_comments(source)
 
 
-def test_a_recording_with_stops_is_strict_and_one_without_stays_loose():
-    """The rule, in one expression: a declared path is only enforced by the
-    strict matcher's path cursor, and a recording with no stops is byte-for-
-    byte the loose definition this tool has always produced."""
-    assert _mode_follows_the_declared_stops(SEGMENT_TIMELINE_JS_SOURCE)
+def test_a_recording_saves_strict_stops_or_no_stops():
+    """Round 15, his ruling verbatim: "They should also be default Strict."
+    The previous rule (strict only once a stop was declared) kept a stop-less
+    recording byte-compatible with the pre-waypoint tool; that guarantee is
+    retired on his word — a recorded piece voids when you deviate. The
+    BUILDER's blank default is a different control and untouched
+    (vocab.match_modes[0], loose-first, its own test above)."""
+    assert _recordings_save_strict(SEGMENT_TIMELINE_JS_SOURCE)
+    assert 'match_mode: waypoints.length ? "strict" : "loose"' \
+        not in strip_comments(SEGMENT_TIMELINE_JS_SOURCE), (
+        "the retired stops-only rule is back beside the strict default")
 
 
 def test_the_mode_rule_guard_can_still_fail():
-    comment_only = ('// STRICT the moment a stop is required, LOOSE when none\n'
-                    '// is: match_mode: waypoints.length ? "strict" : "loose".\n')
-    assert not _mode_follows_the_declared_stops(comment_only)
+    comment_only = ('// Recordings save STRICT unconditionally:\n'
+                    '// match_mode: "strict" is what save() sends.\n')
+    assert not _recordings_save_strict(comment_only)
 
 
 def _save_button_waits_for_the_backtest(source: str) -> bool:
@@ -702,8 +750,10 @@ def _lints_alongside_the_recorder_backtest(source: str) -> bool:
 
 def test_the_recorder_lints_alongside_its_backtest():
     assert _lints_alongside_the_recorder_backtest(SEGMENT_TIMELINE_JS_SOURCE)
-    # Always a brand-new definition in this flow -- nothing on disk to exclude.
-    assert "segment_id: null" in SEGMENT_TIMELINE_JS_SOURCE
+    # A create excludes nothing; a RE-RECORD (round 16) excludes the row it
+    # replaces, or an unchanged walk reports itself as its own duplicate.
+    assert ("segment_id: replaces ? replaces.id : null"
+            in strip_comments(SEGMENT_TIMELINE_JS_SOURCE))
 
 
 def test_the_recorder_lint_guard_can_still_fail():
@@ -730,3 +780,57 @@ def test_the_recorder_save_disable_guard_can_still_fail():
     assert not _recorder_save_waits_for_lint(comment_only)
     assert _recorder_save_waits_for_lint(
         'disabled=${!btReport || saving || lintHasError} onclick=${save}')
+
+
+# --- round 18: the pin wears his name, and Save says it saved ---------------
+
+def _pin_reads_the_landmark_name(source: str) -> bool:
+    """Item 1: the editor's pinned-moment control renders the CATALOGUE name
+    ("✕ CCM Wooden Door"), falling back to the generic wording only for a
+    key he never named. Both halves scanned: the lookup and the render."""
+    stripped = strip_comments(source)
+    return ('(vocab.landmark_names || {})[value]' in stripped
+            and '${pinName || "this specific one"}' in stripped)
+
+
+def test_the_pinned_moment_wears_his_landmark_name():
+    assert _pin_reads_the_landmark_name(SEGMENTS_JS_SOURCE)
+    # The names have to actually ARRIVE: the page fetches the same store the
+    # recorder's rows read and threads it in on vocab.
+    assert '"/api/landmarks"' in SEGMENTS_JS_SOURCE
+    assert "landmark_names: landmarkNames" in SEGMENTS_JS_SOURCE
+
+
+def test_the_pin_name_guard_can_still_fail():
+    comment_only = ('// (vocab.landmark_names || {})[value] feeds the pin\n'
+                    '// ${pinName || "this specific one"} renders it\n')
+    assert not _pin_reads_the_landmark_name(comment_only)
+    real = ('const pinName = (vocab.landmark_names || {})[value];\n'
+            'x = `${pinName || "this specific one"}`;\n')
+    assert _pin_reads_the_landmark_name(real)
+
+
+def _save_flashes_saved(source: str) -> bool:
+    """Item 2: ✓ + "Saved" for ~2 s, set only AFTER the write resolves —
+    the flash call sits after onSaved in the source, which only runs once
+    the PUT/POST returned."""
+    stripped = strip_comments(source)
+    save_site = stripped.find("setSavedFlash(true)")
+    return (save_site != -1
+            and stripped.rfind("onSaved(savedId)", 0, save_site) != -1
+            and '${savedFlash ? "Saved" : "Save segment"}' in stripped
+            and 'name=${savedFlash ? "check" : "save"}' in stripped)
+
+
+def test_the_save_button_confirms_an_actual_save():
+    assert _save_flashes_saved(SEGMENTS_JS_SOURCE)
+
+
+def test_the_save_flash_guard_can_still_fail():
+    comment_only = ('// setSavedFlash(true) after onSaved(savedId)\n'
+                    '// ${savedFlash ? "Saved" : "Save segment"}\n')
+    assert not _save_flashes_saved(comment_only)
+    real = ('onSaved(savedId);\nsetSavedFlash(true);\n'
+            'label = `${savedFlash ? "Saved" : "Save segment"}`;\n'
+            'icon = `name=${savedFlash ? "check" : "save"}`;\n')
+    assert _save_flashes_saved(real)

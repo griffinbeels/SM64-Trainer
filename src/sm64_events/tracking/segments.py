@@ -342,9 +342,23 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           LEVEL_NAMES, node_key, node_label,
                                           node_short_label,
                                           region_for_node, star_count,
-                                          star_name, world_connections,
-                                          world_regions)
+                                          star_name, subarea_name,
+                                          COURSE_SUBAREA_STARS,
+                                          world_connections, world_regions)
+from sm64_events.core.landmark import same_landmark
+from sm64_events.detectors.igt_clock import IgtClock
+from sm64_events.detectors.moment import MOMENTS
+# The verb splice ("Open a door" -> "Open") lives with the row labeller and
+# is borrowed, not copied: a landmark-pinned clause must read exactly like
+# the row it was picked from, and two copies of the rule is how they drift.
+from sm64_events.tracking.eventlabel import _verb
 from sm64_events.tracking import topology
+
+# The moment vocabulary, read as a SET for validation. detectors/moment.py's
+# MOMENTS is the registry; this file never names a kind of its own, so adding
+# one stays a single row over there.
+_MOMENT_KINDS = frozenset(m.kind for m in MOMENTS)
+_MOMENT_LABELS = {m.kind: m.label for m in MOMENTS}
 
 _ANCHOR_TYPES = ("practice_reset", "state_loaded")  # attempt-anchor events
 
@@ -451,6 +465,12 @@ class MatchContext:
     # None/empty = no active route.
     route_segments: frozenset | None = None
     target_segment: int | None = None
+    # The landmark catalogue (key -> name), for the moment pin's SAME-NAME
+    # collapse (round 13 items 2+3): a star door is two objects, so a pin on
+    # one half must fire when he pushes the other once both carry his one
+    # name. None = no catalogue in hand (bare test contexts) = key equality
+    # only, byte-for-byte the pre-collapse behaviour.
+    landmark_names: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -486,6 +506,54 @@ class SegmentDef:
     # "loose" by db.insert_segment_def — an authoring default, not a claim
     # about existing data.
     match_mode: str = "strict"
+    # The entities this is a SUBSECTION of -- [] for a top-level segment,
+    # which is every definition that existed before 2026-08-05 (task 0087).
+    # Defaulted for the same reason waypoints/default_strat/match_mode are: a
+    # non-default field would TypeError every existing construction.
+    #
+    # THIS ONE FIELD is the whole difference between a segment and a
+    # subsection. Everything a subsection needs -- attempts, personal bests,
+    # strategies, ladders, ranks, the practice log, the builder, the matcher
+    # -- already exists and is kind-dispatched between stars and segments
+    # (rule 11), so a third KIND would fan out across roughly twenty files and
+    # buy nothing. The selector filters on this for progressive disclosure,
+    # and a castle MOVEMENT owns subsections through the identical field
+    # ("segment:<id>"), which is why that case needs no mechanism of its own.
+    #
+    # PLURAL since round 20 (his ask, from the first real star-subsection
+    # session: "sometimes the same subsection might be practicable in
+    # multiple stars -- in LLL, both Hot Foot it Into The Volcano and
+    # Elevator Tour into the Volcano would do volcano entry in the same
+    # way"). ONE list rather than a scalar beside it: a second field
+    # carrying the same fact is the divergence class this repo keeps
+    # paying for. Order is his pick order; parents[0] is the primary
+    # (icon fallback reads it).
+    #
+    # The key format per element is the one sheet-library's mapping module
+    # already emits ("star:<course>:<slot>" / "segment:<id>"), so a
+    # subsection this tooling creates is directly mappable from the
+    # community sheet with no bridge on either side.
+    parents: list = field(default_factory=list)
+    # WHEN THE CLOCK STARTS (round 15 item 3, his ruling): "trigger" times
+    # from the start trigger's own frame — every definition before
+    # 2026-08-08, and the honest default for existing rows — while "move"
+    # times from the moment Mario can actually MOVE in the section the
+    # trigger led into: *"it's DETECTED when the specific event occurs (e.g.,
+    # touching the CCM door), but the timer doesn't actually START until
+    # mario is able to finally move, aka when Usamune's timer actually
+    # resets to 0 when we go to the new section."* Mechanically the engine
+    # rebases the arm's clock to the counter zero the start caused (see
+    # CLOCK_START_WINDOW_FRAMES and _close); a "move" def whose start causes
+    # no section change times exactly like "trigger", because Mario never
+    # stopped being able to move. Defaulted for the same reason every field
+    # above is.
+    clock_start: str = "trigger"
+
+
+# `area:<level>` / `area:<level>:<subarea>` — a castle-area parent, the
+# recorder's terminal tile (round 14: "for the castle areas, those are the
+# high level areas, so it shouldn't have a further drill down").
+_PARENT_KEY = re.compile(r"^(?:star:\d+:\d+|segment:\d+|area:\d+(?::\d+)?)$")
 
 
 @dataclass(frozen=True)
@@ -625,9 +693,23 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
     # exactly like a genuine lobby walk — from_transient (detectors/area.py)
     # is the discriminator. Legacy events without the key conservatively
     # match (None = unknown -> match, the codebase-wide convention).
+    # THE CASTLE GATES CAME OFF 2026-08-05 (task 0087). Both were in the
+    # VOCABULARY, never in the matcher -- the lambda below has only ever
+    # compared the payload's level to the clause's, and its `area` check is
+    # equally level-agnostic. What the gates prevented was AUTHORING: the
+    # level list was pinned to the castle regions and the two subarea
+    # selectors only appeared for the castle interior, so "entered the SSL
+    # pyramid" (level 8, area 2) and "left the LLL volcano" could not be
+    # expressed at all -- and "entering a subarea within the level" is one of
+    # the conditions subsections are actually built out of.
+    #
+    # `topology.node_for` still counts subareas only INSIDE the castle
+    # interior, deliberately and unchanged: courses have their own areas and
+    # the world graph does not model them, so such a clause places at LEVEL
+    # granularity. That is a real answer rather than a gap -- the wrong-turn
+    # cancel keeps working, one resolution coarser.
     TriggerType("area_enter", "You enter area", "Enter",
-                {"level": {"kind": "level", "required": True,
-                           "enum": list(CASTLE_REGION_LEVELS)},
+                {"level": {"kind": "level", "required": True},
                  "area": {"kind": "subarea", "required": False,
                           "only_when": _only_castle("level")},
                  "from": {"kind": "subarea", "required": False,
@@ -707,12 +789,94 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 # but no specific star ("Grab a star in <course>").
                 card_template="{star} in {course}",
                 card_fallbacks={"star": "a star"}),
+    # THE SUBSECTION TRIGGER, and the only one in this registry that fires
+    # without Mario going anywhere -- every other type is a place change or a
+    # collection, which is why the journal was empty inside a course and a
+    # subsection could not be authored at all (task 0087).
+    #
+    # It names no kind of its own: `kind` is matched against the payload, so
+    # inventing a moment stays ONE ROW in detectors/moment.py's MOMENTS and
+    # never touches this file. That indirection is the user's requirement --
+    # "we need this to be flexible so that we allow for the invention and
+    # innovation of new sections as needed" (2026-08-05).
+    #
+    # `ordinal` unset means ANY occurrence, which is what a subsection with
+    # one unambiguous boundary wants; set, it is the Nth since the attempt
+    # opened. It exists for START triggers: waypoints already order everything
+    # after the arm, but "the 5th door in Big Boo's Haunt" is a start and a
+    # start has no arm to count from.
+    # CARD LABEL IS DELIBERATELY EMPTY, and it is the only type where that is
+    # right. Every other card_label is the verb ("Enter", "Grab") because the
+    # type fixes the verb and the params fill in the object. Here the VERB
+    # varies per moment and lives on the moment's own label ("Open a door",
+    # "Trigger a textbox"), so a type-level verb can only be prepended to a
+    # phrase that already has one -- "Reach Open a door" was the first draft.
+    # An empty label makes the card read "Open a door #5 in Big Boo's Haunt",
+    # the imperative step the card voice asks for. tests/test_segments.py's
+    # card-label containment check is vacuous for an empty string, so that
+    # test names this type explicitly and asserts the moment's own label leads
+    # the sentence instead -- the guard keeps its teeth rather than passing by
+    # accident.
+    # `landmark` (round 12 item 3) pins WHICH one — the catalogue key of the
+    # specific door/pole/pickup, matched against the payload's own
+    # `landmark.key`. The recorder writes it (a picked row means THAT door,
+    # never "some first door"); there is no hand-authoring control for one,
+    # the same way nobody hand-types a spawn coordinate. It renders through
+    # the catalogue's name where the caller has one (see _resolve_param's
+    # `names`), and it is deliberately NOT in the template: with no name the
+    # sentence falls back to the kind's own wording rather than printing a
+    # raw key at a human.
+    TriggerType("moment_reached", "A moment happens", "",
+                {"kind": {"kind": "moment", "required": True},
+                 "ordinal": {"kind": "int", "required": False},
+                 "landmark": {"kind": "landmark", "required": False},
+                 "level": {"kind": "level", "required": False},
+                 "area": {"kind": "subarea", "required": False,
+                          "only_when": _only_castle("level")}},
+                "{kind} #{ordinal} in {level} {area}",
+                lambda p, ev, ctx: ev.type == "moment_reached"
+                and ev.payload.get("kind") == p["kind"]
+                and (p.get("ordinal") is None
+                     or ev.payload.get("ordinal") == p["ordinal"])
+                and (p.get("landmark") is None
+                     or same_landmark(
+                         p["landmark"],
+                         (ev.payload.get("landmark") or {}).get("key"),
+                         ctx.landmark_names if ctx else None))
+                and (p.get("level") is None
+                     or ev.payload.get("level") == p["level"])
+                and (p.get("area") is None
+                     or ev.payload.get("area") == p["area"]),
+                # The one-line step track wants a thing, not a phrase; a
+                # moment clause names a place so node_short_label normally
+                # answers first, and this is the fallback for one that does
+                # not pin a level.
+                chip_label="Moment"),
+    # A spawn can pin its SUBAREA and its SPAWN POINT (round 20 item 3):
+    # "I need to be able to start a segment when the player spawns into the
+    # SUBAREA, and be able to annotate it as such... ideally we would be
+    # able to identify *which* spawn we came through" (SSL's pyramid has a
+    # top and a bottom entry — different sWarpDest node ids, stamped by
+    # detectors/spawn.py). Both optional; a level-only clause matches
+    # exactly what it always did. A pinned area/node FAILS on a historical
+    # row without the key — an old row cannot prove it was the pyramid, and
+    # conservative here means a recorded subarea start never fires from the
+    # course's front door. The area's only_when is builder-display only
+    # (the castle is the one level with a subarea DROPDOWN); the recorder
+    # pins course subareas straight off the journal row.
     TriggerType("spawned", "You spawn into the game", "Spawn",
-                {"level": {"kind": "level", "required": False}},
-                "in {level}",
+                {"level": {"kind": "level", "required": False},
+                 "area": {"kind": "subarea", "required": False,
+                          "only_when": _only_castle("level")},
+                 "spawn_node": {"kind": "int", "required": False}},
+                "in {level} {area} via spawn {spawn_node}",
                 lambda p, ev, ctx: ev.type == "spawned"
                 and (p.get("level") is None
-                     or ev.payload["level"] == p["level"])),
+                     or ev.payload["level"] == p["level"])
+                and (p.get("area") is None
+                     or ev.payload.get("area") == p["area"])
+                and (p.get("spawn_node") is None
+                     or ev.payload.get("spawn_node") == p["spawn_node"])),
     TriggerType("attempt_anchor", "Practice reset / savestate load",
                 "Reset or reload",
                 {"level": {"kind": "level", "required": True},
@@ -740,15 +904,24 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
 ]}
 
 
-def _resolve_param(kind: str, value, clause: dict) -> str:
+def _resolve_param(kind: str, value, clause: dict,
+                   names: dict | None = None) -> str:
     """Display text for one clause param, by the vocabulary's own KIND — the
-    four TRIGGERS params ever carry. `star` also reads the clause's `course`
+    few TRIGGERS params ever carry. `star` also reads the clause's `course`
     (a star's name is meaningless without one; a course-less star clause
     falls back to the generic "Star N" addresses.star_name itself uses for
-    an unrecognised course)."""
+    an unrecognised course). `names` is the landmark catalogue where the
+    caller has one — see _render_clause."""
     if kind == "level":
         return LEVEL_NAMES.get(value, f"Level {value}")
     if kind == "subarea":
+        # A clause that names a COURSE level beside its subarea (a spawned
+        # clause pinning the pyramid) reads the course-subarea table; every
+        # castle-gated subarea param keeps reading the castle names (its
+        # companion level is 6, which subarea_name routes there anyway).
+        level = clause.get("level")
+        if level is not None:
+            return subarea_name(level, value) or f"Area {value}"
         return CASTLE_AREA_NAMES.get(value, f"Area {value}")
     if kind == "course":
         return COURSE_NAMES.get(value, f"Course {value}")
@@ -756,13 +929,25 @@ def _resolve_param(kind: str, value, clause: dict) -> str:
         course = clause.get("course")
         return star_name(course, value) if course is not None \
             else f"Star {value + 1}"
+    if kind == "moment":
+        # The moment's own label, never its wire key: detectors/moment.py
+        # owns the wording, so "Open a door" cannot drift from what the
+        # builder's dropdown and the timeline's sentence already say.
+        #
+        # A clause pinning a NAMED landmark reads by that name — "Open the
+        # CCM Door", through the same verb splice eventlabel's rows use, so
+        # the sentence he saves matches the row he picked (round 12 item 3).
+        # Unnamed (or no catalogue in hand), the kind's own wording stands.
+        label = _MOMENT_LABELS.get(value, str(value))
+        named = (names or {}).get(clause.get("landmark"))
+        return f"{_verb(label)} the {named}" if named else label
     return str(value)
 
 
 _TEMPLATE_TOKENS = re.compile(r"(\{\w+\})")
 
 
-def _render_clause(clause: dict) -> str:
+def _render_clause(clause: dict, names: dict | None = None) -> str:
     """One trigger clause -> plain English for the practice card, through
     TRIGGERS[type].card_label + .card_template (spec 2026-07-28-multi-step-
     segments; card_waiting_for_sentence below is the only caller). Until
@@ -802,7 +987,13 @@ def _render_clause(clause: dict) -> str:
     ui/components/segments.js's, which builds its own editor sentence
     straight from the label/template vocab() ships raw — see
     card_waiting_for_sentence's docstring for why that is not a second
-    door."""
+    door.
+
+    `names` is the landmark catalogue (db.landmark_names()), passed by the
+    one caller that has a db in hand (the synthesize endpoint) so a
+    landmark-pinned moment clause reads "Open the CCM Door" — the sentence
+    he picked the row by. Without it the kind's own wording stands, which is
+    vague but never wrong."""
     spec = TRIGGERS[clause["type"]]
     template = spec.card_template or spec.template
     tokens = _TEMPLATE_TOKENS.split(template)
@@ -819,7 +1010,8 @@ def _render_clause(clause: dict) -> str:
             value = clause.get(name)
             if value is not None:
                 parts.append(literal_before)
-                parts.append(_resolve_param(meta["kind"], value, clause))
+                parts.append(_resolve_param(meta["kind"], value, clause,
+                                            names))
             elif name in spec.card_fallbacks:
                 parts.append(literal_before)
                 parts.append(spec.card_fallbacks[name])
@@ -828,15 +1020,16 @@ def _render_clause(clause: dict) -> str:
     return f"{spec.card_label} {''.join(parts)}".strip()
 
 
-def clause_sentence(clause: dict) -> str:
+def clause_sentence(clause: dict, names: dict | None = None) -> str:
     """Public entry point onto `_render_clause`, for callers OUTSIDE
     `tracking/` (Task 13's synthesize-preview API endpoint, behind the
     "record what I just did" timeline picker). Same card_label/card_template
     rendering `card_waiting_for_sentence` uses for an armed segment's
     "waiting for" line, so a synthesized-but-unsaved clause reads in the
     IDENTICAL voice a saved one would -- a one-line alias, not a second
-    template walk."""
-    return _render_clause(clause)
+    template walk. `names` (the landmark catalogue) lets a landmark-pinned
+    clause read by the name he gave the thing."""
+    return _render_clause(clause, names)
 
 
 def card_waiting_for_sentence(d: SegmentDef, progress: int) -> str:
@@ -939,8 +1132,25 @@ def arm_level(trig: dict) -> int | None:
     lambdas. Shared by views.py's quick-select banner helpers and the
     projector's segment-target retirement (2026-07-23)."""
     kind = trig.get("type")
-    if kind in ("area_enter", "attempt_anchor", "spawned"):
+    # `moment_reached` places exactly like `area_enter`: a moment names where
+    # it HAPPENS, and Mario is standing there when it fires. Missing until
+    # 2026-08-05, which made every subsection started by a moment invisible in
+    # every selector row -- the row filters on this, so a definition it cannot
+    # place is a definition nobody can pick. Same reason `step_node` has its
+    # own branch for the type.
+    if kind in ("area_enter", "attempt_anchor", "spawned", "moment_reached"):
         return trig.get("level")
+    # `entrance_touched` is the SAME SHAPE, and Griffin named it as one on
+    # 2026-08-05: "the event for entering a course warp, not actually warping
+    # into it... probably a pretty overarching theme in these types of
+    # segments". Its `to` is where the entrance LEADS, and Mario does not
+    # arrive for 77 frames -- so the arm level is where the ENTRANCE lives,
+    # which is the one derivation `topology.entrance_level` owns (the same
+    # door `fires_from` already checks arm positions against). Reading `to`
+    # here instead would place the definition in a course the player is not
+    # standing in yet.
+    if kind == "entrance_touched":
+        return topology.entrance_level(trig.get("to"))
     if kind in ("level_enter", "level_exit"):
         return trig.get("to")   # level_exit: Mario ends up at the DESTINATION
     return None
@@ -988,6 +1198,15 @@ def step_node(clause: dict) -> str | None:
         # every movement at once with nothing going red. `warp_entered` keeps
         # answering None and stays unconstrained, as it always has.
         return topology.node_for(clause.get("to"), None)
+    if kind == "moment_reached":
+        # A moment names where it HAPPENS, so it places exactly like an
+        # area_enter. Answering None here would mean UNCONSTRAINED and would
+        # switch the topological wrong-turn cancel off for every subsection at
+        # once, with nothing going red -- the silent, total failure task 0081
+        # documents for `warp_entered`. A clause naming no level still answers
+        # None, which is the same "no constraint" every place-less clause
+        # already gives and is a real answer rather than a gap.
+        return topology.node_for(clause.get("level"), clause.get("area"))
     return None
 
 
@@ -1067,7 +1286,7 @@ def start_areas(start_triggers: list) -> list:
     subarea (that is what keeps LBLJ out of Upstairs). Derived from the trigger
     param NAMES (stable across the matcher), so this stays decoupled from the
     registry above:
-      area_enter / attempt_anchor : (level, area)
+      area_enter / attempt_anchor / moment_reached : (level, area)
       level_enter / level_exit    : (to, to_subarea)   [to_subarea exists once
           the subarea-trigger work lands; until then .get() returns None and the
           row contributes nothing — forward-safe]
@@ -1081,10 +1300,20 @@ def start_areas(start_triggers: list) -> list:
     out: list = []
     for trig in start_triggers:
         kind = trig.get("type")
-        if kind in ("area_enter", "attempt_anchor"):
+        if kind in ("area_enter", "attempt_anchor", "moment_reached"):
             level, area = trig.get("level"), trig.get("area")
         elif kind in ("level_enter", "level_exit"):
             level, area = trig.get("to"), trig.get("to_subarea")
+        elif kind == "entrance_touched":
+            # Derived, never asked for: an entrance clause carries only where
+            # it LEADS, and the place Mario touches it from is the world
+            # graph's answer (`topology.entrance_node` -- the same door
+            # `arm_level` and `fires_from` use). The subarea is the whole
+            # point here: the level alone says "Castle Inside" for every
+            # basement and lobby entrance alike, which no row can filter on.
+            node = topology.entrance_node(trig.get("to"))
+            level = topology.entrance_level(trig.get("to"))
+            area = topology.node_area(node)
         else:
             continue
         if level is not None and area is not None and [level, area] not in out:
@@ -1188,6 +1417,9 @@ _PRECONDITION_PARAM: dict[str, str] = {
     "key_grabbed": "level",
     "attempt_anchor": "level",
     "spawned": "level",
+    # A moment fires where Mario is standing, so its `level` is both where it
+    # happens and where it must be firable from.
+    "moment_reached": "level",
 }
 
 
@@ -1318,6 +1550,8 @@ _ORIGIN_PARAMS: dict[str, tuple[str, str | None]] = {
     "spawned": ("level", None),
     "warp_entered": ("level", None),
     "key_grabbed": ("level", None),
+    # A subsection is practiced where its first moment fires (task 0087).
+    "moment_reached": ("level", "area"),
 }
 
 ANYWHERE_LABEL = "Anywhere"
@@ -1518,6 +1752,35 @@ def arms_ambiently(start_triggers: list) -> bool:
         if level is not None and COURSE_BY_LEVEL.get(level) is not None:
             return True
     return False
+
+
+#: Start-trigger types that fire by the player merely BEING somewhere —
+#: standing in a level, resetting where he already is, spawning in — as
+#: opposed to doing something that goes somewhere (an exit, a star, a door
+#: moment). `hooks_on_arm` is the one reader; `arms_ambiently` above answers
+#: a narrower question (presence in a star-bearing COURSE) for a different
+#: consumer and deliberately stays separate.
+_PRESENCE_TRIGGER_TYPES = frozenset(
+    {"level_enter", "area_enter", "attempt_anchor", "spawned"})
+
+
+def hooks_on_arm(start_triggers: list) -> bool:
+    """True when this definition's arming is a DELIBERATE act the target
+    queue may hook (round 19, 2026-08-08: "the held target should prioritize
+    whatever is hooked into first").
+
+    A def whose start can fire by mere presence — entering a level, a reset
+    where the player already stands, a spawn — must never hook the practice
+    target: LBLJ arms on every castle entry and the pipe/100-coin families on
+    every course entry, and a selection nobody caused reads as a bug (his
+    standing rule). A def that fires on going somewhere or doing something —
+    a level exit, a star or key grab, a warp/entrance touch, a named moment,
+    even an F1 reset — is the player performing the segment's own start, and
+    that detection enters the queue. Conservative across any-of clause sets:
+    ONE presence clause disqualifies the def, because the notice does not say
+    which clause fired."""
+    return not any(clause.get("type") in _PRESENCE_TRIGGER_TYPES
+                   for clause in start_triggers)
 
 
 def origin_view(node: str | None) -> dict:
@@ -1794,6 +2057,35 @@ MATCH_MODES = {
 }
 
 
+# WHEN THE CLOCK STARTS (round 15 item 3) — the builder renders these the way
+# it renders MATCH_MODES, and "move" sits FIRST because he ruled it the
+# default for new definitions: "I think generally most start triggers should
+# *actually* start timing when Mario's able to move, so this should be the
+# default." Existing rows keep "trigger" until the seeded-flip is priced with
+# numbers (retiming the corpus retimes his recorded history).
+CLOCK_STARTS = [
+    {
+        "key": "move",
+        "label": "When Mario can move",
+        "description": ("The start trigger DETECTS the attempt, but the "
+                        "clock starts when Mario can actually move in the "
+                        "section it led into — the moment Usamune's own "
+                        "timer resets to 0. Open the door, go through: the "
+                        "door animation and the fade cost nothing, and the "
+                        "recorded time matches what Usamune shows."),
+    },
+    {
+        "key": "trigger",
+        "label": "At the start trigger",
+        "description": ("The clock starts on the start trigger's own frame, "
+                        "fades and all — how every definition timed before "
+                        "the move clock existed, and what the seeded corpus "
+                        "still uses."),
+    },
+]
+_CLOCK_START_KEYS = frozenset(entry["key"] for entry in CLOCK_STARTS)
+
+
 def _check_clause(clause: dict, registry: dict, what: str) -> None:
     if not isinstance(clause, dict):
         raise ValueError(f"each clause in {what} must be a dict,"
@@ -1807,7 +2099,29 @@ def _check_clause(clause: dict, registry: dict, what: str) -> None:
     for name, meta in spec.params.items():
         if meta["required"] and clause.get(name) is None:
             raise ValueError(f"{kind}: missing required param {name!r}")
-        if clause.get(name) is not None and not isinstance(clause[name], int):
+        if clause.get(name) is None:
+            continue
+        # Every param in this registry was an integer id until 2026-08-05, so
+        # this check simply demanded one. A MOMENT kind is a name out of
+        # detectors/moment.py's registry instead, so the check dispatches on
+        # the param's own declared kind. Deliberately narrow: one declared
+        # kind is exempted, and a string level is still the mistake it always
+        # was (pinned by test_moment_trigger.py).
+        if meta["kind"] == "moment":
+            if clause[name] not in _MOMENT_KINDS:
+                raise ValueError(
+                    f"{kind}: unknown moment {clause[name]!r} — known moments "
+                    f"are {sorted(_MOMENT_KINDS)}")
+        elif meta["kind"] == "landmark":
+            # A catalogue key, written by the recorder (round 12 item 3) —
+            # a string, never an id. Content is not validated against the
+            # catalogue: an unnamed landmark is a legal pin (the key is the
+            # identity; the name is display), and a key for a thing never
+            # touched again simply never matches.
+            if not isinstance(clause[name], str) or not clause[name].strip():
+                raise ValueError(
+                    f"{kind}: param {name!r} must be a landmark key string")
+        elif not isinstance(clause[name], int):
             raise ValueError(f"{kind}: param {name!r} must be an integer")
     extras = set(clause) - {"type"} - set(spec.params)
     if extras:
@@ -1900,11 +2214,31 @@ def validate_definition(d: dict) -> None:
         # strategy" everywhere while still suppressing the blank option in
         # the picker, leaving no way to express either.
         raise ValueError("default_strat must be a non-empty string or absent")
+    parents = d.get("parents")
+    if parents is not None:
+        if not isinstance(parents, list):
+            raise ValueError(
+                "parents must be a list of entity keys, got "
+                f"{parents!r}")
+        for parent in parents:
+            if not isinstance(parent, str) or not _PARENT_KEY.match(parent):
+                raise ValueError(
+                    "each parent must be a star, segment or castle-area key "
+                    f"like 'star:2:1', 'segment:7' or 'area:6:1', got "
+                    f"{parent!r}")
+        if len(set(parents)) != len(parents):
+            duplicate = next(p for p in parents if parents.count(p) > 1)
+            raise ValueError(f"parents lists {duplicate} twice")
     mode = d.get("match_mode", "strict")
     if mode not in MATCH_MODES:
         raise ValueError(
             f"unknown match_mode {mode!r}; expected one of "
             f"{sorted(MATCH_MODES)}")
+    clock_start = d.get("clock_start", "trigger")
+    if clock_start not in _CLOCK_START_KEYS:
+        raise ValueError(
+            f"unknown clock_start {clock_start!r}; expected one of "
+            f"{sorted(_CLOCK_START_KEYS)}")
     guards = d.get("guards") or []
     if not isinstance(guards, list):
         raise ValueError("guards must be a list")
@@ -1945,6 +2279,14 @@ def vocab() -> dict:
         # position 0 stays loose.
         "match_modes": [MATCH_MODES["loose"], MATCH_MODES["strict"],
                         MATCH_MODES["exclusive"]],
+        # When the clock starts, "move" first — the default for NEW
+        # definitions (round 15 item 3, his ruling).
+        "clock_starts": CLOCK_STARTS,
+        # The moment vocabulary a `moment_reached` clause's `kind` selects
+        # from. Served rather than hard-coded in the builder for the same
+        # reason levels and courses are: detectors/moment.py owns the list,
+        # and a new moment must reach the dropdown without a JS edit.
+        "moments": [{"key": m.kind, "label": m.label} for m in MOMENTS],
         "levels": {str(k): v for k, v in sorted(LEVEL_NAMES.items())},
         "castle_areas": {str(k): v for k, v in CASTLE_AREA_NAMES.items()},
         "courses": {str(k): v for k, v in COURSE_NAMES.items()},
@@ -1957,6 +2299,13 @@ def vocab() -> dict:
         # destinations) — the builder filters flow-annotated level/subarea
         # dropdowns to world-possible moves (addresses.WORLD_EDGES_*)
         "connections": world_connections(),
+        # Which stars a course SUBAREA hosts ("22:2" -> [4, 5, 6]) — the
+        # selector narrows its star row to these while the player stands
+        # inside one (round 21 item 5); a subarea with no row shows every
+        # star. addresses.COURSE_SUBAREA_STARS carries the measurement.
+        "subarea_stars": {f"{level}:{area}": list(stars)
+                          for (level, area), stars
+                          in COURSE_SUBAREA_STARS.items()},
         # Ordered region -> place tree for the segment library's grouping and
         # the editor's origin override (spec 2026-07-24-segment-origin-
         # categories). Domain-free shape: {key, label, children:[...]}.
@@ -2079,6 +2428,7 @@ def split_definition(d: SegmentDef, mid: list[dict],
         "guards": list(d.guards),
         "default_strat": d.default_strat,
         "match_mode": d.match_mode,
+        "clock_start": d.clock_start,
         "seed_key": None,
     }
     second = {
@@ -2090,6 +2440,7 @@ def split_definition(d: SegmentDef, mid: list[dict],
         "guards": list(d.guards),
         "default_strat": d.default_strat,
         "match_mode": d.match_mode,
+        "clock_start": d.clock_start,
         "seed_key": None,
     }
     for half in (first, second):
@@ -2267,6 +2618,7 @@ def merge_definitions(first: SegmentDef, second: SegmentDef,
         "guards": [],
         "default_strat": default_strat,
         "match_mode": match_mode,
+        "clock_start": first.clock_start,
         "seed_key": None,
     }
 
@@ -2319,6 +2671,14 @@ class _Arm:
     # from the SAME number the matcher does — the engine only notices on the
     # next event, and a card must not keep saying "Running" until one arrives.
     deadline_frame: int | None = None
+    # The MOVE clock's origin (round 15 item 3): the frame of the counter
+    # zero the start trigger CAUSED — the section entry — set by feed while
+    # the zero lands inside CLOCK_START_WINDOW_FRAMES of the arm, latest such
+    # zero winning (a load settles its area byte across several zeroing
+    # events; the counter measures from the last of them). None = no section
+    # change followed the start, and a "move" def times from the arm exactly
+    # like a "trigger" one — Mario never stopped being able to move.
+    clock_frame: int | None = None
 
 
 def _at_arm_position(arm: _Arm, ctx: MatchContext) -> bool:
@@ -2340,6 +2700,29 @@ def _is_major_action(ev) -> bool:
     only these two shapes are treated as "the player left the route"."""
     return (ev.type in _MAJOR_EVENT_TYPES
             or (ev.type == "level_changed" and _real_edge(ev)))
+
+
+# How far a zeroing event may sit from an arm and still describe the SAME
+# load. One, measured: a savestate reload emits `spawned` then `practice_reset`
+# on consecutive frames (31 of 31 of his door runs), and the two are one event
+# as far as Usamune's counter is concerned.
+IGT_ARM_SKEW_FRAMES = 1
+
+# How much LONGER than the wall-frame span a closing event's IGT may be before
+# it is judged to have started somewhere this segment did not (round 24; see
+# `SegmentEngine._close`). His two cases are 2 frames over and 297 frames over,
+# so this separates them by two orders of magnitude rather than by tuning.
+IGT_CARRY_SLACK_FRAMES = 5
+
+# How long after a "move" def's arm a counter zero still counts as the
+# section entry the START caused (round 15 item 3). Every measured
+# trigger-to-zero gap sits inside it: his CCM door's own room transition at
+# ~49 frames (the 0'04"23-recorded vs 0'02"57-Usamune gap), a pipe's level
+# load at +23, a painting/portal's at +77, the BBH cage's at +74/75. A zero
+# LATER than this is a transition mid-piece — a different leg, which must
+# not re-base the clock (the delta from the real origin is the honest
+# fallback there, same as every multi-zero case before this mode existed).
+CLOCK_START_WINDOW_FRAMES = 90
 
 
 def _zeroes_usamune_igt(ev) -> bool:
@@ -2397,6 +2780,9 @@ class SegmentEngine:
         # global_timer restarts there and a stale frame number could otherwise
         # collide with a fresh arm's.
         self._last_igt_zero_frame: int | None = None
+        # How much of the star's clock was banked BEFORE that zero (round 25);
+        # 0 unless the zero was an involuntary warp deeper into a course.
+        self._banked_before_zero: int = 0
         # Best successful rta per definition, as seen SO FAR in this feed
         # (spec 2026-07-28-multi-step-segments). Deterministic under replay
         # (same journal -> same answer) and monotonically improving, which is
@@ -2458,6 +2844,23 @@ class SegmentEngine:
         """The def for an id, or None (a deleted or never-loaded definition —
         callers must not assume every armed/pending id still has one)."""
         return self._def_by_id.get(sid)
+
+    def hold_budget(self, sid: int) -> int:
+        """How long a HOOKED practice target may outlive its arm, in frames
+        (round 19): the same measured staleness budget a loose arm and a
+        cancelled arm already get (`budget_frames` of this def's best success
+        so far), because a disarmed head has no cancel rules left to bound it
+        — without a clock, a movement he walked away from hours ago would
+        still read as selected."""
+        return budget_frames(self._best_success.get(sid))
+
+    def anchor_echo(self, ev) -> bool:
+        """Public read of `_anchor_echo` for the projector's forfeit rule
+        (round 19): a hooked target forfeits on a REAL reset in a foreign
+        course, and the involuntary IGT-reset echoes (course-entry co-frame
+        anchors, door crossings, save prompts) must not count — there is ONE
+        echo definition and this is its third reader, not a second copy."""
+        return self._anchor_echo(ev)
 
     def settle(self, frame: int) -> list[dict]:
         """Judge a pending position change on the CLOCK, with no event to carry
@@ -2541,8 +2944,49 @@ class SegmentEngine:
         # updating first can never let an event validate its own close.
         if ev.type == "session_started":
             self._last_igt_zero_frame = None
+            self._banked_before_zero = 0
         elif _zeroes_usamune_igt(ev):
+            # WHAT THE COUNTER READ ON ITS WAY OUT (round 25, 2026-08-09).
+            # An INVOLUNTARY zero -- an area warp deeper into a course -- does
+            # not end the star's clock: `IgtClock.carried_igt_at_xcam` banks
+            # the leg and adds it back, so the grab reports the whole star.
+            # Remembering the banked amount is what lets `_close` hand a piece
+            # its OWN portion of that number instead of falling back to a
+            # wall-frame delta. A VOLUNTARY zero (a reset, a level edge)
+            # starts the star over, so nothing is banked across it.
+            #
+            # Read off the zeroing event's own payload: an `area_changed`
+            # deeper into a course carries the counter just before it wrapped
+            # (his volcano entry: 289). A reset carries no igt at all, which
+            # is exactly the "nothing banked" case and needs no branch.
+            # THE LOAD'S OWN RESET MUST NOT WIPE THE BANK, and it did in the
+            # first version, which measured as zero rows changed on his whole
+            # journal. An in-course area load fires a `practice_reset` on the
+            # SAME FRAME as the area edge (anchors.py: 496 of 825 measured), so
+            # the bank was set and cleared within one frame, every time. A zero
+            # at the same frame is part of the same load; only a LATER one is
+            # the player starting over.
+            carried = ev.payload.get("igt_frames")
+            deeper = (ev.type == "area_changed"
+                      and (ev.payload.get("to") or 1) > 1)
+            if deeper and carried:
+                self._banked_before_zero = carried
+            elif ev.frame != self._last_igt_zero_frame:
+                self._banked_before_zero = 0
             self._last_igt_zero_frame = ev.frame
+            # THE MOVE-CLOCK REBASE (round 15 item 3): a zero landing inside
+            # the window of a "move" arm IS the section entry its start
+            # trigger caused — the moment Mario can actually move — and the
+            # clock's origin moves there. Latest zero inside the window wins
+            # (a load settles across several zeroing events and the counter
+            # measures from the last); one outside it is a mid-piece leg and
+            # must not touch the origin.
+            for def_id, arm in list(self._armed.items()):
+                d = self._def_by_id.get(def_id)
+                if (d is not None and d.clock_start == "move"
+                        and 0 <= ev.frame - arm.start_frame
+                        <= CLOCK_START_WINDOW_FRAMES):
+                    self._armed[def_id] = replace(arm, clock_frame=ev.frame)
         if ev.type == "area_changed":
             if _real_edge(ev):
                 self._last_area_edge_frame = ev.frame  # cross-area relocation
@@ -3456,8 +3900,94 @@ class SegmentEngine:
         # segment does not begin at (a def armed mid-level, or a BBH door
         # crossed mid-run), and the wall-frame delta — which at least spans
         # the right two moments — is the honest fallback.
+        #
+        # WITHIN ONE FRAME, not exactly equal (2026-08-05). A savestate reload
+        # emits `spawned` and then its own `practice_reset` on CONSECUTIVE
+        # frames -- one load, two events -- so a definition armed by the spawn
+        # (Lakitu Skip, and every subsection that starts on becoming
+        # controllable) missed this test by exactly one and banked the delta
+        # forever. Measured over 31 of his door-ended runs: the anchor lands at
+        # arm+1 in 31 of 31, and Usamune's own derived zero sits ON the arm
+        # frame in all 31. One frame is the poll's own skew, not slack: a zero
+        # from a DIFFERENT load is hundreds of frames away, so nothing this
+        # rule exists to reject gets in.
+        # THE CLOCK'S ORIGIN (round 15 item 3): a "move" def whose start
+        # caused a section entry times from that entry's counter zero — the
+        # moment Mario could move — so its close-igt precondition below holds
+        # by construction (the rebase tracked the load's own last zero) and
+        # the recorded number IS what Usamune shows. His case, measured
+        # before building: the CCM entrance touches carry igt 77/78
+        # (0'02"57-60, Usamune's display) while the door-armed delta recorded
+        # 0'04"23+ — the door animation and fade. A "move" def with no
+        # rebase, and every "trigger" def, times from the arm exactly as
+        # before this field existed.
+        clock_origin = (arm.clock_frame
+                        if d.clock_start == "move" and arm.clock_frame is not None
+                        else arm.start_frame)
+        # AN IGT LONGER THAN THE SPAN IT COVERS DID NOT START HERE (round 24,
+        # 2026-08-09). The zero-frame test above is necessary and, since
+        # 2026-08-02, no longer sufficient: the star clock CARRIES a leg across
+        # an area warp and adds it back (`IgtClock.carried_igt_at_xcam`), so a
+        # grab inside a subarea reports the WHOLE STAR. A piece that armed on
+        # the spawn into that subarea passes the zero test -- Usamune really
+        # did zero on its arm frame -- and then banks the star's number as its
+        # own.
+        #
+        # His run, and the arithmetic closes to the frame: "Inside the Volcano
+        # (Elevator Tour)" armed at frame 2409018 (the spawn into the volcano)
+        # and closed on the grab at 2409397 -- a span of 379 -- while the grab
+        # reported igt 676, which is the 296 banked before the warp plus this
+        # piece's own 380. He read it straight off the screen: "it's
+        # incorrectly counting THE ENTIRE STAR TIME as the segment time... it
+        # should be about ~13 seconds long" (379 frames is 12.6 s).
+        #
+        # THE DELTA IS AN UPPER BOUND on any igt measured from the same moment,
+        # because it counts paused frames the counter does not. So an igt that
+        # EXCEEDS it started earlier, and the delta is the only honest number
+        # left. The slack keeps the legitimate case: a close event's igt runs a
+        # frame or two OVER the delta through the display tick and the arm's
+        # own poll alignment -- "Volcano Entry", closed by its own warp touch,
+        # reported 276 against a span of 274 -- where a carried leg is 297
+        # frames over. Two orders of magnitude apart, which is why a small
+        # fixed slack separates them rather than a tuned threshold.
+        # SUBTRACT WHAT WAS BANKED BEFORE THIS PIECE BEGAN (round 25). Round 24
+        # refused a carried igt and fell back to the wall-frame delta, which is
+        # honest but is NOT what Usamune shows: a delta counts the star dance
+        # and every paused frame, so his volcano piece read 16"60 against the
+        # emulator's own 13"60 in the same screenshot -- "I would expect 13\"60
+        # to be displayed here, but we displayed 16\"60."
+        #
+        # His run, and the arithmetic closes to a single display tick: the grab
+        # reported 696 (the whole star), 289 was banked when he warped into the
+        # volcano, and 696 - 289 = 407 against the 408 on screen. The delta was
+        # 498 -- 90 frames of star dance and fall the counter never counted.
+        #
+        # So the carried case is not a refusal any more, it is a subtraction,
+        # and the round-24 guard becomes the TEST for whether one is needed:
+        # an igt longer than the span it covers has a prefix that is not this
+        # piece's. Only an INVOLUNTARY zero banks (`_banked_before_zero`), so a
+        # run he started by resetting INSIDE the subarea has nothing to
+        # subtract and is untouched -- which is exactly the half he reported as
+        # already correct.
         igt = ev.payload.get("igt_frames")
-        if igt is not None and self._last_igt_zero_frame == arm.start_frame:
+        span = ev.frame - clock_origin
+        # THE DISPLAY TICK SURVIVES THE SUBTRACTION (his third pair of
+        # samples, 2026-08-09). Both numbers already carry
+        # `IgtClock.DISPLAY_TICK`, so subtracting one from the other removes it
+        # twice and the piece lands exactly one frame -- 0.03 s -- under what
+        # Usamune shows. Three independent readings, every one 1 frame:
+        # 407 against 408, `0'12"90` against `0'12"93`, `0'24"73` against
+        # `0'24"76`. "Looks like we're one frame too early?" -- yes, exactly
+        # one, which is why this is a named constant and not a fudge.
+        if (igt is not None and self._banked_before_zero
+                and igt > span + IGT_CARRY_SLACK_FRAMES
+                and igt - self._banked_before_zero > 0):
+            igt = igt - self._banked_before_zero + IgtClock.DISPLAY_TICK
+        starts_here = (igt is None
+                       or igt <= span + IGT_CARRY_SLACK_FRAMES)
+        if igt is not None and starts_here and (
+                self._last_igt_zero_frame is not None and abs(
+                self._last_igt_zero_frame - clock_origin) <= IGT_ARM_SKEW_FRAMES):
             rta, timed_by = igt, "igt"
         else:
             # Which branch ran is itself a fact the display needs (ruling 6):
@@ -3465,7 +3995,7 @@ class SegmentEngine:
             # ~1-2 frames CHEAP and an identical igt-timed run cannot beat it.
             # Recorded rather than inferred later, because nothing downstream
             # can reconstruct which of the two conditions failed.
-            rta, timed_by = ev.frame - arm.start_frame, "delta"
+            rta, timed_by = ev.frame - clock_origin, "delta"
             if rta < 0:
                 if outcome == "success":
                     return None  # genuine anomaly: end before arm (self-heal)

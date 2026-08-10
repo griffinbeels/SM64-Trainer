@@ -355,14 +355,34 @@ export function entityIcon(entityKey, context = {}) {
   }
   if (kind === "segment") {
     // NOT gated on starIconsMode: see the "classic is a STAR setting" rule
-    // above. Most specific first — this definition's own art, then the stage
-    // it starts in, then what its whole category wears. A Bowser pipe entry is
-    // categorised Castle Movement AND starts in a Bowser stage, and the stage
-    // is the more useful thing to show, which is why LEVEL_ICONS outranks the
-    // category table. A row the corpus never seeded has no category of its
-    // own, so `segmentCategory` infers one from where it starts — see the
-    // registry comments above.
-    const { seedKey, category, originRegion } = segmentMeta[String(id)] || {};
+    // above. Most specific first — this definition's own art, then what it
+    // is a PIECE of, then the stage it starts in, then what its whole
+    // category wears. A Bowser pipe entry is categorised Castle Movement AND
+    // starts in a Bowser stage, and the stage is the more useful thing to
+    // show, which is why LEVEL_ICONS outranks the category table. A row the
+    // corpus never seeded has no category of its own, so `segmentCategory`
+    // infers one from where it starts — see the registry comments above.
+    const { seedKey, category, originRegion, parents } =
+      segmentMeta[String(id)] || {};
+    // A SUBSECTION wears its parent's art by default (round 15: "Default
+    // segment icon for anything added to the castle (in any area) should
+    // use the castle_movement icon automatically. If it's attached to a
+    // specific star, it should use the default star icon"). A piece of a
+    // star resolves THROUGH this same chain, so the star's own override and
+    // his star-icon mode both apply; a piece of a castle area resolves to
+    // the category the table already owns — never a stem named here twice.
+    // Seeded art still wins (a corpus row's hand-picked stem beats
+    // derivation), and the per-entity override above beats everything.
+    // parents[0] is the PRIMARY parent (round 20 made the field plural, in
+    // his pick order) — a piece of two stars wears the first one's art.
+    const primaryParent = (parents || [])[0];
+    if (!SEGMENT_SEED_ICONS[seedKey] && primaryParent) {
+      if (String(primaryParent).startsWith("star:"))
+        return entityIcon(primaryParent, context);
+      if (String(primaryParent).startsWith("area:"))
+        return starIconSrc(
+          SEGMENT_CATEGORY_ICONS[UNCATEGORIZED_SEGMENT_CATEGORY]);
+    }
     const stem = SEGMENT_SEED_ICONS[seedKey]
       || (segmentLevels[String(id)] || [])
            .map((level) => LEVEL_ICONS[level]).find(Boolean)
@@ -424,8 +444,30 @@ function segmentCourse(segment, courseByLevel) {
 // a segment option's id already IS "segment:12". Get this translation wrong
 // and every star silently shows no rank while every segment works, which
 // reads as missing data rather than as a bug.
-const rankMapKey = (optionId) =>
-  optionId.startsWith("segment:") ? optionId : `star:${optionId}`;
+export const entityKeyForOption = (optionId) => {
+  const id = String(optionId);
+  // "segment:12" and "area:6:1" already ARE entity keys; a bare composite
+  // ("8:1") is a star's. An `area:` id is the recorder's terminal castle
+  // tile (round 14) — prefixing it with star: would save a parent no row
+  // could ever resolve.
+  return id.startsWith("segment:") || id.startsWith("area:") ? id
+                                                             : `star:${id}`;
+};
+// The rank map's key IS the entity key -- one name for the translation, used
+// for the badge lookup here and by the recorder to say which entity a new
+// subsection is a piece of (`SegmentDef.parents`, the sheet's own mapping keys).
+// Two hand-built copies of a key format is how they drift.
+const rankMapKey = entityKeyForOption;
+
+// The other direction, for a stored parent coming BACK into the picker
+// (re-record pre-fills the row's own parent): the picker highlights by
+// OPTION id, so "star:8:1" must become the bare "8:1" again. Lives beside
+// its inverse so neither can change shape without the other in view.
+export const optionForEntityKey = (entityKey) => {
+  if (entityKey == null) return null;
+  const key = String(entityKey);
+  return key.startsWith("star:") ? key.slice(5) : key;
+};
 
 // build_entity_ranks (GET /api/target/ranks) answers per entity with a FLAT
 // {rank, division, strat} -- the endpoint's own docstring names this shape.
@@ -449,8 +491,16 @@ const rankMapKey = (optionId) =>
  *                 until a later task wires the fetch) keeps working unchanged.
  *                 An option's own `rank` comes back NESTED {rank,division} --
  *                 see withRank below for why.
+ *   origins       vocab.origins (the server's ordered region taxonomy),
+ *                 optional -- with it the castle segments split into one tile
+ *                 per REGION (round 12 item 2: "we should show all of the
+ *                 castle areas (lobby, grounds, courtyard, basement,
+ *                 upstairs)" against ONE "Castle" tile holding 20 movements);
+ *                 without it they stay one trailing Castle group, byte-
+ *                 identical to before the parameter existed.
  */
-export function courseUnionGroups(catalog, segments, courseByLevel, ranksByKey = {}) {
+export function courseUnionGroups(catalog, segments, courseByLevel,
+                                  ranksByKey = {}, origins = null) {
   const byCourse = new Map();
   for (const segment of segments || []) {
     const course = segmentCourse(segment, courseByLevel);
@@ -516,12 +566,42 @@ export function courseUnionGroups(catalog, segments, courseByLevel, ranksByKey =
     ],
   })).filter((group) => group.options.length > 0);
   if (castleSegments.length === 0) return courseCells;
-  return [...courseCells, {
-    key: "castle-segments", label: "Castle",
-    options: castleSegments.map((segment) => withRank({
-      id: `segment:${segment.id}`, name: segment.name, sub: "segment",
-    })),
-  }];
+  const segmentOption = (segment) => withRank({
+    id: `segment:${segment.id}`, name: segment.name, sub: "segment",
+  });
+  if (!origins) {
+    return [...courseCells, {
+      key: "castle-segments", label: "Castle",
+      options: castleSegments.map(segmentOption),
+    }];
+  }
+  // One tile per castle REGION, grouped by each segment's own server-stamped
+  // `origin.region` and ordered by the taxonomy the library already reads --
+  // never a second hand-written region table (the duplicated-domain-fact
+  // class this file exists to prevent). A segment whose origin names no
+  // region (an "Anywhere" definition) keeps the trailing Castle tile.
+  const regionRank = new Map(origins.map((region, index) => [region.key, index]));
+  const byRegion = new Map();
+  for (const segment of castleSegments) {
+    const region = (segment.origin || {}).region || null;
+    const key = regionRank.has(region) ? region : null;
+    if (!byRegion.has(key)) byRegion.set(key, []);
+    byRegion.get(key).push(segment);
+  }
+  const regionLabel = new Map(origins.map((region) => [region.key, region.label]));
+  const regionCells = [...byRegion.entries()]
+    .filter(([region]) => region !== null)
+    .sort(([left], [right]) => regionRank.get(left) - regionRank.get(right))
+    .map(([region, members]) => ({
+      key: `castle-${region}`, label: regionLabel.get(region),
+      options: members.map(segmentOption),
+    }));
+  const homeless = byRegion.get(null) || [];
+  return [...courseCells, ...regionCells,
+          ...(homeless.length ? [{
+            key: "castle-segments", label: "Castle",
+            options: homeless.map(segmentOption),
+          }] : [])];
 }
 
 /** "segment:12" -> 12, or null for a star id. The target picker's two kinds

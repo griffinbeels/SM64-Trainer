@@ -8,6 +8,7 @@ contention threshold."""
 import json
 import sqlite3
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sm64_events.core.events import Event
@@ -477,6 +478,102 @@ MIGRATIONS = [
        AND json_extract(end_triggers, '$[0].to') IS NOT NULL
        AND json_extract(end_triggers, '$[0].to') NOT IN (6, 16, 26);
     """,
+    # v22 — a segment may be a SUBSECTION of a star or of another segment
+    # (task 0087). The value is an entity key, "star:<course>:<slot>" or
+    # "segment:<id>" — the same format sheet-library's mapping module emits,
+    # so a subsection is mappable from the community sheet with no bridge.
+    #
+    # NO repair UPDATE and no NOT NULL default, unlike v13's default_strat and
+    # v15's match_mode. Those two had to state a value for existing rows
+    # because absence and "not set yet" meant different things there. Here
+    # they mean the SAME thing: every definition written before today is
+    # top-level, and NULL is exactly what top-level means. A DEFAULT would be
+    # inventing a distinction the data does not have.
+    """
+    ALTER TABLE segment_defs ADD COLUMN parent TEXT;
+    """,
+    # v23 — Lakitu Skip ends at the DOOR, on his instruction: "Lakitu should be
+    # determined by 'move it to the door' (when Mario touches the door)"
+    # (2026-08-05). The corpus already says so (c9262be); his own row is
+    # `seed_dirty=1`, so reconcile can never reach it and it keeps timing the
+    # castle LOAD — 7"33 where the community reads 6"13, which is task 0026's
+    # whole complaint.
+    #
+    # "TOUCHES" IS THE RIGHT WORD AND IT IS WHAT THE MOMENT MEASURES, checked
+    # rather than assumed: `door_open` fires on the entry EDGE into
+    # `addresses.DOOR_ACTIONS`, whose first two members are ACT_PULLING_DOOR
+    # and ACT_PUSHING_DOOR — the frame Mario takes hold of the door, not the
+    # frame the animation finishes.
+    #
+    # WHAT IT COSTS, measured before he decided and accepted by him: his 11
+    # recorded Lakitu successes read 0 after this. `moment_reached` postdates
+    # his entire journal, so no replay can produce one and nothing can be
+    # backfilled. Leaving the row frozen was the alternative and he ruled
+    # against it.
+    #
+    # Same discipline as v21, whose exclusion list (`to NOT IN (6, 16, 26)`)
+    # is exactly what kept it away from this row: rewrite the END CLAUSE ONLY
+    # and leave `seed_dirty` as found. A repair may fix the thing it is about;
+    # it may not spend the user's own work doing it.
+    #
+    # Guarded on the seed_key AND the old shape, because here the identity IS
+    # one definition rather than a shape 55 rows share — and shape alone would
+    # match every other seeded row that legitimately ends on entering the
+    # castle interior. Idempotent: after it runs, no row matches.
+    """
+    UPDATE segment_defs
+       SET end_triggers = json_array(
+             json_object('type', 'moment_reached', 'kind', 'door_open',
+                         'level', 16, 'ordinal', 1))
+     WHERE seed_key = 'seg:lakitu-skip'
+       AND json_valid(end_triggers)
+       AND json_array_length(end_triggers) = 1
+       AND json_extract(end_triggers, '$[0].type') = 'level_enter'
+       AND json_extract(end_triggers, '$[0].to') = 6;
+    """,
+    # THE LANDMARK CATALOGUE. One row names one thing he interacts with, and the
+    # SAME table holds both levels of naming because `key` distinguishes them:
+    # `kind:800ebc8c` names a whole family game-wide (every pole in the game at
+    # once), `6:3:800ebc8c:1126,-1074,-2661` names one specific door. His ask,
+    # 2026-08-05: "if we already know that a specific door is the door to HMC,
+    # we don't ever need to redefine that" -- so these ship in
+    # data/defaults.seed.json like segments and routes, with the same
+    # seed_key/seed_dirty contract protecting an edit from the next refresh.
+    """
+    CREATE TABLE IF NOT EXISTS landmark_names (
+        key         TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        seed_key    TEXT,
+        seed_dirty  INTEGER NOT NULL DEFAULT 0,
+        updated_utc TEXT
+    );
+    """,
+    # WHEN THE CLOCK STARTS (round 15 item 3): "trigger" (the start trigger's
+    # own frame — every row written before 2026-08-08) or "move" (the counter
+    # zero the start caused; the moment Mario can move). NOT NULL with an
+    # explicit default like v13/v15: absence and "trigger" mean the same
+    # thing for every existing row, and the seeded corpus stays "trigger"
+    # until the retiming of his recorded history is priced with numbers
+    # rather than flipped silently.
+    """
+    ALTER TABLE segment_defs ADD COLUMN clock_start TEXT NOT NULL DEFAULT 'trigger';
+    """,
+    # v26 — the parent goes PLURAL (round 20 item 1): "sometimes the same
+    # subsection might be practicable in multiple stars (in LLL, both Hot
+    # Foot it Into The Volcano and Elevator Tour into the Volcano would do
+    # volcano entry in the same way)". `parents` is a JSON array of the same
+    # entity keys v22's scalar held; NULL/'[]' = top-level, same meaning
+    # absence had. The old column is DROPPED, not mirrored — a scalar kept
+    # beside the list is a second door for one fact, and every reader ships
+    # in the same package as this schema. DROP COLUMN needs SQLite 3.35+;
+    # Python 3.12's bundled sqlite3 (which the frozen exe carries too) is
+    # well past it.
+    """
+    ALTER TABLE segment_defs ADD COLUMN parents TEXT;
+    UPDATE segment_defs SET parents = json_array(parent)
+     WHERE parent IS NOT NULL;
+    ALTER TABLE segment_defs DROP COLUMN parent;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -546,15 +643,62 @@ class Database:
             self._conn.commit()
             return cur.lastrowid
 
+    # -- landmark catalogue --------------------------------------------------
+    def landmark_names(self) -> dict[str, str]:
+        """Every name in the catalogue: key -> name, kinds and instances alike."""
+        with self._lock:
+            rows = self._conn.execute("SELECT key, name FROM landmark_names").fetchall()
+            return {row["key"]: row["name"] for row in rows}
+
+    def name_landmark(self, key: str, name: str) -> None:
+        """HIS naming gesture. Blank erases the row rather than storing "".
+
+        `seed_dirty=1` because a name he typed is an edit, and reconcile must
+        never overwrite it at the next corpus refresh -- the same contract
+        segment_defs and routes have carried since 2026-07-23.
+        """
+        with self._lock:
+            if not name.strip():
+                self._conn.execute("DELETE FROM landmark_names WHERE key=?", (key,))
+            else:
+                self._conn.execute(
+                    "INSERT INTO landmark_names (key, name, seed_dirty, updated_utc)"
+                    " VALUES (?,?,1,?)"
+                    " ON CONFLICT(key) DO UPDATE SET name=excluded.name,"
+                    " seed_dirty=1, updated_utc=excluded.updated_utc",
+                    (key, name.strip(), _iso(datetime.now(timezone.utc))))
+            self._conn.commit()
+
+    def seed_landmark_name(self, key: str, name: str, seed_key: str) -> None:
+        """A SHIPPED name. Refreshes an untouched row, never a row he edited."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO landmark_names (key, name, seed_key, seed_dirty, updated_utc)"
+                " VALUES (?,?,?,0,?)"
+                " ON CONFLICT(key) DO UPDATE SET name=excluded.name,"
+                " seed_key=excluded.seed_key, updated_utc=excluded.updated_utc"
+                " WHERE landmark_names.seed_dirty = 0",
+                (key, name, seed_key, _iso(datetime.now(timezone.utc))))
+            self._conn.commit()
+
     def delete_events(self, ids: list[int]) -> None:
         with self._lock:
             self._conn.executemany("DELETE FROM events WHERE id=?",
                                    [(i,) for i in ids])
             self._conn.commit()
 
-    def events(self) -> list[EventRow]:
+    def events(self, after_id: int | None = None) -> list[EventRow]:
+        """The journal, oldest first. `after_id` returns only rows above that
+        id — the tail, for a caller (the API's journal cache) that already
+        holds everything up to it. Same shape either way."""
         with self._lock:
-            rows = self._conn.execute("SELECT * FROM events ORDER BY id").fetchall()
+            if after_id is None:
+                rows = self._conn.execute(
+                    "SELECT * FROM events ORDER BY id").fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM events WHERE id > ? ORDER BY id",
+                    (after_id,)).fetchall()
             return [EventRow(r["id"], r["session_id"], r["seq"], r["type"],
                              r["frame"], r["wall_time_utc"], json.loads(r["payload"]))
                     for r in rows]
@@ -703,6 +847,8 @@ class Database:
                  "seed_key": r["seed_key"], "seed_dirty": r["seed_dirty"],
                  "default_strat": r["default_strat"],
                  "match_mode": r["match_mode"],
+                 "parents": json.loads(r["parents"]) if r["parents"] else [],
+                 "clock_start": r["clock_start"],
                  "created_utc": r["created_utc"]} for r in rows]
 
     def insert_segment_def(self, name: str, start_triggers: list,
@@ -712,17 +858,21 @@ class Database:
                            category: str | None = None,
                            seed_key: str | None = None,
                            default_strat: str | None = None,
-                           match_mode: str = "strict") -> int:
+                           match_mode: str = "strict",
+                           parents: list | None = None,
+                           clock_start: str = "trigger") -> int:
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO segment_defs (name, enabled, start_triggers,"
                 " end_triggers, waypoints, guards, category, seed_key,"
-                " default_strat, match_mode, created_utc)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                " default_strat, match_mode, parents, clock_start,"
+                " created_utc)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (name, int(enabled), json.dumps(start_triggers),
                  json.dumps(end_triggers), json.dumps(waypoints or []),
                  json.dumps(guards), category, seed_key, default_strat,
-                 match_mode, created_utc))
+                 match_mode, json.dumps(parents or []), clock_start,
+                 created_utc))
             self._conn.commit()
             return cur.lastrowid
 
@@ -732,7 +882,9 @@ class Database:
                 "waypoints": json.dumps, "guards": json.dumps,
                 "category": lambda v: v, "seed_key": lambda v: v,
                 "default_strat": lambda v: v, "seed_dirty": int,
-                "match_mode": lambda v: v}
+                "match_mode": lambda v: v,
+                "parents": lambda v: json.dumps(v or []),
+                "clock_start": lambda v: v}
         if set(fields) - set(cols):
             raise ValueError(f"unknown fields {sorted(set(fields) - set(cols))}")
         sets, vals = [], []

@@ -33,6 +33,49 @@ against and which [[personal best]] to compare with.
 - **Lives** — the target rules (`src/sm64_events/tracking/practicable.py`)
   → the [[selector]] and the [[practice log]]
 
+### Target queue
+
+The line of detections waiting behind the held [[target]] — first hooked,
+first held. Performing a [[segment]]'s own start deliberately (a course
+exit, a door [[moment]]) takes an empty hand and becomes a
+[[hooked target]]; a detection that fires while the hand already holds
+something waits its turn; when the front completes or dies, the oldest
+detection still alive takes over, and an empty queue leaves the hand
+neutral. A [[segment]] that
+arms by mere presence — LBLJ on a castle entry, a pipe family on a course
+entry — never enters the queue, and neither does a [[subsection]] whatever
+its clause shape: only your click selects a piece, and its detection
+speaks through its parent [[star]] instead.
+
+- **Lives** — the projector (`src/sm64_events/tracking/projection.py`)
+  → the [[selector]] and the [[practice log]]
+
+### Hooked target
+
+A [[target]] a detection set: the front of the [[target queue]]. The trainer
+holds it until it completes, until you genuinely abandon it (an [[anchor]]
+landing inside a foreign course), or until its own staleness budget expires
+— walking back through a course to redo its start keeps the hold. A
+[[star]] grab takes the hand from a stale hooked one, never from one the
+matcher still holds armed — except a hooked [[subsection]], which yields
+to its parent [[star]]'s grab armed or not; a PICKED one holds even
+through that grab, because explicit choices take priority.
+
+- **Lives** — the projector (`src/sm64_events/tracking/projection.py`)
+  → the [[selector]]
+- **Not** — a [[picked target]]. A click is sovereign; a hook is the
+  trainer following your play.
+
+### Picked target
+
+A [[target]] you clicked. Nothing detected may steal it, a [[star]] grab may
+not move it, choosing one empties the [[target queue]], and it retires only
+by the standing rules (walking into a course it is not practiced in, with
+its arm gone).
+
+- **Lives** — the projector (`src/sm64_events/tracking/projection.py`)
+  → the [[selector]]
+
 ### Star
 
 One of Super Mario 64's collectable stars, identified by its course and its
@@ -51,6 +94,116 @@ than [[in-game time]].
 
 - **Lives** — the trigger vocabulary and matcher
   (`src/sm64_events/tracking/segments.py`) → the segment builder
+
+### Subsection
+
+A piece of a [[star]], of a [[segment]], or of a castle area, practiced on
+its own — the climb rather than the whole [[star]]. A subsection IS a
+[[segment]], and names what it belongs to — several [[star]]s when the same
+piece serves them all, the way both of LLL's volcano [[star]]s enter the
+volcano identically — so it carries its own [[personal best]], its own [[ladder]] and
+its own rows in the [[practice log]], drawn INSIDE its parent's own card and
+indented under it. The [[star]] owns the hand: a piece arms
+and records underneath its parent without ever taking the [[target]] slot
+by detection — its completion points the slot at the parent [[star]], never
+at itself. Its [[cell toggle]] on the [[selector]] says whether the trainer
+tracks it at all; dimming one stops it recording and takes its card out of
+the [[practice log]] everywhere, since a piece serving several [[star]]s is
+still one definition with one timer. Inside a course a piece always
+belongs to something specific; a castle-side
+piece belongs to its area, which is as high as the castle goes — his own
+split, and the [[recorder]]'s parent picker follows it (an area tile
+answers in one click, a course tile opens its [[star]]s, and the + beside a
+chosen parent adds another).
+
+- **Lives** — the trigger vocabulary and matcher
+  (`src/sm64_events/tracking/segments.py`) → the [[selector]]
+- **Not** — a [[route step]]. A [[route step]] names [[target]]s to complete in
+  order; a subsection is one [[target]].
+
+### Clock start
+
+Where a [[segment]]'s timer begins, chosen per definition. "At the start
+trigger" counts from the trigger's own [[frame]], fades and all — how every
+definition timed before the move clock existed. The seeded castle movements
+time from the move too: his call, made against the measured re-timing of
+his own history rather than as a silent default. "When Mario can
+move" detects the [[attempt]] at the trigger but counts from where Usamune's
+own timer restarts in the section the trigger led into — open the door, go
+through, and the recorded time matches what Usamune shows. The [[recorder]]
+saves every recording with the move clock; the matcher rebases to the
+section entry the start caused and never to a later one mid-piece.
+
+- **Lives** — the trigger vocabulary and matcher
+  (`src/sm64_events/tracking/segments.py`) → the segment builder's "Clock
+  starts" control
+- **Not** — a [[strategy]]. A [[strategy]] says how you play the piece; the
+  clock start says which [[frame]] the trainer measures the piece from.
+
+### Moment
+
+Something the player does that a [[subsection]] can start or end on — opening
+a door, triggering a textbox, grabbing a pole or a tree, picking up a bob-omb,
+pressing a switch, defeating an enemy. Most kinds read Mario's own action; a
+[[caused moment]] reads the object he acted on instead. Either way a moment
+happens inside one course, which is why a [[subsection]] begins and ends where
+every other trigger needs him to travel. It records whenever you play, with or
+without a [[target]] set: the [[segment recorder]] exists to let you point at
+what you just did, and you do the thing before you name it.
+
+- **Lives** — the moment registry (`src/sm64_events/detectors/moment.py`)
+
+### Caused moment
+
+A [[moment]] the player caused without Mario's own action saying so — pressing
+a blue coin switch, defeating a goomba or a bob-omb. The switch presses itself
+by watching Mario's position, and an enemy records its defeat on itself, so
+the [[detector]] reads the object's state out of the game's object list
+instead of Mario's action. Every one still names its [[landmark]] — WHICH switch, WHICH
+goomba — and speaks through the same sentence a door does. Which objects may
+fire one, and the measured rule for each, is one registry row; a new object
+kind earns its row with a capture from the pool probe, never from reading the
+game's source alone.
+
+- **Lives** — the caused-moment detector
+  (`src/sm64_events/detectors/caused.py`), its registry
+  (`src/sm64_events/memory/addresses.py`)
+- **Not** — a health change. The game arms an object's hitbox when Mario
+  comes near, which reads as a health write; a defeat is the object entering
+  its own defeat action.
+
+### Landmark
+
+The specific thing in the world a [[moment]] happened to — that door, that
+pole, that bob-omb — and that warp, since a warp inside a course leads nowhere
+new and so has no destination to name it. The game rebuilds its object list every time an area
+loads, so we name a landmark by where it SPAWNED rather than by which slot of
+that list holds it: the slot changes and the spawn position does not. A thing the
+game creates with no spawn position of its own — a pole, a tree — takes the place
+it STANDS in instead, which never moves either, so one specific pole can carry
+a name. Every
+landmark also belongs to a KIND — the game's own script for what the thing
+is — and we ship a name for every kind in the game, derived from the
+decompilation's symbol table, so a row says "a bob-omb" without anyone
+naming anything. He names one specific landmark in the [[recorder]] and
+every row it ever appeared in takes that name; a name he types always beats
+a shipped one. A recorded [[segment]] can also PIN one: a definition made by
+pointing at "Open the CCM Door" matches that door and no other, instead of
+"whichever door came first". Some one things wear several keys — the game
+builds a [[star]]-count door from TWO halves, each with its own spawn position — so the
+name is the collapse: keys of the same kind in the same course that carry
+one name ARE one landmark, a rename or an erase moves all of them, and a
+pinned [[segment]] fires on whichever half he pushes.
+
+- **Lives** — `src/sm64_events/core/landmark.py` (the key),
+  `tools/corpus_behaviors.py` (every kind, named),
+  `src/sm64_events/data/defaults.seed.json` (the names we ship)
+- **Not** — the count in a [[moment]]'s name. "The 5th door you opened" counts
+  doors; a landmark IS the door, and the count is something it has.
+- **Not** — the thing an [[entrance touch]] row renames. Mario collides with
+  level geometry there, not with an object, so the row's landmark reading
+  lingered from whatever he touched last — the entrance carries its own
+  identity instead, made from where it stands and where it leads.
 
 ### Attempt
 
@@ -73,7 +226,7 @@ leaving the area.
 
 ### Anchor
 
-The moment that opens an [[attempt]] — a practice [[reset]] or a state load. The
+What opens an [[attempt]] — a practice [[reset]] or a state load. The
 [[projector]] discards an anchor you never moved after, so an idle [[reset]]
 never counts against your [[failure rate]]. The move the anchor INTERRUPTED
 belongs to the [[attempt]] it ended, so the anchor holds that action back until
@@ -274,7 +427,7 @@ restarted before trusting any difference between them.
 ### X-cam
 
 The camera cut Super Mario 64 plays when you touch a [[star]]. The community
-times a grab at that moment, so the trainer publishes a [[star]] time when the
+times a grab there, so the trainer publishes a [[star]] time when the
 x-cam starts rather than when the game finishes writing its own result.
 
 - **Lives** — the star-grab detector
@@ -282,17 +435,42 @@ x-cam starts rather than when the game finishes writing its own result.
 
 ### Entrance touch
 
-The [[frame]] Mario collides with the painting, portal, hole or pipe that
+The [[frame]] Mario commits to the painting, portal, hole, pipe or cage that
 leads into a course. The game loads that course 77 [[frame]]s later — 23 at a
-pipe — so a [[segment]] measured to the load counts the fade as travelling.
-The trainer ends a movement at the touch instead.
+pipe, 74 at Big Boo's Haunt's cage, whose entering jump is the commit — so a
+[[segment]] measured to the load counts the fade as travelling. The trainer
+ends a movement at the touch instead.
 
-- **Lives** — the warp detector (`src/sm64_events/detectors/warp.py`)
-- **Not** — the moment the course loads. A painting or portal records where it
-  leads as Mario touches it, so the [[detector]] publishes on that same
+An entrance carries a name of its own: the [[recorder]]'s pencil on one of
+these rows names THE ENTRANCE — keyed by where it stands and where it leads —
+never the [[landmark]] Mario last touched on the way in, which is how naming
+the CCM entrance once renamed the CCM door instead.
+
+- **Lives** — the warp detector (`src/sm64_events/detectors/warp.py`);
+  the entrance's own name key in `src/sm64_events/tracking/eventlabel.py`
+- **Not** — the [[frame]] the course loads. A painting or portal records where
+  it leads as Mario touches it, so the [[detector]] publishes on that same
   [[frame]]; only a pipe makes it wait, and a pipe the player pauses out of —
-  the [[attempt]] ends at the touch, the fight unwanted — publishes the moment
+  the [[attempt]] ends at the touch, the fight unwanted — publishes as soon as
   the frozen countdown rules a ride out, not at the eight-second backstop.
+- **Not** — a [[moment]]. A [[moment]] reads Mario's own action; an entrance
+  touch reads what he collided with.
+
+### Spawn point
+
+WHICH entry placed Mario when he spawned — the warp node the game itself
+routed the spawn through, read back off the same warp struct the
+[[entrance touch]] watches. The pyramid's top and bottom entries are two
+spawn points into one subarea, so a [[subsection]] recorded from one of
+them starts only there; a spawn the struct cannot vouch for (a save state,
+a stale write) carries none rather than a wrong one. A spawn into a
+subarea reads "Spawned into Lethal Lava Land: Volcano" — the place, not
+just the level.
+
+- **Lives** — the spawn detector (`src/sm64_events/detectors/spawn.py`);
+  the subarea names in `src/sm64_events/memory/addresses.py`
+- **Not** — an [[anchor]]. An [[anchor]] says an [[attempt]] boundary
+  happened; the spawn point says where the game put Mario when it did.
 
 ### Death
 
@@ -365,11 +543,70 @@ pill]], the [[scope]] control, and your [[rank]]s across everything.
 ### Selector
 
 The row of [[practice cell]]s across the top of the [[Practice tab]], showing
-what you can practice where you currently stand. Clicking a cell sets your
-[[target]].
+what you can practice where you currently stand — and no finer: standing
+inside a subarea narrows the row to that subarea's own [[star]]s (inside
+the volcano, the volcano's), while a subarea the trainer does not know
+keeps every [[star]] rather than hiding one wrongly. It narrows only once you
+have arrived: a course load moves the game through a subarea on its way in, so
+the row keeps every [[star]] until you walk somewhere yourself, which is what
+the course's own entry screen shows. Clicking a cell sets your
+[[target]]. A cell shows every [[subsection]] it owns as a [[cell toggle]]
+inside its own art, so the row draws [[star]]s and castle movements at all times, never a [[subsection]] beside
+its parent.
 
 - **Lives** — the quick-select row
   (`src/sm64_events/ui/components/stagebanner.js`)
+
+### Cell toggle
+
+A small icon button the [[selector]] draws inside a [[practice cell]]'s own
+art. Two kinds share one implementation: a Bowser course's [[practice cell]]
+carries a pair choosing whether the trainer times the grab alone or everything
+up to the pipe, and any cell that owns [[subsection]]s carries one per piece saying
+whether the trainer tracks that piece. Clicking one never moves your
+[[target]] — the cell around it still does that.
+
+- **Lives** — the overlay
+  (`src/sm64_events/ui/components/celltoggles.js`)
+
+### Segment recorder
+
+The screen turning what you just played into a [[segment]]. It lists your recent
+[[moment]]s newest first, keeps listing them while you keep playing, and asks
+which [[target]] the result is a piece of — which is the only way to make a
+[[subsection]]. Picking two [[moment]]s defines the ends and the [[journal]]
+fills the middle from where you walked; picking more says which stops count.
+Each row says when it happened on Usamune's clock, and arriving somewhere draws
+ONE row that names the place — the load moves the area byte several times and
+this screen shows you the arrival rather than the load. An arrival is the game
+handing control back, so entering a course, warping through the Usamune menu
+and resetting the level all draw one, and it reads 0'00"00 because that is
+where Usamune starts counting. Going deeper — the pyramid, the volcano — draws
+a move instead.
+
+- **Lives** — the recording screen
+  (`src/sm64_events/ui/components/segmenttimeline.js`) → the Segments tab
+- **Not** — the [[recorder]], which captures video. This one captures nothing;
+  it reads the [[journal]] you already wrote by playing.
+
+### Re-record
+
+The [[segment recorder]] pointed at a [[segment]] that already exists: play it
+again, point at what you did, and Save replaces that [[segment]]'s recording
+in place. The [[segment]] keeps its identity — same row, so every [[route]] that
+references it, its PBs, each [[attempt]], each [[strategy]]'s [[ladder]] and
+its library filing all stay attached; only the triggers move. The new
+recording's own defaults win over the old row's stored modes (it times from
+the move and saves Strict), and re-recording a shipped movement makes it
+yours, exactly as editing one does. The door lives on the [[segment]]'s own
+editor, where you notice you recorded it wrong.
+
+- **Lives** — the segment editor's "Recorded wrong?" row
+  (`src/sm64_events/ui/components/segments.js`) opening the recording screen
+  (`src/sm64_events/ui/components/segmenttimeline.js`) with the row as its
+  replace intent
+- **Not** — delete-and-recreate, which would orphan every [[route step]] and
+  PB referencing the old row.
 
 ### Practice cell
 
@@ -421,10 +658,12 @@ practicing right now, which leads regardless of its own recency: one card per
 [[target]] you have earned one for (a recorded [[attempt]], or you still
 stand where you set it), each carrying its own [[personal best]], its
 [[strategy rank]] and [[entity rank]], its [[standards ladder]], its
-[[caveat mark]] and its own [[attempt]]s. It highlights the card for whatever
-you are practicing right now, and a Bowser course's Reds/Pipe pair never
-shows both halves at once — only the one matching how you are currently
-grading it.
+[[caveat mark]] and its own [[attempt]]s. A [[subsection]] draws inside its
+parent's card rather than beside it, indented and folding with it, so the
+piece you just ran names the [[star]] it belongs to. It highlights the card
+for whatever you are practicing right now, and a Bowser course's Reds/Pipe
+pair never shows both halves at once — only the one matching how you are
+currently grading it.
 
 - **Lives** — the log
   (`src/sm64_events/ui/components/practicelog.js`)

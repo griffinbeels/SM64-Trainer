@@ -125,10 +125,13 @@ what keeps it out (test_warp.py pins that). The clock must see every tick, so
 it is observed in process() whether or not a touch fires — this detector has
 not been stateless since 2026-07-31, and now holds a pending touch as well."""
 from sm64_events.core.events import Event
+from sm64_events.core.landmark import landmark_at
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.core.timefmt import format_igt
 from sm64_events.detectors.igt_clock import IgtClock
-from sm64_events.memory.addresses import WARP_ENTRY_ACTIONS
+from sm64_events.memory.addresses import (ACT_BBH_ENTER_SPIN,
+                                          BBH_ENTER_ACTIONS, BBH_LEVEL,
+                                          WARP_ENTRY_ACTIONS)
 
 
 def _destination(snapshot: GameSnapshot) -> tuple[int, int, int, int]:
@@ -136,9 +139,31 @@ def _destination(snapshot: GameSnapshot) -> tuple[int, int, int, int]:
             snapshot.warp_dest_area, snapshot.warp_dest_node)
 
 
+_UNSEEN = object()   # engagement never observed -- distinct from "nothing held"
+
+
 class WarpDetector:
     HOLD_CAP_FRAMES = 240
+    # The ceiling on the cage-animation deferral below — 4x the cap, far past
+    # any real entry (the longest observed, his paused one, ran 482 frames)
+    # while still guaranteeing a lingering action byte cannot strand a touch.
+    HOLD_ABSOLUTE_CAP_FRAMES = 960
     FRESH_WINDOW_FRAMES = 4
+    # The engaged-object pointer LINGERS: it holds the last thing Mario
+    # interacted with until something else overwrites it, and a painting or
+    # an in-level teleporter is level geometry that never does. Measured in
+    # his own journal (2026-08-08, round 12 items 5+6): three CCM painting
+    # entries each carried the LOBBY DOOR he had opened 38 frames earlier
+    # (ids 3908/3933/3943), so the entrance row's rename pencil edited the
+    # door -- "it ended up renaming the CCM door segment". A landmark is
+    # therefore taken only when the engagement CHANGED within
+    # ENGAGE_FRESH_FRAMES of the touch (an interaction writes the pointer on
+    # the touch frame itself), and a held publish may still ADOPT a change
+    # landing within ENGAGE_ADOPT_FRAMES after it -- the pointer lags the
+    # action byte by one poll (detectors/moment.py holds one poll for the
+    # same reason). Stale degrades to NO landmark, never a foreign name.
+    ENGAGE_FRESH_FRAMES = 4
+    ENGAGE_ADOPT_FRAMES = 6
     # A delayed warp's countdown is 20 frames (probe_warp_block, both pipes),
     # so a ride resolves itself by +20 (the write) or +23 (the level edge).
     # An op still ARMED past this floor is a countdown that stopped.
@@ -153,17 +178,42 @@ class WarpDetector:
         self._held: dict | None = None
         self._dest: tuple[int, int, int, int] | None = None
         self._dest_written_at: int | None = None
+        self._engaged = _UNSEEN
+        self._engaged_changed_at: int | None = None
         self._igt_ticked_at: int | None = None
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         if self._clock.empty():
             self._clock.observe(prev)
+        if self._engaged is _UNSEEN:
+            # Baseline from prev, same pattern as the clock's seed above: a
+            # touch on the very first pair is still a real CHANGE if prev was
+            # engaged with nothing, while a detector built mid-session reads
+            # whatever the pointer already held as unstamped -- i.e. stale,
+            # the safe direction (mirrors _watch_destination's first-value
+            # rule).
+            self._observe_engagement(prev)
+        self._observe_engagement(curr)
         self._watch_destination(curr)
         self._watch_igt_tick(prev, curr)
         events = self._release(prev, curr) + self._touch(prev, curr)
         self._clock.observe(curr)
         return events
 
+    def _observe_engagement(self, snapshot: GameSnapshot) -> None:
+        """Stamp the frame the engaged-object pointer last RETARGETED.
+
+        Identity is (behaviour, where) -- the same coordinate the landmark is
+        keyed by -- not the live position, which moves every frame on a
+        carried bob-omb and would read as perpetually fresh."""
+        found = landmark_at(snapshot)
+        identity = None if found is None else (found.behaviour, found.where)
+        if self._engaged is _UNSEEN:
+            self._engaged = identity
+            return
+        if identity != self._engaged:
+            self._engaged = identity
+            self._engaged_changed_at = snapshot.global_timer
     def _watch_igt_tick(self, prev: GameSnapshot, curr: GameSnapshot) -> None:
         """Stamp the frame Usamune's counter last MOVED. The gap since then is
         the pause streak: the counter ticks every frame game logic runs, so a
@@ -209,33 +259,92 @@ class WarpDetector:
         # be had here — the event's own `frame` and the frame the IGT is read
         # at stay the same number, whatever the poll phase was.
         igt_frames, source = self._clock.igt_at(curr.global_timer, curr)
+        # WHICH warp, read HERE and not at publish. A painting publishes on
+        # its own frame but a pipe waits ~20 for the destination, and by then
+        # Mario is engaged with nothing — the landmark belongs to the touch,
+        # exactly like the frame and the time already held beside it. Without
+        # it his two BoB warps are the same sentence twice and neither can be
+        # renamed (2026-08-06: every `warp_entered` in the journal carried
+        # `landmark: null`, because the landmark work reached moments and
+        # never reached warps).
+        #
+        # Taken ONLY when the engagement is FRESH — see ENGAGE_FRESH_FRAMES
+        # above. A pipe's own interaction writes the pointer at (or one poll
+        # after) the touch; a painting writes nothing, and reading the
+        # lingering pointer anyway is how three CCM entries wore the lobby
+        # door's key. A late write is adopted in _release.
+        found = landmark_at(curr)
+        fresh = (found is not None
+                 and self._engaged_changed_at is not None
+                 and 0 <= curr.global_timer - self._engaged_changed_at
+                 <= self.ENGAGE_FRESH_FRAMES)
+        found = found if fresh else None
         self._held = {"frame": curr.global_timer, "level": curr.curr_level,
                       "area": curr.curr_area, "action": curr.mario_action,
                       "igt_frames": igt_frames, "igt_source": source,
+                      "landmark": found.payload() if found else None,
                       "wall_time_utc": curr.wall_time_utc}
         if self._destination_is_live(curr):
             return self._publish(curr.warp_dest_level, "destination", curr)
+        # A rollout enters the cage airborne and its FIRST action is the
+        # SPIN — the commit is on this very tick (see _release's spin
+        # branch for the whole argument).
+        if curr.mario_action == ACT_BBH_ENTER_SPIN:
+            return self._publish(BBH_LEVEL, "destination", curr)
         return []
 
     def _release(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         held = self._held
         if held is None:
             return []
+        # The one-poll-late engagement write: a pipe's object can land in the
+        # pointer on the tick AFTER the action edge (the same lag
+        # detectors/moment.py holds a poll for). A touch that read nothing
+        # adopts a retarget landing just after it; anything later is the
+        # destination's own spawn machinery and stays out.
+        if (held["landmark"] is None
+                and self._engaged_changed_at is not None
+                and held["frame"] < self._engaged_changed_at
+                <= held["frame"] + self.ENGAGE_ADOPT_FRAMES):
+            found = landmark_at(curr)
+            if found is not None:
+                held["landmark"] = found.payload()
         if self._destination_is_live(curr):
             return self._publish(curr.warp_dest_level, "destination", curr)
+        # THE CAGE'S SPIN NAMES ITS OWN DESTINATION (round 13 item 1). The
+        # BBH pair exists only for the boo cage, so the ACTION is the
+        # destination and waiting for the level byte (+74) put the row on
+        # screen as BBH loaded — *"the 'entered a boo cage' doesn't appear
+        # until after i enter BBH"*, his second round on this surface. The
+        # SPIN rather than the JUMP: the jump can still be walked away from
+        # via the pause menu (his journal has one), the spin is the
+        # animation's own commit, and a rollout entry opens ON the spin.
+        if curr.mario_action == ACT_BBH_ENTER_SPIN:
+            return self._publish(BBH_LEVEL, "destination", curr)
         if curr.curr_level != prev.curr_level:
             return self._publish(curr.curr_level, "level", curr)
         if curr.curr_area != prev.curr_area:
             return self._publish(curr.curr_level, "area", curr)
         if curr.global_timer < held["frame"]:
             return self._publish(None, "reset", curr)
-        if (curr.global_timer - held["frame"] >= self.RIDE_WINDOW_FRAMES
+        elapsed = curr.global_timer - held["frame"]
+        # The cap DEFERS while the cage animation is visibly still playing
+        # (his 16 s entry: jump, pause menu open past the cap, unpause, spin
+        # — the old cap published `to: None` mid-pause and the REAL entry
+        # then had no held touch left to name). Bounded absolutely so a
+        # lingering action byte can never hold a touch forever. Sits ahead
+        # of the pause release too: a cage jump has no pending warp op, so
+        # that branch cannot claim it, and the deferral must win regardless.
+        if curr.mario_action in BBH_ENTER_ACTIONS \
+                and elapsed < self.HOLD_ABSOLUTE_CAP_FRAMES:
+            return []
+        if (elapsed >= self.RIDE_WINDOW_FRAMES
                 and curr.pending_warp_op != 0
                 and self._igt_ticked_at is not None
                 and curr.global_timer - self._igt_ticked_at
                 >= self.PAUSE_CONFIRM_FRAMES):
             return self._publish(None, "pause", curr)
-        if curr.global_timer - held["frame"] >= self.HOLD_CAP_FRAMES:
+        if elapsed >= self.HOLD_CAP_FRAMES:
             return self._publish(None, "cap", curr)
         return []
 
@@ -246,6 +355,7 @@ class WarpDetector:
                       timestamp_utc=held["wall_time_utc"],
                       payload={"level": held["level"], "area": held["area"],
                                "action": held["action"], "to": to,
+                               "landmark": held["landmark"],
                                "igt_frames": held["igt_frames"],
                                "igt": format_igt(held["igt_frames"]),
                                "igt_source": held["igt_source"],

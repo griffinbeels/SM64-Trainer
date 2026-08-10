@@ -271,7 +271,7 @@ CORPUS_CLAIMS = [
     ("test_api.py: area_enter ends", "tests/test_api.py",
      r"(\d+) of the (\d+) seeded definitions END on area_enter",
      ("ends_on_area_enter", "segments")),
-    ("ui-practice.md: castle-movement share", ".claude/rules/ui-practice.md",
+    ("ui-selector.md: castle-movement share", ".claude/rules/ui-selector.md",
      r"(\d+) of (\d+) seeded rows being Castle Movement",
      ("castle_movement", "segments")),
 ]

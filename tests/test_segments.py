@@ -7,6 +7,7 @@ import pytest
 from sm64_events.memory.addresses import COURSE_NAMES, LEVEL_NAMES
 from sm64_events.storage.db import EventRow
 from sm64_events.tracking import segments as segments_module
+from sm64_events.detectors.moment import MOMENTS
 from sm64_events.tracking.segments import (SEGMENT_ATTEMPT_OFFSET,
                                            arms_ambiently,
                                            card_step_labels,
@@ -140,7 +141,15 @@ def test_every_trigger_template_resolves_cleanly():
     waiting_for_sentence; deleted Task 7, 2026-07-28, alongside that
     function -- spec.template's own placeholder names are still checked
     below since it is card_template's fallback and so still load-bearing.)"""
-    kind_samples = {"level": 6, "subarea": 1, "course": 1, "star": 0}
+    kind_samples = {"level": 6, "subarea": 1, "course": 1, "star": 0,
+                    # a moment kind is a NAME out of the registry, not
+                    # an id -- read from MOMENTS so removing a moment
+                    # can never leave this probe pointing at a ghost.
+                    "int": 3, "moment": MOMENTS[0].kind,
+                    # a landmark is a catalogue KEY; with no names in hand
+                    # the renderer must fall back to the kind's own wording
+                    # rather than printing this string at a human.
+                    "landmark": "6:1:800ebc8c:-2303,0,-1074"}
     for spec in TRIGGERS.values():
         card_named = set(re.findall(r"\{(\w+)\}", spec.card_template or spec.template))
         assert card_named <= set(spec.params), \
@@ -154,7 +163,19 @@ def test_every_trigger_template_resolves_cleanly():
         card_sentence = card_waiting_for_sentence(d, 0)
         assert "{" not in card_sentence and "}" not in card_sentence, \
             f"{spec.key}: leftover template token in card phrasing {card_sentence!r}"
-        assert spec.card_label in card_sentence
+        if spec.card_label:
+            assert spec.card_label in card_sentence
+        else:
+            # `moment_reached` carries an EMPTY card_label on purpose (its
+            # verb varies per moment and rides the moment's own label), and
+            # `"" in anything` is vacuously true -- which would let this
+            # guard pass while the phrasing rotted. Assert the thing the
+            # empty label delegates to instead, so the check keeps teeth.
+            assert spec.key == "moment_reached", \
+                f"{spec.key}: empty card_label with no documented reason"
+            assert card_sentence.startswith(MOMENTS[0].label), \
+                f"{spec.key}: card phrasing {card_sentence!r} does not lead " \
+                "with the moment's own label"
 
 
 def test_every_card_fallback_param_resolves_cleanly_when_unset():
@@ -166,7 +187,15 @@ def test_every_card_fallback_param_resolves_cleanly_when_unset():
     assert the fallback text appears with no leftover token. Runs for every
     TriggerType that declares a fallback today (just star_grabbed), so a
     future type gets the same coverage for free rather than a bespoke test."""
-    kind_samples = {"level": 6, "subarea": 1, "course": 1, "star": 0}
+    kind_samples = {"level": 6, "subarea": 1, "course": 1, "star": 0,
+                    # a moment kind is a NAME out of the registry, not
+                    # an id -- read from MOMENTS so removing a moment
+                    # can never leave this probe pointing at a ghost.
+                    "int": 3, "moment": MOMENTS[0].kind,
+                    # a landmark is a catalogue KEY; with no names in hand
+                    # the renderer must fall back to the kind's own wording
+                    # rather than printing this string at a human.
+                    "landmark": "6:1:800ebc8c:-2303,0,-1074"}
     fallback_specs = [s for s in TRIGGERS.values() if s.card_fallbacks]
     assert fallback_specs, "no TriggerType declares card_fallbacks -- update this probe"
     for spec in fallback_specs:
@@ -1745,6 +1774,15 @@ def test_warp_ping_pong_never_double_arms():
 # duplicate must fail CI, not render a broken builder row.
 # ---------------------------------------------------------------------------
 
+# Params deliberately ABSENT from their type's template, each with the reason.
+# moment_reached.landmark renders THROUGH {kind} instead of a placeholder of
+# its own (segments._resolve_param's moment branch): named, the sentence reads
+# "Open the CCM Door"; unnamed, printing the raw catalogue key at a human is
+# worse than the kind's own wording. A new row here needs the same shape of
+# reason — a param that is merely forgotten from its template is still a bug.
+TEMPLATE_EXEMPT_PARAMS = {("moment_reached", "landmark")}
+
+
 def test_every_trigger_and_guard_template_matches_its_params():
     """A template typo must fail CI, not render a broken builder row. A
     zero-param entry (e.g. in_active_route) has nothing to interpolate, so
@@ -1757,9 +1795,11 @@ def test_every_trigger_and_guard_template_matches_its_params():
             assert len(found) == len(set(found)), (
                 f"{t.key}: duplicated placeholder in template")
             placeholders = set(found)
-            assert placeholders == set(t.params), (
+            expected = {name for name in t.params
+                        if (t.key, name) not in TEMPLATE_EXEMPT_PARAMS}
+            assert placeholders == expected, (
                 f"{t.key}: template placeholders {placeholders}"
-                f" != params {set(t.params)}")
+                f" != params {expected}")
 
 
 def test_vocab_serializes_templates():
@@ -2050,9 +2090,24 @@ def test_validate_rejects_area_enter_without_region():
 
 
 def test_vocab_exposes_region_enum_and_conditional_subareas():
+    """`area_enter` LOST both of its castle gates on 2026-08-05 (task 0087);
+    the three level_enter/level_exit ones below are unchanged and are a
+    different question.
+
+    Only the LEVEL enum went. It lived in the vocabulary and never in the
+    matcher, so all it ever did was stop "entered the SSL pyramid" (level 8)
+    being AUTHORED -- and entering a subarea inside a course is one of the
+    conditions a subsection is built out of.
+
+    The two `only_when` gates STAY, and briefly did not. Removing them made
+    the builder draw a subarea dropdown for every level, offering the castle
+    interior's own names -- "Lobby / Upstairs / Basement" for Shifting Sand
+    Land. Live report the same day, with a screenshot. So a course's LEVEL is
+    selectable and its subarea is not, because nothing names a course's own
+    areas; recording what you just did synthesizes those instead."""
     by_key = {t["key"]: t for t in vocab()["triggers"]}
     ae = by_key["area_enter"]["params"]
-    assert ae["level"]["enum"] == [6, 16, 26]
+    assert "enum" not in ae["level"]
     assert ae["area"]["required"] is False
     assert ae["area"]["only_when"] == {"param": "level", "equals": 6}
     assert ae["from"]["required"] is False

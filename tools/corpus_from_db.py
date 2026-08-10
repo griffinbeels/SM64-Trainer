@@ -202,6 +202,19 @@ def _spawn_src(c: dict) -> str:
     return f"spawn({c['level']})"
 
 
+def _moment_src(c: dict) -> str:
+    _require(c, ("kind",), "moment")
+    args = [repr(c["kind"])]
+    for name in ("level", "area", "ordinal"):
+        if c.get(name) is not None:
+            args.append(f"{name}={c[name]}")
+    # A recorded pin (round 18): a string catalogue key, repr'd -- dropping
+    # it silently is exactly what the round-trip gate refuses.
+    if c.get("landmark") is not None:
+        args.append(f"landmark={c['landmark']!r}")
+    return f"moment({', '.join(args)})"
+
+
 def _enter_entrance_src(c: dict) -> str:
     _require(c, ("to",), "enter_entrance")
     return f"enter_entrance({c['to']})"
@@ -217,6 +230,7 @@ _CLAUSE_BUILDERS = {
     "key_grabbed": _grab_key_src,
     "attempt_anchor": _anchor_src,
     "spawned": _spawn_src,
+    "moment_reached": _moment_src,
 }
 
 
@@ -320,6 +334,35 @@ def _load_definitions(db_path: Path) -> list[dict]:
              "waypoints": json.loads(r["waypoints"])} for r in rows]
 
 
+def landmark_row_source(key: str, name: str) -> str:
+    """One hand-typed landmark name -> the `at(...)`/`kind(...)` line for
+    `tools/corpus_landmarks.py`.
+
+    `corpus_landmarks.py`'s own docstring named this tool as the promotion
+    path for a name he typed in the recorder, and until 2026-08-07 it only
+    handled segment definitions — the doc was ahead of the code, so every
+    name he typed stayed on his machine. A landmark key is
+    `level:area:behaviour:x,y,z`, or `kind:behaviour` for a whole family.
+    """
+    if key.startswith("kind:"):
+        return f'    kind(0x{key.split(":", 1)[1].upper()}, {name!r}),'
+    level, area, behaviour, coords = key.split(":", 3)
+    home = ", ".join(coords.split(","))
+    return (f"    at({level}, {area}, 0x{behaviour.upper()}, "
+            f"({home}), {name!r}),")
+
+
+def _load_landmark_names(db_path: Path) -> list[tuple[str, str]]:
+    """His own landmark names (seed_dirty=1), read-only like the rest."""
+    uri = db_path.resolve().as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("SELECT key, name FROM landmark_names "
+                        "WHERE seed_dirty = 1 ORDER BY key").fetchall()
+    conn.close()
+    return [(r["key"], r["name"]) for r in rows]
+
+
 def main(argv) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -328,17 +371,35 @@ def main(argv) -> int:
     parser.add_argument("--all-dirty", action="store_true",
                         help="print every row with seed_dirty=1 (a user "
                              "edit to a seeded row)")
+    parser.add_argument("--landmarks", action="store_true",
+                        help="print the LANDMARK names he typed himself, as "
+                             "corpus_landmarks.py rows")
     parser.add_argument("--db", default="data/tracker.db",
                         help="path to tracker.db (default: data/tracker.db)")
     args = parser.parse_args(argv)
 
-    if (args.id is not None) == bool(args.all_dirty):
-        parser.error("pass exactly one of: an id, or --all-dirty")
+    if args.landmarks:
+        if args.id is not None or args.all_dirty:
+            parser.error("--landmarks takes no id and no --all-dirty")
+    elif (args.id is not None) == bool(args.all_dirty):
+        parser.error("pass exactly one of: an id, --all-dirty, or --landmarks")
 
     db_path = Path(args.db)
     if not db_path.exists():
         print(f"ERROR: database not found: {db_path}", file=sys.stderr)
         return 1
+
+    if args.landmarks:
+        named = _load_landmark_names(db_path)
+        if not named:
+            print("No hand-typed landmark names found.", file=sys.stderr)
+            return 0
+        for key, name in named:
+            print(landmark_row_source(key, name))
+        print(f"\n# {len(named)} name(s) -- paste into "
+              f"tools/corpus_landmarks.py::LANDMARKS, then rebuild the seed",
+              file=sys.stderr)
+        return 0
 
     defs = _load_definitions(db_path)
     if args.all_dirty:

@@ -1274,14 +1274,19 @@ def test_stage_changed_is_broadcast_only_and_cached(tmp_path):
     # ...but NEVER journaled (recomputable; no historical-query value)
     assert "stage_changed" not in [e.type for e in db.events()]
     # ...and cached for the session view's initial load
-    assert svc.current_stage == {"course_id": 8, "level": 8, "area": 1,
-                                 "mode": "stars"}
+    # Only the fields this test owns -- `current_stage` is stamped with
+    # derived keys (round 26's `on_the_star_select`) and a whole-dict
+    # comparison claims ownership of a shape other work extends.
+    assert {k: svc.current_stage[k]
+            for k in ("course_id", "level", "area", "mode")} == {
+        "course_id": 8, "level": 8, "area": 1, "mode": "stars"}
 
 
 def test_current_stage_defaults_to_no_mode(tmp_path):
     db, svc = make(tmp_path)
-    assert svc.current_stage == {"course_id": None, "level": None,
-                                 "area": None, "mode": None}
+    assert {k: svc.current_stage[k]
+            for k in ("course_id", "level", "area", "mode")} == {
+        "course_id": None, "level": None, "area": None, "mode": None}
 
 
 # -- routes (Phase A) ---------------------------------------------------------
@@ -2305,3 +2310,37 @@ def test_startup_purges_a_session_the_prune_just_emptied(tmp_path):
     asyncio.run(svc2.start())
     assert db.attempts() == []
     assert [s["id"] for s in db.sessions()] == [svc2.session_id]
+
+
+def test_the_star_select_window_opens_on_a_grab_and_closes_on_the_next_spawn(tmp_path):
+    """Round 26, and the THIRD report of one symptom: "on the star select menu
+    for a course, ONLY the subareas are visible... I've mentioned this like 3
+    times."
+
+    The two earlier attempts aimed at a LEVEL-LOAD transient. His UI log says
+    the narrowing tracks the area byte exactly as designed at every other
+    moment — 2 cells inside the volcano, 5 in the main area, all session — and
+    what nothing moves is the area byte while the course's own star-select
+    screen is up. He grabbed a star in the volcano at 09:07:40 and the next
+    spawn landed at 09:07:52: TWELVE seconds of that screen offering two stars
+    where his route has five.
+
+    Derived from journaled events rather than from memory, so a replay and a
+    live session agree about it.
+    """
+    db, svc = make(tmp_path)
+    asyncio.run(svc.publish(ev("stage_changed", 100,
+                               {"course_id": 7, "level": 22, "area": 2,
+                                "mode": "stars"})))
+    assert svc.current_stage["on_the_star_select"] is False
+
+    asyncio.run(svc.publish(ev("star_collected", 200,
+                               {"course_id": 7, "star_id": 5,
+                                "igt_frames": 696})))
+    assert svc.current_stage["on_the_star_select"] is True, (
+        "the star select is up from the grab until he picks again")
+
+    asyncio.run(svc.publish(ev("spawned", 300,
+                               {"level": 22, "kind": "spawn", "area": 1})))
+    assert svc.current_stage["on_the_star_select"] is False, (
+        "the spawn is him being somewhere again, so the area is his")

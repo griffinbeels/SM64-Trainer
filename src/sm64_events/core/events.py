@@ -19,6 +19,33 @@ SCHEMA_VERSION = 1
 # `Attempt.timed_by` are what let a display say so.
 IGT_BEARING_EVENT_TYPES = frozenset({
     "star_collected", "key_grabbed", "warp_entered", "death"})
+# `moment_reached` CARRIES an `igt_frames` (detectors/moment.py) and is
+# deliberately NOT in that set, which asks a different question: "would a
+# delta-timed attempt closing on this have been better off with Usamune's
+# number", i.e. should the caveat mark it OLD CLOCK. For a moment the answer
+# is usually no, and Lakitu Skip is the worked case.
+#
+# `SegmentEngine._close` believes a closing event's IGT only when Usamune's
+# counter was zeroed on the very frame the segment armed, and Lakitu misses
+# that by ONE: it arms on `spawned` (frame 2127 in the run below) and the
+# reload's own `practice_reset` lands the frame after. So it banks the delta.
+#
+# THAT COSTS NOTHING, and the reason is a live measurement rather than an
+# argument. Usamune zeroes its counter when Mario becomes CONTROLLABLE, not
+# when the savestate loads: his run of 2026-08-05 21:43:34 touched the door on
+# frame 2308 carrying `igt_frames` 181, which puts Usamune's zero at frame
+# 2127 -- the spawn exactly, 52 frames after the `state_loaded` at 2075. The
+# delta and Usamune's number are therefore the SAME 181, and the practice log
+# read 0'06"03 beside an emulator reading 0'06"03.
+#
+# (An earlier draft of this comment claimed the two were ~1.7 s apart, from
+# measuring `state_loaded` -> `spawned` and assuming Usamune zeroed at the
+# load. It did not. Kept as a note because the wrong version would have
+# justified a change that broke a working number.)
+#
+# So a Lakitu-shaped delta is how that segment is measured, permanently and
+# correctly, exactly like a movement closing on a `level_changed` -- and
+# marking it OLD CLOCK would warn on every subsection of that shape.
 
 
 @dataclass(frozen=True)

@@ -58,6 +58,29 @@ def test_reconcile_leaves_user_rows(tmp_path):
     assert any(s["id"] == uid and s["seed_key"] is None for s in db.segment_defs())
 
 
+def test_a_seeded_kind_name_refreshes_but_his_rename_wins(tmp_path):
+    """Round 8 item 2's one behavioral requirement on the seed side: the
+    catalogue ships 510 kind names, a newer seed may respell any of them,
+    and a name HE typed must survive every future refresh (same seed_dirty
+    contract the segments above prove — this pins the landmark table's
+    `WHERE seed_dirty = 0` doing the same job)."""
+    db = Database(tmp_path / "t.db")
+    seed1 = {"seed_version": 1, "segments": [], "routes": [],
+             "landmarks": [{"seed_key": "landmark:kind:800ee2f4",
+                            "key": "kind:800ee2f4", "name": "bobomb"}]}
+    reconcile_defaults(db, seed1)
+    assert db.landmark_names()["kind:800ee2f4"] == "bobomb"
+    seed2 = json.loads(json.dumps(seed1)); seed2["seed_version"] = 2
+    seed2["landmarks"][0]["name"] = "bob-omb"
+    reconcile_defaults(db, seed2)
+    assert db.landmark_names()["kind:800ee2f4"] == "bob-omb", \
+        "an untouched seeded name refreshes with the seed"
+    db.name_landmark("kind:800ee2f4", "bomb guy")
+    reconcile_defaults(db, seed2)
+    assert db.landmark_names()["kind:800ee2f4"] == "bomb guy", \
+        "his own name must win over the seeded one, forever"
+
+
 def test_reconcile_leaves_dirty_route_alone(tmp_path):
     db = Database(tmp_path / "t.db")
     reconcile_defaults(db, SEED_V1)
@@ -155,10 +178,23 @@ def test_real_bundled_seed_does_not_alter_existing_segment_defs(tmp_path):
         # seeded row is exactly what is supposed to happen -- it is how the
         # fix reaches a live install at all. Everything else on the row must
         # still come out the other side untouched, which is this gate's point.
-        moved = {"seg:lblj": 17, "seg:mips-clip": 23, "seg:bits-entry": 21}
+        moved = {
+            "seg:lblj": [{"type": "entrance_touched", "to": 17}],
+            "seg:mips-clip": [{"type": "entrance_touched", "to": 23}],
+            "seg:bits-entry": [{"type": "entrance_touched", "to": 21}],
+            # LAKITU SKIP joins them 2026-08-05 (task 0026), for the same
+            # reason one level down: it ended on the castle LOAD and the
+            # community's split is Mario grabbing the door, so we read 7"33
+            # against their 6"13. It was the CONTROL for the 0081 sweep --
+            # the one legacy row with no entrance to touch, because it enters
+            # the castle rather than a course -- which is why it moves now
+            # and by a different mechanism.
+            "seg:lakitu-skip": [{"type": "moment_reached",
+                                 "kind": "door_open", "level": 16,
+                                 "ordinal": 1}],
+        }
         if key in moved:
-            assert after_row["end_triggers"] == [
-                {"type": "entrance_touched", "to": moved[key]}]
+            assert after_row["end_triggers"] == moved[key]
         else:
             assert after_row["end_triggers"] == before_row["end_triggers"]
         assert after_row["waypoints"] == before_row["waypoints"]

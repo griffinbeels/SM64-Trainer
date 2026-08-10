@@ -16,11 +16,13 @@ from sm64_events.core.updater import UpdateService
 from sm64_events.core.version import __version__
 from sm64_events.detectors.anchors import AnchorDetector
 from sm64_events.detectors.area import AreaChangeDetector
+from sm64_events.detectors.caused import CausedMomentDetector
 from sm64_events.detectors.death import DeathDetector
 from sm64_events.detectors.dust import DustTrickDetector
 from sm64_events.detectors.key import KeyGrabDetector
 from sm64_events.detectors.level import LevelChangeDetector
 from sm64_events.detectors.lifecycle import GameResetDetector
+from sm64_events.detectors.moment import MomentDetector
 from sm64_events.detectors.spawn import SpawnDetector
 from sm64_events.detectors.stage import StageChangeDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
@@ -58,7 +60,7 @@ def _bootstrap_cleanup_arg(argv=None) -> "str | None":
     return None
 
 
-def build_detectors() -> list:
+def build_detectors(target_active=None) -> list:
     """THE detector chain, in THE order. Extracted from build() 2026-07-31 so
     a test can drive the real one end to end (tests/test_segment_igt.py plays
     snapshots through this list and projects what comes out) — a test that
@@ -119,11 +121,44 @@ def build_detectors() -> list:
     emit whatever this order says.  Pinned by
     tests/test_reset_during_star_grab.py, mutation-proved by moving this
     detector back to the end.
+
+    ## MomentDetector's position, and its argument
+
+    THIRD since round 9 item 4 (2026-08-07): a moment is now a one-poll HELD
+    emit — the event is built on the action edge but its landmark is settled
+    from the next poll, because the engaged-object pointer can lag the action
+    byte by a read (his first WF tree grab resolved to Mario's own spawn
+    marker; detectors/moment.py carries the evidence). So on the release tick
+    it describes the PAST, and the same rule that put star_grab first and warp
+    second applies: a held event is published before anything describing the
+    present, or an anchor/level change on the settle tick closes the attempt
+    the moment belongs to. Still behind the two leaders — their holds span
+    many frames where this one spans one poll, and a star's settle can release
+    on the same tick a door moment fires.
+
+    `target_active` was the task-0087 gate ("these should ONLY be tracked when
+    we explicitly select / autoselect a star or segment") and `build()` used to
+    inject the live target into it. **It injects nothing now, deliberately** —
+    the recorder is the surface that consumes moments, and it is used with NO
+    target set, because pointing at what you just did is how a definition gets
+    made. Full evidence, the two live reports it cost, and why a recorder-open
+    gate cannot work: `detectors/moment.py`'s module docstring.
+
+    The parameter stays as an INJECTION SEAM rather than being deleted: a
+    future rule that wants to narrow WHEN a moment records has somewhere to go
+    that is not a new branch inside the detector.
     """
-    detectors = [StarGrabDetector(), WarpDetector(), GameResetDetector(),
-                 LevelChangeDetector(), AreaChangeDetector(),
-                 StageChangeDetector(), AnchorDetector(), DeathDetector(),
-                 DustTrickDetector(), KeyGrabDetector(), SpawnDetector()]
+    moments = (MomentDetector() if target_active is None
+               else MomentDetector(target_active=target_active))
+    # CausedMomentDetector emits the same event on the frame it happened —
+    # not a held emit — so like MomentDetector it sits behind the two held
+    # leaders and ahead of everything that closes attempts.
+    detectors = [StarGrabDetector(), WarpDetector(), moments,
+                 CausedMomentDetector(),
+                 GameResetDetector(), LevelChangeDetector(),
+                 AreaChangeDetector(), StageChangeDetector(),
+                 AnchorDetector(), DeathDetector(), DustTrickDetector(),
+                 KeyGrabDetector(), SpawnDetector()]
     return detectors
 
 
@@ -274,7 +309,25 @@ def build():
             builder=CompilationBuilder(extractor=replay.extractor, codec=codec,
                                        fps=replay_cfg.fps),
             out_dir=compilations_dir())
+    # NO target gate. This passed `target_active=lambda: service.target is not
+    # None` (task 0087) until 2026-08-06, which made the recorder blind exactly
+    # when it is used — see `build_detectors`' docstring and moment.py's.
     detectors = build_detectors()
+    # An ordinal means "the Nth since this attempt opened", so the counter
+    # restarts when one does. The service sees every event and the detectors
+    # see only snapshots, so this is the one place that can join them. BOTH
+    # moment detectors count ordinals; a boundary that reset only one would
+    # leave "the 2nd switch press" counting across attempts.
+    _moment_reset = next(
+        d for d in detectors if isinstance(d, MomentDetector)).reset
+    _caused_reset = next(
+        d for d in detectors if isinstance(d, CausedMomentDetector)).reset
+
+    def _reset_moment_ordinals():
+        _moment_reset()
+        _caused_reset()
+
+    service.on_attempt_boundary = _reset_moment_ordinals
     if replay is not None:
         # Poll-thread tap (emits no events): tells the recorder the player
         # is providing input so the buffer pauses while idle (activity.py).

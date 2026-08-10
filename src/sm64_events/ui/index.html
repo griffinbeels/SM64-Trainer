@@ -56,6 +56,18 @@
   .starcell:hover { background: #20242b; }
   .starcell:focus-visible { outline: 2px solid #6fa8ff; outline-offset: 2px; }
   .starcell.active-star { border-color: #e0c36a; background: #211f14; }
+  /* PROGRESSIVE DISCLOSURE is GONE (round 22, 2026-08-08), and its whole
+     treatment with it: `.selector-expanded` and `.starcell.subsection-cell`
+     styled the child-tray look a row wore while expanded into one parent and
+     its subsections. A subsection is never a cell now -- it is a badge inside
+     its parent's own art (`.cell-toggles`, below) -- so there is no child cell
+     left for a tray to group, and the classes are deleted rather than left
+     unused. Griffin: "as a complete redesign / upgrade, we should actually
+     re-use the same exact design we use as the Pipe/Star selector for the
+     Bowser stages." The indent rule those styles were answering ("any time we
+     have child rows that imply a parent/child relationship, we should indent
+     the child one level") now lands on `.log-card-children` instead, which is
+     a vertical list and can honour it literally. */
   /* Round 2 (2026-07-30): a segment cell used to ALSO carry its own
      `.armed` green highlight for "the timer is running now", which fought
      this gold one whenever a segment was both armed and targeted -- the
@@ -318,18 +330,29 @@
   .strat-current { font-size: .68rem; color: var(--gold-soft); }
   .strat-pb { font-size: .7rem; }
   .starsub .strat.none { opacity: .6; }
-  /* Bowser Reds cell (spec 2026-07-28-multi-step-segments, star/pipe toggle):
-     the star/pipe icon buttons + clock + arrows overlay the cell's own art,
-     bottom-centred (mock-up). Not a .starcell BUTTON itself (see
-     stagebanner.js's RedsCell docstring) -- position:relative is scoped to
-     THIS cell's .starholder only, never the shared base rule, since every
-     other cell has exactly one child and needs no positioning context. */
-  .reds-cell .starholder { position: relative; }
-  .reds-toggle {
+  /* CELL TOGGLES -- the small icon buttons overlaying a practice cell's own
+     art, bottom-centred (his mock-up). TWO consumers since round 22
+     (2026-08-08): the Bowser Reds cell's exclusive star/pipe pair, and a
+     star's own [[subsection]] switches, which are MULTI-select. One class set,
+     one component (components/celltoggles.js) -- his instruction was to reuse
+     the Bowser system rather than build a second one beside it.
+     A hosting cell is never a .starcell BUTTON (a button may not contain a
+     button, see practicecell.js), and position:relative is scoped to hosting
+     cells only, never the shared base rule: every other cell has exactly one
+     child and needs no positioning context. */
+  .reds-cell .starholder,
+  .starcell.has-toggles .starholder { position: relative; }
+  .cell-toggles {
     position: absolute; left: 50%; bottom: 6%; transform: translateX(-50%);
     display: flex; align-items: center; gap: .18rem; z-index: 1;
   }
-  .reds-toggle-btn {
+  /* "if there are only 2 options, then it's 2 in a row; if there are 4, then
+     it's a 2x2 grid" -- three draws 2 + 1, centred. */
+  .cell-toggles.is-grid {
+    display: grid; grid-template-columns: repeat(2, auto);
+    gap: .18rem; justify-items: center;
+  }
+  .cell-toggle-btn {
     display: flex; align-items: center; justify-content: center;
     width: 24px; height: 24px; padding: 3px; border-radius: 6px;
     background: rgba(10,23,38,.85); border: 1px solid var(--border-soft);
@@ -337,16 +360,21 @@
     /* ONE declaration for both directions -- a `.is-selected` rule below
        must never declare its own `transition`, or it would WHOLESALE
        replace this one while selected and the glow-in/glow-out would snap
-       on one side (ui-core.md's standing CSS trap). */
-    transition: background .18s ease, border-color .18s ease, box-shadow .18s ease;
+       on one side (ui-core.md's standing CSS trap). Opacity rides it too,
+       because an UNSELECTED subsection toggle is the dimmed state he asked
+       for ("it should be dimmed out"), not merely an unlit one. */
+    transition: background .18s ease, border-color .18s ease,
+                box-shadow .18s ease, opacity .18s ease;
+    opacity: .45;
   }
-  .reds-toggle-btn img { width: 100%; height: 100%; object-fit: contain;
+  .cell-toggle-btn img { width: 100%; height: 100%; object-fit: contain;
                           -webkit-user-select: none; user-select: none; }
-  /* No :disabled rule -- neither half can be disabled since the route lock was
-     deleted (2026-08-02, stagebanner.js's BowserCourseRow docstring). */
-  .reds-toggle-btn.is-selected {
+  /* No :disabled rule -- neither Bowser half can be disabled since the route
+     lock was deleted (2026-08-02, stagebanner.js's BowserCourseRow docstring). */
+  .cell-toggle-btn.is-selected {
     border-color: #ffd75f; background: rgba(64,50,10,.92);
     box-shadow: 0 0 6px rgba(255,215,95,.85), 0 0 2px rgba(255,215,95,.9);
+    opacity: 1;
   }
   .reds-toggle-clock { display: flex; align-items: center; color: var(--muted);
                         opacity: .8; }
@@ -930,10 +958,16 @@
     position: sticky; top: 0; z-index: 24; padding: 14px 0 8px;
     background: linear-gradient(180deg, rgba(5,12,22,.98) 70%, rgba(5,12,22,.82));
   }
+  /* THREE columns since 2026-08-08: session / route rank card / Grading. The
+     Clock card's column went to the rank card when its select moved into the
+     settings drawer (user: the default is always Usamune IGT, so a control
+     nobody changes should not spend a column) -- the rank card's fr is the
+     sum of its old share and the clock's, so the neighbours keep their
+     proportions. */
   .context-bar {
     min-height: 56px; display: grid;
-    grid-template-columns: minmax(170px,.75fr) minmax(250px,1.45fr)
-                           minmax(180px,.9fr) minmax(140px,.7fr);
+    grid-template-columns: minmax(170px,.75fr) minmax(250px,2.35fr)
+                           minmax(140px,.7fr);
     gap: 10px; width: calc(100% - 28px); max-width: 1472px; margin: 0 auto;
   }
   .context-control {
@@ -1227,6 +1261,13 @@
   }
   .builder-seeded.is-dirty { border-left-color: #e0803a; }
   .builder-seeded p.meta { margin: .25rem 0 .5rem; }
+  /* The re-record door (round 16) — same one-row shape as .builder-icon:
+     label, action, consequence, at the point where "recorded wrong" is
+     noticed. `flex-wrap` so the meta line drops under the button in a
+     narrow editor pane instead of overflowing it. */
+  .builder-rerecord { display: flex; align-items: center; gap: .6rem;
+    flex-wrap: wrap; margin-bottom: 10px; }
+  .builder-rerecord .field-label { margin: 0; }
   /* Trailing `auto` track added 2026-07-28 for the collapse toggle. Without
      it the button becomes an implicit 5th column at the grid's default size
      and pushes the strategy picker out of the card. */
@@ -2642,7 +2683,20 @@
      HAT_LAYOUT_WIDTH_RATIO/HAT_WING_SPILL_RATIO for where these numbers
      come from. */
   .attempt-medal { width: 54px; text-align: center; }
-  .attempt-result { min-width: 0; }
+  /* NEVER WRAPS, at any width and at any nesting depth (round 24). The
+     narrow-container variant far below has said `nowrap` since it was
+     written; the WIDE one did not, so a result cell squeezed by anything
+     other than the viewport broke its check away from its time onto a second
+     line -- and a nested card is exactly that: its column is narrow while the
+     `@container` query, which measures `.practice-page`, still reports wide.
+     Griffin, on the second round of it: "the checkmark is spanning two
+     lines... it should be one line, checkmark side by side with the time...
+     each entry line should be exactly ONE row's worth of height. We need to
+     make sure elements look the same for a row regardless of whether it's in
+     a subentry or a top level entry." A wrap also breaks the row's own
+     `--log-row-height`, which is where "one row's worth of height" comes
+     from. */
+  .attempt-result { min-width: 0; white-space: nowrap; }
   .attempt-delta { width: 72px; white-space: nowrap; font-weight: 700; }
   .attempt-strategy { width: 150px; white-space: nowrap; }
   .attempt-strategy select { max-width: 120px; min-width: 0; height: 30px; min-height: 30px; }
@@ -2954,16 +3008,21 @@
   /* Match-mode control (spec 2026-07-28-multi-step-segments, final-review
      finding 4) -- boxed like .builder-enabled above; the description wraps
      to its own full-width row beneath the label+select one so a long
-     sentence never fights the select for horizontal room. */
-  .builder-matchmode {
+     sentence never fights the select for horizontal room. The clock-start
+     control (round 15) is the same shape and shares every rule -- it
+     shipped with NO rule at all, and its description overlapped its own
+     select across the 1019-1075px band (the sweep's 52-defect finding,
+     2026-08-08). */
+  .builder-matchmode, .builder-clockstart {
     display: flex; flex-wrap: wrap; align-items: center; gap: .55rem;
     margin: .65rem 0; padding: .65rem .75rem;
     border: 1px solid var(--border-soft); border-radius: 7px;
     background: rgba(8,20,34,.55);
   }
-  .builder-matchmode .field-label { margin: 0; }
-  .builder-matchmode select { min-width: 0; max-width: 20rem; }
-  .builder-matchmode .meta { flex-basis: 100%; }
+  .builder-matchmode .field-label, .builder-clockstart .field-label { margin: 0; }
+  .builder-matchmode select, .builder-clockstart select {
+    min-width: 0; max-width: 20rem; }
+  .builder-matchmode .meta, .builder-clockstart .meta { flex-basis: 100%; }
   .segment-definition-grid {
     display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .65rem;
   }
@@ -3043,35 +3102,161 @@
     padding-right: 2px; scrollbar-width: thin;
   }
 
-  /* "Record a segment" timeline picker (Task 13, spec 2026-07-28-multi-
-     step-segments) -- ui/components/segmenttimeline.js. Self-responsive
+  /* The RECORDER -- ui/components/segmenttimeline.js. Self-responsive
      (flex-wrap + a capped, scrollable row list), like iconpicker.js's
      .icongrid above: this renders inside a Modal, which is NOT nested in
      .practice-page (the only element with container-type: inline-size), so
      there is no @container to gate against here -- and nothing below needs
-     a breakpoint anyway. */
-  .record-steps { display: flex; gap: .5rem; margin-bottom: .75rem; }
-  .record-step {
-    padding: .25rem .65rem; border-radius: 999px; font-size: .78rem;
-    color: var(--muted); background: rgba(255,255,255,.04);
-  }
-  .record-step.on { color: var(--text); background: rgba(255,196,84,.16); }
+     a breakpoint anyway.
+
+     There is deliberately NO styling for a live/paused distinction: the
+     surface has one state, and a badge saying "streaming" would be inventing
+     the mode the rewrite removed (2026-08-05). */
   .record-view-toggle {
     display: flex; align-items: center; gap: .4rem;
     margin-bottom: .65rem; font-size: .82rem; color: var(--muted);
   }
-  .record-rows {
-    display: flex; flex-direction: column; gap: 4px;
+  .record-picks {
+    display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+    margin-bottom: .45rem;
+  }
+  /* ONE CARD PER VISIT (2026-08-05). The SCROLL moved up here from
+     .record-rows: with cards, each list is short and it is the stack of
+     places that gets long, so capping each card's own rows would give a
+     screenful of tiny independent scrollers. */
+  .record-cards {
+    display: flex; flex-direction: column; gap: 6px;
     max-height: 45vh; overflow-y: auto; padding-right: 4px;
   }
+  /* `flex: 0 0 auto` is load-bearing, not tidying. A flex column SHRINKS its
+     children by default, so several cards competing for the 45vh above were
+     squeezed below their content — and with overflow:hidden for the rounded
+     corners, the rows at the bottom of each card were silently eaten. The
+     responsive sweep found it at 18 viewports × 3 states; nothing about the
+     rendering looked wrong, which is exactly why the probe exists. The stack
+     scrolls; a card never does. */
+  .record-card {
+    flex: 0 0 auto;
+    border: 1px solid var(--border-soft); border-radius: 9px;
+    background: rgba(8,20,34,.30); overflow: hidden;
+  }
+  /* The HEADER is the fold: one affordance, one hit target — the same rule
+     the context cards are built on (a chevron beside a heading gives one
+     gesture two targets, and the mismatch reads as a bug). */
+  .record-card-head {
+    width: 100%; display: flex; align-items: center; gap: .5rem;
+    padding: .45rem .6rem; text-align: left; cursor: pointer;
+    background: rgba(255,255,255,.03); color: var(--text);
+    border: 0; border-bottom: 1px solid var(--border-soft);
+    transition: background 140ms ease;
+  }
+  .record-card-head:hover { background: rgba(255,255,255,.07); }
+  .record-card.folded .record-card-head { border-bottom-color: transparent; }
+  .record-card-chevron {
+    display: inline-grid; place-items: center; color: var(--muted);
+    transition: transform 180ms ease;
+  }
+  .record-card.folded .record-card-chevron { transform: rotate(-90deg); }
+  .record-card-icon {
+    width: 20px; height: 20px; object-fit: contain; flex: 0 0 auto;
+  }
+  .record-card-name {
+    flex: 1 1 auto; min-width: 0; font-weight: 600; font-size: .86rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* `grid-template-rows: 1fr -> 0fr` is the one height transition that needs
+     no measured pixel value, and it interpolates in Chromium 117+ (150 here).
+     `visibility` rides along so a folded card's buttons leave the tab order —
+     zero height with overflow:hidden does not take them out of it. Its own
+     delay is what keeps the content visible THROUGH the collapse rather than
+     vanishing on frame one. */
+  .record-card-body {
+    display: grid; grid-template-rows: 1fr;
+    transition: grid-template-rows 200ms ease, visibility 0s linear 0s;
+  }
+  .record-card.folded .record-card-body {
+    grid-template-rows: 0fr; visibility: hidden;
+    transition: grid-template-rows 200ms ease, visibility 0s linear 200ms;
+  }
+  .record-card-clip { min-height: 0; overflow: hidden; }
+  .record-rows {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 4px; padding-right: 4px;
+  }
   .record-row {
-    min-width: 0; text-align: left; padding: .5rem .65rem;
+    min-width: 0; display: flex; align-items: center; gap: .55rem;
+    text-align: left; padding: .5rem .65rem;
     border: 1px solid var(--border-soft); border-radius: 7px;
     background: rgba(8,20,34,.48); color: var(--text); cursor: pointer;
+    transition: background 140ms ease, border-color 140ms ease;
   }
   .record-row:hover { background: rgba(255,255,255,.06); }
-  .record-picked { display: flex; align-items: center; gap: .5rem; }
+  .record-row.picked {
+    border-color: rgba(255,196,84,.55); background: rgba(255,196,84,.10);
+  }
+  /* The ordinal slot holds its width in EVERY state, picked or not, or the
+     label jumps sideways the moment a row is chosen -- the same reason
+     steptrack.js reserves its marker cell. */
+  .record-mark {
+    flex: 0 0 1.35rem; height: 1.35rem; display: inline-grid;
+    place-items: center; border-radius: 999px; font-size: .72rem;
+    font-variant-numeric: tabular-nums; color: var(--muted);
+    background: rgba(255,255,255,.05);
+  }
+  .record-mark.role-start, .record-mark.role-finish {
+    color: #10202f; background: var(--gold); font-weight: 700;
+  }
+  .record-mark.role-stop {
+    color: var(--text); background: rgba(255,196,84,.30);
+  }
+  .record-label { flex: 1 1 auto; min-width: 0; }
+  /* The row and its rename control sit side by side: a button inside a button
+     is invalid and the browser drops it silently. The wrapper is what makes the
+     pencil a sibling rather than a child. */
+  .record-row-wrap { display: flex; align-items: stretch; gap: 4px; min-width: 0; }
+  .record-row-wrap > .record-row { flex: 1 1 auto; min-width: 0; }
+  .record-rename {
+    flex: 0 0 auto; width: 2rem; border: 1px solid var(--border-soft);
+    border-radius: 7px; background: rgba(8,20,34,.48); color: var(--muted);
+    cursor: pointer; font-size: .95rem; line-height: 1;
+    opacity: 0; transition: opacity 140ms ease, color 140ms ease,
+                            border-color 140ms ease;
+  }
+  /* Revealed on hover or focus, never removed from the tree -- a control that
+     appears from nothing has nothing to animate, and keyboard users need it to
+     exist before they can reach it. */
+  .record-row-wrap:hover .record-rename,
+  .record-rename:focus-visible { opacity: 1; }
+  .record-rename:hover { color: var(--gold); border-color: rgba(255,196,84,.55); }
+  .record-rename-edit { display: flex; align-items: center; gap: .3rem; }
+  .record-rename-input {
+    flex: 0 0 11rem; min-width: 0; padding: .35rem .5rem;
+    border: 1px solid rgba(255,196,84,.55); border-radius: 7px;
+    background: rgba(8,20,34,.8); color: var(--text); font: inherit;
+  }
+  /* The visible commit/cancel pair — the cancel affordance he asked for
+     (round 12 item 5); Escape still works but a key is not an affordance. */
+  .record-rename-ok, .record-rename-cancel {
+    flex: 0 0 auto; width: 1.8rem; padding: .3rem 0;
+    border: 1px solid var(--border-soft); border-radius: 7px;
+    background: rgba(8,20,34,.48); color: var(--muted);
+    cursor: pointer; font-size: .85rem; line-height: 1;
+    transition: color 140ms ease, border-color 140ms ease;
+  }
+  .record-rename-ok:hover { color: var(--good, #7dd97d); border-color: rgba(125,217,125,.55); }
+  .record-rename-cancel:hover { color: var(--bad, #ff7d7d); border-color: rgba(255,125,125,.55); }
+  .record-role {
+    flex: 0 0 auto; font-size: .7rem; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--gold);
+  }
+  .record-igt {
+    flex: 0 0 auto; font-variant-numeric: tabular-nums;
+    font-size: .82rem; color: var(--muted);
+  }
   .record-review { display: flex; flex-direction: column; gap: .5rem; }
+  .record-parent {
+    display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  }
 
   .routes-workshop {
     min-width: 0; display: grid;
@@ -3908,8 +4093,8 @@
     .recording-status .recording-light { display: none; }
 
     .context-bar {
-      grid-template-columns: minmax(145px,.8fr) minmax(210px,1.35fr)
-                             minmax(155px,.9fr) minmax(130px,.65fr);
+      grid-template-columns: minmax(145px,.8fr) minmax(210px,2.25fr)
+                             minmax(130px,.65fr);
     }
   }
 
@@ -4191,6 +4376,10 @@
       width: 100%; max-width: none;
       grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px;
     }
+    /* Three cards in a two-column grid would leave a hole; the rank card
+       takes a full-width row of its own instead, and order:-1 puts it first
+       so auto-placement pairs the two selects on the row below. */
+    .context-bar .marelo-slot { grid-column: 1 / -1; order: -1; }
     .context-control {
       width: 100%; min-width: 0; min-height: 48px;
       padding: .32rem .55rem; gap: .45rem;
@@ -4438,21 +4627,15 @@
     .compare-stage-card { min-height: 0; }
   }
 
-  /* Context bar: four cards in one row need 684px, and `main.app-main` is only
-     670px at viewport 761 -- the narrowest window that still carries the 76px
-     rail. The row overflowed by 14px through the whole 761..775 band and the
-     Grading select hung past the edge. Measured: app-main is viewport - 91
-     while the rail is present, so four-across stops fitting below 775.
-
-     A VIEWPORT query on purpose, and it has to be at TOP LEVEL. `.context-bar`
-     lives in the header, OUTSIDE `.view-pane`, so it has no size container
-     above it -- when the Wave 2 conversion swept this rule into
-     `@container (max-width: 1060px)` the query could never match and the same
-     overflow came back on all seven tabs at once (2026-07-28). A shell element
-     cannot be gated on a container it is not inside. */
-  @media (max-width: 775px) {
-    .context-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  }
+  /* A `@media (max-width: 775px)` two-column override for .context-bar stood
+     here until 2026-08-08. Its measured reason -- FOUR cards need 684px and
+     app-main is viewport - 91 with the rail, so four-across stops fitting
+     below 775 -- expired when the Clock card left the bar: three cards need
+     505px at the rail-block minimums, which fits every rail width (the rail
+     ends at 761). If the bar grows a card again, that block comes back, and
+     it must be a VIEWPORT query at TOP LEVEL -- .context-bar lives outside
+     .view-pane, so a container query above it can never match (2026-07-28:
+     the Wave 2 conversion learned that on all seven tabs at once). */
 
   /* ===================================================================
      Card collapse
@@ -4960,6 +5143,46 @@
     background: rgba(0, 0, 0, var(--log-body-tint, 0.16));
   }
   .log-card-body .attempt-table tr { height: var(--log-row-height, 40px); }
+  /* A STAR'S PIECES, inside its own card (round 22, 2026-08-08): "the
+     subsection should appear WITHIN the star's practice log entry as a
+     sub-entry... indented a bit so it's clear that it's owned by the parent
+     card." Indent is the machine-level rule -- anything implying parent/child
+     indents the child ONE level -- and it is expressed by the DOM nesting
+     itself (a margin on this wrapper), never by a depth custom property,
+     matching `.lib-group`'s own treatment. The guide line is the same
+     vocabulary the library groups use, so "owned by the parent" reads the
+     same way in both places.
+     No `Disclose` of its own: this block sits INSIDE the parent's, so the
+     parent's fold animates it for free -- "if the parent star closes the
+     card, these close with it". */
+  /* ALIGNED WITH THE CARD'S OWN CONTENT, not indented again on top of it
+     (round 23, 2026-08-08). Griffin: "all of the segment cards should be
+     in-line with the rank standards card above it (aka they should be
+     expanded to the left a bit to be in line with the rest of the elements
+     above)." `.log-card-body` already carries `--log-body-indent`, so an
+     extra margin here indented the pieces TWICE -- which is also why their
+     attempt rows wrapped where the parent's identical rows fit ("some
+     elements may bleed into two rows (like the checkbox next to the 12\"20")):
+     a child had ~70px less width than its parent at the same window size.
+     The guide line stays, pulled into the body's own left padding by the
+     negative margin, so the content edge lands exactly on the Rank standards
+     panel's while the line still says "owned by the parent". Content x is
+     therefore unchanged by the border -- the two values must stay equal. */
+  .log-card-children {
+    display: flex; flex-direction: column; gap: .3rem;
+    margin: .5rem 0 .1rem -.75rem; padding-left: .75rem;
+    border-left: 1px solid var(--border-soft);
+  }
+  /* Pieces read as belonging to the card around them rather than as a second
+     list of top-level cards: no gold "active" border of their own (the parent
+     already carries it for the pair) and a quieter surface. */
+  .log-card-children .log-card { background: rgba(255,255,255,.02); }
+  /* NOT here: a rule zeroing `--log-body-indent` inside a nested card. It was
+     written for the wrap in round 23 and MEASURED not to cause it -- with the
+     indent restored, a piece's result cell is 44px against its parent's 44px
+     at the 850px floor. The wrap was entirely the double LEFT OFFSET above.
+     A child's rows keep lining up under the child's own name, the same way
+     every other card's do. */
   .log-list-footer { display: flex; justify-content: center; margin-top: .3rem; }
   /* The rank wash (`.rank-banner::before`, near the top of this file) bleeds
      -8px top / -12px bottom / -16px left assuming it lands in a CARD's own

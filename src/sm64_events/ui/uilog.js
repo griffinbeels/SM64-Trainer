@@ -122,11 +122,55 @@ export function readLogs(root) {
       const rows = Array.from(card.querySelectorAll(".attempt-table tr"));
       return {
         name: text(card.querySelector(".log-card-name")),
+        // OPEN OR CLOSED, added 2026-08-08 for a report nothing could answer:
+        // "I can no longer close the overall dropdown for each star/segment."
+        // Seven experiments failed to reproduce it -- the fixture, a snapshot
+        // of his own db, his window width, with a live refetch, with focus on
+        // the nested piece -- and the row count alone cannot tell "he never
+        // clicked" from "it closed and sprang back", because a card that
+        // reopens within the same render paints no intermediate state and its
+        // row count never moves. This field does: a fold that does not stick
+        // writes closed-then-open in a pair of records milliseconds apart,
+        // and `tools/what_happened.py` puts them on the clock beside whatever
+        // event reopened it. Cheap, and it turns the next report into a query.
+        open: !card.classList.contains("is-closed"),
         rows: rows.slice(0, LOG_ROWS)
           .map((row) => text(row.querySelector(".attempt-result"))),
         total: rows.length,
       };
     }),
+  };
+}
+
+// THE SEGMENT RECORDER'S OWN LIST — the surface every latency report about it
+// is about, and the one this file could not see until 2026-08-06. His report:
+// *"I've clearly grabbed this star, but I don't see the event in the
+// recorder"*, and the row did arrive, late. The server was measured innocent
+// end to end for that exact grab — 18 frames from touching the star to the
+// x-cam, published on the same frame — so the question is entirely about what
+// the SCREEN held and when, and nothing was recording that.
+//
+// The reader takes the NEWEST rows rather than all of them, for the same
+// reason `readLogs` does: the list holds 200 and this file is appended to on
+// every change, so what is worth recording is the head plus how many rows
+// there are. A row arriving moves both.
+//
+// It records the rows and not the cards, deliberately: a report about this
+// surface is always "the entry is not there yet", so the entry is the
+// observation. Which card it landed in is already in the row's own label.
+const RECORD_ROWS = 4;
+
+export function readRecorder(root) {
+  const list = root.querySelector(".record-cards");
+  if (!list) return null;              // the recorder is not open
+  const rows = Array.from(list.querySelectorAll(".record-row-wrap"));
+  return {
+    surface: "recorder",
+    rows: rows.slice(0, RECORD_ROWS).map((row) => ({
+      label: text(row.querySelector(".record-label")),
+      igt: text(row.querySelector(".record-igt")),
+    })),
+    total: rows.length,
   };
 }
 
@@ -193,7 +237,14 @@ export function postObservation(body, marks) {
 // caused it — a WebSocket event, a click, or a re-render nobody asked for.
 // Deduping on the rendered snapshot rather than on props is the point: two
 // different states that paint identically are not a change the human saw.
-export function useUiLog(rootRef) {
+// The PRACTICE page's four... three surfaces. The recorder lives on another
+// tab, which is CONDITIONALLY rendered (`app.js`), so the practice page is not
+// merely off-screen while he is recording — it is unmounted, and this effect
+// does not run at all. That is why the readers are a parameter rather than a
+// list baked in here: the recorder passes its own, from its own root.
+const PAGE_READERS = [readSelector, readTargets, readLogs];
+
+export function useUiLog(rootRef, readers = PAGE_READERS) {
   const sent = useRef(new Map());
   useEffect(() => {
     const root = rootRef.current;
@@ -212,7 +263,7 @@ export function useUiLog(rootRef) {
     // A render that painted nothing has no paint time, and dropping the marks
     // is the honest answer to that.
     const marks = takeMarks();
-    [readSelector(root), readTargets(root), readLogs(root)].forEach((snap) => {
+    readers.map((read) => read(root)).forEach((snap) => {
       if (!snap) return;
       const key = JSON.stringify(snap);
       if (sent.current.get(snap.surface) === key) return;

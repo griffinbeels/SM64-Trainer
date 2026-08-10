@@ -24,14 +24,24 @@ uv run python -m sm64_events.main                    # run from repo root (data/
 uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM)
 uv run python tools/verify_death_clock.py            # live gate, ANSWERED 2026-08-01 (raw counter); re-run only to re-check
 uv run python tools/probe_warp_block.py              # live gate, ANSWERED 2026-08-05: a painting writes sWarpDest AT the touch, a pipe 20 frames later (read-only, safe beside a live session)
+uv run python tools/probe_warp_block.py --entries    # live gate, ANSWERED 2026-08-07: the BBH cage's own ACT_BBH_ENTER_JUMP is the commit moment (+74 to the level byte) and ships in WARP_ENTRY_ACTIONS; re-run only for a future entrance that fires no touch
+uv run python tools/probe_objects.py                 # live gate, ANSWERED 2026-08-05: WHICH door/pole/enemy is its SPAWN POINT, not its pool slot; --report lists the distinct things touched (read-only, safe beside a live session)
+uv run python tools/probe_objects.py --pool          # live gate, ANSWERED 2026-08-07 (1,386 changes): oAction is THE signal, oHealth is proximity noise -- detectors/caused.py ships on it; re-run to earn a NEW behaviour its CAUSED_BEHAVIOURS row (read-only, safe beside a live session)
 uv run python tools/verify_star_stop.py              # live gate, ANSWERED 2026-08-01: the screen is Usamune's RESULT store once it SETTLES (10/10)
 uv run python tools/derive_xcam.py                   # live gate, ANSWERED + now the REGRESSION gate: scores what we journal against Usamune (just play; MIDAIR grabs are the ones that measure)
+uv run python tools/score_moment_clock.py            # a door writes no Usamune result, so ONE screenshot of the emulator is the ground truth: --usamune 1'06"83 names the row and the offset from the RAW COUNTER (comparable across any flip of the constant)
 uv run python tools/dev_cleanup.py                   # kill orphaned dev/harness servers (auto-runs at session start)
 uv run python tools/dedupe_journal.py data/tracker.db  # scan double-journaled events; --fix repairs (server stopped)
 uv run python tools/what_happened.py                 # READ BACK what the human just played -- journal events AND what the UI DREW, one timeline (--no-ui for events only)
 uv run python tools/what_happened.py --list          # which journal is live: repo / each worktree / installed exe
 uv run pytest tests/test_responsive.py -q            # render every breakpoint; report layout defects (no PJ64 needed)
 uv run python tools/check_glossary.py                # docs/glossary.md's own gate: closure, active voice, live Lives paths
+uv run python tools/corpus_from_db.py --landmarks    # every landmark name HE typed, as corpus_landmarks.py rows to paste (read-only)
+uv run python tools/contact_sheet.py .objective-card # one surface at 1500/1200/900/850, in one image -- LOOK at it
+uv run python tools/contact_sheet.py --subsections    # a STAR wearing its subsections as badges (--folded = one switched off); --nested = the practice-log card with its pieces inside it. No shipped definition has a parent, so this is the only fixture that can draw either
+uv run python tools/contact_sheet.py --recorder       # the RECORDER on arrival (--recording = two moments picked, --waypoints = three); it is a modal, so no plain page load reaches it
+uv run pytest tests/test_ui_recorder_latency.py -q -s  # MEASURE the recorder's live half: publish -> painted row, in ms, printed every run
+uv run pytest tests/test_responsive_subsections.py -q # that state's own sweep + the four reach assertions (badges, the badge write, nesting, folding)
 uv run python tools/contact_sheet.py .log-card       # one surface at 1500/1200/900/850, in one image -- LOOK at it
 uv run python tools/mark_sheet.py                    # the caveat badge on both surfaces, side by side (the PICK is made: corner badge, 2026-08-01)
 uv run python tools/topology_map.py                  # DRAW the world graph the segment matcher judges moves against -- LOOK at it, a wrong edge is invisible to every test
@@ -40,6 +50,7 @@ uv run python tools/measure_topology_cancels.py       # score those topological 
 uv run python tools/measure_entrance_sweep.py         # replay both journals under the old corpus and the new one: did the topological rules move? (they must not) and which recorded rows did
 
 uv run python tools/measure_reset_stubs.py            # how often a reset's own interrupted action was re-read onto the NEXT attempt (exact), and how fast the reload's spawn ends the hold
+uv run python tools/measure_target_queue.py           # replay the journals under the pre-queue rule and the target queue: diff every target reading and every recorded row (round 19's own gate)
 node .design-sync/facade/build.mjs                   # rebuild the Claude Design bundle from .design-sync/components.mjs (the registry: one row per published component)
 uv run pytest tests/test_design_sync_registry.py -q  # that registry's own gate: does every declared prop still exist on the component
 ```
@@ -76,9 +87,13 @@ automatically when you touch matching files. Zones:
 |---|---|---|
 | Memory reads + detectors + recipes (new event, dust trick, memory hunting) | `memory/`, `detectors/`, `core/snapshot.py`, `core/events.py` | `.claude/rules/memory-detectors.md` |
 | Tracking, storage, stats, routes/runs/segments, defaults corpus | `tracking/`, `storage/`, `stats/`, `data/`, `tools/corpus_*` | `.claude/rules/tracking-storage.md` |
+| The world-graph rules a movement is judged against (topological cancels, the resurrection memory) | `tracking/topology.py`, `tracking/segments.py`, `tools/measure_topology_cancels.py`, `tools/why_cancelled.py`, `tools/topology_map.py` | `.claude/rules/segment-topology.md` |
+| When a segment's clock STARTS, and what number it records when it stops | `tracking/segments.py`, `detectors/igt_clock.py`, `detectors/counter_epoch.py` | `.claude/rules/segment-clock.md` |
+| The segment recorder — the journal read back as pointable sentences | `tracking/eventlabel.py`, `tracking/synthesize.py`, `ui/components/segmenttimeline.js` | `.claude/rules/recorder.md` |
 | Server, REST/WS APIs, wiring, paths, perf probes | `server/`, `main.py`, `core/paths.py`, `core/procmem.py`, `core/perfmon.py` | `.claude/rules/server.md` |
 | UI shell, shared primitives, **verification norms** (loads for all of `ui/`) | `ui/` | `.claude/rules/ui-core.md` |
-| Practice, stage banner, pickers, segments, routes, runs, strategies, graphs | `ui/components/practice*`, `ui/components/attemptlog.js`, `ui/entitysection.js`, `ui/focustarget.js`, `stagebanner.js`, `entity*`, `segments.js`, `routes.js`, `runview.js`, `strat*`, `links.py` | `.claude/rules/ui-practice.md` |
+| The SELECTOR — quick-select row, cells, their badges and art | `ui/components/stagebanner.js`, `practicecell.js`, `celltoggles.js`, `entityicons.js`, `cellrow.js`, `ui/entities.js`, `ui/subsections.js` | `.claude/rules/ui-selector.md` |
+| Practice cards + the practice log, pickers, segments, routes, runs, strategies, graphs | `ui/components/practice*`, `ui/components/attemptlog.js`, `ui/entitysection.js`, `ui/focustarget.js`, `entitymodal.js`, `segments.js`, `routes.js`, `runview.js`, `strat*`, `links.py` | `.claude/rules/ui-practice.md` |
 | Rank icons + caps, banners, Rank tab, MARELO pill | `ui/components/caps.js`, `rankicon.js`, `hat.js`, `ranks.js`, `rankpage.js`, `marelo.js`, `standards.js` | `.claude/rules/ui-ranks.md` |
 | Celebrations, the level-up climb, the tuning inspector | `ui/celebrations.js`, `rankclimb.js`, `climb*.js`, `tune*`, `components/celebrate.js`, `server/tuning_api.py` | `.claude/rules/ui-climb.md` |
 | Replay capture/encode/extract, compare, compilation + **their UI** | `replay/`, `compare/`, `core/recorder_lock.py`, `ui/components/replay.js`, `compare.js`, `videosync.js`, `failcomp.js` | `.claude/rules/replay-compare.md` |
@@ -219,8 +234,9 @@ Contract changes land on main first, then dependent work fans out. Merge with
   and disappearing ("it briefly lingered… and then was removed"; "after opening
   the usamune menu / pausing, it accidentally got rid of the Bowser 1 → WF
   segment") and neither was answerable from the journal, because nothing
-  recorded what was drawn. `ui/uilog.js` reads the RENDERED practice page back
-  — the selector's cells and every objective card — and posts a record whenever
+  recorded what was drawn. `ui/uilog.js` reads the RENDERED page back
+  — the selector's cells, every objective card, the practice log, and (since
+  2026-08-06) the segment recorder's own row list — and posts a record whenever
   the painted snapshot changes; `core/uilog.py` stores it beside the journal and
   `tools/what_happened.py` interleaves the two on one clock. It reads the DOM
   rather than the store on purpose: a model-based recorder logs what we BELIEVE

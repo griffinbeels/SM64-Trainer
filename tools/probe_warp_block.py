@@ -22,7 +22,20 @@ recorder lock, so it is safe to run beside the live server while playing.
 
 Usage: with PJ64 + Usamune running, `uv run python tools/probe_warp_block.py`,
 then walk into any course entrance. Prints one frame-by-frame trace per touch.
+
+`--entries` INVERTS THE TRIGGER, and it exists because the default mode
+structurally cannot answer the question it gets asked next: it only prints
+once a touch has already fired, so an entrance that fires NO touch is
+invisible to it. His run on 2026-08-07 produced five clean touches and
+nothing at all for Big Boo's Haunt, whose cage *"mario teleports into. he
+triggers an animation for entering it"* — so that entrance never enters a
+`WARP_ENTRY_ACTIONS` action. `--entries` triggers on the LEVEL CHANGE
+instead and prints the run-up: every action edge in the 150 frames before
+it, stamped by how far ahead of the level byte it landed, and a verdict line
+saying outright whether any warp-entry action occurred. Whichever edge sits
+~20-80 frames out IS the animation, and its value is what a detector watches.
 """
+import argparse
 import sys
 import time
 
@@ -101,13 +114,83 @@ def report(trace: list[dict]) -> None:
     sys.stdout.flush()
 
 
-def main() -> int:
-    mem = Pj64Memory()
-    if not mem.attach():
-        print("Could not attach -- is PJ64 running with the ROM loaded?")
-        return 1
+LOOKBACK_FRAMES = 150
+
+
+def report_entry(window: list[dict]) -> None:
+    """What Mario was DOING on the way into a level that fired no touch.
+
+    The mirror image of `report()` above, and it exists because that one
+    structurally cannot answer this: it only ever prints once a touch has
+    already fired, so an entrance that fires none is invisible to it. His
+    report, round 9 item 3: Big Boo's Haunt *"is just a small cage that mario
+    teleports into. he triggers an animation for entering it. that's the
+    timer we want to detect"* — and his own probe run produced five clean
+    touches and NOTHING for BBH, so the cage never enters an action
+    `WARP_ENTRY_ACTIONS` names.
+
+    So this trigger is the LEVEL CHANGE and it looks backward: every action
+    EDGE in the window before it, stamped by how many frames ahead of the
+    level byte it landed. The animation he is describing is whichever edge
+    sits ~20-80 frames out, and its value is what a detector would watch.
+    """
+    landed = window[-1]
+    print(f"\n=== ENTERED level {landed['level']} area {landed['area']} "
+          f"at frame {landed['timer']} ===")
+    edges = [(index, sample) for index, sample in enumerate(window)
+             if index == 0 or sample["action"] != window[index - 1]["action"]]
+    print(f"  {'d_frame':>8}  {'action':>10}  {'level':>5} {'area':>4}"
+          f"  {'op':>3} {'dest(lvl/area)':>15}")
+    for index, sample in edges:
+        ahead = sample["timer"] - landed["timer"]
+        print(f"  {ahead:>8}  {sample['action']:#010x}  "
+              f"{sample['level']:>5} {sample['area']:>4}  {sample['op']:>3}"
+              f"  {sample['dest_level']:>7}/{sample['dest_area']:<7}")
+    touched = [sample for sample in window
+               if sample["action"] in WARP_ENTRY_ACTIONS]
+    if touched:
+        print(f"  -> a WARP_ENTRY action DID occur, {touched[0]['timer'] - landed['timer']}"
+              " frames ahead — this entrance is already covered by warp.py")
+    else:
+        print("  -> NO warp-entry action in the whole window. This entrance is"
+              " invisible to warp.py; the action to watch is one of the edges"
+              " above.")
+    sys.stdout.flush()
+
+
+def watch_entries(mem) -> int:
+    """`--entries`: trigger on the LEVEL CHANGE, print the run-up."""
+    print("Attached read-only. Enter a level ANY way — the cage in Big Boo's")
+    print("Haunt, a painting, a pipe, a Usamune warp. CTRL+C to stop.\n")
+    # FLUSH THE BANNER. print() to a pipe is block-buffered on Windows, so
+    # `probe | tee` showed a blank screen until the first entry landed —
+    # indistinguishable from "it failed to attach", which is the one thing
+    # this line exists to rule out.
+    sys.stdout.flush()
+    prev = sample(mem)
+    window: list[dict] = [prev]
+    while True:
+        time.sleep(1 / 120)
+        curr = sample(mem)
+        if curr["timer"] == prev["timer"]:
+            continue
+        if curr["timer"] < prev["timer"]:      # reset: the run-up is gone
+            window = [curr]
+            prev = curr
+            continue
+        window.append(curr)
+        if len(window) > LOOKBACK_FRAMES:
+            window.pop(0)
+        if curr["level"] != prev["level"]:
+            report_entry(window)
+            window = [curr]
+        prev = curr
+
+
+def watch_touches(mem) -> int:
     print("Attached read-only. Walk into any course entrance (painting, portal,")
     print("pipe or hole). CTRL+C to stop.\n")
+    sys.stdout.flush()      # see watch_entries for why
     prev = sample(mem)
     trace: list[dict] = []
     while True:
@@ -125,6 +208,20 @@ def main() -> int:
               and prev["action"] not in WARP_ENTRY_ACTIONS):
             trace = [curr]
         prev = curr
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--entries", action="store_true",
+                        help="trigger on the LEVEL CHANGE and print the "
+                             "run-up, for an entrance that fires no touch "
+                             "(Big Boo's Haunt)")
+    args = parser.parse_args()
+    mem = Pj64Memory()
+    if not mem.attach():
+        print("Could not attach -- is PJ64 running with the ROM loaded?")
+        return 1
+    return watch_entries(mem) if args.entries else watch_touches(mem)
 
 
 if __name__ == "__main__":

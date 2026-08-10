@@ -62,8 +62,10 @@
       ],
       "end_triggers": [
         {
-          "type": "level_enter",
-          "to": 6
+          "type": "moment_reached",
+          "kind": "door_open",
+          "level": 16,
+          "ordinal": 1
         }
       ],
       "waypoints": [],
@@ -267,7 +269,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bob->wf",
@@ -293,7 +296,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bob->pss",
@@ -319,7 +323,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bob->ccm",
@@ -345,7 +350,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bob->basement",
@@ -372,7 +378,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:pss->wf",
@@ -398,7 +405,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:wf->pss",
@@ -424,7 +432,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:wf->ccm",
@@ -450,7 +459,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:wf->sa",
@@ -476,7 +486,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:wf->bitdw",
@@ -502,7 +513,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:wf->ssl",
@@ -536,7 +548,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:sa->jrb",
@@ -562,7 +575,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:jrb->pss",
@@ -588,7 +602,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:pss->totwc",
@@ -614,7 +629,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:totwc->pss",
@@ -640,7 +656,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:totwc->bitdw",
@@ -666,7 +683,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:pss->bitdw",
@@ -692,7 +710,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:pss->bob",
@@ -718,7 +737,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:ccm->bitdw",
@@ -744,7 +764,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:ccm->bbh",
@@ -777,7 +798,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bowser1->bob",
@@ -803,7 +825,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bowser1->wf",
@@ -845,7 +868,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bowser1->ccm",
@@ -871,7 +895,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bowser1->ssl",
@@ -905,7 +930,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bowser1->ddd",
@@ -939,7 +965,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bowser1->bitfs",
@@ -973,7 +1000,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bbh->basement",
@@ -1009,7 +1037,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bbh->ddd",
@@ -1051,7 +1080,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:mips1->ssl",
@@ -1078,7 +1108,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:ssl->lll",
@@ -1104,7 +1135,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:ssl->hmc",
@@ -1130,7 +1162,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:lll->hmc",
@@ -1156,7 +1189,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:lll->ddd",
@@ -1182,7 +1216,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:hmc->lll",
@@ -1208,7 +1243,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:hmc->ddd",
@@ -1234,7 +1270,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:hmc->rr",
@@ -1283,7 +1320,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:mips2->hmc",
@@ -1310,7 +1348,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:mips2->vcutm",
@@ -1344,7 +1383,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:vcutm->ccm",
@@ -1379,7 +1419,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:ddd->bitfs",
@@ -1405,7 +1446,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:ddd->wdw",
@@ -1454,7 +1496,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bowser2->ddd",
@@ -1480,7 +1523,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bowser2->wdw",
@@ -1521,7 +1565,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bowser2->upstairs",
@@ -1564,7 +1609,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:bowser2->bits",
@@ -1613,7 +1659,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:wdw->thi",
@@ -1639,7 +1686,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:thi->ttm",
@@ -1665,7 +1713,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:ttm->sl",
@@ -1691,7 +1740,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:sl->basement",
@@ -1734,7 +1784,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:sl->rr",
@@ -1760,7 +1811,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:sl->wmotr",
@@ -1786,7 +1838,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:wmotr->ttc",
@@ -1812,7 +1865,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:rr->ttc",
@@ -1838,7 +1892,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:ttc->rr",
@@ -1864,7 +1919,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:rr->bits",
@@ -1890,7 +1946,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:ttc->bits",
@@ -1916,7 +1973,8 @@
       ],
       "category": "Castle Movement",
       "default_strat": "Standard",
-      "match_mode": "strict"
+      "match_mode": "strict",
+      "clock_start": "move"
     },
     {
       "seed_key": "seg:reds->pipe:bitdw",
@@ -12197,6 +12255,2618 @@
           ]
         }
       ]
+    }
+  ],
+  "landmarks": [
+    {
+      "seed_key": "landmark:kind:800eb180",
+      "key": "kind:800eb180",
+      "name": "star door"
+    },
+    {
+      "seed_key": "landmark:kind:800eb1d4",
+      "key": "kind:800eb1d4",
+      "name": "Mr. I"
+    },
+    {
+      "seed_key": "landmark:kind:800eb20c",
+      "key": "kind:800eb20c",
+      "name": "Mr. I body"
+    },
+    {
+      "seed_key": "landmark:kind:800eb22c",
+      "key": "kind:800eb22c",
+      "name": "Mr. I particle"
+    },
+    {
+      "seed_key": "landmark:kind:800eb278",
+      "key": "kind:800eb278",
+      "name": "purple particle"
+    },
+    {
+      "seed_key": "landmark:kind:800eb298",
+      "key": "kind:800eb298",
+      "name": "giant pole"
+    },
+    {
+      "seed_key": "landmark:kind:800eb2c4",
+      "key": "kind:800eb2c4",
+      "name": "pole"
+    },
+    {
+      "seed_key": "landmark:kind:800eb2f4",
+      "key": "kind:800eb2f4",
+      "name": "THI huge island top"
+    },
+    {
+      "seed_key": "landmark:kind:800eb314",
+      "key": "kind:800eb314",
+      "name": "THI tiny island top"
+    },
+    {
+      "seed_key": "landmark:kind:800eb32c",
+      "key": "kind:800eb32c",
+      "name": "cap switch base"
+    },
+    {
+      "seed_key": "landmark:kind:800eb34c",
+      "key": "kind:800eb34c",
+      "name": "cap switch"
+    },
+    {
+      "seed_key": "landmark:kind:800eb374",
+      "key": "kind:800eb374",
+      "name": "King Bob-omb"
+    },
+    {
+      "seed_key": "landmark:kind:800eb3d4",
+      "key": "kind:800eb3d4",
+      "name": "bob-omb anchor Mario"
+    },
+    {
+      "seed_key": "landmark:kind:800eb438",
+      "key": "kind:800eb438",
+      "name": "bubble particle spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800eb464",
+      "key": "kind:800eb464",
+      "name": "bubble maybe"
+    },
+    {
+      "seed_key": "landmark:kind:800eb4b8",
+      "key": "kind:800eb4b8",
+      "name": "small water wave"
+    },
+    {
+      "seed_key": "landmark:kind:800eb518",
+      "key": "kind:800eb518",
+      "name": "small water wave 398"
+    },
+    {
+      "seed_key": "landmark:kind:800eb53c",
+      "key": "kind:800eb53c",
+      "name": "water air bubble"
+    },
+    {
+      "seed_key": "landmark:kind:800eb580",
+      "key": "kind:800eb580",
+      "name": "small particle"
+    },
+    {
+      "seed_key": "landmark:kind:800eb5a8",
+      "key": "kind:800eb5a8",
+      "name": "plunge bubble"
+    },
+    {
+      "seed_key": "landmark:kind:800eb5c4",
+      "key": "kind:800eb5c4",
+      "name": "small particle snow"
+    },
+    {
+      "seed_key": "landmark:kind:800eb5ec",
+      "key": "kind:800eb5ec",
+      "name": "small particle bubbles"
+    },
+    {
+      "seed_key": "landmark:kind:800eb614",
+      "key": "kind:800eb614",
+      "name": "fish group"
+    },
+    {
+      "seed_key": "landmark:kind:800eb628",
+      "key": "kind:800eb628",
+      "name": "cannon"
+    },
+    {
+      "seed_key": "landmark:kind:800eb664",
+      "key": "kind:800eb664",
+      "name": "cannon barrel"
+    },
+    {
+      "seed_key": "landmark:kind:800eb680",
+      "key": "kind:800eb680",
+      "name": "cannon base unused"
+    },
+    {
+      "seed_key": "landmark:kind:800eb6a8",
+      "key": "kind:800eb6a8",
+      "name": "chuckya"
+    },
+    {
+      "seed_key": "landmark:kind:800eb704",
+      "key": "kind:800eb704",
+      "name": "chuckya anchor Mario"
+    },
+    {
+      "seed_key": "landmark:kind:800eb734",
+      "key": "kind:800eb734",
+      "name": "rotating platform"
+    },
+    {
+      "seed_key": "landmark:kind:800eb758",
+      "key": "kind:800eb758",
+      "name": "tower"
+    },
+    {
+      "seed_key": "landmark:kind:800eb780",
+      "key": "kind:800eb780",
+      "name": "bullet bill cannon"
+    },
+    {
+      "seed_key": "landmark:kind:800eb7a4",
+      "key": "kind:800eb7a4",
+      "name": "WF breakable wall right"
+    },
+    {
+      "seed_key": "landmark:kind:800eb7b8",
+      "key": "kind:800eb7b8",
+      "name": "WF breakable wall left"
+    },
+    {
+      "seed_key": "landmark:kind:800eb7ec",
+      "key": "kind:800eb7ec",
+      "name": "kickable board"
+    },
+    {
+      "seed_key": "landmark:kind:800eb824",
+      "key": "kind:800eb824",
+      "name": "tower door"
+    },
+    {
+      "seed_key": "landmark:kind:800eb858",
+      "key": "kind:800eb858",
+      "name": "rotating counter clockwise"
+    },
+    {
+      "seed_key": "landmark:kind:800eb860",
+      "key": "kind:800eb860",
+      "name": "WF rotating wooden platform"
+    },
+    {
+      "seed_key": "landmark:kind:800eb888",
+      "key": "kind:800eb888",
+      "name": "koopa shell underwater"
+    },
+    {
+      "seed_key": "landmark:kind:800eb8a0",
+      "key": "kind:800eb8a0",
+      "name": "exit podium warp"
+    },
+    {
+      "seed_key": "landmark:kind:800eb8dc",
+      "key": "kind:800eb8dc",
+      "name": "fading warp"
+    },
+    {
+      "seed_key": "landmark:kind:800eb900",
+      "key": "kind:800eb900",
+      "name": "warp"
+    },
+    {
+      "seed_key": "landmark:kind:800eb920",
+      "key": "kind:800eb920",
+      "name": "warp pipe"
+    },
+    {
+      "seed_key": "landmark:kind:800eb95c",
+      "key": "kind:800eb95c",
+      "name": "white puff explosion"
+    },
+    {
+      "seed_key": "landmark:kind:800eb978",
+      "key": "kind:800eb978",
+      "name": "spawned star"
+    },
+    {
+      "seed_key": "landmark:kind:800eb98c",
+      "key": "kind:800eb98c",
+      "name": "spawned star no level exit"
+    },
+    {
+      "seed_key": "landmark:kind:800eb9b0",
+      "key": "kind:800eb9b0",
+      "name": "Mr. I blue coin"
+    },
+    {
+      "seed_key": "landmark:kind:800eba08",
+      "key": "kind:800eba08",
+      "name": "coin inside boo"
+    },
+    {
+      "seed_key": "landmark:kind:800eba50",
+      "key": "kind:800eba50",
+      "name": "coin formation spawn"
+    },
+    {
+      "seed_key": "landmark:kind:800eba6c",
+      "key": "kind:800eba6c",
+      "name": "coin formation"
+    },
+    {
+      "seed_key": "landmark:kind:800eba8c",
+      "key": "kind:800eba8c",
+      "name": "one coin"
+    },
+    {
+      "seed_key": "landmark:kind:800eba9c",
+      "key": "kind:800eba9c",
+      "name": "yellow coin"
+    },
+    {
+      "seed_key": "landmark:kind:800ebac0",
+      "key": "kind:800ebac0",
+      "name": "temporary yellow coin"
+    },
+    {
+      "seed_key": "landmark:kind:800ebae4",
+      "key": "kind:800ebae4",
+      "name": "three coins spawn"
+    },
+    {
+      "seed_key": "landmark:kind:800ebb04",
+      "key": "kind:800ebb04",
+      "name": "ten coins spawn"
+    },
+    {
+      "seed_key": "landmark:kind:800ebb24",
+      "key": "kind:800ebb24",
+      "name": "single coin gets spawned"
+    },
+    {
+      "seed_key": "landmark:kind:800ebb60",
+      "key": "kind:800ebb60",
+      "name": "coin sparkles"
+    },
+    {
+      "seed_key": "landmark:kind:800ebb94",
+      "key": "kind:800ebb94",
+      "name": "golden coin sparkles"
+    },
+    {
+      "seed_key": "landmark:kind:800ebbb4",
+      "key": "kind:800ebbb4",
+      "name": "wall tiny star particle"
+    },
+    {
+      "seed_key": "landmark:kind:800ebbd4",
+      "key": "kind:800ebbd4",
+      "name": "vert star particle spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800ebbf8",
+      "key": "kind:800ebbf8",
+      "name": "pound tiny star particle"
+    },
+    {
+      "seed_key": "landmark:kind:800ebc18",
+      "key": "kind:800ebc18",
+      "name": "hor star particle spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800ebc3c",
+      "key": "kind:800ebc3c",
+      "name": "punch tiny triangle"
+    },
+    {
+      "seed_key": "landmark:kind:800ebc58",
+      "key": "kind:800ebc58",
+      "name": "triangle particle spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800ebc7c",
+      "key": "kind:800ebc7c",
+      "name": "warp door"
+    },
+    {
+      "seed_key": "landmark:kind:800ebc8c",
+      "key": "kind:800ebc8c",
+      "name": "door"
+    },
+    {
+      "seed_key": "landmark:kind:800ebcd8",
+      "key": "kind:800ebcd8",
+      "name": "grindel"
+    },
+    {
+      "seed_key": "landmark:kind:800ebd0c",
+      "key": "kind:800ebd0c",
+      "name": "thwomp 2"
+    },
+    {
+      "seed_key": "landmark:kind:800ebd48",
+      "key": "kind:800ebd48",
+      "name": "thwomp"
+    },
+    {
+      "seed_key": "landmark:kind:800ebd84",
+      "key": "kind:800ebd84",
+      "name": "tumbling bridge platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ebda8",
+      "key": "kind:800ebda8",
+      "name": "WF tumbling bridge"
+    },
+    {
+      "seed_key": "landmark:kind:800ebdc4",
+      "key": "kind:800ebdc4",
+      "name": "BBH tumbling bridge"
+    },
+    {
+      "seed_key": "landmark:kind:800ebde4",
+      "key": "kind:800ebde4",
+      "name": "LLL tumbling bridge"
+    },
+    {
+      "seed_key": "landmark:kind:800ebe04",
+      "key": "kind:800ebe04",
+      "name": "flame"
+    },
+    {
+      "seed_key": "landmark:kind:800ebe48",
+      "key": "kind:800ebe48",
+      "name": "another elavator"
+    },
+    {
+      "seed_key": "landmark:kind:800ebe7c",
+      "key": "kind:800ebe7c",
+      "name": "RR elevator platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ebeb0",
+      "key": "kind:800ebeb0",
+      "name": "HMC elevator platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ebeec",
+      "key": "kind:800ebeec",
+      "name": "water mist"
+    },
+    {
+      "seed_key": "landmark:kind:800ebf18",
+      "key": "kind:800ebf18",
+      "name": "breath particle spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800ebf34",
+      "key": "kind:800ebf34",
+      "name": "break box triangle"
+    },
+    {
+      "seed_key": "landmark:kind:800ebf58",
+      "key": "kind:800ebf58",
+      "name": "water mist 2"
+    },
+    {
+      "seed_key": "landmark:kind:800ebfa4",
+      "key": "kind:800ebfa4",
+      "name": "mist circ particle spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800ebfbc",
+      "key": "kind:800ebfbc",
+      "name": "dirt particle spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800ebfd8",
+      "key": "kind:800ebfd8",
+      "name": "snow particle spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800ebff0",
+      "key": "kind:800ebff0",
+      "name": "wind"
+    },
+    {
+      "seed_key": "landmark:kind:800ec008",
+      "key": "kind:800ec008",
+      "name": "end Toad"
+    },
+    {
+      "seed_key": "landmark:kind:800ec02c",
+      "key": "kind:800ec02c",
+      "name": "end Peach"
+    },
+    {
+      "seed_key": "landmark:kind:800ec088",
+      "key": "kind:800ec088",
+      "name": "Ukiki"
+    },
+    {
+      "seed_key": "landmark:kind:800ec094",
+      "key": "kind:800ec094",
+      "name": "Ukiki cage child"
+    },
+    {
+      "seed_key": "landmark:kind:800ec0ac",
+      "key": "kind:800ec0ac",
+      "name": "Ukiki cage star"
+    },
+    {
+      "seed_key": "landmark:kind:800ec0c8",
+      "key": "kind:800ec0c8",
+      "name": "Ukiki cage"
+    },
+    {
+      "seed_key": "landmark:kind:800ec11c",
+      "key": "kind:800ec11c",
+      "name": "BitFS sinking platforms"
+    },
+    {
+      "seed_key": "landmark:kind:800ec148",
+      "key": "kind:800ec148",
+      "name": "BitFS sinking cage platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ec180",
+      "key": "kind:800ec180",
+      "name": "DDD moving pole"
+    },
+    {
+      "seed_key": "landmark:kind:800ec1b0",
+      "key": "kind:800ec1b0",
+      "name": "BitFS tilting inverted pyramid"
+    },
+    {
+      "seed_key": "landmark:kind:800ec1e4",
+      "key": "kind:800ec1e4",
+      "name": "squishable platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ec218",
+      "key": "kind:800ec218",
+      "name": "cut out object"
+    },
+    {
+      "seed_key": "landmark:kind:800ec258",
+      "key": "kind:800ec258",
+      "name": "RR rotating bridge platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ec288",
+      "key": "kind:800ec288",
+      "name": "flamethrower"
+    },
+    {
+      "seed_key": "landmark:kind:800ec2a4",
+      "key": "kind:800ec2a4",
+      "name": "flamethrower flame"
+    },
+    {
+      "seed_key": "landmark:kind:800ec2e8",
+      "key": "kind:800ec2e8",
+      "name": "bouncing fireball"
+    },
+    {
+      "seed_key": "landmark:kind:800ec304",
+      "key": "kind:800ec304",
+      "name": "bouncing fireball flame"
+    },
+    {
+      "seed_key": "landmark:kind:800ec350",
+      "key": "kind:800ec350",
+      "name": "Bowser shock wave"
+    },
+    {
+      "seed_key": "landmark:kind:800ec36c",
+      "key": "kind:800ec36c",
+      "name": "fire particle spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800ec394",
+      "key": "kind:800ec394",
+      "name": "black smoke Mario"
+    },
+    {
+      "seed_key": "landmark:kind:800ec3d4",
+      "key": "kind:800ec3d4",
+      "name": "black smoke Bowser"
+    },
+    {
+      "seed_key": "landmark:kind:800ec3fc",
+      "key": "kind:800ec3fc",
+      "name": "black smoke upward"
+    },
+    {
+      "seed_key": "landmark:kind:800ec434",
+      "key": "kind:800ec434",
+      "name": "spindrift"
+    },
+    {
+      "seed_key": "landmark:kind:800ec474",
+      "key": "kind:800ec474",
+      "name": "tower platform group"
+    },
+    {
+      "seed_key": "landmark:kind:800ec498",
+      "key": "kind:800ec498",
+      "name": "WF sliding tower platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ec4c0",
+      "key": "kind:800ec4c0",
+      "name": "WF elevator tower platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ec4e8",
+      "key": "kind:800ec4e8",
+      "name": "WF solid tower platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ec510",
+      "key": "kind:800ec510",
+      "name": "leaf particle spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800ec528",
+      "key": "kind:800ec528",
+      "name": "tree snow"
+    },
+    {
+      "seed_key": "landmark:kind:800ec544",
+      "key": "kind:800ec544",
+      "name": "tree leaf"
+    },
+    {
+      "seed_key": "landmark:kind:800ec55c",
+      "key": "kind:800ec55c",
+      "name": "another tilting platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ec588",
+      "key": "kind:800ec588",
+      "name": "squarish path moving"
+    },
+    {
+      "seed_key": "landmark:kind:800ec5ac",
+      "key": "kind:800ec5ac",
+      "name": "piranha plant bubble"
+    },
+    {
+      "seed_key": "landmark:kind:800ec5c8",
+      "key": "kind:800ec5c8",
+      "name": "piranha plant waking bubbles"
+    },
+    {
+      "seed_key": "landmark:kind:800ec5e8",
+      "key": "kind:800ec5e8",
+      "name": "floor switch animates object"
+    },
+    {
+      "seed_key": "landmark:kind:800ec5f8",
+      "key": "kind:800ec5f8",
+      "name": "floor switch grills"
+    },
+    {
+      "seed_key": "landmark:kind:800ec604",
+      "key": "kind:800ec604",
+      "name": "floor switch hardcoded model"
+    },
+    {
+      "seed_key": "landmark:kind:800ec62c",
+      "key": "kind:800ec62c",
+      "name": "floor switch hidden objects"
+    },
+    {
+      "seed_key": "landmark:kind:800ec63c",
+      "key": "kind:800ec63c",
+      "name": "hidden object"
+    },
+    {
+      "seed_key": "landmark:kind:800ec660",
+      "key": "kind:800ec660",
+      "name": "breakable box"
+    },
+    {
+      "seed_key": "landmark:kind:800ec698",
+      "key": "kind:800ec698",
+      "name": "pushable metal box"
+    },
+    {
+      "seed_key": "landmark:kind:800ec6c8",
+      "key": "kind:800ec6c8",
+      "name": "heave-ho"
+    },
+    {
+      "seed_key": "landmark:kind:800ec724",
+      "key": "kind:800ec724",
+      "name": "heave ho throw Mario"
+    },
+    {
+      "seed_key": "landmark:kind:800ec740",
+      "key": "kind:800ec740",
+      "name": "CCM touched star spawn"
+    },
+    {
+      "seed_key": "landmark:kind:800ec7d0",
+      "key": "kind:800ec7d0",
+      "name": "jumping box"
+    },
+    {
+      "seed_key": "landmark:kind:800ec7fc",
+      "key": "kind:800ec7fc",
+      "name": "boo cage"
+    },
+    {
+      "seed_key": "landmark:kind:800ec838",
+      "key": "kind:800ec838",
+      "name": "igloo"
+    },
+    {
+      "seed_key": "landmark:kind:800ec864",
+      "key": "kind:800ec864",
+      "name": "Bowser key"
+    },
+    {
+      "seed_key": "landmark:kind:800ec894",
+      "key": "kind:800ec894",
+      "name": "grand star"
+    },
+    {
+      "seed_key": "landmark:kind:800ec8f8",
+      "key": "kind:800ec8f8",
+      "name": "alpha boo key"
+    },
+    {
+      "seed_key": "landmark:kind:800ec91c",
+      "key": "kind:800ec91c",
+      "name": "bullet bill"
+    },
+    {
+      "seed_key": "landmark:kind:800ec974",
+      "key": "kind:800ec974",
+      "name": "white puff smoke"
+    },
+    {
+      "seed_key": "landmark:kind:800ec9a8",
+      "key": "kind:800ec9a8",
+      "name": "Bowser tail anchor"
+    },
+    {
+      "seed_key": "landmark:kind:800ec9d0",
+      "key": "kind:800ec9d0",
+      "name": "Bowser"
+    },
+    {
+      "seed_key": "landmark:kind:800eca4c",
+      "key": "kind:800eca4c",
+      "name": "Bowser body anchor"
+    },
+    {
+      "seed_key": "landmark:kind:800eca84",
+      "key": "kind:800eca84",
+      "name": "Bowser flame spawn"
+    },
+    {
+      "seed_key": "landmark:kind:800ecaa0",
+      "key": "kind:800ecaa0",
+      "name": "tilting Bowser lava platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ecad8",
+      "key": "kind:800ecad8",
+      "name": "falling Bowser platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ecb04",
+      "key": "kind:800ecb04",
+      "name": "blue Bowser flame"
+    },
+    {
+      "seed_key": "landmark:kind:800ecb48",
+      "key": "kind:800ecb48",
+      "name": "flame floating landing"
+    },
+    {
+      "seed_key": "landmark:kind:800ecb8c",
+      "key": "kind:800ecb8c",
+      "name": "blue flames group"
+    },
+    {
+      "seed_key": "landmark:kind:800ecbb0",
+      "key": "kind:800ecbb0",
+      "name": "flame bouncing"
+    },
+    {
+      "seed_key": "landmark:kind:800ecbf4",
+      "key": "kind:800ecbf4",
+      "name": "flame moving forward growing"
+    },
+    {
+      "seed_key": "landmark:kind:800ecc24",
+      "key": "kind:800ecc24",
+      "name": "flame Bowser"
+    },
+    {
+      "seed_key": "landmark:kind:800ecc68",
+      "key": "kind:800ecc68",
+      "name": "flame large burning out"
+    },
+    {
+      "seed_key": "landmark:kind:800eccac",
+      "key": "kind:800eccac",
+      "name": "blue fish"
+    },
+    {
+      "seed_key": "landmark:kind:800eccd4",
+      "key": "kind:800eccd4",
+      "name": "tank fish group"
+    },
+    {
+      "seed_key": "landmark:kind:800eccf0",
+      "key": "kind:800eccf0",
+      "name": "checkerboard elevator group"
+    },
+    {
+      "seed_key": "landmark:kind:800ecd08",
+      "key": "kind:800ecd08",
+      "name": "checkerboard platform sub"
+    },
+    {
+      "seed_key": "landmark:kind:800ecd34",
+      "key": "kind:800ecd34",
+      "name": "Bowser key unlock door"
+    },
+    {
+      "seed_key": "landmark:kind:800ecd54",
+      "key": "kind:800ecd54",
+      "name": "Bowser key course exit"
+    },
+    {
+      "seed_key": "landmark:kind:800ecd74",
+      "key": "kind:800ecd74",
+      "name": "invisible objects under bridge"
+    },
+    {
+      "seed_key": "landmark:kind:800ecd84",
+      "key": "kind:800ecd84",
+      "name": "water level pillar"
+    },
+    {
+      "seed_key": "landmark:kind:800ecdb4",
+      "key": "kind:800ecdb4",
+      "name": "DDD warp"
+    },
+    {
+      "seed_key": "landmark:kind:800ecdd8",
+      "key": "kind:800ecdd8",
+      "name": "moat grills"
+    },
+    {
+      "seed_key": "landmark:kind:800ecdfc",
+      "key": "kind:800ecdfc",
+      "name": "clock minute hand"
+    },
+    {
+      "seed_key": "landmark:kind:800ece0c",
+      "key": "kind:800ece0c",
+      "name": "clock hour hand"
+    },
+    {
+      "seed_key": "landmark:kind:800ece30",
+      "key": "kind:800ece30",
+      "name": "Ukiki"
+    },
+    {
+      "seed_key": "landmark:kind:800ece94",
+      "key": "kind:800ece94",
+      "name": "LLL rotating hexagonal platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ecec0",
+      "key": "kind:800ecec0",
+      "name": "LLL sinking rock block"
+    },
+    {
+      "seed_key": "landmark:kind:800ecef8",
+      "key": "kind:800ecef8",
+      "name": "LLL moving octagonal mesh platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ecf24",
+      "key": "kind:800ecf24",
+      "name": "snow ball"
+    },
+    {
+      "seed_key": "landmark:kind:800ecf28",
+      "key": "kind:800ecf28",
+      "name": "LLL rotating block with fire bars"
+    },
+    {
+      "seed_key": "landmark:kind:800ecf4c",
+      "key": "kind:800ecf4c",
+      "name": "LLL rotating hex flame"
+    },
+    {
+      "seed_key": "landmark:kind:800ecf84",
+      "key": "kind:800ecf84",
+      "name": "LLL wood piece"
+    },
+    {
+      "seed_key": "landmark:kind:800ecfb0",
+      "key": "kind:800ecfb0",
+      "name": "LLL floating wood bridge"
+    },
+    {
+      "seed_key": "landmark:kind:800ecfcc",
+      "key": "kind:800ecfcc",
+      "name": "volcano flames"
+    },
+    {
+      "seed_key": "landmark:kind:800ecfec",
+      "key": "kind:800ecfec",
+      "name": "LLL rotating hexagonal ring"
+    },
+    {
+      "seed_key": "landmark:kind:800ed014",
+      "key": "kind:800ed014",
+      "name": "LLL sinking rectangular platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ed044",
+      "key": "kind:800ed044",
+      "name": "LLL sinking square platforms"
+    },
+    {
+      "seed_key": "landmark:kind:800ed078",
+      "key": "kind:800ed078",
+      "name": "LLL tilting inverted pyramid"
+    },
+    {
+      "seed_key": "landmark:kind:800ed0bc",
+      "key": "kind:800ed0bc",
+      "name": "koopa shell"
+    },
+    {
+      "seed_key": "landmark:kind:800ed0e8",
+      "key": "kind:800ed0e8",
+      "name": "koopa shell flame"
+    },
+    {
+      "seed_key": "landmark:kind:800ed110",
+      "key": "kind:800ed110",
+      "name": "tox box"
+    },
+    {
+      "seed_key": "landmark:kind:800ed13c",
+      "key": "kind:800ed13c",
+      "name": "piranha plant"
+    },
+    {
+      "seed_key": "landmark:kind:800ed198",
+      "key": "kind:800ed198",
+      "name": "LLL hexagonal mesh"
+    },
+    {
+      "seed_key": "landmark:kind:800ed1b8",
+      "key": "kind:800ed1b8",
+      "name": "LLL Bowser puzzle piece"
+    },
+    {
+      "seed_key": "landmark:kind:800ed1e8",
+      "key": "kind:800ed1e8",
+      "name": "LLL Bowser puzzle"
+    },
+    {
+      "seed_key": "landmark:kind:800ed208",
+      "key": "kind:800ed208",
+      "name": "Tuxie's Mother"
+    },
+    {
+      "seed_key": "landmark:kind:800ed258",
+      "key": "kind:800ed258",
+      "name": "penguin baby"
+    },
+    {
+      "seed_key": "landmark:kind:800ed268",
+      "key": "kind:800ed268",
+      "name": "small penguin"
+    },
+    {
+      "seed_key": "landmark:kind:800ed2bc",
+      "key": "kind:800ed2bc",
+      "name": "fish 2"
+    },
+    {
+      "seed_key": "landmark:kind:800ed2cc",
+      "key": "kind:800ed2cc",
+      "name": "fish 3"
+    },
+    {
+      "seed_key": "landmark:kind:800ed2dc",
+      "key": "kind:800ed2dc",
+      "name": "large fish group"
+    },
+    {
+      "seed_key": "landmark:kind:800ed2f8",
+      "key": "kind:800ed2f8",
+      "name": "fish"
+    },
+    {
+      "seed_key": "landmark:kind:800ed314",
+      "key": "kind:800ed314",
+      "name": "WDW express elevator"
+    },
+    {
+      "seed_key": "landmark:kind:800ed340",
+      "key": "kind:800ed340",
+      "name": "WDW express elevator platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ed364",
+      "key": "kind:800ed364",
+      "name": "chirp chirp"
+    },
+    {
+      "seed_key": "landmark:kind:800ed374",
+      "key": "kind:800ed374",
+      "name": "chirp chirp unused"
+    },
+    {
+      "seed_key": "landmark:kind:800ed38c",
+      "key": "kind:800ed38c",
+      "name": "bub"
+    },
+    {
+      "seed_key": "landmark:kind:800ed3d0",
+      "key": "kind:800ed3d0",
+      "name": "exclamation box"
+    },
+    {
+      "seed_key": "landmark:kind:800ed3fc",
+      "key": "kind:800ed3fc",
+      "name": "rotating exclamation mark"
+    },
+    {
+      "seed_key": "landmark:kind:800ed41c",
+      "key": "kind:800ed41c",
+      "name": "sound spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800ed438",
+      "key": "kind:800ed438",
+      "name": "rock solid"
+    },
+    {
+      "seed_key": "landmark:kind:800ed458",
+      "key": "kind:800ed458",
+      "name": "Bowser sub door"
+    },
+    {
+      "seed_key": "landmark:kind:800ed488",
+      "key": "kind:800ed488",
+      "name": "Bowser's sub"
+    },
+    {
+      "seed_key": "landmark:kind:800ed4b8",
+      "key": "kind:800ed4b8",
+      "name": "sushi shark"
+    },
+    {
+      "seed_key": "landmark:kind:800ed508",
+      "key": "kind:800ed508",
+      "name": "sushi shark collision child"
+    },
+    {
+      "seed_key": "landmark:kind:800ed524",
+      "key": "kind:800ed524",
+      "name": "JRB sliding box"
+    },
+    {
+      "seed_key": "landmark:kind:800ed550",
+      "key": "kind:800ed550",
+      "name": "ship part 3"
+    },
+    {
+      "seed_key": "landmark:kind:800ed56c",
+      "key": "kind:800ed56c",
+      "name": "in sunken ship 3"
+    },
+    {
+      "seed_key": "landmark:kind:800ed59c",
+      "key": "kind:800ed59c",
+      "name": "sunken ship part"
+    },
+    {
+      "seed_key": "landmark:kind:800ed5bc",
+      "key": "kind:800ed5bc",
+      "name": "sunken ship set rotation"
+    },
+    {
+      "seed_key": "landmark:kind:800ed5cc",
+      "key": "kind:800ed5cc",
+      "name": "sunken ship part 2"
+    },
+    {
+      "seed_key": "landmark:kind:800ed5ec",
+      "key": "kind:800ed5ec",
+      "name": "in sunken ship"
+    },
+    {
+      "seed_key": "landmark:kind:800ed600",
+      "key": "kind:800ed600",
+      "name": "in sunken ship 2"
+    },
+    {
+      "seed_key": "landmark:kind:800ed62c",
+      "key": "kind:800ed62c",
+      "name": "mist particle spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800ed65c",
+      "key": "kind:800ed65c",
+      "name": "white puff 1"
+    },
+    {
+      "seed_key": "landmark:kind:800ed680",
+      "key": "kind:800ed680",
+      "name": "white puff 2"
+    },
+    {
+      "seed_key": "landmark:kind:800ed6a8",
+      "key": "kind:800ed6a8",
+      "name": "white puff smoke 2"
+    },
+    {
+      "seed_key": "landmark:kind:800ed6d8",
+      "key": "kind:800ed6d8",
+      "name": "purple switch hidden boxes"
+    },
+    {
+      "seed_key": "landmark:kind:800ed6e8",
+      "key": "kind:800ed6e8",
+      "name": "blue coin switch"
+    },
+    {
+      "seed_key": "landmark:kind:800ed708",
+      "key": "kind:800ed708",
+      "name": "hidden blue coin"
+    },
+    {
+      "seed_key": "landmark:kind:800ed740",
+      "key": "kind:800ed740",
+      "name": "openable cage door"
+    },
+    {
+      "seed_key": "landmark:kind:800ed760",
+      "key": "kind:800ed760",
+      "name": "openable grill"
+    },
+    {
+      "seed_key": "landmark:kind:800ed778",
+      "key": "kind:800ed778",
+      "name": "water level diamond"
+    },
+    {
+      "seed_key": "landmark:kind:800ed7a0",
+      "key": "kind:800ed7a0",
+      "name": "initialize changing water level"
+    },
+    {
+      "seed_key": "landmark:kind:800ed7b4",
+      "key": "kind:800ed7b4",
+      "name": "tweester sand particle"
+    },
+    {
+      "seed_key": "landmark:kind:800ed7d0",
+      "key": "kind:800ed7d0",
+      "name": "tweester"
+    },
+    {
+      "seed_key": "landmark:kind:800ed804",
+      "key": "kind:800ed804",
+      "name": "merry go round boo manager"
+    },
+    {
+      "seed_key": "landmark:kind:800ed81c",
+      "key": "kind:800ed81c",
+      "name": "animated texture"
+    },
+    {
+      "seed_key": "landmark:kind:800ed854",
+      "key": "kind:800ed854",
+      "name": "boo in castle"
+    },
+    {
+      "seed_key": "landmark:kind:800ed890",
+      "key": "kind:800ed890",
+      "name": "boo with cage"
+    },
+    {
+      "seed_key": "landmark:kind:800ed8e8",
+      "key": "kind:800ed8e8",
+      "name": "balcony big boo"
+    },
+    {
+      "seed_key": "landmark:kind:800ed8fc",
+      "key": "kind:800ed8fc",
+      "name": "merry go round big boo"
+    },
+    {
+      "seed_key": "landmark:kind:800ed910",
+      "key": "kind:800ed910",
+      "name": "ghost hunt big boo"
+    },
+    {
+      "seed_key": "landmark:kind:800ed950",
+      "key": "kind:800ed950",
+      "name": "courtyard boo triplet"
+    },
+    {
+      "seed_key": "landmark:kind:800ed964",
+      "key": "kind:800ed964",
+      "name": "boo"
+    },
+    {
+      "seed_key": "landmark:kind:800ed974",
+      "key": "kind:800ed974",
+      "name": "merry go round boo"
+    },
+    {
+      "seed_key": "landmark:kind:800ed984",
+      "key": "kind:800ed984",
+      "name": "ghost hunt boo"
+    },
+    {
+      "seed_key": "landmark:kind:800ed9ec",
+      "key": "kind:800ed9ec",
+      "name": "hidden staircase step"
+    },
+    {
+      "seed_key": "landmark:kind:800eda18",
+      "key": "kind:800eda18",
+      "name": "boo boss spawned bridge"
+    },
+    {
+      "seed_key": "landmark:kind:800eda4c",
+      "key": "kind:800eda4c",
+      "name": "BBH tilting trap platform"
+    },
+    {
+      "seed_key": "landmark:kind:800eda7c",
+      "key": "kind:800eda7c",
+      "name": "haunted bookshelf"
+    },
+    {
+      "seed_key": "landmark:kind:800edaac",
+      "key": "kind:800edaac",
+      "name": "mesh elevator"
+    },
+    {
+      "seed_key": "landmark:kind:800edae8",
+      "key": "kind:800edae8",
+      "name": "merry go round"
+    },
+    {
+      "seed_key": "landmark:kind:800edb18",
+      "key": "kind:800edb18",
+      "name": "plays music track when touched"
+    },
+    {
+      "seed_key": "landmark:kind:800edb30",
+      "key": "kind:800edb30",
+      "name": "inside cannon"
+    },
+    {
+      "seed_key": "landmark:kind:800edb64",
+      "key": "kind:800edb64",
+      "name": "static checkered platform"
+    },
+    {
+      "seed_key": "landmark:kind:800edbc8",
+      "key": "kind:800edbc8",
+      "name": "static object"
+    },
+    {
+      "seed_key": "landmark:kind:800edbdc",
+      "key": "kind:800edbdc",
+      "name": "castle floor trap"
+    },
+    {
+      "seed_key": "landmark:kind:800edbfc",
+      "key": "kind:800edbfc",
+      "name": "floor trap in castle"
+    },
+    {
+      "seed_key": "landmark:kind:800edc24",
+      "key": "kind:800edc24",
+      "name": "tree"
+    },
+    {
+      "seed_key": "landmark:kind:800edc50",
+      "key": "kind:800edc50",
+      "name": "sparkle"
+    },
+    {
+      "seed_key": "landmark:kind:800edc70",
+      "key": "kind:800edc70",
+      "name": "sparkle spawn"
+    },
+    {
+      "seed_key": "landmark:kind:800edc88",
+      "key": "kind:800edc88",
+      "name": "sparkle particle spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800edcdc",
+      "key": "kind:800edcdc",
+      "name": "scuttlebug"
+    },
+    {
+      "seed_key": "landmark:kind:800edd20",
+      "key": "kind:800edd20",
+      "name": "scuttlebug spawn"
+    },
+    {
+      "seed_key": "landmark:kind:800edd38",
+      "key": "kind:800edd38",
+      "name": "Whomp King"
+    },
+    {
+      "seed_key": "landmark:kind:800edd4c",
+      "key": "kind:800edd4c",
+      "name": "small whomp"
+    },
+    {
+      "seed_key": "landmark:kind:800edd94",
+      "key": "kind:800edd94",
+      "name": "water splash"
+    },
+    {
+      "seed_key": "landmark:kind:800edde0",
+      "key": "kind:800edde0",
+      "name": "water droplet"
+    },
+    {
+      "seed_key": "landmark:kind:800eddfc",
+      "key": "kind:800eddfc",
+      "name": "water droplet splash"
+    },
+    {
+      "seed_key": "landmark:kind:800ede30",
+      "key": "kind:800ede30",
+      "name": "bubble splash"
+    },
+    {
+      "seed_key": "landmark:kind:800ede60",
+      "key": "kind:800ede60",
+      "name": "idle water wave"
+    },
+    {
+      "seed_key": "landmark:kind:800edea8",
+      "key": "kind:800edea8",
+      "name": "object water splash"
+    },
+    {
+      "seed_key": "landmark:kind:800eded0",
+      "key": "kind:800eded0",
+      "name": "shallow water wave"
+    },
+    {
+      "seed_key": "landmark:kind:800edefc",
+      "key": "kind:800edefc",
+      "name": "shallow water splash"
+    },
+    {
+      "seed_key": "landmark:kind:800edf30",
+      "key": "kind:800edf30",
+      "name": "object wave trail"
+    },
+    {
+      "seed_key": "landmark:kind:800edf40",
+      "key": "kind:800edf40",
+      "name": "wave trail"
+    },
+    {
+      "seed_key": "landmark:kind:800edf84",
+      "key": "kind:800edf84",
+      "name": "tiny strong wind particle"
+    },
+    {
+      "seed_key": "landmark:kind:800edfa0",
+      "key": "kind:800edfa0",
+      "name": "strong wind particle"
+    },
+    {
+      "seed_key": "landmark:kind:800edfbc",
+      "key": "kind:800edfbc",
+      "name": "SL snowman wind"
+    },
+    {
+      "seed_key": "landmark:kind:800edfd8",
+      "key": "kind:800edfd8",
+      "name": "SL walking penguin"
+    },
+    {
+      "seed_key": "landmark:kind:800ee028",
+      "key": "kind:800ee028",
+      "name": "yellow ball"
+    },
+    {
+      "seed_key": "landmark:kind:800ee040",
+      "key": "kind:800ee040",
+      "name": "Mario"
+    },
+    {
+      "seed_key": "landmark:kind:800ee078",
+      "key": "kind:800ee078",
+      "name": "Toad"
+    },
+    {
+      "seed_key": "landmark:kind:800ee0c0",
+      "key": "kind:800ee0c0",
+      "name": "unlock door star"
+    },
+    {
+      "seed_key": "landmark:kind:800ee0e0",
+      "key": "kind:800ee0e0",
+      "name": "instant active warp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee0e4",
+      "key": "kind:800ee0e4",
+      "name": "airborne warp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee0e8",
+      "key": "kind:800ee0e8",
+      "name": "hard air knock back warp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee0ec",
+      "key": "kind:800ee0ec",
+      "name": "spin airborne circle warp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee0f0",
+      "key": "kind:800ee0f0",
+      "name": "death warp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee0f4",
+      "key": "kind:800ee0f4",
+      "name": "spin airborne warp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee0f8",
+      "key": "kind:800ee0f8",
+      "name": "flying warp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee0fc",
+      "key": "kind:800ee0fc",
+      "name": "painting star collect warp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee100",
+      "key": "kind:800ee100",
+      "name": "painting death warp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee104",
+      "key": "kind:800ee104",
+      "name": "airborne death warp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee108",
+      "key": "kind:800ee108",
+      "name": "airborne star collect warp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee10c",
+      "key": "kind:800ee10c",
+      "name": "launch star collect warp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee110",
+      "key": "kind:800ee110",
+      "name": "launch death warp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee114",
+      "key": "kind:800ee114",
+      "name": "swimming warp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee120",
+      "key": "kind:800ee120",
+      "name": "random animated texture"
+    },
+    {
+      "seed_key": "landmark:kind:800ee140",
+      "key": "kind:800ee140",
+      "name": "yellow background in menu"
+    },
+    {
+      "seed_key": "landmark:kind:800ee164",
+      "key": "kind:800ee164",
+      "name": "menu button"
+    },
+    {
+      "seed_key": "landmark:kind:800ee188",
+      "key": "kind:800ee188",
+      "name": "menu button manager"
+    },
+    {
+      "seed_key": "landmark:kind:800ee1ac",
+      "key": "kind:800ee1ac",
+      "name": "act selector star type"
+    },
+    {
+      "seed_key": "landmark:kind:800ee1c8",
+      "key": "kind:800ee1c8",
+      "name": "act selector"
+    },
+    {
+      "seed_key": "landmark:kind:800ee1e8",
+      "key": "kind:800ee1e8",
+      "name": "moving yellow coin"
+    },
+    {
+      "seed_key": "landmark:kind:800ee224",
+      "key": "kind:800ee224",
+      "name": "moving blue coin"
+    },
+    {
+      "seed_key": "landmark:kind:800ee254",
+      "key": "kind:800ee254",
+      "name": "blue coin sliding"
+    },
+    {
+      "seed_key": "landmark:kind:800ee284",
+      "key": "kind:800ee284",
+      "name": "blue coin jumping"
+    },
+    {
+      "seed_key": "landmark:kind:800ee2b4",
+      "key": "kind:800ee2b4",
+      "name": "seaweed"
+    },
+    {
+      "seed_key": "landmark:kind:800ee2d8",
+      "key": "kind:800ee2d8",
+      "name": "seaweed bundle"
+    },
+    {
+      "seed_key": "landmark:kind:800ee2f4",
+      "key": "kind:800ee2f4",
+      "name": "bob-omb"
+    },
+    {
+      "seed_key": "landmark:kind:800ee32c",
+      "key": "kind:800ee32c",
+      "name": "bob-omb fuse smoke"
+    },
+    {
+      "seed_key": "landmark:kind:800ee35c",
+      "key": "kind:800ee35c",
+      "name": "bob-omb buddy"
+    },
+    {
+      "seed_key": "landmark:kind:800ee3a8",
+      "key": "kind:800ee3a8",
+      "name": "bob-omb buddy opens cannon"
+    },
+    {
+      "seed_key": "landmark:kind:800ee3f4",
+      "key": "kind:800ee3f4",
+      "name": "cannon closed"
+    },
+    {
+      "seed_key": "landmark:kind:800ee428",
+      "key": "kind:800ee428",
+      "name": "whirlpool"
+    },
+    {
+      "seed_key": "landmark:kind:800ee448",
+      "key": "kind:800ee448",
+      "name": "jet stream"
+    },
+    {
+      "seed_key": "landmark:kind:800ee460",
+      "key": "kind:800ee460",
+      "name": "sign"
+    },
+    {
+      "seed_key": "landmark:kind:800ee4a4",
+      "key": "kind:800ee4a4",
+      "name": "wall sign"
+    },
+    {
+      "seed_key": "landmark:kind:800ee4d4",
+      "key": "kind:800ee4d4",
+      "name": "homing amp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee508",
+      "key": "kind:800ee508",
+      "name": "circling amp"
+    },
+    {
+      "seed_key": "landmark:kind:800ee53c",
+      "key": "kind:800ee53c",
+      "name": "butterfly"
+    },
+    {
+      "seed_key": "landmark:kind:800ee56c",
+      "key": "kind:800ee56c",
+      "name": "Hoot"
+    },
+    {
+      "seed_key": "landmark:kind:800ee5d4",
+      "key": "kind:800ee5d4",
+      "name": "carry something 1"
+    },
+    {
+      "seed_key": "landmark:kind:800ee5dc",
+      "key": "kind:800ee5dc",
+      "name": "carry something 2"
+    },
+    {
+      "seed_key": "landmark:kind:800ee5e4",
+      "key": "kind:800ee5e4",
+      "name": "carry something 3"
+    },
+    {
+      "seed_key": "landmark:kind:800ee5ec",
+      "key": "kind:800ee5ec",
+      "name": "carry something 4"
+    },
+    {
+      "seed_key": "landmark:kind:800ee5f4",
+      "key": "kind:800ee5f4",
+      "name": "carry something 5"
+    },
+    {
+      "seed_key": "landmark:kind:800ee5fc",
+      "key": "kind:800ee5fc",
+      "name": "carry something 6"
+    },
+    {
+      "seed_key": "landmark:kind:800ee604",
+      "key": "kind:800ee604",
+      "name": "object bubble"
+    },
+    {
+      "seed_key": "landmark:kind:800ee644",
+      "key": "kind:800ee644",
+      "name": "object water wave"
+    },
+    {
+      "seed_key": "landmark:kind:800ee690",
+      "key": "kind:800ee690",
+      "name": "explosion"
+    },
+    {
+      "seed_key": "landmark:kind:800ee6d8",
+      "key": "kind:800ee6d8",
+      "name": "bob-omb bully death smoke"
+    },
+    {
+      "seed_key": "landmark:kind:800ee708",
+      "key": "kind:800ee708",
+      "name": "smoke"
+    },
+    {
+      "seed_key": "landmark:kind:800ee730",
+      "key": "kind:800ee730",
+      "name": "bob-omb explosion bubble"
+    },
+    {
+      "seed_key": "landmark:kind:800ee780",
+      "key": "kind:800ee780",
+      "name": "bob-omb explosion bubble 3600"
+    },
+    {
+      "seed_key": "landmark:kind:800ee794",
+      "key": "kind:800ee794",
+      "name": "respawner"
+    },
+    {
+      "seed_key": "landmark:kind:800ee7ac",
+      "key": "kind:800ee7ac",
+      "name": "small bully"
+    },
+    {
+      "seed_key": "landmark:kind:800ee7e0",
+      "key": "kind:800ee7e0",
+      "name": "big bully"
+    },
+    {
+      "seed_key": "landmark:kind:800ee814",
+      "key": "kind:800ee814",
+      "name": "big bully with minions"
+    },
+    {
+      "seed_key": "landmark:kind:800ee848",
+      "key": "kind:800ee848",
+      "name": "small chill bully"
+    },
+    {
+      "seed_key": "landmark:kind:800ee880",
+      "key": "kind:800ee880",
+      "name": "big chill bully"
+    },
+    {
+      "seed_key": "landmark:kind:800ee8b8",
+      "key": "kind:800ee8b8",
+      "name": "jet stream ring spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800ee8d0",
+      "key": "kind:800ee8d0",
+      "name": "jet stream water ring"
+    },
+    {
+      "seed_key": "landmark:kind:800ee918",
+      "key": "kind:800ee918",
+      "name": "manta ray water ring"
+    },
+    {
+      "seed_key": "landmark:kind:800ee960",
+      "key": "kind:800ee960",
+      "name": "manta ray ring manager"
+    },
+    {
+      "seed_key": "landmark:kind:800ee96c",
+      "key": "kind:800ee96c",
+      "name": "Bowser bomb"
+    },
+    {
+      "seed_key": "landmark:kind:800ee99c",
+      "key": "kind:800ee99c",
+      "name": "Bowser bomb explosion"
+    },
+    {
+      "seed_key": "landmark:kind:800ee9c0",
+      "key": "kind:800ee9c0",
+      "name": "Bowser bomb smoke"
+    },
+    {
+      "seed_key": "landmark:kind:800ee9e8",
+      "key": "kind:800ee9e8",
+      "name": "celebration star"
+    },
+    {
+      "seed_key": "landmark:kind:800eea08",
+      "key": "kind:800eea08",
+      "name": "celebration star sparkle"
+    },
+    {
+      "seed_key": "landmark:kind:800eea30",
+      "key": "kind:800eea30",
+      "name": "star key collection puff spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800eea50",
+      "key": "kind:800eea50",
+      "name": "LLL drawbridge spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800eea68",
+      "key": "kind:800eea68",
+      "name": "LLL drawbridge"
+    },
+    {
+      "seed_key": "landmark:kind:800eea90",
+      "key": "kind:800eea90",
+      "name": "small bomp"
+    },
+    {
+      "seed_key": "landmark:kind:800eeac0",
+      "key": "kind:800eeac0",
+      "name": "large bomp"
+    },
+    {
+      "seed_key": "landmark:kind:800eeaf0",
+      "key": "kind:800eeaf0",
+      "name": "WF sliding platform"
+    },
+    {
+      "seed_key": "landmark:kind:800eeb20",
+      "key": "kind:800eeb20",
+      "name": "moneybag"
+    },
+    {
+      "seed_key": "landmark:kind:800eeb54",
+      "key": "kind:800eeb54",
+      "name": "moneybag hidden"
+    },
+    {
+      "seed_key": "landmark:kind:800eeb88",
+      "key": "kind:800eeb88",
+      "name": "pit bowling ball"
+    },
+    {
+      "seed_key": "landmark:kind:800eebb0",
+      "key": "kind:800eebb0",
+      "name": "free bowling ball"
+    },
+    {
+      "seed_key": "landmark:kind:800eebd8",
+      "key": "kind:800eebd8",
+      "name": "bowling ball"
+    },
+    {
+      "seed_key": "landmark:kind:800eec00",
+      "key": "kind:800eec00",
+      "name": "TTM bowling ball spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800eec24",
+      "key": "kind:800eec24",
+      "name": "BoB bowling ball spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800eec48",
+      "key": "kind:800eec48",
+      "name": "THI bowling ball spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800eec60",
+      "key": "kind:800eec60",
+      "name": "RR cruiser wing"
+    },
+    {
+      "seed_key": "landmark:kind:800eec80",
+      "key": "kind:800eec80",
+      "name": "spindel"
+    },
+    {
+      "seed_key": "landmark:kind:800eecb0",
+      "key": "kind:800eecb0",
+      "name": "SSL moving pyramid wall"
+    },
+    {
+      "seed_key": "landmark:kind:800eece0",
+      "key": "kind:800eece0",
+      "name": "pyramid elevator"
+    },
+    {
+      "seed_key": "landmark:kind:800eed18",
+      "key": "kind:800eed18",
+      "name": "pyramid elevator trajectory marker ball"
+    },
+    {
+      "seed_key": "landmark:kind:800eed34",
+      "key": "kind:800eed34",
+      "name": "pyramid top"
+    },
+    {
+      "seed_key": "landmark:kind:800eed6c",
+      "key": "kind:800eed6c",
+      "name": "pyramid top fragment"
+    },
+    {
+      "seed_key": "landmark:kind:800eed8c",
+      "key": "kind:800eed8c",
+      "name": "pyramid pillar touch detector"
+    },
+    {
+      "seed_key": "landmark:kind:800eedb0",
+      "key": "kind:800eedb0",
+      "name": "waterfall sound loop"
+    },
+    {
+      "seed_key": "landmark:kind:800eedc4",
+      "key": "kind:800eedc4",
+      "name": "volcano sound loop"
+    },
+    {
+      "seed_key": "landmark:kind:800eedd8",
+      "key": "kind:800eedd8",
+      "name": "castle flag waving"
+    },
+    {
+      "seed_key": "landmark:kind:800eedfc",
+      "key": "kind:800eedfc",
+      "name": "birds sound loop"
+    },
+    {
+      "seed_key": "landmark:kind:800eee10",
+      "key": "kind:800eee10",
+      "name": "ambient sounds"
+    },
+    {
+      "seed_key": "landmark:kind:800eee24",
+      "key": "kind:800eee24",
+      "name": "sand sound loop"
+    },
+    {
+      "seed_key": "landmark:kind:800eee38",
+      "key": "kind:800eee38",
+      "name": "hidden at 120 stars"
+    },
+    {
+      "seed_key": "landmark:kind:800eee64",
+      "key": "kind:800eee64",
+      "name": "snowman's bottom"
+    },
+    {
+      "seed_key": "landmark:kind:800eee8c",
+      "key": "kind:800eee8c",
+      "name": "snowman's head"
+    },
+    {
+      "seed_key": "landmark:kind:800eeeb4",
+      "key": "kind:800eeeb4",
+      "name": "snowman's body checkpoint"
+    },
+    {
+      "seed_key": "landmark:kind:800eeecc",
+      "key": "kind:800eeecc",
+      "name": "big snowman whole"
+    },
+    {
+      "seed_key": "landmark:kind:800eeef4",
+      "key": "kind:800eeef4",
+      "name": "big boulder"
+    },
+    {
+      "seed_key": "landmark:kind:800eef20",
+      "key": "kind:800eef20",
+      "name": "big boulder generator"
+    },
+    {
+      "seed_key": "landmark:kind:800eef38",
+      "key": "kind:800eef38",
+      "name": "wing cap"
+    },
+    {
+      "seed_key": "landmark:kind:800eef58",
+      "key": "kind:800eef58",
+      "name": "metal cap"
+    },
+    {
+      "seed_key": "landmark:kind:800eef78",
+      "key": "kind:800eef78",
+      "name": "normal cap"
+    },
+    {
+      "seed_key": "landmark:kind:800eef9c",
+      "key": "kind:800eef9c",
+      "name": "vanish cap"
+    },
+    {
+      "seed_key": "landmark:kind:800eefbc",
+      "key": "kind:800eefbc",
+      "name": "star"
+    },
+    {
+      "seed_key": "landmark:kind:800eefe4",
+      "key": "kind:800eefe4",
+      "name": "star spawn coordinates"
+    },
+    {
+      "seed_key": "landmark:kind:800ef00c",
+      "key": "kind:800ef00c",
+      "name": "hidden red coin star"
+    },
+    {
+      "seed_key": "landmark:kind:800ef02c",
+      "key": "kind:800ef02c",
+      "name": "red coin"
+    },
+    {
+      "seed_key": "landmark:kind:800ef064",
+      "key": "kind:800ef064",
+      "name": "Bowser course red coin star"
+    },
+    {
+      "seed_key": "landmark:kind:800ef07c",
+      "key": "kind:800ef07c",
+      "name": "hidden star"
+    },
+    {
+      "seed_key": "landmark:kind:800ef09c",
+      "key": "kind:800ef09c",
+      "name": "hidden star trigger"
+    },
+    {
+      "seed_key": "landmark:kind:800ef0c0",
+      "key": "kind:800ef0c0",
+      "name": "TTM rolling log"
+    },
+    {
+      "seed_key": "landmark:kind:800ef0f8",
+      "key": "kind:800ef0f8",
+      "name": "LLL volcano falling trap"
+    },
+    {
+      "seed_key": "landmark:kind:800ef124",
+      "key": "kind:800ef124",
+      "name": "LLL rolling log"
+    },
+    {
+      "seed_key": "landmark:kind:800ef15c",
+      "key": "kind:800ef15c",
+      "name": "1up walking"
+    },
+    {
+      "seed_key": "landmark:kind:800ef190",
+      "key": "kind:800ef190",
+      "name": "1up running away"
+    },
+    {
+      "seed_key": "landmark:kind:800ef1c4",
+      "key": "kind:800ef1c4",
+      "name": "1up sliding"
+    },
+    {
+      "seed_key": "landmark:kind:800ef1fc",
+      "key": "kind:800ef1fc",
+      "name": "1 up"
+    },
+    {
+      "seed_key": "landmark:kind:800ef234",
+      "key": "kind:800ef234",
+      "name": "1up jump on approach"
+    },
+    {
+      "seed_key": "landmark:kind:800ef26c",
+      "key": "kind:800ef26c",
+      "name": "hidden 1up"
+    },
+    {
+      "seed_key": "landmark:kind:800ef2a4",
+      "key": "kind:800ef2a4",
+      "name": "hidden 1up trigger"
+    },
+    {
+      "seed_key": "landmark:kind:800ef2c8",
+      "key": "kind:800ef2c8",
+      "name": "hidden 1up in pole"
+    },
+    {
+      "seed_key": "landmark:kind:800ef300",
+      "key": "kind:800ef300",
+      "name": "hidden 1up in pole trigger"
+    },
+    {
+      "seed_key": "landmark:kind:800ef324",
+      "key": "kind:800ef324",
+      "name": "hidden 1up in pole spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800ef33c",
+      "key": "kind:800ef33c",
+      "name": "controllable platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ef370",
+      "key": "kind:800ef370",
+      "name": "controllable platform sub"
+    },
+    {
+      "seed_key": "landmark:kind:800ef398",
+      "key": "kind:800ef398",
+      "name": "small breakable box"
+    },
+    {
+      "seed_key": "landmark:kind:800ef3c4",
+      "key": "kind:800ef3c4",
+      "name": "sliding snow mound"
+    },
+    {
+      "seed_key": "landmark:kind:800ef3f0",
+      "key": "kind:800ef3f0",
+      "name": "snow mound spawn"
+    },
+    {
+      "seed_key": "landmark:kind:800ef404",
+      "key": "kind:800ef404",
+      "name": "WDW square floating platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ef434",
+      "key": "kind:800ef434",
+      "name": "WDW rectangular floating platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ef464",
+      "key": "kind:800ef464",
+      "name": "JRB floating platform"
+    },
+    {
+      "seed_key": "landmark:kind:800ef494",
+      "key": "kind:800ef494",
+      "name": "arrow lift"
+    },
+    {
+      "seed_key": "landmark:kind:800ef4c8",
+      "key": "kind:800ef4c8",
+      "name": "orange number"
+    },
+    {
+      "seed_key": "landmark:kind:800ef4f0",
+      "key": "kind:800ef4f0",
+      "name": "manta ray"
+    },
+    {
+      "seed_key": "landmark:kind:800ef520",
+      "key": "kind:800ef520",
+      "name": "falling pillar"
+    },
+    {
+      "seed_key": "landmark:kind:800ef544",
+      "key": "kind:800ef544",
+      "name": "falling pillar hitbox"
+    },
+    {
+      "seed_key": "landmark:kind:800ef560",
+      "key": "kind:800ef560",
+      "name": "pillar base"
+    },
+    {
+      "seed_key": "landmark:kind:800ef580",
+      "key": "kind:800ef580",
+      "name": "JRB floating box"
+    },
+    {
+      "seed_key": "landmark:kind:800ef5ac",
+      "key": "kind:800ef5ac",
+      "name": "decorative pendulum"
+    },
+    {
+      "seed_key": "landmark:kind:800ef5cc",
+      "key": "kind:800ef5cc",
+      "name": "treasure chests ship"
+    },
+    {
+      "seed_key": "landmark:kind:800ef5f0",
+      "key": "kind:800ef5f0",
+      "name": "treasure chests JRB"
+    },
+    {
+      "seed_key": "landmark:kind:800ef614",
+      "key": "kind:800ef614",
+      "name": "treasure chests"
+    },
+    {
+      "seed_key": "landmark:kind:800ef638",
+      "key": "kind:800ef638",
+      "name": "treasure chest bottom"
+    },
+    {
+      "seed_key": "landmark:kind:800ef660",
+      "key": "kind:800ef660",
+      "name": "treasure chest top"
+    },
+    {
+      "seed_key": "landmark:kind:800ef67c",
+      "key": "kind:800ef67c",
+      "name": "MIPS"
+    },
+    {
+      "seed_key": "landmark:kind:800ef6b8",
+      "key": "kind:800ef6b8",
+      "name": "Yoshi"
+    },
+    {
+      "seed_key": "landmark:kind:800ef700",
+      "key": "kind:800ef700",
+      "name": "koopa"
+    },
+    {
+      "seed_key": "landmark:kind:800ef750",
+      "key": "kind:800ef750",
+      "name": "koopa race endpoint"
+    },
+    {
+      "seed_key": "landmark:kind:800ef778",
+      "key": "kind:800ef778",
+      "name": "koopa flag"
+    },
+    {
+      "seed_key": "landmark:kind:800ef7b4",
+      "key": "kind:800ef7b4",
+      "name": "pokey"
+    },
+    {
+      "seed_key": "landmark:kind:800ef7e8",
+      "key": "kind:800ef7e8",
+      "name": "pokey body part"
+    },
+    {
+      "seed_key": "landmark:kind:800ef818",
+      "key": "kind:800ef818",
+      "name": "swoop"
+    },
+    {
+      "seed_key": "landmark:kind:800ef85c",
+      "key": "kind:800ef85c",
+      "name": "fly guy"
+    },
+    {
+      "seed_key": "landmark:kind:800ef8ac",
+      "key": "kind:800ef8ac",
+      "name": "goomba"
+    },
+    {
+      "seed_key": "landmark:kind:800ef8f0",
+      "key": "kind:800ef8f0",
+      "name": "goomba triplet spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800ef90c",
+      "key": "kind:800ef90c",
+      "name": "chain chomp"
+    },
+    {
+      "seed_key": "landmark:kind:800ef964",
+      "key": "kind:800ef964",
+      "name": "chain chomp chain part"
+    },
+    {
+      "seed_key": "landmark:kind:800ef99c",
+      "key": "kind:800ef99c",
+      "name": "wooden post"
+    },
+    {
+      "seed_key": "landmark:kind:800ef9e8",
+      "key": "kind:800ef9e8",
+      "name": "chain chomp gate"
+    },
+    {
+      "seed_key": "landmark:kind:800efa18",
+      "key": "kind:800efa18",
+      "name": "Wiggler"
+    },
+    {
+      "seed_key": "landmark:kind:800efa60",
+      "key": "kind:800efa60",
+      "name": "Wiggler body"
+    },
+    {
+      "seed_key": "landmark:kind:800efa98",
+      "key": "kind:800efa98",
+      "name": "enemy Lakitu"
+    },
+    {
+      "seed_key": "landmark:kind:800efad4",
+      "key": "kind:800efad4",
+      "name": "camera Lakitu"
+    },
+    {
+      "seed_key": "landmark:kind:800efb08",
+      "key": "kind:800efb08",
+      "name": "cloud"
+    },
+    {
+      "seed_key": "landmark:kind:800efb2c",
+      "key": "kind:800efb2c",
+      "name": "cloud part"
+    },
+    {
+      "seed_key": "landmark:kind:800efb48",
+      "key": "kind:800efb48",
+      "name": "spiny"
+    },
+    {
+      "seed_key": "landmark:kind:800efb80",
+      "key": "kind:800efb80",
+      "name": "monty mole"
+    },
+    {
+      "seed_key": "landmark:kind:800efbd8",
+      "key": "kind:800efbd8",
+      "name": "monty mole hole"
+    },
+    {
+      "seed_key": "landmark:kind:800efbf8",
+      "key": "kind:800efbf8",
+      "name": "monty mole rock"
+    },
+    {
+      "seed_key": "landmark:kind:800efc30",
+      "key": "kind:800efc30",
+      "name": "platform on track"
+    },
+    {
+      "seed_key": "landmark:kind:800efc74",
+      "key": "kind:800efc74",
+      "name": "track ball"
+    },
+    {
+      "seed_key": "landmark:kind:800efc9c",
+      "key": "kind:800efc9c",
+      "name": "seesaw platform"
+    },
+    {
+      "seed_key": "landmark:kind:800efcc4",
+      "key": "kind:800efcc4",
+      "name": "ferris wheel axle"
+    },
+    {
+      "seed_key": "landmark:kind:800efcec",
+      "key": "kind:800efcec",
+      "name": "ferris wheel platform"
+    },
+    {
+      "seed_key": "landmark:kind:800efd0c",
+      "key": "kind:800efd0c",
+      "name": "water bomb spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800efd28",
+      "key": "kind:800efd28",
+      "name": "water bomb"
+    },
+    {
+      "seed_key": "landmark:kind:800efd54",
+      "key": "kind:800efd54",
+      "name": "water bomb shadow"
+    },
+    {
+      "seed_key": "landmark:kind:800efd70",
+      "key": "kind:800efd70",
+      "name": "TTC rotating solid"
+    },
+    {
+      "seed_key": "landmark:kind:800efda4",
+      "key": "kind:800efda4",
+      "name": "TTC pendulum"
+    },
+    {
+      "seed_key": "landmark:kind:800efddc",
+      "key": "kind:800efddc",
+      "name": "TTC treadmill"
+    },
+    {
+      "seed_key": "landmark:kind:800efe14",
+      "key": "kind:800efe14",
+      "name": "TTC moving bar"
+    },
+    {
+      "seed_key": "landmark:kind:800efe4c",
+      "key": "kind:800efe4c",
+      "name": "TTC cog"
+    },
+    {
+      "seed_key": "landmark:kind:800efe78",
+      "key": "kind:800efe78",
+      "name": "TTC pit block"
+    },
+    {
+      "seed_key": "landmark:kind:800efea8",
+      "key": "kind:800efea8",
+      "name": "TTC elevator"
+    },
+    {
+      "seed_key": "landmark:kind:800efee4",
+      "key": "kind:800efee4",
+      "name": "TTC 2 D rotator"
+    },
+    {
+      "seed_key": "landmark:kind:800eff10",
+      "key": "kind:800eff10",
+      "name": "TTC spinner"
+    },
+    {
+      "seed_key": "landmark:kind:800eff3c",
+      "key": "kind:800eff3c",
+      "name": "Mr. Blizzard"
+    },
+    {
+      "seed_key": "landmark:kind:800eff88",
+      "key": "kind:800eff88",
+      "name": "Mr. blizzard snowball"
+    },
+    {
+      "seed_key": "landmark:kind:800effcc",
+      "key": "kind:800effcc",
+      "name": "sliding platform 2"
+    },
+    {
+      "seed_key": "landmark:kind:800efff8",
+      "key": "kind:800efff8",
+      "name": "octagonal platform rotating"
+    },
+    {
+      "seed_key": "landmark:kind:800f0020",
+      "key": "kind:800f0020",
+      "name": "animates on floor switch press"
+    },
+    {
+      "seed_key": "landmark:kind:800f004c",
+      "key": "kind:800f004c",
+      "name": "activated back and forth platform"
+    },
+    {
+      "seed_key": "landmark:kind:800f0078",
+      "key": "kind:800f0078",
+      "name": "recovery heart"
+    },
+    {
+      "seed_key": "landmark:kind:800f0090",
+      "key": "kind:800f0090",
+      "name": "water bomb cannon"
+    },
+    {
+      "seed_key": "landmark:kind:800f00a8",
+      "key": "kind:800f00a8",
+      "name": "cannon barrel bubbles"
+    },
+    {
+      "seed_key": "landmark:kind:800f00c0",
+      "key": "kind:800f00c0",
+      "name": "Unagi"
+    },
+    {
+      "seed_key": "landmark:kind:800f00f8",
+      "key": "kind:800f00f8",
+      "name": "Unagi subobject"
+    },
+    {
+      "seed_key": "landmark:kind:800f0110",
+      "key": "kind:800f0110",
+      "name": "Dorrie"
+    },
+    {
+      "seed_key": "landmark:kind:800f0154",
+      "key": "kind:800f0154",
+      "name": "haunted chair"
+    },
+    {
+      "seed_key": "landmark:kind:800f01a4",
+      "key": "kind:800f01a4",
+      "name": "mad piano"
+    },
+    {
+      "seed_key": "landmark:kind:800f01ec",
+      "key": "kind:800f01ec",
+      "name": "flying bookend"
+    },
+    {
+      "seed_key": "landmark:kind:800f0234",
+      "key": "kind:800f0234",
+      "name": "bookend spawn"
+    },
+    {
+      "seed_key": "landmark:kind:800f0254",
+      "key": "kind:800f0254",
+      "name": "haunted bookshelf manager"
+    },
+    {
+      "seed_key": "landmark:kind:800f0274",
+      "key": "kind:800f0274",
+      "name": "book switch"
+    },
+    {
+      "seed_key": "landmark:kind:800f02a0",
+      "key": "kind:800f02a0",
+      "name": "fire piranha plant"
+    },
+    {
+      "seed_key": "landmark:kind:800f02d8",
+      "key": "kind:800f02d8",
+      "name": "small piranha flame"
+    },
+    {
+      "seed_key": "landmark:kind:800f030c",
+      "key": "kind:800f030c",
+      "name": "fire spitter"
+    },
+    {
+      "seed_key": "landmark:kind:800f032c",
+      "key": "kind:800f032c",
+      "name": "flyguy flame"
+    },
+    {
+      "seed_key": "landmark:kind:800f0360",
+      "key": "kind:800f0360",
+      "name": "snufit"
+    },
+    {
+      "seed_key": "landmark:kind:800f039c",
+      "key": "kind:800f039c",
+      "name": "snufit balls"
+    },
+    {
+      "seed_key": "landmark:kind:800f03dc",
+      "key": "kind:800f03dc",
+      "name": "horizontal grindel"
+    },
+    {
+      "seed_key": "landmark:kind:800f0434",
+      "key": "kind:800f0434",
+      "name": "Eyerok"
+    },
+    {
+      "seed_key": "landmark:kind:800f0450",
+      "key": "kind:800f0450",
+      "name": "Eyerok hand"
+    },
+    {
+      "seed_key": "landmark:kind:800f0490",
+      "key": "kind:800f0490",
+      "name": "Klepto"
+    },
+    {
+      "seed_key": "landmark:kind:800f04d4",
+      "key": "kind:800f04d4",
+      "name": "bird"
+    },
+    {
+      "seed_key": "landmark:kind:800f0500",
+      "key": "kind:800f0500",
+      "name": "racing penguin"
+    },
+    {
+      "seed_key": "landmark:kind:800f0544",
+      "key": "kind:800f0544",
+      "name": "penguin race finish line"
+    },
+    {
+      "seed_key": "landmark:kind:800f055c",
+      "key": "kind:800f055c",
+      "name": "penguin race shortcut check"
+    },
+    {
+      "seed_key": "landmark:kind:800f0574",
+      "key": "kind:800f0574",
+      "name": "coffin spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800f0594",
+      "key": "kind:800f0594",
+      "name": "coffin"
+    },
+    {
+      "seed_key": "landmark:kind:800f05c0",
+      "key": "kind:800f05c0",
+      "name": "clam shell"
+    },
+    {
+      "seed_key": "landmark:kind:800f05e8",
+      "key": "kind:800f05e8",
+      "name": "skeeter"
+    },
+    {
+      "seed_key": "landmark:kind:800f0620",
+      "key": "kind:800f0620",
+      "name": "skeeter wave"
+    },
+    {
+      "seed_key": "landmark:kind:800f0638",
+      "key": "kind:800f0638",
+      "name": "swing platform"
+    },
+    {
+      "seed_key": "landmark:kind:800f066c",
+      "key": "kind:800f066c",
+      "name": "donut platform spawner"
+    },
+    {
+      "seed_key": "landmark:kind:800f0684",
+      "key": "kind:800f0684",
+      "name": "donut platform"
+    },
+    {
+      "seed_key": "landmark:kind:800f06a8",
+      "key": "kind:800f06a8",
+      "name": "DDD pole"
+    },
+    {
+      "seed_key": "landmark:kind:800f06ec",
+      "key": "kind:800f06ec",
+      "name": "red coin star marker"
+    },
+    {
+      "seed_key": "landmark:kind:800f0718",
+      "key": "kind:800f0718",
+      "name": "triplet butterfly"
+    },
+    {
+      "seed_key": "landmark:kind:800f075c",
+      "key": "kind:800f075c",
+      "name": "bubba"
+    },
+    {
+      "seed_key": "landmark:kind:800f0790",
+      "key": "kind:800f0790",
+      "name": "beginning Lakitu"
+    },
+    {
+      "seed_key": "landmark:kind:800f07b8",
+      "key": "kind:800f07b8",
+      "name": "beginning Peach"
+    },
+    {
+      "seed_key": "landmark:kind:800f07dc",
+      "key": "kind:800f07dc",
+      "name": "end birds 1"
+    },
+    {
+      "seed_key": "landmark:kind:800f0800",
+      "key": "kind:800f0800",
+      "name": "end birds 2"
+    },
+    {
+      "seed_key": "landmark:kind:800f0824",
+      "key": "kind:800f0824",
+      "name": "intro scene"
+    },
+    {
+      "seed_key": "landmark:6:3:800ebc8c:1126,-1074,-2661",
+      "key": "6:3:800ebc8c:1126,-1074,-2661",
+      "name": "HMC Door"
+    },
+    {
+      "seed_key": "landmark:6:3:800ebc8c:717,-1177,-869",
+      "key": "6:3:800ebc8c:717,-1177,-869",
+      "name": "Moat Door"
+    },
+    {
+      "seed_key": "landmark:6:3:800ebc8c:-3097,-1279,1434",
+      "key": "6:3:800ebc8c:-3097,-1279,1434",
+      "name": "DDD Door"
+    },
+    {
+      "seed_key": "landmark:6:3:800ebc7c:-1100,-1074,922",
+      "key": "6:3:800ebc7c:-1100,-1074,922",
+      "name": "Basement Stairs Door (from the basement)"
+    },
+    {
+      "seed_key": "landmark:6:1:800ebc7c:-1100,-1074,922",
+      "key": "6:1:800ebc7c:-1100,-1074,922",
+      "name": "Basement Stairs Door (from the lobby)"
+    },
+    {
+      "seed_key": "landmark:6:1:800ebc8c:256,0,-1074",
+      "key": "6:1:800ebc8c:256,0,-1074",
+      "name": "WF Door"
+    },
+    {
+      "seed_key": "landmark:6:1:800ebc8c:-1775,0,-824",
+      "key": "6:1:800ebc8c:-1775,0,-824",
+      "name": "Left Basement Door"
+    },
+    {
+      "seed_key": "landmark:6:1:800ebc8c:-271,0,-824",
+      "key": "6:1:800ebc8c:-271,0,-824",
+      "name": "Right Basement Door"
+    },
+    {
+      "seed_key": "landmark:6:1:800ebc7c:-1023,-101,-5170",
+      "key": "6:1:800ebc7c:-1023,-101,-5170",
+      "name": "Courtyard Door"
+    },
+    {
+      "seed_key": "landmark:6:3:800ebc7c:7885,-1586,-511",
+      "key": "6:3:800ebc7c:7885,-1586,-511",
+      "name": "Moat to Castle Grounds Door"
+    },
+    {
+      "seed_key": "landmark:16:1:800ebc7c:3292,-511,-2931",
+      "key": "16:1:800ebc7c:3292,-511,-2931",
+      "name": "Castle Grounds to Moat Door"
+    },
+    {
+      "seed_key": "landmark:7:1:800ebc8c:3817,205,870",
+      "key": "7:1:800ebc8c:3817,205,870",
+      "name": "Maze Door"
     }
   ]
 }

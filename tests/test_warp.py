@@ -4,7 +4,10 @@ from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.core.timefmt import format_igt
 from sm64_events.detectors.igt_clock import IgtClock
 from sm64_events.detectors.warp import WarpDetector
-from sm64_events.memory.addresses import ACT_DISAPPEARED, ACT_TELEPORT_FADE_OUT
+from sm64_events.memory.addresses import (ACT_BBH_ENTER_JUMP,
+                                          ACT_BBH_ENTER_SPIN,
+                                          ACT_DISAPPEARED,
+                                          ACT_TELEPORT_FADE_OUT)
 
 ACT_IDLE = 0x0C400201
 
@@ -422,3 +425,169 @@ def test_teleport_fade_out_also_emits_warp_entered():
 def test_exit_from_warp_action_is_silent():
     # savestate-load mid-warp: prev=warp, curr=idle -> no edge-in, no event
     assert WarpDetector().process(snap(mario_action=ACT_DISAPPEARED), snap()) == []
+
+
+def test_the_bbh_cage_is_an_entrance_like_any_painting():
+    """The one course entrance that fires NO generic warp action (his probe
+    run, 2026-08-07: five entrances produced clean touches, BBH produced
+    nothing). A GROUND entry opens with ENTER_JUMP, transitions to
+    ENTER_SPIN, and the level byte follows at +74 — the touch is the jump's
+    edge, the pair is one touch, and `to` comes from the level edge exactly
+    like a struct-silent painting. Repairs `seg:ccm->bbh`, whose
+    entrance_touched end could never fire before this."""
+    detector = WarpDetector()
+    prev = snap(global_timer=2000, curr_level=26)          # the courtyard
+    jump = snap(global_timer=2001, curr_level=26,
+                mario_action=ACT_BBH_ENTER_JUMP)
+    assert detector.process(prev, jump) == [], "held until it knows where"
+    # ROUND 13 ITEM 1: the row published at the level edge (+74), which is
+    # the moment BBH starts LOADING — "the 'entered a boo cage' doesn't
+    # appear until after i enter BBH". The pair exists only for the boo
+    # cage, so the SPIN names the destination itself and the row lands ~60
+    # frames earlier, while he is still in the courtyard.
+    spin = snap(global_timer=2015, curr_level=26,
+                mario_action=ACT_BBH_ENTER_SPIN)
+    events = detector.process(jump, spin)
+    assert len(events) == 1
+    assert events[0].type == "warp_entered"
+    assert events[0].frame == 2001, "the moment is the jump, not the spin"
+    assert events[0].payload["to"] == 4
+    assert events[0].payload["level"] == 26
+
+
+def test_an_airborne_cage_entry_fires_at_the_spin():
+    """Round 12, his first real entry: a ROLLOUT into the cage is airborne,
+    and `interact_bbh_entrance` sends an airborne Mario STRAIGHT to
+    ENTER_SPIN — no jump ever occurs (journal id 3708: the arrival anchor
+    latched 0x1535, and no warp row exists before the 26→4 edge). The spin
+    IS the commit, so the row publishes on its own tick (round 13 item 1)."""
+    detector = WarpDetector()
+    prev = snap(global_timer=2000, curr_level=26)          # rolled out: airborne
+    spin = snap(global_timer=2001, curr_level=26,
+                mario_action=ACT_BBH_ENTER_SPIN)
+    events = detector.process(prev, spin)
+    assert len(events) == 1
+    assert events[0].frame == 2001, "the moment is the spin's own edge"
+    assert events[0].payload["to"] == 4
+    assert events[0].payload["level"] == 26
+
+
+def test_a_cage_entry_paused_past_the_cap_still_names_bbh():
+    """His journal, 2026-08-08 (id 4081): jump, pause menu open for ~16
+    seconds, unpause, spin, edge at +482. The old cap published `to: None`
+    mid-pause and the REAL entry then had no held touch left — one of his
+    two BBH entries that evening recorded as a warp to nowhere. While the
+    cage animation is visibly still playing the cap defers (bounded by the
+    absolute cap), and the spin then names BBH as usual."""
+    detector = WarpDetector()
+    detector.process(snap(global_timer=2000, curr_level=26),
+                     snap(global_timer=2001, curr_level=26,
+                          mario_action=ACT_BBH_ENTER_JUMP))
+    for offset in range(2, 470):    # paused: the byte holds the jump
+        held_still = detector.process(
+            snap(global_timer=2000 + offset - 1, curr_level=26,
+                 mario_action=ACT_BBH_ENTER_JUMP),
+            snap(global_timer=2000 + offset, curr_level=26,
+                 mario_action=ACT_BBH_ENTER_JUMP))
+        assert held_still == [], f"published at +{offset}, mid-animation"
+    events = detector.process(
+        snap(global_timer=2469, curr_level=26,
+             mario_action=ACT_BBH_ENTER_JUMP),
+        snap(global_timer=2470, curr_level=26,
+             mario_action=ACT_BBH_ENTER_SPIN))
+    assert len(events) == 1
+    assert events[0].payload["to"] == 4
+    assert events[0].frame == 2001, "the touch is still the jump's frame"
+
+
+def test_a_walked_away_cage_jump_still_caps_to_nowhere():
+    """The abort is real (his journal has one): a jump the pause menu warps
+    away from never spins, the action byte stops reading the pair, and the
+    cap fires exactly as before — `to: None`, never a fabricated BBH entry."""
+    detector = WarpDetector()
+    detector.process(snap(global_timer=2000, curr_level=26),
+                     snap(global_timer=2001, curr_level=26,
+                          mario_action=ACT_BBH_ENTER_JUMP))
+    events = []
+    for offset in range(2, 400):    # menu-warped away: byte back to idle
+        events = detector.process(
+            snap(global_timer=2000 + offset - 1, curr_level=26),
+            snap(global_timer=2000 + offset, curr_level=26))
+        if events:
+            break
+    assert len(events) == 1
+    assert events[0].payload["to"] is None
+    assert offset <= WarpDetector.HOLD_CAP_FRAMES + 1
+
+
+def test_the_touch_carries_WHICH_warp_it_was():
+    """Read at the TOUCH, not at publish. A painting publishes on its own frame
+    but a pipe waits ~20 for the destination, and by then Mario is engaged with
+    nothing -- so the landmark belongs to the touch exactly like the frame and
+    the time already held beside it.
+
+    Until 2026-08-06 every `warp_entered` in the journal carried `landmark:
+    null`, so his two BoB warps (ids 2327 and 2330) were the same sentence
+    twice and neither could be renamed.
+    """
+    detector = WarpDetector()
+    touching = snap(mario_action=ACT_DISAPPEARED, curr_level=9,
+                    landmark_behaviour=0xAABBCCDD,
+                    landmark_home=(120.0, 0.0, -30.0))
+    assert detector.process(snap(curr_level=9), touching) == []
+    [event] = land(detector, touching)
+    assert event.payload["landmark"]["key"] == "9:1:aabbccdd:120,0,-30"
+    assert event.payload["landmark"]["placed"] is True
+
+
+def test_a_touch_that_engages_nothing_names_nothing():
+    """A warp the object pool cannot name still records; `None` is what makes
+    the label fall back to "Entered a warp in ..." rather than inventing one."""
+    detector = WarpDetector()
+    touching = snap(mario_action=ACT_DISAPPEARED)
+    assert detector.process(snap(), touching) == []
+    [event] = land(detector, touching)
+    assert event.payload["landmark"] is None
+
+
+def test_a_stale_engagement_is_not_the_touched_warp():
+    """The engaged-object pointer LINGERS, and a painting never writes it —
+    so a painting touch used to inherit the last thing Mario interacted with.
+    His journal, 2026-08-08 (round 12 items 5+6): three CCM painting entries
+    each carried the LOBBY DOOR opened 38 frames earlier (ids 3908/3933/3943),
+    and the entrance row's rename pencil therefore edited the door. An
+    engagement that predates the touch by more than ENGAGE_FRESH_FRAMES is
+    someone else's landmark; the row degrades to None instead."""
+    detector = WarpDetector()
+    door = dict(landmark_behaviour=0x800EBC8C,
+                landmark_home=(-2303.0, 0.0, -1074.0))
+    opened = snap(global_timer=2000, curr_level=6, **door)
+    detector.process(snap(global_timer=1999, curr_level=6), opened)
+    idle = snap(global_timer=2037, curr_level=6, **door)
+    detector.process(opened, idle)
+    touching = snap(global_timer=2038, curr_level=6,
+                    mario_action=ACT_DISAPPEARED, **door)
+    assert detector.process(idle, touching) == []
+    [event] = land(detector, touching, to=5)
+    assert event.payload["landmark"] is None, (
+        "a 38-frame-old engagement is the door he opened, not the painting")
+
+
+def test_a_pipes_engagement_lands_one_poll_after_the_touch_and_is_adopted():
+    """The pointer lags the action byte by a read (the same lag
+    detectors/moment.py holds one poll for), and a pipe's publish waits ~20
+    frames anyway — a retarget landing just after the touch belongs to it."""
+    detector = WarpDetector()
+    detector.process(snap(global_timer=1999, curr_level=9),
+                     snap(global_timer=2000, curr_level=9))
+    touching = snap(global_timer=2001, curr_level=9,
+                    mario_action=ACT_DISAPPEARED)
+    assert detector.process(snap(global_timer=2000, curr_level=9),
+                            touching) == []
+    settled = snap(global_timer=2002, curr_level=9,
+                   mario_action=ACT_DISAPPEARED,
+                   landmark_behaviour=0x800EB900,
+                   landmark_home=(100.0, 0.0, 200.0))
+    assert detector.process(touching, settled) == []
+    [event] = land(detector, settled)
+    assert event.payload["landmark"]["key"] == "9:1:800eb900:100,0,200"

@@ -420,6 +420,52 @@ console.log(JSON.stringify(courseUnionGroups(catalog, segments, { "9": 1 })));
         {"id": "segment:9", "name": "LBLJ", "sub": "segment"}]
 
 
+def test_castle_segments_split_into_region_tiles_when_origins_are_in_hand():
+    """Round 12 item 2: "for the 'what is this a piece of' display, we should
+    show all of the castle areas (lobby, grounds, courtyard, basement,
+    upstairs)" — against ONE "Castle" tile holding every movement. Grouping
+    reads each segment's server-stamped origin.region and orders by the
+    vocab's own taxonomy, never a second hand-written region table. A
+    region-less segment keeps the trailing Castle tile."""
+    groups = run_node("courseUnionGroups", """
+const catalog = { courses: [{ id: 1, name: "BoB", stars: ["Big Bob-omb"] }] };
+const segments = [
+  { id: 9, name: "LBLJ", origin: { key: "6:1", region: "6:1" } },
+  { id: 10, name: "Basement -> DDD", origin: { key: "6:3", region: "6:3" } },
+  { id: 11, name: "Lobby -> Upstairs", origin: { key: "6:1", region: "6:1" } },
+  { id: 12, name: "Anywhere Trick", origin: { key: null, region: null } },
+];
+const origins = [
+  { key: "16", label: "Castle Grounds", children: [] },
+  { key: "6:1", label: "Lobby", children: [] },
+  { key: "26", label: "Courtyard", children: [] },
+  { key: "6:3", label: "Basement", children: [] },
+  { key: "6:2", label: "Upstairs", children: [] },
+];
+console.log(JSON.stringify(courseUnionGroups(
+  catalog, segments, {}, {}, origins)));
+""")
+    assert [group["label"] for group in groups] == [
+        "BoB", "Lobby", "Basement", "Castle"]
+    lobby = next(group for group in groups if group["label"] == "Lobby")
+    assert [option["name"] for option in lobby["options"]] == [
+        "LBLJ", "Lobby -> Upstairs"]
+    castle = next(group for group in groups if group["label"] == "Castle")
+    assert [option["name"] for option in castle["options"]] == [
+        "Anywhere Trick"]
+
+
+def test_without_origins_the_castle_stays_one_group():
+    # The old call shape must come back byte-identical -- a caller that has
+    # no vocab in hand yet must not lose the castle tile.
+    groups = run_node("courseUnionGroups", """
+const catalog = { courses: [] };
+const segments = [{ id: 9, name: "LBLJ", origin: { key: "6:1", region: "6:1" } }];
+console.log(JSON.stringify(courseUnionGroups(catalog, segments, {})));
+""")
+    assert [group["label"] for group in groups] == ["Castle"]
+
+
 def test_segment_levels_come_from_the_origin_in_one_place():
     # Two call sites need this derivation; a second copy is where the header's
     # missing segment art came from.
@@ -633,3 +679,72 @@ const picked = { ...context, iconOverrides: { "segment:20": "toad1" } };
 console.log(JSON.stringify(entityIcon("segment:20", picked)));
 """)
     assert src == "/ui/assets/star_icons/toad1.png"
+
+
+def test_entity_key_for_option_passes_area_and_segment_keys_through():
+    # "area:6:1" is the recorder's terminal castle tile (round 14); wrapping
+    # it as star:area:6:1 would save a parent no row could ever resolve.
+    keys = run_node("entityKeyForOption", """
+console.log(JSON.stringify([entityKeyForOption("8:1"),
+  entityKeyForOption("segment:12"), entityKeyForOption("area:6:1")]));
+""")
+    assert keys == ["star:8:1", "segment:12", "area:6:1"]
+
+
+# --- round 15: a subsection wears its parent's art --------------------------
+
+def test_a_star_parented_subsection_wears_its_parents_art():
+    # "If it's attached to a specific star, it should use the default star
+    # icon" — resolved THROUGH the same chain, so the parent star's own
+    # override and his star-icon mode both apply.
+    src = run_node("optionIcon", CONTEXT + """
+const withParent = { ...context,
+  segmentMeta: { "31": { parents: ["star:1:2"] } } };
+console.log(JSON.stringify(optionIcon("segment", "31", withParent)));
+""")
+    assert src == "/ui/assets/star_icons/bob3.png"
+
+
+def test_the_parent_stars_own_override_reaches_the_subsection():
+    src = run_node("optionIcon", CONTEXT + """
+const withParent = { ...context,
+  iconOverrides: { "star:1:2": "blj" },
+  segmentMeta: { "31": { parents: ["star:1:2"] } } };
+console.log(JSON.stringify(optionIcon("segment", "31", withParent)));
+""")
+    assert src == "/ui/assets/star_icons/blj.png"
+
+
+def test_an_area_parented_subsection_wears_castle_movement():
+    # "Default segment icon for anything added to the castle (in any area)
+    # should use the castle_movement icon automatically" — through the
+    # category table's own entry, never a stem named twice.
+    src = run_node("optionIcon", CONTEXT + """
+const withParent = { ...context,
+  segmentMeta: { "31": { parents: ["area:6:1"] } } };
+console.log(JSON.stringify(optionIcon("segment", "31", withParent)));
+""")
+    assert src == "/ui/assets/star_icons/castle_movement.png"
+
+
+def test_a_shared_piece_wears_its_primary_parents_art():
+    # Round 20 made parents plural; the FIRST is the primary (his pick
+    # order), so a piece of two stars wears the first one's art.
+    src = run_node("optionIcon", CONTEXT + """
+const withParents = { ...context,
+  segmentMeta: { "31": { parents: ["star:1:2", "star:1:0"] } } };
+console.log(JSON.stringify(optionIcon("segment", "31", withParents)));
+""")
+    assert src == "/ui/assets/star_icons/bob3.png"
+
+
+def test_seeded_art_still_beats_the_parent():
+    # A corpus row's hand-picked stem is more specific than any derivation.
+    result = run_node("optionIcon, SEGMENT_SEED_ICONS", CONTEXT + """
+const seedKey = Object.keys(SEGMENT_SEED_ICONS)[0];
+const withBoth = { ...context,
+  segmentMeta: { "31": { seedKey, parents: ["star:1:2"] } } };
+console.log(JSON.stringify([optionIcon("segment", "31", withBoth),
+  "/ui/assets/star_icons/" + SEGMENT_SEED_ICONS[seedKey] + ".png"]));
+""")
+    assert result[0] == result[1]

@@ -41,7 +41,7 @@
 // enable/disable) -- the same endpoints the rest of the UI uses, so the normal
 // target_changed flow updates the header, the pinned section, and this.
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { CellRow, SurfaceExchange } from "./cellrow.js";
 import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
@@ -51,6 +51,7 @@ import { armedSegments, hasPracticeContext, hasStandardsFor,
          selectorSurfaceId } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
 import { handIsEmpty, loneOption } from "../loneoption.js";
+import { CellToggles } from "./celltoggles.js";
 import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
 import { caveatOf, cellBadge } from "./marks.js";
@@ -224,6 +225,13 @@ function writeBowserFamily(level, family) {
 const segKey = (s) => `segment:${s.segment_id}`;
 const starKey = (courseId, slot) => `star:${courseId}:${slot}`;
 
+// `segKey`/`starKey` above emit the same `segment:<id>` / `star:<c>:<s>`
+// strings the server stamps as a definition's `parent`, which is what lets a
+// row ask "is this piece mine?" with one string compare. A `targetEntityKey`
+// helper lived here for progressive disclosure and went with it in round 22 --
+// which parent a piece belongs to is a question about the CELL now, not about
+// whatever happens to be targeted.
+
 // Row-level icon-picking state (the ✎ on any cell) is iconpicker.js's
 // useIconPicking, shared with the Rank tab's coverage tiles since 2026-07-26.
 
@@ -260,7 +268,7 @@ async function pickSegmentTarget(t, s, options) {
 // THE lone-route auto-pick, shared by the star row and the castle segment row
 // (rule 11 — one implementation, not two that drift). Task 0025: with a route
 // active, a place where the route leaves exactly ONE thing to practice needs no
-// pick from him. The RULE itself is `loneRouteOption`/`handIsEmpty` in
+// pick from him. The RULE itself is `loneOption`/`handIsEmpty` in
 // ../loneoption.js, import-free so node can test it; this is only the wiring.
 //
 // Deliberately NOT applied to the two Bowser rows above. `ArenaRow` already
@@ -296,7 +304,12 @@ function useLoneRouteOption(v, lone, key, commit) {
 // reason. `onPicked` fires after a successful explicit pick so a caller can
 // remember "the user chose THIS family" (Bowser's own writeBowserFamily);
 // every other caller omits it and nothing changes for them.
-function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked }) {
+// `toggles` is components/celltoggles.js's overlay -- this cell's own pieces,
+// drawn inside its art. An `onPickOverride` prop lived here for the expanded
+// family's fold gesture and was deleted with it in round 22: a cell's click is
+// its target write again, with no second meaning to dispatch on.
+function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked,
+                              toggles = null }) {
   const tgt = ((t.view || {}).target) || {};
   async function pick() {
     await pickSegmentTarget(t, s);
@@ -304,6 +317,7 @@ function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked }) {
   }
   return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
     active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
+    toggles=${toggles}
     iconSrc=${entityIconSrc(t, segKey(s))}
     rank=${s.rank} hasStandards=${hasStandardsFor(t.view, segKey(s))}
     caveat=${s.caveat}
@@ -333,6 +347,49 @@ const armedExtraCells = (t, v, shownIds, setPicking, keep = () => true) =>
 // every armed segment, and the castle rows still offer them. Invisible in one
 // course row is not invisible.
 const startsInLevel = (level) => (s) => (s.start_levels || []).includes(level);
+
+// A STAR'S PIECES ARE SWITCHES ON THE STAR, NOT CELLS BESIDE IT (round 22,
+// 2026-08-08). This replaces PROGRESSIVE DISCLOSURE outright -- `useFamilyView`
+// and the whole of `ui/subsections.js` (familyRoot / visibleEntities /
+// isExpanded), the `.selector-expanded` treatment and the "tap the parent again
+// to go back" fold are DELETED, not disabled.
+//
+// Griffin, opening the round: "as a complete redesign / upgrade, we should
+// actually re-use the same exact design we use as the Pipe/Star selector for
+// the Bowser stages... EVERY SUBSECTION ADDED TO A STAR just appears as a new
+// small button overlayed... the buttons are not toggles BETWEEN options, but
+// rather enable/disable options."
+//
+// What that retires and why it is a deletion rather than a patch: with no
+// subsection ever loose in the row there is no family to expand INTO, so there
+// is no fold to come back FROM and no `preferredRoot` tie to break when a piece
+// has several parents. Round 20's plural parents survive intact -- the question
+// simply moved from "which family does the row expand into" to "which stars
+// draw this badge", and `parents.includes(starKey)` answers both.
+//
+// The switch is the definition's own `enabled` flag, which already exists and
+// is per-DEFINITION rather than per-parent. His call, asked and answered at
+// capture: dimming a piece dims it EVERYWHERE. The argument he took is that
+// per-parent could only ever hide a CARD -- one definition has one live timer,
+// so it cannot record under one parent and not another -- and he asked for
+// tracking to stop, not for a display filter.
+function subsectionToggles(t, subsections, parentKey) {
+  const mine = subsections.filter(
+    (s) => (s.parents || []).includes(parentKey));
+  if (!mine.length) return null;
+  const flip = (s) => send("PUT", `/api/segments/${s.segment_id}`,
+                           { enabled: !s.enabled });
+  return html`<${CellToggles} toggles=${mine.map((s) => ({
+    key: `seg:${s.segment_id}`,
+    iconSrc: entityIconSrc(t, segKey(s)),
+    selected: !!s.enabled,
+    title: s.enabled
+      ? `${s.name} — tracked; click to stop tracking it`
+      : `${s.name} — not tracked; click to track it`,
+    onToggle: () => flip(s),
+    onIconError: (errorEvent) => fallbackToGenericStar(errorEvent, 0),
+  }))} />`;
+}
 
 function StarRow({ t, v, stage }) {
   const [fold, toggleFold] = useCollapsed("selector");
@@ -369,11 +426,48 @@ function StarRow({ t, v, stage }) {
   // an empty row: an empty selector reads as "broken", and standing somewhere
   // your route skips is a normal thing to do.
   const routeStars = course ? routeStarFilter(v, stage.course_id) : null;
-  const shown = course
+  // INSIDE A SUBAREA, only that subarea's stars (round 21 item 5: "I'm
+  // inside the volcano, so I can only do stars inside there"). The map is
+  // server-vocab (`subarea_stars`, measured off his own grabs — see
+  // addresses.COURSE_SUBAREA_STARS); a subarea with no row filters nothing,
+  // because hiding a valid star is the worse failure. Applied AFTER the
+  // route filter with the same never-empty fallback that filter has: a
+  // route narrowed to stars outside this subarea must not blank the row.
+  //
+  // AND NOT WHILE THE STAR SELECT IS UP (round 26, and the THIRD report of
+  // one symptom -- "I've mentioned this like 3 times"). The two earlier fixes
+  // aimed at a LEVEL-LOAD transient, and the UI log says the narrowing tracks
+  // the area byte exactly as designed at every other moment: 2 cells inside
+  // the volcano, 5 in the main area, flipping correctly all session. What
+  // nothing moves is the area byte while the course's own star-select screen
+  // is showing -- he grabbed a star in the volcano at 09:07:40 and the next
+  // spawn landed at 09:07:52, TWELVE SECONDS of that screen offering the
+  // volcano's two stars. `on_the_star_select` (tracking/service.py) is true
+  // from a grab until the next spawn, which is exactly that window.
+  //
+  // NOT WHILE THE AREA IS STILL THE LOAD'S (round 23, 2026-08-08). A course
+  // load walks the area byte through a transient -- entering LLL reads the
+  // volcano for 1.74 s, measured on his own journal -- and the STAR-SELECT
+  // SCREEN sits inside that window, so the row narrowed to the volcano's two
+  // stars on the screen where he picks which star to do: "On the star select,
+  // we should show the same options as when we spawn normally." `settling`
+  // (detectors/stage.py) marks exactly the emit that rode the level edge; the
+  // very next area change clears it, which is precisely the moment he walked
+  // somewhere himself. Showing everything is the safe side of this, and the
+  // same side `COURSE_SUBAREA_STARS` already takes for a subarea it has no
+  // row for.
+  const subareaStars = course && !stage.settling && !stage.on_the_star_select
+    ? ((t.vocab || {}).subarea_stars || {})[`${stage.level}:${stage.area}`]
+    : null;
+  const routeShown = course
     ? course.stars
         .map((name, i) => ({ name, i }))
         .filter(({ i }) => !routeStars || routeStars.has(`${stage.course_id}:${i}`))
     : [];
+  const hereShown = subareaStars
+    ? routeShown.filter(({ i }) => subareaStars.includes(i))
+    : routeShown;
+  const shown = hereShown.length ? hereShown : routeShown;
 
   // Task 0025 — DDD during 16 Star offers exactly one star, so pick it.
   // Computed BEFORE the `!course` early return because a hook may not run
@@ -384,6 +478,21 @@ function StarRow({ t, v, stage }) {
   const lone = loneOption(shown);
   useLoneRouteOption(v, lone, `star:${stage.course_id}:${lone ? lone.i : ""}`,
                      () => pick(lone.i, { quiet: true }));
+
+  // A STAR'S SUBSECTIONS BELONG HERE (task 0087, and the case Griffin named
+  // first: "sometimes we want to practice only a small portion of a star"),
+  // and since round 22 they belong INSIDE the star's own cell rather than
+  // beside it -- see `subsectionToggles`. DISABLED ones are kept in this
+  // list on purpose: the badge is the only control that can turn one back on,
+  // so filtering them out here would make the switch one-way.
+  const subsections = (v.segment_targets || [])
+    .filter((s) => (s.parents || []).length > 0
+                   && startsInLevel(stage.level)(s));
+  // Every piece drawn as a badge, so the armed-extras union below does not
+  // ALSO draw it as a loose cell -- which is exactly what put a stray "Volcano
+  // Entry" beside his two LLL stars (his screenshot, 2026-08-09). "A running
+  // segment is never invisible" still holds: it is visible on its parent.
+  const badged = new Set(subsections.map((s) => s.segment_id));
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
   return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
@@ -394,21 +503,22 @@ function StarRow({ t, v, stage }) {
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
     <${CellRow} class="starrow">
-      ${shown.map(({ name, i }) => {
-        return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
-          key=${`${stage.course_id}:${i}`}
-          active=${tgt.kind !== "segment"
-            && tgt.course_id === stage.course_id && tgt.star_id === i}
-          iconSrc=${entityIconSrc(t, starKey(stage.course_id, i))}
-          fallbackSlot=${i}
-          rank=${rankFor(i)} hasStandards=${hasStandardsFor(v, starKey(stage.course_id, i))}
-          caveat=${caveatFor(i)}
-          name=${name}
-          sub=${stratSub(lastStratFor(i))}
-          onPick=${() => pick(i)}
-          onEdit=${() => setPicking(iconIdentityForKey(starKey(stage.course_id, i)))} />`;
-      })}
-      ${armedExtraCells(t, v, new Set(), setPicking, startsInLevel(stage.level))}
+      ${shown.map(({ name, i }) => html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
+        key=${`${stage.course_id}:${i}`}
+        active=${tgt.kind !== "segment"
+          && tgt.course_id === stage.course_id && tgt.star_id === i}
+        iconSrc=${entityIconSrc(t, starKey(stage.course_id, i))}
+        fallbackSlot=${i}
+        rank=${rankFor(i)} hasStandards=${hasStandardsFor(v, starKey(stage.course_id, i))}
+        caveat=${caveatFor(i)}
+        name=${name}
+        sub=${stratSub(lastStratFor(i))}
+        toggles=${subsectionToggles(t, subsections,
+                                       starKey(stage.course_id, i))}
+        onPick=${() => pick(i)}
+        onEdit=${() => setPicking(iconIdentityForKey(starKey(stage.course_id, i)))} />`)}
+      ${armedExtraCells(t, v, badged, setPicking,
+                        startsInLevel(stage.level))}
     <//>
     ${pickerModal}
   </section>`;
@@ -485,18 +595,19 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
   // this function's own docstring for the override that used to sit here.
   const pipeMode = mode === "pipe";
 
-  async function pickStar() {
+  async function pickStar(options) {
     setMode("star");
     writeBowserFamily(stage.level, "reds");
-    await requestTarget(t, { course_id: stage.course_id, star_id: 0 });
+    await requestTarget(t, { course_id: stage.course_id, star_id: 0 }, options);
   }
-  async function pickPipe() {
+  async function pickPipe(options) {
     setMode("pipe");
     writeBowserFamily(stage.level, "reds");
     if (!pipeSeg) return;
     if (!pipeSeg.enabled)
       await send("PUT", `/api/segments/${pipeSeg.segment_id}`, { enabled: true });
-    await requestTarget(t, { kind: "segment", segment_id: pipeSeg.segment_id });
+    await requestTarget(t, { kind: "segment", segment_id: pipeSeg.segment_id },
+                        options);
   }
   // Clicking the CARD selects it in whatever mode is already chosen (user,
   // 2026-07-30, with a mock-up box drawn round the whole cell: "if we just click
@@ -507,9 +618,9 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
   // The "No Reds" cell's own explicit pick -- StandardSegmentCell's onPicked
   // prop (below) already covers the CLICK path; this is the same write for
   // the auto-retarget effect (item 5), which has no cell click to hang off.
-  async function pickNoReds() {
+  async function pickNoReds(options) {
     if (!noRedsSeg) return;
-    await pickSegmentTarget(t, noRedsSeg);
+    await pickSegmentTarget(t, noRedsSeg, options);
     writeBowserFamily(stage.level, "no_reds");
   }
 
@@ -578,10 +689,13 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
     if (!family) return;
     if (redsActive) return;
     if (tgt.kind === "segment") return;
+    // `auto`: the remembered-family retarget is a fill, not a click — the
+    // cell's own onPick path passes nothing and stays sovereign.
     if (family === "reds") {
-      if (bowserModeFor(stage.level) === "pipe") pickPipe(); else pickStar();
+      if (bowserModeFor(stage.level) === "pipe") pickPipe({ auto: true });
+      else pickStar({ auto: true });
     } else if (noRedsSeg) {
-      pickNoReds();
+      pickNoReds({ auto: true });
     }
   }, [stage.level]);
 
@@ -699,24 +813,22 @@ function RedsCell({ t, v, stage, course, redsActive, pipeMode,
            src=${entityIconSrc(t, starKey(stage.course_id, 0))}
            onerror=${(errorEvent) => fallbackToGenericStar(errorEvent, 0)}
            alt="" draggable="false" />
-      <span class="reds-toggle">
-        <button type="button" class="reds-toggle-btn ${!pipeMode ? "is-selected" : ""}"
-            aria-pressed=${!pipeMode}
-            title="Track the star grab alone"
-            onclick=${(clickEvent) => { clickEvent.stopPropagation();
-              onPickStar(); }}>
-          <img src=${genericStarSrc(2)} alt="Star" draggable="false" />
-        </button>
-        <span class="reds-toggle-clock" aria-hidden="true">
-          <${Icon} name="clock" size=${12} />
-        </span>
-        <button type="button" class="reds-toggle-btn ${pipeMode ? "is-selected" : ""}"
-            aria-pressed=${pipeMode}
-            title="Track the run to the pipe"
-            onclick=${(clickEvent) => { clickEvent.stopPropagation(); onPickPipe(); }}>
-          <img src="/ui/assets/pipe_icon.png" alt="Pipe" draggable="false" />
-        </button>
-      </span>
+      ${/* THE SAME overlay a star's subsections use (components/celltoggles.js)
+           -- two buttons here, mutually exclusive, with the clock between
+           them; N buttons and no clock there. Exclusivity lives in these two
+           handlers and nowhere inside the shared component, which is what
+           lets one implementation serve both without growing a mode. */""}
+      <${CellToggles}
+        separator=${html`<span class="reds-toggle-clock" aria-hidden="true">
+          <${Icon} name="clock" size=${12} /></span>`}
+        toggles=${[
+          { key: "star", iconSrc: genericStarSrc(2), ariaLabel: "Star",
+            title: "Track the star grab alone",
+            selected: !pipeMode, onToggle: onPickStar },
+          { key: "pipe", iconSrc: "/ui/assets/pipe_icon.png", ariaLabel: "Pipe",
+            title: "Track the run to the pipe",
+            selected: pipeMode, onToggle: onPickPipe },
+        ]} />
       <span class="reds-arrows" aria-hidden="true">
         <span class="reds-arrow left ${!pipeMode ? "is-lit" : ""}">◀</span>
         <span class="reds-arrow right ${pipeMode ? "is-lit" : ""}">▶</span>
@@ -793,7 +905,10 @@ function ArenaRow({ t, v, stage }) {
     (async () => {
       if (!only.enabled)
         await send("PUT", `/api/segments/${only.segment_id}`, { enabled: true });
-      await requestTarget(t, { kind: "segment", segment_id: only.segment_id });
+      // `auto`: an arrival fill, not a click — the server holds it by the
+      // detection rules and refuses to let it steal a promoted detection.
+      await requestTarget(t, { kind: "segment", segment_id: only.segment_id },
+                          { auto: true });
     })();
   }, [stage.level, only && only.segment_id, heldStartsHere]);
 
@@ -830,7 +945,24 @@ function SegmentRow({ t, v, stage }) {
   const inRoute = routeSegs
     ? here.filter((s) => routeSegs.has(s.segment_id)) : here;
 
-  const segs = inRoute.length ? inRoute : here;   // never empty the row
+  const offered = inRoute.length ? inRoute : here;   // never empty the row
+
+  // A PIECE IS A BADGE ON ITS PARENT, NEVER A CELL (round 22 — the same rule
+  // the star row follows, and the same reason: rule 11, one implementation).
+  // Here the parent is a castle MOVEMENT rather than a star, so `segs` is the
+  // top-level offer and each piece rides whichever movement claims it.
+  //
+  // A piece parented to a castle AREA (`area:<node>`) matches no entity here,
+  // so it stays a top-level cell — Griffin's item 5: "if the subsection is a
+  // top level subsection (e.g., it's associated with a top level area, like
+  // any castle area), then it works the same as today, as a standalone top
+  // level practice log entry."
+  const segs = offered.filter((s) => !(s.parents || []).some(
+    (parent) => offered.some((other) => segKey(other) === parent)));
+  const pieces = (v.segment_targets || []).filter(
+    (s) => (s.parents || []).length > 0
+           && s.start_areas.some((a) => a[0] === stage.level
+                                        && a[1] === stage.area));
 
   // Task 0025's segment half (rule 11 — the same rule, the same module).
   // READS `segs`, the list actually drawn, since 2026-08-05. It read the
@@ -843,19 +975,22 @@ function SegmentRow({ t, v, stage }) {
   useLoneRouteOption(
     v, lone, `seg:${stage.level}:${stage.area}:${lone ? lone.segment_id : ""}`,
     () => pickSegmentTarget(t, lone, { quiet: true }));
-  const extras = armedExtraCells(
-    t, v, new Set(segs.map((s) => s.segment_id)), setPicking);
+
+  const drawn = new Set([...segs.map((s) => s.segment_id),
+                         ...pieces.map((s) => s.segment_id)]);
+  const extras = armedExtraCells(t, v, drawn, setPicking);
   if (!segs.length && !extras.length) return html`<${StagePlaceholder} t=${t} />`;
 
   return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
     <div class="shead"><b>Castle ${CASTLE_AREA_NAMES[stage.area]}</b>
       <span class="meta">tap a segment to practice</span>
-      
+
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
     <${CellRow} class="starrow segcells">
       ${segs.map((s) => html`<${StandardSegmentCell}
-        key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
+        key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking}
+        toggles=${subsectionToggles(t, pieces, segKey(s))} />`)}
       ${extras}
     <//>
     ${pickerModal}
