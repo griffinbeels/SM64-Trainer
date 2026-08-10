@@ -12,16 +12,25 @@ differently is the divergent-duplication class this repo has a rule about:
     already refuses to floor this (`_section_banner`'s own sentinel); the
     quick-select cell did not, which is round-4 item 2.
 
-  * `old_clock` — the attempt was timed by a wall-frame delta even though its
-    closing event type is one that WOULD carry Usamune's IGT today. BOTH
-    clauses are load-bearing and the second is the whole point: 570 of 626
-    segment attempts in the 2026-07-31 journal are delta-timed, and most are
-    delta FOREVER — a castle movement closes on a `level_changed`, an event
-    that has no Usamune number to give, so its delta simply IS how that
-    segment is measured and stays perfectly comparable to the next run of it.
-    Marking those would have put a warning on nearly every movement PB he
-    owns. Round-3 ruling 6; the predicate was measured against a reprojected
-    snapshot of the dev journal and selects 10 of 23 saved segment PBs.
+  * `old_clock` — the PB was timed by a wall-frame delta while the SAME
+    entity's history also holds an igt-timed attempt: two clocks provably
+    coexist, so this number is not comparable to the entity's own fresh runs.
+    THREE clauses now, and the third (`igt_seen`, round 17 item 2,
+    2026-08-08) exists because the closer-TYPE clause stopped being a valid
+    proxy for it: it was measured when castle movements closed on
+    `level_changed` (never igt-bearing), and task 0081 re-pointed 55 of them
+    onto the entrance TOUCH (`warp_entered`, igt-bearing) — so LBLJ, a
+    trigger-clock definition whose every one of 15 attempts banks the same
+    delta, wore "not comparable to a fresh run" for runs that are comparable
+    by construction. His report: "I don't understand why this LBLJ timer has
+    a caveat. Feels like it shouldn't. I didn't save state at all, just
+    played normally." Measured on his live snapshot before the change: the
+    old predicate marked 3 of 8 current PBs, all LBLJ, all noise; requiring
+    a mixed-clock history marks 0 today and re-marks exactly when a fresh
+    igt-timed run lands beside a delta PB — the moment comparability
+    actually breaks. The earlier two clauses still hold (round-3 ruling 6:
+    570 of 626 attempts are delta-timed, most delta FOREVER, and marking
+    them all would put a warning on nearly every movement PB he owns).
 
   * `grab_timed` — a star whose time is the GRAB quantity rather than the
     x-cam quantity a leaderboard accepts (round-4 items 3/4). `Attempt.
@@ -44,12 +53,25 @@ from sm64_events.core.events import IGT_BEARING_EVENT_TYPES
 CAVEAT_SEVERITY = ("grab_timed", "old_clock", "unattributed")
 
 
-def caveats_for(pb_row, attempt) -> list[str]:
+def igt_seen_in(history) -> bool:
+    """Does this entity's history hold ANY igt-timed attempt? THE third
+    old_clock clause: a delta PB is provably on the other clock only when
+    the same entity has banked Usamune's number at least once. Callers pass
+    the entity's FULL attempt list, never a scope-filtered slice — the
+    question is about the record, not about what is on screen."""
+    return any(a.timed_by == "igt" for a in history)
+
+
+def caveats_for(pb_row, attempt, igt_seen: bool = False) -> list[str]:
     """Every caveat true of this PB, unordered. Split out from `caveat_for`
     so a test can assert the PREDICATES independently of the precedence — the
     two have failed separately (ruling 6's own framing was wrong about the
     size of `old_clock` in one direction and my generalization of it wrong in
-    the other, and only a reprojection could say so)."""
+    the other, and only a reprojection could say so).
+
+    `igt_seen` = igt_seen_in(the entity's attempts). Defaults False, which is
+    the direction that cannot cry wolf: a caller that does not know says
+    nothing rather than warning about a clock mismatch it never checked."""
     if pb_row is None:
         return []
     found = []
@@ -71,7 +93,8 @@ def caveats_for(pb_row, attempt) -> list[str]:
         if attempt.segment_id is None and attempt.timed_at in ("grab", None):
             found.append("grab_timed")
         if (attempt.timed_by == "delta"
-                and attempt.closed_by in IGT_BEARING_EVENT_TYPES):
+                and attempt.closed_by in IGT_BEARING_EVENT_TYPES
+                and igt_seen):
             found.append("old_clock")
     # Deliberately outside the `attempt is not None` guard: a PB whose saving
     # attempt has been wiped still shows, and it is still unclaimable.
@@ -80,9 +103,9 @@ def caveats_for(pb_row, attempt) -> list[str]:
     return found
 
 
-def caveat_for(pb_row, attempt) -> str | None:
+def caveat_for(pb_row, attempt, igt_seen: bool = False) -> str | None:
     """The ONE caveat a surface draws for this PB, worst first, or None."""
-    found = caveats_for(pb_row, attempt)
+    found = caveats_for(pb_row, attempt, igt_seen)
     return next((key for key in CAVEAT_SEVERITY if key in found), None)
 
 

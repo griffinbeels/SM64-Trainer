@@ -116,6 +116,34 @@ export function ParamInput({ schema, name, value, vocab, clause, onChange, t }) 
     // A 3-item list has nothing to group, so this stays a plain dropdown.
     return dropdown(Object.entries(vocab.castle_areas).filter(permitted),
                     "Any", "— pick subarea —");
+  if (schema.kind === "moment")
+    // The mid-course vocabulary (doors, textboxes), served by the server's
+    // own registry so a new moment reaches this dropdown with no JS edit.
+    // Without this branch the param fell through to a bare text input and
+    // rendered as an empty box labelled "kind" — the definition matched
+    // perfectly server-side while the editor could not show what it was set
+    // to (live report 2026-08-05, with a screenshot of exactly that).
+    return dropdown((vocab.moments || []).map((m) => [m.key, m.label]),
+                    "Any moment", "— pick a moment —");
+  if (schema.kind === "landmark") {
+    // A RECORDED clause pins THE specific thing (this door, this pole) by
+    // its catalogue key -- the recorder writes it, and there is no
+    // hand-authoring picker for one. The editor's whole offer is letting the
+    // pin go; unset it renders nothing, because typing a key by hand is not
+    // a thing (the fallback below is a NUMBER input, which would show a
+    // string key as an empty box -- the exact trap the moment branch names).
+    //
+    // THE PIN WEARS HIS NAME (round 18 item 1): "I named them 'Lobby to
+    // Grounds Door' and 'CCM Wooden Door' for a reason. We should see
+    // those." The catalogue (`GET /api/landmarks`, threaded in on vocab by
+    // the page) is the same names the recorder's rows read; a key he never
+    // named keeps the generic wording rather than printing a raw key.
+    if (value == null) return null;
+    const pinName = (vocab.landmark_names || {})[value];
+    return html`<button type="button" class="quiet-button"
+        title=${`Pinned to ${pinName || `one specific thing (${value})`}. Click to match any of its kind here.`}
+        onclick=${() => onChange(null)}>✕ ${pinName || "this specific one"}</button>`;
+  }
   if (schema.kind === "course")
     // Grouped the same way, so a course picker and a level picker read alike.
     return html`<${EntityPicker} groups=${courseOptions(vocab)}
@@ -249,7 +277,7 @@ export function ClauseRow({ clause, types, vocab, tint, onChange, onRemove, t })
 // which is exactly why the editor must always send the FULL list — sending a
 // partial one would clear the rest.
 const SAVE_FIELDS = ["name", "enabled", "start_triggers", "end_triggers",
-                     "guards", "match_mode", "waypoints"];
+                     "guards", "match_mode", "clock_start", "waypoints"];
 
 // The full definition shape POST /api/segments/backtest validates against
 // (server/api.py's SegmentBody) -- a SUPERSET of SAVE_FIELDS, deliberately:
@@ -286,10 +314,10 @@ function backtestSummary(report) {
   if (report.unclosed.length > 0)
     return "Never fired — but it DID arm, and never closed. See below.";
   if (report.arms > 0)
-    // "no completion is recorded", not "never completed successfully": unlike
-    // segmenttimeline.js's recordingSummary (which only ever backtests
-    // replaces: null, a brand-new recording), this Builder backtests a real
-    // `replaces` when editing an existing segment -- so arms>0/fires=0 here
+    // "no completion is recorded", not "never completed successfully": like
+    // segmenttimeline.js's recordingSummary in its re-record intent, this
+    // Builder backtests a real `replaces` when editing an existing segment
+    // -- so arms>0/fires=0 here
     // can ALSO mean "it fired, and those attempts were wiped"
     // (tracking/backtest.py replays journaled data_wiped clears against
     // `current`), not only "it never completed". Both readings make this
@@ -300,7 +328,8 @@ function backtestSummary(report) {
   return "Never armed anywhere in your history.";
 }
 
-function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }) {
+function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs,
+                   onRerecord }) {
   // match_mode's own default mirrors the server's (SegmentBody.match_mode =
   // "loose") rather than naming "loose" a second time -- vocab.match_modes
   // is ordered loose-first specifically so a caller that wants "the default"
@@ -309,7 +338,12 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
     start_triggers: [{ type: "level_enter" }],
     end_triggers: [{ type: "level_enter" }], guards: [],
     match_mode: (vocab.match_modes && vocab.match_modes[0]
-                 && vocab.match_modes[0].key) || "loose" };
+                 && vocab.match_modes[0].key) || "loose",
+    // "move" leads vocab.clock_starts because he ruled it the default for
+    // NEW definitions (round 15 item 3) -- read positionally like
+    // match_modes above, never a JS literal a registry change would strand.
+    clock_start: (vocab.clock_starts && vocab.clock_starts[0]
+                  && vocab.clock_starts[0].key) || "trigger" };
   const [d, setD] = useState(initial || blank);
   const [resetting, setResetting] = useState(false);
   const [resetErr, setResetErr] = useState(null);
@@ -417,6 +451,14 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
       if (t) t.refresh();
     } catch (e) { setErr(String(e)); }
   }
+  // "I need visual confirmation that we saved" (round 18 item 2): a check
+  // mark + "Saved" for ~2 s, set only AFTER the write resolves. Held here
+  // rather than on the page because an EDIT save never remounts this
+  // Builder (same id, same key); a CREATE does remount, and there the
+  // editor swapping to the saved row is its own confirmation.
+  const [savedFlash, setSavedFlash] = useState(false);
+  const savedTimer = useRef(null);
+  useEffect(() => () => clearTimeout(savedTimer.current), []);
   // Backtest preview state -- reset for free on every open/switch because
   // Builder remounts (Segments keys it by editing.id/"new"), so a stale
   // report from a different segment can never bleed through.
@@ -514,6 +556,9 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
         }
       }
       onSaved(savedId);
+      setSavedFlash(true);
+      clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSavedFlash(false), 2000);
       return true;
     } catch (e) { setErr(String(e)); return false; }
   }
@@ -632,6 +677,9 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
   // its stored value has bitten this app before).
   const matchModes = vocab.match_modes || [];
   const matchModeInfo = matchModes.find((mode) => mode.key === d.match_mode);
+  const clockStarts = vocab.clock_starts || [];
+  const clockStartInfo = clockStarts.find(
+    (mode) => mode.key === d.clock_start);
 
   // One bordered group per side; each alternative clause inside gets its
   // own tinted card (cycling) so "new color = new alternative" reads at a
@@ -716,6 +764,21 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
       <input placeholder="e.g. Lobby to BitDW" value=${d.name}
           oninput=${(e) => setD({ ...d, name: e.target.value })} />
     </label>
+    ${/* The re-record door (round 16): "OH BOY this segment was actually
+         recorded wrong" is noticed FROM the segment, so the editor is where
+         the door lives. It opens the recorder with this row as its
+         `replaces` intent -- picks empty, name his, save replaces in place.
+         Existing rows only: a not-yet-saved definition has nothing to
+         replace. */""}
+    ${initial && initial.id != null && onRerecord && html`<div
+        class="builder-rerecord">
+      <span class="field-label">Recorded wrong?</span>
+      <button type="button" onclick=${() => onRerecord(initial)}>
+        <${Icon} name="bookmark" size=${15} />${" "}Re-record this movement
+      </button>
+      <span class="meta">play it again and point at what you did — routes,
+        PBs and history stay attached</span>
+    </div>`}
     ${initial && initial.seed_key && html`<div
         class="builder-seeded ${initial.seed_dirty ? "is-dirty" : ""}">
       <span class="field-label"><${Icon} name="shield" size=${15} />${" "}
@@ -807,6 +870,16 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
       </select>
       <span class="meta">${matchModeInfo ? matchModeInfo.description : ""}</span>
     </label>
+    <label class="builder-clockstart">
+      <span class="field-label">Clock starts</span>
+      <select value=${d.clock_start || "trigger"}
+          onchange=${(e) => setD({ ...d, clock_start: e.target.value })}>
+        ${clockStarts.map((mode) => html`<option value=${mode.key}>${mode.label}</option>`)}
+        ${!clockStartInfo && d.clock_start
+          ? html`<option value=${d.clock_start}>${d.clock_start}</option>` : null}
+      </select>
+      <span class="meta">${clockStartInfo ? clockStartInfo.description : ""}</span>
+    </label>
     <div class="segment-definition-grid">
       ${section("Start", "Arm when any one of these happens.", "play",
         "start_triggers", vocab.triggers, "seg-start")}
@@ -882,7 +955,7 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs }
       <button onclick=${onCancel}>Cancel</button>
       <button class="primary-button" onclick=${save} disabled=${lintHasError}
           title=${lintHasError ? "Fix the error above before saving" : ""}>
-        <${Icon} name="save" size=${16} /> Save segment
+        <${Icon} name=${savedFlash ? "check" : "save"} size=${16} />${" "}${savedFlash ? "Saved" : "Save segment"}
       </button>
     </div>
     ${btErr && html`<div class="badx backtest-panel">${btErr}</div>`}
@@ -958,8 +1031,24 @@ export function Segments({ t }) {
   const [defs, setDefs] = useState(null);
   const [query, setQuery] = useState("");
   const [vocabData, setVocabData] = useState(null);
+  // His landmark names, for the editor's pinned-moment clauses (round 18
+  // item 1) -- the SAME store the recorder's rows read, keyed by catalogue
+  // key. Threaded to ParamInput on the vocab object so no clause-row prop
+  // chain grows a new argument.
+  const [landmarkNames, setLandmarkNames] = useState({});
   const [editing, setEditing] = useState(null);   // null | "new" | def object
-  const [recording, setRecording] = useState(false);   // the timeline picker
+  // The timeline picker: false, or {replaces: def|null} — the hero button
+  // opens it to CREATE ({replaces: null}), the editor's re-record door opens
+  // it to REPLACE that row (round 16).
+  const [recording, setRecording] = useState(false);
+  // Bumped when the RECORDER writes a row (round 17 item 1). The Builder is
+  // keyed by segment id and a re-record keeps the id, so without this the
+  // open editor never remounts and its `d` state — read from `initial`
+  // exactly once — keeps rendering the PRE-replace definition: "it doesn't
+  // feel like the start/finish fields were changed" (his report, and a
+  // driven test reproduces it). Folded into the Builder key so only a
+  // recorder save forces the remount; ordinary editing is untouched.
+  const [editorEpoch, setEditorEpoch] = useState(0);
   const editorRef = useRef(null);   // the open Builder's {save, dirty} handle
   const [openGroups, toggleGroup] = useOpenGroups("sm64.segOriginsOpen");
   // Panes cap themselves to the space actually left below them (ui/viewport.js)
@@ -974,7 +1063,10 @@ export function Segments({ t }) {
     return rows;
   };
   useEffect(() => { load();
-    getJSON("/api/segments/vocab").then(setVocabData); }, []);
+    getJSON("/api/segments/vocab").then(setVocabData);
+    getJSON("/api/landmarks")
+      .then((body) => setLandmarkNames(body.names || {}))
+      .catch(() => {}); }, []);
   if (!defs || !vocabData) return html`<${PageState}
       kind=${t.connected ? "loading" : "offline"}
       title="Preparing the segment workshop" />`;
@@ -1034,22 +1126,28 @@ export function Segments({ t }) {
           <p>Define repeatable sections once, then practice and rank them like stars.</p>
         </div>
       </div>
-      <button class="quiet-button" onclick=${() => setRecording(true)}>
+      <button class="quiet-button" onclick=${() => setRecording({ replaces: null })}>
         <${Icon} name="bookmark" size=${16} /> Record a segment
       </button>
       <button class="primary-button" onclick=${() => setEditing("new")}>
         <${Icon} name="plus" size=${17} /> New segment
       </button>
     </header>
-    ${recording && html`<${SegmentTimeline}
+    ${/* Keyed by intent: the recorder seeds name/parent/picks from `replaces`
+         in useState initializers, so swapping intents without a remount would
+         carry one recording's state into the other's. */""}
+    ${recording && html`<${SegmentTimeline} t=${t}
+        key=${recording.replaces ? `re-${recording.replaces.id}` : "new"}
+        replaces=${recording.replaces}
         onCancel=${() => setRecording(false)}
         onSaved=${async (savedId) => {
           // Same "stay on what you just saved" rule the Builder's own
-          // onSaved follows (live audit 2026-07-25): land on the new
-          // segment's own editor rather than the empty state.
+          // onSaved follows (live audit 2026-07-25): land on the new (or
+          // re-recorded) segment's own editor rather than the empty state.
           setRecording(false);
           const rowsList = await load();
           setEditing(rowsList.find((row) => row.id === savedId) || null);
+          setEditorEpoch((epoch) => epoch + 1);
           t.refresh();
         }} />`}
 
@@ -1111,9 +1209,12 @@ export function Segments({ t }) {
 
       <main class="practice-card workshop-card segment-editor">
         ${editing
-          ? html`<${Builder} key=${editing === "new" ? "new" : editing.id}
-              vocab=${vocabData} apiRef=${editorRef} t=${t} load=${load}
+          ? html`<${Builder}
+              key=${editing === "new" ? "new" : `${editing.id}:${editorEpoch}`}
+              vocab=${{ ...vocabData, landmark_names: landmarkNames }}
+              apiRef=${editorRef} t=${t} load=${load}
               allDefs=${defs} initial=${editing === "new" ? null : editing}
+              onRerecord=${(row) => setRecording({ replaces: row })}
               onSaved=${async (savedId) => {
                 // Stay on what you just saved (live audit 2026-07-25): closing
                 // the editor threw the user back to the empty state, and after

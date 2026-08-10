@@ -31,6 +31,29 @@ from sm64_events.core import uilog  # noqa: E402
 
 SETTLE = "new Promise(r => setTimeout(r, 2500))"
 
+# Reaching the recorder is the setup's whole job: it is a modal on another tab,
+# so no plain page load ever renders it. Same walk `tools/uilab_project.py`'s
+# recorder stories take, kept short here because this test needs the list
+# PAINTED and nothing else.
+_OPEN_RECORDER = """
+(async () => {
+  const waitFor = async (test, ms = 4000) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      if (test()) return true;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return false;
+  };
+  const seg = document.querySelector('button.nav-item[title="Segments"]');
+  if (seg) { seg.click(); await waitFor(() => !!document.querySelector('.segments-page')); }
+  const open = Array.from(document.querySelectorAll('button'))
+    .find((b) => b.textContent.includes('Record a segment'));
+  if (open) { open.click(); await waitFor(() => !!document.querySelector('.record-picks')); }
+  await waitFor(() => !!document.querySelector('.record-row-wrap'));
+})()
+"""
+
 
 def test_loading_the_practice_page_records_what_it_painted(tmp_path, monkeypatch):
     # Redirected so a test run never appends to the log a live session is
@@ -115,3 +138,43 @@ def test_a_page_that_paints_the_same_thing_twice_records_it_once(
         assert count <= 6, (
             f"{surface} recorded {count} times for a page that never changed "
             f"— the snapshot dedupe is not holding")
+
+
+def test_opening_the_recorder_records_the_rows_it_painted(tmp_path, monkeypatch):
+    """The surface every latency report about the recorder is about, and the
+    one nothing observed until 2026-08-06.
+
+    His report: *"I've clearly grabbed this star, but I don't see the event in
+    the recorder"* — and the row did arrive, late. The server was measured
+    innocent end to end for that exact grab (journal id 2313: 18 frames from
+    touching the star to the x-cam, `published_after` 0), so the question is
+    entirely about what the LIST held and when, which nothing recorded.
+
+    THE PRACTICE PAGE'S OBSERVER CANNOT COVER IT: `app.js` renders one tab at
+    a time, so while the recorder is open the practice page is unmounted and
+    its effect does not run at all. Hence the recorder's own call, its own
+    root, and this test — a reader wired to a root that never exists would be
+    silent in exactly the way this whole module exists to prevent.
+    """
+    log = tmp_path / "ui_log.jsonl"
+    monkeypatch.setattr(uilog, "log_path", lambda: log)
+
+    with serve_ui(tmp_path / "uilog-recorder.db") as base:
+        with driver.get_driver().launch(headless=True) as page:
+            page.goto(base)
+            page.evaluate(SETTLE)
+            page.evaluate(_OPEN_RECORDER)
+            page.evaluate(SETTLE)
+
+    entries = [e for e in uilog.read(log) if e["surface"] == "recorder"]
+    assert entries, (
+        "the recorder was open and recorded NOTHING. Its observer is in "
+        "components/segmenttimeline.js (useUiLog on its own root); a silent "
+        "log reads as 'nothing was on screen', which is the one answer it "
+        "exists to give.")
+    assert any(entry.get("rows") for entry in entries), (
+        "the recorder reader found no rows on a page the fixture seeded "
+        "events into — it is reading the wrong element and would report "
+        "silence for every latency question asked of it")
+    labelled = [row for entry in entries for row in entry["rows"] if row["label"]]
+    assert labelled, "rows were recorded with no labels, which name nothing"

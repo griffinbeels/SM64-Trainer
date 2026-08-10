@@ -21,6 +21,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 
 from sm64_events.core.events import Event
+from sm64_events.core.landmark import landmark_group
 from sm64_events.core.paths import bundled_defaults_seed
 from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, node_label, star_name
@@ -109,12 +110,23 @@ class TrackerService:
         self.ranks = ranks            # RankStandards | None
         self.session_id: int | None = None
         self._segment_defs = self._load_segment_defs()
+        # The landmark catalogue, cached for the projector's same-name
+        # collapse (round 13): read per FEED through the provider below, so a
+        # full-table SELECT per replayed event would be ruinous — the cache
+        # drops on rename_landmark and at start() (reconcile seeds names).
+        self._landmark_names_cache: dict | None = None
         self._projector = Projector(segments=self._segment_defs,
                                     time_filters=self._time_filters(),
                                     origin_overrides=self._origin_overrides(),
-                                    hundred_coin_strat=self._hundred_coin_strat)
+                                    hundred_coin_strat=self._hundred_coin_strat,
+                                    landmark_names=self._landmark_names)
         self._current_stage = {"course_id": None, "level": None,
                                "area": None, "mode": None}
+        # True from a star grab until the next spawn: the window the course's
+        # own star-select screen occupies, during which the area byte is stale
+        # (see `current_stage`). Derived from journaled events rather than
+        # from memory, so replay and a live session agree.
+        self._grab_since_spawn = False
         self._persisted_runs: list[int] = []
         # Zero-arg callable -> attempt ids with a saved replay clip, which the
         # startup prune must never delete (tracking/prune.py). Injected by
@@ -137,6 +149,28 @@ class TrackerService:
         {} in degraded mode. Segment bounds ride the defs themselves."""
         return self.db.get_state("time_filters", {}) if self.db is not None else {}
 
+    def _landmark_names(self) -> dict:
+        """The catalogue, for the projector's per-feed MatchContext — cached
+        because a moment pin asks on every event and replay feeds thousands."""
+        if self._landmark_names_cache is None:
+            self._landmark_names_cache = (self.db.landmark_names()
+                                          if self.db is not None else {})
+        return self._landmark_names_cache
+
+    def rename_landmark(self, key: str, name: str) -> dict:
+        """His naming gesture, applied to the LANDMARK rather than the key —
+        every key the catalogue currently reads as one thing with `key` moves
+        together (round 13 items 2+3: a star door is TWO objects, so renaming
+        "the 70 Star Door" must move both halves, and a blank erases the whole
+        group). Giving a second key an existing name IS the merge gesture:
+        *"if I rename them to the same name, they should all collapse to the
+        same landmark."* Returns the catalogue as the route answers it."""
+        names = self.db.landmark_names()
+        for member in landmark_group(key, names):
+            self.db.name_landmark(member, name)
+        self._landmark_names_cache = None
+        return self.db.landmark_names()
+
     async def attach_db(self, db: Database) -> None:
         """Late DB attach: upgrade a broadcast-only instance to full
         tracking. A restart handoff that loses the instance-lock race
@@ -149,10 +183,12 @@ class TrackerService:
         2026-07-23: post-update GUI stuck on 'loading…')."""
         self.db = db
         self._segment_defs = self._load_segment_defs()
+        self._landmark_names_cache = None
         self._projector = Projector(segments=self._segment_defs,
                                     time_filters=self._time_filters(),
                                     origin_overrides=self._origin_overrides(),
-                                    hundred_coin_strat=self._hundred_coin_strat)
+                                    hundred_coin_strat=self._hundred_coin_strat,
+                                    landmark_names=self._landmark_names)
         await self.start()
 
     # -- pipeline -------------------------------------------------------------
@@ -169,11 +205,15 @@ class TrackerService:
             log.info("purged %d derived journal row(s) and reclaimed the space",
                      purged)
         events = self.db.events()
+        # Reconcile has just (re)seeded catalogue names by the time start()
+        # replays, so the collapse must not judge pins under a stale cache.
+        self._landmark_names_cache = None
         attempts, self._projector = replay(
             events, segments=self._segment_defs,
             time_filters=self._time_filters(),
             origin_overrides=self._origin_overrides(),
-            hundred_coin_strat=self._hundred_coin_strat)
+            hundred_coin_strat=self._hundred_coin_strat,
+            landmark_names=self._landmark_names)
         self.db.replace_attempts(attempts)
         # Boot repair, same reason as in _reproject: an orphaned pb row keeps
         # GRADING, so a db that already carries some from an older delete or
@@ -198,8 +238,34 @@ class TrackerService:
         # session that had rows when this method began.
         await self._purge_empty_sessions()
 
+    # An attempt boundary opened: whatever is counting per-attempt state
+    # starts again. Wired by main.build() to MomentDetector.reset, and None
+    # everywhere else (every test fixture and several tools build a service
+    # with no detector chain at all, so an unwired hook must be inert).
+    #
+    # A CALLBACK rather than the service reaching into a detector: the
+    # composition root is the only place that holds both, exactly as it is
+    # for the poller's on_frame heartbeat.
+    on_attempt_boundary = None
+
     async def publish(self, event: Event) -> None:
         seq = await self.broadcaster.publish(event)
+        # BEFORE the db/session guards below, deliberately. A broadcast-only
+        # instance still runs the full detector chain, and ordinals that only
+        # restart on the instance holding the lock would be a difference
+        # between two servers watching one game.
+        #
+        # game_reset is absent on purpose: it restarts gGlobalTimer, and every
+        # detector already self-heals on a backward clock (the base contract).
+        # An L-reset or a savestate load does NOT move that clock, which is
+        # why these two need saying.
+        if (event.type in ("practice_reset", "state_loaded")
+                and self.on_attempt_boundary is not None):
+            self.on_attempt_boundary()
+        if event.type == "star_collected":
+            self._grab_since_spawn = True
+        elif event.type == "spawned":
+            self._grab_since_spawn = False
         if event.type == "stage_changed":
             # Live presentation signal: cache for the session view's initial
             # load and NEVER journal it (recomputable from curr_level; a
@@ -322,6 +388,7 @@ class TrackerService:
         if self.db is None:
             return
         proj = self._projector
+        target_before = proj.target
         for n in proj.settle(frame):
             await self.broadcaster.publish(Event(
                 type=n["event"], frame=n["frame"], timestamp_utc=_now(),
@@ -334,6 +401,14 @@ class TrackerService:
                          if k not in ("event", "frame")}))
             if self._projector is not proj:
                 return   # a CRUD reproject swapped it; its state is authoritative
+        if proj.target != target_before:
+            # A hooked target can EXPIRE on the clock (round 19's hold
+            # budget), and standing still journals nothing — the same
+            # late-verdict lesson the settle above exists for, applied to
+            # the selection itself.
+            await self.broadcaster.publish(Event(
+                type="target_changed", frame=frame, timestamp_utc=_now(),
+                payload=self.target_payload()))
 
     def _attempt_completed_event(self, a, close_event: Event) -> Event:
         return Event(type="attempt_completed", frame=close_event.frame,
@@ -369,16 +444,21 @@ class TrackerService:
         target_changed broadcasts and the session view (views.py) -- so the
         WS payload and GET /api/session can never drift."""
         tgt = self._projector.target
+        # Detections waiting their turn behind the held target (round 19's
+        # FIFO) — names resolved here so no client re-derives them.
+        queued = [{"segment_id": sid, "segment_name": self._segment_name(sid)}
+                  for sid in self._projector.target_queue()]
         if tgt and tgt[0] == "segment":
             # course_id/star_id stay present-as-None for shape stability:
             # the UI header keys off course_id presence for star targets.
             return {"kind": "segment", "segment_id": tgt[1],
                     "segment_name": self._segment_name(tgt[1]),
                     "course_id": None, "star_id": None,
-                    "strat_tag": self._projector.strat_tag}
+                    "strat_tag": self._projector.strat_tag,
+                    "queued": queued}
         c, s = (tgt[1], tgt[2]) if tgt else (None, None)
         return {"kind": "star", "course_id": c, "star_id": s,
-                "strat_tag": self._projector.strat_tag}
+                "strat_tag": self._projector.strat_tag, "queued": queued}
 
     # -- state ------------------------------------------------------------------
     @property
@@ -402,8 +482,23 @@ class TrackerService:
         """The quick-select banner context the player is standing in (payload's
         `mode`: stars / bowser_course / arena / castle / None), cached from the
         broadcast-only stage_changed event for the session view's initial load.
-        See detectors/stage.py."""
-        return self._current_stage
+        See detectors/stage.py.
+
+        `on_the_star_select` is stamped HERE rather than in the detector,
+        because the detector only sees snapshots and this is a fact about
+        EVENTS. It is true from a star grab until the next spawn — the window
+        the course's own star-select screen occupies — and the selector reads
+        it to stop narrowing the row to a subarea Mario has already left.
+
+        WHY (round 26, and the third report of one symptom): the area byte
+        holds whatever area he was last in, and nothing moves it while the
+        star select is up. He grabbed a star in the volcano at 09:07:40 and
+        the next spawn landed at 09:07:52 — **twelve seconds** of star-select
+        screen offering the volcano's two stars where the route has five. Both
+        earlier attempts at this aimed at a LEVEL-LOAD transient, which is a
+        different window entirely and is not the one he was photographing."""
+        return {**self._current_stage,
+                "on_the_star_select": self._grab_since_spawn}
 
     @property
     def segment_defs(self) -> list[SegmentDef]:
@@ -489,7 +584,8 @@ class TrackerService:
                              star_id: int | None = None,
                              segment_id: int | None = None,
                              strat_tag: str | None = None,
-                             clear_strat: bool = False) -> dict:
+                             clear_strat: bool = False,
+                             auto: bool = False) -> dict:
         """Set the practice target, or refuse a pick from somewhere else.
 
         You practice what is in front of you: a pick the player is not
@@ -552,17 +648,23 @@ class TrackerService:
                 f"that one is in {node_label(node)}")
         if kind == "segment":
             await self.set_target_segment(segment_id, strat_tag,
-                                          clear_strat=clear_strat)
+                                          clear_strat=clear_strat, auto=auto)
         else:
             await self.set_target(course_id, star_id, strat_tag,
-                                  clear_strat=clear_strat)
+                                  clear_strat=clear_strat, auto=auto)
         return {}
 
     async def set_target(self, course_id: int, star_id: int,
                          strat_tag: str | None = None,
-                         clear_strat: bool = False) -> None:
+                         clear_strat: bool = False,
+                         auto: bool = False) -> None:
         db = self._require_db()
         payload = {"course_id": course_id, "star_id": star_id}
+        if auto:
+            # A convenience fill, not his click (round 19) — the projector
+            # holds the two by different rules. Only ever written when true,
+            # so every pre-queue payload keeps its exact shape.
+            payload["auto"] = True
         # target_set's payload shape is unchanged: strat_tag rides along only
         # when truthy, exactly as before, so no target_set consumer sees a
         # new field. An explicit clear ("(no strategy)" in the picker) is
@@ -581,14 +683,17 @@ class TrackerService:
 
     async def set_target_segment(self, segment_id: int,
                                  strat_tag: str | None = None,
-                                 clear_strat: bool = False) -> None:
+                                 clear_strat: bool = False,
+                                 auto: bool = False) -> None:
         self._require_db()
         if all(d.id != segment_id for d in self._segment_defs):
             raise LookupError(f"segment {segment_id} not found")
+        payload = {"kind": "segment", "segment_id": segment_id}
+        if auto:
+            # See set_target: a fill is detection-flavored, a click is not.
+            payload["auto"] = True
         await self.publish(Event(type="target_set", frame=0,
-                                 timestamp_utc=_now(),
-                                 payload={"kind": "segment",
-                                          "segment_id": segment_id}))
+                                 timestamp_utc=_now(), payload=payload))
         if strat_tag is not None:
             # segment strat memory is written via strat_set (the projector
             # ignores strat_tag inside segment target_set payloads)
@@ -809,7 +914,10 @@ class TrackerService:
                                     enabled=d.get("enabled", True),
                                     waypoints=d.get("waypoints", []),
                                     category=d.get("category"),
-                                    match_mode=d.get("match_mode", "loose"))
+                                    match_mode=d.get("match_mode", "loose"),
+                                    parents=d.get("parents"),
+                                    clock_start=d.get("clock_start",
+                                                      "trigger"))
         await self._segments_changed()
         return sid
 
@@ -825,7 +933,8 @@ class TrackerService:
         db.update_segment_def(segment_id, **{
             k: d[k] for k in ("name", "enabled", "start_triggers",
                               "end_triggers", "waypoints", "guards",
-                              "category", "match_mode") if k in d})
+                              "category", "match_mode", "parents",
+                              "clock_start") if k in d})
         if current.get("seed_key"):
             # a user edit to a seeded row protects it from reconcile's
             # refresh (tracking/defaults.py) until reset_segment clears the
@@ -902,7 +1011,8 @@ class TrackerService:
             d["name"], d["start_triggers"], d["end_triggers"], d["guards"],
             _iso(_now()), enabled=d["enabled"], waypoints=d["waypoints"],
             default_strat=d.get("default_strat"),
-            match_mode=d.get("match_mode", "loose"))
+            match_mode=d.get("match_mode", "loose"),
+            parents=d.get("parents"))
 
     async def split_segment(self, segment_id: int, mid: list,
                             names: tuple[str, str]) -> tuple[int, int]:
@@ -1642,7 +1752,8 @@ class TrackerService:
             db.events(), segments=self._segment_defs,
             time_filters=self._time_filters(),
             origin_overrides=self._origin_overrides(),
-            hundred_coin_strat=self._hundred_coin_strat)
+            hundred_coin_strat=self._hundred_coin_strat,
+            landmark_names=self._landmark_names)
         # keep the live session: replayed projector state is authoritative
         self._projector = projector
         db.replace_attempts(attempts)

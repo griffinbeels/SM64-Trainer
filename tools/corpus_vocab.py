@@ -156,6 +156,29 @@ def spawn(level):
     return {"type": "spawned", "level": level}
 
 
+def moment(kind, level=None, area=None, ordinal=None, landmark=None):
+    """A mid-course boundary: a door opening, a textbox firing.
+
+    `kind` is a row in detectors/moment.py's MOMENTS registry, which is the
+    one place moments are named -- this helper never carries a list of its
+    own. `ordinal` unset means any occurrence. `landmark` pins THE specific
+    thing (a core/landmark.py catalogue key) the way a recorded clause does
+    -- round 18: his re-recorded LBLJ is a seeded row whose start pins the
+    Lobby to Grounds Door, and a promotion that silently stripped the pin
+    would ship a corpus row matching any door in the lobby.
+    """
+    clause = {"type": "moment_reached", "kind": kind}
+    if level is not None:
+        clause["level"] = level
+    if area is not None:
+        clause["area"] = area
+    if ordinal is not None:
+        clause["ordinal"] = ordinal
+    if landmark is not None:
+        clause["landmark"] = landmark
+    return clause
+
+
 # --- route steps -----------------------------------------------------------
 
 def star(course, star_id, label):

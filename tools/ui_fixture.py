@@ -34,6 +34,7 @@ import uvicorn
 from sm64_events.compare.importer import VideoImporter
 from sm64_events.compare.service import CompareService
 from sm64_events.core.events import Event
+from sm64_events.core.timefmt import format_igt
 from sm64_events.core.paths import (bundled_defaults_seed, bundled_rank_standards, bundled_sheet_ladders,
                                     rank_standards_path)
 from sm64_events.ranks.standards import RankStandards
@@ -154,10 +155,24 @@ FIXTURE_SEGMENT = 6
 FIXTURE_SEGMENT_STRAT = "Pole Glitch"
 
 
+
+# EVERY PLACE EVENT CARRIES A TIME, because the real detectors do (2026-08-06,
+# his report: "some events have the timer next to them, most don't? I would
+# expect the timer for all of them"). `area.py`, `level.py` and `spawn.py` each
+# stamp the shared IgtClock now, so a fixture publishing bare payloads renders
+# a recorder nobody will ever see -- and the reach test that counts timed rows
+# would go on passing against exactly the state the fix removed.
+def _place_time(payload: dict, igt_frames: int) -> dict:
+    """The `igt` trio a real place detector stamps, folded onto a hand-built
+    payload. One door, so a new fixture event cannot forget the shape."""
+    return {**payload, "igt_frames": igt_frames, "igt_source": "counter",
+            "igt": format_igt(igt_frames)}
+
+
 def seed_practice(service, course_id: int = FIXTURE_COURSE,
                   star_id: int = FIXTURE_STAR,
                   level: int = FIXTURE_LEVEL, attempts: bool = True,
-                  strat: str | None = None) -> None:
+                  strat: str | None = None, moments: bool = False) -> None:
     """Give the fixture an ACTIVE TARGET and a few attempts.
 
     Without this the Practice page renders only its empty states -- the
@@ -205,6 +220,16 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
             type="stage_changed", frame=900, timestamp_utc=now,
             payload={"course_id": course_id, "level": level, "area": 1,
                      "mode": "stars"}))
+        # `stage_changed` is BROADCAST-ONLY, so it reaches the store and never
+        # the journal — which means it says nothing about where these grabs
+        # happened to anything that reads events back. `area_changed` is the
+        # one type that names the level AND the settled area outright, and the
+        # recorder's per-place cards are derived from it alone; without this
+        # row every grab below belongs to no place and the cards render as one
+        # "Somewhere unrecorded" heap. Added 2026-08-05 with the cards.
+        await service.publish(Event(
+            type="area_changed", frame=900, timestamp_utc=now,
+            payload=_place_time({"level": level, "from": None, "to": 1}, 30)))
         if not attempts:
             return
         if strat:
@@ -214,6 +239,24 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
             await service.publish(Event(
                 type="practice_reset", frame=1000 + index * 1000,
                 timestamp_utc=now, payload={"igt_frames_before": 0}))
+            # TWO DOORS PER RUN, when asked -- the start triggers
+            # `_subsection_definition` uses (`moment_reached door_open`,
+            # ordinals 1 and 2). Without these the seeded subsections exist as
+            # DEFINITIONS and record nothing, so the practice log has no piece
+            # to nest inside its parent's card and that whole surface renders
+            # zero times (round 22, 2026-08-08 -- the same "the fixture never
+            # reaches the state" failure this file has now paid for four
+            # times). Ordinals reset at every attempt boundary, which is why
+            # they are published INSIDE the loop rather than once.
+            if moments:
+                for ordinal in (1, 2):
+                    await service.publish(Event(
+                        type="moment_reached", frame=1100 + index * 1000 + ordinal,
+                        timestamp_utc=now,
+                        payload=_place_time({
+                            "kind": "door_open", "ordinal": ordinal,
+                            "landmark": None, "level": level, "area": 1,
+                            "action": 0}, 60 + ordinal)))
             await service.publish(Event(
                 type="star_collected", frame=1350 + index * 1000,
                 timestamp_utc=now,
@@ -347,7 +390,8 @@ def _pad_log_with_more_entities(service) -> None:
         for segment_id, level, close_type in _PADDING_SEGMENTS:
             await service.publish(Event(
                 type="level_changed", frame=frame, timestamp_utc=now,
-                payload={"from": previous_level, "to": level}))
+                payload=_place_time({"from": previous_level, "to": level},
+                                    frame % 600)))
             # >= DEFAULT_MIN_FRAMES (15, projection.py) between arm and close,
             # or the projector auto-ignores the "attempt" as too fast to be
             # real (`_auto_ignored`) -- measured directly: at +10 frames every
@@ -357,7 +401,7 @@ def _pad_log_with_more_entities(service) -> None:
             frame += 60
             await service.publish(Event(
                 type=close_type, frame=frame, timestamp_utc=now,
-                payload={"level": level}))
+                payload=_place_time({"level": level}, frame % 600)))
             frame += 100
             previous_level = level
 
@@ -418,17 +462,98 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
                 f"fixture could not POST {path}: {error.code} "
                 f"{error.read()[:200]!r}") from error
 
+    # EVERY level edge is followed by its establishing `area_changed` ON THE
+    # SAME FRAME, because that is what the real detectors emit (the corpus
+    # walker's own docstring says the same, and for the same reason) -- and
+    # because `area_changed` is the ONLY thing that says where the player is.
+    # Without these rows every event in the fixture belongs to no place at
+    # all, and the recorder's per-place cards render as one "Somewhere
+    # unrecorded" heap: a gate reporting a clean page nobody is looking at,
+    # which is this rig's own documented failure mode. Added 2026-08-05 with
+    # the cards; nothing measured before them depends on an area row.
     async def arm_and_close() -> None:
         await service.publish(Event(type="level_changed", frame=5000,
                                     timestamp_utc=now,
-                                    payload={"from": 17, "to": 19}))
+                                    payload=_place_time({"from": 17, "to": 19},
+                                                        412)))
+        await service.publish(Event(type="area_changed", frame=5000,
+                                    timestamp_utc=now,
+                                    payload=_place_time({"level": 19,
+                                                         "from": None,
+                                                         "to": 1}, 412)))
         await service.publish(Event(type="warp_entered", frame=5085,
-                                    timestamp_utc=now, payload={"level": 19}))
+                                    timestamp_utc=now,
+                                    payload=_place_time({"level": 19}, 497)))
+        # TWO doors, so the recorder draws BOTH landmark states on one page: the
+        # first is named by the shipped catalogue (its key is the HMC Door row in
+        # tools/corpus_landmarks.py, taken from his own 2026-08-05 session), the
+        # second is a real basement door nobody has named yet and so still reads
+        # by its kind. Without a landmark-bearing row here the rename control
+        # renders nowhere and every gate passes on a page that cannot show it --
+        # this rig's own documented failure mode.
+        for frame, home in ((5100, [1126, -1074, -2661]),
+                            (5200, [717, -1177, -869])):
+            key = "6:3:800ebc8c:{},{},{}".format(*home)
+            await service.publish(Event(
+                type="moment_reached", frame=frame, timestamp_utc=now,
+                payload={"kind": "door_open", "ordinal": 1, "level": 6,
+                         "area": 3, "action": 0x00001321,
+                         "igt_frames": 200, "igt_source": "counter",
+                         "igt": format_igt(200),
+                         "landmark": {"key": key, "kind_key": "kind:800ebc8c",
+                                      "behaviour": 0x800EBC8C, "home": home,
+                                      "placed": True}}))
+        # A THIRD moment whose object has NEITHER coordinate -- no spawn point
+        # and standing at the origin. Every such object shares that one key, so
+        # a name typed on it would land on all of them at once and the recorder
+        # must offer no rename control. Without this row the rule has nothing to
+        # be tested against and a pencil on everything would look correct.
+        await service.publish(Event(
+            type="moment_reached", frame=5300, timestamp_utc=now,
+            payload={"kind": "textbox", "ordinal": 1, "level": 6, "area": 3,
+                     "action": 0x20001305, "igt_frames": 260,
+                     "igt_source": "counter", "igt": format_igt(260),
+                     "landmark": {"key": "6:3:800ee040:0,0,0",
+                                  "kind_key": "kind:800ee040",
+                                  "behaviour": 0x800EE040, "home": [0, 0, 0],
+                                  "pos": [0, 0, 0],
+                                  "placed": False, "nameable": False}}))
+        # A FOURTH: a POLE. Scriptless (`placed` false, no spawn point) and
+        # still nameable, because it never moves and is keyed by where it
+        # stands -- round 9 item 7, "we should be able to rename ANYTHING",
+        # and the specific poles his subsections are built on. The numbers are
+        # the WF tree's own, from the 2026-08-05 probe captures.
+        await service.publish(Event(
+            type="moment_reached", frame=5400, timestamp_utc=now,
+            payload={"kind": "pole_grab", "ordinal": 1, "level": 6, "area": 3,
+                     "action": 0x00000841, "igt_frames": 300,
+                     "igt_source": "counter", "igt": format_igt(300),
+                     "landmark": {"key": "6:3:800edc24:2560,256,4608",
+                                  "kind_key": "kind:800edc24",
+                                  "behaviour": 0x800EDC24, "home": [0, 0, 0],
+                                  "pos": [2560, 256, 4608],
+                                  "placed": False, "nameable": True}}))
+        # Name the FIRST door and leave the second alone, so one page carries
+        # both states. Applied directly rather than through reconcile: the
+        # catalogue does not depend on the 84-segment corpus this fixture
+        # deliberately skips, and a named row is the whole point of the row.
+        # Lowercase, per the catalogue's case convention (corpus_behaviors.py):
+        # a common noun's case IS its grammar, and "Door" would render bare as
+        # a proper noun ("Open Door in...").
+        service.db.seed_landmark_name("kind:800ebc8c", "door", "landmark:kind")
+        service.db.seed_landmark_name(
+            "6:3:800ebc8c:1126,-1074,-2661", "HMC Door", "landmark:hmc")
 
     async def rearm() -> None:
         await service.publish(Event(type="level_changed", frame=6000,
                                     timestamp_utc=now,
-                                    payload={"from": 17, "to": 19}))
+                                    payload=_place_time({"from": 17, "to": 19},
+                                                        538)))
+        await service.publish(Event(type="area_changed", frame=6000,
+                                    timestamp_utc=now,
+                                    payload=_place_time({"level": 19,
+                                                         "from": None,
+                                                         "to": 1}, 538)))
 
     # A strat active BEFORE the closing edge, so the completed attempt's own
     # strat_tag stamps FIXTURE_SEGMENT_STRAT -- BitFS Pipe Entry carries no
@@ -518,6 +643,34 @@ def _publish_bowser_stage(service, course_id: int, level: int) -> None:
     asyncio.run(go())
 
 
+def _publish_castle_stage(service, area: int) -> None:
+    """Publish a `stage_changed` naming a CASTLE INTERIOR subarea (1 lobby /
+    2 upstairs / 3 basement) -- the mode `SegmentRow` draws, and the one no
+    gate had ever rendered.
+
+    That gap shipped a hard crash. Round 22 dropped one `const` while editing
+    `SegmentRow`, which `node --check` passes and every test passed too,
+    because the whole matrix only ever renders `mode="stars"` and
+    `"bowser_course"`. On his machine the first walk out of a course into the
+    castle threw inside Preact's render and FROZE THE ENTIRE PAGE -- listeners
+    still fired, so it read as "I can't interact with ANY of the dropdowns on
+    this page" (2026-08-09; his journal recorded 48 further events while the
+    screen posted nothing).
+
+    Same additive shape as `_publish_bowser_stage`: broadcast-only, retires
+    nothing, so whatever target the fixture set survives underneath it.
+    """
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    async def go() -> None:
+        await service.publish(Event(
+            type="stage_changed", frame=5300, timestamp_utc=now,
+            payload={"course_id": None, "level": 6, "area": area,
+                     "mode": "castle", "settling": False}))
+
+    asyncio.run(go())
+
+
 def _enter_level(service, level: int, frame: int = 9000) -> None:
     """Publish ONE real `level_changed` entering `level`, arming whatever
     real definition(s) key off it and leaving them ARMED -- no closing event
@@ -534,7 +687,7 @@ def _enter_level(service, level: int, frame: int = 9000) -> None:
     async def go() -> None:
         await service.publish(Event(
             type="level_changed", frame=frame, timestamp_utc=now,
-            payload={"from": 0, "to": level}))
+            payload=_place_time({"from": 0, "to": level}, 271)))
 
     asyncio.run(go())
 
@@ -644,6 +797,86 @@ def _seed_editor_fixtures(base: str) -> None:
              {"name": f"Editor Fixture {suffix}", **_EDITOR_FIXTURE_DEFINITION})
 
 
+# A PARENT and its two SUBSECTIONS, all starting in the fixture's own level,
+# so the selector's progressive disclosure has something to disclose. Nothing
+# in the shipped corpus carries a `parent`, so before this the expanded row
+# was unreachable by every instrument -- and the two defects in `28ef261`
+# (a blank moment dropdown, a subarea selector that meant nothing) are what
+# that costs: both invisible to every assertion, both obvious on sight.
+#
+# Parented to FIXTURE_STAR, deliberately: "sometimes we want to practice only
+# a small portion of a star" is the case Griffin named first, and the STAR row
+# is the one that had no disclosure wiring at all until 2026-08-05.
+#
+# `moment_reached` starts them, which is also what makes them practicable
+# HERE: `segments.start_levels` reads a moment's own `level`, so these three
+# surface in the Whomp's Fortress row and nowhere else.
+def _subsection_definition(ordinal: int) -> dict:
+    return {
+        "start_triggers": [{"type": "moment_reached", "kind": "door_open",
+                            "level": FIXTURE_LEVEL, "ordinal": ordinal}],
+        "end_triggers": [{"type": "star_grabbed", "course": FIXTURE_COURSE,
+                          "star": FIXTURE_STAR}],
+        "guards": [], "enabled": True, "waypoints": [], "match_mode": "loose",
+    }
+
+
+def _seed_subsections(base: str) -> None:
+    """POST a parent movement in the fixture's level plus two subsections of
+    the fixture STAR -- the state the selector draws badges for, and the one
+    the practice log nests cards inside (`ui/subsections.js`)."""
+    import urllib.error
+    import urllib.request
+
+    def post(path: str, payload: dict) -> dict:
+        request = urllib.request.Request(
+            f"{base}{path}", data=json.dumps(payload).encode(), method="POST",
+            headers={"Content-Type": "application/json"})
+        try:
+            return json.loads(urllib.request.urlopen(request, timeout=10).read())
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(
+                f"fixture could not POST {path}: {error.code} "
+                f"{error.read()[:200]!r}") from error
+
+    star_key = f"star:{FIXTURE_COURSE}:{FIXTURE_STAR}"
+    for ordinal, name in enumerate(("Tower Climb", "Owl Drop"), start=1):
+        post("/api/segments", {"name": name, "parents": [star_key],
+                               **_subsection_definition(ordinal)})
+
+
+def _pad_journal(db_path: Path, count: int) -> None:
+    """Bulk-fill the journal with `count` inert rows, so the timeline
+    endpoint's per-poll walk costs what it costs on the LIVE journal (~23k
+    rows) instead of the near-zero a fresh fixture db pays.
+
+    The burst latency gate needs that: the tail-fetch discard cascade it
+    guards against (round 8 item 3, the 4.7 s star grab) only bites while a
+    fetch is genuinely IN FLIGHT when the burst's next broadcast lands, and
+    against an empty journal the fetch returns before any second message
+    arrives, so the gate would measure nothing.
+
+    Raw SQL on its own connection, BEFORE the server starts: `append_event`
+    commits per row, and these rows are deliberately below the service API --
+    type "padding" is unknown to every detector, projector branch and label
+    rule, so the replay and the timeline walks pay for them (the cost being
+    simulated) and no derived state changes.
+    """
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        cursor = conn.execute(
+            "INSERT INTO sessions (started_utc) VALUES (?)",
+            (datetime.now(timezone.utc).isoformat(),))
+        session_id = cursor.lastrowid
+        stamp = datetime.now(timezone.utc).isoformat()
+        conn.executemany(
+            "INSERT INTO events (session_id, seq, type, frame, wall_time_utc,"
+            " payload) VALUES (?,?,?,?,?,?)",
+            ((session_id, seq, "padding", seq * 2, stamp,
+              json.dumps({"igt_frames": seq % 3600}))
+             for seq in range(count)))
+        conn.commit()
+
+
 def _free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -651,17 +884,34 @@ def _free_port() -> int:
 
 
 @contextlib.contextmanager
-def serve_ui(db_path: Path | None = None, timeout: float = 30,
+def serve_ui(*args, **kwargs):
+    """`serve_ui_live`, with the service handle dropped.
+
+    THE default door, and the one every gate uses: a caller that only needs a
+    URL should not be handed a live TrackerService it could publish through by
+    accident. The one caller that DOES need it is measuring latency -- how
+    long a real game event takes to reach the screen -- and that cannot be
+    asked of a page whose server nothing can make anything happen on.
+    """
+    with serve_ui_live(*args, **kwargs) as (base, _service):
+        yield base
+
+
+@contextlib.contextmanager
+def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               seed: bool = True, from_dev_db: bool = False,
               stage: tuple[int, int] | None = None,
               target: tuple[int, int] | None = None,
               arm_segment: int | None = None,
               target_segment: int | None = None,
               seed_editor_fixtures: bool = False,
+              seed_subsections: bool = False,
               reconcile_full_corpus: bool = False,
               bowser_stage: tuple[int, int] | None = None,
+              castle_stage: int | None = None,
               enter_level: int | None = None,
-              arm_hundred_coin: tuple[int, int] | None = None):
+              arm_hundred_coin: tuple[int, int] | None = None,
+              pad_journal: int = 0):
     """Yield the base URL of an offline instance; stop it on the way out.
 
     DETERMINISTIC BY DEFAULT: an empty database plus `seed_practice`, so two
@@ -703,6 +953,11 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
     reaching them needs a definition on disk to open, which no earlier
     fixture state provided.
 
+    `seed_subsections` additionally POSTs two subsections of the fixture STAR
+    (see `_seed_subsections`) -- the only way to reach a star wearing
+    subsection BADGES, or a practice-log card with pieces nested inside it,
+    since nothing in the shipped corpus carries a `parent`.
+
     `reconcile_full_corpus` additionally applies the bundled 84-segment
     default corpus (`tracking/defaults.reconcile_defaults` against `data/
     defaults.seed.json`) to a FRESH db, the same call `main.py` makes at real
@@ -738,6 +993,10 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
     both (a foreign level change disarms an armed def), so this and
     `arm_segment` are for two separate, independent fixture instances, not
     one shared one.
+
+    `pad_journal` bulk-inserts that many inert journal rows before the server
+    starts, so per-poll endpoint costs match a LIVE-sized journal instead of a
+    fresh one (see `_pad_journal` -- the burst latency gate is why).
     """
     scratch = None
     if db_path is None:
@@ -763,6 +1022,8 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
             if problems:
                 raise RuntimeError(
                     f"fixture's reconcile_defaults skipped rows: {problems}")
+    if pad_journal:
+        _pad_journal(db_path, pad_journal)
     broadcaster = Broadcaster()
     # `ranks=` is NOT optional here, whatever the signature says. Omit it and
     # every rank builder short-circuits to empty -- /api/ranks/standards starts
@@ -837,11 +1098,14 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
                 _arm_segment(base, service, segment_id=arm_segment)
             if seed_editor_fixtures:
                 _seed_editor_fixtures(base)
+            if seed_subsections:
+                _seed_subsections(base)
             course, level = stage or (FIXTURE_COURSE, FIXTURE_LEVEL)
             seed_practice(service, course_id=course, level=level,
                           star_id=(target or (0, FIXTURE_STAR))[1],
                           attempts=target is None,
-                          strat=FIXTURE_STRAT if target is None else None)
+                          strat=FIXTURE_STRAT if target is None else None,
+                          moments=seed_subsections)
             _seed_target(base, *(target or (FIXTURE_COURSE, FIXTURE_STAR)),
                          with_pb=target is None)
             if target_segment is not None:
@@ -851,6 +1115,8 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
                 # already be armed (arm_segment), or there is no `armed_
                 # detail` for the resulting card to carry.
                 _target_segment(base, target_segment)
+            if castle_stage is not None:
+                _publish_castle_stage(service, castle_stage)
             if bowser_stage is not None:
                 # AFTER _seed_target, not instead of it: broadcast-only and
                 # retires nothing (see _publish_bowser_stage), so the star
@@ -861,7 +1127,7 @@ def serve_ui(db_path: Path | None = None, timeout: float = 30,
                 _enter_level(service, enter_level)
             if arm_hundred_coin is not None:
                 _arm_hundred_coin_star(base, service, *arm_hundred_coin)
-        yield base
+        yield base, service
     finally:
         server.should_exit = True
         thread.join(timeout=15)

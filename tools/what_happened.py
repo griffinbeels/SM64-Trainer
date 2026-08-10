@@ -65,6 +65,24 @@ def candidate_journals() -> list[Path]:
     return [path for path in found if path.exists()]
 
 
+def survey_journals(journals: list[Path] | None = None
+                    ) -> list[tuple[Path, int, datetime | None]]:
+    """Every candidate journal with its event count and newest stamp,
+    FRESHEST FIRST — the one policy for "which journal is live".
+
+    Shared with `tools/score_moment_clock.py` on purpose: reading the wrong
+    journal does not error, it returns days-old events that look entirely
+    plausible, so two tools with two private freshness rules would be two
+    tools that can silently disagree about which db to trust. This module
+    stays the owner because the refusal threshold (`STALE_AFTER`) and the
+    labelling live here too."""
+    surveyed = [(path, *newest_event(path))
+                for path in (journals or candidate_journals())]
+    surveyed.sort(key=lambda row: row[2] or datetime.min.replace(tzinfo=timezone.utc),
+                  reverse=True)
+    return surveyed
+
+
 def open_readonly(path: Path) -> sqlite3.Connection:
     """Read-only, so a live server's journal is never disturbed by an inspection."""
     return sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
@@ -214,12 +232,7 @@ def main() -> int:
         print("No journal found. Has the server ever run?", file=sys.stderr)
         return 2
 
-    surveyed = []
-    for path in journals:
-        count, newest = newest_event(path)
-        surveyed.append((path, count, newest))
-    surveyed.sort(key=lambda row: row[2] or datetime.min.replace(tzinfo=timezone.utc),
-                  reverse=True)
+    surveyed = survey_journals(journals)
 
     print("Journals found:")
     for path, count, newest in surveyed:

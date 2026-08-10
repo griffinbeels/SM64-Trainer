@@ -563,6 +563,63 @@ def test_timeline_limit_is_bounded(tmp_path):
             "/api/segments/timeline?limit=99999").status_code == 422
 
 
+def test_timeline_journal_cache_extends_instead_of_rereading(tmp_path):
+    """The journal cache (round 8 item 1, approved: "we definitely shouldn't
+    be re-reading the journal from disk on every poll"): the first poll
+    decodes the whole journal, every later one asks only for `id > cached
+    max`. Asserted on the DOOR (which query the db was asked), never on a
+    timing — a timing assertion flakes, and the cost lives entirely in which
+    query runs. The second half asserts the rows still ARRIVE, so a cache
+    that extends wrongly cannot pass by never returning the new row."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)  # journal ids 2, 3 (session_started is id 1)
+        asked = []
+        whole_journal = service.db.events
+
+        def recording_events(after_id=None):
+            asked.append(after_id)
+            return whole_journal(after_id=after_id)
+
+        service.db.events = recording_events
+        first = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        assert asked == [None], "the first poll fetches the whole journal"
+        cached_max = max(row.id for row in whole_journal())
+        newest_shown = first[-1]["id"]
+
+        async def go():
+            await service.publish(Event(
+                type="star_collected", frame=2000, timestamp_utc=T0,
+                payload={"course_id": 2, "star_id": 3, "igt_frames": 500}))
+        asyncio.run(go())
+        second = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        assert asked[1:] == [cached_max], (
+            "a later poll asks only for the tail above the cached max id "
+            f"(got {asked[1:]})")
+        assert second[-1]["id"] > newest_shown, (
+            "the tail-extended cache must still serve the new row")
+
+
+def test_timeline_journal_cache_does_not_survive_a_db_swap(tmp_path):
+    """A reattach after a db-less boot swaps `service.db` (attach_db), and
+    another file's journal rows must not answer for the new one — same
+    object-identity rule the label memo already follows."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        seed(service)
+        primed = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        assert primed, "the cache must hold rows for the swap to matter"
+        service.db = Database(tmp_path / "second.db")
+        swapped = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        assert swapped == [], (
+            "a fresh, empty journal must answer empty — rows here are the "
+            "old db's cache outliving the object it belongs to")
+
+
 def test_timeline_orders_by_journal_id_not_frame(tmp_path):
     """CORRECTION to the task-11 brief: its sketch asserted rows sorted by
     `frame`, but `frame` is the raw game-frame counter and is NOT
@@ -628,7 +685,8 @@ def test_timeline_default_view_includes_area_changed(tmp_path):
         async def go():
             await service.publish(Event(type="area_changed", frame=10,
                                         timestamp_utc=T0,
-                                        payload={"from": 1, "to": 3}))
+                                        payload={"level": 6, "from": 1,
+                                                 "to": 3}))
         asyncio.run(go())
         default_rows = client.get(
             "/api/segments/timeline?limit=50").json()["rows"]
@@ -812,6 +870,80 @@ def test_put_segment_persists_a_changed_match_mode(tmp_path):
                           json={"match_mode": "strict"}).status_code == 200
         assert next(s for s in db.segment_defs()
                     if s["id"] == sid)["match_mode"] == "strict"
+
+
+def test_rerecord_replaces_the_recording_and_keeps_the_identity(tmp_path):
+    """Round 16: the recorder's re-record save is a PUT of the FULL definition
+    it builds (name, triggers, waypoints, parents, match_mode "strict",
+    clock_start "move", enabled) to the EXISTING id — replace, never
+    delete-and-recreate, because everything downstream (route steps, PBs,
+    attempts, strategies) references the segment by id. This drives that
+    exact payload shape and pins both halves: the recording moved, and the
+    identity did not."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments", json={
+            "name": "Recorded Piece", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}],
+            "category": "Main Categories/16 Star",
+            "parents": ["star:8:1"]})
+        sid = r.json()["id"]
+        rid = client.post("/api/routes", json={"name": "R", "steps": [
+            {"need": 1, "candidates": [{"type": "segment", "segment_id": sid}]},
+        ]}).json()["id"]
+
+        # The byte shape segmenttimeline.js::definitionFor sends on replace.
+        # `category` is deliberately ABSENT: the library filing must survive
+        # untouched (SegmentPatch's exclude_unset).
+        r = client.put(f"/api/segments/{sid}", json={
+            "name": "Recorded Piece", "enabled": True,
+            "start_triggers": [{"type": "level_exit", "from": 16}],
+            "end_triggers": [{"type": "level_enter", "to": 17}],
+            "guards": [], "waypoints": [[{"type": "level_enter", "to": 6}]],
+            "parents": ["star:8:1"], "match_mode": "strict",
+            "clock_start": "move"})
+        assert r.status_code == 200
+
+        rows = client.get("/api/segments").json()
+        same = [row for row in rows if row["name"] == "Recorded Piece"]
+        assert [row["id"] for row in same] == [sid], (
+            "replace must land on the SAME row — a second id here means "
+            "delete-and-recreate, which orphans every route step and PB")
+        row = same[0]
+        assert row["start_triggers"] == [{"type": "level_exit", "from": 16}]
+        assert row["waypoints"] == [[{"type": "level_enter", "to": 6}]]
+        # The new recording's own defaults win over the stored modes — a
+        # re-record IS a new recording (round 16's stated design call).
+        assert row["match_mode"] == "strict"
+        assert row["clock_start"] == "move"
+        assert row["category"] == "Main Categories/16 Star"
+        # Route membership rode the id through the replace.
+        view = client.get(f"/api/routes/{rid}").json()
+        assert view["steps"][0]["broken"] is False
+
+
+def test_rerecord_put_with_an_explicit_empty_parents_clears_them(tmp_path):
+    """The recorder's parent control can be cleared ("Nothing — it stands on
+    its own"), and its save always SENDS parents — so an explicit [] must
+    clear the stored parents, or the control shows one thing and the row
+    keeps another. Pydantic counts an explicitly-sent value as set, which is
+    what carries it through update_segment's exclude_unset dump; OMITTED
+    parents stay untouched (the builder's own save relies on that)."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.post("/api/segments", json={
+            "name": "Custom", "start_triggers": [{"type": "spawned"}],
+            "end_triggers": [{"type": "level_enter", "to": 6}],
+            "parents": ["star:8:1"]})
+        sid = r.json()["id"]
+        assert client.put(f"/api/segments/{sid}",
+                          json={"enabled": True}).status_code == 200
+        assert next(s for s in db.segment_defs()
+                    if s["id"] == sid)["parents"] == ["star:8:1"]
+        assert client.put(f"/api/segments/{sid}",
+                          json={"parents": []}).status_code == 200
+        assert next(s for s in db.segment_defs()
+                    if s["id"] == sid)["parents"] == []
 
 
 # -- backtest endpoint (Task 8, spec 2026-07-28-multi-step-segments) --------
@@ -1068,24 +1200,31 @@ def test_synthesize_endpoint_builds_a_clause_pair_a_name_and_sentences(tmp_path)
         asyncio.run(go())
         start_id, end_id = _timeline_ids(client)
         r = client.get(
-            f"/api/segments/synthesize?start_id={start_id}&end_id={end_id}")
+            f"/api/segments/synthesize?ids={start_id},{end_id}")
         assert r.status_code == 200
         body = r.json()
         assert body["start_clause"] == {"type": "level_exit", "from": 23}
         assert body["end_clause"] == {"type": "level_enter", "to": 19}
         assert body["start_sentence"] == "Exit Dire, Dire Docks"
         assert body["end_sentence"] == "Enter Bowser in the Fire Sea"
-        assert body["name"] == "Dire, Dire Docks → Bowser in the Fire Sea"
+        # Route notation since round 14 ("Cool Cool Mountain becomes CCM") —
+        # the step track's own vocabulary, one door (node_short_label).
+        assert body["name"] == "DDD → BitFS"
 
 
 def test_synthesize_endpoint_404s_on_an_unknown_event_id(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:
-        r = client.get("/api/segments/synthesize?start_id=999998&end_id=999999")
+        r = client.get("/api/segments/synthesize?ids=999998,999999")
         assert r.status_code == 404
 
 
-def test_synthesize_endpoint_409s_on_the_same_event_for_both_ends(tmp_path):
+def test_synthesize_endpoint_422s_on_the_same_event_picked_twice(tmp_path):
+    # segments.py's COROLLARY (a definition armed and closed on the identical
+    # tick) reached one step earlier than it used to be: `ids` is DEDUPED
+    # before it is counted, so picking one moment twice is not a pair at all.
+    # This was a 409 "same moment for both start and end" while the endpoint
+    # took a start_id/end_id pair.
     client, service, db = make_client(tmp_path)
     with client:
         async def go():
@@ -1094,10 +1233,9 @@ def test_synthesize_endpoint_409s_on_the_same_event_for_both_ends(tmp_path):
                                         payload={"from": 7, "to": 6}))
         asyncio.run(go())
         [only_id] = _timeline_ids(client)
-        r = client.get(
-            f"/api/segments/synthesize?start_id={only_id}&end_id={only_id}")
-        assert r.status_code == 409
-        assert "same moment" in r.json()["detail"]
+        r = client.get(f"/api/segments/synthesize?ids={only_id},{only_id}")
+        assert r.status_code == 422
+        assert "at least two" in r.json()["detail"]
 
 
 def test_synthesize_endpoint_409s_when_the_start_row_has_no_synthesis_rule(tmp_path):
@@ -1116,7 +1254,7 @@ def test_synthesize_endpoint_409s_when_the_start_row_has_no_synthesis_rule(tmp_p
         asyncio.run(go())
         start_id, end_id = _timeline_ids(client)
         r = client.get(
-            f"/api/segments/synthesize?start_id={start_id}&end_id={end_id}")
+            f"/api/segments/synthesize?ids={start_id},{end_id}")
         assert r.status_code == 409
         assert "start" in r.json()["detail"]
 
@@ -1134,7 +1272,7 @@ def test_synthesize_endpoint_409s_when_the_end_row_has_no_synthesis_rule(tmp_pat
         asyncio.run(go())
         start_id, end_id = _timeline_ids(client)
         r = client.get(
-            f"/api/segments/synthesize?start_id={start_id}&end_id={end_id}")
+            f"/api/segments/synthesize?ids={start_id},{end_id}")
         assert r.status_code == 409
         assert "end" in r.json()["detail"]
 
@@ -1143,8 +1281,255 @@ def test_synthesize_endpoint_503s_in_degraded_mode(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:
         service.db = None
-        r = client.get("/api/segments/synthesize?start_id=1&end_id=2")
+        r = client.get("/api/segments/synthesize?ids=1,2")
         assert r.status_code == 503
+
+
+# --- N picked moments, not two (2026-08-05, the recorder) ----------------
+# "I should be able to select any number of the events, in chronological
+# order, to define the segment that I want to capture." The middles become
+# waypoints; the two-moment case is byte-for-byte what it always was.
+
+def test_synthesize_makes_every_middle_moment_a_waypoint_in_journal_order(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            for frame, payload in ((100, {"from": 23, "to": 6}),
+                                   (200, {"from": 6, "to": 24}),
+                                   (300, {"from": 24, "to": 6}),
+                                   (400, {"from": 6, "to": 19})):
+                await service.publish(Event(type="level_changed", frame=frame,
+                                            timestamp_utc=T0, payload=payload))
+        asyncio.run(go())
+        ids = _timeline_ids(client)
+        r = client.get(f"/api/segments/synthesize?ids={','.join(map(str, ids))}")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["start_clause"] == {"type": "level_exit", "from": 23}
+        assert body["end_clause"] == {"type": "level_enter", "to": 19}
+        # Both middles, in journal order, each as the clause for the role a
+        # waypoint plays -- a place you REACH, which is the END role.
+        assert [step["clause"] for step in body["picked"]] == [
+            {"type": "level_enter", "to": 24}, {"type": "level_enter", "to": 6}]
+        assert body["picked"][0]["sentence"] == "Enter Whomp's Fortress"
+
+
+def test_synthesize_sorts_the_picked_ids_rather_than_trusting_click_order(tmp_path):
+    # The list is drawn NEWEST FIRST, so clicking down it hands the ids over
+    # backwards. Chronological order is a property the events already have,
+    # and reading it off the clicks instead would author a definition whose
+    # steps run backwards through a walk that only happened one way.
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            for frame, payload in ((100, {"from": 23, "to": 6}),
+                                   (200, {"from": 6, "to": 24}),
+                                   (300, {"from": 24, "to": 19})):
+                await service.publish(Event(type="level_changed", frame=frame,
+                                            timestamp_utc=T0, payload=payload))
+        asyncio.run(go())
+        ids = _timeline_ids(client)
+        forwards = client.get(
+            f"/api/segments/synthesize?ids={','.join(map(str, ids))}").json()
+        backwards = client.get(
+            f"/api/segments/synthesize?ids={','.join(map(str, reversed(ids)))}"
+        ).json()
+        assert forwards == backwards
+        assert forwards["start_clause"] == {"type": "level_exit", "from": 23}
+
+
+def test_synthesize_422s_on_fewer_than_two_moments(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.get("/api/segments/synthesize?ids=7")
+        assert r.status_code == 422
+        assert "at least two" in r.json()["detail"]
+
+
+def test_synthesize_422s_on_ids_that_are_not_numbers(tmp_path):
+    client, service, db = make_client(tmp_path)
+    with client:
+        r = client.get("/api/segments/synthesize?ids=7,nope")
+        assert r.status_code == 422
+
+
+def test_synthesize_409s_when_a_MIDDLE_moment_carries_no_clause(tmp_path):
+    # A definition cannot hold a step it cannot express, so a middle refuses
+    # for the same reason either end does -- and says "step", not "end", or
+    # the sentence points at the wrong row.
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="level_changed", frame=100,
+                                        timestamp_utc=T0,
+                                        payload={"from": 23, "to": 6}))
+            await service.publish(Event(type="practice_reset", frame=200,
+                                        timestamp_utc=T0,
+                                        payload={"igt_frames_before": 0}))
+            await service.publish(Event(type="level_changed", frame=300,
+                                        timestamp_utc=T0,
+                                        payload={"from": 6, "to": 19}))
+        asyncio.run(go())
+        ids = _timeline_ids(client)
+        r = client.get(f"/api/segments/synthesize?ids={','.join(map(str, ids))}")
+        assert r.status_code == 409
+        assert "step" in r.json()["detail"]
+
+
+# --- the timeline's live tail + the in-game timer (2026-08-05) -----------
+
+def test_timeline_rows_carry_the_in_game_timer_when_the_event_does(tmp_path):
+    # "what was the timer in game" -- surfaced from the payload the detector
+    # already stamped, never derived here. A type that carries none reports
+    # null rather than a computed stand-in.
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="moment_reached", frame=100,
+                                        timestamp_utc=T0,
+                                        payload={"kind": "door_open",
+                                                 "level": 16, "ordinal": 1,
+                                                 "igt": "0'06\"03",
+                                                 "igt_frames": 181}))
+            await service.publish(Event(type="level_changed", frame=200,
+                                        timestamp_utc=T0,
+                                        payload={"from": 16, "to": 6}))
+        asyncio.run(go())
+        rows = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        by_type = {row["type"]: row for row in rows}
+        assert by_type["moment_reached"]["igt_frames"] == 181
+        assert by_type["level_changed"]["igt_frames"] is None
+        # FRAMES only, never the payload's own pre-formatted string: the
+        # browser renders it through fmtIgtShort like every other time on
+        # screen, and shipping the string would put a second formatter's
+        # output on the page beside it (they differ — the display form drops
+        # an empty minutes field).
+        assert "igt" not in by_type["moment_reached"]
+
+
+def test_timeline_rows_carry_where_they_happened(tmp_path):
+    # "we should segment each of the events by the course / area that the
+    # event occurred in" (2026-08-05). Most rows do not say where they are, so
+    # the place is a running position over the whole journal -- derived here
+    # because the browser holds a windowed tail with no beginning to walk from.
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            # Standing in HMC, grab a star there, leave for the castle.
+            await service.publish(Event(type="area_changed", frame=100,
+                                        timestamp_utc=T0,
+                                        payload={"level": 7, "from": None,
+                                                 "to": 1}))
+            await service.publish(Event(type="star_collected", frame=200,
+                                        timestamp_utc=T0,
+                                        payload={"course_id": 6, "star_id": 0,
+                                                 "igt_frames": 900}))
+            # The exit and its establishing area row land on ONE frame, exactly
+            # as the real detectors emit them.
+            await service.publish(Event(type="level_changed", frame=300,
+                                        timestamp_utc=T0,
+                                        payload={"from": 7, "to": 6}))
+            await service.publish(Event(type="area_changed", frame=300,
+                                        timestamp_utc=T0,
+                                        payload={"level": 6, "from": 1,
+                                                 "to": 3}))
+            await service.publish(Event(type="level_changed", frame=400,
+                                        timestamp_utc=T0,
+                                        payload={"from": 6, "to": 22}))
+        asyncio.run(go())
+        rows = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        by_label = {row["label"]: row for row in rows}
+        star = by_label["Grabbed Swimming Beast in the Cavern in Hazy Maze Cave"]
+        assert (star["place"], star["place_label"], star["place_level"]) \
+            == ("7", "Hazy Maze Cave", 7)
+        # THE ROW THAT SAYS YOU LEFT closes the card you were in, because that
+        # is what its own sentence is about -- a row is filed under where its
+        # FRAME BEGAN, not under the destination.
+        assert by_label["Exited Hazy Maze Cave into Castle Inside"]["place"] == "7"
+        # ...and so does the establishing area row that shares its frame, which
+        # is the whole reason for the per-frame collapse: judged raw it would
+        # open a one-frame card of its own between the two real places.
+        assert by_label["Moved into the Basement"]["place"] == "7"
+        # The NEXT frame is where the basement's own card begins.
+        assert by_label["Exited Castle Inside into Lethal Lava Land"]["place"] \
+            == "6:3"
+
+
+def test_timeline_reads_area_changed_only_never_level_changed(tmp_path):
+    # The obvious reading -- move the position on a level edge too -- puts a
+    # one-frame "Castle Inside" card between the course you left and the
+    # basement you are standing in, for a place nobody was ever in. Same rule
+    # `walked_steps` and `SegmentEngine.feed` already use, and this is the
+    # assertion that fails if someone "simplifies" it back.
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="area_changed", frame=100,
+                                        timestamp_utc=T0,
+                                        payload={"level": 24, "from": None,
+                                                 "to": 1}))
+            await service.publish(Event(type="level_changed", frame=200,
+                                        timestamp_utc=T0,
+                                        payload={"from": 24, "to": 6}))
+            await service.publish(Event(type="area_changed", frame=200,
+                                        timestamp_utc=T0,
+                                        payload={"level": 6, "from": 1,
+                                                 "to": 3}))
+            await service.publish(Event(type="warp_entered", frame=300,
+                                        timestamp_utc=T0,
+                                        payload={"level": 6, "to": 22}))
+        asyncio.run(go())
+        rows = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        # Two places over the whole run: Whomp's Fortress, then the Basement.
+        # A bare "6" anywhere would mean a level edge had moved the position.
+        # The leading None is the establishing area row itself -- it is filed
+        # under where its own frame began, and nothing preceded it.
+        assert [row["place"] for row in rows] == [None, "24", "24", "6:3"]
+        assert "6" not in [row["place"] for row in rows]
+
+
+def test_timeline_place_is_null_before_the_first_area_row(tmp_path):
+    # Position genuinely unknown is not a place to invent. In practice this is
+    # the first frames of a fresh database only -- the walk covers the WHOLE
+    # journal while the timeline shows its last 200 rows.
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(type="game_reset", frame=10,
+                                        timestamp_utc=T0, payload={}))
+        asyncio.run(go())
+        [row] = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        assert row["place"] is None and row["place_label"] is None
+
+
+def test_timeline_after_id_returns_only_what_happened_since(tmp_path):
+    # The live tail. A broadcast event carries `seq`, never the journal `id`
+    # these rows are picked by, so a live surface has to come back for the id
+    # regardless -- asking for the tail costs one round trip instead of the
+    # whole list, and keeps `label_event` server-side.
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go(payload):
+            await service.publish(Event(type="level_changed", frame=100,
+                                        timestamp_utc=T0, payload=payload))
+        asyncio.run(go({"from": 23, "to": 6}))
+        first = _timeline_ids(client)[-1]
+        asyncio.run(go({"from": 6, "to": 19}))
+        tail = client.get(
+            f"/api/segments/timeline?limit=50&view=all&after_id={first}"
+        ).json()["rows"]
+        assert [row["id"] for row in tail] == [first + 1]
+        assert tail[0]["label"] == "Exited Castle Inside into Bowser in the Fire Sea"
+        # Nothing new since the newest row is an EMPTY tail, not the last row
+        # over again -- a surface that prepends what it gets back would
+        # otherwise double every row it already holds.
+        assert client.get(
+            f"/api/segments/timeline?limit=50&view=all&after_id={first + 1}"
+        ).json()["rows"] == []
 
 
 # Fields that legitimately MUST NOT persist through create_segment/
@@ -1164,7 +1549,15 @@ _SEGMENT_FIELD_SAMPLES = {
     "name": "Renamed", "start_triggers": [{"type": "spawned"}],
     "end_triggers": [{"type": "level_enter", "to": 6}],
     "guards": [], "enabled": False, "waypoints": [],
-    "category": "Cat", "match_mode": "strict",
+    "category": "Cat",
+    # round 15 item 3: when the clock starts — "move" is the non-default of
+    # the db column, so the round trip proves the write path carries it.
+    "clock_start": "move", "match_mode": "strict",
+    # A subsection's parent entities (task 0087; plural round 20). Must be
+    # WELL-FORMED keys -- validate_definition rejects anything else, so a
+    # placeholder string here would fail the write for the wrong reason and
+    # read as this guard working when it was not.
+    "parents": ["segment:7"],
 }
 
 
@@ -2083,3 +2476,162 @@ def test_merge_endpoint_response_carries_lint_warnings(tmp_path):
             "first_id": first_id, "second_id": second_id, "name": "WF -> SSL"})
         assert r.status_code == 200
         assert r.json()["warnings"] == []
+
+
+def test_timeline_counts_repeats_of_the_same_sentence(tmp_path):
+    """His ask, 2026-08-06, against EIGHT consecutive rows reading "Open the
+    Maze Door in Hazy Maze Cave": *"if we've already recorded that specific
+    landmark, it should show as a duplicate… we simply see a counter rising"*.
+    Naming the door correctly removed the ordinal that used to separate two
+    rows, and the count is what puts it back.
+
+    The key is the SENTENCE, not the landmark, which is why nothing extra was
+    needed for arrivals (item 7 asked for the counter there too): rows that
+    read identically are exactly the rows he cannot tell apart.
+    """
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            for _ in range(3):
+                await service.publish(Event(
+                    type="moment_reached", frame=1000, timestamp_utc=T0,
+                    payload={"kind": "door_open", "level": 7, "ordinal": 1,
+                             "landmark": {"key": "7:1:door:1,2,3"}}))
+            await service.publish(Event(
+                type="moment_reached", frame=1000, timestamp_utc=T0,
+                payload={"kind": "textbox", "level": 7, "ordinal": 1}))
+        asyncio.run(go())
+        rows = client.get(
+            "/api/segments/timeline?limit=50").json()["rows"]
+        doors = [r for r in rows if r["label"].startswith("Open")]
+        assert [r["repeat"] for r in doors] == [1, 2, 3]
+        assert [r["label"] for r in doors] == [
+            "Open a door in Hazy Maze Cave",
+            "Open a door in Hazy Maze Cave (2)",
+            "Open a door in Hazy Maze Cave (3)"]
+        other = [r for r in rows if r["label"].startswith("Trigger")]
+        assert [r["repeat"] for r in other] == [1], "a different sentence counts alone"
+
+
+def test_timeline_repeat_count_survives_the_live_tail(tmp_path):
+    """The count is taken BEFORE the `after_id` skip. Without that the
+    recorder's own live-tail fetch -- which is how every row after the first
+    reaches the screen -- would restart it at 1 on every poll, so the surface
+    the feature exists for would be the one place it never worked."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            for _ in range(4):
+                await service.publish(Event(
+                    type="moment_reached", frame=1000, timestamp_utc=T0,
+                    payload={"kind": "door_open", "level": 7, "ordinal": 1}))
+        asyncio.run(go())
+        everything = client.get("/api/segments/timeline?limit=50").json()["rows"]
+        cutoff = everything[1]["id"]
+        tail = client.get(
+            f"/api/segments/timeline?limit=50&after_id={cutoff}").json()["rows"]
+        assert [r["repeat"] for r in tail] == [3, 4]
+
+
+def test_timeline_labels_follow_a_rename_through_the_memo(tmp_path):
+    """A rename applies BACKWARDS (the /api/landmark route's own contract),
+    and since 2026-08-06 the timeline memoises labels per row id -- so this is
+    the memo's one failure mode made into a test: fetch (populates the memo),
+    rename, fetch again, and the OLD sentence coming back is the cache
+    surviving its own invalidation rule."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        async def go():
+            await service.publish(Event(
+                type="moment_reached", frame=1000, timestamp_utc=T0,
+                payload={"kind": "door_open", "level": 7, "ordinal": 1,
+                         "landmark": {"key": "7:1:aa:1,2,3", "placed": True}}))
+        asyncio.run(go())
+        before = client.get("/api/segments/timeline?limit=50").json()["rows"]
+        assert any(r["label"] == "Open a door in Hazy Maze Cave" for r in before)
+        client.post("/api/landmark",
+                    json={"key": "7:1:aa:1,2,3", "name": "Maze Door"})
+        after = client.get("/api/segments/timeline?limit=50").json()["rows"]
+        assert any(r["label"] == "Open the Maze Door in Hazy Maze Cave"
+                   for r in after), (
+            "the rename never reached the row -- the label memo is serving a "
+            "sentence from before the catalogue changed")
+
+
+def test_an_entrance_rows_rename_identity_is_the_entrance_itself(tmp_path):
+    """Round 12 items 5+6, one cause: an entrance row's PAYLOAD landmark is
+    whatever object Mario last engaged -- his three CCM painting entries each
+    carried the lobby DOOR's key, so the pencil autofilled "CCM Door" on the
+    entrance and committing renamed the door ("If I'm setting the name for a
+    specific row, I would expect THAT row to change"). The row's rename
+    identity is DERIVED from the row's own place + destination instead,
+    which also covers every historical row, and renaming it must touch the
+    entrance alone."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        door_key = "6:1:800ebc8c:-2303,0,-1074"
+
+        async def go():
+            await service.publish(Event(
+                type="moment_reached", frame=1000, timestamp_utc=T0,
+                payload={"kind": "door_open", "level": 6, "ordinal": 1,
+                         "landmark": {"key": door_key, "placed": True,
+                                      "nameable": True}}))
+            # The touch 38 frames later still wears the door -- the exact
+            # journal shape (ids 3908/3933/3943) this exists to survive.
+            await service.publish(Event(
+                type="warp_entered", frame=1038, timestamp_utc=T0,
+                payload={"level": 6, "area": 1, "to": 5,
+                         "landmark": {"key": door_key, "placed": True,
+                                      "nameable": True}}))
+        asyncio.run(go())
+        client.post("/api/landmark", json={"key": door_key, "name": "CCM Door"})
+        rows = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        [entrance] = [r for r in rows if r["type"] == "warp_entered"]
+        assert entrance["landmark"] == "entrance:6:1:5", (
+            "the entrance row still offers the payload's foreign landmark -- "
+            "renaming it edits the door he opened on the way in")
+        assert entrance["landmark_nameable"] is True
+        assert entrance["landmark_name"] is None, (
+            "a new entrance must start unnamed -- 'CCM Door' autofilling here "
+            "is item 5 verbatim")
+        # Naming the ENTRANCE lands on the entrance: the row re-labels, and
+        # the door's own name is untouched.
+        client.post("/api/landmark",
+                    json={"key": "entrance:6:1:5", "name": "CCM Painting"})
+        rows = client.get(
+            "/api/segments/timeline?limit=50&view=all").json()["rows"]
+        [entrance] = [r for r in rows if r["type"] == "warp_entered"]
+        assert entrance["label"] == "Touched CCM Painting in Castle Inside"
+        names = client.get("/api/landmarks").json()["names"]
+        assert names[door_key] == "CCM Door"
+
+
+def test_renaming_one_half_of_a_named_pair_moves_the_whole_door(tmp_path):
+    """Round 13 items 2+3: a star door is TWO objects, and his rule is the
+    spec — "if I rename them to the same name, they should all collapse to
+    the same landmark". Naming the second half like the first IS the merge;
+    after it, a rename through EITHER key moves both, and a blank erases
+    both. A same-named key in another level never moves."""
+    client, service, db = make_client(tmp_path)
+    with client:
+        half_a = "6:2:800eb180:-281,3174,3772"   # his real 70-star-door keys
+        half_b = "6:2:800eb180:-127,3174,3772"
+        elsewhere = "7:1:800eb180:-281,3174,3772"
+        client.post("/api/landmark", json={"key": half_a, "name": "70 Star Door"})
+        client.post("/api/landmark", json={"key": elsewhere, "name": "70 Star Door"})
+        # The merge gesture: the second half takes the same name.
+        client.post("/api/landmark", json={"key": half_b, "name": "70 Star Door"})
+        # One landmark now: renaming through half B moves half A too, and
+        # the same-named door in another level stays put.
+        names = client.post("/api/landmark", json={
+            "key": half_b, "name": "Star Door (70)"}).json()["names"]
+        assert names[half_a] == "Star Door (70)"
+        assert names[half_b] == "Star Door (70)"
+        assert names[elsewhere] == "70 Star Door"
+        # A blank erases the whole group, nothing else.
+        names = client.post("/api/landmark",
+                            json={"key": half_a, "name": ""}).json()["names"]
+        assert half_a not in names and half_b not in names
+        assert names[elsewhere] == "70 Star Door"

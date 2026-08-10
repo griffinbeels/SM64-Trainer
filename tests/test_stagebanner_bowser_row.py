@@ -119,7 +119,8 @@ def test_bowser_row_star_pick_is_a_plain_target_write():
     enabled flag -- picking the star grades the grab alone and never arms
     or disarms anything."""
     body = _bowser_row_body()
-    pick_star = re.search(r"async function pickStar\(\) \{.*?\n  \}\n", body, re.S)
+    pick_star = re.search(
+        r"async function pickStar\(options\) \{.*?\n  \}\n", body, re.S)
     assert pick_star, "pickStar not found (or changed shape) in BowserCourseRow"
     assert "requestTarget(" in pick_star.group(0)
     assert "send(" not in pick_star.group(0)
@@ -133,7 +134,8 @@ def test_bowser_row_pipe_pick_only_ever_enables_never_disables():
     exactly the retired mutual-exclusion mechanism this file exists to keep
     out."""
     body = _bowser_row_body()
-    pick_pipe = re.search(r"async function pickPipe\(\) \{.*?\n  \}\n", body, re.S)
+    pick_pipe = re.search(
+        r"async function pickPipe\(options\) \{.*?\n  \}\n", body, re.S)
     assert pick_pipe, "pickPipe not found (or changed shape) in BowserCourseRow"
     assert "requestTarget(" in pick_pipe.group(0)
     assert "enabled: false" not in pick_pipe.group(0)
@@ -412,8 +414,13 @@ def test_returning_to_a_bowser_stage_retargets_the_remembered_family():
     effect = retarget.group(0)
     assert "if (!family) return;" in effect
     assert "if (redsActive) return;" in effect
-    assert "pickPipe();" in effect and "pickStar();" in effect
-    assert "pickNoReds();" in effect
+    # The retarget is a FILL, not a click, and says so: `auto` puts the
+    # write under the target queue's detection rules (round 19), so the
+    # projector holds it like a detection and it can never steal a
+    # promoted one. The cells' own click paths pass no options.
+    assert "pickPipe({ auto: true });" in effect \
+        and "pickStar({ auto: true });" in effect
+    assert "pickNoReds({ auto: true });" in effect
 
 
 def test_returning_to_a_bowser_stage_never_steals_a_segment_already_picked():
@@ -445,7 +452,7 @@ def test_returning_to_a_bowser_stage_never_steals_a_segment_already_picked():
         "not only this row's own cells")
     # And it must come BEFORE either pick, or the guard is decoration.
     assert effect.index('if (tgt.kind === "segment") return;') < effect.index(
-        "pickPipe();")
+        "pickPipe({ auto: true });")
 
 
 def test_bowser_family_memory_has_no_default_unlike_the_star_pipe_submode():

@@ -1,28 +1,75 @@
-// src/sm64_events/ui/components/segmenttimeline.js — "record what I just
-// did" (spec 2026-07-28-multi-step-segments, Task 13): pick a start moment
-// and an end moment off the recent journal (GET /api/segments/timeline),
-// preview the synthesized clause pair + a backtest against your own history
-// (POST /api/segments/backtest), then save (POST /api/segments) as a
-// match_mode: "loose" definition. This is the tool the whole feature exists
-// for — "I really love a 'record what I just did' tool. This also lets
-// someone define super custom segments very very very easily" (the user,
-// choosing this design 2026-07-28).
+// src/sm64_events/ui/components/segmenttimeline.js — the RECORDER: point at
+// what you just did and it becomes a definition.
 //
-// Three states in ONE modal: "start" -> "end" -> "review". Consumes Task 8
-// (backtest), Task 11 (timeline), Task 12 (tracking/synthesize.py). Neither
-// synthesize() nor suggest_name() had a caller outside tracking/ before this
-// component needed one, so GET /api/segments/synthesize (server/api.py) is
-// this task's own addition — the wiring the plan's Task 12 report flagged as
-// a concern to carry forward, not a contradiction of the brief's file list.
+// Rewritten 2026-08-05 from the three-state "Record a segment" modal that
+// shipped 2026-07-28 (spec 2026-07-28-multi-step-segments, Task 13). His
+// complaint about that one framed the whole rewrite:
+//
+//   "the user should not have to waste time on figuring out the vocabulary
+//    for what they want to do. They should just be able to DO THE THING THEY
+//    WANT TO DO IN GAME. Once they do it, they should be able to select from
+//    the history of what they just did, and be able to extract the important
+//    bit."
+//
+// and then, settling the shape:
+//
+//   "It should be one surface. If I come to that screen after playing, it
+//    should show stuff that I just did; if I open that screen and KEEP
+//    playing, it should show what I'm now doing. I should be able to select
+//    any number of the events, in chronological order, to define the segment
+//    that I want to capture."
+//
+// Five properties, each of which the old modal got wrong in its own way:
+//
+// 1. NO LIVE MODE. Arriving after playing and staying while playing are the
+//    SAME state. There is no toggle, no "go live", no paused/streaming
+//    distinction, because there is nothing for a person to choose between.
+// 2. IT OPENS ONTO HISTORY, never an empty screen waiting for input.
+// 3. NEWEST FIRST. `GET /api/segments/timeline` answers oldest-first (its
+//    `id` sort is the only chronological key the journal has — `frame` runs
+//    backward across every reset), so the reversal is a DISPLAY choice made
+//    here and the ids the endpoint is asked about are untouched by it.
+// 4. ROWS LAND AS THEY HAPPEN. Every websocket event triggers a tail fetch
+//    (`after_id=<newest held>`), which is why `label_event` stays server-side
+//    and there is no second labeller in the browser. A broadcast carries
+//    `seq`, never the journal `id` a row is picked by, so the client has to
+//    come back for the id regardless.
+// 5. N MOMENTS ARE THE DEFINITION. The earliest picked is the start, the
+//    latest is the end, everything between is a waypoint. The ORDER is the
+//    journal's, not the click order — see `pickedIds` below.
+//
+// The old modal's machinery survives unchanged where it was already right:
+// ONE `definitionFor` builder so backtest, lint and save send the identical
+// object; `StepPicker` for the walk the journal derives; the same
+// arms/fires/unclosed diagnostic the hand-authored Builder shows.
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { courseUnionGroups, entityKeyForOption, optionForEntityKey,
+         parseSegmentId } from "../entities.js";
+import { fmtIgtShort } from "../format.js";
+import { visitCards } from "../visits.js";
 import { Icon } from "./icons.js";
 import { Modal } from "./modal.js";
+import { readRecorder, useUiLog } from "../uilog.js";
+
+// Module-level, so the array identity is stable across renders.
+const RECORDER_READERS = [readRecorder];
+import { PickerDialog } from "./entitymodal.js";
+import { optionIconSrc } from "./entityicons.js";
 import { StepPicker } from "./steptrack.js";
 
 const html = htm.bind(h);
+
+// How far back the live tail re-asks, in journal ids. A load's verdict is
+// revised by rows that land after it — `eventlabel.level_entry_rows` settles
+// its area edges once the spawn arrives, which the measured window puts up to
+// 60 game frames later — so the tail has to be able to take a row BACK, and
+// it can only do that for rows it re-fetches. Sized generously (the endpoint
+// walks the whole journal either way, so a few extra rows in the response
+// cost nothing) and bounded so the request never becomes the whole list.
+const RETRACTION_WINDOW = 40;
 
 // The same three-way diagnostic segments.js's Builder renders for a hand-
 // authored definition's backtest (backtestSummary) -- recording reaches the
@@ -30,7 +77,7 @@ const html = htm.bind(h);
 // BacktestReport shape, read through the same endpoint. Not a second copy:
 // wording is scoped to "this recording" rather than "this definition",
 // since nothing is saved yet when this renders.
-function recordingSummary(report) {
+function recordingSummary(report, replacing = false) {
   const n = report.attempts.length;
   if (report.fires > 0)
     return `${report.fires} fire${report.fires === 1 ? "" : "s"} out of `
@@ -41,66 +88,390 @@ function recordingSummary(report) {
   if (report.unclosed.length > 0)
     return `It started ${report.arms} time${report.arms === 1 ? "" : "s"} `
       + "before, and is still running as of your most recent history.";
-  // "Never finished" is accurate here ONLY because runBacktest() below
-  // always sends replaces: null (recording only ever CREATES) -- with a
-  // real `replaces`, arms>0/fires=0/unclosed=[] can also mean "it fired,
-  // and those attempts were manually wiped" (backtest.py replays journaled
-  // clears). If a later flow reuses this component to back an EDIT
-  // (split/merge is the shape that would), this wording needs the same
-  // hedge backtestSummary would need for that case.
+  // "Never finished" is accurate for a CREATE because the backtest ran with
+  // replaces: null. Re-recording sends the real id, and there
+  // arms>0/fires=0/unclosed=[] can ALSO mean "it fired, and those attempts
+  // were manually wiped" (backtest.py replays journaled clears) — so the
+  // replacing wording hedges where the create wording may assert.
+  if (replacing)
+    return `It started ${report.arms} time${report.arms === 1 ? "" : "s"} `
+      + "before and finished none we still hold — your END may be wrong, or "
+      + "its earlier attempts were wiped.";
   return `It started ${report.arms} time${report.arms === 1 ? "" : "s"} `
     + "before and never finished — your END may be wrong, or unreachable "
     + "from there.";
 }
 
-// One clickable row per timeline event -- the row IS the picker, no
-// secondary confirm step (spec: "point at what you just did").
-function TimelineRows({ rows, onPick, emptyText }) {
-  if (!rows.length) return html`<p class="meta">${emptyText}</p>`;
+// What a picked row is FOR, given how many are picked and where this one
+// sits. Checked by RENDER rather than by a node test of its own -- the class
+// it produces is the only thing telling a reader which end of a newest-first
+// list is the start, so `tests/test_fixture_reaches_the_real_page.py` counts
+// `.record-mark.role-start`/`.role-finish`/`.role-stop` at two picks and at
+// three, which covers every branch including the boundary (at two, index 1 is
+// the finish and never a stop).
+function roleOf(index, count) {
+  if (index === 0) return "start";
+  if (index === count - 1) return "finish";
+  return "stop";
+}
+
+const ROLE_WORDS = { start: "Start", stop: "Stop", finish: "Finish" };
+
+// One clickable row per timeline moment. The row IS the picker -- no
+// secondary confirm step (spec: "point at what you just did") -- and it is a
+// TOGGLE, because with N selections there is no step to advance to that could
+// stand in for un-picking one.
+// The rename control. Only a NAMEABLE landmark gets one — a name typed here
+// has to land on THIS thing and nothing else. Since 2026-08-07 that is almost
+// everything: a pole or a tree carries no spawn point (the game creates them
+// scriptless) but never moves, so it is keyed by where it stands, which is his
+// own ask — "we should be able to rename ANYTHING", and the specific poles the
+// Ultimate Sheet's subsections are built on. What is still refused is an
+// object with NEITHER coordinate, whose key is shared with every other of its
+// kind in that area. The rule and its measurement: core/landmark.py.
+//
+// A pencil on its own row-wrapper rather than inside the row button, because a
+// button inside a button is invalid and the browser drops it silently.
+//
+// THE DRAFT IS THE INPUT'S OWN STATE while he types (round 9 item 2: "my text
+// suddenly gets deleted, and I find myself racing against some mysterious
+// timer"). The timer was the next game event: the live tail appends a row,
+// the recorder re-renders, and an input whose `value` is drawn from the
+// stored name gets diffed straight back to it — empty, for the unnamed row he
+// is mid-typing on. `draft` survives the repaint because it is component
+// state; the COMMITS still read `e.target.value` (the DOM's own text), so a
+// driven test that sets the value and hits Enter in one tick — before any
+// re-render lands the draft — commits what was typed, same as a human whose
+// keystrokes each get their own tick.
+function RenameControl({ row, renaming, onStart, onCommit, onCancel }) {
+  if (!row.landmark || !row.landmark_nameable) return null;
+  if (renaming) {
+    return html`<${RenameInput} key=${row.id} row=${row}
+        onCommit=${onCommit} onCancel=${onCancel} />`;
+  }
+  return html`<button type="button" class="record-rename"
+      title=${row.landmark_name
+        ? `Rename ${row.landmark_name} — every row it appears in follows`
+        : "Name this one — every row it appears in follows"}
+      onclick=${() => onStart(row)}>✎</button>`;
+}
+
+// The ✓/✕ pair is the CANCEL AFFORDANCE he asked for (round 12 item 5:
+// "we should be able to cancel the name change easily (there's no clear way
+// to do this)") — Escape already cancelled, and a key nobody can see is not
+// an affordance. `onmousedown` preventDefault keeps the input focused, so
+// clicking either button never fires the input's own blur-commit first.
+function RenameInput({ row, onCommit, onCancel }) {
+  const [draft, setDraft] = useState(row.landmark_name || "");
+  const inputRef = useRef(null);
+  const commit = () => onCommit(row, inputRef.current ? inputRef.current.value
+                                                      : draft);
+  return html`<span class="record-rename-edit"
+      onclick=${(e) => e.stopPropagation()}>
+    <input class="record-rename-input" type="text" autofocus ref=${inputRef}
+      value=${draft}
+      placeholder="name this one"
+      oninput=${(e) => setDraft(e.target.value)}
+      onblur=${(e) => onCommit(row, e.target.value)}
+      onkeydown=${(e) => {
+        if (e.key === "Enter") { e.preventDefault(); onCommit(row, e.target.value); }
+        if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+      }} />
+    <button type="button" class="record-rename-ok" title="Save this name"
+      onmousedown=${(e) => e.preventDefault()}
+      onclick=${commit}>✓</button>
+    <button type="button" class="record-rename-cancel"
+      title="Keep the old name (Esc)"
+      onmousedown=${(e) => e.preventDefault()}
+      onclick=${onCancel}>✕</button>
+  </span>`;
+}
+
+function TimelineRows({ rows, order, onToggle, renamingId,
+                        onRenameStart, onRenameCommit, onRenameCancel }) {
   return html`<div class="record-rows">
-    ${rows.map((row) => html`<button key=${row.id} type="button"
-        class="record-row" onclick=${() => onPick(row)}>
-      ${row.label}
-    </button>`)}
+    ${rows.map((row) => {
+      const index = order.indexOf(row.id);
+      const picked = index >= 0;
+      const role = picked ? roleOf(index, order.length) : null;
+      return html`<div key=${row.id} class="record-row-wrap">
+        <button type="button"
+          class=${`record-row${picked ? " picked" : ""}`}
+          aria-pressed=${picked ? "true" : "false"}
+          onclick=${() => onToggle(row)}>
+        <span class=${`record-mark${picked ? ` role-${role}` : ""}`}>
+          ${picked ? index + 1 : ""}
+        </span>
+        <span class="record-label">${row.label}</span>
+        ${picked && order.length > 1
+          && html`<span class="record-role">${ROLE_WORDS[role]}</span>`}
+        ${/* "what was the timer in game", his own words -- and it is the
+             thing you choose BY, so it belongs on the row rather than in the
+             review. Through fmtIgtShort, the display form every other time on
+             screen goes through; a type with no Usamune number of its own (a
+             level change) shows nothing rather than a computed stand-in. */""}
+        ${row.igt_frames != null
+          && html`<span class="record-igt">${fmtIgtShort(row.igt_frames)}</span>`}
+        </button>
+        <${RenameControl} row=${row} renaming=${renamingId === row.id}
+            onStart=${onRenameStart} onCommit=${onRenameCommit}
+            onCancel=${onRenameCancel} />
+      </div>`;
+    })}
   </div>`;
 }
 
-export function SegmentTimeline({ onSaved, onCancel }) {
-  const [step, setStep] = useState("start");      // "start" | "end" | "review"
+// One card per visit: the place's own symbol and name, how many moments landed
+// there, and a fold. OPEN BY DEFAULT, so the state held is the COLLAPSED set —
+// an empty set is "everything open", which is what a first render must be.
+//
+// The header is the fold. A separate chevron button beside a heading gives one
+// affordance two hit targets, and this app's own rule is that a card is ONE hit
+// target (the context cards, 2026-07-25, where the mismatch read as a bug).
+function VisitCard({ card, collapsed, onToggleFold, icon, order, onToggleRow,
+                     renamingId, onRenameStart, onRenameCommit, onRenameCancel }) {
+  return html`<section class=${`record-card${collapsed ? " folded" : ""}`}>
+    <button type="button" class="record-card-head" aria-expanded=${!collapsed}
+        onclick=${onToggleFold}
+        title=${collapsed ? `Show what happened in ${card.label}`
+                          : `Hide what happened in ${card.label}`}>
+      <span class="record-card-chevron"><${Icon} name="chevron" size=${14} /></span>
+      ${icon && html`<img class="record-card-icon" src=${icon} alt="" />`}
+      <span class="record-card-name">${card.label || "Somewhere unrecorded"}</span>
+      <span class="count-badge">${card.rows.length}</span>
+    </button>
+    ${/* The body is ALWAYS rendered and folded by CSS, never removed from the
+         tree. A conditional render has nothing left to animate out, and every
+         state change on this machine animates (his standing rule, 2026-07-26).
+         `grid-template-rows: 1fr -> 0fr` is the one height transition that
+         needs no measured pixel value; `visibility` rides along so a folded
+         card's buttons cannot be reached by Tab, which zero height alone does
+         not prevent. */""}
+    <div class="record-card-body">
+      <div class="record-card-clip">
+        <${TimelineRows} rows=${card.rows} order=${order}
+            onToggle=${onToggleRow} renamingId=${renamingId}
+            onRenameStart=${onRenameStart} onRenameCommit=${onRenameCommit}
+            onRenameCancel=${onRenameCancel} />
+      </div>
+    </div>
+  </section>`;
+}
+
+// `replaces` (round 16): the /api/segments row being RE-RECORDED, or null for
+// an ordinary create. Replace beats delete-and-recreate because the segment's
+// IDENTITY survives — same id, so routes that reference it, its PBs, attempts,
+// strategies and ladders all stay attached; only the recording itself moves.
+// The new recording's own defaults win over the row's stored modes
+// (clock "move" + Strict) — a re-record IS a new recording, stated in copy.
+export function SegmentTimeline({ t, onSaved, onCancel, replaces = null }) {
   // Task 11's own carried concern: the default view (view=steps) is only
   // ~10% of the journal by design, and the rarer reset/spawn-triggered
   // starts are reachable ONLY through view=all -- without this control here
-  // they are unreachable through this tool at all.
+  // they are unreachable through this tool at all. It is NOT a live-mode
+  // toggle: both views are equally live.
   const [view, setView] = useState("steps");
-  const [rows, setRows] = useState(null);
+  const [rows, setRows] = useState(null);      // oldest first, as served
   const [rowsErr, setRowsErr] = useState(null);
-  const [startRow, setStartRow] = useState(null);
-  const [endRow, setEndRow] = useState(null);
-  const [synth, setSynth] = useState(null);       // {start_clause, end_clause, start_sentence, end_sentence, name}
+  // The ids the player pointed at, ALWAYS in journal order. Not click order:
+  // the list is drawn newest-first, so clicking down it hands them over
+  // backwards, and "in chronological order" is a property the events already
+  // have. The server sorts too (GET /api/segments/synthesize), so the two
+  // cannot disagree about which end is the start.
+  const [pickedIds, setPickedIds] = useState([]);
+  // NAMING, and it applies BACKWARDS: nothing stores the name a row was drawn
+  // with, so bumping `catalogue` refetches and every row that landmark ever
+  // appeared in re-labels at once. His pick over a separate Entities screen
+  // (2026-08-05) -- he names the thing while standing in front of it.
+  const [renamingId, setRenamingId] = useState(null);
+  const [catalogue, setCatalogue] = useState(0);
+  const startRename = (row) => setRenamingId(row.id);
+  const cancelRename = () => setRenamingId(null);
+  const commitRename = async (row, name) => {
+    setRenamingId(null);
+    if ((name || "").trim() === (row.landmark_name || "")) return;
+    try {
+      await send("POST", "/api/landmark", { key: row.landmark, name });
+      setCatalogue((n) => n + 1);
+    } catch (err) { setRowsErr(String(err)); }
+  };
+  // The COLLAPSED cards, keyed by their oldest row's id. Collapsed rather than
+  // open, because he asked for open by default and an empty set has to mean
+  // "everything open" — the library's own `useOpenGroups` stores the opposite
+  // (an OPEN set in localStorage, where nothing stored means all collapsed),
+  // so reusing it here would mean fighting its default on every first render.
+  // Not persisted: which trips you folded a minute ago is not a preference,
+  // and a remembered fold would hide the newest place on the next open.
+  const [folded, setFolded] = useState(new Set());
+  const [synth, setSynth] = useState(null);
   const [synthErr, setSynthErr] = useState(null);
-  const [name, setName] = useState("");
+  // A re-record opens carrying the row's own name, PRE-MARKED as his: the
+  // name field keeps HIS name (it already exists), so the auto-name may
+  // never overwrite it. Emptying the field still hands it back.
+  const [name, setName] = useState(replaces ? replaces.name : "");
+  // THE AUTO-NAME MAY ONLY FILL A FIELD HE HAS NOT EDITED (round 12 item 4:
+  // "once I set the name for the segment name it shouldn't change" — every
+  // pick toggle re-derived and overwrote what he typed). A ref, not state:
+  // derive()'s .then would otherwise read the value frozen at call time.
+  // Emptying the field hands it back to the auto-name; Clear resets both.
+  const nameEditedRef = useRef(!!replaces);
+  // Which entities this is a piece of (`SegmentDef.parents`) -- the ONLY way
+  // a subsection can be created, and it is asked HERE because this is the
+  // moment you know the answer: "nothing asks 'you just recorded this, what
+  // is it a piece of?' when you would want to answer" (spec). Distinct from
+  // `origin`, which is where the LIBRARY files it; a subsection of a JRB star
+  // is parented to that star and filed under JRB.
+  //
+  // PLURAL since round 20 -- "sometimes the same subsection might be
+  // practicable in multiple stars... We need to just add a + button to the
+  // right and allow multiple selections." A LIST of picks; the + appends,
+  // re-picking a pill changes that slot, and picking the "Nothing"
+  // placeholder on a pill removes it.
+  //
+  // Held as the PICKER's own option ids ("8:1" / "segment:12"), never as
+  // entity keys, so `value=` can highlight the chosen cell -- a star option's
+  // id is the bare composite and the key is "star:8:1", and storing the key
+  // here would leave every star looking unpicked while segments highlighted
+  // fine. `entityKeyForOption` is the one translation, applied where the
+  // definition is built.
+  const [parentOptions, setParentOptions] = useState(
+    replaces ? (replaces.parents || []).map(optionForEntityKey) : []);
+  // null = closed; an index = re-picking that pill; "add" = the + button.
+  const [pickingParentAt, setPickingParentAt] = useState(null);
+  const parents = parentOptions.map(entityKeyForOption);
   const [btReport, setBtReport] = useState(null);
   const [btErr, setBtErr] = useState(null);
   // Author-time lint (Task 16, spec 2026-07-28-multi-step-segments) --
   // the recorder is where lint pays best: it's what explains a backtest that
   // came back arms=0/fires=0 rather than leaving the user at a dead end.
-  // `segment_id: null` always -- this flow only ever CREATES.
+  // `segment_id` is the replaced row's own id on a re-record, null on a
+  // create (runLint below).
   const [lintFindings, setLintFindings] = useState([]);
   const [lintErr, setLintErr] = useState(null);
   const [saveErr, setSaveErr] = useState(null);
   // Node keys of the walked stops this definition REQUIRES. A Set, not a
   // list of clauses: the walk is ground truth and the only open question is
   // which of its stops count, so an invalid step is unreachable rather than
-  // validated away.
+  // validated away. Only consulted when exactly TWO moments are picked --
+  // picking a third says the walk is not the answer.
   const [required, setRequired] = useState(new Set());
   const [saving, setSaving] = useState(false);
+  // WHAT THIS SURFACE ACTUALLY SHOWED, and when. Its own call rather than the
+  // practice page's, because that page is unmounted while this tab is open.
+  // Every latency report about the recorder so far has been unanswerable for
+  // want of this: the journal says what the GAME did, and nothing said what
+  // the LIST held (2026-08-06, *"I've clearly grabbed this star, but I don't
+  // see the event in the recorder"* -- measured innocent on the server side,
+  // 18 frames from the touch to the x-cam and published on the same frame).
+  const recorderRef = useRef(null);
+  useUiLog(recorderRef, RECORDER_READERS);
+  // THE TAIL MACHINE'S STATE, all in refs, on purpose (round 8 item 3, his
+  // 4.7 s star grab). The tail used to live inside the feed-keyed effect
+  // below, and an effect RE-RUN cleans up the previous instance — but a star
+  // is never one broadcast, it is a BURST (star_collected, attempt_completed,
+  // rank traffic), so every fetch the burst triggered had its response
+  // discarded as stale, and the serialiser's retry ran inside the dead
+  // closure so ITS response was discarded too. The row only appeared when a
+  // LONE message let one instance survive its own round trip — usually his
+  // reset, which is the report verbatim. Refs give the machine nothing to die
+  // in: `deadRef` flips on UNMOUNT only, and `epochRef` counts base-list
+  // replacements so a tail racing a view switch cannot append old-view rows
+  // (its response is simply discarded; the fresh base load repaints anyway).
+  //
+  // `tailing`/`tailAgain` serialise the fetches. Not a debounce: latency IS
+  // the deliverable here, so a burst must not be made to wait -- what this
+  // prevents is two fetches in flight racing each other into the row list
+  // out of order.
+  const tailing = useRef(false);
+  const tailAgain = useRef(false);
+  const rowsRef = useRef(null);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const epochRef = useRef(0);
+  const deadRef = useRef(false);
+  useEffect(() => () => { deadRef.current = true; }, []);
+
+  // ONE writer for the held rows: the ref is what the tail machine reads for
+  // its after-id (state would hand it a stale closure), the state is what
+  // renders. Splitting the writes is how they would drift.
+  const holdRows = (next) => { rowsRef.current = next; setRows(next); };
+
+  async function tail() {
+    if (tailing.current) { tailAgain.current = true; return; }
+    const held = rowsRef.current;
+    if (held == null) return;   // base list in flight; its landing re-kicks
+    tailing.current = true;
+    const epoch = epochRef.current;
+    try {
+      // RE-ASK FOR THE LAST FEW ROWS, and REPLACE them with what comes back.
+      // A pure append cannot be right, because the server's answer about a
+      // row CHANGES after the fact: `eventlabel.level_entry_rows` settles a
+      // load's own area edges RETROACTIVELY, once the spawn that speaks for
+      // the load arrives. Poll during the load and the endpoint honestly says
+      // "Moved to another part of Whomp's Fortress"; poll again after the
+      // spawn and that row is gone and "Started Whomp's Fortress" is there
+      // instead. An append-only tail keeps the first answer forever — which
+      // is his report, twice: *"I'm still getting the 'moved to another part'
+      // event before the 'Started' event"* (2026-08-07), with the stray row
+      // carrying the load's own time.
+      //
+      // So the window is re-fetched rather than skipped, and rows inside it
+      // are taken from the SERVER rather than from what we hold. A row the
+      // server no longer returns is dropped, which is the whole point. It
+      // also picks up the repeat counter and any rename that moved a label
+      // inside the window, for free.
+      const newest = held.length ? held[held.length - 1].id : 0;
+      const after = Math.max(0, newest - RETRACTION_WINDOW);
+      const body = await getJSON(
+        `/api/segments/timeline?limit=200&view=${viewRef.current}`
+        + `&after_id=${after}`);
+      if (!deadRef.current && epoch === epochRef.current) {
+        const kept = rowsRef.current.filter((row) => row.id <= after);
+        const next = [...kept, ...body.rows];
+        // Only repaint when something actually differs — the recorder polls
+        // per game event, and a list rebuilt identically would remount every
+        // row and lose the caret in an open rename input.
+        const held_now = rowsRef.current;
+        const same = next.length === held_now.length
+          && next.every((row, index) => row.id === held_now[index].id
+                        && row.label === held_now[index].label);
+        if (!same) holdRows(next);
+      }
+    } catch { /* a dropped tail is covered by the next event */ }
+    finally {
+      tailing.current = false;
+      if (!deadRef.current && tailAgain.current) {
+        tailAgain.current = false; tail();
+      }
+    }
+  }
 
   useEffect(() => {
-    setRows(null); setRowsErr(null);
+    epochRef.current += 1;
+    const epoch = epochRef.current;
+    holdRows(null); setRowsErr(null);
     getJSON(`/api/segments/timeline?limit=200&view=${view}`)
-      .then((body) => setRows(body.rows))
-      .catch((err) => setRowsErr(String(err)));
-  }, [view]);
+      .then((body) => {
+        if (deadRef.current || epoch !== epochRef.current) return;
+        holdRows(body.rows);
+        tail();   // anything broadcast while the base load was in flight
+      })
+      .catch((err) => {
+        if (!deadRef.current && epoch === epochRef.current)
+          setRowsErr(String(err));
+      });
+    // `catalogue` is in here on purpose: a rename changes no event, only what
+    // the labels READ, so the refetch is the whole of "names apply backwards".
+  }, [view, catalogue]);
+
+  // THE LIVE HALF, and the whole of it. `t.feed` grows on every websocket
+  // message (store.js), so this effect fires the moment the game does
+  // anything -- and merely KICKS the machine above, which asks only for what
+  // is newer than the newest row held. The old modal fetched inside a
+  // useEffect keyed on [view] and subscribed to nothing, so it was a snapshot
+  // of the moment it opened, forever.
+  const newestSeq = t && t.feed && t.feed.length ? t.feed[0].seq : null;
+  useEffect(() => { tail(); }, [newestSeq]);
 
   function resetDownstream() {
     setSynth(null); setSynthErr(null);
@@ -109,39 +480,51 @@ export function SegmentTimeline({ onSaved, onCancel }) {
     setRequired(new Set());
   }
 
-  function pickStart(row) {
-    setStartRow(row); setEndRow(null);
-    resetDownstream();
-    setStep("end");
-  }
-
   // ONE builder for the definition every one of backtest / lint / save sends,
   // so the thing tested, the thing linted and the thing written are the same
   // object. They were three literals and stayed in step by hand; the moment
   // waypoints entered the picture that stopped being tenable -- a backtest run
   // against a DIFFERENT match_mode than the save uses reports on a matcher
-  // branch the user will never get (the exact trap the old match_mode comment
-  // here was already working around).
+  // branch the user will never get.
   //
   // STRICT the moment a stop is required, LOOSE when none is. That is not a
   // preference: a declared path only means anything under the strict matcher's
   // path cursor, and a recording with no declared stops is byte-for-byte the
   // loose definition this tool has always produced.
+  //
+  // TWO sources of waypoints and they are exclusive. `synthBody.picked` is
+  // what the PERSON pointed at; `synthBody.steps` filtered by `requiredNodes`
+  // is the walk we DERIVED for them, and it is offered only when exactly two
+  // moments are picked. Picking a third is how you say the derivation is not
+  // the answer -- which is what keeps the two-click case working unchanged.
   function definitionFor(synthBody, requiredNodes) {
-    const waypoints = (synthBody.steps || [])
-      .filter((step) => requiredNodes.has(step.node))
-      .map((step) => [step.clause]);
+    const waypoints = (synthBody.picked || []).length
+      ? synthBody.picked.map((step) => [step.clause])
+      : (synthBody.steps || [])
+          .filter((step) => requiredNodes.has(step.node))
+          .map((step) => [step.clause]);
+    // STRICT unconditionally since round 15 — his ruling: "They should also
+    // be default Strict." A recorded piece voids when you deviate, stops or
+    // no stops; the old stops-only rule kept a stop-less recording
+    // byte-compatible with the pre-waypoint tool, and that guarantee is
+    // retired on his word. The BUILDER's own blank default is untouched.
+    // clock_start "move" (round 15 item 3): the trigger detects, the
+    // section entry it causes starts the clock -- "the timer doesn't
+    // actually START until mario is able to finally move". His default for
+    // everything this tool records.
     return { name: (name.trim() || synthBody.name), enabled: true,
       start_triggers: [synthBody.start_clause],
       end_triggers: [synthBody.end_clause], guards: [], waypoints,
-      match_mode: waypoints.length ? "strict" : "loose" };
+      parents, match_mode: "strict", clock_start: "move" };
   }
 
   async function runBacktest(definition) {
     setBtReport(null); setBtErr(null);
     try {
+      // A re-record backtests AGAINST the row it replaces, so the report's
+      // gained/lost compares the new recording with the old one's history.
       const report = await send("POST", "/api/segments/backtest",
-        { definition, replaces: null });
+        { definition, replaces: replaces ? replaces.id : null });
       setBtReport(report);
     } catch (err) { setBtErr(String(err)); }
   }
@@ -149,8 +532,10 @@ export function SegmentTimeline({ onSaved, onCancel }) {
   async function runLint(definition) {
     setLintFindings([]); setLintErr(null);
     try {
+      // `segment_id` excludes the row being replaced from the duplicate
+      // rule, or an unchanged walk reports itself as its own duplicate.
       const result = await send("POST", "/api/segments/lint",
-        { definition, segment_id: null });
+        { definition, segment_id: replaces ? replaces.id : null });
       setLintFindings(result.warnings);
     } catch (err) { setLintErr(String(err)); }
   }
@@ -173,13 +558,16 @@ export function SegmentTimeline({ onSaved, onCancel }) {
     if (synth) recheck(synth, next);
   }
 
-  async function pickEnd(row) {
-    setEndRow(row);
+  // Every change to the selection re-derives the whole definition. Nothing is
+  // written until Save, so there is no partial state to unwind and un-picking
+  // a moment costs exactly what picking one does (his standing rule that a
+  // multi-step flow is abandonable with NO side effects).
+  async function derive(ids) {
     resetDownstream();
-    setStep("review");
+    if (ids.length < 2) return;
     try {
       const body = await getJSON(
-        `/api/segments/synthesize?start_id=${startRow.id}&end_id=${row.id}`);
+        `/api/segments/synthesize?ids=${ids.join(",")}`);
       // Everywhere you went starts REQUIRED. You walked the route you meant to
       // practise, so the common case is that all of it counts; unticking a room
       // you were only crossing is one click, and the alternative default (none
@@ -187,48 +575,121 @@ export function SegmentTimeline({ onSaved, onCancel }) {
       // produced before, which is the outcome this whole pass exists to change.
       const walked = new Set((body.steps || []).map((step) => step.node));
       setSynth(body);
-      setName(body.name);
+      if (!nameEditedRef.current) setName(body.name);
       setRequired(walked);
       recheck(body, walked);
     } catch (err) { setSynthErr(String(err)); }
   }
 
-  // Abandonable with no side effects at every step (user rule 2026-07-26,
-  // the target-picker flow): nothing is written until Save, so going back
-  // just re-derives the review from scratch -- there is no partial state to
-  // unwind.
-  function backTo(target) {
-    if (target === "start") setEndRow(null);
-    resetDownstream();
-    setStep(target);
+  function toggleRow(row) {
+    const next = pickedIds.includes(row.id)
+      ? pickedIds.filter((id) => id !== row.id)
+      : [...pickedIds, row.id].sort((left, right) => left - right);
+    setPickedIds(next);
+    derive(next);
+  }
+
+  function clearPicks() {
+    setPickedIds([]); resetDownstream();
+    // Clear un-picks the MOMENTS; on a re-record the name is the row's own
+    // and stays his, exactly as it arrived.
+    setName(replaces ? replaces.name : "");
+    nameEditedRef.current = !!replaces;
+  }
+
+  function toggleFold(key) {
+    setFolded((held) => {
+      const next = new Set(held);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
   }
 
   async function save() {
     if (!synth || !btReport) return;   // see Save's disabled= below
     setSaving(true); setSaveErr(null);
     try {
-      const body = await send("POST", "/api/segments",
-                              definitionFor(synth, required));
-      onSaved(body.id);
+      if (replaces) {
+        // Replace, never delete-and-recreate: a PUT to the existing id is
+        // what keeps routes, PBs, attempts, strategies and ladders attached.
+        // `category` is absent from the definition, so the library filing
+        // survives untouched (SegmentPatch's exclude_unset).
+        await send("PUT", `/api/segments/${replaces.id}`,
+                   definitionFor(synth, required));
+        onSaved(replaces.id);
+      } else {
+        const body = await send("POST", "/api/segments",
+                                definitionFor(synth, required));
+        onSaved(body.id);
+      }
     } catch (err) { setSaveErr(String(err)); }
     finally { setSaving(false); }
   }
 
-  const later = startRow
-    ? (rows || []).filter((row) => row.id > startRow.id) : [];
+  // NEWEST FIRST is a display choice, made once, here. Every id handed to the
+  // server keeps the journal's own order.
+  const shown = rows ? [...rows].reverse() : [];
+  const cards = visitCards(shown);
+  // A castle-AREA tile is a TERMINAL parent pick (round 14, his ruling:
+  // "for the castle areas, those are the high level areas, so it shouldn't
+  // have a further drill down… Or, it's a castle movement which is high
+  // level") — a castle-side piece parents to its AREA, while a course tile
+  // still drills to the specific star or segment it is a piece of. Marked
+  // HERE, not in courseUnionGroups: the target picker reads the same groups
+  // and must keep drilling into a region to pick a practice target.
+  const parentGroups = (t && t.view ? courseUnionGroups(
+    t.view.catalog, (t.segments || []).filter((s) => !s.is_hundred_coin_engine),
+    (t.vocab || {}).course_by_level || {}, {},
+    (t.vocab || {}).origins || null) : []
+  ).map((group) => {
+    const region = group.key.startsWith("castle-")
+      && group.key !== "castle-segments" ? group.key.slice(7) : null;
+    return region ? { ...group, pick: `area:${region}` } : group;
+  });
+  const parentNameFor = (optionId) => {
+    if (optionId == null) return null;
+    for (const group of parentGroups) {
+      if (group.pick === optionId) return group.label;
+      for (const option of group.options)
+        if (option.id === optionId) return option.name;
+    }
+    return entityKeyForOption(optionId);
+  };
+  // A pill's pick REPLACES its slot; the + APPENDS; the "Nothing" placeholder
+  // on a pill REMOVES it (and on the +, changes nothing). Picking an entity
+  // already listed collapses to a no-op rather than a duplicate row.
+  const commitParentPick = (id) => {
+    setParentOptions((held) => {
+      const at = pickingParentAt;
+      const next = held.filter((_, index) => index !== at);
+      if (id == null || next.includes(id)) return next;
+      if (at === "add" || at == null || at >= held.length)
+        return [...held, id];
+      next.splice(at, 0, id);
+      return next;
+    });
+    setPickingParentAt(null);
+  };
   // Same name/shape as segments.js's Builder -- an "error" severity finding
   // disables Save there too; a "warning" one does not.
   const lintHasError = lintFindings.some((finding) => finding.severity === "error");
 
-  return html`<${Modal} title="Record a segment" icon="segments" size="large"
+  return html`<${Modal} title=${replaces ? `Re-record ${replaces.name}`
+                                         : "Record a segment"}
+      icon="segments" size="large"
       onClose=${onCancel}
-      description="Point at what you just did: pick when it started, then when it finished.">
-    <div class="record-steps">
-      <span class="record-step ${step === "start" ? "on" : ""}">1. Start</span>
-      <span class="record-step ${step === "end" ? "on" : ""}">2. End</span>
-      <span class="record-step ${step === "review" ? "on" : ""}">3. Review</span>
-    </div>
-
+      description=${replaces
+        ? "Play it again, then point at what you just did. Save replaces this "
+          + "movement's recording — its routes, PBs, attempts and strategies "
+          + "stay attached."
+        : "Play, then point at what you just did. Pick the moment it started, "
+          + "the moment it finished, and any stops in between."}>
+    ${/* A plain block wrapper, and the only thing it does is give the UI log a
+         root to read this surface from. `.modal-body` is block flow, so it
+         changes no layout -- the alternative was a `rootRef` prop on the
+         SHARED modal, which is a change to a primitive nine other screens use
+         for the sake of one. */""}
+    <div ref=${recorderRef} class="record-observed">
     <label class="record-view-toggle">
       <input type="checkbox" checked=${view === "all"}
           onchange=${(e) => setView(e.target.checked ? "all" : "steps")} />
@@ -238,64 +699,139 @@ export function SegmentTimeline({ onSaved, onCancel }) {
     ${rowsErr && html`<p class="badx">${rowsErr}</p>`}
     ${!rows && !rowsErr && html`<p class="meta">Loading your recent history…</p>`}
 
-    ${rows && step === "start" && html`<${TimelineRows} rows=${rows}
-        onPick=${pickStart}
-        emptyText="Nothing recorded yet — play a bit, then come back." />`}
-
-    ${rows && step === "end" && html`<div>
-      <p class="meta record-picked">Start: <b>${startRow.label}</b>
-        <button class="quiet-button" onclick=${() => backTo("start")}>
-          <${Icon} name="stepBack" size=${14} /> Change
-        </button>
-      </p>
-      <${TimelineRows} rows=${later} onPick=${pickEnd}
-          emptyText="Nothing later than that in your history yet — play a bit more, then come back." />
+    ${rows && html`<div class="record-picks">
+      <span class="meta">${pickedIds.length === 0
+        ? "Nothing picked yet — newest is at the top."
+        : pickedIds.length === 1
+          ? "1 moment picked. Pick the one it finished on."
+          : `${pickedIds.length} moments picked.`}</span>
+      ${pickedIds.length > 0 && html`<button class="quiet-button"
+          onclick=${clearPicks}>
+        <${Icon} name="close" size=${14} /> Clear
+      </button>`}
     </div>`}
 
-    ${step === "review" && html`<div class="record-review">
-      <p class="meta record-picked">Start: <b>${startRow.label}</b>
-        <button class="quiet-button" onclick=${() => backTo("start")}>
-          <${Icon} name="stepBack" size=${14} /> Change
-        </button>
-      </p>
-      <p class="meta record-picked">End: <b>${endRow.label}</b>
-        <button class="quiet-button" onclick=${() => backTo("end")}>
-          <${Icon} name="stepBack" size=${14} /> Change
-        </button>
-      </p>
-      ${synthErr && html`<p class="badx">${synthErr}</p>`}
-      ${!synth && !synthErr && html`<p class="meta">Working it out…</p>`}
-      ${synth && html`<div>
-        <label class="builder-name">
-          <span class="field-label">Segment name</span>
-          <input value=${name} oninput=${(e) => setName(e.target.value)} />
-        </label>
-        <p class="meta">Starts when: <b>${synth.start_sentence}</b></p>
-        <p class="meta">Ends when: <b>${synth.end_sentence}</b></p>
-        <${StepPicker} steps=${synth.steps} required=${required}
-          onToggle=${toggleStep} />
-        ${btErr && html`<p class="badx">${btErr}</p>`}
-        ${!btReport && !btErr
-          && html`<p class="meta">Testing against your history…</p>`}
-        ${btReport && html`<p class="meta">${recordingSummary(btReport)}</p>`}
-        ${lintErr && html`<p class="badx">${lintErr}</p>`}
-        ${lintFindings.length > 0 && html`<div class="lint-panel">
-          ${lintFindings.map((finding, i) => html`<div key=${i}
-              class="lint-finding lint-${finding.severity}">
-            <${Icon} name=${finding.severity === "error" ? "close" : "shield"} size=${14} />
-            ${" "}${finding.message}
-          </div>`)}
-        </div>`}
+    ${/* ONE CARD PER PLACE YOU WERE IN, his ask 2026-08-05: "That way, when we
+         observe the live viewer, we can easily and quickly identify which
+         areas contained which events." The place is server-derived (a running
+         position over the whole journal — most rows do not say where they
+         are), and the symbol is the SAME chain every other surface resolves
+         art through, addressed as `level:<id>`. */""}
+    ${rows && !shown.length && html`<p class="meta">
+      Nothing recorded yet — play a bit and it will appear here.</p>`}
+    ${rows && shown.length > 0 && html`<div class="record-cards">
+      ${cards.map((card) => html`<${VisitCard} key=${card.key} card=${card}
+        collapsed=${folded.has(card.key)}
+        onToggleFold=${() => toggleFold(card.key)}
+        icon=${card.level == null ? null
+                                  : optionIconSrc(t, "level", card.level)}
+        order=${pickedIds} onToggleRow=${toggleRow}
+        renamingId=${renamingId} onRenameStart=${startRename}
+        onRenameCommit=${commitRename} onRenameCancel=${cancelRename} />`)}
+    </div>`}
+
+    ${synthErr && html`<p class="badx">${synthErr}</p>`}
+    ${pickedIds.length >= 2 && !synth && !synthErr
+      && html`<p class="meta">Working it out…</p>`}
+    ${synth && html`<div class="record-review">
+      <label class="builder-name">
+        <span class="field-label">Segment name</span>
+        <input value=${name} oninput=${(e) => {
+          setName(e.target.value);
+          nameEditedRef.current = e.target.value.trim() !== "";
+        }} />
+      </label>
+      <p class="meta">Starts when: <b>${synth.start_sentence}</b></p>
+      ${(synth.picked || []).map((step, i) => html`<p key=${i} class="meta">
+        Then: <b>${step.sentence}</b></p>`)}
+      <p class="meta">Ends when: <b>${synth.end_sentence}</b></p>
+      ${(synth.picked || []).length === 0
+        && html`<${StepPicker} steps=${synth.steps} required=${required}
+          onToggle=${toggleStep} />`}
+
+      ${/* The ONLY door into a subsection. `parents` is absent from
+           segments.js's SAVE_FIELDS and no other control writes one, which
+           is why he asked "what star has subsections? I don't see a way to
+           define that?" One pill per chosen parent, and the + to the right
+           appends another (round 20: the same piece can belong to several
+           stars). */""}
+      <div class="record-parent">
+        <span class="field-label">What is this a piece of?</span>
+        ${parentOptions.length === 0
+          ? html`<button type="button" class="entity-trigger"
+                onclick=${() => setPickingParentAt("add")}>
+              Nothing — it stands on its own
+            </button>`
+          : parentOptions.map((optionId, index) => html`<button
+                type="button" key=${optionId} class="entity-trigger"
+                onclick=${() => setPickingParentAt(index)}>
+              ${parentNameFor(optionId)}
+            </button>`)}
+        ${parentOptions.length > 0 && html`<button type="button"
+            class="quiet-button record-parent-add"
+            title="It is a piece of another star or segment too"
+            onclick=${() => setPickingParentAt("add")}>
+          <${Icon} name="plus" size=${14} /> Add
+        </button>`}
+      </div>
+      ${pickingParentAt != null && html`<${PickerDialog} groups=${parentGroups}
+        value=${typeof pickingParentAt === "number"
+          ? parentOptions[pickingParentAt] : null}
+        title="What is this a piece of?" depth=${2}
+        placeholder=${typeof pickingParentAt === "number"
+          ? "Nothing — remove this one" : "Nothing — it stands on its own"}
+        iconFor=${(id) => optionIconSrc(t,
+          parseSegmentId(id) == null ? "star" : "segment",
+          parseSegmentId(id) == null ? id : parseSegmentId(id))}
+        onPick=${commitParentPick}
+        onClose=${() => setPickingParentAt(null)} />`}
+
+      ${/* What a re-record COSTS, said where the save lands, before it does:
+           the new recording's own defaults (clock "move" + Strict) replace
+           the row's stored modes, and re-recording a shipped movement makes
+           it his (same consequence the editor's seeded panel states; Reset
+           there still puts it back). */""}
+      ${replaces && html`<p class="meta record-replace-note">
+        Saving replaces <b>${replaces.name}</b> — new recording, same segment.
+        It times from the move and voids when you deviate (Strict).${" "}
+        ${replaces.seed_key && !replaces.seed_dirty
+          ? "It is a shipped movement, so re-recording makes it yours; the editor's Reset puts it back."
+          : ""}
+      </p>`}
+      ${btErr && html`<p class="badx">${btErr}</p>`}
+      ${!btReport && !btErr
+        && html`<p class="meta">Testing against your history…</p>`}
+      ${btReport && html`<p class="meta">${recordingSummary(btReport, !!replaces)}</p>`}
+      ${lintErr && html`<p class="badx">${lintErr}</p>`}
+      ${lintFindings.length > 0 && html`<div class="lint-panel">
+        ${lintFindings.map((finding, i) => html`<div key=${i}
+            class="lint-finding lint-${finding.severity}">
+          <${Icon} name=${finding.severity === "error" ? "close" : "shield"} size=${14} />
+          ${" "}${finding.message}
+        </div>`)}
       </div>`}
     </div>`}
 
     ${saveErr && html`<p class="badx">${saveErr}</p>`}
     <div class="builder-actions">
       <button onclick=${onCancel}>Cancel</button>
-      ${step === "review" && html`<button class="primary-button"
+      ${/* Save is simply ABSENT below two picks rather than present and
+           refused: a start with no end can never complete, and a disabled
+           control whose reason lives in its own hover is the shape he
+           reported as a dead button (2026-08-02). The line above the list
+           says what to do instead. */""}
+      ${/* While the backtest is in flight the button is disabled — so the
+           REASON lives on the button itself (his rule: put the reason where
+           the click lands, or do not disable it). A click during that window
+           does nothing silently, which is exactly how a re-record can be
+           believed saved when it never was (round 17 item 1). */""}
+      ${pickedIds.length >= 2 && html`<button class="primary-button"
           disabled=${!btReport || saving || lintHasError} onclick=${save}>
-        <${Icon} name="save" size=${16} />${" "}${saving ? "Saving…" : "Save segment"}
+        <${Icon} name="save" size=${16} />${" "}${saving ? "Saving…"
+          : !btReport && !btErr ? "Testing your history…"
+          : replaces ? "Replace segment" : "Save segment"}
       </button>`}
+    </div>
     </div>
   <//>`;
 }

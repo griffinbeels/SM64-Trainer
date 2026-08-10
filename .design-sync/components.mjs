@@ -139,6 +139,7 @@ export const COMPONENTS = [
       ["onPick?", "() => void", "Called when the cell is chosen."],
       ["onEdit?", "() => void", "Called when the cell's edit affordance is used."],
       ["caveat?", "string | null", "Names a caveat on the result; renders the caveat mark."],
+      ["toggles?", "any", "Small enable/disable buttons drawn inside the cell's art (CellToggles). Passing any switches the host element to a div, since a button may not contain a button."],
     ],
   },
   {

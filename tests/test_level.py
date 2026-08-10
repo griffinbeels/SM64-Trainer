@@ -7,6 +7,16 @@ from sm64_events.detectors.level import LevelChangeDetector
 ACT_IDLE = 0x0C400201
 
 
+# WHOLE-DICT EQUALITY IS DELIBERATELY GONE from this file (2026-08-06).
+# `level_changed` grew `igt_frames`/`igt_source`/`igt` when the recorder started
+# needing a time on every row, and every assertion here went red for a field
+# none of them is about. A test pins the keys it OWNS.
+# (auto-memory: pin-fields-not-payload-dicts.)
+def owns(payload: dict, expected: dict) -> None:
+    """`payload` carries at least `expected`, exactly."""
+    assert {key: payload.get(key) for key in expected} == expected, payload
+
+
 def snap(**overrides) -> GameSnapshot:
     defaults = dict(
         wall_time_utc=datetime(2026, 6, 10, tzinfo=timezone.utc),
@@ -30,7 +40,7 @@ def test_level_change_emits_event_with_from_and_to():
     ev = events[0]
     assert ev.type == "level_changed"
     assert ev.frame == 1000
-    assert ev.payload == {"from": 8, "to": 24, "from_area": 1}
+    owns(ev.payload, {"from": 8, "to": 24, "from_area": 1})
 
 
 def test_level_change_carries_source_area_only():
@@ -51,7 +61,7 @@ def test_first_pair_establishes_level_in_journal():
     events = LevelChangeDetector().process(
         snap(curr_level=8, curr_area=1), snap(curr_level=8, curr_area=1))
     assert len(events) == 1
-    assert events[0].payload == {"from": 8, "to": 8, "from_area": 1}
+    owns(events[0].payload, {"from": 8, "to": 8, "from_area": 1})
 
 
 def test_same_level_silent_after_established():
@@ -72,7 +82,7 @@ def test_reattach_gap_level_change_is_caught():
     events = d.process(snap(curr_level=6, curr_area=3),
                        snap(curr_level=6, curr_area=3))
     assert len(events) == 1
-    assert events[0].payload == {"from": 8, "to": 6, "from_area": 3}
+    owns(events[0].payload, {"from": 8, "to": 6, "from_area": 3})
 
 
 def test_level_change_frame_matches_curr_global_timer():
@@ -90,4 +100,4 @@ def test_boot_default_level_zero_to_real_level_emits_event():
     events = LevelChangeDetector().process(
         snap(curr_level=0, curr_area=0), snap(curr_level=8, curr_area=1))
     assert len(events) == 1
-    assert events[0].payload == {"from": 0, "to": 8, "from_area": 0}
+    owns(events[0].payload, {"from": 0, "to": 8, "from_area": 0})

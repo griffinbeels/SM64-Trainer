@@ -228,52 +228,63 @@ if (btBtn && !document.querySelector('.backtest-panel')) {
 """)
 
 
-def _recorder_setup(target_step: int) -> str:
-    """Idempotent, order-independent: walks the "record a segment" modal
-    (segmenttimeline.js) FORWARD from wherever it currently is to
-    `target_step` (0 start / 1 end / 2 review), backing up to "start" first
-    if it is already further along. Each forward click picks the FIRST
-    currently-listed `.record-row` -- any row synthesizes into a segment
-    (any level_changed/star_collected pair works), and picking the first
-    (oldest) one at every step guarantees rows remain for the step after it;
-    picking the LAST (most recent) one at "start" was tried and left nothing
-    later to pick for "end" (measured, not assumed)."""
+def _recorder_setup(picks: int) -> str:
+    """Idempotent, order-independent: opens the RECORDER (segmenttimeline.js)
+    and leaves exactly `picks` moments selected.
+
+    Rewritten 2026-08-05 with the surface itself. The old script walked a
+    three-state stepper (start -> end -> review) and read its position off
+    `.record-step.on`; there are no steps now -- one list, a selection of any
+    size, and the review appears at two. So the position IS the number of
+    picked rows, which is what `.record-row.picked` counts.
+
+    Picks the OLDEST rows (the list is drawn newest-first, so the LAST DOM
+    rows) for the same reason the old script picked the first ones: the
+    synthesize call refuses a pair that is one event, and any
+    level_changed/star_collected pair the fixture holds synthesizes fine.
+    """
     return _script(f"""
 const segBtn = document.querySelector('button.nav-item[title="Segments"]');
 if (segBtn && segBtn.getAttribute('aria-current') !== 'page') {{
   segBtn.click();
   await waitFor(() => !!document.querySelector('.segments-page'));
 }}
-if (!document.querySelector('.record-steps')) {{
+if (!document.querySelector('.record-rows, .record-picks')) {{
   const openBtn = Array.from(document.querySelectorAll('button'))
     .find((b) => b.textContent.includes('Record a segment'));
   if (openBtn) {{
     openBtn.click();
-    await waitFor(() => !!document.querySelector('.record-steps'));
+    await waitFor(() => !!document.querySelector('.record-picks'));
   }}
 }}
-const stepIndex = () => {{
-  const el = document.querySelector('.record-step.on');
-  if (!el) return -1;
-  const label = el.textContent.trim();
-  return label.startsWith('1') ? 0 : label.startsWith('2') ? 1 : 2;
-}};
-if (stepIndex() > {target_step}) {{
-  // The FIRST `.record-picked` "Change" is always Start's -- one back-click
-  // from either "end" or "review" returns to "start" (segmenttimeline.js's
-  // own backTo("start") clears endRow too).
-  const back = document.querySelector('.record-picked button');
-  if (back) {{ back.click(); await waitFor(() => stepIndex() <= {target_step}); }}
+const picked = () => document.querySelectorAll('.record-row.picked').length;
+while (picked() > {picks}) {{
+  const clear = Array.from(document.querySelectorAll('.record-picks button'))
+    .find((b) => b.textContent.includes('Clear'));
+  if (!clear) break;
+  clear.click();
+  await waitFor(() => picked() === 0, 2000);
 }}
-let guard = 0;   // bounded: at most two forward steps ever needed
-while (stepIndex() >= 0 && stepIndex() < {target_step} && guard < 5) {{
+let guard = 0;   // bounded: never more than a handful of picks is measured
+while (picked() < {picks} && guard < 6) {{
   guard++;
-  const before = stepIndex();
   await waitFor(() => document.querySelectorAll('.record-row').length > 0, 3000);
-  const rows = document.querySelectorAll('.record-row');
+  const rows = Array.from(document.querySelectorAll('.record-row'))
+    .filter((row) => !row.classList.contains('picked'));
   if (!rows.length) break;
-  rows[0].click();
-  await waitFor(() => stepIndex() !== before, 2000);
+  const before = picked();
+  rows[rows.length - 1].click();          // oldest first
+  await waitFor(() => picked() !== before, 2000);
+}}
+if ({picks} >= 2) {{
+  // The review is fetched (synthesize -> backtest -> lint), so a story that
+  // does not wait measures "Working it out…" instead of the layout it is
+  // named for.
+  await waitFor(() => !!document.querySelector('.record-review'), 4000);
+  await waitFor(() => {{
+    const panel = document.querySelector('.record-review');
+    return panel && !panel.textContent.includes('Testing against your history');
+  }}, 6000);
 }}
 """)
 
@@ -414,9 +425,13 @@ STORIES = [
     # `skip_if` runs BEFORE `setup` (uilab's sweep loop), so gating on the
     # state setup is meant to create would skip every single time.
     Story(name="segments-editor", at=".segbuilder", setup=_EDITOR_SETUP),
-    Story(name="recorder-start", at=".modal", setup=_recorder_setup(0)),
-    Story(name="recorder-end", at=".modal", setup=_recorder_setup(1)),
+    Story(name="recorder-open", at=".modal", setup=_recorder_setup(0)),
     Story(name="recorder-review", at=".modal", setup=_recorder_setup(2)),
+    # THREE moments, which is the shape that only exists since 2026-08-05:
+    # the middle one is a waypoint the PERSON picked, so this is the state
+    # where the review grows a "Then:" line per stop and drops the derived
+    # step picker entirely.
+    Story(name="recorder-waypoints", at=".modal", setup=_recorder_setup(3)),
 ]
 
 PROJECT = Project(
@@ -922,6 +937,270 @@ BOWSER_PROJECT = dataclasses.replace(
         '980x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '980x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+    },
+)
+
+
+# -- the SELECTOR'S SUBSECTION BADGES (task 0087; round 22, 2026-08-08) -------
+#
+# Nothing in the shipped corpus carries a `parent`, so a star with pieces was
+# unreachable by every instrument until `ui_fixture.seed_subsections` existed
+# -- and an unreachable state is one no gate is looking at. Three real defects
+# lived in it, all invisible to the node-driven rule tests and all obvious in
+# the first render: the STAR row had no subsection wiring at all (the primary
+# case), a selected subsection collapsed the row to a single cell with no way
+# back, and `arm_level` could not place a moment, so a subsection defined by
+# one appeared in no row anywhere.
+#
+# The two stories were `selector-expanded`/`selector-folded` until round 22
+# replaced progressive disclosure with badges. There is no expanded row to
+# measure now, and the states worth measuring are the two the BADGES have --
+# every piece tracked, and one of them dimmed off.
+_TOGGLE_A_PIECE_OFF = _script("""
+const badge = document.querySelector('.stagebanner .cell-toggle-btn.is-selected');
+if (badge) {
+  badge.click();
+  await waitFor(() => !document.querySelector(
+    '.stagebanner .cell-toggle-btn.is-selected:first-of-type'));
+}
+""")
+
+SUBSECTION_STORIES = [
+    # `page` first, for the reason BOWSER_STORIES states: uilab's probe never
+    # checks its own scope root, so a story scoped to `.stagebanner` cannot
+    # see `.stagebanner`'s OWN clipping.
+    Story(name="page", at="", setup=_EXPAND_ALL),
+    Story(name="selector-pieces-on", at=".stagebanner"),
+    Story(name="selector-piece-off", at=".stagebanner",
+          setup=_TOGGLE_A_PIECE_OFF),
+]
+
+SUBSECTION_PROJECT = dataclasses.replace(
+    PROJECT,
+    serve=functools.partial(serve_ui, seed_subsections=True),
+    stories=SUBSECTION_STORIES,
+    # Its own list, story-scoped keys, taken VERBATIM from this project's own
+    # sweep output rather than hand-typed -- see BOWSER_PROJECT's note. Every
+    # row is one of the SAME two long-owed classes PROJECT and BOWSER_PROJECT
+    # already exempt (the `.stagebanner` card's own fixed-height shortfall and
+    # `.starcell`'s starholder/starrank overlap), classified rather than
+    # assumed: 26 clipped + 78 overlap, and nothing else. So the expanded row
+    # and its child treatment introduce no defect of their own.
+    #
+    # RE-TAKEN 2026-08-06 after merging main, which deleted the Active Target
+    # card: every fixed-height shortfall in the selector shifted by two pixels
+    # and eight viewports joined the matrix, so all 104 keys moved at once.
+    # Re-taken by running the sweep and classifying its output (0 rows outside
+    # the two owed classes), never by patching the numbers that went red.
+    known_defects={
+        '1019x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 222 > clientHeight 220',
+        '1019x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1019x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1019x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1020x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 222 > clientHeight 220',
+        '1020x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1020x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1020x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1060x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 228 > clientHeight 226',
+        '1060x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1060x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1060x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1061x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 228 > clientHeight 226',
+        '1061x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1061x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1061x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1100x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1100x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1100x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1100x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1101x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1101x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1101x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1101x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1180x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1180x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1180x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1180x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1181x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 227 > clientHeight 225',
+        '1181x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1181x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1181x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1250x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1250x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1250x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1250x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1251x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1251x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1251x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1251x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1280x720 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1280x720 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1280x720 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1280x720 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1400x760 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1400x760 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1400x760 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1400x760 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1400x761 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1400x761 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1400x761 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1400x761 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1500x900 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1500x900 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1500x900 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1500x900 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1920x1080 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 230 > clientHeight 228',
+        '1920x1080 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1920x1080 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1920x1080 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '850x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 199 > clientHeight 197',
+        '850x1180 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '850x1180 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '850x1180 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '851x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 199 > clientHeight 197',
+        '851x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '851x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '851x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '860x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 200 > clientHeight 198',
+        '860x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '860x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '860x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '861x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 200 > clientHeight 198',
+        '861x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '861x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '861x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '900x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 206 > clientHeight 204',
+        '900x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '900x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '900x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '900x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 206 > clientHeight 204',
+        '900x1180 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '900x1180 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '900x1180 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '901x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 206 > clientHeight 204',
+        '901x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '901x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '901x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '912x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 207 > clientHeight 205',
+        '912x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '912x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '912x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '913x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 208 > clientHeight 206',
+        '913x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '913x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '913x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '979x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 217 > clientHeight 215',
+        '979x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '979x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '979x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '980x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
+            'scrollHeight 217 > clientHeight 215',
+        '980x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '980x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '980x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
     },
 )

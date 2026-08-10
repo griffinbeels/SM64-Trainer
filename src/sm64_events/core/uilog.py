@@ -50,8 +50,13 @@ TRIM_ABOVE_BYTES = 2_000_000
 # endpoint takes a free-shaped body from the browser, and an unbounded key set
 # would let a page bloat the file that has to stay cheap to append to.
 CLIENT_FIELDS = ("surface", "client_utc", "title", "note", "cells", "cards",
-                 "logs", "marks")
-SURFACES = ("selector", "target", "log")
+                 "logs", "marks", "rows", "total")
+# A surface not named here is DROPPED, silently and by design — which is also
+# why adding a reader to `ui/uilog.js` is never the whole change: the recorder
+# reader posted correctly for a while and this list ate every record, with no
+# error anywhere. `tests/test_ui_log_records_the_real_page.py` is what catches
+# that, because it asserts the records LAND rather than that they were sent.
+SURFACES = ("selector", "target", "log", "recorder")
 
 MAX_TEXT = 200
 MAX_CELLS = 40
@@ -155,6 +160,12 @@ def render(entry: dict) -> str:
         head = " / ".join(part for part in (entry.get("title"), entry.get("note"))
                           if part)
         return f"{head or '(no heading)'} -> {drawn or '(NO CELLS)'}"
+    if entry.get("surface") == "recorder":
+        rows = [row for row in (entry.get("rows") or []) if isinstance(row, dict)]
+        drawn = "  |  ".join(
+            " ".join(part for part in (row.get("label"), row.get("igt")) if part)
+            for row in rows)
+        return f"recorder({entry.get('total')}) -> {drawn or '(NO ROWS)'}"
     cards = [card for card in (entry.get("cards") or []) if isinstance(card, dict)]
     if not cards:
         return "(NO CARDS)"

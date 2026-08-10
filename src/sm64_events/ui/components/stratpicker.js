@@ -93,8 +93,20 @@ export function StratPicker({ entity, identity, strategies, active, onChanged,
     (g) => g.strategies.map((s) => s.name)));
   const strays = options.filter((s) => !inGroups.has(s));
 
+  // A CHOICE THAT DOES NOT EXIST IS NOT SHOUTED ABOUT (round 23, 2026-08-08).
+  // `needs-strat` is the red glow meaning "you have not picked one yet" -- an
+  // instruction. With no strategies to pick it instructs nobody: Griffin, on a
+  // freshly-recorded subsection, "If a segment doesn't have a ranked ladder
+  // (aka there are no strategies to select), it should not be blinking red
+  // (there's nothing to select...)". The control stays live and stays
+  // enabled -- "+ new strat..." is a real action and disabling the only way
+  // out would be the other half of his dead-control rule -- it just goes
+  // quiet. `options` rather than `strategies` is deliberate: a historical
+  // attempt carrying a purged name has exactly one option and it IS the
+  // active one, which this expression already covers through `!active`.
+  const nothingToPick = options.length === 0;
   return html`<select key=${`strat-${nonce}`}
-      class="meta ${!active && highlightUnset ? "needs-strat" : ""}"
+      class="meta ${!active && highlightUnset && !nothingToPick ? "needs-strat" : ""}"
       value=${active || ""}
       onchange=${(changeEvent) => setStrat(changeEvent.target.value)}>
     ${allowBlank ? html`<option value="">${blankLabel}</option>` : null}

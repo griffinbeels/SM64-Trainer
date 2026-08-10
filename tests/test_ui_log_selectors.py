@@ -43,15 +43,21 @@ RENDERERS = (UI / "components" / "stagebanner.js",
              # the exact silent-empty-log failure this file exists to catch
              # (2026-08-04, readLogs found nothing all session).
              UI / "components" / "practicelog.js",
-             UI / "components" / "attemptlog.js")
+             UI / "components" / "attemptlog.js",
+             # readRecorder's renderer. The recorder is a modal on another
+             # tab, so its classes exist in exactly one file and a rename
+             # there empties the one log that can answer a recorder latency
+             # report (2026-08-06).
+             UI / "components" / "segmenttimeline.js")
 
 
 def _reader_source() -> str:
     source = strip_comments(READER.read_text(encoding="utf-8"))
     match = re.search(r"export function readSelector.*?^}\n.*?"
                       r"export function readTargets.*?^}\n.*?"
-                      r"export function readLogs.*?^}", source, re.S | re.M)
-    assert match, "the three reader functions are not all in uilog.js any more"
+                      r"export function readLogs.*?^}\n.*?"
+                      r"export function readRecorder.*?^}", source, re.S | re.M)
+    assert match, "the four reader functions are not all in uilog.js any more"
     return match.group(0)
 
 

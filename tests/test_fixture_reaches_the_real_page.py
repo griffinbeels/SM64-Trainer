@@ -43,7 +43,8 @@ if _MISSING:
 
 from uilab.driver import get_driver          # noqa: E402
 from uilab_project import (PROJECT, STORIES,  # noqa: E402
-                           BOWSER_COURSE, BOWSER_LEVEL)
+                           BOWSER_COURSE, BOWSER_LEVEL,
+                           _script as _ASYNC)
 from ui_fixture import (serve_ui, FIXTURE_COURSE, FIXTURE_LEVEL,  # noqa: E402
                         _seed_target, _target_segment)
 
@@ -641,6 +642,32 @@ def test_the_matching_control_shows_the_definition_s_STORED_mode(page):
         "that segments.js still seeds the select from `initial`.")
 
 
+def test_the_clock_start_control_is_on_the_open_definition(page):
+    """Round 15 item 3: a stored `clock_start` invisible in the editor is the
+    exact shape match_mode shipped in for a day — the branch's central
+    concept, unseeable and unchangeable from the app. The control must exist
+    and show the STORED value (the fixture's definitions predate the field,
+    so they read "trigger")."""
+    reach(page, "segments-editor")
+    assert count(page, ".builder-clockstart select") == 1
+    # Against the ROW, never a literal: the fixture's definitions arrive
+    # through whichever creation path it uses (the API body defaults "move"
+    # since this round; a db-default row reads "trigger"), and the claim
+    # here is only that the control shows the STORED value.
+    verdict = page.evaluate("""
+(async () => {
+  const shown = document.querySelector('.builder-clockstart select').value;
+  const name = document.querySelector('.builder-name input').value;
+  const rows = await (await fetch('/api/segments')).json();
+  const row = rows.find((r) => r.name === name);
+  if (!row) return 'no row named ' + name;
+  return shown === (row.clock_start || 'trigger')
+    ? 'ok' : `control ${shown} != stored ${row.clock_start}`;
+})()
+""")
+    assert verdict == "ok", verdict
+
+
 def test_the_lint_panel_has_a_real_finding(page):
     """A definition with NO lint finding renders no `.lint-panel` at all
     (`${lintFindings.length > 0 && html...}` in segments.js) -- so opening a
@@ -672,40 +699,74 @@ def test_the_merge_panel_is_offered(page):
     assert count(page, ".builder-merge") == 1
 
 
-def test_the_recorder_start_step_has_pickable_rows(page):
-    """`.record-rows` renders nothing (a plain-text empty state) if the
-    fixture's journal has no timeline rows -- both `_arm_segment`'s
-    level_changed events and `seed_practice`'s star_collected events count,
-    so this should never be empty in the default fixture."""
-    reach(page, "recorder-start")
-    assert count(page, ".record-steps") == 1
+def test_the_save_button_flashes_saved_after_a_real_save(page):
+    """Round 18 item 2, driven end to end: click Save on the open editor and
+    the button reads "Saved" (with the check icon) once the PUT resolves,
+    then returns to "Save segment". Saving the untouched fixture definition
+    is a no-op PUT, so the shared page's later tests see the same rows."""
+    reach(page, "segments-editor")
+    # `waitFor` RESOLVES false on timeout — it never throws (its own source,
+    # tools/uilab_project.py). The first version of this test wrapped it in
+    # try/catch and returned 'ok' unconditionally: green with the flash
+    # mutated off, the exact vacuous-guard shape ui-core.md warns about.
+    verdict = page.evaluate(_ASYNC("""
+const saveBtn = Array.from(document.querySelectorAll('.builder-actions button'))
+  .find((b) => b.textContent.includes('Save segment'));
+saveBtn.click();
+if (!await waitFor(() => saveBtn.textContent.includes('Saved'), 4000))
+  return 'never flashed: ' + saveBtn.textContent;
+if (!await waitFor(() => !saveBtn.textContent.includes('Saved'), 4000))
+  return 'stuck on: ' + saveBtn.textContent;
+return 'ok';
+"""))
+    assert verdict == "ok", verdict
+
+
+def test_the_recorder_opens_onto_history_with_pickable_rows(page):
+    """The ARRIVAL state, and it is the whole of property 2: the recorder
+    opens onto what you just did, never an empty screen waiting for input.
+    `.record-rows` renders a plain-text empty state if the fixture's journal
+    has no timeline rows -- both `_arm_segment`'s level_changed events and
+    `seed_practice`'s star_collected events count, so this should never be
+    empty in the default fixture."""
+    reach(page, "recorder-open")
+    assert count(page, ".record-picks") == 1
     assert count(page, ".record-row") >= 1
+    # "what was the timer in game" -- the number he chooses BY, so it is on
+    # the row and not in the review.
+    #
+    # REVERSED 2026-08-06. This asserted `0 < times < rows` -- SOME rows timed
+    # and not all -- because the fixture's level edges carried no `igt_frames`
+    # and neither did the real detector. His report: *"It looks like some
+    # events have the timer next to them, most don't? I would expect the timer
+    # for all of them."* `area.py`, `level.py` and `spawn.py` stamp the shared
+    # clock now, and `ui_fixture._place_time` puts the same trio on every
+    # hand-built place event -- so a blank cell here means a detector stopped
+    # stamping, which is the only thing this can now be about.
+    rows, times = count(page, ".record-row"), count(page, ".record-igt")
+    assert times == rows, (
+        f"only {times} of {rows} rows show a time — every type the recorder "
+        "draws stamps one")
+    # Nothing picked means no review and no Save -- a start with no end can
+    # never complete, so the control is absent rather than present-and-refused.
+    assert count(page, ".record-review") == 0
 
 
-def test_the_recorder_end_step_still_has_later_rows_to_pick(page):
-    """The `later` list is `rows.filter(row => row.id > startRow.id)` --
-    picking the MOST RECENT event as "start" would leave this empty, which
-    is exactly the bug this fixture's setup script had until the rows it
-    clicked were changed from last-in-list to first-in-list (measured, not
-    assumed: `later rows: 0` was the actual failure)."""
-    reach(page, "recorder-end")
-    assert count(page, ".record-picked") == 1
-    assert count(page, ".record-row") >= 1
-
-
-def test_the_recorder_reaches_the_dense_review_step(page):
-    """The review step is the one the team lead named as dense: two
-    `.record-picked` summaries, the synthesized start/end sentences, the
-    backtest summary and (when findings exist) the lint panel, all at once.
-    `.record-review` is the whole step's own root."""
+def test_the_recorder_review_appears_at_two_picked_moments(page):
+    """Two picks is the smallest definition there is, and the state the old
+    three-step modal called "review". `.record-review` is its own root."""
     reach(page, "recorder-review")
     assert count(page, ".record-review") == 1
-    assert count(page, ".record-picked") == 2
+    assert count(page, ".record-row.picked") == 2
+    # The two ends wear their roles, which is the only thing telling a reader
+    # which end of a newest-first list is the start.
+    assert count(page, ".record-mark.role-start") == 1
+    assert count(page, ".record-mark.role-finish") == 1
 
 
 def test_the_recorder_review_step_has_run_its_backtest(page):
-    """`synth`/`btReport` are both fetched asynchronously on entering this
-    step -- if the Story's setup did not wait for them, this measures
+    """`synth`/`btReport` are both fetched asynchronously on picking the
+    second moment -- if the Story's setup did not wait for them, this measures
     "Working it out…"/"Testing against your history…" placeholders instead
     of the real content whose layout the sweep is supposed to be checking."""
     reach(page, "recorder-review")
@@ -714,11 +775,236 @@ def test_the_recorder_review_step_has_run_its_backtest(page):
     # Absence of a placeholder is not presence of content. `segmenttimeline.js`
     # renders "Working it out…" only while `!synth && !synthErr` — a FAILED
     # synthesize clears the placeholder and renders `.badx` instead, so both
-    # this test and the dense-review-step one above pass green on an error
-    # state, measuring the layout of an error box. (Delta review, finding 6.)
+    # this test and the one above pass green on an error state, measuring the
+    # layout of an error box. (Delta review, finding 6.)
     assert count(page, ".record-review .badx") == 0, (
         "the review step rendered an error, not a synthesized definition — "
         "the placeholder assertions above cannot tell those apart")
+
+
+def test_the_recorder_asks_what_the_recording_is_a_piece_of(page):
+    """The ONLY door into a subsection. `parent` is absent from segments.js's
+    SAVE_FIELDS and no other control in the app writes one, so if this
+    control is unreachable the feature does not exist -- which is exactly
+    what he reported ("what star has subsections? I don't see a way to define
+    that?", 2026-08-05)."""
+    reach(page, "recorder-review")
+    assert count(page, ".record-parent") == 1
+    assert count(page, ".record-parent .entity-trigger") == 1
+
+
+def test_a_third_picked_moment_becomes_a_waypoint_the_person_chose(page):
+    """Three picks is the state that did not exist before 2026-08-05. The
+    middle one is a stop HE named, so the derived-walk picker is gone (its
+    whole job was filling a middle nobody had named) and the review grows a
+    "Then:" line."""
+    reach(page, "recorder-waypoints")
+    assert count(page, ".record-row.picked") == 3
+    assert count(page, ".record-mark.role-stop") == 1
+    assert count(page, ".record-review .step-picker") == 0
+    assert count(page, ".record-review:has-text('Then:')") >= 1
+
+
+def test_the_rerecord_door_opens_the_recorder_carrying_the_row(page):
+    """Round 16. The editor's re-record door is the ONLY entry into the
+    recorder's replace intent — if it is unreachable, or opens a recorder
+    that has forgotten which row it replaces, the feature does not exist
+    (the same rule that produced the parent test above). Three claims, end
+    to end in the real app: the door is on a saved definition's editor;
+    clicking it opens the recorder in Re-record with NOTHING picked (a
+    re-record starts from a fresh recording, not the old picks); and after
+    two picks the name field holds the ROW's name, not the auto-name — the
+    pre-fill arrives pre-marked as his, which is what stops every pick
+    toggle overwriting it. Closes the modal after, so the recorder stories'
+    own idempotent setups never inherit a replace intent."""
+    reach(page, "segments-editor")
+    # The recorder stories above leave the CREATE recorder open (their setups
+    # are idempotent, not self-closing) — a human cannot click the editor's
+    # door through a modal, so close it before this test does.
+    page.evaluate(_ASYNC("""
+const cancel = Array.from(document.querySelectorAll(
+  '.modal .builder-actions button')).find((b) => b.textContent === 'Cancel');
+if (cancel) { cancel.click();
+  await waitFor(() => !document.querySelector('.record-picks')); }
+"""))
+    assert count(page, ".builder-rerecord button") == 1
+    row_name = page.evaluate(
+        "return document.querySelector('.builder-name input').value")
+    page.evaluate(_ASYNC("""
+document.querySelector('.builder-rerecord button').click();
+await waitFor(() => !!document.querySelector('.record-picks'));
+"""))
+    # The Modal renders its title as a bare <h2 id="modal-title-N"> — no
+    # .modal-title class exists to select on, so match by content.
+    assert count(page, ".modal h2:has-text('Re-record')") == 1
+    assert count(page, ".record-row.picked") == 0
+    # Reuse the ONE script that reaches two-picked (the file's own rule) —
+    # it finds this modal already open and picks into it.
+    reach(page, "recorder-review")
+    shown = page.evaluate(
+        "return document.querySelector('.record-review .builder-name input')"
+        + ".value")
+    assert shown == row_name, (
+        f"the recorder shows {shown!r} where the replaced row is named "
+        f"{row_name!r} — the auto-name overwrote the pre-fill, so the save "
+        "would silently rename the segment")
+    assert count(page, ".record-replace-note") == 1
+    save_label = page.evaluate("""
+return Array.from(document.querySelectorAll('.builder-actions button'))
+  .map((b) => b.textContent).join('|')
+""")
+    assert "Replace segment" in save_label, save_label
+    # Drive the save itself: replace must land on the SAME row (the client's
+    # PUT, not a second POST — a duplicate here orphans nothing visibly and
+    # is exactly the silent failure the whole feature exists to avoid), with
+    # the recording actually moved. Safe against the shared page: this is the
+    # file's last test, and the second viewport gets its own fresh server.
+    before = page.evaluate(_ASYNC("""
+const rows = await (await fetch('/api/segments')).json();
+const mine = rows.filter((r) => r.name === %s);
+return JSON.stringify({n: rows.length, ids: mine.map((r) => r.id),
+                       triggers: mine[0].start_triggers});
+""" % json.dumps(row_name)))
+    page.evaluate(_ASYNC("""
+const saveBtn = Array.from(document.querySelectorAll(
+  '.modal .builder-actions button'))
+  .find((b) => b.textContent.includes('Replace segment'));
+saveBtn.click();
+await waitFor(() => !document.querySelector('.record-picks'), 5000);
+"""))
+    after = page.evaluate(_ASYNC("""
+const rows = await (await fetch('/api/segments')).json();
+const mine = rows.filter((r) => r.name === %s);
+return JSON.stringify({n: rows.length, ids: mine.map((r) => r.id),
+                       triggers: mine[0].start_triggers});
+""" % json.dumps(row_name)))
+    was, now = json.loads(before), json.loads(after)
+    assert now["ids"] == was["ids"], (
+        f"row ids for {row_name!r} moved {was['ids']} -> {now['ids']} — the "
+        "save created a new row instead of replacing the old one")
+    assert now["n"] == was["n"], (
+        f"the library grew {was['n']} -> {now['n']} rows — the save POSTed a "
+        "duplicate instead of PUTting the replaced id")
+    assert now["triggers"] != was["triggers"], (
+        "the replaced row still holds its old start triggers — the save "
+        "landed nowhere")
+    # Round 17 item 1: the OPEN editor below must show the server's version.
+    # The Builder is keyed by segment id and the replace keeps the id, so
+    # without a forced remount its `d` state (read from `initial` exactly
+    # once) keeps rendering the PRE-replace definition — which is his report
+    # verbatim: "it doesn't feel like the start/finish fields were changed".
+    # Three comparisons, all against the API row rather than guessed
+    # constants: the start clause's TYPE select, its `to` param when the
+    # clause has one, and the Then section's step count.
+    editor = json.loads(page.evaluate(_ASYNC("""
+await waitFor(() => !!document.querySelector('.segbuilder'), 5000);
+const start = document.querySelector('.seg-start');
+const selects = Array.from(start.querySelectorAll('select'))
+  .map((s) => s.value);
+return JSON.stringify({
+  startType: selects[0] || null,
+  startValues: selects,
+  thenSteps: document.querySelectorAll('.then-step').length,
+});
+""")))
+    row = json.loads(page.evaluate(_ASYNC("""
+const rows = await (await fetch('/api/segments')).json();
+const mine = rows.find((r) => r.name === %s);
+return JSON.stringify({start: mine.start_triggers[0],
+                       waypoints: mine.waypoints.length});
+""" % json.dumps(row_name))))
+    assert editor["startType"] == row["start"]["type"], (
+        f"the editor's Start clause reads {editor['startType']!r} where the "
+        f"server row now holds {row['start']['type']!r} — the Builder kept "
+        "its pre-replace state instead of remounting on the fresh row")
+    if "to" in row["start"]:
+        assert str(row["start"]["to"]) in editor["startValues"], (
+            f"the editor's Start params {editor['startValues']} do not show "
+            f"the replaced clause's to={row['start']['to']} — stale state")
+    assert editor["thenSteps"] == row["waypoints"], (
+        f"the editor's Then section draws {editor['thenSteps']} step(s) "
+        f"where the server row holds {row['waypoints']} — his second "
+        "screenshot exactly (the CCM door stop missing from Then)")
+
+
+def test_a_castle_area_tile_is_a_terminal_parent_pick(page):
+    """Round 14, his ruling: "for the castle areas, those are the high level
+    areas, so it shouldn't have a further drill down". Clicking the Lobby
+    tile in "What is this a piece of?" IS the answer — the dialog closes on
+    it (no star grid, no third screen of any kind) and the trigger reads the
+    area's name. Course tiles still drill; only the region tiles are
+    terminal."""
+    reach(page, "recorder-review")
+    verdict = page.evaluate("""
+(async () => {
+  const waitFor = async (test, ms = 4000) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      if (test()) return true;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return false;
+  };
+  // SCOPED to the recorder's own dialog, never a bare `.entity-grid`. The
+  // Library tab (spec 2026-08-07-library-page) renders the SAME picker as
+  // its course browser and stays mounted with `display:none` when you leave
+  // it, so an unscoped query finds that hidden grid first (measured: one
+  // `.entity-grid` inside `.library-courses`, `offsetParent` null, present
+  // before this dialog opens) -- its own "Castle Movements (Lobby)" tile
+  // matched the text below and the drill it performed read as this dialog
+  // refusing to close. Same trap, same remedy as the `.library-search` scope
+  // in tools/uilab_project.py.
+  const grid = () => document.querySelector('.record-review .entity-grid');
+  document.querySelector('.record-parent .entity-trigger').click();
+  if (!await waitFor(() => !!grid()))
+    return 'the parent dialog never opened';
+  const tiles = Array.from(grid().querySelectorAll('button'));
+  const lobby = tiles.find((b) => b.textContent.includes('Lobby'));
+  if (!lobby) return 'no Lobby tile: ' +
+    JSON.stringify(tiles.map((b) => b.textContent.trim()).slice(-8));
+  lobby.click();
+  if (!await waitFor(() => !grid()))
+    return 'the dialog stayed open — the tile drilled instead of picking';
+  const trigger = document.querySelector('.record-parent .entity-trigger');
+  if (!trigger.textContent.includes('Lobby'))
+    return 'the trigger reads ' + trigger.textContent.trim();
+  // Leave the parent as it was found, through the dialog's own clear cell.
+  trigger.click();
+  await waitFor(() => !!document.querySelector('.record-review .entity-clear'));
+  document.querySelector('.record-review .entity-clear').click();
+  await waitFor(() => !grid());
+  return 'ok';
+})()
+""")
+    assert verdict == "ok", verdict
+
+
+def test_a_typed_segment_name_survives_a_pick_change(page):
+    """Round 12 item 4: "once I set the name for the segment name it
+    shouldn't change". Every pick toggle re-derives the definition and used
+    to overwrite the name field with the fresh auto-name — the auto-fill may
+    only fill a field he has not edited."""
+    reach(page, "recorder-review")
+    typed = page.evaluate(
+        "const input = document.querySelector('.builder-name input');"
+        "input.value = 'My Own Name';"
+        "input.dispatchEvent(new Event('input', { bubbles: true }));"
+        "return input.value;")
+    assert typed == "My Own Name"
+    page.evaluate(
+        "document.querySelector('.record-row:not(.picked)').click();")
+    page.wait_ms(600)   # derive() round-trips /api/segments/synthesize
+    held = page.evaluate(
+        "return document.querySelector('.builder-name input').value;")
+    assert held == "My Own Name", (
+        f"the pick change re-derived the auto-name over his ({held!r})")
+    # Put the third pick back so later stories start from their own setup
+    # with nothing extra picked (Story setups are idempotent, but this click
+    # was ours, not theirs).
+    page.evaluate(
+        "const picked = document.querySelectorAll('.record-row.picked');"
+        "picked[1].click();")
+    page.wait_ms(200)
 
 
 def test_the_page_story_returns_to_practice_after_the_segments_tab(page):

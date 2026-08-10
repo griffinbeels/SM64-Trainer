@@ -183,12 +183,13 @@ export function Header({ t, settingsOpen, closeSettings }) {
             identity=${`${mareloTurn.marelo ? mareloTurn.marelo.label : ""}|${v ? v.rank_mode : ""}`} />
       </div>
 
-      <${ContextSelect} icon="clock" label="Clock" id="clock-select"
-        name="clock" options=${CLOCK_OPTIONS} value=${t.clock}
-        onChange=${(e) => t.pickClock(e.target.value)} empty="—" />
-
+      ${/* The Clock card left the bar 2026-08-08 (user): the default is
+            always Usamune IGT, so a control nobody changes was spending a
+            column the rank card can use. Its select lives in the settings
+            drawer's Display section now. */
+        null}
       ${/* Labelled "Grading", not "Rank": it sets HOW a rank is graded, and
-            it now sits two cards from the MARELO bar, which shows what your
+            it sits directly beside the route rank card, which shows what your
             rank IS. Two cards reading RANK side by side, one of them a mode,
             is the kind of correct-but-unexplained pairing that reads as a
             rendering fault. The id/name stay rank_mode -- the wire contract
@@ -326,6 +327,20 @@ export function Header({ t, settingsOpen, closeSettings }) {
           <p class="settings-note">Show dustless rollout/jump counts on
             attempt rows and in the stats menu. Off by default while the
             detection is being tuned.</p>
+          ${/* Was a card in the top bar until 2026-08-08. The default is
+               always Usamune IGT (x-cam timing), so the control earns a
+               hidden shelf here, not a column up top. */""}
+          <label class="settings-field">
+            <span>Timing clock</span>
+            <select value=${t.clock}
+                onchange=${(e) => t.pickClock(e.target.value)}>
+              ${CLOCK_OPTIONS.map(([key, label]) =>
+                html`<option value=${key}>${label}</option>`)}
+            </select>
+          </label>
+          <p class="settings-note">Which clock grades star times. Usamune IGT
+            (x-cam timing) is the community standard and the default; Anchor
+            to grab times from your anchor instead, for star-grab practice.</p>
         </section>
 
         <section class="settings-section">

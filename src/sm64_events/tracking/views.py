@@ -57,6 +57,7 @@ from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
 from sm64_events.tracking.projection import DEFAULT_MIN_FRAMES, journal_id
 from sm64_events.tracking.routes import route_stats
 from sm64_events.tracking.caveats import (attempt_caveat, caveat_for,
+                                           igt_seen_in,
                                           pb_blocked_by)
 from sm64_events.tracking.segments import (arm_level, arms_ambiently,
                                             card_step_labels,
@@ -1326,7 +1327,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                               # quick-select cell, so the two surfaces cannot
                               # word the same fact differently.
                               "caveat": caveat_for(
-                                  row, attempt_by_id.get(row["attempt_id"]))}
+                                  row, attempt_by_id.get(row["attempt_id"]),
+                                  igt_seen_in(history))}
                              if row else None)
         # Basis computed ONCE per section and shared by both rank numbers
         # below: the strat rank grades it against the ACTIVE strategy's
@@ -1535,6 +1537,22 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # 2026-07-24-segment-default-strat). Stars carry no such key —
             # the documented rule 11 asymmetry.
             "default_strat": meta.get("default_strat"),
+            # The entities this is a SUBSECTION of, [] for a top-level
+            # segment (task 0087; plural round 20). Stamped rather than
+            # derived client-side for the same reason `course_id` is: the
+            # selector asks "what has this target as a parent" on every
+            # render, and a second derivation in JS is how two surfaces
+            # start disagreeing.
+            "parents": meta.get("parents") or [],
+            # Whether this definition is TRACKED at all -- the selector's
+            # subsection badge writes it (round 22, 2026-08-08: "If you click
+            # on the button, it should be dimmed out and then we no longer
+            # track the practice log entry for that subsection"). Shipped
+            # beside `parents` because the same surface asks both questions
+            # in one breath: a piece nests under its parent's card only while
+            # it is on. A section still EXISTS for a disabled definition --
+            # its history is real and the badge is how it comes back.
+            "enabled": bool(meta.get("enabled", True)),
             # igt present-as-None: same shape-stability rule as the target
             # payload — UI code reading sec.pb.igt gets null, not undefined.
             "pb": {"igt": None,
@@ -1672,7 +1690,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             f"{c}:{s}": key
             for (c, s, mode), row in pbs.items()
             if c != "segment" and mode == "igt"
-            and (key := caveat_for(row, attempt_by_id.get(row["attempt_id"])))},
+            and (key := caveat_for(
+                row, attempt_by_id.get(row["attempt_id"]),
+                igt_seen_in(attempts_by_star.get((c, s), []))))},
         "rank_mode": rank_mode,
         # Entity keys that HAVE a ladder, whether or not this player has a time
         # on them. `rank_by_star`/`segment_targets[].rank` are None in both the
@@ -1694,6 +1714,13 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "segment_targets": [
             {"segment_id": d.id, "name": d.name, "enabled": d.enabled,
              "start_areas": areas, "start_levels": levels,
+             # The entities this is a SUBSECTION of, [] for none (task 0087;
+             # plural round 20). The SELECTOR reads this payload, not the
+             # sections, so the field is needed in both places -- a
+             # subsection missing it here would simply sit loose in the row
+             # beside its own parent, which is the crowding progressive
+             # disclosure exists to prevent.
+             "parents": d.parents,
              # True for the seg:reds->pipe:<abbrev> half of a Bowser Reds
              # pairing -- the discriminator stagebanner.js needs to tell it
              # apart from the legacy exclusive "no reds" pipe-only segment,
@@ -1720,7 +1747,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
              # Rule 11: the same mark the star cells get, from the same
              # derivation, off this segment's own strategy-blind current PB.
              "caveat": (lambda row: caveat_for(
-                 row, attempt_by_id.get(row["attempt_id"]) if row else None))(
+                 row, attempt_by_id.get(row["attempt_id"]) if row else None,
+                 igt_seen_in(attempts_by_seg.get(d.id, []))))(
                      pbs.get(("segment", d.id, "rta")))}
             # EVERY def is included except the HUNDRED_COIN_EXIT family
             # (spec 2026-07-28-multi-step-segments) — a fully location-less

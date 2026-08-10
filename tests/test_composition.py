@@ -6,6 +6,7 @@ from pathlib import Path
 
 import sm64_events
 from sm64_events.main import build_detectors
+from source_scan import strip_comments
 
 
 def test_detector_order_is_load_bearing():
@@ -25,6 +26,65 @@ def test_detector_order_is_load_bearing():
     wired = [type(detector).__name__ for detector in build_detectors()]
     positions = [wired.index(name) for name in order]
     assert positions == sorted(positions)
+
+
+def test_the_moment_detector_runs_behind_the_held_emitters():
+    # A moment is emitted on the frame it HAPPENED, so it is not a held
+    # event and must not jump ahead of one. The two held emitters publish
+    # the past; everything describing the present follows them.
+    wired = [type(detector).__name__ for detector in build_detectors()]
+    assert wired.index("MomentDetector") > wired.index("StarGrabDetector")
+    assert wired.index("MomentDetector") > wired.index("WarpDetector")
+
+
+def test_the_moment_detector_takes_the_live_target_predicate():
+    """The SEAM, not a live rule. `build_detectors()` with no argument is
+    permissive, which is what the composition root now uses (the task-0087
+    target gate was retired 2026-08-06 — see the guard below). A caller that
+    wants to narrow when a moment records still has somewhere to inject it,
+    which is the only reason the parameter outlived the rule."""
+    from sm64_events.main import build_detectors as build
+
+    permissive = next(d for d in build()
+                      if type(d).__name__ == "MomentDetector")
+    assert permissive._target_active() is True
+
+    gated = next(d for d in build(target_active=lambda: False)
+                 if type(d).__name__ == "MomentDetector")
+    assert gated._target_active() is False
+
+
+def test_the_composition_root_gates_moments_on_NOTHING():
+    """REVERSED 2026-08-06, and stated as a reversal rather than deleted: this
+    asserted `build_detectors(target_active=` was in main.py, wiring the live
+    target into the gate (task 0087).
+
+    The recorder is what consumes moments and it is used with NO target set --
+    pointing at what you just did is HOW a definition gets made -- so the gate
+    made the builder blind in the one situation it exists for. Two live reports
+    in one message, one cause: "I went into Whomp's Fortress, triggered the
+    Whomp King dialogue, and now nothing popped up in the segment recorder
+    tool" and "briefly I was able to detect the doors in HMC, but... I lost the
+    ability to detect those" (2026-08-06). His journal scored it exactly -- 207
+    moments, all inside target windows, then a whole session across three
+    levels with zero of any kind.
+
+    A recorder-OPEN gate is not the answer either and this guard is where that
+    is written down: he does the thing first and opens the recorder afterwards,
+    so detection has to have already happened.
+    """
+    src = strip_comments((Path(sm64_events.__file__).parent
+                          / "main.py").read_text(encoding="utf-8"))
+    # The PARAMETER survives as an injection seam (see build_detectors' own
+    # docstring), so the scan reads the CALLS and skips the definition — the
+    # thing that may not come back is main wiring the live target into it.
+    calls = [line.strip() for line in src.splitlines()
+             if "build_detectors(" in line and not line.lstrip().startswith("def ")]
+    assert calls, "nothing in main.py builds the detector chain any more"
+    assert all(call.endswith("build_detectors()") for call in calls), (
+        "the composition root must not gate moments on the practice target — "
+        "the recorder is used with no target set, and gating makes it blind "
+        f"exactly then. Calls: {calls}")
 
 
 def test_stage_detector_is_wired():
@@ -170,6 +230,43 @@ def test_build_wires_replay_endpoints(monkeypatch, tmp_path):
     assert "/api/replay/clips/{name}" in paths
 
 
+def test_build_joins_the_boundary_hook_to_the_moment_detector(monkeypatch):
+    """An ordinal means "the Nth since this attempt opened". The service sees
+    every event and the detector sees only snapshots, so if build() does not
+    join them the counter never restarts -- and a subsection pinned to an
+    ordinal matches the first run and never again.
+
+    Driven through the REAL build() rather than a source scan, for the same
+    reason the frame-heartbeat test above is: a scan passes on a line that
+    has been commented out, moved into a branch that never runs, or wired to
+    a different detector instance than the poller got."""
+    main_mod = _stubbed_main(monkeypatch)
+    captured = {}
+    real_poller = main_mod.Poller
+
+    def spy(memory, detectors, sink, **kw):
+        captured["detectors"] = detectors
+        captured["sink"] = sink
+        return real_poller(memory, detectors, sink, **kw)
+
+    monkeypatch.setattr(main_mod, "Poller", spy)
+    main_mod.build()
+
+    hook = captured["sink"].on_attempt_boundary
+    assert hook is not None, "the service was built with no boundary hook"
+    # BOTH moment detectors count ordinals (Mario-action moments and caused
+    # moments), so the hook must clear both — and it must clear the INSTANCES
+    # the poller got, not another pair's, which would leave the running
+    # counters untouched while looking correct. Proven by driving them: seed
+    # each counter directly, fire the hook, require both empty.
+    moment = next(d for d in captured["detectors"]
+                  if type(d).__name__ == "MomentDetector")
+    caused = next(d for d in captured["detectors"]
+                  if type(d).__name__ == "CausedMomentDetector")
+    moment._counts["door_open"] = 4
+    caused._counts["switch_press"] = 2
+    hook()
+    assert moment._counts == {} and caused._counts == {}
 def test_dbless_boot_still_mounts_compare_and_compilation(monkeypatch):
     """A boot that loses the instance-lock race (the reload-handoff race,
     live 2026-07-30 and 2026-08-06) must still mount the compare and

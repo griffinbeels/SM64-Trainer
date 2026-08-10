@@ -73,7 +73,11 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
                     # Item 0); "strict" until then, matching the column
                     # default and every existing row rather than the insert
                     # function's own now-gone "loose" default.
-                    match_mode=srow.get("match_mode", "strict"))
+                    match_mode=srow.get("match_mode", "strict"),
+                    parents=srow.get("parents"),
+                    # "trigger" until the corpus retiming is priced (round
+                    # 15 item 3) — a seed row may carry its own value later.
+                    clock_start=srow.get("clock_start", "trigger"))
             else:
                 key_to_id[key] = existing["id"]
                 if not existing["seed_dirty"]:
@@ -89,7 +93,9 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
                         # Same reasoning as the insert branch above: an
                         # ALREADY-installed, untouched row must also pick up a
                         # later seed conversion, not just a fresh install.
-                        match_mode=srow.get("match_mode", "strict"))
+                        match_mode=srow.get("match_mode", "strict"),
+                        parents=srow.get("parents"),
+                        clock_start=srow.get("clock_start", "trigger"))
         except _SEED_ERRORS as exc:
             problems.append(f"segment {key}: {exc}")
     route_by_key = {r["seed_key"]: r for r in db.routes() if r.get("seed_key")}
@@ -117,6 +123,22 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
                                 category=rrow.get("category"))
         except _SEED_ERRORS as exc:
             problems.append(f"route {key}: {exc}")
+
+    # The LANDMARK CATALOGUE — the shipped answer to "which door is that". Same
+    # contract as the two above and deliberately the simplest of the three: a
+    # name has nothing to validate beyond being a non-empty string on a
+    # non-empty key, so a bad row costs one skipped name and nothing else.
+    for lrow in seed.get("landmarks") or []:
+        try:
+            key = _seed_key(lrow, "landmark")
+            target, name = lrow.get("key"), lrow.get("name")
+            if not isinstance(target, str) or not target.strip():
+                raise ValueError("landmark row is missing the key it names")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("landmark row is missing its name")
+            db.seed_landmark_name(target.strip(), name.strip(), key)
+        except _SEED_ERRORS as exc:
+            problems.append(f"landmark {_describe(lrow)}: {exc}")
     return problems
 
 

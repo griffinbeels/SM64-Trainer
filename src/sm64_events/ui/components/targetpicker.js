@@ -88,6 +88,7 @@ export function useTargetPicker(t) {
     const courseGroups = courseUnionGroups(
       v.catalog, (t.segments || []).filter((s) => !s.is_hundred_coin_engine),
       (t.vocab || {}).course_by_level || {}, targetRanks,
+      (t.vocab || {}).origins || null,
     ).map((group) => ({
       ...group,
       icon: optionIconSrc(t, "course", group.key.replace("course-", "")),

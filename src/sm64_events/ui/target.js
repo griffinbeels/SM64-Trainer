@@ -25,7 +25,16 @@ import { releaseCelebrationHold } from "./rankclimb.js";
 //     PLAYER's privilege ("if I click on another star to target while ranking
 //     up, it should let me immediately jump"); a convenience pick is not a
 //     click and must not cut a celebration short.
-export async function requestTarget(t, body, { quiet = false } = {}) {
+// `auto` tells the SERVER the same thing `quiet` tells the client: no gesture
+// asked for this write. The projector holds an auto-filled target by round
+// 19's detection rules (complete / forfeit / expire) instead of a click's
+// sovereign hold, and drops a fill that races a promoted detection. It
+// defaults from `quiet` — a quiet write is by definition gestureless — and
+// the non-quiet convenience sites (the arena row, the Bowser family memory)
+// pass it explicitly.
+export async function requestTarget(t, body, { quiet = false,
+                                               auto = quiet } = {}) {
+  if (auto) body = { ...body, auto: true };
   // A gesture beats the rank-up HOLD (ui/rankclimb.js). While a rank is
   // climbing the practice page is frozen so the GAME cannot move it out from
   // under the celebration -- walking out of the stage the instant you grab

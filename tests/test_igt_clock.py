@@ -151,3 +151,49 @@ def test_a_reset_clears_the_subarea_basis():
     walk(c, range(1400, 1403), curr_level=8, curr_area=1, igt_overall=350)
     walk(c, [1403], curr_level=8, curr_area=1, igt_overall=0)
     assert c.counter_may_be_subarea_local() is False
+
+
+# -- a spawn is the ZERO, not a reading of the counter -------------------------
+# His report, 2026-08-06: *"for 'starting' a level, the timer event should be
+# at 0"00"*, against a recorder row reading "Started Bob-omb Battlefield
+# 16"33". Measured from his own journal at capture time: every recent `spawned`
+# carried `igt_source: "reconstructed"` and the PREVIOUS run's final time (ids
+# 2345 1'11"10, 2348 0'33"60, 2354 0'07"13).
+#
+# The mechanism is `_reading`'s reset-race guard doing its job in the one place
+# its premise is inverted. For a STAR grabbed a blink after the counter reset,
+# the grab concluded the attempt that was being played, so reconstructing the
+# pre-reset value is right. A SPAWN is the other side of the same edge: it
+# opens the attempt the reset started, so the only honest number is zero.
+
+def test_a_spawn_at_a_counter_reset_reads_zero_not_the_run_that_just_ended():
+    c = IgtClock()
+    walk(c, range(1000, 1030), curr_level=8, igt_overall=500)
+    arrival = snap(1031, igt_overall=0, curr_level=8)
+    c.observe(arrival)
+    assert c.igt_at(1031, arrival)[1] == "reconstructed", (
+        "the fixture no longer reproduces the reported shape")
+    assert c.igt_at_spawn(1031, arrival) == (0, "spawn")
+
+
+def test_a_spawn_whose_counter_has_already_zeroed_reads_a_literal_zero():
+    """Not one DISPLAY_TICK. The tick compensates the counter path -- Usamune's
+    display leads the counter by a frame -- and a spawn is not a reading of the
+    counter at all, it is the origin the counter is about to measure from."""
+    c = IgtClock()
+    walk(c, range(1000, 1005), curr_level=8, igt_overall=0)
+    arrival = snap(1006, igt_overall=0, curr_level=8)
+    c.observe(arrival)
+    assert c.igt_at_spawn(1006, arrival) == (0, "spawn")
+
+
+def test_a_spawn_ACTION_in_the_middle_of_a_run_states_the_real_counter():
+    """The guard that stops a stated zero from meaning "we could not read it".
+    A cannon exit and a savestate loaded mid-run both enter a spawn action with
+    the counter running, and `spawn.py` says those are harmless -- they are
+    only harmless while they keep telling the truth about the clock."""
+    c = IgtClock()
+    walk(c, range(1000, 1030), curr_level=8, igt_overall=900)
+    mid_run = snap(1031, igt_overall=901, curr_level=8)
+    c.observe(mid_run)
+    assert c.igt_at_spawn(1031, mid_run) == (902, "counter")

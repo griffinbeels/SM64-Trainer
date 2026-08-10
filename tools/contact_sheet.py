@@ -42,7 +42,8 @@ if _MISSING:
 
 from uilab import sheet                               # noqa: E402
 from uilab.sweep import derived_matrix                # noqa: E402
-from uilab_project import PROJECT, STORIES            # noqa: E402
+from uilab_project import (PROJECT, STORIES,          # noqa: E402
+                           SUBSECTION_PROJECT, SUBSECTION_STORIES)
 
 # Wide, the two stacked layouts, and the supported floor. Not the full matrix:
 # a sheet of 30 tiles is one nobody reads, and these are the four places this
@@ -64,25 +65,53 @@ def main(argv: list[str]) -> int:
             names = ", ".join(s.name for s in STORIES)
             raise SystemExit(f"no story named {story_name!r} -- have: {names}") from None
 
-    floor = PROJECT.min_viewport_width
+    # The RECORDER, which is a modal and so is unreachable from a plain page
+    # load -- `--recorder` opens it empty (the arrival state), `--recording`
+    # with two moments picked (the review), `--waypoints` with three (a stop
+    # the person named rather than one the walk derived).
+    for flag, name in (("--recorder", "recorder-open"),
+                       ("--recording", "recorder-review"),
+                       ("--waypoints", "recorder-waypoints")):
+        if flag in argv:
+            story = next(s for s in STORIES if s.name == name)
+            selector = selector or ".modal"
+
+    # A star wearing its pieces as badges needs a fixture with a `parent` in
+    # it -- no shipped definition has one, so the default project literally
+    # cannot draw this surface. `--folded` shoots the same fixture with one
+    # badge switched OFF (the name predates round 22's redesign and is kept so
+    # the flag in CLAUDE.md keeps working).
+    project = PROJECT
+    if "--nested" in argv:
+        project = SUBSECTION_PROJECT
+        story = next(s for s in SUBSECTION_STORIES if s.name == "page")
+        selector = selector or ".log-card"
+    if "--subsections" in argv or "--folded" in argv:
+        project = SUBSECTION_PROJECT
+        wanted = ("selector-piece-off" if "--folded" in argv
+                  else "selector-pieces-on")
+        story = next(s for s in SUBSECTION_STORIES if s.name == wanted)
+        selector = selector or ".stagebanner"
+
+    floor = project.min_viewport_width
     assert min(WIDTHS) >= floor, (
         f"this sheet shoots {min(WIDTHS)}px, below the supported floor {floor}")
 
     out = Path(tempfile.gettempdir()) / "uilab" / (
         f"sheet-{(selector or 'page').strip('.#') }"
-        f"{'-collapsed' if story else ''}.png")
-    path = sheet.write(out, PROJECT, WIDTHS, selector=selector, story=story)
+        f"{'-' + story.name if story else ''}.png")
+    path = sheet.write(out, project, WIDTHS, selector=selector, story=story)
     print(f"{path}")
     print(f"  widths {', '.join(f'{w}px' for w in WIDTHS)}"
           f"   (supported floor {floor}px)")
     # Say what the matrix is NOT looking at, every time. A narrowed range that
     # reports "0 defects" reads exactly like a complete one.
     from uilab.sweep import dropped_viewports
-    dropped = sorted({view.width for view in dropped_viewports(PROJECT)})
+    dropped = sorted({view.width for view in dropped_viewports(project)})
     if dropped:
         print(f"  below the floor and no longer measured at all: "
               f"{', '.join(str(w) for w in dropped)}")
-    print(f"  matrix now spans {len(derived_matrix(PROJECT))} viewports")
+    print(f"  matrix now spans {len(derived_matrix(project))} viewports")
     return 0
 
 

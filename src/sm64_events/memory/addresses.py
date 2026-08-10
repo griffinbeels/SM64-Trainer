@@ -31,6 +31,19 @@ MARIO_PARTICLE_FLAGS = MARIO_STRUCT + 0x08  # u32 particleFlags, re-zeroed every
 MARIO_ACTION = MARIO_STRUCT + 0x0C        # u32; live-verified 2026-06-10
 MARIO_ACTION_TIMER = MARIO_STRUCT + 0x1A  # u16, resets to 0 on action change
 MARIO_NUM_STARS = MARIO_STRUCT + 0xAA     # s16, total star count; live-verified 2026-06-10
+# The pointers that say WHICH object Mario is engaged with. Live-verified
+# 2026-08-05 and DISCOVERED rather than asserted: tools/probe_objects.py
+# scanned every word of the struct's first 0xC0 bytes for a value landing on an
+# object-pool SLOT BOUNDARY while he played, and exactly these three plus
+# marioObj (+0x88, Mario's own object, deliberately absent here) ever did.
+# Names are decomp's. riddenObj (+0x84) is NOT listed: nothing in that session
+# rode anything, so it stays unverified.
+MARIO_INTERACT_OBJ = MARIO_STRUCT + 0x78  # what he touched (stomp, painting)
+MARIO_HELD_OBJ = MARIO_STRUCT + 0x7C      # what he picked up (bob-omb, shell)
+MARIO_USED_OBJ = MARIO_STRUCT + 0x80      # what he operated (door, pole, tree)
+# Priority when several are set at once: what he HOLDS beats what he USES beats
+# what he merely touched, because the more deliberate act is the one he means.
+MARIO_OBJECT_POINTERS = (MARIO_HELD_OBJ, MARIO_USED_OBJ, MARIO_INTERACT_OBJ)
 
 # Bit in particleFlags (the visible dust puffs) — corroborates the dust-
 # trick detector's action-edge signal. Decomp (fetched 2026-06-11): slide
@@ -83,6 +96,96 @@ OBJECT_POOL = 0x8033D488     # first slot (STROOP US ObjectStartAddress)
 OBJECT_SIZE = 0x260
 OBJECT_COUNT = 240
 OBJECT_BEHAVIOR = 0x20C      # u32 behavior-script pointer within a slot
+# WHICH door / pole / enemy this is: the object's SPAWN point, live-verified
+# 2026-08-05 over one ordinary session (tools/probe_objects.py). Nothing else
+# in the 0x260-byte slot survived both tests. The POOL SLOT does not: his three
+# castle-basement doors held slots 3/2/0, then 38/42/44 after a death exit, then
+# 3/2/0 again -- same three doors, and the count is a property of the pool, not
+# of the door. Nor does the CURRENT position (+0xA0): across 21 grabs of one
+# SSL bob-omb it took 14 values while this one took exactly 1. Two proofs, one
+# offset: 13 of 13 door captures keyed by (level, area, behaviour, home) matched
+# his own labels for HMC / moat / DDD across the reload.
+OBJECT_HOME_POS = 0x164      # Vec3f oHome (spawn x/y/z) within a slot
+# Current position (+0xA0, Vec3f oPos). NOT an identity in general -- the
+# bob-omb measurement above is exactly about that -- but for a STATIC object
+# the game creates scriptless (a pole, a tree: oHome never written, reads
+# 0,0,0) the live position IS the authored placement and never moves. Measured
+# 2026-08-07 from the stored 2026-08-05 probe captures: the WF tree, 6 grabs
+# across TWO area reloads, position (2560, 256, 4608) byte-identical every
+# time -- clean power-of-2 designer coordinates. core/landmark.py owns which
+# kinds may key on it.
+OBJECT_POS = 0xA0            # Vec3f oPos (current x/y/z) within a slot
+
+# WHAT MARIO JUST DID TO THIS OBJECT — the game's own record of the
+# association, and Griffin's framing is what makes these the right read
+# (2026-08-07): *"the switch press is the switch's, but that switch press
+# never occurs without mario. by association, it's therefore mario's action…
+# Defeating an enemy is a result of MARIO defeating the enemy."* An object
+# does not have to reach Mario's engagement pointers to know he acted on it;
+# `oInteractStatus` is where the engine writes it down.
+#
+# Offsets are the decomp's own (`include/object_fields.h`, fetched
+# 2026-08-07) and the header states each one in a comment. VALIDATED against
+# this project's two independently-measured offsets in the same table:
+# `oPosX` reads 0x0A0 and `oHomeX` reads 0x164, which is exactly what
+# OBJECT_POS and OBJECT_HOME_POS above were measured to be. Two hits means
+# the field table lines up with the layout we actually read.
+# ANSWERED 2026-08-07 (his `--pool` run, 1,386 changes): `oAction` is THE
+# legible field — a switch presses 0 -> 1, an enemy dies into a death action.
+# `oInteractStatus` is DEAD to a poll (8 non-zero reads in 1,386; the engine
+# clears it within the frame — do not build on it). And `oHealth` is NOT a
+# defeat signal: the hitbox struct inits `health: 0` (decomp bobomb.inc.c),
+# written when the object's logic first runs with Mario in range, so a health
+# transition means PROXIMITY — six far-apart bob-ombs "died" inside 50 frames
+# of his capture while Mario flew past them, and the ledger's "goomba
+# 2048 -> 0" defeats were pool initialisation at a level load.
+OBJECT_INTERACT_TYPE = 0x130   # u32 oInteractType: what it offers Mario
+OBJECT_INTERACT_STATUS = 0x134 # s32 oInteractStatus: cleared within the frame
+OBJECT_ACTION = 0x14C          # s32 oAction: its own state machine — THE read
+OBJECT_HEALTH = 0x184          # s32 oHealth: hitbox arming, NOT defeats
+
+# WHAT THE PLAYER CAUSED — the behaviours a caused moment may fire on, and
+# the rule that reads each one (detectors/caused.py owns the rules; the kind
+# must also be a MOMENTS row so every label/vocab surface can say it).
+# Griffin's framing is the design (2026-08-07): *"the switch press is the
+# switch's, but that switch press never occurs without mario. by association,
+# it's therefore mario's action."*
+#
+# ADDING A BEHAVIOUR IS ONE ROW HERE — with a capture first. Every shipped
+# row is measured from `data/object_pool_probe.jsonl` (his 2026-08-07 run),
+# never reasoned from the decomp alone: the switch was reasoned about twice
+# and measured once, and only the measurement was right (round 10). Next
+# candidates (cap/purple switches, bosses) each want one `--pool` capture.
+#
+# The POINTERS restate `tools/corpus_behaviors.py`'s derivation (segment base
+# + STROOP offset). src cannot import tools/ — the frozen exe does not carry
+# it — so the copy is COMPARED instead of shared:
+# tests/test_caused.py::test_the_pointer_table_matches_the_shipped_catalogue.
+#   symbol -> (US RAM behaviour pointer, moment kind, legibility rule)
+CAUSED_BEHAVIOURS = {
+    # BLUE_COIN_SWITCH_ACT: IDLE 0 -> RECEDING 1 on the press (-> TICKING 2
+    # as it stays down). 3 presses in his capture, all 0 -> 1 at one stable
+    # coordinate — his ruling: "We need to support blue coin switch presses
+    # for sure".
+    "bhvBlueCoinSwitch": (0x800ED6E8, "switch_press", "press"),
+    # Dies into the engine's SHARED attacked actions (100/101/102); its own
+    # walk/aggro/jump cycle is 0/1/2. 4 squishes (-> 102) in his capture.
+    "bhvGoomba": (0x800EF8AC, "enemy_defeated", "attacked"),
+    # Dies into ITS OWN explode state (BOBOMB_ACT_EXPLODE): chase -> 3 and
+    # thrown -> 3 both measured. The fuse detonation counts too — a bob-omb
+    # only fuses while chasing, which the player caused by aggroing it.
+    "bhvBobomb": (0x800EE2F4, "enemy_defeated", "explode"),
+}
+CAUSED_POINTERS = frozenset(row[0] for row in CAUSED_BEHAVIOURS.values())
+
+# Generic object death actions — decomp include/object_constants.h, fetched
+# 2026-08-07. NOTE the deliberate collision in the decomp itself:
+# OBJ_ACT_LAVA_DEATH is ALSO 100 and OBJ_ACT_DEATH_PLANE_DEATH is ALSO 101,
+# so an enemy walking into lava unaided reads as "attacked". No shipped
+# course pairs a watched enemy with lava close enough to matter; if a phantom
+# defeat is ever reported in LLL or BBH, this collision is the first suspect.
+OBJECT_ATTACKED_ACTIONS = frozenset({100, 101, 102})
+BOBOMB_ACT_EXPLODE = 3         # decomp object_constants.h, same fetch
 
 # Mario actions entered the moment a star (or key) is grabbed — decomp sm64.h.
 ACT_STAR_DANCE_EXIT = 0x00001302               # live-verified 2026-06-10
@@ -384,7 +487,40 @@ ACT_DISAPPEARED = 0x00001300       # generic "Mario left the world" (pipes, some
 # then KEEPS reading 0x1337 for well over a hundred frames, which is why
 # detectors/anchors.py keys on fade-out RECENCY rather than on the action.
 ACT_TELEPORT_FADE_OUT = 0x00001336  # teleporter/cap-warp fade; also fires for in-level teleporters elsewhere
-WARP_ENTRY_ACTIONS = frozenset({ACT_DISAPPEARED, ACT_TELEPORT_FADE_OUT})
+# THE BIG BOO'S HAUNT CAGE — the one course entrance that fires neither of
+# the two actions above (his probe run, 2026-08-07: five entrances produced
+# clean touches, BBH produced nothing). The cage plays its own animation, and
+# WHICH action opens it depends on how Mario arrives — decomp
+# `interaction.c::interact_bbh_entrance`, fetched verbatim 2026-08-07:
+# `m->action & ACT_FLAG_AIR` → ENTER_SPIN directly, else ENTER_JUMP (which
+# then transitions into the spin). So the commit moment is the FIRST of the
+# pair to occur, which is what the edge INTO this set expresses with both
+# members present: a ground entry fires at the jump (jump → spin is in-set,
+# no second touch), an airborne entry fires at the spin. Level byte follows
+# the jump by +74/75 (both probe entries) — a painting's ~77 almost exactly.
+# Both values verified against decomp include/sm64.h, same fetch returning
+# ACT_IN_CANNON, ACT_DISAPPEARED and ACT_TELEPORT_FADE_OUT byte-identical.
+#
+# THE SPIN'S FIRST DAY OUT OF THE SET COST A LIVE ROUND (round 12). The
+# probe's two entries were both GROUND entries, so the jump looked like "the
+# commit moment" rather than "the ground half of a fork" — and his first
+# real entry was a ROLLOUT, airborne, so no jump edge ever occurred and the
+# entry recorded nothing: journal id 3708's arrival anchor latched action
+# 0x1535 with no warp row anywhere before the 26→4 edge. One live entry
+# falsified what two probe entries had agreed on. (The old exclusion
+# reasoning — a leaving-window 0x1535 sighting explained as the entry's own
+# probe tail — was correct as far as it went; it answered "is the spin an
+# exit signal", which was never the right question.)
+ACT_BBH_ENTER_JUMP = 0x00001934
+ACT_BBH_ENTER_SPIN = 0x00001535
+# The pair exists ONLY for the boo cage (decomp interact_bbh_entrance), so
+# the ACTION names the destination — no address read can, since the cage
+# writes no sWarpDest before the edge. warp.py publishes `to = BBH_LEVEL`
+# the moment the SPIN is observed (round 13 item 1).
+BBH_LEVEL = 4
+BBH_ENTER_ACTIONS = frozenset({ACT_BBH_ENTER_JUMP, ACT_BBH_ENTER_SPIN})
+WARP_ENTRY_ACTIONS = frozenset({ACT_DISAPPEARED, ACT_TELEPORT_FADE_OUT,
+                                ACT_BBH_ENTER_JUMP, ACT_BBH_ENTER_SPIN})
 
 # Spawn actions — same decomp fetch. Live-verified 2026-06-12:
 # - FRESH file start: ACT_INTRO_CUTSCENE plays through Lakitu's dialogue;
@@ -427,6 +563,58 @@ ACT_WAITING_FOR_DIALOG = 0x0000130A        # dialog about to begin
 DIALOG_ACTIONS = frozenset({ACT_READING_AUTOMATIC_DIALOG,
                             ACT_READING_NPC_DIALOG, ACT_WAITING_FOR_DIALOG})
 
+# Pole / tree grabs — decomp include/sm64.h. A TREE IS A POLE to the engine:
+# both use the same climbing action group, which is why one moment kind covers
+# the BoB tree, the WF pole and every LLL cage pole. His report, 2026-08-06:
+# *"We don't detect poles / trees when I would expect this to be there"*,
+# with a screenshot of Mario hugging the BoB tree and an empty recorder.
+# Only the two GRAB actions are the moment — the climb, the top transition and
+# the top itself all follow from one successful grab, and entering any of them
+# is not a separate practice boundary.
+# VERIFY (live gate): mario_action reads 0x00100341 grabbing a pole/tree slowly
+# and 0x00100342 grabbing one at speed.
+ACT_GRAB_POLE_SLOW = 0x00100341
+ACT_GRAB_POLE_FAST = 0x00100342
+POLE_GRAB_ACTIONS = frozenset({ACT_GRAB_POLE_SLOW, ACT_GRAB_POLE_FAST})
+
+# Picking something up — decomp include/sm64.h, quoted verbatim from
+# n64decomp/sm64 master, fetched 2026-08-06. His report, same day: *"When I
+# grab a bob-omb in a level, I want to be able to detect WHEN i grabbed them.
+# The frame I managed to successfully grab them."* ACT_PICKING_UP is exactly
+# that frame: the game sets it when the grab SUCCEEDS, so the entry edge is
+# the moment and no holding action needs to be watched.
+#
+# THE DIVE PICKUP IS ITS OWN ID, and it is the one a runner mostly uses —
+# diving onto a bob-omb grabs it in one motion, and the game enters 0x385
+# rather than 0x383 for it. This set shipped for a few hours calling 0x385
+# "Bowser's tail", from memory; the decomp says otherwise, and Bowser's tail
+# is 0x390 — also here, deliberately, because the first tail grab is exactly
+# the practiced boundary of every ranked Bowser fight. One kind covers all
+# three: which thing was grabbed is the LANDMARK's job, not the action's.
+# VERIFY (live gate): mario_action reads 0x00000383 walking into a bob-omb,
+# 0x00000385 dive-grabbing one, 0x00000390 grabbing Bowser's tail.
+ACT_PICKING_UP = 0x00000383
+ACT_DIVE_PICKING_UP = 0x00000385
+ACT_PICKING_UP_BOWSER = 0x00000390
+PICKUP_ACTIONS = frozenset({ACT_PICKING_UP, ACT_DIVE_PICKING_UP,
+                            ACT_PICKING_UP_BOWSER})
+
+# Climbing INTO a cannon — decomp include/sm64.h, fetched 2026-08-07 (the two
+# pole constants above came back byte-identical from the same file, which is
+# how this version was checked). His ask, round 9 item 6: *"We also need to
+# detect when the user enters a cannon"*, then *"(cannon entry xcam)"* naming
+# the timing reference.
+#
+# ENTRY ONLY, and the entry edge is the whole point: ACT_IN_CANNON is the
+# frame the game commits Mario to the in-cannon view, which is the camera cut
+# he calls the cannon-entry x-cam. Firing is a different moment
+# (ACT_SHOT_FROM_CANNON 0x00880898) and is deliberately NOT here — one kind,
+# one boundary, and the launch already has `spawned`-shaped consequences a
+# route can key on.
+# VERIFY (live gate): mario_action reads 0x00001371 while aiming in a cannon.
+ACT_IN_CANNON = 0x00001371
+CANNON_ACTIONS = frozenset({ACT_IN_CANNON})
+
 # gCurrAreaIndex (s16) — castle lobby/upstairs/basement are AREAS of level 6,
 # not levels. Live-verified 2026-06-12 via tools/hunt_exact.py snapshot diff:
 # reads 1 in the lobby, 2 upstairs, 3 in the basement, stable across repeated
@@ -434,6 +622,63 @@ DIALOG_ACTIONS = frozenset({ACT_READING_AUTOMATIC_DIALOG,
 # the area.c globals cluster two halfwords above gCurrCourseNum (0x8033BAC6).
 CURR_AREA = 0x8033BACA               # s16 gCurrAreaIndex
 CASTLE_AREA_NAMES = {1: "Lobby", 2: "Upstairs", 3: "Basement"}  # live-verified 2026-06-12 (same hunt)
+
+# COURSE subarea names, keyed (level, gCurrAreaIndex) — what a "Spawned into
+# Lethal Lava Land: Volcano" row calls the place (round 20 item 3). Courses
+# spawn in area 1 (counter_epoch.COURSE_START_AREA), so only the areas a warp
+# goes DEEPER into are named. CONFIDENT rows only, from decomp level layouts;
+# an unnamed (level, area) renders "Area N" rather than a guessed name — a
+# confident wrong name reads as finished work (his standing canonical-form
+# rule). VERIFY (live): each name is confirmed the first time he spawns there
+# and the row reads right; SSL 2/3 and LLL 2 are the ones his sessions reach.
+COURSE_SUBAREA_NAMES = {
+    (8, 2): "Pyramid",              # SSL: inside the ancient pyramid
+    (8, 3): "Eyerok's Chamber",     # SSL: the boss room under the pyramid
+    (22, 2): "Volcano",             # LLL: inside the volcano
+    (5, 2): "Slide",                # CCM: the cabin slide
+    (11, 2): "Downtown",            # WDW: the sunken town
+    (23, 2): "Submarine Bay",       # DDD: the second chamber, with the sub
+    (12, 2): "Inside the Ship",     # JRB: the sunken ship interior
+}
+
+
+# Which STARS a course subarea hosts, keyed (level, gCurrAreaIndex) — the
+# selector's "I'm inside the volcano, so I can only do stars inside there"
+# filter (round 21 item 5). MEASURED FIRST, authored second: walking every
+# journal and reading the settled area at each star grab (2026-08-08) proves
+# LLL 22:2 = stars 4+5 (his 41 volcano grabs, nothing else ever grabbed
+# there), SSL 8:2 = star 2 (58 grabs), CCM 5:2 = the slide (his 6 hundred-
+# coin grabs INSIDE it — which is also why star 6 rides every row: the
+# 100-coin star completes wherever you cross 100). Stars beyond his play
+# come from the community's level layouts, and a subarea whose FULL set is
+# not confidently known gets NO row at all — an absent row shows every star
+# (never hide wrongly, his dead-control rule), which is why DDD/THI/TTM/JRB
+# subareas are deliberately missing.
+COURSE_SUBAREA_STARS = {
+    (22, 2): (4, 5, 6),      # LLL volcano: Hot-Foot-It, Elevator Tour (both measured)
+    (8, 2): (2, 3, 5, 6),    # SSL pyramid: Inside the Pyramid (measured),
+                             # Stand Tall (Eyerok, entered through here),
+                             # Pyramid Puzzle
+    (8, 3): (3, 6),          # SSL Eyerok's chamber
+    (5, 2): (2, 6),          # CCM slide: Big Penguin Race (100c measured here)
+    (11, 2): (4, 5, 6),      # WDW downtown: reds + Quick Race
+}
+
+
+def subarea_name(level: int | None, area: int | None) -> str | None:
+    """The display name a SUBAREA spawn carries, or None when the place is
+    just the level itself — area 1 (every course's start), an unknown, or a
+    level with no distinct subareas. The castle interior answers through
+    CASTLE_AREA_NAMES (where even area 1, the Lobby, is a named place);
+    everything else through COURSE_SUBAREA_NAMES with an honest "Area N"
+    fallback for a subarea no table names yet."""
+    if level is None or area is None:
+        return None
+    if level == LEVEL_CASTLE_INSIDE:
+        return CASTLE_AREA_NAMES.get(area, f"Area {area}")
+    if area <= 1:
+        return None
+    return COURSE_SUBAREA_NAMES.get((level, area), f"Area {area}")
 
 # The castle-region levels the segment builder's "enter area" condition offers
 # (tracking/segments.py): the interior (6, whose CASTLE_AREA_NAMES subareas
@@ -669,6 +914,21 @@ CASTLE_REGION_NODES = (
 # then puts each course above its own arena (17 < 30, 19 < 33, 21 < 34).
 BOWSER_STAGE_LEVELS = frozenset({17, 19, 21, BOWSER_1_ARENA,
                                  BOWSER_2_ARENA, BOWSER_3_ARENA})
+
+# WHAT THE PLAYER CALLS THE THING HE JUST TOUCHED. One event covers all of
+# them (`warp_entered`), and calling every one a pipe made the row he needed
+# unrecognisable -- live report 2026-08-05, reading his own BOB warp back:
+# *"it's a warp not a pipe, but maybe they're the same thing internally -- in
+# bowser levels it's a pipe, in every other level it's a warp"*. Exactly his
+# rule, and exactly these three courses: the thing that ends a Bowser stage is
+# a pipe, and every other in-level teleporter in the game is a warp. The
+# ARENAS are not here -- a fight ends on a key, never on a warp.
+PIPE_LEVELS = frozenset({LEVEL_BITDW, LEVEL_BITFS, LEVEL_BITS})
+
+
+def warp_word(level: int | None) -> str:
+    """"pipe" or "warp", for the level Mario is standing in."""
+    return "pipe" if level in PIPE_LEVELS else "warp"
 
 # Where a course-0 (castle secret) star is GRABBED, for segments that start on
 # one. MIPS runs in the basement, both catches. The Toad stars are DELIBERATELY

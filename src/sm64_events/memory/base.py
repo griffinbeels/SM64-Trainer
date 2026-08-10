@@ -46,3 +46,15 @@ class RdramReader:
     def read_s16(self, addr: int) -> int:
         v = self.read_u16(addr)
         return v - 0x10000 if v >= 0x8000 else v
+
+    def read_block(self, addr: int, size: int) -> bytes:
+        """`size` bytes from `addr`, in N64 (big-endian) order — ONE host read.
+
+        For dumping a whole struct whose layout is not yet known: decode any
+        field out of the result with byte order "big". Word-aligned only,
+        because the swap that undoes PJ64's storage is per 32-bit word.
+        """
+        if addr % 4 or size % 4:
+            raise ValueError(f"read_block needs word alignment: {addr:#x}+{size:#x}")
+        raw = self._read_raw(addr - KSEG0_BASE, size)
+        return b"".join(raw[at:at + 4][::-1] for at in range(0, size, 4))
