@@ -354,20 +354,6 @@ def test_a_piece_of_a_segment_is_a_badge_on_that_segment_and_not_a_cell():
 # otherwise leave the movement with no section to nest the star inside.
 
 
-@pytest.mark.xfail(
-    strict=True, reason=(
-        "practicelog.js::applyRedsPipeExclusivity (deleted per design spec "
-        "2026-08-10-reds-as-subsection item 5, bundled with the toggle "
-        "removal, Tasks 2-4) runs BEFORE nestSubsections and, whenever both "
-        "halves of a reds/pipe pair have a section, drops exactly one of "
-        "them -- with the default 'pipe' mode it drops the STAR every time, "
-        "so it strips the star out before nesting ever sees it. This task's "
-        "own file scope forbids editing practicelog.js. Proven independent "
-        "of this task's own fix: reverting the ambient-arm exemption below "
-        "changes the failure message (top card missing); reverting the "
-        "`parents` stamp does NOT (same 'not nested' failure either way) --"
-        "the exclusivity rule swamps the signal regardless. Flip this to a "
-        "real assertion the moment applyRedsPipeExclusivity is retired."))
 def test_the_reds_star_draws_inside_its_movement_s_card():
     """Griffin, 2026-08-10: "the Reds card should contain the star subsection
     inside of it, and if we do the star subsection, it'll show it inside and

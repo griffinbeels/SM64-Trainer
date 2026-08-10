@@ -104,14 +104,15 @@ def test_the_auto_open_slot_is_resolved_against_the_rendered_list():
         "pre-resolved key")
     assert "topKey" not in practice.replace("topKey:", ""), (
         "the page must not resolve the auto-open slot -- only PracticeLog "
-        "knows which cards survive membership and Reds/Pipe exclusivity")
+        "knows which cards survive membership and where nesting puts them")
 
     log = strip_comments((UI / "components" / "practicelog.js")
                          .read_text(encoding="utf-8"))
-    assert re.search(r"const topKey = autoOpenKey\(sections, activeKey, "
+    assert re.search(r"const topKey = autoOpenKey\(openCandidates, activeKey, "
                      r"playedKeys\)", log), (
-        "PracticeLog must resolve the slot from `sections` -- its own rendered "
-        "list -- and nothing else")
+        "PracticeLog must resolve the slot from its OWN rendered candidates "
+        "-- every card it actually draws, top-level and nested alike -- and "
+        "nothing handed down pre-resolved")
 
 
 def _tops(page):

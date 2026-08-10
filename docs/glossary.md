@@ -780,9 +780,10 @@ stand where you set it), each carrying its own [[personal best]], its
 [[caveat mark]] and its own [[attempt]]s. A [[subsection]] draws inside its
 parent's card rather than beside it, indented and folding with it, so the
 piece you just ran names the [[star]] it belongs to. It highlights the card
-for whatever you are practicing right now, and a Bowser course's Reds/Pipe
-pair never shows both halves at once — only the one matching how you are
-currently grading it.
+for whatever you are practicing right now. A Bowser course's Reds/Pipe pair is
+the worked example: the reds [[star]] is a [[subsection]] of its paired
+pipe-entry [[segment]], so grabbing it draws its own card nested inside the
+movement's rather than beside it — never a toggle hiding either half.
 
 - **Lives** — the log
   (`src/sm64_events/ui/components/practicelog.js`)
