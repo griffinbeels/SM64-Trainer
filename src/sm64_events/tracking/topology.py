@@ -42,6 +42,71 @@ def node_for(level: int | None, area: int | None) -> str | None:
     return node_key(level, area if level == LEVEL_CASTLE_INSIDE else None)
 
 
+def graph_node(node_key_string: str | None) -> str | None:
+    """A node key from ANY source, re-expressed in the graph's own vocabulary.
+
+    `segments.start_origin` builds its keys straight out of a clause's params,
+    so an `area_enter(level=21, area=1)` resolves to `"21:1"` -- a subarea key
+    for a level the world graph models as ONE place. `node_for` is the graph's
+    rule (subareas only inside the castle interior) and every key that reaches
+    `hops`/`between` has to have been through it, or a perfectly real node
+    silently answers None and the caller reads that as "no constraint".
+
+    Measured cost of not doing this: the arena retirement rule's first version
+    compared a def's `"33:1"` against a stage's `"33"` and retired the arena's
+    OWN fight -- the one thing it must never do (2026-08-10).
+    """
+    if not node_key_string:
+        return None
+    level, _, area = node_key_string.partition(":")
+    if not level.lstrip("-").isdigit():
+        return None
+    return node_for(int(level), int(area) if area else None)
+
+
+@lru_cache(maxsize=1)
+def graph_nodes() -> frozenset:
+    """Every node the world graph knows -- sources and destinations alike.
+
+    A destination-only node (a Bowser arena is entered and never linked out of
+    by anything else) is still a place the player can stand, so both sides of
+    every edge count.
+    """
+    successors = _successors()
+    nodes = set(successors)
+    for destinations in successors.values():
+        for level, area in destinations:
+            nodes.add(node_key(level, area))
+    return frozenset(nodes)
+
+
+@lru_cache(maxsize=4096)
+def between(from_key: str | None, to_key: str | None) -> frozenset:
+    """Every node lying on SOME shortest walk from one node to another,
+    both ends included -- "is this place on the way?".
+
+    A node is on the way when going through it costs nothing:
+    `hops(from, node) + hops(node, to) == hops(from, to)`. SOME rather than
+    THE, because the castle offers more than one shortest route to several
+    places and a player picking either is not making a detour -- the same
+    reason rule 2 in `_flush_move` fires on a strict hop INCREASE and treats
+    equal as sideways.
+
+    An empty result means "no answer", never "nowhere": either end unknown, or
+    no directed path at all. Callers read that as the unconstrained case, the
+    convention `hops` and `segments.step_node` already take.
+    """
+    span = hops(from_key, to_key)
+    if span is None:
+        return frozenset()
+    on_the_way = {from_key, to_key}
+    for node in graph_nodes():
+        lead, rest = hops(from_key, node), hops(node, to_key)
+        if lead is not None and rest is not None and lead + rest == span:
+            on_the_way.add(node)
+    return frozenset(on_the_way)
+
+
 @lru_cache(maxsize=1)
 def _successors() -> dict:
     """`world_connections()` rebuilds its map from module constants on every

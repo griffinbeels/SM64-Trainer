@@ -22,6 +22,7 @@ import { displayName, entityIdentity, entityKey, entityNoun, isSegment,
          sectionClock, sectionPb, standardsIdentity } from "../entitysection.js";
 import { entityIconSrc, fallbackToGenericStar, fallbackSlotForEntityKey }
   from "./entityicons.js";
+import { practicedHere } from "../stagecontext.js";
 import { RankBanner } from "./ranks.js";
 import { Icon } from "./icons.js";
 import { ShrinkToFitName } from "./shrinkname.js";
@@ -108,35 +109,46 @@ export function orderedSections(view, activeKey = null) {
  * this very card (`active`, below) -- reused via `activeKey`, not
  * reinvented.
  *
- * Three ways in, checked in order:
+ * TWO ways in since 2026-08-10, and dropping the third is his ruling:
+ * *"nothing should appear in the practice log until I successfully have an
+ * attempt, OR it was explicitly selected (or autodetected as the only
+ * option) -- these are all empty, which means they shouldn't appear yet."*
+ * His screenshot is six `Bowser 1 -> X` cards in the Castle Lobby, every one
+ * of them empty, because leaving the arena is ONE `level_exit` and all six
+ * arm on it together.
+ *
  *   1. A real attempt landed in scope, ever -- unconditional. "A card that
  *      recorded even one attempt stays" (the log is a record of what he DID,
  *      not of what is merely selected).
- *   2. It is still ARMED (`armed_detail` non-null, star or segment) -- the
- *      standing "a RUNNING segment is never invisible" rule (2026-07-24),
- *      checked independently of `activeKey` on purpose: several defs can arm
- *      off one course entry with no single one of them "the" pick
- *      (practice.js's own `ambiguousPins`), and none of them may vanish
- *      merely because none is unambiguous.
- *   3. It is the entity `activeKey` names AND it has a real course of its
- *      own (`course_id != null`). The course_id guard is the one piece that
- *      is NOT a restatement of `activeKey` -- measured live (a synthetic
- *      TrackerService run, entering the Bowser 1 arena, auto-selecting its
- *      fight, then leaving to the lobby with nothing grabbed): the fight
- *      disarms correctly (the topological engine's own doing), but
- *      `practicedHere`'s course-less bucket treats EVERY course-less place
- *      (the castle, any hub, any OTHER arena) as "still here" for an
- *      arena-originated entity -- so `activeKey` kept naming it long after
- *      he had genuinely left the arena for the lobby, still with zero
- *      attempts. A course-BEARING entity (an ordinary star, most castle
- *      movements) has no such gap: `practicedHere` requires the player's
- *      OWN course to match exactly, so `activeKey` alone already means "he
- *      is standing right where this is practiced."
+ *   2. It is the entity `activeKey` names, and he is still standing
+ *      somewhere it can be practiced.
+ *
+ * **BEING ARMED IS NO LONGER ENOUGH**, and that retires his own 2026-07-24
+ * rule ("a RUNNING segment is never invisible") for THIS surface only. That
+ * rule was written when at most one thing armed at a time, so "the armed one"
+ * and "the one he means" were the same section; six arm off one arena exit
+ * now. `practice.js`'s `ambiguousPins` learned the identical lesson for the
+ * pinned card on 2026-08-02 -- *"two or more with an empty hand shows none,
+ * because picking between them asserts a selection he never made"* -- and
+ * never reached the log. A running movement he actually chose still shows,
+ * via clause 2; a lone option is auto-selected, which writes the target, so
+ * his "autodetected as the only option" needs no clause of its own.
+ *
+ * **The place test is `practicedHere`, not the `course_id != null` guard it
+ * replaced.** That guard was a stand-in for exactly one question -- has he
+ * walked away from a course-less entity (an arena fight, a hub trick) -- and
+ * it answered by refusing every course-less section, which was harmless only
+ * while the armed clause above was carrying them. Without that clause it
+ * would hide a castle movement he had DELIBERATELY picked, since every one of
+ * the 56 has `course_id: null`. `practicedHere` now answers the real question
+ * (2026-08-10, the [[segment reach]]): a fight's reach is its own arena, so
+ * leaving for the lobby drops the card, and a picked movement's reach covers
+ * the castle it walks through, so it keeps one.
  */
-export function hasEarnedACard(sec, activeKey) {
+export function hasEarnedACard(sec, activeKey, t) {
   if (sec.attempts && sec.attempts.length > 0) return true;
-  if (sec.armed_detail != null) return true;
-  return sec.course_id != null && activeKey != null && entityKey(sec) === activeKey;
+  if (activeKey == null || entityKey(sec) !== activeKey) return false;
+  return t ? practicedHere(sec, t) : sec.course_id != null;
 }
 
 /**
@@ -901,7 +913,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   // injected rather than pre-applied.
   const groups = nestSubsections(
     applyRedsPipeExclusivity(ordered, modeForCourse),
-    enforceMembership ? (sec) => hasEarnedACard(sec, activeKey) : () => true);
+    enforceMembership ? (sec) => hasEarnedACard(sec, activeKey, t) : () => true);
   const sections = groups.map((group) => group.sec);
   const childrenOf = new Map(
     groups.map((group) => [entityKey(group.sec), group.children]));

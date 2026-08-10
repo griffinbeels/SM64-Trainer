@@ -64,7 +64,8 @@ from sm64_events.tracking.segments import (arm_level, arms_ambiently,
                                             card_waiting_for_sentence,
                                             course_groups, hundred_coin_entity,
                                             origin_course,
-                                            origin_view, segment_origin,
+                                            origin_view, reachable_places,
+                                            segment_origin,
                                             start_areas, start_levels,
                                             start_origin, time_bounds)
 
@@ -1487,8 +1488,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         # pipe-pairing display names) rather than re-derived twice — a
         # deleted definition has no place, which reads as "anywhere" and
         # keeps its card, matching the projector.
-        seg_course_id = origin_course(segment_origin(
-            seg_id, d.start_triggers, origin_overrides)) if d else None
+        seg_origin_node = segment_origin(
+            seg_id, d.start_triggers, origin_overrides) if d else None
+        seg_course_id = origin_course(seg_origin_node)
         seg_sections.append({
             "kind": "segment", "segment_id": seg_id,
             "last_activity": last_id.get(("segment", seg_id), -1),
@@ -1504,6 +1506,24 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # course. A deleted definition has no place, which reads as
             # "anywhere" and keeps its card, matching the projector.
             "course_id": seg_course_id,
+            # Every world node this segment can be STARTED in or WALKS
+            # THROUGH (segments.reachable_places). The card compares it
+            # against `stage.node` to answer "does this still belong where
+            # he is standing" -- his rule, 2026-08-10: *"we shouldn't be
+            # displaying segments when the segments are fundamentally
+            # impossible to be practiced in a location (and such that the
+            # segment doesn't go through that location)."*
+            #
+            # A STATIC fact about the entity, never a server-computed "is it
+            # here" boolean: the card freezes `stage` during a celebration,
+            # and a boolean resolved here could not be frozen with it, so a
+            # rank-up running while he walked out would drop the very card it
+            # was celebrating. Sorted for a stable payload.
+            #
+            # An EMPTY list means "anywhere" -- a definition naming no place,
+            # or one that was deleted. The client falls back to the course
+            # comparison there, which is what it always did.
+            "places": sorted(reachable_places(d, seg_origin_node)) if d else [],
             "armed": seg_id in armed,
             # arms merely by the player being present (course/stage entry
             # or an attempt_anchor there), not by a deliberate action --
@@ -1714,6 +1734,13 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         "segment_targets": [
             {"segment_id": d.id, "name": d.name, "enabled": d.enabled,
              "start_areas": areas, "start_levels": levels,
+             # NO `places` here, deliberately, though `parents` sets the
+             # precedent for carrying a section's fact on this payload too:
+             # the selector's rows already filter on start_areas/start_levels
+             # -- where a definition STARTS -- which is strictly narrower than
+             # its reach, so the banner cannot show a movement somewhere it
+             # neither starts nor runs. A field with no caller is a capability
+             # that does not exist while looking exactly like one that does.
              # The entities this is a SUBSECTION of, [] for none (task 0087;
              # plural round 20). The SELECTOR reads this payload, not the
              # sections, so the field is needed in both places -- a

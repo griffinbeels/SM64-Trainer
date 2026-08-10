@@ -150,14 +150,22 @@ def test_the_already_leading_active_entity_is_a_no_op():
 
 def _has_earned_a_card_source() -> str:
     log_source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
-    return "\n".join([_entity_key_source_early(),
+    # The REAL `practicedHere`, imported rather than restated: the place half
+    # of this rule is that function, and a copy here would be a third answer
+    # to the question `.claude/rules/segment-topology.md` says has one.
+    stagecontext = (LOG_JS.parent.parent / "stagecontext.js").as_uri()
+    return "\n".join([f'import {{ practicedHere }} from "{stagecontext}";',
+                       _entity_key_source_early(),
                        _extract(log_source, "hasEarnedACard")])
 
 
-def earned(sec, active_key) -> bool:
+def earned(sec, active_key, t=None) -> bool:
+    """`t` omitted exercises the no-stage fallback (`course_id != null`);
+    passing one exercises the real place test."""
     script = (_has_earned_a_card_source() + "\n"
               f"console.log(JSON.stringify(hasEarnedACard("
-              f"{json.dumps(sec)}, {json.dumps(active_key)})));")
+              f"{json.dumps(sec)}, {json.dumps(active_key)}, "
+              f"{json.dumps(t)})));")
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True,
                             timeout=30)
@@ -194,13 +202,50 @@ def test_any_real_attempt_earns_a_card_unconditionally():
     assert earned(_sec(course_id=2, star_id=4, attempts=[{"id": 1}]), None) is True
 
 
-def test_a_still_armed_entity_earns_a_card_even_with_no_active_key():
-    """"A RUNNING segment is never invisible" (2026-07-24), independent of
-    `activeKey` on purpose: several defs can arm off one course entry with no
-    single one of them unambiguously "the" pick (practice.js's own
-    `ambiguousPins`), and none of them may vanish for lack of one."""
-    assert earned(_sec(kind="segment", segment_id=8, armed_detail={"progress": 0}),
-                  None) is True
+def test_being_armed_no_longer_earns_a_card_on_its_own():
+    """RETIRED 2026-08-10, and this test is the inverse of the one it
+    replaces rather than a deletion, because the old rule is his and would
+    otherwise look like an oversight to restore.
+
+    It was "a RUNNING segment is never invisible" (2026-07-24), written when
+    at most one thing armed at a time. Leaving the Bowser 1 arena is ONE
+    `level_exit` and all six `Bowser 1 -> X` movements arm on it, so his
+    Castle Lobby held six empty cards: *"nothing should appear in the practice
+    log until I successfully have an attempt, OR it was explicitly selected
+    (or autodetected as the only option) -- these are all empty, which means
+    they shouldn't appear yet."*
+
+    A movement he really is running still shows, through `activeKey` — a
+    deliberate pick, or the lone-option auto-select, both of which write the
+    target."""
+    armed = _sec(kind="segment", segment_id=8, armed_detail={"progress": 0})
+    assert earned(armed, None) is False
+    assert earned(armed, "segment:8") is True, "picked and running still shows"
+
+
+def test_a_picked_castle_movement_earns_a_card_though_it_has_no_course():
+    """The clause the retired armed rule was quietly carrying. Every one of
+    the 56 castle movements has `course_id: null`, so the old
+    `course_id != null` guard refused them all and only the armed clause kept
+    them on screen. With that clause gone the place test has to be the real
+    one — `practicedHere` against the movement's own reach."""
+    lobby = {"stage": {"course_id": None, "level": 6, "area": 1,
+                       "mode": "castle", "node": "6:1"}}
+    movement = {"kind": "segment", "segment_id": 8, "course_id": None,
+                "attempts": [], "armed_detail": None,
+                "places": ["30", "17", "6:1", "24"]}
+    assert earned(movement, "segment:8", lobby) is True
+
+
+def test_a_picked_arena_fight_loses_its_card_once_he_leaves_the_arena():
+    """The case the `course_id != null` guard existed for, now answered by
+    the reach instead of by refusing every course-less entity: a fight's
+    reach is its own arena, so the lobby is outside it."""
+    lobby = {"stage": {"course_id": None, "level": 6, "area": 1,
+                       "mode": "castle", "node": "6:1"}}
+    fight = {"kind": "segment", "segment_id": 9, "course_id": None,
+             "attempts": [], "armed_detail": None, "places": ["30"]}
+    assert earned(fight, "segment:9", lobby) is False
 
 
 def test_a_course_less_target_the_player_has_left_earns_nothing_even_though_activekey_still_names_it():

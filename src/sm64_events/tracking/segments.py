@@ -1279,6 +1279,65 @@ def path_nodes(d) -> tuple:
     return tuple(path)
 
 
+def reachable_places(d, origin: str | None) -> frozenset:
+    """Every world node this definition may legitimately be SHOWN in — where it
+    can be started, every place it declares as a step, and everywhere on the
+    way between them.
+
+    Griffin's rule, verbatim (2026-08-10): *"we shouldn't be displaying segments
+    when the segments are fundamentally impossible to be practiced in a location
+    (and such that the segment doesn't go through that location)."* Read as one
+    sentence it is an OR — show it where it can be run, or where it passes
+    through — and that is exactly this set.
+
+    It replaces a COURSE comparison that could not express the second half.
+    `origin_course` answers None for the castle interior, the hubs AND the
+    Bowser arenas alike, so "course-less" lumped a room every castle movement
+    walks through together with one no movement can reach: standing in the
+    Bowser 1 arena, every castle movement still had a card. The world graph
+    already knows the difference — the arena is on no shortest walk out of
+    anywhere — so nothing here is a new fact about the world, only a second
+    reader of the one `_flush_move` already judges moves against.
+
+    THE ORIGIN IS PART OF THE WALK, not a separate clause: a movement starts
+    where it starts and its steps run from there, so the lobby is on
+    `WF → Basement → SSL` without the corpus ever saying so. Both the chained
+    pairs AND origin→each-step are unioned, because a declared route may
+    deliberately be longer than the shortest one (a re-entry movement) and the
+    chain is what covers those hops.
+
+    AMBIGUOUS steps still count as places. `path_nodes` drops an any-of step
+    whose members disagree — right for a CURSOR, which cannot hold two
+    positions — but a place named by any alternative is somewhere the player
+    may legitimately be, and dropping it here would hide a card. Hence
+    `declared_nodes` as well.
+
+    An EMPTY result means "anywhere", the unknown-means-yes convention this
+    module takes everywhere. NO ORIGIN is exactly that case and it is the
+    whole of it: a `reset_game` start can be satisfied wherever the player is
+    standing, so nothing about such a definition may be hidden — its END
+    triggers say where the route GOES, never where it may begin, and reading
+    them as a constraint retired a placeless target the moment he walked into
+    any course (caught by
+    `tests/test_practicable.py::test_a_placeless_segment_target_is_never_retired`,
+    which is older than this function and was right).
+    """
+    here = topology.graph_node(origin)
+    if here is None:
+        return frozenset()
+    walk = [node for node in (here, *(topology.graph_node(step)
+                                      for step in path_nodes(d)))
+            if node is not None]
+    named = {topology.graph_node(node) for node in declared_nodes(d)}
+    named.discard(None)
+    places = set(walk) | named
+    for lead, rest in zip(walk, walk[1:]):
+        places |= topology.between(lead, rest)
+    for node in walk[1:]:
+        places |= topology.between(walk[0], node)
+    return frozenset(places)
+
+
 def start_areas(start_triggers: list) -> list:
     """[[level, area], …] — the castle SUBAREAS a segment explicitly starts in.
 

@@ -14,6 +14,72 @@ Lifted verbatim out of `.claude/rules/tracking-storage.md` on 2026-08-08 when
 that file hit its size ceiling; the map row that points here lives in its
 table (`tracking/segments.py`).
 
+## Segment reach — where a movement may be SHOWN
+
+**2026-08-10.** `segments.reachable_places(d, origin)` + `topology.between` /
+`graph_node` / `graph_nodes`. A THIRD reader of the same world table, after the
+builder's dropdown filtering and `_flush_move`'s cancels, and the question it
+answers is a display one: *"we shouldn't be displaying segments when the
+segments are fundamentally impossible to be practiced in a location (and such
+that the segment doesn't go through that location)."*
+
+The set is the origin, every node the definition names as a step, and every
+node on a shortest walk between them — `hops(a,n) + hops(n,b) == hops(a,b)`.
+**The origin is part of the walk**, which is what supplies the transit places
+the corpus never names: `WF → SSL` declares the basement and SSL, and the
+LOBBY falls out of the fill. **No origin means ANYWHERE** (a `reset_game`
+start is satisfiable where he stands); end triggers say where a route GOES and
+constrain nothing about where it may begin — reading them as a constraint
+retired a placeless target on every course entry, which
+`tests/test_practicable.py::test_a_placeless_segment_target_is_never_retired`
+had already forbidden.
+
+**`graph_node` is not decoration.** `start_origin` builds keys from clause
+params, so `area_enter(21,1)` gives `"21:1"` — a subarea key for a level the
+graph models as one place. Unnormalised it answers None from `hops`, every
+fill returns empty, and a real node reads as no constraint. The first version
+of the arena rule compared a def's `"33:1"` against a stage's `"33"` and
+retired the arena's OWN fight; mutation-proved in
+`tests/test_segment_places.py`.
+
+**What it replaced could not express the question.** `origin_course` answers
+None for the castle interior, both hubs AND the three Bowser arenas, so a room
+every castle movement walks through and a room no movement enters were one
+bucket — standing in the Bowser 1 arena, where the only practicable thing is
+the fight, every castle movement still had a card.
+
+**Two consumers, both narrowing an existing rule rather than replacing it, and
+that is measured rather than stylistic:**
+
+* `ui/stagecontext.js::practicedHere` ANDs it with the course comparison. The
+  path rule alone would also SHOW a movement all along its own route (111
+  such pairs across the shipped corpus) — nobody asked for that, and an AND
+  is what keeps the card STRICTER than the projector, the one direction
+  `tests/test_ui_practice_context.py` pins.
+* `projection.py`'s `level_changed` branch ORs it with the origin retirement
+  (`_seg_places`). Substituting would RELAX that rule, since places contains
+  the origin: replayed over his journal, 124 more targets held in courses
+  where a fresh pick would be refused (14 → 138 by
+  `tools/measure_unrunnable_holds.py`). The castle interior is exempt from the
+  place kill because a `level_changed` names a LEVEL and level 6 holds three
+  nodes, so `stage_origin(6)` answers `"6"` — a key no definition can contain.
+
+**A HOOKED head is exempt, deliberately and still owed.** Round 19's bounds
+are his (complete / forfeit on a real anchor in a foreign course / expire),
+and his worked example is a trip out through a course and back to redo the
+fight with the selection surviving — a place kill fires on that trip. So the
+arena hold he actually reported (`BitS Pipe Entry`, auto-filled on entering
+BitS, riding into Bowser 3) is NOT fixed here: **31 arena holds → 3, and the 3
+are hooked.** Round 29's ledger prescribes the remaining shape — ship the head
+FLAVOR on the target payload and let the lone option displace a hooked head —
+which reverses a ruling and earns its own measured round.
+
+**Measured before shipping**, both tools over his live journal: unrunnable
+holds `arena 31 → 3, course 14 → 14` (unchanged by construction), and
+`tools/measure_target_queue.py --before HEAD` reports **49 target readings
+moved (37 → none, 12 → something runnable here) with 0 attempt rows lost,
+gained or changed.**
+
 ## Topological validity
 
 **`SegmentEngine._flush_move`, spec `2026-08-01-topological-segment-validity`.**

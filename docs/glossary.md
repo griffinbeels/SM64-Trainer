@@ -132,6 +132,24 @@ offers both: a course tile opens its [[star]]s, an area tile opens the
 - **Not** — a [[route step]]. A [[route step]] names [[target]]s to complete in
   order; a subsection is one [[target]].
 
+### Segment reach
+
+Every place the trainer may show a [[segment]] in: where you can start it,
+every place it names as one of its own steps, and everywhere on a shortest
+walk between them. It answers "does this go through here", which
+the course a [[segment]] belongs to cannot — the castle, the two hubs and the
+three Bowser arenas all belong to no course, so a room every castle movement
+walks through and a room no movement enters at all read as one place. The
+trainer hides a card outside its [[segment]]'s reach and drops a
+[[picked target]] that leaves one. A [[star]] has none: one grab walks no
+[[topology]].
+
+- **Lives** — the derivation (`src/sm64_events/tracking/segments.py`) and the
+  world graph it walks (`src/sm64_events/tracking/topology.py`) → the
+  [[practice log]]
+- **Not** — where you may SET a [[target]], which is the one place a
+  [[segment]] starts in and nowhere else along its reach.
+
 ### Clock start
 
 Where a [[segment]]'s timer begins, chosen per definition. "At the start

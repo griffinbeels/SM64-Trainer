@@ -243,15 +243,16 @@ Caveats (hard-won — keep these current):
 """
 from dataclasses import dataclass, replace
 
-from sm64_events.memory.addresses import CASTLE_LEVELS, course_for_level
+from sm64_events.memory.addresses import (CASTLE_LEVELS, LEVEL_CASTLE_INSIDE,
+                                          course_for_level)
 # one-way import: segments.py pulls Attempt lazily at call time, so this
 # module-level import cannot cycle (see SegmentEngine.feed).
 from sm64_events.tracking.prune import PRUNE_EVENT
 from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
     SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, arms_ambiently,
-    hooks_on_arm, hundred_coin_entity, origin_course, segment_origin,
-    stage_origin, time_bounds)
+    hooks_on_arm, hundred_coin_entity, origin_course, reachable_places,
+    segment_origin, stage_origin, time_bounds)
 
 
 @dataclass(frozen=True)
@@ -671,6 +672,20 @@ class Projector:
         # the picker and this rule cannot disagree about where a segment is.
         self._seg_origins = {
             d.id: segment_origin(d.id, d.start_triggers, origin_overrides)
+            for d in (segments or [])}
+        # Every world node a definition can be STARTED in or WALKS THROUGH.
+        # The hand is held by this rather than by the origin alone since
+        # 2026-08-10: `origin_course` reads the castle, the hubs and the three
+        # Bowser arenas as one "course-less" bucket, so a target picked up in
+        # BitS survived into the Bowser 3 arena, where the fight is the only
+        # practicable thing and a fresh pick of that target would be refused
+        # outright by `practicable.py`. Setting it there was impossible and
+        # holding it there was fine -- two halves of the system disagreeing
+        # about one fact, which is what he named: *"we should be clearing out
+        # the hand in these cases, or we've defined things incorrectly."*
+        # `ui/stagecontext.js` compares the SAME set for the display half.
+        self._seg_places = {
+            d.id: reachable_places(d, self._seg_origins[d.id])
             for d in (segments or [])}
         # {(course_id, 6)} whose whole course-visit span is timed by an
         # ENABLED engine (spec 2026-07-28-multi-step-segments, "the 100-coin
@@ -1258,8 +1273,33 @@ class Projector:
         # don't" — a piece is selected by click, and detection speaks
         # through its PARENT (the suspend exemption above, and the
         # follow-onto-the-parent rule in the seg_closed loop).
+        #
+        # AN AMBIGUOUS BURST DETECTS NOTHING (2026-08-10). Leaving the Bowser
+        # 1 arena is ONE `level_exit from=30` and all six `Bowser 1 -> X`
+        # movements arm on it together; the queue took whichever the notice
+        # list happened to hold first and lit it gold. His ruling: *"it
+        # pre-selected Bowser 1 -> BOB. This makes no sense, because there
+        # are too many options here to autoselect any of them."*
+        #
+        # So they neither hook NOR queue. Queueing them would only defer the
+        # same assertion — the head pops, a promotion picks one of the five
+        # survivors, and he never chose any of them. Round 19's FIFO is a
+        # line of things he can be said to have detected one at a time, and a
+        # simultaneous burst is exactly the case where that reading fails.
+        #
+        # THE SAME LESSON, THIRD SURFACE. `practice.js`'s `ambiguousPins`
+        # (2026-08-02) is this rule for the pinned card — *"When I don't have
+        # selected in the UI, it should never display an active segment like
+        # this, especially since there are multiple options"* — and
+        # `practicelog.js`'s membership rule is it for the log. All three
+        # were written when at most one thing armed at a time.
+        #
+        # Counted over the arms that are actually ELIGIBLE, so a burst whose
+        # extras are subsections, presence arms or the head itself still
+        # leaves one unambiguous detection standing.
         head_seg = (self.target[1] if self.target
                     and self.target[0] == "segment" else None)
+        hooking = []
         for n in self.segment_notices:
             if n["event"] != "segment_armed":
                 continue
@@ -1267,9 +1307,12 @@ class Projector:
             armed_def = self._segments.definition(sid)
             if (armed_def is None or not hooks_on_arm(armed_def.start_triggers)
                     or (armed_def.parents or [])
-                    or sid == head_seg or sid in self._target_queue):
+                    or sid == head_seg or sid in self._target_queue
+                    or sid in hooking):
                 continue
-            self._target_queue.append(sid)
+            hooking.append(sid)
+        if len(hooking) == 1:
+            self._target_queue.append(hooking[0])
         self._hold_hooked_head(ev, head_popped)
         armed_now = self._segments.armed_ids()
         # The grab's deferred claim (see _close_by_grab): the hooked head it
@@ -1441,12 +1484,56 @@ class Projector:
             # bounds are round 19's (complete / forfeit / expire), and his
             # worked example walks INTO a foreign course — BitDW, to redo
             # the Bowser 1 fight — with the selection expected to hold.
-            if (self.target and self.target[0] == "segment"
-                    and not self._target_hooked
-                    and to_course is not None
-                    ):
+            #
+            #
+            # A SECOND KILL SITS BESIDE IT (2026-08-10), and the two are ORed
+            # so the hand can only ever empty SOONER. Standing where a segment
+            # neither starts nor passes through is the same impossibility
+            # `practicable.py` refuses a fresh pick for, and the origin
+            # comparison could not see it: `origin_course` reads the castle,
+            # both hubs and the three arenas as one course-less bucket.
+            #
+            # A HOOKED HEAD IS EXEMPT, exactly as it is from the origin rule,
+            # and that is a DEFERRAL rather than an oversight. Round 19's
+            # bounds are his: a detection is held until it completes, forfeits
+            # on a real anchor in a foreign course, or expires -- and his
+            # worked example is a trip out through a course and back to redo
+            # the fight, with the selection expected to survive. A place kill
+            # would fire on that trip. So the arena hold he reported (`BitS
+            # Pipe Entry`, auto-filled on entering BitS) is NOT fixed here;
+            # round 29's ledger already prescribes the right shape for it --
+            # ship the head FLAVOR on the target payload and let the lone
+            # option displace a hooked head, since a place offering exactly
+            # one practicable thing is a better detection than a stale one
+            # carried in. That reverses a ruling and earns its own measured
+            # round rather than riding on this one.
+            #
+            # ADDED rather than substituted, and the measurement is the reason.
+            # `places` contains the origin, so swapping the comparison for it
+            # RELAXES the origin rule -- a pick would survive into any course
+            # on its own route. Replayed over his journal that read as 124 more
+            # targets held in courses where a fresh pick would be refused
+            # (14 -> 138 by `tools/measure_unrunnable_holds.py`), which is the
+            # opposite of what he asked for. Holding longer is a separate
+            # decision with its own report; this change only shortens.
+            #
+            # THE CASTLE INTERIOR IS EXEMPT from the place kill, and not as a
+            # special case: a `level_changed` names a LEVEL, and level 6 holds
+            # three nodes, so `stage_origin(6)` answers "6" -- a key no
+            # definition's places can contain. Judging on it would retire
+            # everything on every castle entry. The castle stays transit.
+            if self.target and self.target[0] == "segment":
+                here = stage_origin(to_level)
                 origin = self._seg_origins.get(self.target[1])
-                if origin is not None and origin != stage_origin(to_level):
+                places = self._seg_places.get(self.target[1])
+                left_its_origin = (not self._target_hooked
+                                   and to_course is not None
+                                   and origin is not None and origin != here)
+                off_its_path = (not self._target_hooked
+                                and to_level != LEVEL_CASTLE_INSIDE
+                                and places and here is not None
+                                and here not in places)
+                if left_its_origin or off_its_path:
                     self._pending_target_retire = self.target[1]
             if self.target and self.target[0] == "star":
                 if to_course is not None and to_course != self.target[1]:
