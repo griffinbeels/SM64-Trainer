@@ -169,7 +169,16 @@ class WarpDetector:
     RIDE_WINDOW_FRAMES = 26   # 20 + FRESH_WINDOW_FRAMES poller slack + margin
     # Usamune's counter ticks every frame game logic runs; the 12-call
     # snapshot's read skew is ±1 at each window end (verify_death_clock), so a
-    # 6-frame silence cannot be a torn read -- it is a pause or a dialog stop.
+    # 6-frame silence cannot be a torn read -- it is a pause.
+    #
+    # "OR A DIALOG STOP" USED TO BE ON THAT LINE AND IS MEASURED FALSE for the
+    # dialogue this game actually shows here (2026-08-10): across every
+    # `moment_reached` textbox in his journal, the counter advances 1:1 with
+    # `global_timer` right through the box -- 25 samples, 0 frozen frames,
+    # including the star door's 47-frame automatic dialogue. Inert for this
+    # rule, which fires on the pause either way; recorded because it was
+    # reasoned rather than watched, and the next person to need "what stops
+    # this counter" would have inherited it.
     PAUSE_CONFIRM_FRAMES = 6
 
     def __init__(self):
