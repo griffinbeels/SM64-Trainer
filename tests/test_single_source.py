@@ -322,6 +322,33 @@ INVARIANTS = (
             "constants rather than either restating the other.",
     ),
     SingleSource(
+        concept="what makes a segment a PIECE of something",
+        owners=frozenset({"subsections.js", "entities.js"}),
+        tokens=('startsWith("area:")',),
+        files=ui_js(),
+        why="A piece is a badge on its parent's cell and a card inside its "
+            "parent's card, and both surfaces have to agree about WHICH rows "
+            "those are. They did not: the practice log asked subsections.js, "
+            "the star row asked `parents.length > 0` over its own level, and "
+            "the castle segment row asked whether the parent happened to be "
+            "offered in the same subarea -- so a piece of a castle MOVEMENT "
+            "was a badge on neither and a loose cell instead (round 30, "
+            "2026-08-09: he expected the Key Door piece to be a button on "
+            "the BLJs segment rather than a cell beside it, and asked for "
+            "both surfaces to use the same underlying system). The `area:` "
+            "prefix test IS the rule -- an area parent is a place, so it "
+            "names no cell and no card -- and ui/subsections.js::isPiece is "
+            "the one place it may be written. Everything else calls it. "
+            "entities.js is the second owner and not a second door: its "
+            "entityKeyForOption asks the same prefix of a PICKER OPTION id "
+            "on its way to becoming a parent, which is a translation rather "
+            "than a membership rule. LIMIT worth stating: this catches the "
+            "double-quoted spelling this codebase uses everywhere, so a "
+            "single-quoted copy would slip past -- the render gate in "
+            "tests/test_responsive_subsections.py is what covers that, and "
+            "it is the one that fails on the reported bug itself.",
+    ),
+    SingleSource(
         concept="which Mario actions are the x-cam moment",
         owners=frozenset({"addresses.py"}),
         tokens=("ACT_STAR_DANCE_EXIT", "ACT_STAR_DANCE_WATER",

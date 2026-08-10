@@ -79,8 +79,16 @@ export function PickerDialog({ groups, value, allow, title, iconFor, depth,
   // identities change each render and the memo would never hit (review M9).
   const shown = visibleGroups(groups, allow, value);
   const openGroup = shown.find((group) => group.key === openGroupKey) || null;
+  // A group carrying `pick` is an answer in its OWN right as well as a door
+  // into its members, so it appears twice: as the layer-1 tile you drill
+  // through, and as the first cell inside — same art, the group's own label,
+  // and whatever `sub` the caller wrote to say what picking it means.
+  const selfOption = (group) => (group == null || group.pick == null ? null
+    : { id: group.pick, name: group.label, sub: group.sub || "" });
+  const groupIcon = (group) => group.icon || iconFor(group.options[0].id);
   const pendingOption = pendingId == null ? null
-    : shown.flatMap((group) => group.options)
+    : shown.flatMap((group) => [selfOption(group), ...group.options])
+        .filter(Boolean)
         .find((option) => option.id === pendingId) || null;
 
   // A caller with no nextStep keeps the original contract byte-for-byte:
@@ -137,35 +145,43 @@ export function PickerDialog({ groups, value, allow, title, iconFor, depth,
           <span class="entity-clear-mark">×</span>
           <span class="entity-clear-label">${placeholder}</span>
         </button>` : null}
-        ${/* A group carrying `pick` is TERMINAL: clicking the tile IS the
-             answer, no drill-in. Round 14, his ruling on the parent picker:
-             "for the castle areas, those are the high level areas, so it
-             shouldn't have a further drill down" — a piece of the Lobby is
-             a piece of the LOBBY, not of some movement inside it. The
-             caller marks the groups (the same call-site-owns-the-policy
-             rule `allow` follows); an unmarked group drills exactly as
-             before. */""}
+        ${/* EVERY tile drills, including one carrying `pick`. That marking
+             made the tile terminal until 2026-08-09 (round 14: "for the
+             castle areas, those are the high level areas, so it shouldn't
+             have a further drill down"), which put the movements recorded
+             inside an area out of reach — "I should be able to click into
+             Upstairs, and be able to select any segment within Upstairs OR
+             select a general 'Upstairs' association". Both answers live one
+             layer down now; the tile still lights up when the group itself
+             is the current value. */""}
         ${shown.map((group) => html`<${PracticeCell} key=${group.key}
-          iconSrc=${group.icon || iconFor(group.options[0].id)}
+          iconSrc=${groupIcon(group)}
           name=${group.label}
-          sub=${group.pick ? group.sub || "" : `${group.options.length} to practice`}
+          sub=${`${group.options.length} to practice`}
           title=${group.label}
           active=${group.pick != null && group.pick === value}
-          onPick=${group.pick ? () => handlePick(group.pick)
-                              : () => setOpenGroupKey(group.key)} />`)}
+          onPick=${() => setOpenGroupKey(group.key)} />`)}
       </div>
     <//>`;
 
-  if (depth > 1)
+  if (depth > 1) {
+    // The group's own cell LEADS its members — a piece of the Upstairs as a
+    // whole is the commonest answer here, and it wears the tile's own art so
+    // the cell you just clicked is still recognisable one layer in.
+    const self = selfOption(openGroup);
+    const inGroup = self ? [self, ...openGroup.options] : openGroup.options;
+    const iconInGroup = (id) => (self && id === self.id ? groupIcon(openGroup)
+                                                       : iconFor(id));
     return html`<${Modal} title=${openGroup.label} icon="target" size="grid"
         onClose=${onClose}>
       <button type="button" class="entity-back" ref=${focusOnDrillIn}
           onclick=${() => setOpenGroupKey(null)}>
         <${Icon} name="chevron" size=${15} /> Back
       </button>
-      <${CellGrid} options=${openGroup.options} value=${value}
-        iconFor=${iconFor} onPick=${handlePick} />
+      <${CellGrid} options=${inGroup} value=${value}
+        iconFor=${iconInGroup} onPick=${handlePick} />
     <//>`;
+  }
 
   return html`<${Modal} title=${title} icon="target" size="grid" onClose=${onClose}>
     ${shown.map((group, index) => html`<div class="entity-section" key=${group.key}>
@@ -180,7 +196,11 @@ export function PickerDialog({ groups, value, allow, title, iconFor, depth,
 }
 
 /**
- * groups      [{ key, label, icon?, options: [{ id, name, sub?, rank? }] }]
+ * groups      [{ key, label, icon?, pick?, sub?, options: [{ id, name, sub?,
+ *             rank? }] }] — a group with `pick` is pickable AS ITSELF: its
+ *             layer-2 grid leads with a cell emitting that id, labelled with
+ *             the group's label and `sub`. The caller marks it, the same
+ *             call-site-owns-the-policy rule `allow` follows.
  * value       current id (string) or null
  * onChange    (id) => void
  * allow       optional (id) => boolean — the CALLER's domain filter

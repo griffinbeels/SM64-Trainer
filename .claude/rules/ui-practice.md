@@ -144,11 +144,21 @@ and answered 2026-08-08: *"for the castle areas, those are the high level
 areas, so it shouldn't have a further drill down. For the individual stars, we
 should be able to drill into a specific star… within a course, we're always
 doing something as a subsection of something else. Or, it's a castle movement
-which is high level"*): a castle-AREA tile is a TERMINAL pick — `area:<node>`,
-via PickerDialog's `group.pick` capability, marked at the RECORDER's call site
-because the target picker reads the same groups and must keep drilling into a
-region — a course tile drills to its stars and segments, and there is no third
-screen of any kind here (this dialog never had a `nextStep`).
+which is high level"*): a castle-AREA answers as `area:<node>`, via
+PickerDialog's `group.pick` capability, marked at the RECORDER's call site
+because the target picker reads the same groups and has no second answer to
+give — a course tile drills to its stars and segments, and there is no third
+screen of any kind here (this dialog never had a `nextStep`). **That marking
+made the area tile TERMINAL until 2026-08-09, and terminal was too strong**:
+every castle movement sits behind an area tile, so a piece of an Upstairs BLJ
+could never name the BLJ (*"I should be able to click into Upstairs, and be
+able to select any segment within Upstairs OR select a general 'Upstairs'
+association… I can't select BLJs because they're in the Upstairs section"*).
+`pick` now means pickable AS ITSELF, not instead-of-drilling: every tile
+drills, and a marked group's layer 2 LEADS with a cell carrying the group's
+own label, art and `sub` ("the whole area"). The round-14 ruling survives
+intact — an area is still as high as the castle goes, it is just no longer
+the only thing behind its own tile.
 `entityKeyForOption` passes `area:` ids through, `_PARENT_KEY` accepts all
 three kinds, and an area-parented row matches no entity in `ui/subsections.js`
 so it renders top-level, which is what "high level" means there. **The

@@ -927,13 +927,17 @@ return JSON.stringify({start: mine.start_triggers[0],
         "screenshot exactly (the CCM door stop missing from Then)")
 
 
-def test_a_castle_area_tile_is_a_terminal_parent_pick(page):
-    """Round 14, his ruling: "for the castle areas, those are the high level
-    areas, so it shouldn't have a further drill down". Clicking the Lobby
-    tile in "What is this a piece of?" IS the answer — the dialog closes on
-    it (no star grid, no third screen of any kind) and the trigger reads the
-    area's name. Course tiles still drill; only the region tiles are
-    terminal."""
+def test_a_castle_area_tile_opens_its_movements_and_still_answers_as_itself(page):
+    """2026-08-09: "I should be able to click into Upstairs, and be able to
+    select any segment within Upstairs OR select a general 'Upstairs'
+    association (as it is today)." Round 14 made the tile TERMINAL, which put
+    every castle movement out of reach as a parent — a piece of an Upstairs
+    BLJ could never name the BLJ. The tile drills now, its layer 2 leads with
+    the area's own cell, and picking that cell is the answer round 14 asked
+    for. Both halves are driven here: the drill has to expose at least one
+    movement beside the self cell (a drill onto an empty grid would read as
+    the feature working while nothing new is selectable), and the self cell
+    has to close the dialog with the area's name on the trigger."""
     reach(page, "recorder-review")
     verdict = page.evaluate("""
 (async () => {
@@ -963,8 +967,19 @@ def test_a_castle_area_tile_is_a_terminal_parent_pick(page):
   if (!lobby) return 'no Lobby tile: ' +
     JSON.stringify(tiles.map((b) => b.textContent.trim()).slice(-8));
   lobby.click();
+  if (!await waitFor(() =>
+        !!document.querySelector('.record-review .entity-back')))
+    return 'the tile never drilled in';
+  const cells = Array.from(grid().querySelectorAll('button'));
+  if (cells.length < 2)
+    return 'the Lobby holds no movements to pick: ' +
+      JSON.stringify(cells.map((b) => b.textContent.trim()));
+  if (!cells[0].textContent.includes('Lobby'))
+    return 'the area does not lead its own layer: ' +
+      JSON.stringify(cells.map((b) => b.textContent.trim()).slice(0, 3));
+  cells[0].click();
   if (!await waitFor(() => !grid()))
-    return 'the dialog stayed open — the tile drilled instead of picking';
+    return 'the dialog stayed open — the area cell did not answer';
   const trigger = document.querySelector('.record-parent .entity-trigger');
   if (!trigger.textContent.includes('Lobby'))
     return 'the trigger reads ' + trigger.textContent.trim();

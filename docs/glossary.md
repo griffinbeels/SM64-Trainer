@@ -121,10 +121,11 @@ tracks it at all; dimming one stops it recording and takes its card out of
 the [[practice log]] everywhere, since a piece serving several [[star]]s is
 still one definition with one timer. Inside a course a piece always
 belongs to something specific; a castle-side
-piece belongs to its area, which is as high as the castle goes — his own
-split, and the [[recorder]]'s parent picker follows it (an area tile
-answers in one click, a course tile opens its [[star]]s, and the + beside a
-chosen parent adds another).
+piece belongs either to a [[segment]] recorded in its area or to the area
+itself, which is as high as the castle goes. The [[recorder]]'s parent picker
+offers both: a course tile opens its [[star]]s, an area tile opens the
+[[segment]]s recorded there and leads that list with the area itself, and the
++ beside a chosen parent adds another.
 
 - **Lives** — the trigger vocabulary and matcher
   (`src/sm64_events/tracking/segments.py`) → the [[selector]]

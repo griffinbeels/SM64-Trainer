@@ -169,3 +169,85 @@ def test_a_piece_that_earned_nothing_is_dropped_rather_than_nested():
 
 def test_a_pair_that_earned_nothing_at_all_leaves_no_card_behind():
     assert nest([star(7, 4), seg(90, ["star:7:4"])], earned_keys=[]) == []
+
+
+# --- the rule the SELECTOR shares with this module --------------------------
+# Round 30, 2026-08-09. `isPiece` was extracted so the practice log and the
+# quick-select row stop answering "is this a piece" separately -- the star row
+# asked `parents.length > 0` over its own level and the castle segment row
+# asked whether the parent was offered in the same subarea, so a piece of a
+# castle MOVEMENT was a badge on neither and a loose cell instead. Driven here
+# in its own right because both callers now depend on it and only one of them
+# has a render gate.
+
+
+def is_piece(row):
+    script = (
+        f"import {{ isPiece }} from {SUBSECTIONS_JS.as_uri()!r};\n"
+        f"console.log(JSON.stringify(isPiece({json.dumps(row)})));")
+    result = subprocess.run(["node", "--input-type=module", "-"],
+                            input=script, capture_output=True, text=True,
+                            encoding="utf-8")
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def pieces_for(rows, parent_key):
+    script = (
+        f"import {{ piecesFor }} from {SUBSECTIONS_JS.as_uri()!r};\n"
+        f"const out = piecesFor({json.dumps(rows)}, {json.dumps(parent_key)});\n"
+        "console.log(JSON.stringify(out.map((r) => r.segment_id)));")
+    result = subprocess.run(["node", "--input-type=module", "-"],
+                            input=script, capture_output=True, text=True,
+                            encoding="utf-8")
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_a_star_parent_makes_it_a_piece():
+    assert is_piece(seg(90, ["star:7:4"])) is True
+
+
+def test_a_segment_parent_makes_it_a_piece():
+    """His BLJs case: the parent is a castle movement, not a star."""
+    assert is_piece(seg(92, ["segment:4"])) is True
+
+
+def test_an_area_parent_does_not():
+    """An area is a PLACE -- it names no cell and no card, so such a row is an
+    ordinary top-level one (round 22 item 5, unchanged)."""
+    assert is_piece(seg(90, ["area:6:2"])) is False
+
+
+def test_no_parents_at_all_does_not():
+    assert is_piece(seg(90)) is False
+
+
+def test_a_self_reference_is_not_a_parent():
+    """The guard exists to stop infinite nesting, never to hide a row."""
+    assert is_piece(seg(90, ["segment:90"])) is False
+
+
+def test_a_selector_row_is_read_the_same_way_as_a_log_section():
+    """A `segment_targets` row carries no `kind`, so the self-key branch has
+    to read `segment_id` directly -- keying it off `entityKey` alone would
+    call every selector row a star and quietly break the self-reference
+    guard on exactly the surface this rule was extracted for."""
+    assert is_piece({"segment_id": 90, "parents": ["segment:90"]}) is False
+    assert is_piece({"segment_id": 90, "parents": ["segment:4"]}) is True
+
+
+def test_pieces_for_finds_every_row_naming_that_parent():
+    """Round 20's plural parents: a piece serving two stars is claimed by
+    both, so this is a filter over `parents`, never a first-match lookup."""
+    rows = [seg(90, ["star:7:4", "star:7:5"]), seg(91, ["star:7:5"]),
+            seg(92, ["segment:4"]), seg(93)]
+    assert pieces_for(rows, "star:7:5") == [90, 91]
+    assert pieces_for(rows, "segment:4") == [92]
+    assert pieces_for(rows, "star:1:0") == []
+
+
+def test_pieces_for_keeps_a_disabled_piece():
+    """The badge is the only control that turns one back on, so filtering a
+    disabled piece out here would make the switch one-way."""
+    assert pieces_for([seg(90, ["star:7:4"], enabled=False)], "star:7:4") == [90]

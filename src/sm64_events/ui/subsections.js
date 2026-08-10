@@ -17,6 +17,38 @@
 // feature exists to have one of.
 import { entityKey } from "./entitysection.js";
 
+// The row's OWN entity key. A practice-log section and a selector
+// `segment_targets` row are different payloads for the same thing, and only
+// the section carries `kind` -- so a segment row is keyed off `segment_id`
+// directly and everything else goes through `entityKey`.
+const selfKey = (row) => (row.segment_id != null ? `segment:${row.segment_id}`
+                                                 : entityKey(row));
+
+/**
+ * IS THIS ROW A PIECE OF SOMETHING THAT HAS A CELL OR A CARD?
+ *
+ * The one definition, read by the practice log (`nestSubsections` below) AND
+ * by the selector (`components/stagebanner.js`). Two answers to this question
+ * is what round 30 (2026-08-09) was reported against: the star row asked it
+ * one way and the castle segment row another, so a piece of a castle MOVEMENT
+ * kept its own cell beside its parent instead of becoming a badge inside it --
+ * *"I would therefore expect NOT to see 'Key Door (R) - Wooden Door' next to
+ * BLJs, because it should instead be a button on the BLJs segment. We should
+ * reuse the exact system used for stars."*
+ *
+ * An `area:` parent is a PLACE rather than an entity: it names no cell and no
+ * card, so such a row is an ordinary top-level one (round 22 item 5). A
+ * SELF-reference names no other entity either, and exists only to stop
+ * infinite nesting -- it never decides whether something is shown.
+ */
+export const isPiece = (row) => (row.parents || []).some(
+  (parent) => !String(parent).startsWith("area:") && parent !== selfKey(row));
+
+/** The pieces a given cell or card claims -- `parents.includes(<its key>)`,
+ *  which is the same test whether the parent is a star or another segment. */
+export const piecesFor = (rows, parentKey) => (rows || []).filter(
+  (row) => (row.parents || []).includes(parentKey));
+
 /**
  * A [[subsection]] renders INSIDE its parent's card, indented, never beside it
  * (round 22, 2026-08-08). Griffin: "the subsection should appear WITHIN the
@@ -70,13 +102,10 @@ export function nestSubsections(sections, earned = () => true) {
   const homesOf = (sec) => (sec.parents || []).filter(
     (parent) => present.has(parent) && parent !== entityKey(sec));
   // A parent that names an ENTITY -- a star or another segment -- as opposed
-  // to a castle AREA, which is a place and can never have a card.
-  // A SELF-reference is not a parent: it names no other entity, so such a row
-  // behaves like an unparented segment and stays visible. That guard exists to
-  // stop infinite nesting, never to decide whether a card is shown.
-  const wantsAParent = (sec) => (sec.parents || []).some(
-    (parent) => !String(parent).startsWith("area:")
-                && parent !== entityKey(sec));
+  // to a castle AREA, which is a place and can never have a card. `isPiece`
+  // above is that rule, shared with the selector so a piece cannot be one
+  // thing to a card and another to a cell.
+  const wantsAParent = isPiece;
   const nested = new Map();          // parent key -> [child sec]
   for (const sec of sections) {
     if (sec.enabled === false) continue;

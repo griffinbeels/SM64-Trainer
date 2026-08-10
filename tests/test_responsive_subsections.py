@@ -40,6 +40,7 @@ from uilab.driver import get_driver  # noqa: E402
 from uilab.pytest_plugin import (  # noqa: E402,F401
     assert_no_new_defects, assert_no_stale_exemptions, uilab_sweep)
 from uilab_project import SUBSECTION_PROJECT  # noqa: E402
+from ui_fixture import serve_ui  # noqa: E402
 
 # The plugin's `uilab_sweep` fixture reads this off the module.
 uilab_project = SUBSECTION_PROJECT
@@ -302,3 +303,44 @@ def test_a_piece_with_no_strategies_does_not_shout_for_one():
             assert not shouts, "a piece with no strategies must not glow red"
             assert not disabled, (
                 "it must stay usable -- '+ new strat...' is a real action")
+
+
+# --- and the SEGMENT half of the same feature -------------------------------
+# Its own `serve_ui` instance rather than SUBSECTION_PROJECT, deliberately:
+# this is a CASTLE row, a different stage entirely, and folding it into the
+# shared project would re-derive that project's whole `known_defects` table
+# for a state its sweep has no reason to measure (the same reasoning
+# `test_fixture_reaches_the_real_page.py`'s own standalone instances use).
+
+
+def test_a_piece_of_a_segment_is_a_badge_on_that_segment_and_not_a_cell():
+    """Round 30, 2026-08-09, against three pieces of his BLJs movement drawn
+    as loose cells beside it: *"I would therefore expect NOT to see 'Key Door
+    (R) - Wooden Door' next to BLJs, because it should instead be a button on
+    the BLJs segment. We should reuse the exact system used for stars, and
+    make sure this doesn't regress going forward."*
+
+    Every star-side gate above stayed green through that bug, and structurally
+    had to: a star row draws stars, so a piece of a SEGMENT has no parent cell
+    there to ride. This is the case none of them can reach.
+
+    Both claims, because only the pair is the ask -- the parent wears the
+    badge, AND the piece is not also a cell of its own.
+    """
+    with serve_ui(castle_stage=2, seed_castle_pieces=True) as url, \
+            get_driver().launch() as page:
+        page.goto(url)
+        page.wait_for(".stagebanner")
+        page.wait_ms(400)
+        names = page.evaluate(
+            "Array.from(document.querySelectorAll('.stagebanner .starcell'))"
+            ".map(c => (c.querySelector('.starname')||c).innerText)")
+        assert any("Upstairs Run" in name for name in names), (
+            f"the seeded movement is not on the row at all; drew {names!r}")
+        assert not any("Key Door" in name for name in names), (
+            f"the piece drew its own cell -- the round-30 bug exactly: {names!r}")
+        assert page.count(".stagebanner .starcell.has-toggles") == 1, (
+            "the movement's cell must host its piece's badge; a cell with "
+            "toggles is a div rather than a button, so this pins the swap too")
+        assert page.count(".stagebanner .cell-toggle-btn") == 1, (
+            "one seeded piece, one badge, inside its parent's art")

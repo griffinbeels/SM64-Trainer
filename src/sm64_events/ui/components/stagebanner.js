@@ -62,6 +62,7 @@ import { RANK_FLOOR } from "./caps.js";
 import { useRouteSwap } from "../routeswap.js";
 import { mareloTuning } from "../marelotuning.js";
 import { familyLabel } from "../redsfamily.js";
+import { isPiece, piecesFor } from "../subsections.js";
 
 const html = htm.bind(h);
 
@@ -304,12 +305,16 @@ function useLoneRouteOption(v, lone, key, commit) {
 // reason. `onPicked` fires after a successful explicit pick so a caller can
 // remember "the user chose THIS family" (Bowser's own writeBowserFamily);
 // every other caller omits it and nothing changes for them.
-// `toggles` is components/celltoggles.js's overlay -- this cell's own pieces,
-// drawn inside its art. An `onPickOverride` prop lived here for the expanded
-// family's fold gesture and was deleted with it in round 22: a cell's click is
-// its target write again, with no second meaning to dispatch on.
-function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked,
-                              toggles = null }) {
+// THIS CELL DERIVES ITS OWN BADGES, and no caller may pass them. A `toggles`
+// prop was the shape until round 30 (2026-08-09) and exactly one of the four
+// call sites remembered to fill it, so a movement drawn by any other path --
+// the armed-extras one, which is how a castle movement usually arrives --
+// wore none and its pieces went looking for a cell of their own. Deriving
+// here makes forgetting unwriteable rather than merely discouraged.
+// An `onPickOverride` prop lived here for the expanded family's fold gesture
+// and was deleted with it in round 22: a cell's click is its target write
+// again, with no second meaning to dispatch on.
+function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked }) {
   const tgt = ((t.view || {}).target) || {};
   async function pick() {
     await pickSegmentTarget(t, s);
@@ -317,7 +322,7 @@ function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked,
   }
   return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
     active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
-    toggles=${toggles}
+    toggles=${subsectionToggles(t, segKey(s))}
     iconSrc=${entityIconSrc(t, segKey(s))}
     rank=${s.rank} hasStandards=${hasStandardsFor(t.view, segKey(s))}
     caveat=${s.caveat}
@@ -330,9 +335,16 @@ function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked,
 // A RUNNING segment must never be invisible (spec addendum 2026-07-24):
 // cells for every armed segment a row's own filter did not already show.
 // Pinned into every row by tests/test_star_icons.py.
+// A PIECE IS NEVER A LOOSE CELL, on any row (`isPiece`, ui/subsections.js).
+// It rides its parent's cell as a badge, and this filter is why no row has to
+// remember that: the extras path is the one that drew "Key Door (R) → Wooden
+// Door" beside its own parent (2026-08-09) and the stray "Volcano Entry"
+// beside his LLL stars a day earlier, both because each row kept its own
+// list of what to exclude. "A running segment is never invisible" still
+// holds -- it is visible ON its parent, lit.
 const armedExtraCells = (t, v, shownIds, setPicking, keep = () => true) =>
   armedSegments(t, v)
-    .filter((s) => !shownIds.has(s.segment_id) && keep(s))
+    .filter((s) => !shownIds.has(s.segment_id) && !isPiece(s) && keep(s))
     .map((s) => html`<${StandardSegmentCell} key=${`seg:${s.segment_id}`}
       t=${t} s=${s} setPicking=${setPicking} />`);
 
@@ -373,9 +385,18 @@ const startsInLevel = (level) => (s) => (s.start_levels || []).includes(level);
 // per-parent could only ever hide a CARD -- one definition has one live timer,
 // so it cannot record under one parent and not another -- and he asked for
 // tracking to stop, not for a display filter.
-function subsectionToggles(t, subsections, parentKey) {
-  const mine = subsections.filter(
-    (s) => (s.parents || []).includes(parentKey));
+//
+// ONE ARGUMENT, and that is the point (round 30, 2026-08-09). It used to take
+// the caller's own list of pieces, and the two callers built that list
+// differently -- the star row over the LEVEL, the castle segment row over the
+// AREA -- so a piece whose start area differed from its parent's was a badge
+// on neither and a loose cell instead. Reading `segment_targets` here means
+// there is no list for a row to get wrong: *"We should reuse the exact system
+// used for stars… Both should use the same underlying system here."* DISABLED
+// pieces are deliberately included -- the badge is the only control that turns
+// one back on, so filtering them out would make the switch one-way.
+function subsectionToggles(t, parentKey) {
+  const mine = piecesFor(((t.view || {}).segment_targets) || [], parentKey);
   if (!mine.length) return null;
   const flip = (s) => send("PUT", `/api/segments/${s.segment_id}`,
                            { enabled: !s.enabled });
@@ -482,17 +503,9 @@ function StarRow({ t, v, stage }) {
   // A STAR'S SUBSECTIONS BELONG HERE (task 0087, and the case Griffin named
   // first: "sometimes we want to practice only a small portion of a star"),
   // and since round 22 they belong INSIDE the star's own cell rather than
-  // beside it -- see `subsectionToggles`. DISABLED ones are kept in this
-  // list on purpose: the badge is the only control that can turn one back on,
-  // so filtering them out here would make the switch one-way.
-  const subsections = (v.segment_targets || [])
-    .filter((s) => (s.parents || []).length > 0
-                   && startsInLevel(stage.level)(s));
-  // Every piece drawn as a badge, so the armed-extras union below does not
-  // ALSO draw it as a loose cell -- which is exactly what put a stray "Volcano
-  // Entry" beside his two LLL stars (his screenshot, 2026-08-09). "A running
-  // segment is never invisible" still holds: it is visible on its parent.
-  const badged = new Set(subsections.map((s) => s.segment_id));
+  // beside it -- see `subsectionToggles`, which reads them itself. This row
+  // kept its own level-scoped list until round 30; nothing here does now, and
+  // the stray-cell half it also bought is `armedExtraCells`' own rule.
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
   return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
@@ -513,11 +526,10 @@ function StarRow({ t, v, stage }) {
         caveat=${caveatFor(i)}
         name=${name}
         sub=${stratSub(lastStratFor(i))}
-        toggles=${subsectionToggles(t, subsections,
-                                       starKey(stage.course_id, i))}
+        toggles=${subsectionToggles(t, starKey(stage.course_id, i))}
         onPick=${() => pick(i)}
         onEdit=${() => setPicking(iconIdentityForKey(starKey(stage.course_id, i)))} />`)}
-      ${armedExtraCells(t, v, badged, setPicking,
+      ${armedExtraCells(t, v, new Set(), setPicking,
                         startsInLevel(stage.level))}
     <//>
     ${pickerModal}
@@ -952,17 +964,18 @@ function SegmentRow({ t, v, stage }) {
   // Here the parent is a castle MOVEMENT rather than a star, so `segs` is the
   // top-level offer and each piece rides whichever movement claims it.
   //
+  // `isPiece` (ui/subsections.js) is that test, and asking it of the ROW alone
+  // is round 30's correction: this line used to require the parent to be in
+  // `offered` too, which is a place-based question a piece cannot answer --
+  // his BLJs pieces start on doors in a different subarea from BLJs itself, so
+  // every one of them failed it and came back as a cell.
+  //
   // A piece parented to a castle AREA (`area:<node>`) matches no entity here,
   // so it stays a top-level cell — Griffin's item 5: "if the subsection is a
   // top level subsection (e.g., it's associated with a top level area, like
   // any castle area), then it works the same as today, as a standalone top
   // level practice log entry."
-  const segs = offered.filter((s) => !(s.parents || []).some(
-    (parent) => offered.some((other) => segKey(other) === parent)));
-  const pieces = (v.segment_targets || []).filter(
-    (s) => (s.parents || []).length > 0
-           && s.start_areas.some((a) => a[0] === stage.level
-                                        && a[1] === stage.area));
+  const segs = offered.filter((s) => !isPiece(s));
 
   // Task 0025's segment half (rule 11 — the same rule, the same module).
   // READS `segs`, the list actually drawn, since 2026-08-05. It read the
@@ -976,8 +989,7 @@ function SegmentRow({ t, v, stage }) {
     v, lone, `seg:${stage.level}:${stage.area}:${lone ? lone.segment_id : ""}`,
     () => pickSegmentTarget(t, lone, { quiet: true }));
 
-  const drawn = new Set([...segs.map((s) => s.segment_id),
-                         ...pieces.map((s) => s.segment_id)]);
+  const drawn = new Set(segs.map((s) => s.segment_id));
   const extras = armedExtraCells(t, v, drawn, setPicking);
   if (!segs.length && !extras.length) return html`<${StagePlaceholder} t=${t} />`;
 
@@ -989,8 +1001,7 @@ function SegmentRow({ t, v, stage }) {
         label="the course selector" /></div>
     <${CellRow} class="starrow segcells">
       ${segs.map((s) => html`<${StandardSegmentCell}
-        key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking}
-        toggles=${subsectionToggles(t, pieces, segKey(s))} />`)}
+        key=${`seg:${s.segment_id}`} t=${t} s=${s} setPicking=${setPicking} />`)}
       ${extras}
     <//>
     ${pickerModal}

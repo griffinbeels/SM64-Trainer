@@ -630,13 +630,15 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null }) {
   // server keeps the journal's own order.
   const shown = rows ? [...rows].reverse() : [];
   const cards = visitCards(shown);
-  // A castle-AREA tile is a TERMINAL parent pick (round 14, his ruling:
-  // "for the castle areas, those are the high level areas, so it shouldn't
-  // have a further drill down… Or, it's a castle movement which is high
-  // level") — a castle-side piece parents to its AREA, while a course tile
-  // still drills to the specific star or segment it is a piece of. Marked
-  // HERE, not in courseUnionGroups: the target picker reads the same groups
-  // and must keep drilling into a region to pick a practice target.
+  // A castle-AREA tile opens the movements recorded there AND answers as
+  // itself from inside — `pick` marks the second half (entitymodal.js). Round
+  // 14 made the tile terminal on his ruling that an area is as high as the
+  // castle goes; that is still true of the AREA, and it also meant a piece of
+  // an Upstairs BLJ could never name the BLJ, because every castle movement
+  // sits behind an area tile ("I want to add support for defining the
+  // subsections of BLJs… but I can't select BLJs because they're in the
+  // Upstairs section", 2026-08-09). Marked HERE, not in courseUnionGroups:
+  // the target picker reads the same groups and has no second answer to give.
   const parentGroups = (t && t.view ? courseUnionGroups(
     t.view.catalog, (t.segments || []).filter((s) => !s.is_hundred_coin_engine),
     (t.vocab || {}).course_by_level || {}, {},
@@ -644,7 +646,8 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null }) {
   ).map((group) => {
     const region = group.key.startsWith("castle-")
       && group.key !== "castle-segments" ? group.key.slice(7) : null;
-    return region ? { ...group, pick: `area:${region}` } : group;
+    return region ? { ...group, pick: `area:${region}`,
+                      sub: "the whole area" } : group;
   });
   const parentNameFor = (optionId) => {
     if (optionId == null) return null;

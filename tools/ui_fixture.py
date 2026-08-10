@@ -136,6 +136,10 @@ FIXTURE_LEVEL = 24
 FIXTURE_STAR = 4
 FIXTURE_STRAT = "TJ Owlless"
 
+# Castle Inside, the level every castle subarea (lobby / upstairs / basement)
+# belongs to -- `_publish_castle_stage` and `_seed_castle_pieces` both name it.
+CASTLE_LEVEL = 6
+
 # The segment the fixture arms, chosen for the SAME reason as FIXTURE_STAR
 # above and caught by the same review the day after: LBLJ (segment:1) has
 # exactly one bundled strategy, so its strategy ladder IS its best ladder
@@ -845,6 +849,84 @@ def _seed_subsections(base: str) -> None:
                                **_subsection_definition(ordinal)})
 
 
+def _seed_castle_pieces(base: str, service, area: int) -> None:
+    """POST a castle MOVEMENT plus a piece of that movement, and arm both --
+    the only fixture state that reaches a SEGMENT wearing subsection badges.
+
+    `seed_subsections` reaches the STAR half of the same feature and cannot
+    reach this one: a star row draws stars, so a piece of a SEGMENT has no
+    parent cell there to ride. That gap is exactly what shipped round 30's
+    bug -- his three BLJs pieces drew as loose cells beside their own parent,
+    while every star-side gate stayed green.
+
+    Both start on a `moment_reached door_open` in the castle and are left
+    ARMED with nothing to close them, which also reproduces the shape that
+    made the bug invisible: a moment-started definition carries no
+    `start_areas`, so the castle row offers neither of them and the whole row
+    is drawn by `armedExtraCells` -- the one path that never carried badges.
+    """
+    import urllib.error
+    import urllib.request
+
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    def post(path: str, payload: dict) -> dict:
+        request = urllib.request.Request(
+            f"{base}{path}", data=json.dumps(payload).encode(), method="POST",
+            headers={"Content-Type": "application/json"})
+        try:
+            return json.loads(urllib.request.urlopen(request, timeout=10).read())
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(
+                f"fixture could not POST {path}: {error.code} "
+                f"{error.read()[:200]!r}") from error
+
+    def castle_definition(ordinal: int) -> dict:
+        return {
+            "start_triggers": [{"type": "moment_reached", "kind": "door_open",
+                                "level": CASTLE_LEVEL, "ordinal": ordinal}],
+            # Ends by walking to the LOBBY, and the choice is forced rather
+            # than stylistic: `can_run_from` rule (A) refuses to arm a
+            # definition whose next required step cannot fire from where the
+            # player stands, so a castle definition ending on a course's star
+            # never arms here at all. Nothing publishes that edge after this,
+            # so both definitions stay armed for the render.
+            "end_triggers": [{"type": "area_enter", "level": CASTLE_LEVEL,
+                              "area": 1}],
+            "guards": [], "enabled": True, "waypoints": [],
+            "match_mode": "loose",
+        }
+
+    parent = post("/api/segments",
+                  {"name": "Upstairs Run", **castle_definition(1)})
+    post("/api/segments", {"name": "Upstairs Run — Key Door",
+                           "parents": [f"segment:{parent['id']}"],
+                           **castle_definition(2)})
+
+    async def go() -> None:
+        await service.publish(Event(
+            type="level_changed", frame=5200, timestamp_utc=now,
+            payload=_place_time({"from": 0, "to": CASTLE_LEVEL}, 271)))
+        await service.publish(Event(
+            type="area_changed", frame=5200, timestamp_utc=now,
+            payload=_place_time({"level": CASTLE_LEVEL, "from": None,
+                                 "to": area}, 271)))
+        # An ATTEMPT has to be open for a moment-started definition to arm --
+        # `seed_practice`'s own door moments ride inside one, which is why the
+        # star-side pieces record and these would not without this row.
+        await service.publish(Event(
+            type="practice_reset", frame=5205, timestamp_utc=now,
+            payload={"igt_frames_before": 0}))
+        for ordinal in (1, 2):
+            await service.publish(Event(
+                type="moment_reached", frame=5210 + ordinal, timestamp_utc=now,
+                payload=_place_time({"kind": "door_open", "ordinal": ordinal,
+                                     "landmark": None, "level": CASTLE_LEVEL,
+                                     "area": area, "action": 0}, 272 + ordinal)))
+
+    asyncio.run(go())
+
+
 def _pad_journal(db_path: Path, count: int) -> None:
     """Bulk-fill the journal with `count` inert rows, so the timeline
     endpoint's per-poll walk costs what it costs on the LIVE journal (~23k
@@ -909,6 +991,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               reconcile_full_corpus: bool = False,
               bowser_stage: tuple[int, int] | None = None,
               castle_stage: int | None = None,
+              seed_castle_pieces: bool = False,
               enter_level: int | None = None,
               arm_hundred_coin: tuple[int, int] | None = None,
               pad_journal: int = 0):
@@ -957,6 +1040,11 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     (see `_seed_subsections`) -- the only way to reach a star wearing
     subsection BADGES, or a practice-log card with pieces nested inside it,
     since nothing in the shipped corpus carries a `parent`.
+
+    `seed_castle_pieces` (with `castle_stage`) additionally POSTs a castle
+    MOVEMENT and a piece OF that movement, both armed (see
+    `_seed_castle_pieces`) -- the segment-side half of the same feature, which
+    `seed_subsections` structurally cannot reach.
 
     `reconcile_full_corpus` additionally applies the bundled 84-segment
     default corpus (`tracking/defaults.reconcile_defaults` against `data/
@@ -1116,6 +1204,11 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                 # detail` for the resulting card to carry.
                 _target_segment(base, target_segment)
             if castle_stage is not None:
+                # BEFORE the display stage: the pieces arm off real events
+                # that name the castle, and publishing the stage last leaves
+                # the banner showing the subarea the row is measured in.
+                if seed_castle_pieces:
+                    _seed_castle_pieces(base, service, castle_stage)
                 _publish_castle_stage(service, castle_stage)
             if bowser_stage is not None:
                 # AFTER _seed_target, not instead of it: broadcast-only and
