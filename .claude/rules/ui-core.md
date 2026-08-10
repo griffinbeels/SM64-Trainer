@@ -383,6 +383,16 @@ and a row reshuffling four times in a tenth of a second is the flicker.
   browser. `run-test-server.bat` prints the commit it is running for the same
   reason, but that is on the console and this is queryable.
 
+- **A hand-picked example can satisfy the assertion through the wrong path.**
+  A search test typed `"lblj"` to prove that an APPROACH's name finds its
+  target — and passed, because "LBLJ" is in several target LABELS too, so the
+  mechanism under test never ran (2026-08-10). Not a vacuous guard: it
+  asserted real content and got it, by a route that would survive the feature
+  being deleted. Where the corpus is the input, DERIVE the example from it at
+  test time — that search now computes a word some approach carries and no
+  label does, and reports "the index is not shipping approach_names" when
+  there is none, which is the mutation proof and the calibration in one.
+
 - **SCOPE every query in a driven test — a bare class selector finds the
   HIDDEN copy, because two tabs stay mounted while you are not looking at
   them.** Compare and the Library both render with `display:none` when you
