@@ -330,6 +330,113 @@ def test_a_piece_of_a_segment_is_not_a_cell_of_its_own():
             "here")
 
 
+# --- and the ALWAYS-VISIBLE half (round 32, 2026-08-10) --------------------
+# Every gate above seeds a piece that has ALREADY recorded or armed --
+# `nestSubsections` used to require that (its `earned` gate) before it would
+# nest a piece at all. This is the state none of them reach: a piece with
+# ZERO attempts of its own, never armed, whose parent nonetheless has a card.
+
+
+def _click_parent_fold(page):
+    """`Disclose` never mounts a CLOSED body's contents at all, and the
+    castle movement in this fixture starts closed -- a real practiced star
+    elsewhere on the page legitimately wins the one auto-open slot instead
+    (see the render gate below). So the piece is only reachable in the DOM
+    once its parent is opened by a real click, same as `_one_line_at` above
+    already does for a parent that starts open on its own."""
+    page.evaluate(
+        "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+        ".find(c => (c.querySelector('.log-card-name')||{}).innerText"
+        ".includes('Upstairs Run') && !(c.querySelector('.log-card-name')"
+        "||{}).innerText.includes('Key Door'))"
+        ".querySelector('.log-card-fold').click()")
+    page.wait_ms(600)
+
+
+def test_a_zero_attempt_piece_still_draws_inside_its_parent_s_card():
+    """Griffin, 2026-08-10: "the subsections should always be visible inside
+    of the parent practice log (i.e., we don't wait for the subsection to
+    trigger for it to have its own card inside the parent practice log
+    card's card)... It just starts out empty in a new session."
+
+    `castle_piece_arms=False` leaves the piece defined, enabled and parented,
+    but never arms it -- the parent (`Upstairs Run`) still earns its own card
+    off its OWN arm, and the piece (`Upstairs Run — Key Door`) has recorded
+    and armed nothing at all.
+
+    Mutation-proved: restoring the `earned` check inside `nestSubsections`'
+    own nesting loop (`ui/subsections.js`) or reverting `views.py`'s new
+    piece-publish loop makes this go red with the piece absent from BOTH
+    `top` and `nested` -- exactly the pre-round-32 shape.
+    """
+    with serve_ui(castle_stage=2, seed_castle_pieces=True,
+                  castle_piece_arms=False) as url, \
+            get_driver().launch() as page:
+        page.goto(url)
+        page.wait_for(".log-list-card")
+        page.wait_ms(400)
+        top = page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert any("Upstairs Run" in name and "Key Door" not in name
+                   for name in top), (
+            f"the parent movement earned no card of its own; top {top!r}")
+        assert not any("Key Door" in name for name in top), (
+            f"the piece must not be its OWN top-level card; top {top!r}")
+        _click_parent_fold(page)
+        nested = page.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.log-card-children > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert any("Key Door" in name for name in nested), (
+            "the zero-attempt piece is not nested inside its now-open parent"
+            f" -- an empty list means it never got a section at all; "
+            f"nested {nested!r}")
+
+
+def test_a_zero_attempt_piece_draws_closed_and_never_steals_the_open_slot():
+    """The other half of the same ask: an always-visible empty card must not
+    also be an always-OPEN one. `autoOpenKey`'s slot is earned by recorded
+    activity (`playedEntityKeys`) or by being the live target -- a piece with
+    neither must render closed, exactly like any other unearned card. Two
+    things are checked, in order, so a vacuous "everything closed" pass could
+    not masquerade as this: something ELSE on the page must genuinely hold
+    the slot BEFORE the parent is even opened (this fixture's own default
+    seeded star, with real attempts), and the never-practiced castle movement
+    must not be it.
+
+    Mutation-proved: reverting `practicelog.js`'s `nestedKeys` plumbing (or
+    `isCardOpen`'s own `childKeys` clause) so a nested-but-unearned piece
+    could win `topKey` makes the piece's own card lose `.is-closed` once its
+    parent is opened.
+    """
+    with serve_ui(castle_stage=2, seed_castle_pieces=True,
+                  castle_piece_arms=False) as url, \
+            get_driver().launch() as page:
+        page.goto(url)
+        page.wait_for(".log-list-card")
+        page.wait_ms(400)
+        open_before = page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".filter(c => !c.classList.contains('is-closed'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert open_before, (
+            "nothing is open at all before the parent is even opened -- the "
+            "auto-open slot must land on a genuinely earned card")
+        assert not any("Upstairs Run" in name for name in open_before), (
+            f"the never-practiced parent must not hold the slot; {open_before!r}")
+        _click_parent_fold(page)
+        piece_closed = page.evaluate(
+            "(() => { const cards = Array.from(document.querySelectorAll("
+            "'.log-card-children > .log-card'));"
+            " const piece = cards.find(c => (c.querySelector("
+            "'.log-card-name')||{}).innerText.includes('Key Door'));"
+            " return piece ? piece.classList.contains('is-closed') : null; })()")
+        assert piece_closed is True, (
+            "the zero-attempt piece rendered open, or did not render at all "
+            f"(piece_closed={piece_closed!r})")
+
+
 # --- and the STAR-as-piece half (spec 2026-08-10-reds-as-subsection) --------
 # The reds star names its own movement as a parent (task 1, views.py's
 # `parents` stamp); this is the render half, proving `nestSubsections`' rule

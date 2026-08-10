@@ -1349,6 +1349,30 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # manufacture the same unchosen card. A player who chose star 6 already
     # has a section from the star half of the target branch above.
 
+    # A [[subsection]]'s own card is no longer conditional on having earned
+    # one -- Griffin, round 32 (2026-08-10): "the subsections should always
+    # be visible inside of the parent practice log... we don't wait for the
+    # subsection to trigger for it to have its own card... It just starts
+    # out empty in a new session." Mirrors the reds-star hoist above in the
+    # OPPOSITE direction: there, the star's own presence lends its parent
+    # movement a card; here, a parent that already holds one (by ANY of the
+    # reasons above -- attempts, target, the reds hoist, or being armed)
+    # lends it back to every ENABLED piece naming that parent, with zero
+    # attempts of its own. Judged against `seen`/`seen_segs` as they stand
+    # right now, after every other reason a section exists has already run,
+    # so a piece can only ever borrow an ALREADY-earned card, never
+    # manufacture its parent's. ONE pass, not a fixed point: `parents` never
+    # names another piece (nesting is one level, ui/subsections.js's own
+    # structural guarantee), so a piece's parent is always something this
+    # function has already decided.
+    published_keys = ({entity_key(c, s) for c, s in seen}
+                      | {f"segment:{sid}" for sid in seen_segs})
+    for sid, d in seg_defs.items():
+        if sid in hundred_coin_ids or not d.enabled or not d.parents:
+            continue
+        if any(parent in published_keys for parent in d.parents):
+            seen_segs.setdefault(sid, None)
+
     scoped_set = set(scoped)
     igt_of = lambda a: a.igt_frames
     for course_id, star_id in seen:

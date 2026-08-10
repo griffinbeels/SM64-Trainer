@@ -6,9 +6,11 @@
 // draws, under progressive disclosure -- and round 22 (2026-08-08) retired
 // that question outright in favour of a small enable/disable badge on the
 // parent's own art (components/celltoggles.js). Round 31 (task 3, 2026-08-10)
-// retired the badge in turn: a piece is ALWAYS tracked and always shows, so
+// retired the badge in turn: a piece is ALWAYS tracked once enabled, so
 // there is nothing left for a switch to say, and celltoggles.js is deleted.
-// A [[subsection]] is never a cell and never a badge now -- there is no
+// (It did not yet always SHOW -- an unpractised piece stayed invisible
+// until round 32 the same day, below.) A [[subsection]] is never a cell and
+// never a badge now -- there is no
 // family for a row to expand into and no fold to come back from. What
 // survives is the one thing that was always really here: the piece -> parent
 // mapping, `parents.includes(<entity key>)`, read by the practice LOG so a
@@ -62,8 +64,20 @@ export const piecesFor = (rows, parentKey) => (rows || []).filter(
  * owned by the parent card."
  *
  * Returns `[{sec, children}]` in the order given, children in the same order.
- * Four rules, each answering a case his own LLL data already produces:
+ * Five rules, each answering a case his own LLL data already produces:
  *
+ *  - **A piece nests WHETHER OR NOT it has earned a card of its own** (round
+ *    32, 2026-08-10). Griffin: "the subsections should always be visible
+ *    inside of the parent practice log card's card (i.e., we don't wait for
+ *    the subsection to trigger for it to have its own card inside the
+ *    parent practice log card's card). This is because I might want to
+ *    check past results or rank standards (or even know that it exists). It
+ *    just starts out empty in a new session." `earned` used to gate this
+ *    very question, so an unpractised piece was invisible until it recorded
+ *    something of its own; it still gates a PARENTLESS section's own
+ *    top-level visibility (unaffected by this rule) and whether a nesting
+ *    parent that earned nothing itself keeps its card (the rule right
+ *    below) -- it stopped gating nesting membership alone.
  *  - **Disabled pieces never nest.** They are dropped from the log entirely,
  *    which is the display half of the badge he dims ("we no longer track the
  *    practice log entry for that subsection"), and it leaves the parent card
@@ -130,7 +144,6 @@ export function nestSubsections(sections, earned = () => true) {
   const nested = new Map();          // parent key -> [child sec]
   for (const sec of sections) {
     if (sec.enabled === false) continue;
-    if (!earned(sec)) continue;
     for (const home of homesOf(sec)) {
       if (!nested.has(home)) nested.set(home, []);
       nested.get(home).push(sec);
@@ -141,8 +154,14 @@ export function nestSubsections(sections, earned = () => true) {
     const key = entityKey(sec);
     if (sec.enabled === false) continue;
     const children = nested.get(key) || [];
-    // Drawn inside at least one parent, so not ALSO at the top level.
-    if (homesOf(sec).length && earned(sec)) continue;
+    // Drawn inside at least one parent, so not ALSO at the top level --
+    // WHETHER OR NOT it earned a card of its own (round 32, 2026-08-10: a
+    // piece nests unconditionally now, "it just starts out empty in a new
+    // session"). `earned` moving off this line is the trap the round's own
+    // brief called out by name: leaving it here while the nesting loop
+    // above stopped checking it would draw an unearned piece BOTH nested
+    // AND at the top level, since neither guard would then exclude it.
+    if (homesOf(sec).length) continue;
     // ...and a piece of a castle MOVEMENT with no parent card on screen is
     // not promoted to the top level, it simply is not shown (round 28). Its
     // own children, if it somehow had any, would go with it -- a piece of a

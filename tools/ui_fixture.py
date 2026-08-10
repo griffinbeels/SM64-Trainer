@@ -871,7 +871,8 @@ def _seed_subsections(base: str) -> None:
                                **_subsection_definition(ordinal)})
 
 
-def _seed_castle_pieces(base: str, service, area: int) -> None:
+def _seed_castle_pieces(base: str, service, area: int,
+                        arm_piece: bool = True) -> None:
     """POST a castle MOVEMENT plus a piece of that movement, and arm both --
     the only fixture state that reaches a SEGMENT wearing subsection badges.
 
@@ -886,6 +887,13 @@ def _seed_castle_pieces(base: str, service, area: int) -> None:
     made the bug invisible: a moment-started definition carries no
     `start_areas`, so the castle row offers neither of them and the whole row
     is drawn by `armedExtraCells` -- the one path that never carried badges.
+
+    `arm_piece=False` (round 32, 2026-08-10) publishes only the PARENT's own
+    door moment and withholds the piece's -- the piece stays defined,
+    enabled and parented, but never arms and records nothing. That is the
+    exact state the "always visible" fix exists for: a card-bearing parent
+    with an ENTIRELY UNPRACTICED piece, which no earlier fixture state could
+    reach (both moments always fired together before this).
     """
     import urllib.error
     import urllib.request
@@ -939,7 +947,7 @@ def _seed_castle_pieces(base: str, service, area: int) -> None:
         await service.publish(Event(
             type="practice_reset", frame=5205, timestamp_utc=now,
             payload={"igt_frames_before": 0}))
-        for ordinal in (1, 2):
+        for ordinal in (1, 2) if arm_piece else (1,):
             await service.publish(Event(
                 type="moment_reached", frame=5210 + ordinal, timestamp_utc=now,
                 payload=_place_time({"kind": "door_open", "ordinal": ordinal,
@@ -1043,6 +1051,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               bowser_stage: tuple[int, int] | None = None,
               castle_stage: int | None = None,
               seed_castle_pieces: bool = False,
+              castle_piece_arms: bool = True,
               enter_level: int | None = None,
               arm_hundred_coin: tuple[int, int] | None = None,
               seed_reds_run: bool = False,
@@ -1096,7 +1105,10 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     `seed_castle_pieces` (with `castle_stage`) additionally POSTs a castle
     MOVEMENT and a piece OF that movement, both armed (see
     `_seed_castle_pieces`) -- the segment-side half of the same feature, which
-    `seed_subsections` structurally cannot reach.
+    `seed_subsections` structurally cannot reach. `castle_piece_arms=False`
+    leaves the piece unarmed and therefore attempt-less -- the parent still
+    earns its own card, and the piece must borrow it rather than vanish
+    (round 32, 2026-08-10).
 
     `reconcile_full_corpus` additionally applies the bundled 84-segment
     default corpus (`tracking/defaults.reconcile_defaults` against `data/
@@ -1268,7 +1280,8 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                 # that name the castle, and publishing the stage last leaves
                 # the banner showing the subarea the row is measured in.
                 if seed_castle_pieces:
-                    _seed_castle_pieces(base, service, castle_stage)
+                    _seed_castle_pieces(base, service, castle_stage,
+                                       arm_piece=castle_piece_arms)
                 _publish_castle_stage(service, castle_stage)
             if bowser_stage is not None:
                 # AFTER _seed_target, not instead of it: broadcast-only and

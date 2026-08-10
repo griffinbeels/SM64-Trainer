@@ -117,9 +117,13 @@ indented under it. The [[star]] owns the hand: a piece arms
 and records underneath its parent without ever taking the [[target]] slot
 by detection — its completion points the slot at the parent [[star]], never
 at itself. It has no switch on the [[selector]] — a piece always tracks and
-always draws its card, and the only doors that turn one off are the ones
-that were always separate: its own editor's enabled checkbox and its
-library row's hide/show button. A [[star]] can be a subsection too, of a
+always draws its card as soon as its parent has one, even with nothing
+recorded yet (empty, closed, never stealing the parent's auto-open slot) —
+so its history, its [[ladder]] and the fact that it exists at all are
+reachable from a fresh [[session]], not only after it first records something.
+The only doors that turn a piece off are the ones that were always
+separate: its own editor's enabled checkbox and its library row's hide/show
+button. A [[star]] can be a subsection too, of a
 [[segment]] rather than of another [[star]]: a Bowser course's reds [[star]]
 already rides its Reds→Pipe [[segment]] as that movement's own waypoint, so
 its section carries the movement as its parent and its card nests inside
