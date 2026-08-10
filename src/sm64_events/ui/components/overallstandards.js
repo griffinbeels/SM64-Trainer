@@ -47,13 +47,17 @@ import { Disclose } from "./collapsible.js";
 import { Icon } from "./icons.js";
 import { RankIcon } from "./rankicon.js";
 import { getJSON } from "../api.js";
-import { capName, divisionDigit } from "./caps.js";
+import { capName, divisionDigit, DIVISION_NUMERALS } from "./caps.js";
 import {
   ladderBands, bandRangeLabel, divisionRangeLabel, standingOn,
 } from "./librarymodel.js";
 
 const html = htm.bind(h);
 const enc = encodeURIComponent;
+
+// Index 0 of the registry is the BOTTOM of any tier (caps.js), so this is
+// Capless V -- the ladder floor a player with no saved time stands on.
+const FLOOR_NUMERAL = DIVISION_NUMERALS[0];
 
 /**
  * entity   entity key this page grades on ("star:c:s" / "segment:id"), or null
@@ -100,7 +104,16 @@ export function OverallStandards({ entity, label, pbCs = null }) {
   // inside an html`` template, which the sibling below sits in.
   const steps = bands.flatMap((band) =>
     (band.divisions || []).map((division) => band.tier + "/" + division.numeral));
-  const yourStep = you ? steps.indexOf(you.rank + "/" + you.division) : -1;
+  // With no saved time `standingOn` answers `{Iron, null}` — right for a chip
+  // that just says "Capless", wrong for a LADDER, where every position is a
+  // division and the floor is Capless V (caps.js: `rankPosition(tier, V, 0)`
+  // is position 0). Resolved here rather than in `standingOn`, whose other
+  // callers print a numeral-less cap on purpose. Without it the section's own
+  // closing line ("the top row is where you are, and the row under it is the
+  // first thing to beat") pointed at two rows carrying no mark at all —
+  // caught by rendering the state the fixture's own star can never be in.
+  const yourNumeral = you && you.division ? you.division : FLOOR_NUMERAL;
+  const yourStep = you ? steps.indexOf(you.rank + "/" + yourNumeral) : -1;
   const nextStep = yourStep >= 0 && yourStep + 1 < steps.length
     ? steps[yourStep + 1] : null;
 
@@ -157,7 +170,7 @@ export function OverallStandards({ entity, label, pbCs = null }) {
                     const key = band.tier + "/" + division.numeral;
                     return html`<div key=${division.numeral}
                         class=${`library-overall-division${
-                          you && you.rank === band.tier && you.division === division.numeral
+                          you && you.rank === band.tier && yourNumeral === division.numeral
                             ? " is-you" : ""}${key === nextStep ? " is-next" : ""}`}>
                       <span class="library-overall-division-label">
                         <span class="rank-icon-slot" style="--icon-size: 16px">
@@ -168,7 +181,7 @@ export function OverallStandards({ entity, label, pbCs = null }) {
                       <span class="meta">${divisionRangeLabel(division)}</span>
                       ${key === nextStep
                         ? html`<span class="chip library-overall-next">next</span>` : ""}
-                      ${you && you.rank === band.tier && you.division === division.numeral
+                      ${you && you.rank === band.tier && yourNumeral === division.numeral
                         ? html`<span class="chip library-overall-you">◀ you</span>` : ""}
                     </div>`;
                   })}

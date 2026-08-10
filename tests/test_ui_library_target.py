@@ -705,3 +705,54 @@ def test_an_ungraded_movement_says_so_rather_than_rendering_nothing(library_serv
         assert page.evaluate(
             "document.querySelectorAll('.library-target .library-overall-band')"
             ".length") == 0, "an ungraded target must draw no ladder"
+
+
+def test_a_star_with_no_saved_time_still_marks_the_floor_it_stands_on(library_server):
+    """The state the fixture's OWN star can never reach, and where the section
+    was wrong until 2026-08-10: with no PB, `standingOn` answers Capless with
+    NO division -- right for a chip that just says "Capless", wrong for a
+    ladder, where every position is a division. Both marks silently vanished
+    while the section's own closing line said "the top row is where you are,
+    and the row under it is the first thing to beat", pointing at two rows
+    carrying nothing. Reached by browsing to a star the fixture seeds no
+    attempts for, which is the only way this state renders at all."""
+    with driver.get_driver().launch(headless=True) as page:
+        page.goto(f"{library_server}/ui/index.html")
+        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.evaluate(CLICK_LIBRARY_TAB)
+        page.wait_for(".library-target", timeout_ms=15000)
+        page.evaluate("document.querySelector('.library-page .entity-back').click()")
+        page.wait_for(".library-courses", timeout_ms=15000)
+        assert page.evaluate(
+            "(() => { const hit = Array.from(document.querySelectorAll("
+            "'.library-page .library-courses button')).find(el => "
+            "el.textContent.includes('Bob-omb')); if (!hit) return false; "
+            "hit.click(); return true; })()"), "no Bob-omb Battlefield group"
+        page.wait_for(".library-group .entity-grid", timeout_ms=10000)
+        assert page.evaluate(
+            "(() => { const hit = Array.from(document.querySelectorAll("
+            "'.library-page .library-group .entity-grid button')).find(el => "
+            "el.textContent.includes('Big Bob-omb')); if (!hit) return false; "
+            "hit.click(); return true; })()"), "no Big Bob-omb target"
+        page.wait_for(".library-target .library-overall", timeout_ms=10000)
+        page.evaluate(OPEN_OVERALL)
+        page.wait_for(".library-overall-band", timeout_ms=10000)
+        state = page.evaluate("""
+          (() => {
+            const box = document.querySelector('.library-target .library-overall');
+            const rows = Array.from(box.querySelectorAll('.library-overall-division'));
+            return {
+              youIndex: rows.findIndex(r => r.classList.contains('is-you')),
+              nextIndex: rows.findIndex(r => r.classList.contains('is-next')),
+              floorTier: box.querySelector('.library-overall-band').dataset.tier,
+              note: Array.from(box.querySelectorAll('.library-overall-note'))
+                .map(p => p.textContent).join(' '),
+            };
+          })()""")
+    # Anti-vacuity: this must really be the no-PB state, not just any page.
+    assert "No saved time here yet" in state["note"], state
+    assert state["floorTier"] == "Iron", state
+    # The floor is Capless V -- the very first row -- and the first thing to
+    # beat is the one under it.
+    assert state["youIndex"] == 0, state
+    assert state["nextIndex"] == 1, state

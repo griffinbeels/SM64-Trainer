@@ -337,3 +337,52 @@ def test_standing_on_grades_the_readers_pb_by_the_displayed_walk():
     # agreement with the entry-filing walk itself, not a restatement of it
     same_tier = run_js(f"m.bandFor({ladder}, 305)")
     assert same_tier == mid["rank"]
+
+
+# ---- the band math the Overall Rank Standards section shares (2026-08-10) --
+
+def test_ladder_bands_keep_the_capless_floor_that_bandsof_filters_away():
+    """The one structural difference between the two callers, and the reason
+    `ladderBands` exists. `bandsOf` drops a band with no cutoff and no entries
+    -- correct for a table OF entries -- but a rank standard holds whether or
+    not anyone has published a time in that band, so the standards ladder must
+    keep the Capless floor. His round 2: "we also need to remember to include
+    the capless times"."""
+    ladder = {"Bronze": 14.0, "Mario": 12.0}
+    shells = run_js(f"m.ladderBands({json.dumps(ladder)})")
+    assert [band["tier"] for band in shells] == ["Iron", "Bronze", "Mario"]
+    assert all(len(band["divisions"]) == 5 for band in shells), shells
+    # ...and the same ladder through bandsOf with NO entries loses exactly it.
+    filtered = run_js(f"m.bandsOf({json.dumps(ladder)}, [])")
+    assert [band["tier"] for band in filtered] == ["Bronze", "Mario"]
+
+
+def test_ladder_bands_is_empty_for_a_ladder_with_no_tiers():
+    # There is nothing to be capless AT -- the same reasoning bandsOf's own
+    # no-ladder branch applies, and what lets the section say "no published
+    # rank standards" instead of drawing a lone floor.
+    assert run_js("m.ladderBands({})") == []
+
+
+def test_the_two_bracket_labels_read_the_way_the_page_prints_times():
+    """Both moved out of librarytarget.js so the standards ladder and the
+    entry bands cannot disagree about a span. Usamune notation throughout
+    (`fmtSeconds`), never raw seconds."""
+    ladder = {"Bronze": 14.0, "Mario": 12.0}
+    bands = run_js(f"m.ladderBands({json.dumps(ladder)})")
+    labels = run_js(f"m.ladderBands({json.dumps(ladder)})"
+                    ".map((band) => m.bandRangeLabel(band))")
+    # The floor has no cutoff, so it is open-ended at the slow end.
+    assert labels[0].endswith("+"), labels
+    assert " – " in labels[1], labels
+    divisions = run_js(f"m.ladderBands({json.dumps(ladder)})[1].divisions"
+                       ".map((division) => m.divisionRangeLabel(division))")
+    assert len(divisions) == 5, divisions
+    assert all(label for label in divisions), divisions
+    assert len(bands) == 3
+
+
+def test_a_zero_width_subdivision_says_so_rather_than_printing_it_backwards():
+    # An `empty` shell owns no whole centisecond -- real on tight vetted
+    # ladders -- and a span printed slow-to-fast there would read backwards.
+    assert run_js('m.divisionRangeLabel({empty: true, slowCs: 1200, fastCs: 1201})') == "—"
