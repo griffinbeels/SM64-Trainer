@@ -339,6 +339,9 @@ one. Grading against it answers "how close is this to the fastest this
 [[target]] can go", which mastering a slow [[strategy]] never moves.
 
 - **Lives** — the scorer (`src/sm64_events/ranks/scoring.py`)
+  → the Overall Rank Standards section on the [[library]] page for that
+  [[target]] (`src/sm64_events/ui/components/overallstandards.js`), which also
+  names the [[strategy]] that sets each [[rank]]
 
 ### Strategy rank
 

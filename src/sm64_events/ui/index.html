@@ -3388,6 +3388,61 @@
   .library-target-search:focus {
     outline: none; border-color: #6287aa; background: rgba(8,20,34,.85);
   }
+  /* Overall Rank Standards — the target page's own header section. Shaped
+     like a `.library-section` so it reads as a peer of the strategy
+     accordions below it, but deliberately NOT one: it is not part of their
+     single-open group, because closing the ladder to read a strategy (or the
+     reverse) is exactly the comparison it exists to support. */
+  .library-overall {
+    margin: 0 0 .6rem;
+    border: 1px solid var(--border-soft); border-radius: 10px;
+    background: rgba(8,20,34,.5);
+  }
+  .library-overall-toggle {
+    width: 100%; display: flex; align-items: center; gap: .4rem;
+    padding: .5rem .65rem; font-size: .85rem; font-weight: 600;
+    color: var(--text); background: none; border: 0; cursor: pointer;
+    text-align: left;
+  }
+  .library-overall-toggle .meta { font-weight: 400; min-width: 0; }
+  .library-overall-chevron {
+    margin-left: auto; flex: 0 0 auto;
+    transition: transform .18s ease;
+  }
+  .library-overall-toggle[aria-expanded="true"] .library-overall-chevron {
+    transform: rotate(180deg);
+  }
+  .library-overall-body {
+    padding: 0 .65rem .6rem; display: grid; gap: .5rem;
+    overflow-x: auto;
+  }
+  .library-overall-note { margin: 0; font-size: .78rem; color: var(--muted); }
+  .library-overall-table {
+    width: 100%; border-collapse: collapse; font-size: .8rem;
+  }
+  .library-overall-table th {
+    padding: .22rem .4rem; text-align: left; font-weight: 600;
+    font-size: .72rem; color: var(--muted);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .library-overall-table td {
+    padding: .26rem .4rem; border-bottom: 1px solid rgba(255,255,255,.05);
+    vertical-align: middle;
+  }
+  /* Rank and time shrink to their content so the OWNER column takes the
+     slack — a cap filling a third of the row reads as a progress bar, which
+     is a thing this app draws elsewhere and means something else. */
+  .library-overall-table th:nth-child(-n+2),
+  .library-overall-table td:nth-child(-n+2) { width: 1%; white-space: nowrap; }
+  .library-overall-cap {
+    white-space: nowrap; color: #111; font-weight: 700;
+    border-radius: 6px; text-align: center;
+  }
+  .library-overall-time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .library-overall-by { color: var(--muted); }
+  .library-overall-table tr.is-you td { background: rgba(96,152,209,.14); }
+  .library-overall-table tr.is-next td { background: rgba(233,196,106,.10); }
+  .library-overall-you, .library-overall-next { margin-left: .35rem; }
   .segment-list {
     min-height: 0; flex: 1 1 auto;
     overflow: auto; display: grid; align-content: start; gap: .55rem;

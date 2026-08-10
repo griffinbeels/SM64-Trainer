@@ -21,6 +21,7 @@ import { capName, divisionDigit } from "./caps.js";
 import { Disclose } from "./collapsible.js";
 import { Icon } from "./icons.js";
 import { SearchMenu } from "./searchselect.js";
+import { OverallStandards } from "./overallstandards.js";
 import {
   sectionOrder, autoExpandName, bandsOf, matchesRunner, videoSource, linkable,
   standingOn,
@@ -901,6 +902,36 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
     return map;
   }, [stratsData]);
 
+  // WHICH entity this page's overall rank belongs to, resolved once. A star
+  // target grades on itself; an entity-less movement grades on whatever
+  // segment it is linked to, else on the one it name-matches -- the exact
+  // precedence `assocFor` already applies per row (an explicit assignment
+  // outranks a name match), lifted to the page because the overall rank is a
+  // fact about the TARGET, not about any one approach. Null is a real answer:
+  // an unlinked castle movement is graded by nothing.
+  const gradingEntity = useMemo(() => {
+    if (entityKey) return entityKey;
+    const linked = approaches.find((approach) => approach.adopted);
+    if (linked) return linked.adopted;
+    const matched = approaches.find((approach) => approach._matchedSegment);
+    return matched ? matched._matchedSegment.entity : null;
+  }, [entityKey, approaches]);
+  const gradingLabel = gradingEntity === entityKey
+    ? label : (gradingEntity ? resolveLabel(gradingEntity) : null);
+  // His best SAVED time on that entity across every strategy -- the same
+  // reduction `useAssocStandings` performs, reused verbatim for a linked
+  // segment and repeated over the star page's own strategy payload, which is
+  // the one place that number is already on hand.
+  const gradingPbCs = useMemo(() => {
+    if (gradingEntity && gradingEntity !== entityKey)
+      return (assocStandings[gradingEntity] || {}).pbCs ?? null;
+    const timed = ((stratsData && stratsData.strategies) || [])
+      .filter((strategy) => strategy.pb_cs != null);
+    return timed.length
+      ? timed.reduce((left, right) => (left.pb_cs <= right.pb_cs ? left : right)).pb_cs
+      : null;
+  }, [gradingEntity, entityKey, assocStandings, stratsData]);
+
   // Auto-expand once per PAGE — a deliberate one-shot, so a click the user
   // makes afterward is never silently reverted by a later render of the same
   // page (autoExpandName(ordered, t.view's active strat), brief step 1).
@@ -1031,6 +1062,17 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
     <input class="library-target-search" type="search" value=${query}
         placeholder="Search runners…" aria-label="Search runners"
         oninput=${(inputEvent) => setQuery(inputEvent.target.value)} />
+    ${/* Round 11 (2026-08-10): the ladder the star/segment ITSELF grades on,
+         above every per-strategy section, because "what it takes to rank up
+         overall" is a different question from "what it takes to rank up on
+         this strategy" and only the second had a surface. The entity is
+         resolved once, here, through the same ladder every other standing on
+         this page reads: the target's own key, else whatever segment it is
+         linked or name-matched to. An entity-less, unlinked movement passes
+         null and the section says so rather than not rendering — a page that
+         looks identical after a change reads as the change not working. */""}
+    <${OverallStandards} entity=${gradingEntity} label=${gradingLabel}
+        pbCs=${gradingPbCs} />
     ${approaches.length === 0
       ? html`<p class="library-target-empty">
           ${missReason === "castle_movement" ? "Browse only — no segment adopts this movement yet."

@@ -533,3 +533,113 @@ def test_a_click_the_instant_the_header_exists_is_never_reverted(library_server)
             page.wait_for(".log-list-card", timeout_ms=20000)
             open_name = page.evaluate(click_and_wait_for_settle)
             assert open_name == target_name, (trial, open_name)
+
+
+# ---- Overall Rank Standards (2026-08-10) --------------------------------
+#
+# "This just displays the rank standards that determine the OVERALL RANK FOR
+# THAT SEGMENT/STAR rather than the individual standards per strategy. The
+# point is to make it very clear what it takes for you to rank up overall,
+# versus rank up per strategy."
+
+OPEN_OVERALL = (
+    "document.querySelector('.library-target .library-overall-toggle').click()")
+OVERALL_ROWS = (
+    "Array.from(document.querySelectorAll("
+    "'.library-target .library-overall-table tbody tr'))"
+    ".map(tr => Array.from(tr.children).map(td => td.textContent.trim()))")
+
+
+def test_the_overall_section_sits_above_every_strategy_section(library_page):
+    """It answers a question about the whole target, so it cannot be filed
+    under one of the strategies -- his ask puts it directly under the runner
+    search, above everything."""
+    placement = library_page.evaluate("""
+      (() => {
+        const page = document.querySelector('.library-target');
+        const kids = Array.from(page.children);
+        const overall = kids.findIndex(k => k.classList.contains('library-overall'));
+        const section = kids.findIndex(k => k.classList.contains('library-section'));
+        return {overall, section};
+      })()""")
+    assert placement["overall"] >= 0, "no Overall Rank Standards section rendered"
+    assert placement["section"] > placement["overall"], placement
+
+
+def test_the_overall_ladder_is_the_best_across_strategies_not_one_of_them(library_page):
+    """The load-bearing assertion, and it cannot pass by accident: on star:2:4
+    the pointwise-best ladder is SPLIT -- one strategy sets the hardest tiers
+    and another the rest -- so a table echoing any single strategy's ladder
+    would name one owner throughout. Times are asserted non-empty separately,
+    because a table of rank names with no cutoffs would satisfy the owner
+    check on its own."""
+    library_page.evaluate(OPEN_OVERALL)
+    library_page.wait_for(".library-overall-table", timeout_ms=10000)
+    rows = library_page.evaluate(OVERALL_ROWS)
+    assert len(rows) >= 5, rows
+    assert all(row[1] for row in rows), rows            # every tier has a cutoff
+    owners = {row[2] for row in rows}
+    assert len(owners) >= 2, owners
+    assert "" not in owners and "\u2014" not in owners, owners
+
+
+def test_the_overall_section_marks_where_you_are_and_what_is_next(library_page):
+    """Without the two marks the table is a price list: his ask is "what it
+    takes for YOU to rank up overall"."""
+    library_page.evaluate(OPEN_OVERALL)
+    library_page.wait_for(".library-overall-table", timeout_ms=10000)
+    marks = library_page.evaluate("""
+      (() => {
+        const rows = Array.from(document.querySelectorAll(
+          '.library-target .library-overall-table tbody tr'));
+        return {
+          you: rows.findIndex(r => r.classList.contains('is-you')),
+          next: rows.findIndex(r => r.classList.contains('is-next')),
+          total: rows.length,
+        };
+      })()""")
+    assert marks["you"] > 0, marks           # a real standing, not the top row
+    # "Next" is the tier ABOVE, and the table runs hardest-first.
+    assert marks["next"] == marks["you"] - 1, marks
+
+
+def test_an_ungraded_movement_says_so_rather_than_rendering_nothing(library_server):
+    """A castle movement with no segment of its own is graded by nothing, so
+    there is no ladder to draw. The section still renders and says why, with
+    the remedy naming the link door directly above it -- a page that looks
+    identical after this change reads as the change not working, and a control
+    whose explanation never arrives is this project's oldest UI complaint."""
+    with driver.get_driver().launch(headless=True) as page:
+        page.goto(f"{library_server}/ui/index.html")
+        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.evaluate(CLICK_LIBRARY_TAB)
+        # The tab AUTO-OPENS onto the last-practiced star's target page, so
+        # the course grid is not on screen yet -- walk back to it first. A
+        # test that skipped this would report "no Basement group" and read
+        # as the grid being broken.
+        page.wait_for(".library-target", timeout_ms=15000)
+        page.evaluate("document.querySelector('.library-page .entity-back').click()")
+        page.wait_for(".library-courses", timeout_ms=15000)
+        opened = page.evaluate(
+            "(() => { const hit = Array.from(document.querySelectorAll("
+            "'.library-page .library-courses button')).find(el => "
+            "el.textContent.includes('Basement')); if (!hit) return false; "
+            "hit.click(); return true; })()")
+        assert opened, "no Castle Movements (Basement) group cell"
+        page.wait_for(".library-group .entity-grid", timeout_ms=10000)
+        picked = page.evaluate(
+            "(() => { const hit = Array.from(document.querySelectorAll("
+            "'.library-page .library-group .entity-grid button')).find(el => "
+            "el.textContent.includes('MIPS Clip')); if (!hit) return false; "
+            "hit.click(); return true; })()")
+        assert picked, "no MIPS Clip target cell"
+        page.wait_for(".library-target .library-overall", timeout_ms=10000)
+        page.evaluate(OPEN_OVERALL)
+        page.wait_for(".library-overall-note", timeout_ms=10000)
+        note = page.evaluate(
+            "document.querySelector('.library-target .library-overall-note')"
+            ".textContent.replace(/[ \\n\\t]+/g, ' ').trim()")
+        assert "Link one above" in note, note
+        assert page.evaluate(
+            "document.querySelectorAll('.library-target .library-overall-table')"
+            ".length") == 0, "an ungraded target must draw no ladder"

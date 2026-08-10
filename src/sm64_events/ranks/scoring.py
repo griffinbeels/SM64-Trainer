@@ -18,7 +18,8 @@ Pure: no I/O, no db, no standards store."""
 from sm64_events.ranks.classify import RANK_NAMES
 
 __all__ = ["RANK_NAMES", "SCORE_ANCHORS", "TOP_SCORE", "DIVISIONS_PER_TIER",
-           "DIVISION_NUMERALS", "defined_tiers", "best_ladder", "score_for",
+           "DIVISION_NUMERALS", "defined_tiers", "best_ladder",
+           "best_ladder_owners", "score_for",
            "tier_from_score", "tier_band", "division_for", "progression_key",
            "next_tier_target", "division_progress", "time_for_score",
            "progress_for_time"]
@@ -56,6 +57,25 @@ def best_ladder(ladders: dict[str, dict[str, float]]) -> dict[str, int]:
             if rank not in out or cs < out[rank]:
                 out[rank] = cs
     return out
+
+
+def best_ladder_owners(ladders: dict[str, dict[str, float]]) -> dict[str, list[str]]:
+    """{strat: {rank: SECONDS}} -> {rank: [strat, ...]}, who SETS each tier of
+    `best_ladder`.
+
+    The pointwise minimum is a ladder no single strategy necessarily owns --
+    one way can be fastest at Mario while another sets Bronze -- so "what does
+    it take to rank up overall" is only half an answer without "and by doing
+    what". Ties are real and common (two ways published to the same
+    centisecond), so every winner is named rather than one picked arbitrarily;
+    order is the caller's iteration order, made stable by sorting."""
+    best = best_ladder(ladders)
+    owners: dict[str, list[str]] = {rank: [] for rank in best}
+    for strat, ladder in ladders.items():
+        for rank, seconds in ladder.items():
+            if int(round(seconds * 100)) == best[rank]:
+                owners[rank].append(strat)
+    return {rank: sorted(names) for rank, names in owners.items()}
 
 
 def score_for(ladder_cs: dict[str, int], time_cs: int) -> float | None:

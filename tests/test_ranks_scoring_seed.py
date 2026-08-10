@@ -11,7 +11,8 @@ import pytest
 
 from sm64_events.ranks.classify import rank_for
 from sm64_events.ranks.scoring import (
-    DIVISIONS_PER_TIER, best_ladder, defined_tiers, progress_for_time,
+    DIVISIONS_PER_TIER, best_ladder, best_ladder_owners, defined_tiers,
+    progress_for_time,
     score_for, tier_band, tier_from_score, time_for_score)
 
 SEED = Path(__file__).resolve().parents[1] / "src" / "sm64_events" / "data" / \
@@ -90,3 +91,36 @@ def test_no_shipped_ladder_can_owe_zero_centiseconds(name, ladder):
         gap = progress_for_time(ladder, time_cs)["next_gap_cs"]
         assert gap is None or gap >= 1, \
             f"{name} at {time_cs}cs owes {gap}cs to its next rank"
+
+
+def _entity_ladders():
+    """Per-ENTITY, unlike `_ladders` above: the overall ladder is a fact about
+    an entity's whole strategy set, so it cannot be checked one ladder at a
+    time."""
+    entities = json.loads(SEED.read_text())["entities"]
+    for key, entity in entities.items():
+        strategies = {name: ladder
+                      for name, ladder in entity.get("strategies", {}).items()
+                      if ladder}
+        if strategies:
+            yield key, strategies
+
+
+def test_every_named_owner_really_sets_its_tier():
+    """The Library's Overall Rank Standards table names, per tier, which
+    strategy sets that cutoff. If a named owner did not actually hold it, the
+    table would send the reader to practice the wrong strategy -- and it would
+    still agree with the entity banner beside it, since the banner only shows
+    the ladder's own numbers. Checked over every bundled entity."""
+    checked = 0
+    for key, ladders in _entity_ladders():
+        best = best_ladder(ladders)
+        owners = best_ladder_owners(ladders)
+        assert set(owners) == set(best), key
+        for tier, names in owners.items():
+            assert names, f"{key} {tier}: a cutoff nobody sets"
+            for name in names:
+                assert int(round(ladders[name][tier] * 100)) == best[tier], \
+                    f"{key} {tier}: {name} does not hold this cutoff"
+            checked += 1
+    assert checked >= 800, checked

@@ -1,6 +1,7 @@
 from sm64_events.ranks.classify import rank_for
 from sm64_events.ranks.scoring import (
-    SCORE_ANCHORS, best_ladder, defined_tiers, division_for, division_progress,
+    SCORE_ANCHORS, best_ladder, best_ladder_owners, defined_tiers,
+    division_for, division_progress,
     next_tier_target, progress_for_time, progression_key, score_for, tier_band,
     tier_from_score, time_for_score)
 
@@ -241,3 +242,23 @@ def test_the_returned_division_always_matches_the_returned_score():
         progress = progress_for_time(NUTS, time_cs)
         assert division_for(progress["score"], defined_tiers(NUTS)) == \
             (progress["tier"], progress["division"]), time_cs
+
+
+def test_best_ladder_owners_names_who_sets_each_tier():
+    # The pointwise minimum is a ladder no single strategy need own: one way
+    # can be fastest at Mario and another set Bronze. "What does it take to
+    # rank up overall" is only half an answer without "and by doing what",
+    # which is the half that says which strategy to go and practice.
+    ladders = {"Sideflip": {"Mario": 10.93, "Gold": 12.00},
+               "Owlless": {"Mario": 11.36, "Gold": 11.63}}
+    assert best_ladder(ladders) == {"Mario": 1093, "Gold": 1163}
+    assert best_ladder_owners(ladders) == {
+        "Mario": ["Sideflip"], "Gold": ["Owlless"]}
+
+
+def test_best_ladder_owners_names_every_winner_of_a_tie():
+    # Two ways published to the same centisecond is ordinary, not exotic, and
+    # picking one arbitrarily would tell the reader to practice a strategy
+    # that is no better than the one beside it.
+    ladders = {"A": {"Mario": 10.0}, "B": {"Mario": 10.0}, "C": {"Mario": 10.5}}
+    assert best_ladder_owners(ladders) == {"Mario": ["A", "B"]}
