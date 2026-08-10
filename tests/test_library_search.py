@@ -44,6 +44,7 @@ INDEX = json.dumps({
              "entries": 4, "approach_names": ["LBLJ (Lobby)", "Backwards long jump"]},
         ]},
     ],
+    "runners": {"cheese05": [1, 3], "Wario 3": [2]},
 })
 
 
@@ -121,3 +122,43 @@ def test_a_missing_approach_names_field_is_not_a_crash():
     hits = run(f"m.searchTargets({older}, 'stop')")
     assert [hit["target"]["index"] for hit in hits] == [7]
     assert run(f"m.searchTargets({older}, 'lblj')") == []
+
+
+def test_a_runner_finds_every_target_they_have_a_time_on():
+    """The third thing a query can be: WHO ran it."""
+    hits = search("cheese05")
+    assert [hit["target"]["index"] for hit in hits] == [1, 3]
+    assert all(hit["runner"] == "cheese05" for hit in hits)
+    assert all(hit["matched"] is None for hit in hits)
+
+
+def test_a_runner_narrows_with_a_place():
+    """A runner is the coarsest match here -- one real runner appears on 324
+    targets -- so the words have to be shareable between the runner's name and
+    the target's own, or a prolific name floods the list."""
+    assert [hit["target"]["index"] for hit in search("cheese05 tick")] == [1]
+    assert search("cheese05 rainbow") == []
+
+
+def test_a_name_match_outranks_a_runner_match_on_the_same_target():
+    """A target claimed by its own label keeps that reason: telling him a
+    runner has a time there, under a name he just typed, answers a question he
+    did not ask."""
+    hits = search("wario")            # a runner AND nothing else here
+    assert [hit["target"]["index"] for hit in hits] == [2]
+    assert hits[0]["runner"] == "Wario 3"
+    assert run(f"m.resultSub({json.dumps(hits[0])})") == "Wario 3 has a time here"
+    # "roll into" is target 2's own label, so the label wins and no runner is
+    # credited even though Wario 3 has a time on it.
+    label_hit = search("roll into")[0]
+    assert label_hit.get("runner") is None
+    assert run(f"m.resultSub({json.dumps(label_hit)})") == "1 entry"
+
+
+def test_an_index_with_no_roster_is_not_a_crash():
+    """An index served by an older build carries no `runners` key."""
+    older = json.dumps({"groups": [{"group": "G", "targets": [
+        {"index": 7, "label": "Stop Watch", "entity_key": None, "entries": 2}]}]})
+    assert [hit["target"]["index"] for hit in run(
+        f"m.searchTargets({older}, 'stop')")] == [7]
+    assert run(f"m.searchTargets({older}, 'cheese05')") == []

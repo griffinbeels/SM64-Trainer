@@ -142,7 +142,33 @@ class LibraryStore:
                                    if way.get("name")],
                 "entries": sum(len(item["entries"]) for item
                                in target["approaches"] + target["subsections"])})
-        return {"sheet_revision": self.revision, "groups": list(groups.values())}
+        return {"sheet_revision": self.revision, "groups": list(groups.values()),
+                "runners": self._runner_roster()}
+
+    def _runner_roster(self) -> dict:
+        """`{runner: [target position, ...]}` — who has a time on what.
+
+        A ROSTER rather than a `runner_names` list per target, and the shape
+        was picked by measuring rather than by symmetry with `approach_names`
+        beside it. A runner appears on 124 targets on average and one appears
+        on 324, so the per-target shape repeats the same 448 names until it
+        weighs 340 KB against a 70 KB index; deduped this way it is 139 KB,
+        and the search reads it the same number of times either way.
+
+        Positions, not labels: they are the ids `groups[].targets[].index`
+        already carries, so the client joins without a second name→target
+        table of its own.
+        """
+        roster: dict[str, list[int]] = {}
+        for position, target in enumerate(self.payload["targets"]):
+            seen = set()
+            for way in target["approaches"] + target["subsections"]:
+                for entry in way["entries"]:
+                    name = entry.get("runner")
+                    if name and name not in seen:
+                        seen.add(name)
+                        roster.setdefault(name, []).append(position)
+        return roster
 
     def target(self, index: int) -> dict | None:
         targets = self.payload["targets"]

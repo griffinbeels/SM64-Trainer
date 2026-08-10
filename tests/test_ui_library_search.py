@@ -203,3 +203,53 @@ def test_a_query_matching_nothing_says_so(page):
     """)
     assert verdict == "ok", verdict
     clear(page)
+
+
+def test_a_runner_name_finds_the_targets_they_have_run(page):
+    """2026-08-10, his ask straight after the round landed. The runner is
+    DERIVED from the live roster rather than hardcoded, for the same reason
+    the approach word is: a name picked by hand can match a label and pass on
+    the wrong mechanism."""
+    picked = page.evaluate("""
+      (async () => {
+        const fold = (text) => String(text).toLowerCase()
+          .replace(/[^a-z0-9]+/g, ' ').trim();
+        const index = await (await fetch('/api/library')).json();
+        if (!index.runners) return JSON.stringify(null);
+        const labelWords = new Set();
+        for (const group of index.groups)
+          for (const target of group.targets) {
+            fold(group.group + ' ' + target.label).split(' ')
+              .forEach((word) => labelWords.add(word));
+            for (const name of (target.approach_names || []))
+              fold(name).split(' ').forEach((word) => labelWords.add(word));
+          }
+        for (const [name, positions] of Object.entries(index.runners)) {
+          const words = fold(name).split(' ').filter(Boolean);
+          if (words.length === 1 && words[0].length > 4
+              && !labelWords.has(words[0]) && positions.length > 1)
+            return JSON.stringify({name, word: words[0], count: positions.length});
+        }
+        return JSON.stringify(null);
+      })()
+    """)
+    import json as _json
+    picked = _json.loads(picked)
+    assert picked, "the index is not shipping a `runners` roster"
+
+    assert page.evaluate(TYPE % _json.dumps(picked["word"])) == "typed"
+    page.wait_ms(250)
+    verdict = page.evaluate("""
+      (() => {
+        const rows = Array.from(document.querySelectorAll(
+          '.library-page .library-result'));
+        if (!rows.length) return 'the derived runner found nothing';
+        const subs = rows.map((row) => row.querySelector(
+          '.library-result-sub').textContent);
+        if (!subs.some((sub) => sub.includes('has a time here')))
+          return 'no row credits a runner: ' + JSON.stringify(subs.slice(0, 4));
+        return 'ok';
+      })()
+    """)
+    assert verdict == "ok", f"{verdict} (runner was {picked['name']!r})"
+    clear(page)
