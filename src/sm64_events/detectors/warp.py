@@ -125,7 +125,7 @@ what keeps it out (test_warp.py pins that). The clock must see every tick, so
 it is observed in process() whether or not a touch fires — this detector has
 not been stateless since 2026-07-31, and now holds a pending touch as well."""
 from sm64_events.core.events import Event
-from sm64_events.core.landmark import landmark_at
+from sm64_events.core.landmark import EngagementWatch, landmark_at
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.core.timefmt import format_igt
 from sm64_events.detectors.igt_clock import IgtClock
@@ -139,7 +139,6 @@ def _destination(snapshot: GameSnapshot) -> tuple[int, int, int, int]:
             snapshot.warp_dest_area, snapshot.warp_dest_node)
 
 
-_UNSEEN = object()   # engagement never observed -- distinct from "nothing held"
 
 
 class WarpDetector:
@@ -178,42 +177,27 @@ class WarpDetector:
         self._held: dict | None = None
         self._dest: tuple[int, int, int, int] | None = None
         self._dest_written_at: int | None = None
-        self._engaged = _UNSEEN
-        self._engaged_changed_at: int | None = None
+        self._engaged = EngagementWatch()
         self._igt_ticked_at: int | None = None
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         if self._clock.empty():
             self._clock.observe(prev)
-        if self._engaged is _UNSEEN:
+        if not self._engaged.seen():
             # Baseline from prev, same pattern as the clock's seed above: a
             # touch on the very first pair is still a real CHANGE if prev was
             # engaged with nothing, while a detector built mid-session reads
             # whatever the pointer already held as unstamped -- i.e. stale,
             # the safe direction (mirrors _watch_destination's first-value
             # rule).
-            self._observe_engagement(prev)
-        self._observe_engagement(curr)
+            self._engaged.observe(prev)
+        self._engaged.observe(curr)
         self._watch_destination(curr)
         self._watch_igt_tick(prev, curr)
         events = self._release(prev, curr) + self._touch(prev, curr)
         self._clock.observe(curr)
         return events
 
-    def _observe_engagement(self, snapshot: GameSnapshot) -> None:
-        """Stamp the frame the engaged-object pointer last RETARGETED.
-
-        Identity is (behaviour, where) -- the same coordinate the landmark is
-        keyed by -- not the live position, which moves every frame on a
-        carried bob-omb and would read as perpetually fresh."""
-        found = landmark_at(snapshot)
-        identity = None if found is None else (found.behaviour, found.where)
-        if self._engaged is _UNSEEN:
-            self._engaged = identity
-            return
-        if identity != self._engaged:
-            self._engaged = identity
-            self._engaged_changed_at = snapshot.global_timer
     def _watch_igt_tick(self, prev: GameSnapshot, curr: GameSnapshot) -> None:
         """Stamp the frame Usamune's counter last MOVED. The gap since then is
         the pause streak: the counter ticks every frame game logic runs, so a
@@ -274,11 +258,9 @@ class WarpDetector:
         # lingering pointer anyway is how three CCM entries wore the lobby
         # door's key. A late write is adopted in _release.
         found = landmark_at(curr)
-        fresh = (found is not None
-                 and self._engaged_changed_at is not None
-                 and 0 <= curr.global_timer - self._engaged_changed_at
-                 <= self.ENGAGE_FRESH_FRAMES)
-        found = found if fresh else None
+        if not self._engaged.fresh_for(curr.global_timer,
+                                       self.ENGAGE_FRESH_FRAMES):
+            found = None
         self._held = {"frame": curr.global_timer, "level": curr.curr_level,
                       "area": curr.curr_area, "action": curr.mario_action,
                       "igt_frames": igt_frames, "igt_source": source,
@@ -302,9 +284,10 @@ class WarpDetector:
         # detectors/moment.py holds a poll for). A touch that read nothing
         # adopts a retarget landing just after it; anything later is the
         # destination's own spawn machinery and stays out.
+        changed_at = self._engaged.changed_at
         if (held["landmark"] is None
-                and self._engaged_changed_at is not None
-                and held["frame"] < self._engaged_changed_at
+                and changed_at is not None
+                and held["frame"] < changed_at
                 <= held["frame"] + self.ENGAGE_ADOPT_FRAMES):
             found = landmark_at(curr)
             if found is not None:

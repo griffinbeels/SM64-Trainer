@@ -124,7 +124,7 @@ def test_a_backward_jump_on_the_settle_poll_still_publishes_the_moment():
     The edge's own landmark stands, since a post-reset snapshot describes a
     different world."""
     det = MomentDetector()
-    det.process(snap(ACT_WALKING, 100, landmark_behaviour=TREE),
+    det.process(snap(ACT_WALKING, 100),
                 snap(ACT_GRAB_POLE, 101, landmark_behaviour=TREE))
     released = det.process(snap(ACT_GRAB_POLE, 101, landmark_behaviour=TREE),
                            snap(ACT_IDLE, 5))
@@ -134,14 +134,83 @@ def test_a_backward_jump_on_the_settle_poll_still_publishes_the_moment():
 
 def test_the_settle_never_crosses_a_place_change():
     """If the settle poll is somewhere else, `curr`'s engaged object belongs
-    to that other place — the edge's reading stands, stale or not."""
+    to that other place — the edge's own reading stands."""
     events = run([
-        snap(ACT_WALKING, 100, landmark_behaviour=SPAWN_MARKER),
+        snap(ACT_WALKING, 100),
         snap(ACT_PULLING_DOOR, 101, landmark_behaviour=SPAWN_MARKER),
         snap(ACT_PULLING_DOOR, 102, level=6, curr_area=3,
              landmark_behaviour=TREE),
     ])
     assert events[0].payload["landmark"]["behaviour"] == SPAWN_MARKER
+
+
+# -- a lingering pointer names nothing (2026-08-10) ---------------------------
+# *"when I FIRST TRIGGER the 70 Star door in Castle Inside, it actually gets
+# incorrectly marked as 'Trigger the WOODEN door in castle inside'... If I
+# rename it, it also renames the ACTUAL wooden door, which is wrong."*
+# A star door's dialog engages nothing, so the pointer still held the wooden
+# door he had walked through 453 frames earlier (journal ids 28313/28316).
+
+WOODEN_DOOR, STAR_DOOR = 0x800EBC8C, 0x800EB180
+ACT_AUTOMATIC_DIALOG = next(iter(next(m for m in MOMENTS
+                                      if m.kind == "textbox").actions))
+
+
+def test_a_moment_that_engaged_nothing_new_names_nothing():
+    events = run([
+        snap(ACT_WALKING, 100, level=6,
+             landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
+        # 453 frames of walking later the pointer STILL holds that door, and
+        # the star door's textbox is not about it.
+        snap(ACT_WALKING, 553, level=6,
+             landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
+        snap(ACT_AUTOMATIC_DIALOG, 554, level=6,
+             landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
+    ])
+    assert [e.payload["kind"] for e in events] == ["textbox"]
+    assert events[0].payload["landmark"] is None, (
+        "a lingering pointer must not lend its name to the next moment")
+
+
+def test_a_moment_that_engaged_something_of_its_own_still_names_it():
+    """Bowser's pre-fight dialogue retargets the pointer, and 7 of his 27
+    real textbox rows are that shape — the gate must not cost them."""
+    events = run([
+        snap(ACT_WALKING, 100, level=6,
+             landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
+        snap(ACT_AUTOMATIC_DIALOG, 101, level=6,
+             landmark_behaviour=STAR_DOOR, landmark_home=(-127.0, 3174.0, 3772.0)),
+    ])
+    assert events[0].payload["landmark"]["behaviour"] == STAR_DOOR
+
+
+def test_a_stale_edge_reading_is_refused_even_when_the_settle_cannot_help():
+    """The settle poll is somewhere else, so only the EDGE's own reading is
+    available — and it is a leftover, so the row names nothing."""
+    events = run([
+        snap(ACT_WALKING, 100, level=6,
+             landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
+        snap(ACT_WALKING, 553, level=6,
+             landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
+        snap(ACT_AUTOMATIC_DIALOG, 554, level=6,
+             landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
+        snap(ACT_AUTOMATIC_DIALOG, 555, level=24, curr_area=1,
+             landmark_behaviour=TREE),
+    ])
+    assert events[0].payload["landmark"] is None
+
+
+def test_the_engagement_age_rides_along_so_the_window_can_be_re_measured():
+    events = run([
+        snap(ACT_WALKING, 100, level=6),
+        snap(ACT_WALKING, 553, level=6,
+             landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
+        snap(ACT_WALKING, 900, level=6,
+             landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
+        snap(ACT_AUTOMATIC_DIALOG, 1006, level=6,
+             landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
+    ])
+    assert events[0].payload["engaged_age_frames"] == 1006 - 553
 
 
 # -- what this module deliberately does NOT emit ------------------------------

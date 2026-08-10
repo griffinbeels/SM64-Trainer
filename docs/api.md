@@ -488,6 +488,15 @@ held slots 3/2/0, then 38/42/44 after an area reload, then 3/2/0 again. A
 `kind:<behaviour>` key names a whole family game-wide instead, so naming
 "Pole" once names every pole in the game.
 
+**A moment names only what it ENGAGED, so many rows carry no landmark at all.**
+The pointer the game writes lingers — it holds the last thing Mario operated
+until something overwrites it — and a star door's dialog, like a painting,
+overwrites nothing. So `landmark` is taken only when that pointer retargeted
+around the moment's own frame; otherwise it is `null` and the row reads by its
+kind ("Trigger a textbox in Castle Inside"). Every `moment_reached` carries
+`engaged_age_frames` — how old the engagement was — as inert evidence for
+re-measuring that window.
+
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/landmarks` | `{names: {key: name}}` — the whole catalogue, kinds and instances in one map. One map rather than two endpoints because a row's label resolves from both. 503 in degraded mode. |

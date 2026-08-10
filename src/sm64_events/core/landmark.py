@@ -117,6 +117,80 @@ def landmark_at(snapshot) -> Landmark | None:
     )
 
 
+# --- the pointer LINGERS, so a reading needs a timestamp -------------------
+
+_UNSEEN = object()   # never observed -- distinct from "engaged with nothing"
+
+
+class EngagementWatch:
+    """WHEN the engaged-object pointer last retargeted, so a reading of it can
+    be told apart from a leftover.
+
+    THE ONE DOOR onto "is this engagement fresh", because the same misread has
+    now produced two live reports through two different detectors and a third
+    reader of `landmark_at` would have inherited it again:
+
+    * a PAINTING is level geometry and engages nothing, so three CCM entrance
+      rows wore the LOBBY DOOR he had opened 38 frames earlier and the rename
+      pencil edited the door (2026-08-08, `detectors/warp.py`);
+    * a STAR DOOR's dialog engages nothing either, so "Trigger the 70 Star
+      Door" journaled the WOODEN door he had walked through 453 frames (15 s)
+      earlier, and renaming that row renamed the wooden door with it
+      (2026-08-10, `detectors/moment.py`) -- *"I'm literally walking into the
+      70 star door... If I rename it, it also renames the ACTUAL wooden door,
+      which is wrong."*
+
+    Measured across his journal that day: of 27 textbox rows, **20 carried the
+    key of an engagement that was already a median 377 frames old** (max 3254 —
+    108 seconds), and not one of them was a fresh read. The 7 that were fresh
+    are the ones with an object of their own: Bowser's pre-fight dialogue in
+    both arenas, and the castle-grounds sign.
+
+    Identity is (behaviour, where) -- the coordinate the landmark is keyed by,
+    never the live position, which moves every frame on a carried bob-omb and
+    would read as perpetually fresh.
+
+    The FIRST reading is deliberately unstamped: a detector built mid-session
+    finds the pointer already holding something, and calling that a retarget
+    would name whatever Mario last touched before we were watching. Unstamped
+    means stale, which is the safe direction."""
+
+    def __init__(self):
+        self._identity = _UNSEEN
+        self._changed_at: int | None = None
+
+    @property
+    def changed_at(self) -> int | None:
+        """The frame the pointer last retargeted, or None if never seen to."""
+        return self._changed_at
+
+    def observe(self, snapshot) -> None:
+        found = landmark_at(snapshot)
+        identity = None if found is None else (found.behaviour, found.where)
+        if self._identity is _UNSEEN:
+            self._identity = identity
+            return
+        if identity != self._identity:
+            self._identity = identity
+            self._changed_at = snapshot.global_timer
+
+    def seen(self) -> bool:
+        """Whether anything has been observed yet — the caller's cue to
+        baseline off `prev` before judging `curr`."""
+        return self._identity is not _UNSEEN
+
+    def fresh_for(self, frame: int, before: int, after: int = 0) -> bool:
+        """Whether the retarget belongs to something that happened at `frame`.
+
+        `before` is how long an interaction may take to reach the pointer
+        BEFORE we look (the write lands on the action frame itself, plus
+        poller slack); `after` covers the write landing a poll LATE, which is
+        the lag both detectors already hold a poll for."""
+        if self._changed_at is None:
+            return False
+        return -after <= frame - self._changed_at <= before
+
+
 # --- one thing wearing several keys (round 13 items 2+3) -------------------
 #
 # A star door is TWO OBJECTS — the game builds it from two halves, each with

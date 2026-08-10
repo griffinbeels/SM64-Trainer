@@ -480,6 +480,40 @@ both journals before it was authored (the volcano = stars 4+5 across his
 41 grabs there; his six CCM 100-coin grabs landed INSIDE the slide, which
 is why star 6 rides every row); a subarea with no row filters nothing.
 
+## A lingering pointer must never lend its name — one watch, two detectors
+
+**2026-08-10.** `core/landmark.py::EngagementWatch` is THE answer to "is this
+engagement fresh", because the same misread has now produced two live reports
+through two detectors and a third reader of `landmark_at` would have inherited
+it again. His report: *"when I FIRST TRIGGER the 70 Star door in Castle Inside,
+it actually gets incorrectly marked as 'Trigger the WOODEN door'… If I rename
+it, it also renames the ACTUAL wooden door, which is wrong."*
+
+Journal ids 28313/28316/28317 are that walk: the wooden door at frame 133800,
+the star door's textbox **453 frames (15 s) later still carrying the wooden
+door's key**, and the star door itself finally reaching the pointer 47 frames
+after that, when it actually opens. So a star door's DIALOG engages nothing —
+exactly what a painting does to `warp.py`, and the rename collapse (same name =
+same landmark) is what turned a wrong label into an edit of a real door.
+
+Scored over his journal before the fix: of **27 textbox rows, 20 carried an
+engagement already a median 377 frames old (max 3254)** and not one of those
+was a fresh read. The other 7 are the rows with an object of their own —
+Bowser's pre-fight dialogue in both arenas, and the castle-grounds sign — so
+the gate costs nothing that deserved a name.
+
+`moment.py` gates at BOTH ends (the edge's own reading and the one-poll settle,
+`ENGAGE_FRESH_FRAMES` 4 / `ENGAGE_ADOPT_FRAMES` 6, warp.py's measured numbers);
+stale degrades to no landmark, never a foreign name. Every moment carries
+`engaged_age_frames`, inert, so the window moves from measurement rather than
+argument. Both gates mutation-proved in `tests/test_moment.py`.
+
+**FORWARD-ONLY, and this is the part to know before reading an old row**: the
+landmark is journaled in the payload, and unlike an entrance — whose identity
+derives from place + destination, which is why `eventlabel.entrance_key` could
+repair history — a textbox has NO derivable owner. A row journaled before this
+keeps the wrong name and still renames the group.
+
 ## A moment's landmark settles one poll late
 
 **A MOMENT IS A ONE-POLL HELD EMIT since 2026-08-07 (round 9 item 4), and it is THIRD in the chain because of it**: the event is built on the action edge — frame, igt, ordinal, action are all the edge's — but its LANDMARK is re-read from the NEXT poll, because the engaged-object pointer lags the action byte by a read. His first WF tree grab (journal id 2794, 2 s after spawning) named `bhvSpinAirborneWarp`, Mario's own SPAWN MARKER — the previous thing the pointer held — while every later grab that session read the tree; invisible until the kind catalogue landed, since both objects labelled "Grab a pole" identically, so the catalogue EXPOSED a pre-existing misread rather than causing one. A 60 Hz poll of a 30 fps game cannot miss the settle frame, and the hold costs 16 ms nobody can see. The settle is refused (edge reading stands) on a backward `global_timer` or when the settle poll is in a different level/area — a possibly-stale name beats a definitely-foreign one. Moving it behind star_grab/warp follows the same rule those two already obey: a held event describes the PAST and is published before anything describing the present, or an anchor on the settle tick closes the attempt the moment belongs to.

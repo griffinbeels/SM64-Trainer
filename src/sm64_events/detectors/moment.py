@@ -64,7 +64,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from sm64_events.core.events import Event
-from sm64_events.core.landmark import landmark_at
+from sm64_events.core.landmark import EngagementWatch, landmark_at
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.core.timefmt import format_igt
 from sm64_events.detectors.igt_clock import IgtClock
@@ -154,6 +154,25 @@ class MomentDetector:
     # rather than an argument -- keep them.
     DISPLAY_LAG_FRAMES = 1
 
+    # A MOMENT NAMES ONLY WHAT IT ENGAGED, and the engaged-object pointer
+    # LINGERS -- it holds the last thing Mario operated until something else
+    # overwrites it, and a star door's dialog overwrites nothing. His report,
+    # 2026-08-10: *"when I FIRST TRIGGER the 70 Star door... it actually gets
+    # incorrectly marked as 'Trigger the WOODEN door'... If I rename it, it
+    # also renames the ACTUAL wooden door, which is wrong."* Journal ids
+    # 28313/28316/28317 are that walk: the wooden door at frame 133800, the
+    # star door's textbox 453 frames later STILL carrying the wooden door's
+    # key, and the star door itself finally reaching the pointer 47 frames
+    # after that when it actually opens.
+    #
+    # So the landmark is taken only when the engagement RETARGETED around the
+    # action edge; anything older degrades to no landmark, never a foreign
+    # name. Same rule, same numbers and now the same code as `warp.py`'s
+    # painting fix (round 12 items 5+6) -- see `core/landmark.py`'s
+    # EngagementWatch for the measurement behind both.
+    ENGAGE_FRESH_FRAMES = 4
+    ENGAGE_ADOPT_FRAMES = 6
+
     def __init__(self, target_active: Callable[[], bool] = lambda: True):
         # Kept as an INJECTION POINT, defaulting permissive: `build()` no
         # longer passes one (see the module docstring on the retired
@@ -176,6 +195,9 @@ class MomentDetector:
         # still IN the grab (a 60 Hz poll of a 30 fps game cannot miss it), so
         # the re-read is unambiguous; the hold costs 16 ms nobody can see.
         self._pending: list[Event] = []
+        # WHEN that pointer last retargeted -- the only thing that separates a
+        # reading from a leftover. See ENGAGE_FRESH_FRAMES above.
+        self._engaged = EngagementWatch()
 
     def reset(self) -> None:
         """A new attempt opened: ordinals count from here.
@@ -188,6 +210,12 @@ class MomentDetector:
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         backward = curr.global_timer < prev.global_timer
+        if not self._engaged.seen():
+            # Baseline off `prev` so a retarget on the very first pair still
+            # counts as one, while whatever the pointer already held when this
+            # detector was built reads as stale (landmark.py's own rule).
+            self._engaged.observe(prev)
+        self._engaged.observe(curr)
         released = self._release(curr, backward=backward)
         if backward:
             # Savestate load / console reset: the ordinals we were counting
@@ -213,6 +241,14 @@ class MomentDetector:
             return []
         released, self._pending = self._pending, []
         for event in released:
+            # INERT EVIDENCE, the pattern star_grab and warp already use: how
+            # old the engagement was when this moment happened. If the gate
+            # ever strips a name off a row that deserved one, this number says
+            # by how much and the window moves from measurement rather than
+            # from argument. None = the pointer was never seen to retarget.
+            changed_at = self._engaged.changed_at
+            event.payload["engaged_age_frames"] = (
+                None if changed_at is None else event.frame - changed_at)
             if backward:
                 continue
             settled = landmark_at(curr)
@@ -220,6 +256,13 @@ class MomentDetector:
                 continue
             if (curr.curr_level != event.payload["level"]
                     or curr.curr_area != event.payload["area"]):
+                continue
+            # The settle may only ADOPT a retarget belonging to this moment —
+            # a pointer that has held the same object since long before the
+            # edge is the leftover this gate exists to refuse.
+            if not self._engaged.fresh_for(event.frame,
+                                           self.ENGAGE_FRESH_FRAMES,
+                                           self.ENGAGE_ADOPT_FRAMES):
                 continue
             event.payload["landmark"] = settled.payload()
         return released
@@ -252,7 +295,12 @@ class MomentDetector:
         # -- it is a property of the moment now rather than its name, which is
         # his own sentence -- and `landmark` is what a label and a subsection key
         # on. None where Mario engaged nothing the pool could name.
+        # Taken only when the engagement is FRESH -- a lingering pointer names
+        # the last door he walked through, not the thing he just did.
         found = landmark_at(curr)
+        if not self._engaged.fresh_for(curr.global_timer,
+                                       self.ENGAGE_FRESH_FRAMES):
+            found = None
         return Event(type="moment_reached", frame=curr.global_timer,
                      timestamp_utc=curr.wall_time_utc,
                      payload={"kind": kind, "ordinal": self._counts[kind],
