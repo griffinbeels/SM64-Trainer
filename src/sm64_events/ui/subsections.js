@@ -18,7 +18,7 @@
 // reason), so tests/test_ui_subsections.py drives the REAL rule under node --
 // a Python reimplementation would be a second copy of exactly the thing this
 // feature exists to have one of.
-import { entityKey } from "./entitysection.js";
+import { entityKey, isSegment } from "./entitysection.js";
 
 // The row's OWN entity key. A practice-log section and a selector
 // `segment_targets` row are different payloads for the same thing, and only
@@ -93,12 +93,30 @@ export const piecesFor = (rows, parentKey) => (rows || []).filter(
  *    An `area:` parent is a PLACE rather than an entity, names no section, and
  *    keeps the round-22 behaviour -- that is item 5 of that round and is
  *    untouched.
+ *
+ *    A piece that is itself a STAR is the one exception to "DISAPPEARS"
+ *    (decision 1, final review 2026-08-10, reds-as-subsection): it PROMOTES
+ *    to an ordinary top-level card instead. A star was a top-level card with
+ *    its own history and its own published ladder before this branch
+ *    existed -- unlike a segment piece, which has never been a standalone
+ *    card -- so hiding it as a side effect of its movement losing its OWN
+ *    card (disabled, deleted, or just never armed) is a larger change than
+ *    this branch asked for. Deliberately NOT generalised to a segment piece.
  *  - **A parent with a nesting child EARNS a card**, whether or not it earned
  *    one itself. Practicing only the piece would otherwise orphan it back to
  *    the top level on the very run that proves the association.
  */
 export function nestSubsections(sections, earned = () => true) {
-  const present = new Set(sections.map(entityKey));
+  // A DISABLED section is dropped from the log entirely (the `enabled`
+  // check a few lines down), so it must never count as a home either -- a
+  // parent that will never paint is not a card to nest inside. Before this
+  // (final review 2026-08-10, the disabled-parent half of C1) `present` was
+  // built from every section regardless of `enabled`, so disabling a
+  // Bowser reds/pipe movement took its nesting reds STAR down with it: the
+  // star still found "its" parent in the raw list, nested there, and the
+  // parent never rendered to hold it -- both cards gone from one toggle.
+  const present = new Set(
+    sections.filter((sec) => sec.enabled !== false).map(entityKey));
   // EVERY parent with a card, not the first one (round 24). A piece with no
   // such parent stays top-level, which is what covers an `area:`-parented
   // castle movement and a parent that earned no card of its own.
@@ -125,11 +143,22 @@ export function nestSubsections(sections, earned = () => true) {
     const children = nested.get(key) || [];
     // Drawn inside at least one parent, so not ALSO at the top level.
     if (homesOf(sec).length && earned(sec)) continue;
-    // ...and a piece of a STAR with no parent card on screen is not promoted
-    // to the top level, it simply is not shown (round 28). Its own children,
-    // if it somehow had any, would go with it -- a piece of a piece is already
-    // impossible (nesting is one level), so there is nothing to strand.
-    if (wantsAParent(sec) && !homesOf(sec).length) continue;
+    // ...and a piece of a castle MOVEMENT with no parent card on screen is
+    // not promoted to the top level, it simply is not shown (round 28). Its
+    // own children, if it somehow had any, would go with it -- a piece of a
+    // piece is already impossible (nesting is one level), so there is
+    // nothing to strand.
+    //
+    // A piece that IS A STAR is the one exception (decision 1, final review
+    // 2026-08-10, reds-as-subsection): it falls through and is treated as an
+    // ordinary top-level section instead (the `earned` check two lines
+    // down). A star was a top-level card with its own history and its own
+    // published ladder before this branch existed, so hiding it as a side
+    // effect of its movement losing its card -- disabled, deleted, or simply
+    // not yet earning one -- is a larger change than this branch asked for.
+    // Deliberately NOT generalised to a segment piece: that one has never
+    // been a standalone card, and round 28's rule for it is untouched.
+    if (wantsAParent(sec) && !homesOf(sec).length && isSegment(sec)) continue;
     if (!children.length && !earned(sec)) continue;
     groups.push({ sec, children });
   }

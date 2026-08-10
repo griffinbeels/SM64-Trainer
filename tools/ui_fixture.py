@@ -617,6 +617,28 @@ def _target_segment(base: str, segment_id: int) -> None:
             f"{error.read()[:200]!r}") from error
 
 
+def _disable_segment(base: str, segment_id: int) -> None:
+    """Flip a definition's `enabled` off through the real editor endpoint
+    (`PUT /api/segments/{id}`, the same PATCH the Segments tab's checkbox
+    sends) -- the render half of the disabled-parent gate (final review
+    2026-08-10, decision 1): the reds->pipe movement's OWN card must stop
+    rendering while its nesting star promotes to a top-level card of its
+    own, rather than both cards vanishing together."""
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(
+        f"{base}/api/segments/{segment_id}",
+        data=json.dumps({"enabled": False}).encode(),
+        method="PUT", headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(request, timeout=10)
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(
+            f"fixture could not disable segment {segment_id}: {error.code} "
+            f"{error.read()[:200]!r}") from error
+
+
 def _publish_bowser_stage(service, course_id: int, level: int) -> None:
     """Publish a `stage_changed` naming a Bowser-course PIPE stage (BitDW/
     BitFS/BitS) -- the one `mode` `seed_practice`'s own stage_changed call can

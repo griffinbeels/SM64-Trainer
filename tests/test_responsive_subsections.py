@@ -22,8 +22,10 @@ sweep with its own `Project`. Deliberately does NOT repeat
 `test_component_layout_gates_on_the_container` -- that law is a project-wide
 stylesheet scan and already runs once in `tests/test_responsive.py`.
 """
+import json
 import os
 import sys
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -40,7 +42,7 @@ from uilab.driver import get_driver  # noqa: E402
 from uilab.pytest_plugin import (  # noqa: E402,F401
     assert_no_new_defects, assert_no_stale_exemptions, uilab_sweep)
 from uilab_project import SUBSECTION_PROJECT, BOWSER_COURSE, BOWSER_LEVEL  # noqa: E402
-from ui_fixture import serve_ui  # noqa: E402
+from ui_fixture import serve_ui, _disable_segment  # noqa: E402
 
 # The plugin's `uilab_sweep` fixture reads this off the module.
 uilab_project = SUBSECTION_PROJECT
@@ -367,3 +369,89 @@ def test_the_reds_star_draws_inside_its_movement_s_card():
             f"the reds star is not nested inside it; nested {nested!r}")
         assert not any("Star" in name for name in top), (
             "the star must not ALSO be a top-level card")
+
+
+def test_the_reds_star_nests_even_when_its_movement_is_not_armed():
+    """The exact regression the final review reproduced as C1, 2026-08-10:
+    "a Bowser reds star that has recorded real attempts loses its
+    practice-log card entirely whenever its paired seg:reds->pipe:<abbrev>
+    movement is not armed. On his own database that is BitS's reds star,
+    today, in lifetime scope."
+
+    The render gate above only ever exercised the ARMED case (`enter_level`
+    is always given), which is why C1 survived review-free until the final
+    whole-branch pass caught it three independent ways. This is the same
+    fixture with `enter_level` OMITTED -- the star is grabbed for real
+    (`seed_reds_run`), but nobody has ever stood in the stage, so the
+    movement has never armed. Before the fix (`views.py`'s unconditional
+    `reds_pipe_with_a_nesting_star` publish) the star's card simply did not
+    exist anywhere on the page.
+
+    Mutation-proved: reverting the hoist back inside the armed loop's own
+    `continue` (i.e. gating the movement's section on `sid in armed` again)
+    makes this go red with an empty `top` and an empty `nested`."""
+    with serve_ui(reconcile_full_corpus=True,
+                  bowser_stage=(BOWSER_COURSE, BOWSER_LEVEL),
+                  seed_reds_run=True) as url, \
+            get_driver().launch() as page:
+        page.goto(url)
+        page.wait_for(".log-list-card")
+        page.wait_ms(400)
+        top = page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        nested = page.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.log-card-children > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert any("Pipe" in name for name in top), (
+            "the never-armed Reds movement earned no card of its own -- "
+            f"top cards {top!r}")
+        assert any("Star" in name for name in nested), (
+            f"the reds star vanished instead of nesting; nested {nested!r}")
+        assert not any("Star" in name for name in top), (
+            "the star must not ALSO be a top-level card")
+
+
+def test_a_star_promotes_to_top_level_when_its_movement_is_disabled():
+    """Decision 1, final review 2026-08-10: "a star must NOT vanish from the
+    practice log because a MOVEMENT was disabled. So when a star's only
+    parent has no card, the star promotes to top level rather than
+    disappearing." The review's own second reproduction of C1: disabling the
+    reds->pipe definition -- a supported control, untouched by this branch --
+    used to take the star's card down with it, because `nestSubsections`
+    still found the (disabled, unrendered) parent in the raw section list
+    and nested the star there instead of promoting it.
+
+    Mutation-proved: restoring `subsections.js`'s `present` set to include
+    disabled sections (or dropping the `isSegment` guard on the round-28
+    drop rule) makes this go red -- the star's name disappears from BOTH
+    `top` and `nested` instead of appearing in `top` alone."""
+    with serve_ui(reconcile_full_corpus=True,
+                  bowser_stage=(BOWSER_COURSE, BOWSER_LEVEL),
+                  enter_level=BOWSER_LEVEL,
+                  seed_reds_run=True) as base, \
+            get_driver().launch() as page:
+        segments = json.loads(urllib.request.urlopen(
+            f"{base}/api/segments", timeout=10).read())
+        pipe = next(s for s in segments
+                   if (s.get("seed_key") or "") == "seg:reds->pipe:bitdw")
+        _disable_segment(base, pipe["id"])
+        page.goto(f"{base}/ui/index.html")
+        page.wait_for(".log-list-card")
+        page.wait_ms(400)
+        top = page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        nested = page.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.log-card-children > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert not any("Pipe" in name for name in top), (
+            f"the disabled movement must not draw its own card; top {top!r}")
+        assert any("Star" in name for name in top), (
+            f"the star must promote to a top-level card of its own instead "
+            f"of vanishing; top {top!r}, nested {nested!r}")
+        assert not any("Star" in name for name in nested), (
+            "a promoted star has no card left to nest inside -- it must not "
+            f"also appear as a child; nested {nested!r}")

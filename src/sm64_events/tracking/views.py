@@ -1278,15 +1278,35 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # segment is ALSO something else's NESTING PARENT (ui/subsections.js's
     # `nestSubsections` rule 4: "a parent with a nesting child earns a
     # card"). Computed from the exact `seen` set the target/attempt branch
-    # above already built -- never a second "did he choose this" predicate,
-    # and never a general relaxation of the ambient-arm exemption below: the
-    # 100-coin star's own engine and the legacy pipe-entry trio are not
-    # `_reds_pipe_segments` pairings and so can never land in this set
-    # (`.claude/rules/hundred-coin.md`'s "one CARD, only when the entity is
-    # the target" -- those phantom-card counts still apply to them).
+    # above already built -- never a second "did he choose this" predicate.
+    # This genuinely IS a relaxation of the ambient-arm exemption below, not
+    # merely narrow, and it is stated that way rather than denied (final
+    # review 2026-08-10, I3): the 100-coin star's own engine and the legacy
+    # pipe-entry trio are not `_reds_pipe_segments` pairings and so can never
+    # land in this set (`.claude/rules/hundred-coin.md`'s "one CARD, only
+    # when the entity is the target" -- those phantom-card counts still
+    # apply to them), but for a REAL reds/pipe pairing this now publishes the
+    # movement's section from ANYWHERE, not only while armed in-stage -- see
+    # "The reds star's nesting exemption" in hundred-coin.md.
     reds_pipe_with_a_nesting_star = {
         seg_id for course_id, seg_id in reds_pipe_by_course.items()
         if (course_id, 0) in seen}
+    # Published UNCONDITIONALLY -- before the armed loop even runs, and
+    # regardless of whether the movement is currently armed at all (final
+    # review 2026-08-10, C1). The star's own `parents` stamp below names this
+    # segment the instant the star is `seen` (a real attempt or the live
+    # target), with no dependence on the player still standing in the stage
+    # -- so the section it nests inside must exist just as unconditionally,
+    # or a star with real recorded attempts loses its practice-log card the
+    # moment he walks away. Measured on his own database: BitS's reds star,
+    # 2 attempts, 0 on its own movement -- the card vanished outside BitS
+    # before this fix, every time. `nestSubsections` rule 4 ("a parent with
+    # a nesting child earns a card") then draws the movement with no
+    # attempts of its own, which is exactly what Griffin approved: "if we do
+    # the star subsection, it'll show it inside and earns the card in this
+    # case, yes."
+    for sid in reds_pipe_with_a_nesting_star:
+        seen_segs.setdefault(sid, None)
     for sid in sorted(armed):
         # A HUNDRED_COIN_EXIT engine arms ambiently on every entry to its
         # course -- excluded here so it never grows a segment section of
@@ -1310,14 +1330,16 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         # one may be his. An ambiently-armed def he DID choose still gets its
         # card and its live timer, through the target branch just above --
         # the identical `service.target` signal read here, not a second
-        # answer to "did he choose this". EXCEPT when the star it pairs with
-        # is itself seen (a real attempt or the live target) -- that star's
-        # own section is about to carry this segment as its `parents[0]`,
-        # and the practice log has nowhere to nest it if this branch drops
-        # the card the star needs to nest inside (spec
-        # 2026-08-10-reds-as-subsection, task 1).
-        if d is not None and arms_ambiently(d.start_triggers) \
-                and sid not in reds_pipe_with_a_nesting_star:
+        # answer to "did he choose this". No exception is needed here any
+        # more for a def paired with a nesting star: it already has its
+        # section from the UNCONDITIONAL publish above `reds_pipe_with_a_
+        # nesting_star` feeds, whether or not it is currently armed
+        # (`seen_segs.setdefault` is idempotent, so this loop simply agrees).
+        # Before the fix (final review 2026-08-10, C1) the exception here was
+        # the ONLY door, and it opened only while armed -- which is exactly
+        # what let a star with real recorded attempts lose its card the
+        # instant he walked out of the stage.
+        if d is not None and arms_ambiently(d.start_triggers):
             continue
         seen_segs.setdefault(sid, None)
     # NOT "armed is active now" for the 100-coin star's own section (deleted

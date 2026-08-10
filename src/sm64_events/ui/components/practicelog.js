@@ -35,7 +35,7 @@ import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
   from "./attemptlog.js";
 import { logTuning, logTuningVars, logTuningClasses, rankPlacementFor,
          nextStepModeFor, NARROW_CONTAINER_PX } from "../logtuning.js";
-import { nestSubsections } from "../subsections.js";
+import { nestSubsections, isPiece } from "../subsections.js";
 
 const html = htm.bind(h);
 
@@ -237,17 +237,33 @@ export function topEntityKey(view) {
 // resolved in practice.js against the UNFILTERED view, and the two lists
 // genuinely disagree: a Bowser course's reds star and its pipe segment tie on
 // `last_activity` (measured on his live session -- both 1414), stars sort
-// before segments, and `applyRedsPipeExclusivity` renders whichever half his
-// star/pipe toggle names. So the slot named the STAR while the log drew the
-// SEGMENT, `isCardOpen` matched nothing, and every card sat closed -- which is
-// exactly the screenshot that opened this round. A key that names no rendered
-// card is indistinguishable from "nothing qualifies", which is why it survived
-// a rule whose own tests were all green.
+// before segments, and `applyRedsPipeExclusivity` (retired 2026-08-10,
+// reds-as-subsection) rendered whichever half his star/pipe toggle names. So
+// the slot named the STAR while the log drew the SEGMENT, `isCardOpen`
+// matched nothing, and every card sat closed -- which is exactly the
+// screenshot that opened this round. A key that names no rendered card is
+// indistinguishable from "nothing qualifies", which is why it survived a
+// rule whose own tests were all green.
 export function autoOpenKey(sections, activeKey = null, playedKeys = []) {
   const rendered = sections || [];
   if (activeKey != null) {
     const active = rendered.find((sec) => entityKey(sec) === activeKey);
-    if (active && hasRecordedAttempts(active)) return activeKey;
+    // A NESTED active entity does not get the same second chance a
+    // top-level one does. "Only once it has recorded something" (the rule
+    // this clause otherwise enforces) was written for a card that stays
+    // VISIBLE, closed, either way -- but `Disclose` never mounts a closed
+    // body at all, so a piece that fails this check is not merely folded,
+    // it is ABSENT from the DOM until something else opens its parent.
+    // Before this (final review 2026-08-10, the suite's own stray failure)
+    // a freshly-targeted reds star with zero attempts -- the entity he is
+    // standing in front of RIGHT NOW -- rendered nowhere on the page at
+    // all, top-level or nested, even though its own section existed. A
+    // top-level active-but-empty card keeps the old, stricter rule
+    // unchanged: it is already visible with nothing open, so there is
+    // nothing broken to fix.
+    if (active && (hasRecordedAttempts(active) || isPiece(active))) {
+      return activeKey;
+    }
   }
   for (const key of playedKeys || []) {
     if (rendered.some((sec) => entityKey(sec) === key)) return key;
@@ -876,19 +892,26 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
     if (idx === -1) return;                // not a classified entity (unassigned)
     setShown((current) => (idx >= current ? idx + 1 : current));
   }, [focusKey]);
-  // Resolved HERE, never handed down pre-decided: `openCandidates` is the
-  // list the user is looking at, and `autoOpenKey`'s own comment records what
-  // it cost to learn that the page's raw view and the rendered list are two
-  // different lists. It is EVERY rendered card, top-level and nested alike --
-  // narrower than that (`sections` alone) let a [[subsection]] win the slot
-  // with nowhere for `isCardOpen` to ever find it, since a card that never
-  // reaches `autoOpenKey` can never hold `topKey` (round 2026-08-10,
-  // reds-as-subsection: the reds star, freshly grabbed and therefore the
-  // newest thing PRACTICED, nests inside its Reds/Pipe movement now instead
-  // of leading the page on its own).
-  const openCandidates = groups.flatMap((group) => [group.sec, ...group.children]);
-  const topKey = autoOpenKey(openCandidates, activeKey, playedKeys);
   const page = sections.slice(0, shown);
+  // Resolved HERE, never handed down pre-decided: `openCandidates` is every
+  // card that ACTUALLY RENDERS, top-level and nested alike -- bounded to
+  // `page` (final review 2026-08-10, I2), not every group's `sec` plus every
+  // child regardless of pagination. `sections` alone let a [[subsection]]
+  // win the slot with nowhere for `isCardOpen` to ever find it (round
+  // 2026-08-10, reds-as-subsection: the reds star, freshly grabbed and
+  // therefore the newest thing PRACTICED, nests inside its Reds/Pipe
+  // movement now instead of leading the page on its own) -- but the
+  // UNBOUNDED version traded that bug for a narrower one: a piece can be
+  // newer than its own PARENT, so `topKey` could name a child whose parent
+  // sits past "Show 5 more", and then nothing on screen opens at all --
+  // exactly the "zero open cards is the failure signature" this file's own
+  // render gate exists to catch. Bounding to `page` costs nothing a real
+  // session needs: `autoOpenKey`'s `playedKeys` fallback simply moves on to
+  // the next-newest key that IS rendered, the same self-heal it already
+  // does for an off-page TOP-LEVEL section.
+  const openCandidates = page.flatMap(
+    (sec) => [sec, ...(childrenOf.get(entityKey(sec)) || [])]);
+  const topKey = autoOpenKey(openCandidates, activeKey, playedKeys);
   // ONE renderer, used for a top-level card and for a nested [[subsection]]
   // alike (round 22) -- his "These cards should work exactly the same way as
   // normal" is structural here rather than a promise: a child goes through

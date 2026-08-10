@@ -34,6 +34,7 @@ REPO = Path(__file__).resolve().parent.parent
 UI = REPO / "src" / "sm64_events" / "ui"
 LOG_JS = UI / "components" / "practicelog.js"
 ENTITY_SECTION_JS = UI / "entitysection.js"
+SUBSECTIONS_JS = UI / "subsections.js"
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node not on PATH")
@@ -332,6 +333,19 @@ def _played_keys_source() -> str:
     assert has, "hasRecordedAttempts not found in practicelog.js — renamed?"
     return "\n".join([has.group(0),
                      _extract(log_source, "playedEntityKeys")])
+
+
+def _is_piece_source() -> str:
+    """`isPiece` (+ its own private `selfKey`) -- `autoOpenKey` reads it too
+    since 2026-08-10 (final review, the suite's own stray failure): a NESTED
+    active entity with zero attempts must still win the slot, or its parent
+    never opens and the piece never mounts at all."""
+    source = strip_comments(SUBSECTIONS_JS.read_text(encoding="utf-8"))
+    self_key = re.search(r"^const selfKey = .*?;$", source, re.M | re.S)
+    assert self_key, "selfKey not found in subsections.js — renamed?"
+    is_piece = re.search(r"^export const isPiece = .*?;$", source, re.M | re.S)
+    assert is_piece, "isPiece not found in subsections.js — renamed?"
+    return "\n".join([self_key.group(0), is_piece.group(0)])
 
 
 def _top_entity_key_source() -> str:
@@ -681,6 +695,7 @@ def test_the_slot_moves_the_moment_a_first_attempt_lands():
 def _auto_open_source() -> str:
     log_source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
     return "\n".join([_entity_key_source(),
+                        _is_piece_source(),
                         _played_keys_source(),
                         _extract(log_source, "autoOpenKey")])
 

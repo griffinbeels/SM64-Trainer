@@ -2813,13 +2813,26 @@ def _service_with_corpus(tmp_path):
     `_make_with_def`'s hand-built reds->pipe stand-in above, this exercises
     the REAL seg:reds->pipe:bitdw definition `_reds_pipe_segments` pairs by
     seed_key prefix, which is what the star section's own `parents` stamp
-    (spec 2026-08-10-reds-as-subsection) has to read."""
+    (spec 2026-08-10-reds-as-subsection) has to read.
+
+    Reconciles BEFORE constructing the service, not after -- `TrackerService`
+    caches `segment_defs` at construction (`_load_segment_defs`) and never
+    re-reads the table on its own, exactly like `main.py`'s real startup
+    order and `tools/ui_fixture.py`'s `reconcile_full_corpus`. Reconciling on
+    an already-started `make()` service left `_segment_defs` holding only the
+    10 legacy rows that predate the corpus, which stayed invisible until this
+    branch's C1 fix started building a section for a corpus-only segment id
+    (67) that `seg_defs.get()` could not find -- `TypeError` inside
+    `star_name`, not a missing section (final review 2026-08-10, fix wave)."""
     import json
     from sm64_events.core.paths import bundled_defaults_seed
     from sm64_events.tracking.defaults import reconcile_defaults
-    db, svc = make(tmp_path)
+    db = Database(tmp_path / "t.db")
+    db.set_state("stat_menu", REFERENCE_STAT_MENU)
     seed_data = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
     assert reconcile_defaults(db, seed_data) == []
+    svc = TrackerService(db, Broadcaster())
+    asyncio.run(svc.start())
     return db, svc
 
 

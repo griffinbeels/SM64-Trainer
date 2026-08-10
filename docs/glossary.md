@@ -123,7 +123,14 @@ library row's hide/show button. A [[star]] can be a subsection too, of a
 [[segment]] rather than of another [[star]]: a Bowser course's reds [[star]]
 already rides its Reds→Pipe [[segment]] as that movement's own waypoint, so
 its section carries the movement as its parent and its card nests inside
-the movement's, the same as any other piece. Inside a course a piece always
+the movement's, the same as any other piece — with one exception a
+[[segment]] piece does not get: when its parent [[segment]] draws no card of
+its own (disabled, or simply not armed anywhere the player has stood),
+the [[star]] promotes to an ordinary top-level card instead of disappearing.
+A [[star]] carried its own [[practice log]] entry and its own [[ladder]] long
+before it could ever be a piece of anything, so hiding it as a side effect of
+its parent's card going away would erase real history a [[segment]] piece —
+which has never stood alone — has none of. Inside a course a piece always
 belongs to something specific; a castle-side
 piece belongs either to a [[segment]] recorded in its area or to the area
 itself, which is as high as the castle goes. The [[recorder]]'s parent picker
