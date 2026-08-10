@@ -172,6 +172,30 @@ def test_a_moment_that_engaged_nothing_new_names_nothing():
         "a lingering pointer must not lend its name to the next moment")
 
 
+def test_opening_the_SAME_door_again_keeps_its_name():
+    """The regression the blanket gate caused, 2026-08-10: he practices BLJs by
+    reloading in front of the Upstairs Door and opening it over and over, so
+    the pointer already holds that door and nothing retargets. *"the door that
+    opens at 00\"06 is ALWAYS the Upstairs Door... these two are the same
+    thing!"* — 21 of 51 door rows had degraded to "Open a door in Castle
+    Inside". Pulling a door IS operating it, so the pointer is authoritative
+    whether or not its value moved."""
+    events = run([
+        snap(ACT_WALKING, 100, level=6),
+        # He opened it once; the pointer took it here and never moves again.
+        snap(ACT_WALKING, 101, level=6,
+             landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
+        snap(ACT_WALKING, 600, level=6,
+             landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
+        snap(ACT_PULLING_DOOR, 601, level=6,
+             landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
+    ])
+    assert [e.payload["kind"] for e in events] == ["door_open"]
+    assert events[0].payload["landmark"]["behaviour"] == WOODEN_DOOR
+    assert events[0].payload["engaged_age_frames"] == 601 - 101, (
+        "the evidence field still records how old the engagement was")
+
+
 def test_a_moment_that_engaged_something_of_its_own_still_names_it():
     """Bowser's pre-fight dialogue retargets the pointer, and 7 of his 27
     real textbox rows are that shape — the gate must not cost them."""

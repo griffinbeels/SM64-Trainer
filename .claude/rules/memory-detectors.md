@@ -559,8 +559,30 @@ the gate costs nothing that deserved a name.
 `moment.py` gates at BOTH ends (the edge's own reading and the one-poll settle,
 `ENGAGE_FRESH_FRAMES` 4 / `ENGAGE_ADOPT_FRAMES` 6, warp.py's measured numbers);
 stale degrades to no landmark, never a foreign name. Every moment carries
-`engaged_age_frames`, inert, so the window moves from measurement rather than
-argument. Both gates mutation-proved in `tests/test_moment.py`.
+`engaged_age_frames`, inert. Both gates mutation-proved in
+`tests/test_moment.py`.
+
+**IT APPLIES TO THE TEXTBOX ALONE (`Moment.needs_fresh_engagement`), and the
+half-day it did not is why that field exists.** Shipped as a blanket rule it
+cost every REPEAT opening of one door its name: he practices BLJs by reloading
+in front of the Upstairs Door and opening it again and again, so the pointer
+already holds that door and nothing retargets — *"the door that opens at 00"06
+is ALWAYS the Upstairs Door… (Open a Door in Castle Inside versus Open the
+Upstairs Door in Castle Inside — these two are the same thing!)"*. **The inert
+field paid for itself the same day**: read straight back out of it, **21 of 51
+door rows refused**, with BIMODAL ages — 0 or −1 where the pointer retargeted
+at the edge, 55..1160 where the same door was simply opened again.
+
+**The discriminator is whether the moment is ITSELF an object interaction.**
+Pulling a door, grabbing a pole, picking something up, entering a cannon: the
+action IS operating that object, so the game writes the pointer as part of it
+and the reading is authoritative whether or not the VALUE moved — "unchanged"
+means he did the same thing twice. Reading text is not an interaction, which
+is what leaves a textbox with nothing of its own to point at. The one-poll
+settle remains the fix for the write LAG in both cases. A per-kind behaviour
+allowlist ("a door_open must name a door") was the other candidate and is
+deliberately not built — this project already refused a static-kind allowlist
+once, because it is a list that rots while looking healthy.
 
 **FORWARD-ONLY, and this is the part to know before reading an old row**: the
 landmark is journaled in the payload, and unlike an entrance — whose identity

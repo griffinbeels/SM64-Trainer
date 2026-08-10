@@ -82,6 +82,15 @@ class Moment:
     # the door's, so an unmeasured kind carries the one value that has a
     # screenshot behind it and says so.
     display_lag: int = 1
+    # Whether this moment must see the engaged-object pointer RETARGET before
+    # it will believe it. FALSE for every kind whose action IS operating the
+    # object -- pulling a door, grabbing a pole, picking something up, climbing
+    # into a cannon -- because there the pointer is authoritative whether or
+    # not its VALUE moved, and demanding a change costs the second, third and
+    # fourth opening of the SAME door their name. See
+    # MomentDetector.ENGAGE_FRESH_FRAMES for the measurement that split this
+    # out of a blanket rule.
+    needs_fresh_engagement: bool = False
 
 
 # THE registry. One row per moment kind; the sets are the ones addresses.py
@@ -92,7 +101,11 @@ MOMENTS: tuple[Moment, ...] = (
     # A TEXTBOX READS THE RAW COUNTER -- his frame-stepped replay, 2026-08-10,
     # is the only kind of evidence this number has ever moved on. See
     # MomentDetector.DISPLAY_LAG_FRAMES.
-    Moment("textbox", A.DIALOG_ACTIONS, "Trigger a textbox", display_lag=-1),
+    # ...and it is the ONE kind that must see the pointer retarget: reading
+    # text is not operating an object, so the pointer may be holding something
+    # from minutes ago (the star door, 2026-08-10).
+    Moment("textbox", A.DIALOG_ACTIONS, "Trigger a textbox", display_lag=-1,
+           needs_fresh_engagement=True),
     Moment("pole_grab", A.POLE_GRAB_ACTIONS, "Grab a pole"),
     Moment("pickup", A.PICKUP_ACTIONS, "Pick up an object"),
     # Round 9 item 6: *"We also need to detect when the user enters a cannon"*
@@ -115,6 +128,12 @@ MOMENTS: tuple[Moment, ...] = (
     Moment("switch_press", frozenset(), "Press a switch"),
     Moment("enemy_defeated", frozenset(), "Defeat an enemy"),
 )
+
+
+def needs_fresh_engagement(kind: str) -> bool:
+    """Whether this kind may only name an object the pointer just retargeted
+    to. See `Moment.needs_fresh_engagement`."""
+    return any(m.kind == kind and m.needs_fresh_engagement for m in MOMENTS)
 
 
 def display_lag_for(kind: str) -> int:
@@ -209,11 +228,37 @@ class MomentDetector:
     # key, and the star door itself finally reaching the pointer 47 frames
     # after that when it actually opens.
     #
-    # So the landmark is taken only when the engagement RETARGETED around the
-    # action edge; anything older degrades to no landmark, never a foreign
-    # name. Same rule, same numbers and now the same code as `warp.py`'s
+    # So a TEXTBOX's landmark is taken only when the engagement RETARGETED
+    # around the action edge; anything older degrades to no landmark, never a
+    # foreign name. Same rule, same numbers and the same code as `warp.py`'s
     # painting fix (round 12 items 5+6) -- see `core/landmark.py`'s
     # EngagementWatch for the measurement behind both.
+    #
+    # IT APPLIES TO THE TEXTBOX ALONE, and the day it did not is the whole
+    # reason `Moment.needs_fresh_engagement` exists. Shipped as a blanket rule
+    # it cost every REPEAT opening of one door its name: he practices BLJs by
+    # reloading in front of the Upstairs Door and opening it again and again,
+    # the pointer already holds that door from the previous run, so nothing
+    # retargets and the row degraded to "Open a door in Castle Inside" beside
+    # "Open the Upstairs Door in Castle Inside" -- *"these two are the same
+    # thing!"* Read straight back out of the `engaged_age_frames` this change
+    # had just started journaling: **21 of 51 door rows refused**, and the
+    # ages are BIMODAL -- 0 or -1 where the pointer retargeted at the edge,
+    # 55..1160 where the same door was simply opened again.
+    #
+    # THE DISCRIMINATOR IS WHETHER THE MOMENT IS ITSELF AN OBJECT INTERACTION.
+    # Pulling a door, grabbing a pole, picking something up, climbing into a
+    # cannon: Mario's action IS operating that object, so the game writes the
+    # pointer as part of the action and it is authoritative whether or not the
+    # VALUE moved -- "unchanged" there means he did the same thing twice, not
+    # that we are reading a leftover. Reading text is not an interaction, so a
+    # textbox is the one kind with nothing of its own to point at. The
+    # one-poll settle stays the fix for the lag in BOTH cases.
+    #
+    # A per-kind BEHAVIOUR allowlist ("a door_open must name a door") was the
+    # other candidate and is deliberately not built: this project already
+    # refused a static-kind allowlist once, for the reason that it is a list
+    # that rots while looking healthy (core/landmark.py's docstring).
     ENGAGE_FRESH_FRAMES = 4
     ENGAGE_ADOPT_FRAMES = 6
 
@@ -301,12 +346,13 @@ class MomentDetector:
             if (curr.curr_level != event.payload["level"]
                     or curr.curr_area != event.payload["area"]):
                 continue
-            # The settle may only ADOPT a retarget belonging to this moment —
-            # a pointer that has held the same object since long before the
-            # edge is the leftover this gate exists to refuse.
-            if not self._engaged.fresh_for(event.frame,
-                                           self.ENGAGE_FRESH_FRAMES,
-                                           self.ENGAGE_ADOPT_FRAMES):
+            # For a kind that demands it, the settle may only ADOPT a retarget
+            # belonging to this moment — a pointer that has held the same
+            # object since long before the edge is the leftover it refuses.
+            if (needs_fresh_engagement(event.payload["kind"])
+                    and not self._engaged.fresh_for(event.frame,
+                                                    self.ENGAGE_FRESH_FRAMES,
+                                                    self.ENGAGE_ADOPT_FRAMES)):
                 continue
             event.payload["landmark"] = settled.payload()
         return released
@@ -339,11 +385,13 @@ class MomentDetector:
         # -- it is a property of the moment now rather than its name, which is
         # his own sentence -- and `landmark` is what a label and a subsection key
         # on. None where Mario engaged nothing the pool could name.
-        # Taken only when the engagement is FRESH -- a lingering pointer names
-        # the last door he walked through, not the thing he just did.
+        # For a kind that demands it, taken only when the engagement is FRESH
+        # -- a lingering pointer names the last door he walked through, not the
+        # thing he just did.
         found = landmark_at(curr)
-        if not self._engaged.fresh_for(curr.global_timer,
-                                       self.ENGAGE_FRESH_FRAMES):
+        if (needs_fresh_engagement(kind)
+                and not self._engaged.fresh_for(curr.global_timer,
+                                                self.ENGAGE_FRESH_FRAMES)):
             found = None
         return Event(type="moment_reached", frame=curr.global_timer,
                      timestamp_utc=curr.wall_time_utc,
