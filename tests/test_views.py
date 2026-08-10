@@ -1290,12 +1290,14 @@ def test_section_banner_sentinel_when_standards_but_no_strat(tmp_path):
     # entity HAS standards, active strat with a ladder but NO time on it yet →
     # UNRANKED (a PB on another strat must not be borrowed here)
     result2 = _section_banner(ranks, "star:2:2", strat="fast", basis=None, mode="pb")
-    assert result2 == {"rank": None, "reason": "unranked", "mode": "pb"}
+    assert result2 == {"rank": None, "reason": "unranked", "mode": "pb",
+                       "fitted": False}
     # entity HAS standards, active strat has no ladder → no_ladder sentinel
     result3 = _section_banner(ranks, "star:2:2", strat="unknown_strat",
                               basis={"frames": 343, "count": 1, "window": None},
                               mode="pb")
-    assert result3 == {"rank": None, "reason": "no_ladder", "mode": "pb"}
+    assert result3 == {"rank": None, "reason": "no_ladder", "mode": "pb",
+                       "fitted": False}
     # entity has NO standards → None (don't render banner at all)
     result4 = _section_banner(ranks, "star:8:1", strat=None, basis=None, mode="pb")
     assert result4 is None
@@ -1400,7 +1402,8 @@ def test_rank_by_star_grades_active_strat_for_quick_select(tmp_path):
     best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
     asyncio.run(svc.save_pb(best_aid, "igt"))
     view = build_session_view(db, svc, clock="igt")
-    assert view["rank_by_star"]["2:2"] == {"rank": "Diamond", "division": "III"}
+    assert view["rank_by_star"]["2:2"] == {"rank": "Diamond", "division": "III",
+                                           "fitted": False}
     # a star with a strat but no PB / no ladder is omitted, not None-valued
     asyncio.run(svc.set_strat(1, 0, "whatever"))
     view2 = build_session_view(db, svc, clock="igt")
@@ -1447,7 +1450,8 @@ def test_rank_uses_only_that_strategys_pb_not_the_overall_best(tmp_path):
     # Switch active strat to B: no time on B yet → UNRANKED (NOT A's Diamond).
     asyncio.run(svc.set_strat(2, 2, "B"))
     sec = build_session_view(db, svc, clock="igt")["stars"][0]
-    assert sec["rank"] == {"rank": None, "reason": "unranked", "mode": "pb"}
+    assert sec["rank"] == {"rank": None, "reason": "unranked", "mode": "pb",
+                           "fitted": False}
     assert sec["pb"]["igt"]["frames"] == 343         # overall best PB unchanged
 
     # Record a time on B (the slower 350f) and save it → B graded by its OWN
@@ -1658,7 +1662,8 @@ def test_a_time_filter_hiding_the_pb_run_regrades_and_is_reversible(tmp_path):
     [sec] = build_session_view(db, svc, clock="igt")["stars"]
     assert next(a for a in sec["attempts"] if a["id"] == a343)["cleared"] is True
     assert sec["pb"]["igt"] is None            # the 350f run has no save of its own
-    assert sec["rank"] == {"rank": None, "reason": "unranked", "mode": "pb"}
+    assert sec["rank"] == {"rank": None, "reason": "unranked", "mode": "pb",
+                           "fitted": False}
 
     asyncio.run(svc.clear_time_filter(2, 2))            # valid again
     [sec] = build_session_view(db, svc, clock="igt")["stars"]
@@ -1675,7 +1680,8 @@ def test_rank_mode_unranked_when_strat_has_no_valid_runs(tmp_path):
     asyncio.run(svc.set_strat(2, 2, "slow"))
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
-    assert sec["rank"] == {"rank": None, "reason": "unranked", "mode": "avg10"}
+    assert sec["rank"] == {"rank": None, "reason": "unranked", "mode": "avg10",
+                           "fitted": False}
 
 
 def test_rank_mode_unknown_stored_value_falls_back_to_pb(tmp_path):
@@ -2242,7 +2248,132 @@ def test_entity_strategies_report_an_ungraded_strategy_as_unranked_not_missing(t
     out = build_entity_strategies(db, svc, "star:2:2")
     strat_row = next(s for s in out["strategies"] if s["name"] == "fast")
     assert strat_row == {"name": "fast", "rank": None, "division": None,
-                         "score": None, "pb_display": None}
+                         "score": None, "pb_display": None, "pb_cs": None,
+                         "fitted": False}
+
+
+def test_entity_strategies_flags_a_sheet_derived_ladder_as_fitted(tmp_path):
+    """A strategy adopted from the Ultimate Sheet grades attempts exactly like
+    a community-vetted Daily Star one -- the picker can only warn the user
+    it's measured at 39-42% same-tier accuracy if this payload says which is
+    which (ranks/standards.py::is_fitted's own contract)."""
+    from sm64_events.tracking.views import build_entity_strategies
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    svc.ranks = _ranks(tmp_path)                # vetted-only: defines "fast"
+    svc.ranks.apply_sheet_ladders(
+        {"star:2:2": {"strategies": {"sheet strat": {"Mario": 11.0}}}})
+
+    out = build_entity_strategies(db, svc, "star:2:2")
+    vetted = next(s for s in out["strategies"] if s["name"] == "fast")
+    fitted = next(s for s in out["strategies"] if s["name"] == "sheet strat")
+    assert vetted["fitted"] is False
+    assert fitted["fitted"] is True
+
+
+def test_fitted_reaches_every_rank_surface_the_session_view_builds(tmp_path):
+    """The picker's step-3 list is not the only place a fitted (sheet-
+    derived) ladder can present itself as a vetted Daily Star one -- the
+    practice card's own banner, the entity's best-possible rank, the quick-
+    select grid medal, an attempt row's own medal, and the picker's pre-
+    strategy-choice number all grade against the SAME possibly-fitted ladder
+    and must all say so. Every one of them must ALSO flip to fitted: False
+    the moment the active strategy is a vetted one on the same entity --
+    proving this isn't a stuck True rather than a real derivation."""
+    from sm64_events.tracking.views import build_entity_ranks
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    svc.ranks = _ranks(tmp_path)                      # vetted-only: "fast"
+    # Strictly faster than "fast"'s own Mario (11.0) -- entity_rank's
+    # fastest_strat is the strategy that WINS the pointwise-min ladder, and a
+    # tie breaks alphabetically ("fast" < "sheet strat"), which would silently
+    # pick the vetted strategy and defeat this test.
+    svc.ranks.apply_sheet_ladders(
+        {"star:2:2": {"strategies": {"sheet strat": {"Mario": 9.0}}}})
+    db._conn.execute("UPDATE attempts SET strat_tag='sheet strat' WHERE course_id=2")
+    db._conn.commit()
+    asyncio.run(svc.set_strat(2, 2, "sheet strat"))
+    aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(aid, "igt"))
+
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert sec["rank"]["fitted"] is True
+    assert sec["entity_rank"]["fitted"] is True
+    assert view["rank_by_star"]["2:2"]["fitted"] is True
+    assert sec["attempts"][-1]["rank"]["fitted"] is True
+    assert build_entity_ranks(db, svc)["star:2:2"]["fitted"] is True
+
+    # Same entity, the vetted strategy instead -- everything graded against
+    # the ACTIVE strategy must flip, or "fitted" is a value that never
+    # actually moves. entity_rank is the one exception BY DESIGN (its own
+    # docstring): it grades the entity's best-POSSIBLE ladder across every
+    # strategy, active or not, so it stays True here -- "sheet strat" (9.0)
+    # is still faster than "fast" (11.0) and still owns that ladder.
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    asyncio.run(svc.save_pb(aid, "igt"))
+
+    view = build_session_view(db, svc, clock="igt")
+    [sec] = view["stars"]
+    assert sec["rank"]["fitted"] is False
+    assert sec["entity_rank"]["fitted"] is True
+    assert sec["entity_rank"]["fastest_strat"] == "sheet strat"
+    assert view["rank_by_star"]["2:2"]["fitted"] is False
+    assert sec["attempts"][-1]["rank"]["fitted"] is False
+    assert build_entity_ranks(db, svc)["star:2:2"]["fitted"] is False
+
+
+def test_entity_rank_flags_fitted_even_when_a_vetted_strategy_wins_mario(tmp_path):
+    """entity_rank's ladder is a POINTWISE MINIMUM across every strategy: a
+    vetted strategy can own the HARDEST shared tier (and so become
+    _fastest_strategy) while a completely different, fitted strategy still
+    sets an EASIER tier of that same graded ladder. fastest_strat's own
+    is_fitted cannot see that -- it stops narrowing at the first uniquely-
+    identified strategy, which here is the vetted one at Mario. A run graded
+    against this ladder is compared to EVERY tier's own cutoff (classify.
+    rank_for), contaminated tiers included, so fitted must ask the whole
+    ladder, not one name."""
+    from sm64_events.tracking.views import entity_rank
+
+    ranks = _ranks(tmp_path)      # vetted "fast": Mario 11.0, Diamond 12.0, Silver 13.0
+    # Slower than "fast" at Mario (so "fast" uniquely wins that tier and
+    # becomes fastest_strat) but FASTER at Silver (so it alone sets that
+    # tier of the pointwise-min ladder).
+    ranks.apply_sheet_ladders(
+        {"star:2:2": {"strategies": {
+            "sheet strat": {"Mario": 12.0, "Silver": 10.0}}}})
+
+    out = entity_rank(ranks, "star:2:2", 330)   # frames value is irrelevant here
+    assert out["fastest_strat"] == "fast"       # the vetted strategy, correctly
+    assert out["fitted"] is True                # but "sheet strat" still owns Silver
+
+
+def test_a_route_steps_rank_flags_a_sheet_derived_ladder(tmp_path):
+    """build_route_view's per-step rank goes through the SAME _strat_rank as
+    rank_by_star (module docstring's own claim) -- prove fitted rides along
+    there too, since a route step is a real place a user reads a rank."""
+    from sm64_events.tracking.views import build_route_view
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    svc.ranks = _ranks(tmp_path)
+    svc.ranks.apply_sheet_ladders(
+        {"star:2:2": {"strategies": {"sheet strat": {"Mario": 11.0}}}})
+    db._conn.execute("UPDATE attempts SET strat_tag='sheet strat' WHERE course_id=2")
+    db._conn.commit()
+    asyncio.run(svc.set_strat(2, 2, "sheet strat"))
+    aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    asyncio.run(svc.save_pb(aid, "igt"))
+
+    route_id = asyncio.run(svc.create_route({
+        "name": "R", "steps": [{"need": 1, "candidates": [
+            {"type": "star", "course": 2, "star": 2}]}]}))
+    view = build_route_view(db, svc, route_id)
+    assert view["steps"][0]["rank"]["fitted"] is True
 
 
 def test_a_defaulted_segment_disallows_the_blank_strategy(tmp_path):

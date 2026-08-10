@@ -5,8 +5,10 @@
 // route rank card and needed the same mechanism without header.js importing
 // marelo.js and marelo.js importing header.js back.
 import { h, Fragment } from "preact";
+import { useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
+import { SearchMenu } from "./searchselect.js";
 
 const html = htm.bind(h);
 
@@ -46,6 +48,30 @@ export function CardSelect({ id, name, label, title, options, value, onChange })
       ${options.map(([optionValue, optionLabel]) =>
         html`<option value=${optionValue}>${optionLabel}</option>`)}
     </select>
+  <//>`;
+}
+
+// ROUND 10 (2026-08-08): the route rank card's picker is round 9's
+// filterable popup now ("Let's also update the MARELO menu to use that new
+// type of dropdown") -- the one LONG dropdown among the four cards; the
+// other three stay native selects per round 9's own short-dropdown carve-out.
+// SAME one-hit-target mechanism as CardSelect: an invisible trigger button
+// stretched over the whole card (`.context-select > .context-card-trigger`,
+// beside the select rule in index.html), the card wearing the focus ring via
+// :has(). The menu overlays BENEATH the card, shifting nothing.
+export function CardSearchSelect({ label, title, menuTitle, groups, value, onPick }) {
+  const [open, setOpen] = useState(false);
+  return html`<${Fragment}>
+    <${Icon} name="chevron" size=${16} />
+    <button type="button" class="context-card-trigger" aria-label=${label}
+        title=${title} aria-expanded=${open}
+        onclick=${() => setOpen((prev) => !prev)}></button>
+    ${open ? html`<${SearchMenu} title=${menuTitle || label} groups=${groups}
+        onPick=${(picked) => {
+          setOpen(false);
+          if (picked !== value) onPick(picked);
+        }}
+        onClose=${() => setOpen(false)} />` : ""}
   <//>`;
 }
 

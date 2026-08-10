@@ -23,6 +23,9 @@ class FakeRanks:
     def strategies(self, key):
         return list(self._data.get(key, {}).keys())
 
+    def is_fitted(self, key, strat):
+        return False   # every fixture ladder here stands in for a vetted one
+
 
 RANKS = FakeRanks({"star:1:0": {"Fast": {"Mario": 45.0, "Gold": 60.0},
                                 "Slow": {"Mario": 50.0, "Gold": 65.0}}})

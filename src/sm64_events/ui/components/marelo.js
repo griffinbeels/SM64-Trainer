@@ -12,7 +12,7 @@ import { useRankClimb } from "../rankclimb.js";
 import { useRouteSwap } from "../routeswap.js";
 import { mareloTuning } from "../marelotuning.js";
 import { barEase } from "../climbcurve.js";
-import { CardSelect } from "./contextselect.js";
+import { CardSearchSelect } from "./contextselect.js";
 const html = htm.bind(h);
 
 // The rank name under the icon, and the SWAP's from/to text -- one place so
@@ -217,11 +217,13 @@ export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
       <span class="marelo-track"><i style=${`width:${barFillFraction * 100}%`}></i></span>
       <span class="meta">${fmtPoints(score)} pts</span>
     </span>
-    ${interactive && onPickRoute ? html`<${CardSelect} id="route-select"
-      name="active_route" label=${cardLabel}
+    ${interactive && onPickRoute ? html`<${CardSearchSelect}
+      label=${cardLabel} menuTitle="Pick your route"
       title="Which route you are practising — this is also what the rank rates"
-      options=${options} value=${activeRouteId == null ? "" : String(activeRouteId)}
-      onChange=${(event) => onPickRoute(
-        event.target.value ? Number(event.target.value) : null)} />` : null}
+      groups=${[{ label: null,
+                  options: options.map(([optionValue, optionLabel]) =>
+                    ({ value: optionValue, label: optionLabel })) }]}
+      value=${activeRouteId == null ? "" : String(activeRouteId)}
+      onPick=${(picked) => onPickRoute(picked ? Number(picked) : null)} />` : null}
   </div>`;
 }

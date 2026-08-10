@@ -52,7 +52,7 @@ function useFreshAttemptIds(t) {
   return freshIds;
 }
 
-export function Practice({ t, openCompare }) {
+export function Practice({ t, openCompare, openLibrary }) {
   // Records what this page actually PAINTS — the selector's cells and every
   // practice-log card — so a report about a cell that "was just there a
   // couple frames ago" is readable afterwards instead of guessable from a
@@ -390,7 +390,7 @@ export function Practice({ t, openCompare }) {
          once, for every width and every mode, and let the CSS block go. */""}
     <${PracticeLog} v=${v} t=${held} ui=${ui} freshIds=${freshIds}
       openCompare=${openCompare} focus=${focus} pick=${pick}
-      clearFocus=${clearFocus}
+      clearFocus=${clearFocus} openLibrary=${openLibrary}
       focusKey=${focusKey} onSelect=${selectFocus}
       activeKey=${live.activeKey} playedKeys=${frozen.playedKeys}
       openTargetPicker=${openTargetPicker} />

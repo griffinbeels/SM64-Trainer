@@ -271,7 +271,7 @@ thing you practice toward, rather than the thing you practice.
 
 ### Route step
 
-One entry in a [[route]]: a group of candidate [[target]]s and how many of them
+One item in a [[route]]: a group of candidate [[target]]s and how many of them
 you need. "Any 3 of these 7 [[star]]s" is one step, so a [[route]] tolerates you
 taking them in a different order.
 
@@ -368,11 +368,16 @@ it.
 
 ### Division
 
-One step inside a [[MARELO]] [[tier]], written as a roman numeral — the fine
-half of the rating, and the thing that moves often enough to feel like
-progress.
+One step inside a [[tier]], written as a roman numeral — the fine half of a
+[[MARELO]] rating, and since round 1 of the [[Library tab]] also how that
+page files every community [[sheet entry]] ("Wario 3"), so a reader can tell the
+top of a [[tier]] from its bottom at a glance.
 
-- **Lives** — the scorer (`src/sm64_events/ranks/scoring.py`)
+- **Lives** — the scorer (`src/sm64_events/ranks/scoring.py`), with a
+  pinned twin for the [[Library tab]]
+  (`src/sm64_events/ui/components/librarymodel.js`,
+  compared implementation-to-implementation by
+  `tests/test_cross_language_parity.py`)
 
 ### Scope
 
@@ -520,6 +525,81 @@ did not happen.
 
 - **Lives** — the world graph (`src/sm64_events/tracking/topology.py`)
 
+### Ultimate Sheet
+
+The community spreadsheet this trainer reads its [[approach]]es from — one row
+per documented way of doing a [[target]], one column per [[runner]].
+
+- **Lives** — the sheet reader (`src/sm64_events/library/sheet.py`)
+
+### Approach
+
+One documented way of doing a [[target]], as the [[Ultimate Sheet]] publishes
+it. Adopting an approach mints a [[strategy]] you can practice.
+
+- **Lives** — the library builder (`src/sm64_events/library/build.py`)
+- **Not** — a [[strategy]]. You practice a [[strategy]] and hold a [[personal
+  best]] on it; an approach is only what the community wrote down.
+
+### Sheet entry
+
+One [[runner]]'s recorded time for one [[approach]], and the video they linked
+to it.
+
+- **Lives** — the library builder (`src/sm64_events/library/build.py`)
+
+### Runner
+
+A person holding at least one [[sheet entry]] in the [[Ultimate Sheet]].
+
+- **Lives** — the library builder (`src/sm64_events/library/build.py`)
+
+### Matched strategy
+
+The vetted [[strategy]] an [[approach]] turns out to be — found by comparing
+whole [[ladder]]s, since one time alone can misread a JP result as three
+seconds slower than its US twin. A match shows your real [[rank]] and
+[[personal best]] beside the community's; an [[approach]] with no match stays
+sheet-only. It can carry its own variant: a [[100-coin star]]'s [[approach]]
+matches only inside the exit its [[runner]]s actually used.
+
+- **Lives** — the matcher (`src/sm64_events/library/adopt.py`)
+  → the "= your …" chip on the [[Library tab]]
+
+### Sheet piece
+
+A stretch inside one way of doing a [[target]] that the [[Ultimate Sheet]] times separately — the
+sheet's own [[subsection]] rows, a third kind of row beside whole
+[[approach]]es. A piece grades nobody until you link it (see [[adoption]]):
+the sheet is finer than your [[segment]]s, so you build the [[segment]] first
+and point the piece at it.
+
+- **Lives** — the library builder (`src/sm64_events/library/build.py`)
+  → the Pieces list on the [[Library tab]]'s target page
+
+### Adoption
+
+Your own assignment of a sheet row — a castle-movement [[approach]] or a
+[[sheet piece]] — to a [[segment]] you built, minting that [[segment]] a
+[[strategy]] with the community's [[ladder]] so every [[attempt]] grades there.
+Yours, not the community's: it lives beside your data and survives a
+refresh. The door sits beside the [[target]]'s own name on the
+[[Library tab]] and links the WHOLE [[target]] — one click adopts every
+laddered [[approach]] as its own [[strategy]] on the [[segment]]; a
+[[sheet piece]] keeps its own row-level door; unlink reverses the whole batch.
+The [[segment]] builder carries the same door from the other side — pick a
+sheet [[target]] while making or editing a [[segment]], and the link lands
+when you save. A [[segment]] whose name equals an entity-less
+[[target]]'s label
+associates by itself — no click — and an associated row shows your standing
+at once: your [[segment]]'s best [[personal best]] graded on the row's own
+displayed [[ladder]], or Capless ([[Iron]]) when you hold no time yet. Where
+the [[segment]] already carries a community-vetted [[strategy]] of the same
+name, the assignment still lands and the vetted [[ladder]] keeps grading.
+
+- **Lives** — the assignments (`src/sm64_events/library/adoptions.py`)
+  → the link strip on the [[Library tab]]'s target page
+
 ---
 
 ## What is on screen
@@ -539,6 +619,34 @@ pill]], the [[scope]] control, and your [[rank]]s across everything.
 
 - **Lives** — the rank page
   (`src/sm64_events/ui/components/rankpage.js`)
+
+### Library tab
+
+The screen for browsing every [[approach]] the [[Ultimate Sheet]] documents.
+Opens straight on whichever [[star]] or [[segment]] you last practiced,
+otherwise a course grid to browse into; open one and its [[approach]]es lay
+out beginner to expert, each one's community times banded by the [[rank]]
+they earn, and each [[rank]] band split into its five [[division]]s —
+collapsed until you open the exact one you want to study. An [[sheet entry]] with a
+video draws a playable card; one without draws a compact [[runner]]-and-time
+row. The [[tray]] collects [[sheet entry]] rows to compare side by side.
+
+- **Lives** — the tab (`src/sm64_events/ui/components/library.js`,
+  `src/sm64_events/ui/components/librarynav.js`,
+  `src/sm64_events/ui/components/librarytarget.js`)
+- **Not** — the [[Practice tab]]. The Library never sets your [[target]]; it
+  only shows what the community has recorded.
+
+### Tray
+
+The Library's comparison basket. Adding an [[sheet entry]] docks it here, keyed on
+its [[approach]], its [[runner]] and its time together — never on its clip
+alone, since one video regularly stands as evidence for more than one
+[[star]]. "Play all" plays every docked clip loosely together; Study in
+Compare hands the whole tray to Compare's own transport instead, playing them
+back in lockstep.
+
+- **Lives** — the tray (`src/sm64_events/ui/components/librarytray.js`)
 
 ### Selector
 
@@ -668,6 +776,18 @@ currently grading it.
 - **Lives** — the log
   (`src/sm64_events/ui/components/practicelog.js`)
 
+### Book mark
+
+The icon on a [[practice log]] card that opens the [[Library tab]] at
+whatever [[target]] and last-played [[strategy]] the card's own [[standards
+ladder]] actually grades against — its own [[target]], except a paired
+Bowser reds card, which opens its paired [[star]] instead. A caller with
+nowhere to send it omits the icon outright, never a disabled one with no
+doorway behind it.
+
+- **Lives** — the doorway (`src/sm64_events/ui/components/practicelog.js`)
+  → the [[Library tab]]
+
 ### Progress graph
 
 The plot of your [[attempt]]s over one [[session]] or over your whole history,
@@ -730,7 +850,7 @@ consecutive pairs to every [[detector]], publish whatever they emit.
 
 ### Snapshot
 
-One coherent read of every piece of game state the [[detector]]s need, taken at
+One coherent read of all the game state the [[detector]]s need, taken at
 one instant so no two fields can straddle a change.
 
 - **Lives** — the snapshot (`src/sm64_events/core/snapshot.py`)

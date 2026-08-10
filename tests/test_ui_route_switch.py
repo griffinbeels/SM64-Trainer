@@ -90,21 +90,35 @@ ROUTE_NAMES = [
 TRIALS = 10
 SETTLE_SECONDS = 2.0
 
+# ROUND 10 (2026-08-08): the card's picker is the filterable popup now
+# (contextselect.js::CardSearchSelect), so a pick is trigger-click ->
+# option-click rather than a select value write. The short waits let Preact
+# mount the menu between the two clicks; the picks still land back-to-back
+# fast enough to contest the reconcile, which is what this test exists for.
 _DRIVE = """(async (ids) => {
-  const sel = document.getElementById('route-select');
-  if (!sel) return JSON.stringify({error: 'no route-select in DOM'});
   for (const id of ids) {
-    sel.value = String(id);
-    sel.dispatchEvent(new Event('change', {bubbles: true}));
+    const trigger = document.querySelector('.marelo-bar .context-card-trigger');
+    if (!trigger) return JSON.stringify({error: 'no card trigger in DOM'});
+    trigger.click();
+    await new Promise(r => setTimeout(r, 30));
+    const option = document.querySelector(
+      '.marelo-bar .search-menu-option[data-value="' + id + '"]');
+    if (!option) return JSON.stringify({error: 'no option for ' + id});
+    option.click();
+    await new Promise(r => setTimeout(r, 30));
   }
   return JSON.stringify({dispatched: ids});
 })(IDS)"""
 
+# The client's own remembered pick lives in localStorage now that no native
+# select carries a value (store.js::setRoute writes sm64.activeRoute); the
+# three-way agreement this test requires is unchanged -- client pick, card
+# label, server active_route.
 _MEASURE = """(() => {
-  const sel = document.getElementById('route-select');
+  const stored = localStorage.getItem('sm64.activeRoute');
   const label = document.querySelector('.marelo-bar-body .context-value');
   return JSON.stringify({
-    selectValue: sel ? sel.value : null,
+    selectValue: stored,
     cardLabel: label ? label.textContent : null,
   });
 })()"""
@@ -173,7 +187,7 @@ def test_rapid_route_switching_converges_with_multiple_connected_clients(tmp_pat
                 if not ok:
                     failures.append(
                         f"trial {trial}: expected route {expected_id} "
-                        f"({expected_name!r}) but select={select_id} "
+                        f"({expected_name!r}) but client_pick={select_id} "
                         f"server_active_route_id={server_active} "
                         f"card_label={measured['cardLabel']!r}")
 

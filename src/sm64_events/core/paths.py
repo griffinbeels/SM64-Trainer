@@ -174,6 +174,55 @@ def bundled_defaults_seed() -> Path | None:
     return cand if cand.exists() else None
 
 
+def sheet_library_path() -> Path:
+    """The user's own refreshed library, beside their other data."""
+    return data_root() / "data" / "sheet_library.json.gz"
+
+
+def library_adoptions_path() -> Path:
+    """Which library rows the USER assigned to segments they built. Theirs, not
+    the community's -- library_overrides.json is the other thing."""
+    return data_root() / "data" / "library_adoptions.json"
+
+
+def bundled_sheet_library() -> Path | None:
+    """The library snapshot shipped with the release. Mirrors
+    bundled_rank_standards() exactly."""
+    if is_frozen():
+        cand = Path(getattr(sys, "_MEIPASS", "")) / "sheet_library.seed.json.gz"
+        return cand if cand.exists() else None
+    cand = (Path(__file__).resolve().parent.parent / "data"
+            / "sheet_library.seed.json.gz")
+    return cand if cand.exists() else None
+
+
+def bundled_library_overrides() -> Path | None:
+    """The human's audit corrections to our READING of the sheet
+    (tools/audit_library.py), shipped beside a frozen exe (PyInstaller
+    _MEIPASS), else the in-repo file when running from source. Mirrors
+    bundled_rank_standards() exactly. Without this, a server-side refresh
+    (library/store.py::LibraryStore.refresh) rebuilds the library with no
+    overrides at all -- and since a refreshed copy carries a newer
+    sheet_revision, the un-corrected copy then wins over the bundled,
+    corrected one until the next release."""
+    if is_frozen():
+        cand = Path(getattr(sys, "_MEIPASS", "")) / "library_overrides.json"
+        return cand if cand.exists() else None
+    cand = Path(__file__).resolve().parent.parent / "data" / "library_overrides.json"
+    return cand if cand.exists() else None
+
+
+def bundled_sheet_ladders() -> Path | None:
+    """Ladders derived from the Ultimate Sheet. Its own file, never merged into
+    rank_standards.seed.json, so a fitted ladder structurally cannot overwrite
+    a vetted one. Mirrors bundled_rank_standards() exactly."""
+    if is_frozen():
+        cand = Path(getattr(sys, "_MEIPASS", "")) / "sheet_ladders.seed.json"
+        return cand if cand.exists() else None
+    cand = Path(__file__).resolve().parent.parent / "data" / "sheet_ladders.seed.json"
+    return cand if cand.exists() else None
+
+
 def install_root() -> Path:
     """Directory containing the running executable — the onedir install root
     when frozen (SM64Trainer.exe + _internal\\ live here). The updater and the

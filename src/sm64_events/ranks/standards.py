@@ -78,10 +78,18 @@ def _reconcile(stored: dict, seed: dict) -> dict:
 
 
 class RankStandards:
-    def __init__(self, path, seed_path=None):
+    def __init__(self, path, seed_path=None, sheet_path=None):
         self.path = Path(path)
         self.seed_path = Path(seed_path) if seed_path else None
+        # Ladders derived from the Ultimate Sheet, kept in their OWN file and
+        # merged only on READ. That is what makes "a fitted ladder never
+        # overwrites a vetted one" structural rather than a rule a test has to
+        # remember: nothing here can write into `self._data`, so `save()`
+        # cannot spill sheet-derived data into the user's standards file.
+        self.sheet_path = Path(sheet_path) if sheet_path else None
         self._data = {"version": 1, "entities": {}}
+        self._sheet = {}
+        self._sheet_jp = {}
 
     # ---- load / save ----
     def _read_valid(self, p):
@@ -93,7 +101,18 @@ class RankStandards:
             return None
         return d if isinstance(d, dict) and isinstance(d.get("entities"), dict) else None
 
+    def _load_sheet(self) -> None:
+        sheet = self._read_valid(self.sheet_path)
+        self._sheet, self._sheet_jp = {}, {}
+        for ek, entity in (sheet["entities"] if sheet else {}).items():
+            if "strategies" in entity:     # v2: the vetted seed's own two-layer shape
+                self._sheet[ek] = entity.get("strategies", {})
+                self._sheet_jp[ek] = entity.get("jp_strategies", {})
+            else:                          # v1: flat strat -> ladder
+                self._sheet[ek] = entity
+
     def load(self) -> None:
+        self._load_sheet()
         data = self._read_valid(self.path)
         seed = self._read_valid(self.seed_path)
         if data is None:
@@ -131,11 +150,75 @@ class RankStandards:
     def _entity(self, ek) -> dict:
         return self._data["entities"].get(ek, {})
 
-    def ladders(self, ek) -> dict:
+    def _stored_ladders(self, ek) -> dict:
+        """The user's own dict, for the paths that MUTATE it."""
         return self._entity(ek).get("strategies", {})
 
-    def ladder_cs(self, ek, strat) -> dict:
-        return {r: int(round(v * 100)) for r, v in self.ladders(ek).get(strat, {}).items()}
+    def ladders(self, ek) -> dict:
+        """Every ladder for this entity, vetted merged over sheet-derived.
+
+        A new dict each call, deliberately: a caller that mutated the result
+        would be editing a merge rather than the store, so the mutating paths
+        take `_stored_ladders` instead."""
+        vetted = self._stored_ladders(ek)
+        fitted = self._sheet.get(ek)
+        if not fitted:
+            return dict(vetted)
+        return {**fitted, **vetted}
+
+    def apply_sheet_ladders(self, mapping: dict) -> None:
+        """Merge user-assigned library ladders into the sheet-derived layer.
+
+        Same layer as the bundled ones on purpose: both are sheet-derived, both
+        lose to a vetted ladder, and neither can ever be written into the
+        user's standards file. Called again whenever an assignment changes, so
+        it REPLACES what it added last time rather than accumulating."""
+        self._load_sheet()
+        for entity, layers in (mapping or {}).items():
+            if "strategies" not in layers:           # tolerate the flat shape
+                layers = {"strategies": layers}
+            self._sheet.setdefault(entity, {}).update(layers.get("strategies", {}))
+            if layers.get("jp_strategies"):
+                self._sheet_jp.setdefault(entity, {}).update(layers["jp_strategies"])
+
+    def is_fitted(self, ek, strat) -> bool:
+        """Whether this ladder came from the sheet rather than the community's
+        vetted standards -- what a surface needs to say so."""
+        return strat in self._sheet.get(ek, {}) and strat not in self._stored_ladders(ek)
+
+    def fitted_strategies(self, ek) -> list:
+        return [s for s in self._sheet.get(ek, {}) if s not in self._stored_ladders(ek)]
+
+    def jp_deltas(self, ek, strat) -> dict:
+        """{rank: JP seconds} where the JP time is ANNOTATED as different --
+        the vetted seed's sparse `jp_strategies` overlay, or the sheet layer's
+        fitted JP ladder. Empty means no annotated difference, and the base
+        ladder applies to BOTH modes (user's rule, 2026-08-07: combined unless
+        a difference is written down)."""
+        vetted = self._entity(ek).get("jp_strategies", {}).get(strat)
+        if vetted:
+            return dict(vetted)
+        return dict(self._sheet_jp.get(ek, {}).get(strat, {}))
+
+    def has_jp_ladder(self, ek, strat) -> bool:
+        return bool(self.jp_deltas(ek, strat))
+
+    def ladder_cs(self, ek, strat, version=None) -> dict:
+        """The ladder a time on `version` grades against, in centiseconds.
+
+        `version="jp"` OVERLAYS the annotated JP values onto the base ladder,
+        rank by rank -- sparse overlays (the vetted seed annotates only the
+        ranks whose JP time differs) and full JP ladders (the sheet layer)
+        resolve through the same rule. Any other version, and any (ek, strat)
+        with no annotation at all, gets the base ladder unchanged.
+
+        WHICH version a given attempt should grade on is deliberately not
+        decided here: that is the console-support branch's N64-mode spec, and
+        this parameter is the door it resolves through."""
+        base = self.ladders(ek).get(strat, {})
+        if version == "jp":
+            base = {**base, **self.jp_deltas(ek, strat)}
+        return {r: int(round(v * 100)) for r, v in base.items()}
 
     def clock_for(self, ek) -> str:
         return self._entity(ek).get("clock", _default_clock(ek))
@@ -226,8 +309,10 @@ class RankStandards:
         A ladder with no thresholds in it does not count -- an entity present
         in the file with an empty strategies dict has standards in name only.
         """
-        return [ek for ek, entity in self._data.get("entities", {}).items()
-                if any(entity.get("strategies", {}).values())]
+        keys = {ek for ek, entity in self._data.get("entities", {}).items()
+                if any(entity.get("strategies", {}).values())}
+        keys |= {ek for ek, strategies in self._sheet.items() if any(strategies.values())}
+        return sorted(keys)
 
     def videos(self, ek) -> dict:
         return self._entity(ek).get("videos", {})
@@ -308,7 +393,9 @@ class RankStandards:
         return label
 
     def delete_strategy(self, ek, strat) -> None:
-        self.ladders(ek).pop(strat, None)
+        # The STORED dict, not the merged read -- popping from a merge would
+        # silently no-op and the strategy would still be there next load.
+        self._stored_ladders(ek).pop(strat, None)
         self.user_videos(ek).pop(strat, None)
         self.save()
 

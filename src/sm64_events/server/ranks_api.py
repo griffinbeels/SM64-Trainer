@@ -287,6 +287,13 @@ def create_ranks_router(service) -> APIRouter:
             return service.ranks.to_json()
         return {"entity": entity, "clock": service.ranks.clock_for(entity),
                 "strategies": service.ranks.ladders(entity),
+                # Which of the names above (keys of "strategies") came off the
+                # Ultimate Sheet rather than community-vetted standards --
+                # ranks.is_fitted's own contract, exposed as a sibling LIST
+                # rather than a per-strategy bool, since "strategies" is a
+                # {name: ladder} dict and a "fitted" key inside a ladder
+                # would collide with its own tier names (Mario, Bronze, ...).
+                "fitted_strategies": service.ranks.fitted_strategies(entity),
                 "videos": service.ranks.videos(entity),
                 "cutoff_videos": service.ranks.cutoff_videos(entity),
                 "user_videos": service.ranks.user_videos(entity),

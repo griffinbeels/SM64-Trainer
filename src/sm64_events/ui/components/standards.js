@@ -86,7 +86,8 @@ function inFamily(name, family) {
 }
 
 export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
-    defaultOpen = false, sectionRank = null, sectionPb = null, family = null }) {
+    defaultOpen = false, sectionRank = null, sectionPb = null, family = null,
+    openLibrary = null }) {
   const [open, setOpen] = useState(defaultOpen);
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -296,7 +297,26 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
                white slab (old Toad) was the live complaint that started
                this. capGradient falls back to null for a flat tier. -->
           <td style=${`background:${capGradient(rank) || rankColor(rank)};color:#111;font-weight:700`}
-              title=${`${capName(rank)} · ${rank} on xcams`}>${capName(rank)}</td>
+              title=${`${capName(rank)} · ${rank} on xcams`}>${capName(rank)}${
+            /* The standards-ladder deep link (spec 2026-08-07-library-page,
+               section 3: "each tier row... links into the Library at that
+               tier's band for the current target + strategy") -- one link
+               per ROW, not per cell, scoped to the ACTIVE strategy: this
+               table already interpolates "you are here" against `activeStrat`
+               alone (`marker`, above), and a tier is a fact about the whole
+               row, not about any one column. Hidden with no `activeStrat` --
+               `librarytarget.js`'s own deep-link effect requires a truthy
+               `focusStrat` to resolve a section at all, so a link with none
+               to offer would open the Library and land nowhere, which reads
+               as broken rather than as "did less than it promised". */
+            openLibrary && activeStrat
+              ? html`<button type="button" class="std-tier-link"
+                    title=${`See ${capName(rank)} examples in the Library`}
+                    onclick=${() => openLibrary({ kind: "target", entity,
+                        strat: activeStrat, tier: rank })}>
+                  <${Icon} name="library" size=${12} />
+                </button>`
+              : ""}</td>
           ${strats.map((strat) => {
             const v = (data.strategies[strat] || {})[rank];
             const vid = cutoffVid(strat, rank);

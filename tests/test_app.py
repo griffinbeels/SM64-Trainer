@@ -1,4 +1,5 @@
 # tests/test_app.py
+import json
 import signal
 import threading
 import time
@@ -53,6 +54,43 @@ def test_health_reports_unattached():
 def test_state_is_null_before_first_snapshot():
     with make_client() as client:
         assert client.get("/state").json() == {"snapshot": None}
+
+
+def test_refresh_applies_the_humans_audit_corrections(tmp_path, monkeypatch):
+    """A live POST /api/library/refresh must apply the SAME audit corrections
+    tools/scrape_sheet.py bakes into the bundled snapshot (library/audit.py's
+    load_overrides over core.paths.bundled_library_overrides()) -- without
+    them a refresh un-corrects every row the human fixed by hand, and (a
+    refreshed copy always carries a newer sheet_revision) the un-corrected
+    copy then wins over the bundled, corrected one until the next release."""
+    import sm64_events.core.paths as paths_mod
+    from sm64_events.library.build import SCHEMA_VERSION
+
+    overrides_path = tmp_path / "library_overrides.json"
+    written = {"targets": {}, "rows": {"some-row-key": {"kind": "approach"}}}
+    overrides_path.write_text(json.dumps(written), encoding="utf-8")
+    monkeypatch.setattr(paths_mod, "bundled_library_overrides",
+                        lambda: overrides_path)
+
+    captured = {}
+
+    def fake_build(data, fetched_at, overrides=None):
+        captured["overrides"] = overrides
+        # Deliberately OLDER than the real bundled snapshot, so refresh()
+        # returns before ever writing to the real (cwd-relative) local path.
+        return {"schema_version": SCHEMA_VERSION,
+                "sheet_revision": "2000-01-01T00:00:00", "fetched_at": fetched_at,
+                "runners": [], "ladder_model": {}, "targets": []}
+
+    monkeypatch.setattr("sm64_events.library.build.build", fake_build)
+    monkeypatch.setattr("sm64_events.library.ladders.fit_payload", lambda p: p)
+    monkeypatch.setattr("sm64_events.server.library_api.fetch", lambda: b"stub")
+
+    with make_client() as client:
+        resp = client.post("/api/library/refresh")
+    assert resp.status_code == 200
+    assert resp.json()["applied"] is False       # never wrote to a real path
+    assert captured["overrides"] == written
 
 
 def test_websocket_receives_published_events():

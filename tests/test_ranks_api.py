@@ -42,6 +42,21 @@ def test_get_empty_then_put_then_read_back(tmp_path):
         r = client.get("/api/ranks/standards", params={"entity": "star:8:2"})
         assert r.json()["strategies"]["Nuts Pless"]["Mario"] == 12.93
 
+def test_get_standards_names_which_strategies_are_sheet_derived(tmp_path):
+    """fitted_strategies must list a sheet-adopted strategy and never a
+    community-vetted one -- ranks.is_fitted's own contract, exposed as a
+    sibling list because "strategies" is a {name: ladder} dict a per-entry
+    "fitted" key would collide inside (a tier could be named "fitted")."""
+    client, svc = make_client(tmp_path)
+    with client:
+        svc.ranks.apply_sheet_ladders(
+            {"star:8:2": {"strategies": {"Sheet Strat": {"Mario": 11.0}}}})
+        r = client.get("/api/ranks/standards", params={"entity": "star:8:2"})
+        assert r.json()["fitted_strategies"] == ["Sheet Strat"]
+        r = client.get("/api/ranks/standards", params={"entity": "star:9:2"})
+        assert r.json()["fitted_strategies"] == []   # vetted-only, none fitted
+
+
 def test_delete_strategy_and_bad_rank(tmp_path):
     client, svc = make_client(tmp_path)
     with client:

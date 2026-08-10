@@ -33,13 +33,30 @@ def test_every_context_card_is_one_hit_target():
     # CardSelect and not of markup.
     assert strip_comments(HEADER_JS).count("<${ContextSelect}") == 2
     assert strip_comments(CONTEXT_JS).count("<${CardSelect}") == 1
-    assert strip_comments(MARELO_JS).count("<${CardSelect}") == 1
+    # ROUND 10: the route rank card is the ONE long dropdown among the four,
+    # so its picker is round 9's filterable popup -- through the SAME shared
+    # card mechanism (CardSearchSelect, defined beside CardSelect), never a
+    # hand-rolled lookalike. The other three cards stay native selects per
+    # round 9's short-dropdown carve-out.
+    assert strip_comments(MARELO_JS).count("<${CardSearchSelect}") == 1
+    assert "<${CardSelect}" not in strip_comments(MARELO_JS)
+    assert strip_comments(CONTEXT_JS).count("function CardSearchSelect") == 1
     rule = context_select_rule(INDEX_HTML)
     assert "position: absolute" in rule and "inset: 0" in rule, rule
     # Hidden by OPACITY, never by transparent colours: Chromium themes a
     # select's popup off its computed background, so a transparent one gets a
     # white list (tests/test_ui_dropdown_theming.py owns that rule).
     assert "opacity: 0" in rule, rule
+    # The trigger-button variant stretches the same way, or the rank card's
+    # hit target silently shrinks back to the chevron.
+    stripped_css = strip_comments(INDEX_HTML)
+    trigger_rule = re.search(
+        r"\.context-select > \.context-card-trigger \{([^}]*)\}", stripped_css)
+    assert trigger_rule, "the stretched card-trigger rule is gone"
+    body = trigger_rule.group(1)
+    assert "position: absolute" in body and "inset: 0" in body, body
+    assert "opacity: 0" in body, body
+    assert ".context-card-trigger:focus-visible" in stripped_css
 
 
 def test_the_settings_drawer_offers_a_debug_report():

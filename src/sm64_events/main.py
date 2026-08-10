@@ -202,8 +202,9 @@ def build():
                 "database unavailable - running broadcast-only")
             db = None
     from sm64_events.ranks.standards import RankStandards
-    from sm64_events.core.paths import rank_standards_path, bundled_rank_standards
-    ranks = RankStandards(rank_standards_path(), bundled_rank_standards())
+    from sm64_events.core.paths import rank_standards_path, bundled_rank_standards, bundled_sheet_ladders
+    ranks = RankStandards(rank_standards_path(), bundled_rank_standards(),
+                          bundled_sheet_ladders())
     ranks.load()
     if db is not None:
         # Editable-defaults reconcile (spec 2026-07-23-default-routes-

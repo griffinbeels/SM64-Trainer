@@ -1,0 +1,169 @@
+from sm64_events.library import ladders
+from sm64_events.ranks.classify import RANK_NAMES, rank_for
+
+
+def _spread(low, high, count):
+    step = (high - low) / (count - 1)
+    return [int(round(low + step * i)) for i in range(count)]
+
+
+def test_a_thin_row_gets_no_ladder():
+    # A feasibility floor, not an accuracy one: below it neighbouring
+    # percentiles land on the same observation and the "ladder" is three
+    # numbers wearing eight names.
+    assert ladders.fit_ladder(_spread(1000, 2000, ladders.MIN_ENTRIES - 1)) == {}
+    assert ladders.fit_ladder(_spread(1000, 2000, ladders.MIN_ENTRIES)) != {}
+
+
+def test_tiers_the_data_cannot_tell_apart_merge_instead_of_being_invented():
+    # Two distinct values in the whole population: the honest ladder has two
+    # tiers, not eight names spread over invented +1-frame thresholds. The
+    # faster rank of each colliding group survives.
+    ladder = ladders.fit_ladder([1200] * 40 + [1300] * 40)
+    values = [int(round(ladder[r] * 100)) for r in RANK_NAMES if r in ladder]
+    assert values == sorted(set(values)), values
+    assert len(values) <= 3, ladder
+    assert "Mario" in ladder
+
+
+def test_a_door_sized_population_never_gets_a_bronze_past_its_slowest_member():
+    """The frame-chain fabrication, pinned. A ~2s movement whose whole
+    community spread is four frames cannot carry eight tiers; the old forced
+    separation pushed Bronze a median 10 cs past its intended percentile with
+    0.0% of the population slower than it (measured 2026-08-06, 43 ladders)."""
+    from sm64_events.core.timefmt import attainable_cs
+    times = [230] * 30 + [233] * 40 + [236] * 20 + [240] * 10
+    ladder = ladders.fit_ladder(times)
+    cutoffs = [int(round(v * 100)) for v in ladder.values()]
+    assert max(cutoffs) <= attainable_cs(max(times)), ladder
+    assert len(cutoffs) == len(set(cutoffs))
+    assert len(cutoffs) <= 4, ladder          # four distinct frames observed
+    assert "Mario" in ladder                   # the top survives every merge
+
+
+def test_the_fastest_tier_is_near_the_fastest_times():
+    times = _spread(2000, 4000, 200)
+    ladder = ladders.fit_ladder(times)
+    mario = int(round(ladder["Mario"] * 100))
+    assert times[0] <= mario <= times[len(times) // 5]
+    assert ladder["Bronze"] > ladder["Mario"]
+
+
+def test_the_model_reproduces_its_own_percentiles():
+    from sm64_events.core.timefmt import attainable_cs
+    times = _spread(1000, 2000, 1001)      # one value per 0.01s, exactly linear
+    ladder = ladders.fit_ladder(times)
+    for rank, percent in ladders.LADDER_PERCENTILES.items():
+        raw = 1000 + (2000 - 1000) * percent / 100
+        # The percentile decides the cutoff and the timer decides which times
+        # exist, so the answer is the first DISPLAYABLE time at or after it --
+        # never the raw number, which is usually unhittable.
+        assert int(round(ladder[rank] * 100)) == attainable_cs(int(round(raw)))
+
+
+def test_every_cutoff_is_a_time_the_timer_can_actually_show():
+    from sm64_events.core.timefmt import GAME_FPS
+    displayable = {(f % GAME_FPS) * 100 // GAME_FPS for f in range(GAME_FPS)}
+    for low, high in ((1000, 2000), (517, 1013), (12345, 19999)):
+        ladder = ladders.fit_ladder(_spread(low, high, 200))
+        for rank, seconds in ladder.items():
+            assert int(round(seconds * 100)) % 100 in displayable, (rank, seconds)
+
+
+def test_quantising_only_ever_rounds_a_cutoff_UP():
+    """A cutoff is a threshold you must beat, so rounding down would quietly
+    make a rank harder than the number it was derived from. Up biases the
+    ladder gentle, which is the user's ruling (2026-08-05)."""
+    times = _spread(1000, 2000, 1001)
+    ladder = ladders.fit_ladder(times)
+    for rank, percent in ladders.LADDER_PERCENTILES.items():
+        raw = 1000 + (2000 - 1000) * percent / 100
+        assert ladder[rank] * 100 >= raw - 0.5
+
+
+def test_the_quantiser_is_replaceable():
+    """The model has already changed once; changing it again must stay cheap."""
+    times = _spread(1000, 2000, 200)
+    raw = ladders.fit_ladder(times, quantise=lambda cs: cs)
+    quantised = ladders.fit_ladder(times)
+    assert raw != quantised
+    assert all(quantised[r] >= raw[r] for r in raw if r in quantised)
+
+
+def test_a_cutoff_inside_a_real_gap_moves_to_its_slow_edge():
+    # A cycle star: everyone either catches it (~10s) or waits one (~13s).
+    # A cutoff left in the void between them decides a future time arbitrarily
+    # and lets two tiers share one gap, which mints a band nobody can occupy.
+    times = sorted([1000 + i for i in range(60)] + [1300 + i for i in range(60)])
+    ladder = ladders.fit_ladder(times)
+    for rank, seconds in ladder.items():
+        centiseconds = int(round(seconds * 100))
+        assert not (1060 < centiseconds < 1299), (rank, centiseconds)
+
+
+def test_every_recorded_time_lands_on_a_real_tier():
+    times = _spread(1500, 3000, 300)
+    ladder = ladders.fit_ladder(times)
+    graded = {rank_for({r: int(round(v * 100)) for r, v in ladder.items()}, t)
+              for t in times}
+    assert "Mario" in graded and len(graded) >= 6, graded
+
+
+def test_fit_payload_stamps_rows_and_records_the_model():
+    payload = {"targets": [
+        {"approaches": [{"name": "a", "entries": [{"time_cs": 1000 + i}
+                                                  for i in range(60)]}],
+         "subsections": [{"name": "s", "entries": [{"time_cs": 500}] * 3}]}]}
+    out = ladders.fit_payload(payload)
+    target = out["targets"][0]
+    assert "ladder" in target["approaches"][0]
+    assert "ladder" not in target["subsections"][0]      # too thin
+    assert out["ladder_model"]["fitted_rows"] == 1
+    assert out["ladder_model"]["rows_too_thin"] == 1
+    assert out["ladder_model"]["source"] == "sheet"
+    assert out["ladder_model"]["percentiles"] == dict(ladders.LADDER_PERCENTILES)
+
+
+def test_refitting_is_idempotent():
+    payload = {"targets": [
+        {"approaches": [{"name": "a", "entries": [{"time_cs": 1000 + i}
+                                                  for i in range(60)]}],
+         "subsections": []}]}
+    first = ladders.fit_payload(payload)["targets"][0]["approaches"][0]["ladder"]
+    second = ladders.fit_payload(payload)["targets"][0]["approaches"][0]["ladder"]
+    assert first == second
+
+
+def test_a_ladder_is_never_fitted_across_two_rom_versions():
+    # A (JP)/(US) pair merges into one approach holding both populations --
+    # JRB's stone pillar is 10.80 JP against 14.50 US -- and a ladder fitted
+    # across that pile spans a gap no single player can be on both sides of.
+    item = {"entries": [{"time_cs": 1080 + i, "version": "jp"} for i in range(40)]
+                       + [{"time_cs": 1450 + i, "version": "us"} for i in range(30)]}
+    times, version = ladders.row_times(item)
+    assert version == "us"
+    assert min(times) >= 1450
+
+
+def test_a_thin_us_population_does_not_discard_a_large_jp_one():
+    # US is preferred only when it clears the floor on its own; buying
+    # consistency by throwing 40 times away for 6 is not a trade worth making.
+    item = {"entries": [{"time_cs": 1080 + i, "version": "jp"} for i in range(40)]
+                       + [{"time_cs": 1450 + i, "version": "us"} for i in range(6)]}
+    times, version = ladders.row_times(item)
+    assert version == "jp" and len(times) == 40
+
+
+def test_an_unversioned_row_uses_everything():
+    item = {"entries": [{"time_cs": 1000 + i, "version": None} for i in range(20)]}
+    times, version = ladders.row_times(item)
+    assert version is None and len(times) == 20
+
+
+def test_fit_payload_records_which_population_each_ladder_describes():
+    payload = {"targets": [{"approaches": [
+        {"name": "a", "entries": [{"time_cs": 1450 + i, "version": "us"}
+                                  for i in range(30)]}], "subsections": []}]}
+    item = ladders.fit_payload(payload)["targets"][0]["approaches"][0]
+    assert item["ladder_version"] == "us"
+    assert item["ladder_samples"] == 30

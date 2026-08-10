@@ -296,7 +296,7 @@ export function isCardOpen(overrides, topKey, key) {
 
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, pick, selected, onSelect, forceOpen,
-                          open, onSetOpen,
+                          open, onSetOpen, openLibrary = null,
                           active = false, pieces = null,
                           nameOverflow = "ellipsis", rankIconSize = 24,
                           rankPlacement = "head", nextStepMode = "classic" }) {
@@ -543,11 +543,51 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            "open + turn to the right page + scroll + flash". */""}
       <${PbTag} pb=${sectionPb(sec, t.clock)} mode=${clock} rows=${rows}
         pick=${pbPick} t=${t} />
-      <button type="button" class="log-card-fold" onclick=${() => onSetOpen(!isOpen)}
-          aria-expanded=${isOpen ? "true" : "false"}
-          title=${`${isOpen ? "Collapse" : "Expand"} ${named.name}'s attempts`}>
-        <${Icon} name="chevron" size=${18} />
-      </button>
+      ${/* The book mark -- a doorway OUT to the community sheet for whatever
+           this card is showing: it opens the Library at this card's target
+           and strategy. It is the ONLY such doorway on the card now; the one
+           this comment used to compare itself to (StepTrack's onEdit, into
+           the Segments tab) was deleted with the step indicator on
+           2026-08-06, along with the whole openSegment chain (see app.js).
+           Shares the fold button's grid-area/flex row (`.log-card-actions`)
+           rather than claiming a new column -- adding a fifth named area
+           would mean re-deriving it across all four layout matrix cells
+           (oneLine/twoLine/stacked/stackNarrow) for one small icon, and
+           `.log-card-head`'s own comment already names that as the bug this
+           card's grid exists to avoid (the unassigned-card double-height
+           regression). Omitted entirely when the caller has no door to offer
+           (`ui/tunelog.js`'s inspector, which never passes it) -- never a
+           disabled button with nothing behind it.
+
+           FIX ROUND 1: opens `standards.entity`, NOT `ek`. A Bowser reds/pipe
+           PAIR publishes exactly one sheet target under the STAR's key --
+           `standardsIdentity(sec)` already resolves that for the ladder one
+           click below this button (`entitysection.js`: a pipe segment's own
+           `standardsIdentity().entity` is `sec.pipe_star_entity`, never
+           `segment:<id>`, because the sheet has no reds->pipe SEGMENT target
+           at all, only the paired star's). Opening `ek` instead sent this
+           card's book mark to `segment:<id>`'s own Library page -- a real
+           route that resolves to ZERO approaches (a 200 with an empty list,
+           never a 404), while the ladder directly below kept showing the
+           star's real, populated one. One card, one ladder, and now one
+           Library identity -- never two doors to the same standings. */""}
+      <div class="log-card-actions">
+        ${/* Wears the LIBRARY (open book) icon, the same glyph the nav's own
+             Library entry and the standards table's per-tier links wear -- a
+             door into the Library is the library icon everywhere (round 1,
+             2026-08-07: "the icon for the library should be... the book
+             icon"). `bookmark` is the marker glyph and stays on markers. */""}
+        ${openLibrary && html`<button type="button" class="log-card-library-link"
+            onclick=${() => openLibrary({ kind: "target", entity: standards.entity, strat: sec.last_strat })}
+            title=${`Open ${named.name} in the Library`}>
+          <${Icon} name="library" size=${15} />
+        </button>`}
+        <button type="button" class="log-card-fold" onclick=${() => onSetOpen(!isOpen)}
+            aria-expanded=${isOpen ? "true" : "false"}
+            title=${`${isOpen ? "Collapse" : "Expand"} ${named.name}'s attempts`}>
+          <${Icon} name="chevron" size=${18} />
+        </button>
+      </div>
     </div>
     <${Disclose} open=${isOpen} className="log-card-disclose">
       <div class="log-card-body">
@@ -598,7 +638,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
       <${StandardsPanel} entity=${standards.entity}
         activeStrat=${sec.last_strat} strategies=${sec.strategies}
         sectionRank=${sec.rank} sectionPb=${sec.pb}
-        family=${standards.family}
+        family=${standards.family} openLibrary=${openLibrary}
         onChanged=${t.refresh} defaultOpen=${false} />
       ${/* THE PIECES OF THIS ENTITY, inside its own card and indented one
            level (round 22). They sit INSIDE the `Disclose` body deliberately,
@@ -757,6 +797,7 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
 export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
                               clearFocus, focusKey, onSelect, activeKey = null,
                               playedKeys = [], openTargetPicker = null,
+                              openLibrary = null,
                               enforceMembership = true }) {
   const [shown, setShown] = useState(CARDS_PER_PAGE);
   // Per-entity fold overrides -- ONLY what the user has touched himself, in
@@ -907,6 +948,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
     const kids = (childrenOf.get(ek) || []).map(cardFor);
     return html`<${LogCard} key=${ek} sec=${sec} t=${t} ui=${ui}
       freshIds=${freshIds} openCompare=${openCompare}
+      openLibrary=${openLibrary}
       focus=${focus} clearFocus=${clearFocus} pick=${pick}
       selected=${ek === focusKey} onSelect=${onSelect}
       forceOpen=${ek === focusKey}

@@ -75,6 +75,24 @@ def app_args(ffmpeg: "str | None") -> list[str]:
         # (reconcile_defaults safely no-ops on a missing seed).
         "--add-data",
         f"{REPO / 'src' / 'sm64_events' / 'data' / 'defaults.seed.json'}{SEP}.",
+        # Ladders derived from the Ultimate Sheet (bundled_sheet_ladders() in
+        # core/paths.py). Without this entry the 75 sheet-derived strategies
+        # work perfectly from source and vanish from the released exe, which is
+        # a silent failure: the helper simply returns None and the store falls
+        # back to vetted ladders alone.
+        "--add-data",
+        f"{REPO / 'src' / 'sm64_events' / 'data' / 'sheet_ladders.seed.json'}{SEP}.",
+        # The library snapshot itself (bundled_sheet_library()). Same silent
+        # failure as above if omitted: the Library page simply has no data.
+        "--add-data",
+        f"{REPO / 'src' / 'sm64_events' / 'data' / 'sheet_library.seed.json.gz'}{SEP}.",
+        # The human's audit corrections to our reading of the sheet
+        # (bundled_library_overrides()). Without this entry a refresh run from
+        # the released exe rebuilds the library with none of them applied, and
+        # the un-corrected (but newer-revisioned) copy then wins over the
+        # bundled, corrected one until the next release.
+        "--add-data",
+        f"{REPO / 'src' / 'sm64_events' / 'data' / 'library_overrides.json'}{SEP}.",
     ]
     for pkg in COLLECT:
         argv += ["--collect-all", pkg]

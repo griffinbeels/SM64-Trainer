@@ -37,6 +37,7 @@ after:
 | Replay capture/encode/extract, compare, compilation | `replay/`, `compare/`, `core/recorder_lock.py` | `.claude/rules/replay-compare.md` |
 | Desktop shell, self-update, build, release | `desktop/`, `bootstrap/`, `core/update*`, `tools/build_exe.py`, `tools/release.py` | `.claude/rules/desktop-update-release.md` |
 | Ranks (classify, standards, scraper) | `ranks/`, `tools/scrape_ranks.py` | `.claude/rules/ranks.md` |
+| The Ultimate Sheet library (read, classify, map, snapshot) | `library/`, `tools/scrape_sheet.py` | `.claude/rules/library.md` |
 | The 100-coin star (its exit-star variants, and why one reset is one row) | `tracking/hundred_coin.py`, `ranks/standards.py` | `.claude/rules/hundred-coin.md` |
 
 Tests mirror modules: `tests/test_<module>.py` — read the test file first, it

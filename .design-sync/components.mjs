@@ -205,6 +205,8 @@ export const COMPONENTS = [
       ["sectionRank?", "RankBadge | null", "Rank shown in the collapsed header."],
       ["sectionPb?", "unknown", "PB shown in the collapsed header."],
       ["family?", "unknown", "Related entities the panel offers to switch between."],
+      ["openLibrary?", "(intent: unknown) => void",
+        "Opens the Library at a tier's community examples for the entity's active strategy."],
     ],
   },
   {

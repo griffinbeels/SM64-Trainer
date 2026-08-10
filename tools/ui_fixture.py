@@ -31,9 +31,11 @@ from pathlib import Path
 
 import uvicorn
 
+from sm64_events.compare.importer import VideoImporter
+from sm64_events.compare.service import CompareService
 from sm64_events.core.events import Event
 from sm64_events.core.timefmt import format_igt
-from sm64_events.core.paths import (bundled_defaults_seed, bundled_rank_standards,
+from sm64_events.core.paths import (bundled_defaults_seed, bundled_rank_standards, bundled_sheet_ladders,
                                     rank_standards_path)
 from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.app import create_app
@@ -61,6 +63,29 @@ class _OfflineMemory:
 
     def detach(self) -> None:
         pass
+
+
+# Task 6 fix round 2 (task-6-caveats.md's own root cause, cited three times
+# in ui-core.md): the fixture had NO Compare backend at all, so
+# `/api/compare/view` 404d under it no matter what the code did and a
+# content-asserting render test could only prove itself against a hand-built
+# harness. `serve_ui` now wires a REAL `CompareService` -- real sqlite
+# `comparisons` table, real `/api/compare/view` -- and stubs ONLY the two
+# genuinely slow, genuinely network-bound steps a gate should never run for
+# real: yt-dlp's download and ffmpeg's re-encode. Same idiom
+# `tests/test_compare_service.py::_svc` already uses for the server-side unit
+# tests, applied here so the UI layer gets the same real backend.
+def _fixture_downloader(source_ref: str, dest_dir: Path) -> Path:
+    p = dest_dir / "fixture-src.mp4"
+    p.write_bytes(b"fixture video bytes")
+    return p
+
+
+def _fixture_ffmpeg_runner(cmd: list[str]) -> None:
+    # cmd[-1] is VideoImporter's own tmp_out path (see
+    # VideoImporter._normalize_to_cache) -- writing bytes there IS the
+    # "normalize" step this fixture needs to fake.
+    Path(cmd[-1]).write_bytes(b"fixture normalized bytes")
 
 
 def snapshot_db(source: Path, destination: Path) -> Path:
@@ -98,6 +123,14 @@ def snapshot_db(source: Path, destination: Path) -> Path:
 # would otherwise have failed every time. Only mattered once something finally
 # asked "is the player standing where they can practice this" BEFORE an
 # attempt had already answered it implicitly.
+# Also the entity the Library tab (Task 3, spec 2026-08-07-library-page)
+# auto-opens to under PROJECT's own config (arm_segment=FIXTURE_SEGMENT,
+# seed_editor_fixtures=True): `seed_practice` runs AFTER `_arm_segment` and
+# `_pad_log_with_more_entities` in `serve_ui`'s own ordering below, so its
+# star_collected rows get the highest journal_id of anything the fixture
+# seeds -- confirmed by querying a live PROJECT-shaped instance directly
+# (`journal_id` 22, star:2:4, against 21 or lower for every other seeded
+# entity). `librarymodel.js::lastPracticed` is what reads that ordering back.
 FIXTURE_COURSE = 2
 FIXTURE_LEVEL = 24
 FIXTURE_STAR = 4
@@ -971,6 +1004,11 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
         db_path = Path(scratch.name) / "fixture.db"
         if from_dev_db and DEV_DB.exists():
             snapshot_db(DEV_DB, db_path)
+    # Own tempdir regardless of `scratch` above (which is None whenever the
+    # caller passed an explicit `db_path`) -- the compare cache needs
+    # somewhere to write fixture clips into and must never touch a real
+    # user's `core/paths.compare_cache_dir()`.
+    compare_cache_scratch = tempfile.TemporaryDirectory(prefix="sm64-fixture-cache-")
 
     database = Database(db_path)
     if reconcile_full_corpus:
@@ -994,11 +1032,31 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     # sweep run made exactly that mistake and under-reported the one card it
     # was built to measure (2026-07-28), which is the failure mode
     # .claude/rules/ui-core.md warns reads as a broken builder.
-    ranks = RankStandards(rank_standards_path(), bundled_rank_standards())
+    ranks = RankStandards(rank_standards_path(), bundled_rank_standards(),
+                          bundled_sheet_ladders())
     ranks.load()
     service = TrackerService(database, broadcaster, ranks=ranks)
     poller = Poller(_OfflineMemory(), [], service)
-    app = create_app(poller, broadcaster, service=service)
+    # Real CompareService over the SAME db/broadcaster/ranks the rest of the
+    # fixture already uses (`service` exposes `.db`/`.ranks`, exactly what
+    # CompareService's `tracker` param wants) -- only the network download
+    # and ffmpeg re-encode are faked. `title_probe` is stubbed too: the
+    # default hits YouTube's real oEmbed endpoint, and every import this
+    # fixture (or a caller) makes supplies a real `name`, never a bare URL,
+    # so the probe would never fire anyway -- stubbed defensively rather
+    # than relying on that staying true.
+    compare_importer = VideoImporter(
+        Path(compare_cache_scratch.name), "ffmpeg",
+        downloader=_fixture_downloader, runner=_fixture_ffmpeg_runner)
+    compare = CompareService(compare_importer, service, broadcaster,
+                             Path(compare_cache_scratch.name),
+                             title_probe=lambda url: None)
+    # `adoptions_path` into scratch: without it the link door's adopt/unadopt
+    # writes land in the REAL dev data dir (`data/library_adoptions.json`,
+    # cwd-relative from source) and leak state between test runs.
+    app = create_app(poller, broadcaster, service=service, compare=compare,
+                     adoptions_path=Path(compare_cache_scratch.name)
+                     / "library_adoptions.json")
 
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(
@@ -1079,3 +1137,4 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
         database.close()
         if scratch is not None:
             scratch.cleanup()
+        compare_cache_scratch.cleanup()

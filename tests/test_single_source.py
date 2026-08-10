@@ -105,6 +105,16 @@ def strategy_name_zone() -> tuple[Path, ...]:
 
 INVARIANTS = (
     SingleSource(
+        concept="the filterable dropdown popup",
+        owners=frozenset({"searchselect.js"}),
+        tokens=("search-menu-option", "search-menu-filter", "search-menu-head"),
+        files=ui_js(),
+        why="Round 9 (2026-08-08): 'we should basically reuse this anywhere "
+            "we have a dropdown selector' is not a mechanism until a second "
+            "implementation is a red build. The classes ARE the popup; a file "
+            "rendering them outside searchselect.js is building its own.",
+    ),
+    SingleSource(
         concept="how a background child process is spawned",
         owners=frozenset({"childproc.py", "installer.py"}),
         tokens=("CREATE_NO_WINDOW", "0x08000000", "FORCEOFFFEEDBACK"),

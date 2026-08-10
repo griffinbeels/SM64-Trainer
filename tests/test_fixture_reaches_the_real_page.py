@@ -148,6 +148,21 @@ def test_the_bowser_reds_pipe_pairing_renders_its_family_naming():
             "ui_fixture.py's enter_level) or views.py's pipe_star_entity "
             "stopped resolving it (tracking-storage.md's _reds_pipe_segments)")
 
+        # Task 7 fix round 1's own precondition: the ACTIVE card is a PAIRED
+        # segment (`pipe_star_entity` set), the one shape whose book mark must
+        # open the paired STAR's Library page rather than its own -- see
+        # tests/test_ui_library_links.py for the full regression. The book
+        # mark lives in `.log-card-head`, which renders whether or not the
+        # card is open, so no fold click is needed here -- this only pins
+        # that the fixture can produce the card the other file's test drives.
+        has_book_mark = opened.evaluate(
+            "!!document.querySelector('.log-card.log-card-active .log-card-library-link')")
+        assert has_book_mark, (
+            "the active paired-segment card carries no book mark button -- "
+            "either ui_fixture.py stopped reaching this state, or "
+            "practicelog.js stopped rendering one on a card an openLibrary "
+            "caller was given")
+
 
 def test_the_star_kind_carries_its_own_armed_detail():
     """The rule-11 ASYMMETRY, re-pointed at the payload 2026-08-06.
@@ -202,6 +217,41 @@ def test_the_star_kind_carries_its_own_armed_detail():
             assert only["steps"], (
                 f"the 100-coin engine armed with no steps: {only}")
             assert isinstance(only["progress"], int)
+
+
+# --- the Compare fold-in's backend (Task 6 fix round 2) --------------------
+# This file's own canary lesson, a fifth time: `serve_ui()` had NO Compare
+# backend at all until this round -- `create_app()` was never given
+# `compare=`, so `/api/compare/view` 404d regardless of what the app code
+# did, and every render test asserting `.compare-cmp` CONTENT (Task 6 fix
+# round 1) could only be proved against a hand-built harness, never this
+# shared fixture. Not a UI reach check (test_ui_library_compare.py already
+# drives the real click-through) -- this is the fixture's own promise that
+# the ROUTE exists at all, which is the thing that silently wasn't true.
+#
+# Placed HERE, above the module's own `page` fixture, for the SAME reason
+# the two tests above it are: `serve_ui()`'s own seeding calls `asyncio.run()`
+# internally, and running that in a thread whose event-loop state a prior
+# `get_driver().launch()` has already touched hits the identical, real
+# `asyncio.run() cannot be called from a running event loop` this file's own
+# `reach()` docstring names for two Playwright launches in one process —
+# measured directly: placed at the end of the file (after `page`'s many
+# launches) this failed with exactly that traceback; moved here, clean.
+
+def test_the_fixture_reaches_a_real_compare_backend():
+    """`/api/compare/view` must answer 200 with a real (empty) payload, not
+    404 -- confirms `serve_ui()` actually wires `compare=` into `create_app`
+    rather than leaving it `None`. A 404 here is indistinguishable from a
+    typo in the route path unless this asserts the STATUS, not just that a
+    response arrived."""
+    with serve_ui() as base:
+        with urllib.request.urlopen(
+                f"{base}/api/compare/view?entity=star:2:4", timeout=10) as r:
+            assert r.status == 200, r.status
+            body = json.loads(r.read())
+        assert body["entity"] == "star:2:4", body
+        assert body["saved"] == [], (
+            "a fresh fixture should have no saved comparisons yet")
 
 
 # Two viewports, not one: 1500x1000 (comfortably wide, side-by-side rank
@@ -895,24 +945,34 @@ def test_a_castle_area_tile_is_a_terminal_parent_pick(page):
     }
     return false;
   };
+  // SCOPED to the recorder's own dialog, never a bare `.entity-grid`. The
+  // Library tab (spec 2026-08-07-library-page) renders the SAME picker as
+  // its course browser and stays mounted with `display:none` when you leave
+  // it, so an unscoped query finds that hidden grid first (measured: one
+  // `.entity-grid` inside `.library-courses`, `offsetParent` null, present
+  // before this dialog opens) -- its own "Castle Movements (Lobby)" tile
+  // matched the text below and the drill it performed read as this dialog
+  // refusing to close. Same trap, same remedy as the `.library-search` scope
+  // in tools/uilab_project.py.
+  const grid = () => document.querySelector('.record-review .entity-grid');
   document.querySelector('.record-parent .entity-trigger').click();
-  if (!await waitFor(() => !!document.querySelector('.entity-grid')))
+  if (!await waitFor(() => !!grid()))
     return 'the parent dialog never opened';
-  const tiles = Array.from(document.querySelectorAll('.entity-grid button'));
+  const tiles = Array.from(grid().querySelectorAll('button'));
   const lobby = tiles.find((b) => b.textContent.includes('Lobby'));
   if (!lobby) return 'no Lobby tile: ' +
     JSON.stringify(tiles.map((b) => b.textContent.trim()).slice(-8));
   lobby.click();
-  if (!await waitFor(() => !document.querySelector('.entity-grid')))
+  if (!await waitFor(() => !grid()))
     return 'the dialog stayed open — the tile drilled instead of picking';
   const trigger = document.querySelector('.record-parent .entity-trigger');
   if (!trigger.textContent.includes('Lobby'))
     return 'the trigger reads ' + trigger.textContent.trim();
   // Leave the parent as it was found, through the dialog's own clear cell.
   trigger.click();
-  await waitFor(() => !!document.querySelector('.entity-clear'));
-  document.querySelector('.entity-clear').click();
-  await waitFor(() => !document.querySelector('.entity-grid'));
+  await waitFor(() => !!document.querySelector('.record-review .entity-clear'));
+  document.querySelector('.record-review .entity-clear').click();
+  await waitFor(() => !grid());
   return 'ok';
 })()
 """)
@@ -960,3 +1020,46 @@ def test_the_page_story_returns_to_practice_after_the_segments_tab(page):
     # (hidden by CSS at this viewport, still present in the DOM), so a wide
     # viewport genuinely has two.
     assert page.count('button.nav-item[title="Practice"][aria-current="page"]') >= 1
+
+
+# --- the Library tab (Task 3, spec 2026-08-07-library-page) ---------------
+# Appended at the end, per this file's own canary lesson at the top: a fixture
+# that does not reach the state a feature needs does not go red, it reports a
+# clean page nobody is looking at. Placed last so it inherits the "page" story
+# above's own self-healing return to Practice, rather than measuring whatever
+# tab the LAST test above it happened to leave open.
+
+CLICK_LIBRARY_TAB = 'document.querySelector(\'.nav-item[title="Library"]\').click()'
+
+
+@pytest.fixture(scope="module")
+def fresh_db_page():
+    """An UNSEEDED instance -- no stage, no target, no attempts anywhere --
+    so `librarymodel.js::lastPracticed` has nothing to resolve and the
+    Library tab's auto-open must fall back to the course grid rather than
+    erroring or rendering nothing (task-3-caveats.md point 3: null is the
+    empty-log case). A fresh fixture rather than a state reached by clicking
+    around `page` -- that fixture's own default seeding is exactly what the
+    OTHER new test below needs present."""
+    with serve_ui(seed=False) as base, get_driver().launch() as opened:
+        opened.goto(f"{base}/ui/index.html")
+        opened.wait_for(".log-list-card")
+        yield opened
+
+
+def test_the_library_tab_reaches_the_target_page(page):
+    """Auto-open's whole point: switching to the Library tab with a practiced
+    entity in hand lands straight on that entity's target page, not on the
+    course grid the user would then have to re-navigate through by hand.
+    FIXTURE_STAR (star:2:4, "Fall onto the Caged Island") is the NEWEST
+    entity by journal_id in this fixture (ui_fixture.py's own comment on
+    FIXTURE_STAR has the measurement), so `lastPracticed` resolves to it
+    every time."""
+    page.evaluate(CLICK_LIBRARY_TAB)
+    page.wait_for(".library-target", timeout_ms=15000)
+
+
+def test_an_empty_log_falls_back_to_the_course_grid(fresh_db_page):
+    """The other half of the same rule, with nothing to land on."""
+    fresh_db_page.evaluate(CLICK_LIBRARY_TAB)
+    fresh_db_page.wait_for(".library-courses", timeout_ms=15000)

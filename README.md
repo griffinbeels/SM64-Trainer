@@ -93,9 +93,16 @@ it happens — and save the ones worth keeping, forever. Audio is captured from
 Project64 alone, so a Discord call, music or a video playing in the background
 never ends up in a clip you upload.
 
-**Compare.** Put your run beside a reference video — pulled from YouTube, a
-local file, or a browser upload — with one frame-accurate transport driving
-both in lockstep.
+**Library.** Browse the whole community spreadsheet without leaving the app —
+every star and segment's proven ways to do it, laid out beginner to expert
+with real recorded times filed by the rank and subdivision they'd earn
+against your own standards, down to "Wario 3", with a JP/US mode that shows
+only that version's runs. Opens straight on whatever you last practiced.
+Runs with video play in place — YouTube, Twitch, X, Bluesky, Streamable,
+Drive, or a raw clip file — and runs without one still count as times. Dock
+clips to the tray to watch several side by side, or send the tray to Compare
+— pulled from YouTube, a local file, or a browser upload — for one
+frame-accurate transport driving them all in lockstep.
 
 **Debug report.** Something behaving oddly? **Settings → Debug report** writes
 a single file capturing what the trainer was doing (logs, recent events,

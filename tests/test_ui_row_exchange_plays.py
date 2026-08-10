@@ -58,10 +58,14 @@ _TRACE = """(async (routeId) => {
     if (running) requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
-  const select = document.getElementById('route-select');
-  if (!select) return JSON.stringify({error: 'no route-select on the page'});
-  select.value = String(routeId);
-  select.dispatchEvent(new Event('change', {bubbles: true}));
+  const trigger = document.querySelector('.marelo-bar .context-card-trigger');
+  if (!trigger) return JSON.stringify({error: 'no card trigger on the page'});
+  trigger.click();
+  await new Promise((done) => setTimeout(done, 50));
+  const option = document.querySelector(
+    '.marelo-bar .search-menu-option[data-value="' + routeId + '"]');
+  if (!option) return JSON.stringify({error: 'no option for route ' + routeId});
+  option.click();
   await new Promise((done) => setTimeout(done, 1600));
   running = false;
   return JSON.stringify({samples});

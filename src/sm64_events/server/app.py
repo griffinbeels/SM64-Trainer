@@ -249,7 +249,12 @@ def _quiet_connection_resets(loop, context) -> None:
 
 def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, updater=None, compare=None,
-               compilation=None, db_retry=None, debug_hooks: bool = False) -> FastAPI:
+               compilation=None, db_retry=None, debug_hooks: bool = False,
+               adoptions_path=None) -> FastAPI:
+    # `adoptions_path` overrides where the user's library->segment
+    # assignments live -- the UI fixture passes a scratch file so a render
+    # test clicking the link door can never write into the real data dir.
+    # None (production) resolves to core.paths.library_adoptions_path().
     # Observability for long-running sessions: samples self + CHILD (ffmpeg)
     # memory, handle/GDI/USER counts, system pressure, and a per-type heap
     # histogram on a cadence — logs an expanded line, fires one-shot per-class
@@ -363,6 +368,51 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     # source checkout, and it refuses itself when frozen.
     from sm64_events.server.tuning_api import create_tuning_router
     app.include_router(create_tuning_router())
+    # The Ultimate Sheet library. Mounted unconditionally and independent of
+    # the tracker service: it is community reference data, so it is worth
+    # having even in a broadcast-only second instance with no store of its own.
+    from sm64_events.core.paths import (bundled_library_overrides,
+                                        bundled_sheet_library,
+                                        sheet_library_path)
+    from sm64_events.library.audit import load_overrides
+    from sm64_events.library.store import LibraryStore
+    from sm64_events.server.library_api import create_library_router
+    library = LibraryStore(sheet_library_path(), bundled_sheet_library())
+    library.load()
+    app.state.library = library
+    # The human's own audit corrections (tools/audit_library.py) -- a
+    # server-side refresh must apply them exactly as tools/scrape_sheet.py
+    # does at release time, or a re-fetched copy re-introduces every mistake
+    # the audit already fixed and (carrying a newer sheet_revision) keeps
+    # winning over the bundled, corrected snapshot until the next release.
+    library_overrides = load_overrides(bundled_library_overrides())
+    # Adoptions bind a library row to a segment the USER built, so they need
+    # the standards store to merge into. Without one (a broadcast-only second
+    # instance) the read routes still mount and the adopt routes do not.
+    adoptions = None
+    standards = getattr(service, "ranks", None)
+    if standards is not None and hasattr(standards, "apply_sheet_ladders"):
+        from sm64_events.core.paths import library_adoptions_path
+        from sm64_events.library.adoptions import Adoptions
+        qualified = {ek for ek in standards.graded_entities()
+                     if standards.exit_variants(ek)}
+        adoptions = Adoptions(adoptions_path or library_adoptions_path(),
+                              library, standards, qualified)
+        adoptions.load()
+        app.state.library_adoptions = adoptions
+    # The live segment list the auto-match pairs entity-less targets against
+    # (round 6). Read per request so a segment built mid-session pairs on the
+    # next page load; empty when the db is degraded rather than an error.
+    def live_segment_names():
+        db = getattr(service, "db", None)
+        if db is None:
+            return []
+        return [(definition["id"], definition["name"])
+                for definition in db.segment_defs()]
+
+    app.include_router(create_library_router(
+        library, overrides=library_overrides, adoptions=adoptions,
+        segment_names=live_segment_names if service is not None else None))
     if service is not None:
         app.include_router(create_api_router(service))
         from sm64_events.server.ranks_api import create_ranks_router
