@@ -2344,3 +2344,41 @@ def test_the_star_select_window_opens_on_a_grab_and_closes_on_the_next_spawn(tmp
                                {"level": 22, "kind": "spawn", "area": 1})))
     assert svc.current_stage["on_the_star_select"] is False, (
         "the spawn is him being somewhere again, so the area is his")
+
+
+def test_deleting_a_seeded_segment_survives_the_next_app_load(tmp_path):
+    """His report, 2026-08-10: *"I have deleted the BitS entry segment
+    multiple times on the Main branch, yet it keeps reappearing."* The delete
+    ROUTE is what has to record the tombstone -- reconcile can only honour one
+    that exists, so a guard on reconcile alone stays green while the click
+    that the user actually makes records nothing."""
+    from sm64_events.tracking.defaults import (deleted_seed_keys,
+                                               reconcile_defaults)
+
+    db, svc = make(tmp_path)
+    seed = {"seed_version": 1, "routes": [],
+            "segments": [{"seed_key": "seg:bits-entry", "name": "BitS Entry",
+                          "enabled": True,
+                          "start_triggers": [{"type": "spawned", "level": 16}],
+                          "end_triggers": [{"type": "level_enter", "to": 6}],
+                          "waypoints": [], "guards": []}]}
+    reconcile_defaults(db, seed)
+    seg = next(s for s in db.segment_defs() if s["seed_key"] == "seg:bits-entry")
+
+    asyncio.run(svc.delete_segment(seg["id"]))
+
+    assert deleted_seed_keys(db, "segments") == {"seg:bits-entry"}
+    reconcile_defaults(db, seed)      # the next app load
+    assert not [s for s in db.segment_defs()
+                if s["seed_key"] == "seg:bits-entry"]
+
+
+def test_deleting_a_USER_segment_leaves_no_tombstone_behind(tmp_path):
+    from sm64_events.tracking.defaults import deleted_seed_keys
+
+    db, svc = make(tmp_path)
+    uid = db.insert_segment_def("Mine", [{"type": "spawned", "level": 16}],
+                                [{"type": "level_enter", "to": 6}], [],
+                                "2026-08-10T00:00:00Z")
+    asyncio.run(svc.delete_segment(uid))
+    assert deleted_seed_keys(db, "segments") == set()

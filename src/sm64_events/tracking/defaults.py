@@ -22,6 +22,59 @@ from sm64_events.tracking.segments import validate_definition
 _SEED_ERRORS = (ValueError, TypeError, KeyError, AttributeError, IndexError)
 
 
+# A DELETION IS DURABLE (2026-08-10). Reconcile treats "a seed row with no
+# matching db row" as an INSERT, so deleting a shipped default guaranteed it
+# came back on the next boot -- his report, after removing the same one several
+# times: *"I have deleted the BitS entry segment multiple times on the Main
+# branch, yet it keeps reappearing. If the user marks a segment as deleted, it
+# should not reappear when they load the app again."*
+#
+# The old design said Disable was the protected hide path, and that answer is
+# already ruled out: a row that is still there, greyed, is the "mark it removed"
+# shape he rejected outright ("marking them as 'removed' is still worthless.
+# Just completely erase them", 2026-08-02). So the ROW really is erased and what
+# survives is the KEY -- the smallest thing that can say "he meant this".
+#
+# It lives in `ui_state` rather than a column for the same reason
+# `origin_overrides` does: writing to segment_defs flips seed_dirty, which would
+# freeze the row against every future corpus refresh as a side effect of
+# deleting it. A KV also needs no migration and cannot be lost by a re-project,
+# since defs are not journal-derived.
+DELETED_SEED_KEYS = "deleted_seed_keys"
+
+
+def deleted_seed_keys(db, kind: str) -> set[str]:
+    """The seed keys of `kind` ("segments"/"routes") the user has DELETED."""
+    stored = db.get_state(DELETED_SEED_KEYS, {}) or {}
+    return set(stored.get(kind) or [])
+
+
+def remember_deletion(db, kind: str, seed_key) -> None:
+    """Record that a shipped default was deleted on purpose. A user-created row
+    carries no seed_key and needs no tombstone -- nothing would re-insert it."""
+    if not isinstance(seed_key, str) or not seed_key.strip():
+        return
+    stored = db.get_state(DELETED_SEED_KEYS, {}) or {}
+    keys = list(stored.get(kind) or [])
+    if seed_key not in keys:
+        keys.append(seed_key)
+    stored[kind] = keys
+    db.set_state(DELETED_SEED_KEYS, stored)
+
+
+def _forget_deletion(db, kind: str, seed_key: str) -> None:
+    """The row is present again (re-imported, or restored by hand), so the
+    tombstone has nothing left to suppress. Self-healing on purpose: without
+    it a key deleted once could never be brought back, which is a permanent
+    consequence of one click."""
+    stored = db.get_state(DELETED_SEED_KEYS, {}) or {}
+    keys = [k for k in (stored.get(kind) or []) if k != seed_key]
+    if keys == list(stored.get(kind) or []):
+        return
+    stored[kind] = keys
+    db.set_state(DELETED_SEED_KEYS, stored)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -50,6 +103,7 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
         return ["seed is not an object"]
     seg_by_key = {s["seed_key"]: s for s in db.segment_defs()
                   if s.get("seed_key")}
+    deleted_segments = deleted_seed_keys(db, "segments")
     key_to_id: dict[str, int] = {}
     for srow in seed.get("segments") or []:
         try:
@@ -60,6 +114,10 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
             continue
         try:
             existing = seg_by_key.get(key)
+            if existing is not None and key in deleted_segments:
+                _forget_deletion(db, "segments", key)   # it is back; stand down
+            elif existing is None and key in deleted_segments:
+                continue                                # he deleted it. Stay gone.
             if existing is None:
                 key_to_id[key] = db.insert_segment_def(
                     srow["name"], srow["start_triggers"], srow["end_triggers"],
@@ -99,6 +157,10 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
         except _SEED_ERRORS as exc:
             problems.append(f"segment {key}: {exc}")
     route_by_key = {r["seed_key"]: r for r in db.routes() if r.get("seed_key")}
+    # Routes resurrect exactly the same way and were not reported only because
+    # he deleted a segment first — one report, the whole class (his standing
+    # rule), and it is the same three lines.
+    deleted_routes = deleted_seed_keys(db, "routes")
     for rrow in seed.get("routes") or []:
         try:
             key = _seed_key(rrow, "route")
@@ -112,6 +174,10 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
             continue
         try:
             existing = route_by_key.get(key)
+            if existing is not None and key in deleted_routes:
+                _forget_deletion(db, "routes", key)
+            elif existing is None and key in deleted_routes:
+                continue
             if existing is None:
                 db.insert_route(rrow["name"], steps, _now_iso(),
                                 start_condition=start_condition,

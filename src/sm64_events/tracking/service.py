@@ -30,7 +30,7 @@ from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking import practicable
 from sm64_events.tracking.caveats import pb_blocked_by
-from sm64_events.tracking.defaults import resolve_steps
+from sm64_events.tracking.defaults import remember_deletion, resolve_steps
 from sm64_events.tracking.hundred_coin import classify
 from sm64_events.tracking.prune import PRUNE_EVENT, prunable_ids
 from sm64_events.tracking.projection import (Projector, journal_id, replay,
@@ -944,7 +944,18 @@ class TrackerService:
         await self._segments_changed()
 
     async def delete_segment(self, segment_id: int) -> None:
+        """Erase the row, and REMEMBER that a shipped default was erased.
+
+        Without the second half the deletion lasts until the next boot:
+        reconcile reads "a seed row with no db row" as an insert, so his BitS
+        Entry came back every time — *"I have deleted the BitS entry segment
+        multiple times on the Main branch, yet it keeps reappearing."* The
+        tombstone is the seed KEY only; the row itself is really gone, because
+        a greyed-out leftover is the shape he has already rejected.
+        """
         db = self._require_db()
+        row = next((s for s in db.segment_defs() if s["id"] == segment_id), None)
+        remember_deletion(db, "segments", (row or {}).get("seed_key"))
         db.delete_segment_def(segment_id)
         await self._segments_changed()
 
@@ -1147,6 +1158,8 @@ class TrackerService:
     async def delete_route(self, route_id: int) -> None:
         db = self._require_db()
         was_active = self._projector.active_route_id() == route_id
+        row = next((r for r in db.routes() if r["id"] == route_id), None)
+        remember_deletion(db, "routes", (row or {}).get("seed_key"))
         db.delete_route(route_id)
         await self._routes_changed()
         if was_active:

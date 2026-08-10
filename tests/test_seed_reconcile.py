@@ -9,7 +9,9 @@ import json
 
 from sm64_events.core.paths import bundled_defaults_seed
 from sm64_events.storage.db import Database
-from sm64_events.tracking.defaults import reconcile_defaults
+from sm64_events.tracking.defaults import (deleted_seed_keys,
+                                          reconcile_defaults,
+                                          remember_deletion)
 from sm64_events.tracking.segments import validate_definition
 
 SEED_V1 = {"seed_version": 1,
@@ -295,3 +297,68 @@ def test_reconcile_carries_default_strat_on_insert_and_refresh(tmp_path):
     reconcile_defaults(db, seed3)
     assert next(s for s in db.segment_defs()
                 if s["id"] == seg["id"])["default_strat"] == "Blindfolded"
+
+
+# -- a deletion is durable (2026-08-10) ---------------------------------------
+# *"I have deleted the BitS entry segment multiple times on the Main branch,
+# yet it keeps reappearing. If the user marks a segment as deleted, it should
+# not reappear when they load the app again."*  Reconcile read "seed row with
+# no db row" as an insert, so every boot put it back.
+
+def test_a_deleted_default_segment_stays_deleted_across_reconciles(tmp_path):
+    db = Database(tmp_path / "t.db")
+    reconcile_defaults(db, SEED_V1)
+    seg = next(s for s in db.segment_defs() if s["seed_key"] == "seg:demo")
+
+    remember_deletion(db, "segments", seg["seed_key"])
+    db.delete_segment_def(seg["id"])
+
+    reconcile_defaults(db, SEED_V1)          # the next app load
+    reconcile_defaults(db, SEED_V1)          # and the one after that
+    assert not [s for s in db.segment_defs() if s["seed_key"] == "seg:demo"]
+
+
+def test_a_deleted_default_ROUTE_stays_deleted_too(tmp_path):
+    db = Database(tmp_path / "t.db")
+    reconcile_defaults(db, SEED_V1)
+    route = next(r for r in db.routes() if r["seed_key"] == "route:demo")
+
+    remember_deletion(db, "routes", route["seed_key"])
+    db.delete_route(route["id"])
+
+    reconcile_defaults(db, SEED_V1)
+    assert not [r for r in db.routes() if r["seed_key"] == "route:demo"]
+
+
+def test_deleting_a_USER_row_records_no_tombstone(tmp_path):
+    """A user-created row has no seed_key and nothing would re-insert it, so
+    remembering one would only be a key that suppresses a future default."""
+    db = Database(tmp_path / "t.db")
+    remember_deletion(db, "segments", None)
+    assert deleted_seed_keys(db, "segments") == set()
+
+
+def test_the_tombstone_stands_down_once_the_row_is_back(tmp_path):
+    """Otherwise one click is permanent: a re-import or a hand-restore could
+    never bring that default back, however the row returned."""
+    db = Database(tmp_path / "t.db")
+    reconcile_defaults(db, SEED_V1)
+    seg = next(s for s in db.segment_defs() if s["seed_key"] == "seg:demo")
+    remember_deletion(db, "segments", seg["seed_key"])
+    db.delete_segment_def(seg["id"])
+    reconcile_defaults(db, SEED_V1)
+    assert deleted_seed_keys(db, "segments") == {"seg:demo"}
+
+    db.insert_segment_def("Demo", SEED_V1["segments"][0]["start_triggers"],
+                          SEED_V1["segments"][0]["end_triggers"], [],
+                          "2026-08-10T00:00:00Z", seed_key="seg:demo")
+    reconcile_defaults(db, SEED_V1)
+    assert deleted_seed_keys(db, "segments") == set()
+    assert [s for s in db.segment_defs() if s["seed_key"] == "seg:demo"]
+
+
+def test_a_tombstone_never_suppresses_a_DIFFERENT_default(tmp_path):
+    db = Database(tmp_path / "t.db")
+    remember_deletion(db, "segments", "seg:something-else")
+    reconcile_defaults(db, SEED_V1)
+    assert [s for s in db.segment_defs() if s["seed_key"] == "seg:demo"]
