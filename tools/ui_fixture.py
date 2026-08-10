@@ -927,6 +927,35 @@ def _seed_castle_pieces(base: str, service, area: int) -> None:
     asyncio.run(go())
 
 
+def _seed_reds_run(service, course_id: int) -> None:
+    """Publish a real, x-cam-timed `star_collected` for a Bowser course's
+    reds star -- the star half of the reds/pipe pair (spec
+    2026-08-10-reds-as-subsection). Callers already published `bowser_stage`/
+    `enter_level` for the same course, which is what arms the paired
+    `seg:reds->pipe:<abbrev>` movement AMBIENTLY; that ambient arm alone
+    gives the star nothing (`views.py`'s `seen` needs an attempt or a
+    target), so this is what puts the star into its OWN section and gives
+    it a real `pipe_segment_id`/`parents` stamp to nest under.
+
+    `igt_timed_at: "xcam"`, same as `seed_practice`'s own rows -- WITHOUT it
+    a star replays as the pre-2026-08-01 GRAB-quantity shape (projection.py),
+    which the render this fixture exists to reach does not depend on, but
+    keeping every seeded grab the same shape avoids a second one to reason
+    about."""
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    async def go() -> None:
+        await service.publish(Event(
+            type="practice_reset", frame=9100, timestamp_utc=now,
+            payload={"igt_frames_before": 0}))
+        await service.publish(Event(
+            type="star_collected", frame=9350, timestamp_utc=now,
+            payload={"course_id": course_id, "star_id": 0,
+                     "igt_frames": 400, "igt_timed_at": "xcam"}))
+
+    asyncio.run(go())
+
+
 def _pad_journal(db_path: Path, count: int) -> None:
     """Bulk-fill the journal with `count` inert rows, so the timeline
     endpoint's per-poll walk costs what it costs on the LIVE journal (~23k
@@ -994,6 +1023,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               seed_castle_pieces: bool = False,
               enter_level: int | None = None,
               arm_hundred_coin: tuple[int, int] | None = None,
+              seed_reds_run: bool = False,
               pad_journal: int = 0):
     """Yield the base URL of an offline instance; stop it on the way out.
 
@@ -1081,6 +1111,14 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     both (a foreign level change disarms an armed def), so this and
     `arm_segment` are for two separate, independent fixture instances, not
     one shared one.
+
+    `seed_reds_run` additionally publishes a real, x-cam-timed `star_collected`
+    for `bowser_stage`'s course's reds star (see `_seed_reds_run`) -- the star
+    half of the reds/pipe pair (spec 2026-08-10-reds-as-subsection), needed
+    alongside `reconcile_full_corpus`+`bowser_stage`+`enter_level` to reach a
+    star SECTION carrying a real `pipe_segment_id`/`parents` stamp. Pass a
+    `bowser_stage` naming the same course `enter_level` arms, or the star
+    records for a course with no paired reds->pipe movement to nest under.
 
     `pad_journal` bulk-inserts that many inert journal rows before the server
     starts, so per-poll endpoint costs match a LIVE-sized journal instead of a
@@ -1218,6 +1256,8 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                 _publish_bowser_stage(service, *bowser_stage)
             if enter_level is not None:
                 _enter_level(service, enter_level)
+            if seed_reds_run:
+                _seed_reds_run(service, bowser_stage[0])
             if arm_hundred_coin is not None:
                 _arm_hundred_coin_star(base, service, *arm_hundred_coin)
         yield base, service

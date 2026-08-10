@@ -2806,3 +2806,46 @@ def test_route_candidate_ranks_the_reds_pipe_segment_against_the_star_ladder(tmp
     route = build_route_view(db, svc, rid)
     assert route["steps"][0]["rank"] is not None
     assert route["steps"][0]["rank"]["rank"] == "Iron"   # see the docstring above
+
+
+def _service_with_corpus(tmp_path):
+    """A fresh service with the SHIPPED 84-def corpus reconciled -- unlike
+    `_make_with_def`'s hand-built reds->pipe stand-in above, this exercises
+    the REAL seg:reds->pipe:bitdw definition `_reds_pipe_segments` pairs by
+    seed_key prefix, which is what the star section's own `parents` stamp
+    (spec 2026-08-10-reds-as-subsection) has to read."""
+    import json
+    from sm64_events.core.paths import bundled_defaults_seed
+    from sm64_events.tracking.defaults import reconcile_defaults
+    db, svc = make(tmp_path)
+    seed_data = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
+    assert reconcile_defaults(db, seed_data) == []
+    return db, svc
+
+
+def _star_section(view, course_id, star_id):
+    return next(s for s in view["stars"]
+                if s["course_id"] == course_id and s["star_id"] == star_id)
+
+
+def test_a_bowser_reds_star_names_its_movement_as_a_parent(tmp_path):
+    """Round 31. The reds star is a piece of seg:reds->pipe:<abbrev> -- the
+    movement that already carries its grab as a waypoint -- so the practice
+    log nests it there. Stamped from `_reds_pipe_segments`, the pairing this
+    module already computes for the shared ladder, never a second table."""
+    db, svc = _service_with_corpus(tmp_path)
+    # A section only exists for a scoped entity (attempts, target, or armed) --
+    # reconciling the corpus alone seeds definitions, not history. Course 16
+    # (BitDW) carries the shipped seg:reds->pipe:bitdw pairing; course 2 star
+    # 4 is an ordinary WF star with no such pairing.
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, course=16, star_id=0)))
+    asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1750, course=2, star_id=4)))
+    view = build_session_view(db, svc, clock="igt", scope="lifetime")
+    reds = _star_section(view, course_id=16, star_id=0)
+    assert reds["parents"], "the reds star carries no parent at all"
+    assert reds["parents"][0].startswith("segment:")
+    ordinary = _star_section(view, course_id=2, star_id=4)
+    assert ordinary["parents"] == [], (
+        "only a Bowser reds star is a piece; every other star is top-level")

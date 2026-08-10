@@ -1273,6 +1273,20 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # multi-step-segments) -- same live-projector self-heal reasoning as
     # `armed` above, read once here rather than per section.
     armed_arms = service.armed_arms
+    # A star's own `parents` stamp (below, the star loop) can only ever name
+    # a Bowser reds/pipe movement -- the one place an ambiently-arming
+    # segment is ALSO something else's NESTING PARENT (ui/subsections.js's
+    # `nestSubsections` rule 4: "a parent with a nesting child earns a
+    # card"). Computed from the exact `seen` set the target/attempt branch
+    # above already built -- never a second "did he choose this" predicate,
+    # and never a general relaxation of the ambient-arm exemption below: the
+    # 100-coin star's own engine and the legacy pipe-entry trio are not
+    # `_reds_pipe_segments` pairings and so can never land in this set
+    # (`.claude/rules/hundred-coin.md`'s "one CARD, only when the entity is
+    # the target" -- those phantom-card counts still apply to them).
+    reds_pipe_with_a_nesting_star = {
+        seg_id for course_id, seg_id in reds_pipe_by_course.items()
+        if (course_id, 0) in seen}
     for sid in sorted(armed):
         # A HUNDRED_COIN_EXIT engine arms ambiently on every entry to its
         # course -- excluded here so it never grows a segment section of
@@ -1296,8 +1310,14 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         # one may be his. An ambiently-armed def he DID choose still gets its
         # card and its live timer, through the target branch just above --
         # the identical `service.target` signal read here, not a second
-        # answer to "did he choose this".
-        if d is not None and arms_ambiently(d.start_triggers):
+        # answer to "did he choose this". EXCEPT when the star it pairs with
+        # is itself seen (a real attempt or the live target) -- that star's
+        # own section is about to carry this segment as its `parents[0]`,
+        # and the practice log has nowhere to nest it if this branch drops
+        # the card the star needs to nest inside (spec
+        # 2026-08-10-reds-as-subsection, task 1).
+        if d is not None and arms_ambiently(d.start_triggers) \
+                and sid not in reds_pipe_with_a_nesting_star:
             continue
         seen_segs.setdefault(sid, None)
     # NOT "armed is active now" for the 100-coin star's own section (deleted
@@ -1403,6 +1423,13 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # hatch into the OTHER half of this same practiced thing (its own
             # section is below, in the segment loop).
             "pipe_segment_id": pipe_seg_id,
+            # A Bowser course's reds star is a PIECE of the movement that
+            # already carries its grab as a waypoint (seg:reds->pipe:<abbrev>),
+            # so the practice log nests it inside that movement's card
+            # (ui/subsections.js). Same pairing `pipe_segment_id` above rides,
+            # read once more rather than resolved a second way. Every other
+            # star is top-level and carries [].
+            "parents": [f"segment:{pipe_seg_id}"] if pipe_seg_id else [],
             "timeline": _timeline(in_section, igt_of),
             "markers_by_strat": _markers_for(markers_state, course_id, star_id),
             "time_filter": _time_filter_json(

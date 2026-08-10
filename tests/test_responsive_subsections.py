@@ -39,7 +39,7 @@ if _MISSING:
 from uilab.driver import get_driver  # noqa: E402
 from uilab.pytest_plugin import (  # noqa: E402,F401
     assert_no_new_defects, assert_no_stale_exemptions, uilab_sweep)
-from uilab_project import SUBSECTION_PROJECT  # noqa: E402
+from uilab_project import SUBSECTION_PROJECT, BOWSER_COURSE, BOWSER_LEVEL  # noqa: E402
 from ui_fixture import serve_ui  # noqa: E402
 
 # The plugin's `uilab_sweep` fixture reads this off the module.
@@ -344,3 +344,58 @@ def test_a_piece_of_a_segment_is_a_badge_on_that_segment_and_not_a_cell():
             "toggles is a div rather than a button, so this pins the swap too")
         assert page.count(".stagebanner .cell-toggle-btn") == 1, (
             "one seeded piece, one badge, inside its parent's art")
+
+
+# --- and the STAR-as-piece half (spec 2026-08-10-reds-as-subsection) --------
+# The reds star names its own movement as a parent (task 1, views.py's
+# `parents` stamp); this is the render half, proving `nestSubsections`' rule
+# 4 ("a parent with a nesting child earns a card") actually meets the
+# ambient-arm exemption (`.claude/rules/hundred-coin.md`) that would
+# otherwise leave the movement with no section to nest the star inside.
+
+
+@pytest.mark.xfail(
+    strict=True, reason=(
+        "practicelog.js::applyRedsPipeExclusivity (deleted per design spec "
+        "2026-08-10-reds-as-subsection item 5, bundled with the toggle "
+        "removal, Tasks 2-4) runs BEFORE nestSubsections and, whenever both "
+        "halves of a reds/pipe pair have a section, drops exactly one of "
+        "them -- with the default 'pipe' mode it drops the STAR every time, "
+        "so it strips the star out before nesting ever sees it. This task's "
+        "own file scope forbids editing practicelog.js. Proven independent "
+        "of this task's own fix: reverting the ambient-arm exemption below "
+        "changes the failure message (top card missing); reverting the "
+        "`parents` stamp does NOT (same 'not nested' failure either way) --"
+        "the exclusivity rule swamps the signal regardless. Flip this to a "
+        "real assertion the moment applyRedsPipeExclusivity is retired."))
+def test_the_reds_star_draws_inside_its_movement_s_card():
+    """Griffin, 2026-08-10: "the Reds card should contain the star subsection
+    inside of it, and if we do the star subsection, it'll show it inside and
+    earns the card in this case, yes."
+
+    The interaction this exists for: seg:reds->pipe:* `arms_ambiently`, and an
+    ambient arm with nothing chosen publishes NO section (2026-08-05) -- while
+    `nestSubsections`' rule 4 says a parent with a nesting child earns a card.
+    Those two rules meet here for the first time. If the exemption wins, the
+    star vanishes from the log instead of nesting, silently."""
+    with serve_ui(reconcile_full_corpus=True,
+                  bowser_stage=(BOWSER_COURSE, BOWSER_LEVEL),
+                  enter_level=BOWSER_LEVEL,
+                  seed_reds_run=True) as url, \
+            get_driver().launch() as page:
+        page.goto(url)
+        page.wait_for(".log-list-card")
+        page.wait_ms(400)
+        top = page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        nested = page.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.log-card-children > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert any("Pipe" in name for name in top), (
+            f"the Reds movement earned no card of its own; top cards {top!r}")
+        assert any("Star" in name for name in nested), (
+            f"the reds star is not nested inside it; nested {nested!r}")
+        assert not any("Star" in name for name in top), (
+            "the star must not ALSO be a top-level card")
