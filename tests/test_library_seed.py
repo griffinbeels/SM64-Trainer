@@ -247,3 +247,33 @@ def test_the_ladder_model_is_recorded_with_the_data(payload):
     assert ordered == sorted(ordered) and len(set(ordered)) == len(ordered)
     assert all(0 < v < 100 for v in ordered)
     assert model["fitted_rows"] >= 550
+
+
+def test_no_target_is_named_after_only_one_rom_version(payload):
+    """A target's cell in the browse grid wears its opening row's name, so a
+    label ending in a version token tells a reader that version is all the
+    sheet has -- and the other version's rows sit inside it, invisible until
+    you click. That is exactly how "I don't see the HMC Door Mips Clip US
+    version in our library" happened (2026-08-09) with the row present all
+    along. 14 targets read that way while the version was only recognised as
+    a BARE trailing "(JP)"; a compound parenthetical hid it from the pairing."""
+    from sm64_events.library.sheet import version_of
+    named = [target["label"] for target in payload["targets"]
+             if version_of(target["label"]) is not None]
+    assert named == [], named
+
+
+def test_the_version_pairs_the_sheet_writes_in_a_compound_parenthetical_merged(payload):
+    """The rows the old bare-suffix rule could not see. Each is one approach
+    now, carrying BOTH versions' bests -- which is what gives its entries a
+    version to filter on and lets a JP ladder be fitted from the JP half."""
+    wanted = {
+        "HMC door - Enter DDD (\u260615 MIPS Clip)",
+        "HMC door - Enter HMC (Toad)",
+        "TTC result - Enter RR (Toad)",
+        "Bowser in the Sky Battle (120 star file)",
+    }
+    both = {approach["name"] for target in payload["targets"]
+            for approach in target["approaches"]
+            if len(approach.get("times") or {}) > 1}
+    assert wanted <= both, sorted(wanted - both)

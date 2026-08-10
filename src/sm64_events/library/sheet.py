@@ -76,11 +76,54 @@ SUBSECTION_VETO_RATIO = 0.70
 _STAR_XCAM = re.compile(r"\bstar Xcam\b", re.I)
 _ROW = re.compile(r"^\s*\[([\d|]+)\]\s*(.+?)\s*$")
 _TIME = re.compile(r"^(?:(\d{1,2}):)?(\d{1,3})\.(\d{2})$")
-_VERSION = re.compile(r"\((JP|US)\)\s*$", re.I)
+# The ROM version sits in the trailing parenthetical, but it is not always
+# ALONE there: 163 rows write a bare "(JP)"/"(US)", and 58 write it as one
+# comma-separated token beside other words -- "(Toad, US)", "(☆15 MIPS Clip,
+# JP)", "(120 star file, US)", "(JP, 34c -)". Anchoring on the bare form read
+# all 58 as version-less, which cost three things at once: their JP and US
+# halves never paired into one approach, their entries carried no version so
+# the target page's mode toggle never rendered, and 14 targets went into the
+# browse grid wearing their JP row's name with nothing saying a US row existed
+# at all. Live report 2026-08-09: "I don't see the HMC Door Mips Clip US
+# version in our library" -- it was there, one click in, under a JP name.
+_TRAILING_PAREN = re.compile(r"\(([^()]*)\)\s*$")
+_VERSION_TOKEN = re.compile(r"^(JP|US)$", re.I)
 # A stage RTA times a whole course rather than a target, and its family holds
 # routes of genuinely different lengths (a 70-star route against a full one).
 # The ratio veto cannot speak about those.
 _STAGE_RTA = re.compile(r"\bRTA\b")
+
+
+def version_of(label: str) -> str | None:
+    """The ROM version a row's name declares, or `None` where it declares none.
+
+    Only the TRAILING parenthetical is read, and only a whole comma-separated
+    token counts -- so "Punch grab in front of LLL (MIPS, JP)" is JP while
+    "US" appearing inside a word never is."""
+    tail = _TRAILING_PAREN.search(label)
+    if tail is None:
+        return None
+    for part in tail.group(1).split(","):
+        if _VERSION_TOKEN.match(part.strip()):
+            return part.strip().lower()
+    return None
+
+
+def base_name(label: str) -> str:
+    """The label minus its ROM-version token -- what pairs a JP row with its US
+    sibling.
+
+    ONLY the version token goes. Every other word in the parenthetical
+    distinguishes real rows, so "(Toad, JP)" and "(Toad, US)" become one
+    approach while "(MIPS, JP)" and "(☆50 MIPS, US)" stay two -- those name
+    genuinely different setups, not two versions of one."""
+    tail = _TRAILING_PAREN.search(label)
+    if tail is None or version_of(label) is None:
+        return label.strip()
+    kept = [part.strip() for part in tail.group(1).split(",")
+            if part.strip() and not _VERSION_TOKEN.match(part.strip())]
+    head = label[:tail.start()].strip()
+    return f"{head} ({', '.join(kept)})" if kept else head
 
 
 class ClassificationConflict(Exception):
@@ -212,11 +255,10 @@ def read_rows(data: bytes) -> list:
             if centiseconds is not None:
                 entries[runner] = (centiseconds, cell.link)
 
-        version = _VERSION.search(label)
         out.append(SheetRow(
             row=row, group=group, section=section, label=label, ids=ids, kind=kind,
             opens_target=opens, bold=bool(head.bold),
-            version=version.group(1).lower() if version else None,
+            version=version_of(label),
             best_cs=best_cs, best_runner=text(row, 3).strip(),
             ideal_cs=parse_time(text(row, 4)),
             fill_rate=_fill_rate(text(row, 5)), entries=entries))

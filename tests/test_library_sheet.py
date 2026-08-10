@@ -187,3 +187,41 @@ def test_rom_version_is_read_from_the_label():
         ("[3] Left side strat", False, BLACK, "42.90", {}),
     ])
     assert [r.version for r in sheet.read_rows(data)] == ["jp", "us", None]
+
+
+def test_a_version_beside_other_words_is_still_read():
+    # 58 rows write the ROM version as one comma-separated token inside a
+    # COMPOUND parenthetical rather than alone. Anchoring on the bare "(JP)"
+    # form read every one of them as version-less, so their halves never
+    # paired and 14 targets went into the browse grid under a JP-only name
+    # (live report 2026-08-09, "HMC door - Enter DDD (<15 MIPS Clip, US)").
+    data = _rows([
+        ("[1] HMC door - Enter DDD (\u260615 MIPS Clip, JP)", True, BLACK, "22.33", {}),
+        ("[2] HMC door - Enter DDD (\u260615 MIPS Clip, US)", False, BLACK, "24.16", {}),
+        ("[3] Post slide (JP, 98/99c -)", False, GREY, "9.83", {}),
+        ("[4] Bowser in the Sky Battle (120 star file, US)", False, BLACK, "38.23", {}),
+    ])
+    assert [r.version for r in sheet.read_rows(data)] == ["jp", "us", "jp", "us"]
+
+
+def test_a_version_token_is_a_whole_word_not_a_substring():
+    # "US" inside a word, and a parenthetical that is not the trailing one,
+    # must not be read as a ROM version -- otherwise the pairing would merge
+    # rows that are not two versions of anything.
+    data = _rows([
+        ("[1] Bust the Bonus (JP) then finish", True, BLACK, "12.26", {}),
+        ("[2] Chuckya toss", False, BLACK, "13.50", {}),
+    ])
+    assert [r.version for r in sheet.read_rows(data)] == [None, None]
+
+
+def test_only_the_version_token_is_dropped_when_pairing():
+    # The pairing name keeps every OTHER word in the parenthetical, which is
+    # what stops "(MIPS, JP)" merging with "(<50 MIPS, US)": those name two
+    # different setups, not two versions of one.
+    assert sheet.base_name("HMC door - Enter HMC (Toad, JP)") == "HMC door - Enter HMC (Toad)"
+    assert sheet.base_name("HMC door - Enter HMC (Toad, US)") == "HMC door - Enter HMC (Toad)"
+    assert (sheet.base_name("Tunnel door - HMC door (MIPS, JP)")
+            != sheet.base_name("Tunnel door - HMC door (\u260650 MIPS, US)"))
+    assert sheet.base_name("Big Bob-omb on the Summit (JP)") == "Big Bob-omb on the Summit"
+    assert sheet.base_name("Left side strat") == "Left side strat"

@@ -11,10 +11,8 @@ Several sheet targets legitimately share one entity key (every "+ 100c" row is
 the course's 100-coin star). They stay separate targets here: they are
 genuinely different runs, and collapsing them would merge four CCM routes into
 one unreadable list."""
-import re
-
 from sm64_events.library.mapping import map_target, miss_reason
-from sm64_events.library.sheet import read_rows
+from sm64_events.library.sheet import base_name as _base_name, read_rows
 from sm64_events.library.workbook import log_revision
 
 # 2: approaches carry `matched_strategy` (2026-08-07). The Library page
@@ -22,16 +20,6 @@ from sm64_events.library.workbook import log_revision
 # stamped bundled one -- newest-sheet-revision-wins would otherwise keep a
 # stale local copy whose shape the page cannot read.
 SCHEMA_VERSION = 2
-
-_VERSION_SUFFIX = re.compile(r"\s*\((?:JP|US)\)\s*$", re.I)
-
-
-def _base_name(label: str) -> str:
-    """The label minus its ROM-version suffix -- what pairs a (JP) row with
-    its (US) sibling. Only that suffix is stripped: every other parenthetical
-    ("PAUSE TIME INCLUDED", "120 star file") distinguishes real rows."""
-    return _VERSION_SUFFIX.sub("", label).strip()
-
 
 def _entries(row) -> list:
     # The ROM version rides on every entry, not just on the approach. A (JP)
