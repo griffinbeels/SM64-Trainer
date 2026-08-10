@@ -109,8 +109,15 @@ def test_the_auto_open_slot_is_resolved_against_the_rendered_list():
 
     log = strip_comments((UI / "components" / "practicelog.js")
                          .read_text(encoding="utf-8"))
+    # The first three arguments in order ARE the property -- resolved here,
+    # from this component's own rendered candidates, nothing pre-decided.
+    # Deliberately open-ended after `playedKeys`: pinning the closing paren
+    # made this go red on `nestedKeys` being added (2026-08-10,
+    # reds-as-subsection), which is a change to HOW nesting is judged and not
+    # to WHO decides -- the only question this guard is about. It still bites:
+    # swap `openCandidates` for the top-level `page` and it fails.
     assert re.search(r"const topKey = autoOpenKey\(openCandidates, activeKey, "
-                     r"playedKeys\)", log), (
+                     r"playedKeys[,)]", log), (
         "PracticeLog must resolve the slot from its OWN rendered candidates "
         "-- every card it actually draws, top-level and nested alike -- and "
         "nothing handed down pre-resolved")
