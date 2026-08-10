@@ -105,6 +105,21 @@ def strategy_name_zone() -> tuple[Path, ...]:
 
 INVARIANTS = (
     SingleSource(
+        concept="a clickable row in the Library's search results",
+        owners=frozenset({"librarynav.js"}),
+        tokens=("library-result-name", "library-result-sub", "library-result-icon"),
+        files=ui_js(),
+        why="Round 12 (2026-08-10) left a real asymmetry and this is what "
+            "keeps it from becoming three: everywhere else in this app, "
+            "'an entity you can click' is components/practicecell.js, and a "
+            "search result is deliberately NOT one — a row has to carry its "
+            "course AND its star name on one line with an ellipsis, which a "
+            "cell cannot do. So there are two ways to draw that idea on "
+            "purpose. Two is a decision; three is the divergence this file "
+            "exists to prevent, and the classes ARE the row — a file "
+            "rendering them outside librarynav.js is building its own.",
+    ),
+    SingleSource(
         concept="the filterable dropdown popup",
         owners=frozenset({"searchselect.js"}),
         tokens=("search-menu-option", "search-menu-filter", "search-menu-head"),
