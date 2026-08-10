@@ -384,3 +384,45 @@ def test_replay_rebuilds_head_flavor_and_queue():
     assert rebuilt.target == live.target == ("segment", 1)
     assert rebuilt.target_queue() == live.target_queue() == [2]
     assert rebuilt._target_hooked == live._target_hooked is True
+
+
+def test_a_burst_of_arms_detects_nothing():
+    """Leaving the Bowser 1 arena is ONE `level_exit from=30` and all six
+    `Bowser 1 -> X` movements arm on it together. His ruling, 2026-08-10:
+    *"it pre-selected Bowser 1 -> BOB. This makes no sense, because there are
+    too many options here to autoselect any of them."*
+
+    They neither hook NOR queue -- queueing would only defer the same
+    assertion to the next promotion."""
+    six = [exit_def(id=n, name=f"B1 -> {n}", start_from=30, end_to=end)
+           for n, end in enumerate([9, 24, 5, 8, 23, 19], start=40)]
+    p = Projector(segments=six)
+    p.feed(jev(1, "level_changed", 1000, {"from": 30, "to": 6}))
+    assert len(p.armed_segment_ids()) == 6, "all six really do arm together"
+    assert p.target is None, "nobody picked between them"
+    assert p.target_queue() == [], (
+        "and none may sit in line either -- a promotion is the same "
+        "assertion one pop later")
+
+
+def test_a_lone_arm_still_takes_the_empty_hand():
+    """The threshold is 'more than one', not 'any'. Round 19's whole point is
+    that ONE detection into an empty hand is a reading of what he did, and
+    dropping that would make a single practised movement unselectable."""
+    p = Projector(segments=[exit_def(id=1)])
+    p.feed(jev(1, "level_changed", 1000, {"from": 30, "to": 6}))
+    assert p.target == ("segment", 1)
+
+
+def test_the_burst_count_ignores_arms_that_could_never_hook():
+    """Counted over the ELIGIBLE arms only, so a burst whose extras are
+    subsections or presence arms still leaves one unambiguous detection."""
+    piece = SegmentDef(id=2, name="a piece", enabled=True,
+                       start_triggers=[{"type": "level_exit", "from": 30}],
+                       end_triggers=[{"type": "level_enter", "to": 5}],
+                       guards=[], parents=["star:1:1"])
+    p = Projector(segments=[exit_def(id=1), piece, presence_def(id=9)])
+    p.feed(jev(1, "level_changed", 1000, {"from": 30, "to": 6}))
+    assert 2 in p.armed_segment_ids(), "the piece really did arm"
+    assert p.target == ("segment", 1), (
+        "a subsection never hooks, so it cannot make a lone arm ambiguous")

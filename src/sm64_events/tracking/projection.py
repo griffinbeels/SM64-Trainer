@@ -1273,8 +1273,33 @@ class Projector:
         # don't" — a piece is selected by click, and detection speaks
         # through its PARENT (the suspend exemption above, and the
         # follow-onto-the-parent rule in the seg_closed loop).
+        #
+        # AN AMBIGUOUS BURST DETECTS NOTHING (2026-08-10). Leaving the Bowser
+        # 1 arena is ONE `level_exit from=30` and all six `Bowser 1 -> X`
+        # movements arm on it together; the queue took whichever the notice
+        # list happened to hold first and lit it gold. His ruling: *"it
+        # pre-selected Bowser 1 -> BOB. This makes no sense, because there
+        # are too many options here to autoselect any of them."*
+        #
+        # So they neither hook NOR queue. Queueing them would only defer the
+        # same assertion — the head pops, a promotion picks one of the five
+        # survivors, and he never chose any of them. Round 19's FIFO is a
+        # line of things he can be said to have detected one at a time, and a
+        # simultaneous burst is exactly the case where that reading fails.
+        #
+        # THE SAME LESSON, THIRD SURFACE. `practice.js`'s `ambiguousPins`
+        # (2026-08-02) is this rule for the pinned card — *"When I don't have
+        # selected in the UI, it should never display an active segment like
+        # this, especially since there are multiple options"* — and
+        # `practicelog.js`'s membership rule is it for the log. All three
+        # were written when at most one thing armed at a time.
+        #
+        # Counted over the arms that are actually ELIGIBLE, so a burst whose
+        # extras are subsections, presence arms or the head itself still
+        # leaves one unambiguous detection standing.
         head_seg = (self.target[1] if self.target
                     and self.target[0] == "segment" else None)
+        hooking = []
         for n in self.segment_notices:
             if n["event"] != "segment_armed":
                 continue
@@ -1282,9 +1307,12 @@ class Projector:
             armed_def = self._segments.definition(sid)
             if (armed_def is None or not hooks_on_arm(armed_def.start_triggers)
                     or (armed_def.parents or [])
-                    or sid == head_seg or sid in self._target_queue):
+                    or sid == head_seg or sid in self._target_queue
+                    or sid in hooking):
                 continue
-            self._target_queue.append(sid)
+            hooking.append(sid)
+        if len(hooking) == 1:
+            self._target_queue.append(hooking[0])
         self._hold_hooked_head(ev, head_popped)
         armed_now = self._segments.armed_ids()
         # The grab's deferred claim (see _close_by_grab): the hooked head it

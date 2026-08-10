@@ -87,6 +87,21 @@ Two head flavors, split by WHO chose (`Projector._target_hooked`):
   reason a mere DISARM does not pop: walking back through BitDW to redo the
   Bowser 1 fight cancels the arm and must keep the selection.
 
+**AN AMBIGUOUS BURST DETECTS NOTHING (2026-08-10).** Leaving the Bowser 1
+arena is ONE `level_exit from=30` and all six `Bowser 1 → X` movements arm
+on it together; the queue took whichever the notice list held first and lit
+it gold. His ruling: *"it pre-selected Bowser 1 → BOB. This makes no sense,
+because there are too many options here to autoselect any of them."* So the
+eligible arms of one event are collected and **only a lone one queues** —
+queueing the group would defer the same assertion to the next promotion.
+Counted over ELIGIBLE arms, so a burst whose extras are subsections or
+presence arms still leaves one unambiguous detection standing. THIRD
+surface to learn this: `practice.js`'s `ambiguousPins` (2026-08-02) is it
+for the pinned card and `practicelog.js`'s membership rule for the log,
+and all three were written when at most one thing armed at a time.
+Measured with the reach change over both journals: 79 target readings
+differ, **0 attempt rows lost, gained or changed**.
+
 **What enters the queue**: a `segment_armed` notice for a def
 `segments.hooks_on_arm` accepts — no presence-type start clause
 (`level_enter`/`area_enter`/`attempt_anchor`/`spawned`). LBLJ (castle
