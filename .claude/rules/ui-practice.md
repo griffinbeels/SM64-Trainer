@@ -349,7 +349,31 @@ cannot silently land above the log. `tests/test_practice_page_order.py`
 forbids CSS `order` on any of the four and renders the route-active page,
 which is the state the report was actually about.
 
-## The Reds/Pipe pair shows exactly one card
+## The Reds/Pipe pair shows exactly one card — retired 2026-08-10, kept for its evidence
+
+**Retired, round reds-as-subsection (2026-08-10, tasks 1-4).** The reds star is
+now a [[subsection]] of its own Reds→Pipe movement — `views.py` stamps
+`parents: ["segment:<reds->pipe id>"]` on it — so its card nests INSIDE the
+movement's card (`nestSubsections`, `ui/subsections.js`) whenever it has
+earned one, instead of a mode choosing which of the two independently-earned
+cards to hide. Griffin's own words approving the design: "Bowser Reds STAR is
+just... a subsection of Bowser Reds Pipe entry" and "showing both is the point
+now." Deleted with the exclusivity rule below: `applyRedsPipeExclusivity`, the
+`levelByCourse` lookup it needed, `bowserModeFor`/`BOWSER_MODE_KEY`/
+`sm64.bowserMode` in stagebanner.js (the star/pipe sub-toggle's own memory
+this section describes), and the `justCompletedStar` half of its
+auto-detection. `bowserFamilyFor`/`writeBowserFamily`/`sm64.bowserFamily`
+survive untouched — they still choose which CELL (Reds vs No Reds) the
+selector highlights, a different question from which card the log shows now
+that both can be on screen at once. Nesting broke the log's auto-open slot in
+turn: `Disclose` never mounts a closed card's body, so a freshly-grabbed reds
+star winning the slot as a nested card was invisible until its parent opened
+too. `PracticeLog`'s `topKey` now resolves against every rendered card,
+nested included, and `isCardOpen` opens a parent whenever one of its own
+children holds the slot (`childKeys`, `practicelog.js`).
+
+What follows is the retired mechanism's own build note, preserved for its
+evidence.
 
 Same round. *"If I have pipe selected, it shouldn't show the card for
 (Star). If I have (Star) selected, and I grab the star, it shouldn't show the

@@ -332,32 +332,6 @@ def test_ambiently_armed_segments_get_a_third_exemption_generalized():
         r"\.filter\(\(sec\) => !isAmbientlyArmed\(sec\)\)", body)
 
 
-def test_just_completed_star_is_fresh_success_only():
-    """justCompletedStar (spec 2026-07-28-multi-step-segments round 2, item
-    2's detection signal for the Bowser Reds row): true only for a star
-    section whose own MOST RECENT attempt (by id, never assumed sorted)
-    landed as a FRESH success -- mirrors justCompletedSegment one level up
-    (a star instead of a segment), driven directly through node rather than
-    only via a source-scan of a caller."""
-    v = {"stars": [{"course_id": 16, "star_id": 0,
-                    "attempts": [{"id": 1, "outcome": "reset"},
-                                 {"id": 2, "outcome": "success"}]}]}
-    script = (
-        f"import {{ justCompletedStar }} from {STAGECONTEXT_JS!r};\n"
-        f"const v = {json.dumps(v)};\n"
-        "console.log(JSON.stringify([\n"
-        "  justCompletedStar(v, new Set([2]), 16, 0),\n"   # latest id IS fresh -> true
-        "  justCompletedStar(v, new Set([1]), 16, 0),\n"   # fresh id isn't the latest -> false
-        "  justCompletedStar(v, new Set(), 16, 0),\n"      # nothing fresh -> false
-        "  justCompletedStar(v, new Set([2]), 16, 5),\n"   # no section for this star -> false
-        "]));")
-    result = subprocess.run(["node", "--input-type=module", "-"],
-                            input=script, capture_output=True, text=True,
-                            timeout=30)
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == [True, False, False, False]
-
-
 def test_the_segment_he_clicked_leads_the_objective_card():
     """Live report 2026-08-02, four screenshots: he tapped `Bowser 2 →
     Upstairs`, the CELL lit up, and the card below kept reading `Bowser 2 →
