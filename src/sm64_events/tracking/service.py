@@ -38,7 +38,8 @@ from sm64_events.tracking.projection import (Projector, journal_id, replay,
 from sm64_events.tracking.segments import (SegmentDef, hundred_coin_entity,
                                            merge_definitions,
                                            segment_origin, split_definition,
-                                           star_origin, validate_definition)
+                                           stage_origin, star_origin,
+                                           validate_definition)
 from sm64_events.tracking import routes as route_logic
 
 log = logging.getLogger("sm64.tracker")
@@ -249,6 +250,17 @@ class TrackerService:
     on_attempt_boundary = None
 
     async def publish(self, event: Event) -> None:
+        if event.type == "stage_changed":
+            # The world NODE the player is standing in, stamped BEFORE the
+            # broadcast because the browser MERGES this payload into its held
+            # stage (`store.js`) rather than refetching -- so a key present
+            # only on the session view would go stale on the next move and
+            # keep answering for a room he has left, which is worse than
+            # never having it. Same value `current_stage` stamps for the
+            # initial load; both go through `stage_origin` so a subarea
+            # counts only where the world graph models one.
+            event.payload["node"] = stage_origin(event.payload.get("level"),
+                                                 event.payload.get("area"))
         seq = await self.broadcaster.publish(event)
         # BEFORE the db/session guards below, deliberately. A broadcast-only
         # instance still runs the full detector chain, and ordinals that only
@@ -496,8 +508,18 @@ class TrackerService:
         the next spawn landed at 09:07:52 — **twelve seconds** of star-select
         screen offering the volcano's two stars where the route has five. Both
         earlier attempts at this aimed at a LEVEL-LOAD transient, which is a
-        different window entirely and is not the one he was photographing."""
+        different window entirely and is not the one he was photographing.
+
+        `node` is stamped here for the same layering reason: the world-node
+        vocabulary (a subarea counts only inside the castle) is a TRACKING
+        rule, and a detector re-deriving it would be the second door
+        `tests/test_single_source.py` exists to stop. It is what a segment's
+        own `places` list is compared against, so both sides of that
+        comparison are server-derived and the browser owns no domain rule at
+        all."""
         return {**self._current_stage,
+                "node": stage_origin(self._current_stage.get("level"),
+                                     self._current_stage.get("area")),
                 "on_the_star_select": self._grab_since_spawn}
 
     @property

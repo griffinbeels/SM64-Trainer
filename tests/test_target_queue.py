@@ -279,11 +279,17 @@ def test_a_foreign_success_never_steals_a_held_head():
     """Pre-queue, a neighbouring success took the slot whenever the held
     pick was not among the closures. FIFO forbids the steal outright."""
     a = exit_def(id=1)
-    b = exit_def(id=2, name="other", start_from=16, end_to=26)
+    # B ends back in the Bowser 1 arena, which is A's OWN origin. Deliberate
+    # since 2026-08-10: a picked head is now also retired by standing
+    # somewhere its segment neither starts nor passes through, and this test
+    # is about the FIFO steal, not about that rule -- ending B in the
+    # courtyard retired A for an unrelated reason and B's arm then filled the
+    # empty hand, which looks exactly like the steal this forbids.
+    b = exit_def(id=2, name="other", start_from=16, end_to=30)
     p = Projector(segments=[a, b])
     p.feed(jev(1, "target_set", 0, {"kind": "segment", "segment_id": 1}))
     p.feed(jev(2, "level_changed", 1000, {"from": 16, "to": 6}))   # B arms
-    closed = p.feed(jev(3, "level_changed", 2000, {"from": 6, "to": 26}))
+    closed = p.feed(jev(3, "level_changed", 2000, {"from": 6, "to": 30}))
     assert any(x.segment_id == 2 and x.outcome == "success" for x in closed)
     assert p.target == ("segment", 1)
 

@@ -178,7 +178,8 @@ def test_the_card_rule_matches_the_projector_on_every_seeded_definition():
     from sm64_events.storage.db import EventRow
     from sm64_events.tracking.projection import Projector
     from sm64_events.tracking.segments import (SegmentDef, origin_course,
-                                               segment_origin)
+                                               reachable_places,
+                                               segment_origin, stage_origin)
 
     seed = _json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
     # every main course, the three Bowser courses, the castle, both hubs, an
@@ -192,7 +193,16 @@ def test_the_card_rule_matches_the_projector_on_every_seeded_definition():
             start_triggers=row["start_triggers"],
             waypoints=row.get("waypoints") or [],
             end_triggers=row["end_triggers"], guards=row.get("guards") or [])
-        course = origin_course(segment_origin(index, definition.start_triggers, {}))
+        origin = segment_origin(index, definition.start_triggers, {})
+        course = origin_course(origin)
+        # The two fields the place rule compares, built exactly as the server
+        # builds them (views.py stamps `places`, service.current_stage stamps
+        # `node`). The stage is given AREA 1, because a real `stage_changed`
+        # always carries the settled area and the castle's three nodes are
+        # only distinguishable with it -- a level-only stage would resolve to
+        # the bare "6" no definition can name and would test a state the app
+        # never publishes.
+        places = sorted(reachable_places(definition, origin))
         for level in levels:
             projector = Projector(segments=[definition])
             projector.feed(EventRow(id=1, session_id=1, seq=1, type="target_set",
@@ -206,8 +216,9 @@ def test_the_card_rule_matches_the_projector_on_every_seeded_definition():
                                     payload={"from": 6, "to": level}))
             expected.append(projector.target is not None)
             pairs.append(({"kind": "segment", "segment_id": index,
-                           "course_id": course},
-                          {"course_id": COURSE_OF.get(level), "level": level}))
+                           "course_id": course, "places": places},
+                          {"course_id": COURSE_OF.get(level), "level": level,
+                           "node": stage_origin(level, 1)}))
 
     answers = run_node("practicedHere", *(
         f"{json.dumps(section)}, {{stage: {json.dumps(stage)}}}"

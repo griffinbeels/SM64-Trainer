@@ -76,10 +76,46 @@ export const armedSegments = (t, view) =>
 // wherever it got to, and the selector agrees — every row appends
 // `armedExtraCells` for exactly that. So "the card shows only what the selector
 // shows" holds in both directions rather than by coincidence.
+// NARROWED 2026-08-10, and the second clause is why: a COURSE cannot express
+// "does this segment go through here". `origin_course` answers null for the
+// castle interior, both hubs AND the three Bowser arenas alike, so the
+// course-less bucket lumped a room every castle movement walks through in with
+// one that no movement can reach at all -- standing in the Bowser 1 arena,
+// where the only practicable thing is the fight, every castle movement still
+// had a card. His rule: *"we shouldn't be displaying segments when the segments
+// are fundamentally impossible to be practiced in a location (and such that the
+// segment doesn't go through that location)."*
+//
+// `sec.places` is that sentence, resolved SERVER-side (segments.
+// reachable_places): where it can be started, every place it declares as a
+// step, and everywhere on a shortest walk between them. `t.stage.node` is the
+// player's own place in the same vocabulary (tracking/service.py stamps both
+// the broadcast and the view). So this file owns NO domain rule -- it compares
+// two server-derived strings, which is what keeps the world graph out of the
+// browser.
+//
+// It only ever REMOVES a card. The path rule would also SHOW a movement all
+// along its own route (`WF -> SSL` in the lobby it walks through), which the
+// course rule has always hidden and nobody has asked for -- 111 such pairs
+// across the shipped corpus. Widening is a separate decision with its own
+// report; an AND keeps this change to the defect he named, and keeps the card
+// strictly stricter than the projector, which tests/test_ui_practice_context.py
+// requires in that direction and no other.
+//
+// Both unknowns mean yes, the convention the server side takes as well: no
+// `places` (a star section, a deleted definition) or no `node` (the emulator
+// detached) leaves the course rule answering alone.
 export function practicedHere(section, t) {
   if (!t.stage) return true;               // no live stage: unknown, allow
-  const standingIn = t.stage.course_id;
   if (section == null) return false;
+  if (!byCourse(section, t.stage)) return false;
+  const places = section.places;
+  if (!places || !places.length) return true;
+  return t.stage.node == null || places.includes(t.stage.node);
+}
+
+function byCourse(section, stage) {
+  const standingIn = stage.course_id;
   if (standingIn == null)                  // castle, hub, arena
     return section.course_id == null;
   return section.course_id === standingIn;
