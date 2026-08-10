@@ -97,7 +97,9 @@ never ends up in a clip you upload.
 every star and segment's proven ways to do it, laid out beginner to expert
 with real recorded times filed by the rank and subdivision they'd earn
 against your own standards, down to "Wario 3", with a JP/US mode that shows
-only that version's runs. Opens straight on whatever you last practiced.
+only that version's runs. Opens straight on whatever you last practiced, and
+a search box finds any star or movement as you type — by its own name or by
+the name of a way of doing it, so "LBLJ" lands on the one that documents it.
 Runs with video play in place — YouTube, Twitch, X, Bluesky, Streamable,
 Drive, or a raw clip file — and runs without one still count as times. Dock
 clips to the tray to watch several side by side, or send the tray to Compare

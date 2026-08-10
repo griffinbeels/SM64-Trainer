@@ -1063,3 +1063,44 @@ def test_an_empty_log_falls_back_to_the_course_grid(fresh_db_page):
     """The other half of the same rule, with nothing to land on."""
     fresh_db_page.evaluate(CLICK_LIBRARY_TAB)
     fresh_db_page.wait_for(".library-courses", timeout_ms=15000)
+
+
+def test_the_library_search_story_reaches_its_own_result_rows(page):
+    """Round 12's story earns its line here for the reason this whole file
+    exists: the results REPLACE the course grid, so a sweep of the landing
+    page can never draw a result row, and a story whose setup silently fails
+    reports a clean surface nobody is looking at rather than going red.
+
+    Two things are asserted, not one: that rows exist, and that a row carries
+    BOTH its lines. A row list that rendered with empty text would satisfy a
+    selector wait and measure nothing -- the vacuous-guard shape ui-core.md
+    names."""
+    reach(page, "library-search")
+    verdict = page.evaluate("""
+      (() => {
+        const rows = Array.from(document.querySelectorAll(
+          '.library-searching .library-result'));
+        if (!rows.length) return 'the story drew no result rows';
+        const bad = rows.find((row) => {
+          const name = row.querySelector('.library-result-name');
+          const sub = row.querySelector('.library-result-sub');
+          return !name || !sub || !name.textContent.trim() || !sub.textContent.trim();
+        });
+        if (bad) return 'a row rendered with an empty line: ' + bad.textContent;
+        if (document.querySelector('.library-searching .entity-grid'))
+          return 'the course grid is still drawn beside the results';
+        return 'ok';
+      })()
+    """)
+    assert verdict == "ok", verdict
+    # Leave the tab as the other stories expect to find it.
+    page.evaluate("""
+      (() => {
+        const box = document.querySelector('.library-page .library-find-input');
+        if (!box) return;
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype, 'value').set;
+        setter.call(box, '');
+        box.dispatchEvent(new Event('input', {bubbles: true}));
+      })()
+    """)
