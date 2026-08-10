@@ -35,7 +35,7 @@ import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
   from "./attemptlog.js";
 import { logTuning, logTuningVars, logTuningClasses, rankPlacementFor,
          nextStepModeFor, NARROW_CONTAINER_PX } from "../logtuning.js";
-import { nestSubsections, isPiece } from "../subsections.js";
+import { nestSubsections } from "../subsections.js";
 
 const html = htm.bind(h);
 
@@ -244,7 +244,8 @@ export function topEntityKey(view) {
 // screenshot that opened this round. A key that names no rendered card is
 // indistinguishable from "nothing qualifies", which is why it survived a
 // rule whose own tests were all green.
-export function autoOpenKey(sections, activeKey = null, playedKeys = []) {
+export function autoOpenKey(sections, activeKey = null, playedKeys = [],
+                             nestedKeys = []) {
   const rendered = sections || [];
   if (activeKey != null) {
     const active = rendered.find((sec) => entityKey(sec) === activeKey);
@@ -261,7 +262,17 @@ export function autoOpenKey(sections, activeKey = null, playedKeys = []) {
     // top-level active-but-empty card keeps the old, stricter rule
     // unchanged: it is already visible with nothing open, so there is
     // nothing broken to fix.
-    if (active && (hasRecordedAttempts(active) || isPiece(active))) {
+    //
+    // `nestedKeys` -- the keys the caller ACTUALLY rendered as children this
+    // pass (its own `childrenOf`, flattened) -- is what decides "nested",
+    // not a static read of `sec.parents`. A star's `parents` stays truthy
+    // even when its only parent is a DISABLED movement, and such a star
+    // promotes to TOP LEVEL (the round's own promotion rule) rather than
+    // nesting -- an already-visible, empty, top-level card, exactly the
+    // "nothing broken to fix" case two paragraphs up. Asking `sec.parents`
+    // instead of the render let that promoted card auto-open anyway (NEW-1,
+    // final re-review 2026-08-10).
+    if (active && (hasRecordedAttempts(active) || nestedKeys.includes(activeKey))) {
       return activeKey;
     }
   }
@@ -911,7 +922,13 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   // does for an off-page TOP-LEVEL section.
   const openCandidates = page.flatMap(
     (sec) => [sec, ...(childrenOf.get(entityKey(sec)) || [])]);
-  const topKey = autoOpenKey(openCandidates, activeKey, playedKeys);
+  // The keys `nestSubsections` actually placed as children THIS render --
+  // `childrenOf`'s own values, flattened -- is what `autoOpenKey` asks to
+  // tell a genuinely nested active entity from a PROMOTED one (NEW-1, final
+  // re-review 2026-08-10): a star whose only parent is disabled renders
+  // top-level, not nested, and must not borrow the nested case's leniency.
+  const nestedKeys = [...childrenOf.values()].flat().map(entityKey);
+  const topKey = autoOpenKey(openCandidates, activeKey, playedKeys, nestedKeys);
   // ONE renderer, used for a top-level card and for a nested [[subsection]]
   // alike (round 22) -- his "These cards should work exactly the same way as
   // normal" is structural here rather than a promise: a child goes through

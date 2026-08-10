@@ -335,19 +335,6 @@ def _played_keys_source() -> str:
                      _extract(log_source, "playedEntityKeys")])
 
 
-def _is_piece_source() -> str:
-    """`isPiece` (+ its own private `selfKey`) -- `autoOpenKey` reads it too
-    since 2026-08-10 (final review, the suite's own stray failure): a NESTED
-    active entity with zero attempts must still win the slot, or its parent
-    never opens and the piece never mounts at all."""
-    source = strip_comments(SUBSECTIONS_JS.read_text(encoding="utf-8"))
-    self_key = re.search(r"^const selfKey = .*?;$", source, re.M | re.S)
-    assert self_key, "selfKey not found in subsections.js — renamed?"
-    is_piece = re.search(r"^export const isPiece = .*?;$", source, re.M | re.S)
-    assert is_piece, "isPiece not found in subsections.js — renamed?"
-    return "\n".join([self_key.group(0), is_piece.group(0)])
-
-
 def _top_entity_key_source() -> str:
     log_source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
     return "\n".join([_entity_key_source(),
@@ -421,14 +408,21 @@ def _is_card_open_source() -> str:
     return _extract(source, "isCardOpen")
 
 
-def is_open(overrides, top, key, child_keys=()):
-    """`child_keys` defaults to empty, never `null` -- `isCardOpen`'s own
-    default parameter only kicks in for a genuinely OMITTED argument, and a
-    `null` fourth arg would reach `childKeys.includes` and throw."""
+_NO_CHILD_KEYS = object()  # sentinel: distinguishes "not passed" from "()"
+
+
+def is_open(overrides, top, key, child_keys=_NO_CHILD_KEYS):
+    """`child_keys` defaults to genuinely OMITTED, not `[]` -- a caller that
+    does not pass it must reach `isCardOpen`'s own `childKeys = []` default
+    parameter, not a `[]` this wrapper forwards on its behalf. Passing `()`
+    or `[]` explicitly still serialises a real fourth argument; a `null`
+    fourth arg would reach `childKeys.includes` and throw, so the omitted
+    case must drop the argument from the call entirely, never pass `null`."""
+    args = f"{json.dumps(overrides)}, {json.dumps(top)}, {json.dumps(key)}"
+    if child_keys is not _NO_CHILD_KEYS:
+        args += f", {json.dumps(list(child_keys))}"
     script = (_is_card_open_source() + "\n"
-              f"console.log(JSON.stringify(isCardOpen("
-              f"{json.dumps(overrides)}, {json.dumps(top)}, "
-              f"{json.dumps(key)}, {json.dumps(list(child_keys))})));")
+              f"console.log(JSON.stringify(isCardOpen({args})));")
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True,
                             timeout=30)
@@ -695,16 +689,20 @@ def test_the_slot_moves_the_moment_a_first_attempt_lands():
 def _auto_open_source() -> str:
     log_source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
     return "\n".join([_entity_key_source(),
-                        _is_piece_source(),
                         _played_keys_source(),
                         _extract(log_source, "autoOpenKey")])
 
 
-def auto_open(sections, active_key, played):
+def auto_open(sections, active_key, played, nested_keys=()):
+    """`nested_keys` names which of `sections` the CALLER actually rendered
+    as a nested child this pass -- `autoOpenKey` no longer asks `isPiece`
+    (a static read of `sec.parents`), because a star whose only parent is
+    disabled still answers `isPiece` truthfully while rendering top-level,
+    not nested (NEW-1, final re-review 2026-08-10)."""
     script = (_auto_open_source() + "\n"
               f"console.log(JSON.stringify(autoOpenKey("
               f"{json.dumps(sections)}, {json.dumps(active_key)}, "
-              f"{json.dumps(played)})));")
+              f"{json.dumps(played)}, {json.dumps(list(nested_keys))})));")
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True,
                             timeout=30)
@@ -749,3 +747,26 @@ def test_a_played_key_that_is_not_rendered_is_skipped_not_returned():
 def test_nothing_played_and_nothing_active_leaves_every_card_closed():
     fresh = star("fresh", 99, course_id=2, star_id=2, attempts=0)
     assert auto_open([fresh], "star:2:2", []) is None
+
+
+def test_a_genuinely_nested_active_entity_with_nothing_recorded_still_takes_the_slot():
+    """The suite's own stray failure, preserved: a freshly-targeted piece
+    with zero attempts is invisible everywhere -- top-level AND nested --
+    until its parent's card opens, so it must win the slot regardless of
+    the eligibility rule. `nested_keys` says the caller actually rendered
+    it as a child this pass."""
+    piece = star("piece", 99, course_id=2, star_id=2, attempts=0)
+    assert auto_open([piece], "star:2:2", [], nested_keys=["star:2:2"]) == "star:2:2"
+
+
+def test_a_promoted_star_with_nothing_recorded_does_not_take_the_slot():
+    """NEW-1. `promoted` carries a `parents` stamp -- exactly what the old
+    `isPiece(active)` check read, and would have answered true for -- but its
+    only parent is a disabled movement, so `nestSubsections` promotes it to
+    TOP LEVEL instead of nesting it (the round's own promotion rule) and
+    `nested_keys` is empty. A top-level active-but-empty card is already
+    visible with nothing open, so it must fall through to the eligibility
+    rule like any other top-level card, whatever its `parents` field says."""
+    promoted = star("promoted", 99, course_id=2, star_id=2, attempts=0)
+    promoted["parents"] = ["segment:71"]
+    assert auto_open([promoted], "star:2:2", []) is None
