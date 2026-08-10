@@ -28,6 +28,39 @@ Nothing was summarised. Every row below is the row that lived in
 | Practice cell (banner + picker) | `ui/components/practicecell.js` — art / rank Hat / name / sub-line, extracted from stagebanner.js (2026-07-25) so a star looks the same where you PICK it and where you PRACTICE it. `dimIdle` is the banner's look (the grid passes false — dim cells there read as disabled); `onEdit` is optional and omitting it drops the ✎ entirely, which is why the picker has no per-cell icon override. Art is resolved by the caller through `entityicons.js`'s `entityIconSrc`; this file only renders. **`toggles` (round 22, 2026-08-08) changes the ELEMENT** from `<button>` to `<div role="button">`, because a button may not contain a button and every toggle is one; omit it and the markup is byte-for-byte what it was, which is what keeps the other ~20 call sites on a real button with the browser's own keyboard and focus behaviour |
 | The small buttons INSIDE a cell's art | `ui/components/celltoggles.js` — `CellToggles`, extracted from `RedsCell` on Griffin's instruction (*"it's REALLY important that we reuse the same system as the bowser level icons, because we already put in a lot of work to getting that to work"*). TWO consumers, differing by ONE prop: the Bowser pair is two buttons, mutually exclusive, with the clock between them; a star's [[subsection]]s are N buttons, MULTI-select, no clock (*"it's basically different by the fact that it's more like a multi-selection rather than a toggle version"*). **Exclusivity lives in the CALLER's click handler and nowhere in here** — all this module receives is which buttons are lit, which is what keeps one implementation honest instead of a shared component with two modes inside it. Layout is a function of COUNT and it is his: one row up to two, a two-column grid from three (three draws 2 + 1). Classes `.cell-toggles`/`.cell-toggle-btn`, and the host cell wears `.has-toggles` for its own `position: relative` |
 
+## A cell is a fixed-height column, so every child is a shrink candidate
+
+**Two rounds, 2026-08-10, and the second is the one worth remembering.** He
+reported the strategy word under each star shaved at the bottom. Two
+independent causes were stacking, and fixing the first left the second
+looking like a partial fix — *"somehow the LBLJ text is still broken, but the
+others are fine???"*
+
+1. `--selector-height` sets a BORDER-box height and the row's height
+   subtraction ignored the card's own 1px borders, so the row ran 2px taller
+   than the card that clips it, at every width. The responsive sweep had
+   measured this and was carrying it as **78 exempted rows**; all 78 are
+   deleted, so it guards itself now.
+2. `.starrank` declared `height: 18px` and **did not keep it**. A declared
+   height is only a starting point here: the cell is a fixed-height column
+   whose contents already overflow, so the slot collapsed to **16px holding a
+   rank medal** (a 16px image resists) and **14.41px holding the "–"** (text
+   compresses freely). The one movement in his row he had practised therefore
+   stood 1.59px taller than its six neighbours and shaved its own strategy
+   line. `flex: 0 0 18px` is the fix — one number, both states.
+
+**Neither is visible to a probe.** Nothing overflows and nothing clips; the
+cells simply disagree with each other by a pixel and a half. Both have their
+own contract test — `tests/test_selector_strat_line_fits.py` and
+`tests/test_selector_rank_slot_holds.py` — and both are mutation-proved.
+
+**The rank-slot test had to REBUILD his row**, because the fixture's Castle
+Lobby renders LBLJ alone and one cell in a wide row is never asked to shrink
+at all: the bug only exists at his cell count. Clone into the REAL row (the
+`test_log_card_name_fits.py` technique) and scope every query to
+`.stagebanner` — an unscoped `.starcell` finds the target picker's 21 HIDDEN
+cells, all of height 0, which is the trap `.claude/rules/ui-core.md` names.
+
 ## Subsections are badges, not cells
 
 **A SUBSECTION IS A BADGE ON ITS PARENT, NOT A CELL BESIDE IT** (round 22, 2026-08-08; widened from stars to every parent in round 30, 2026-08-09).

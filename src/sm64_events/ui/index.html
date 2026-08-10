@@ -99,9 +99,19 @@
   /* rank medal (or "–" when unranked) sitting between the star and its name;
      nudged up (negative margin) to sit centered in the gap — the star art has
      transparent bottom margin below its legs. Bobs with the active star. */
+  /* `flex: 0 0 18px` and not `height` alone — the cell is a fixed-height
+     column whose contents already overflow, so every child is a shrink
+     candidate and a declared height is only a starting point. Measured in
+     his own Castle Lobby row: the slot collapsed to 16px where it holds a
+     rank MEDAL (a 16px image resists) and to 14.41px where it holds the
+     "–" (text compresses freely), so the one practised movement in the row
+     stood 1.59px taller than its six neighbours and shaved its own strategy
+     line at the bottom of the clip — "somehow the LBLJ text is still
+     broken, but the others are fine???" (2026-08-10). One number, both
+     states. Pinned by tests/test_selector_rank_slot_holds.py. */
   .starrank { display: flex; align-items: center; justify-content: center;
-              height: 18px; margin-top: -6px; color: #6c7686; font-size: .9rem;
-              line-height: 1; }
+              flex: 0 0 18px; margin-top: -6px; color: #6c7686;
+              font-size: .9rem; line-height: 1; }
   .starholder { display: block; width: min(74px, 72%);
                 aspect-ratio: 1 / 1; transition: transform .18s ease; }
   .starcell.active-star .starholder { transform: scale(1.16); }
@@ -135,8 +145,17 @@
               display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
               overflow: hidden; }
   .starcell.active-star .starname { color: #ffd75f; }
+  /* flex-shrink: 0 is load-bearing, and it is the SAME shave .starname was
+     fixed for on 2026-08-02 ("'Floating Isle' has the bottom shaved off"),
+     one element further down. The cell is a fixed-height column flex
+     container whose children overflow it, so every flex item is a shrink
+     candidate -- and this one clips its own content. Measured at 1400px:
+     the .strat line box is 16px inside a .starsub squeezed to 15.08px, so
+     "Standard" lost the bottom of its descenders at every wide pane (live
+     report 2026-08-10). A sub-line is one line by construction (.strat is
+     nowrap+ellipsis), so refusing to shrink cannot cost height elsewhere. */
   .starsub { display: flex; align-items: center; gap: .28rem; justify-content: center;
-             max-width: 100%; overflow: hidden; }
+             max-width: 100%; overflow: hidden; flex-shrink: 0; }
   /* the armed "running" chip rides the same sub row as the strat text —
      slimmed so it can't push past the cell's fixed height (it clipped at
      mid widths, harness 2026-07-24) */
@@ -1527,8 +1546,15 @@
   }
   .selector-card .shead { min-height: 30px; align-items: center; }
   .selector-card .shead b { color: var(--text); font-size: 1.06rem; }
+  /* 58 = card padding (14 + 12) + .shead's 30px min-height + the card's own
+     1px top and bottom BORDER. That last term was missing until 2026-08-10
+     and cost exactly 2px at every width -- `--selector-height` sets a
+     border-box height, so a subtraction that counts only padding leaves the
+     row 2px too tall for the space it is given. The sweep had been carrying
+     it as 78 exempted "scrollHeight 222 > clientHeight 220" rows rather than
+     as a bug; it is what left the strat sub-line with no slack of its own. */
   .selector-card .starrow {
-    height: calc(var(--selector-height) - 56px); align-items: stretch;
+    height: calc(var(--selector-height) - 58px); align-items: stretch;
     gap: clamp(3px, .82cqw, 8px); margin: 0; padding: 4px 1px 8px;
   }
   .selector-card .starcell {
@@ -5046,7 +5072,9 @@
     .route-focus-control select { width: 100%; min-width: 0; }
     .practice-card { padding: 12px; }
     .selector-card { padding: 12px; }
-    .selector-card .starrow { height: calc(var(--selector-height) - 54px); }
+    /* 56 = this block's 12px card padding (x2) + .shead 30 + 2px border --
+       the same border term the wide rule was missing (see it for why). */
+    .selector-card .starrow { height: calc(var(--selector-height) - 56px); }
     /* The Active Target card's narrow layout USED to live here, keyed to the
        viewport. It moved to an @container block (search "objective card,
        narrow pane") on 2026-07-28 -- and moving it CHANGED WHICH SIDE OF 760
