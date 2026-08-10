@@ -383,6 +383,26 @@ and a row reshuffling four times in a tenth of a second is the flicker.
   browser. `run-test-server.bat` prints the commit it is running for the same
   reason, but that is on the console and this is queryable.
 
+- **SCOPE every query in a driven test — a bare class selector finds the
+  HIDDEN copy, because two tabs stay mounted while you are not looking at
+  them.** Compare and the Library both render with `display:none` when you
+  leave them (library.js's own docstring names the trick), and both reuse
+  shared components: the Library's course browser is the SAME
+  `entitymodal.js` picker the recorder's "what is this a piece of?" dialog
+  is. So `document.querySelector('.entity-grid')` answers with the Library's
+  invisible grid, which sits earlier in the DOM and legitimately drills where
+  the visible dialog would have closed — a passing app reported as a broken
+  feature. Measured, not guessed: `offsetParent` null, ancestors
+  `.library-courses` → `.library-page`, present BEFORE the dialog opens
+  (2026-08-09, the sheet-library merge). **Twice now** — the same trap ate
+  `.library-search` in `tools/uilab_project.py` a day earlier, where the
+  Library's hidden search box swallowed every keystroke meant for the
+  Segments tab's. The tell is identical both times: no error, plausible
+  elements, a verdict about the wrong surface. Anchor to the container that
+  identifies YOUR surface (`.record-review .entity-grid`,
+  `.segments-page .library-search`), and prove the anchor by mutation —
+  a scope that matches nothing looks exactly like a feature that is absent.
+
 - **uilab is the shared rig; a limit you hit in it is a bug to FIX there, and
   two of the three "limits" written here were never real (2026-07-29).** Both
   false ones were written from a symptom without measuring the cause, and both

@@ -145,15 +145,22 @@ def _navigate_to_section(page, group_name, target_name, section_name):
     section, opened."""
     page.evaluate(CLICK_LIBRARY_TAB)
     page.wait_for(".library-page", timeout_ms=15000)
+    # Scoped to `.library-page`, never a bare `.entity-grid`: this tab and
+    # Compare both stay mounted with `display:none` while you are elsewhere,
+    # and the recorder's parent dialog draws the SAME picker component, so an
+    # unscoped query can answer with a grid belonging to another surface
+    # entirely (2026-08-09 -- `.claude/rules/ui-core.md`'s own norm, written
+    # after that swap read as the recorder refusing to close).
     page.evaluate(
-        "(() => { const b = document.querySelector('.entity-back'); "
+        "(() => { const b = document.querySelector('.library-page .entity-back'); "
         "if (b) b.click(); })()")
-    page.wait_for(".entity-grid button", timeout_ms=15000)
+    page.wait_for(".library-page .entity-grid button", timeout_ms=15000)
 
     for label, name in (("group", group_name), ("target", target_name)):
         result = page.evaluate(f"""
           (() => {{
-            const cell = Array.from(document.querySelectorAll('.entity-grid button'))
+            const cell = Array.from(document.querySelectorAll(
+              '.library-page .entity-grid button'))
               .find((el) => el.textContent.includes({name!r}));
             if (!cell) return 'no {label} cell for ' + {name!r};
             cell.click();
@@ -162,7 +169,7 @@ def _navigate_to_section(page, group_name, target_name, section_name):
         """)
         assert result == "clicked", result
         if label == "group":
-            page.wait_for(".entity-grid button", timeout_ms=15000)
+            page.wait_for(".library-page .entity-grid button", timeout_ms=15000)
     page.wait_for(".library-target .library-section", timeout_ms=15000)
 
     section_result = page.evaluate(f"""

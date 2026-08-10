@@ -17,6 +17,16 @@ Two rules make this an artifact rather than a document, and
 2. **Active voice.** No definition hides its actor, because the actor is nearly
    always the module you would open.
 
+**A term that is also an ordinary English word this project says in another
+sense gets QUALIFIED, not left bare.** `Entry` and `Piece` were minted for the
+Ultimate Sheet's rows on one branch while another branch was writing "a course
+entry" and "a piece of a star" in plain English all over its own rows; the
+moment both merged, closure reported 12 rows using a defined term unmarked, and
+neither reading was wrong. `Sheet entry` and `Sheet piece` say which half of the
+app they belong to and leave the everyday words free (2026-08-09). Closure can
+only find this AFTER a merge — it compares rows to rows, so two branches each
+adding a coherent set is exactly the case it cannot warn about early.
+
 Each row names the module that owns it. `Not` appears only where two terms
 genuinely get confused.
 
