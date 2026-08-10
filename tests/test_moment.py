@@ -200,6 +200,21 @@ def test_a_stale_edge_reading_is_refused_even_when_the_settle_cannot_help():
     assert events[0].payload["landmark"] is None
 
 
+def test_a_textbox_publishes_the_RAW_counter_where_a_door_publishes_it_plus_two():
+    """His frame-stepped replay, 2026-08-10: Usamune 0'11"53 against our
+    0'11"60 on journal id 28790, raw counter 346. A door's own screenshot
+    (2026-08-06) says +2 and is untouched, so this is per-kind rather than a
+    fourth flip of one constant."""
+    textbox = run([snap(ACT_WALKING, 100, igt_overall=346),
+                   snap(ACT_AUTOMATIC_DIALOG, 101, igt_overall=346)])
+    assert textbox[0].payload["igt_frames"] == 346
+    assert textbox[0].payload["igt"] == "0'11\"53"
+
+    door = run([snap(ACT_WALKING, 100, igt_overall=2003),
+                snap(ACT_PULLING_DOOR, 101, igt_overall=2003)])
+    assert door[0].payload["igt_frames"] == 2005
+
+
 def test_the_engagement_age_rides_along_so_the_window_can_be_re_measured():
     events = run([
         snap(ACT_WALKING, 100, level=6),

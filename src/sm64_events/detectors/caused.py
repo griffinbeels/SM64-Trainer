@@ -70,7 +70,7 @@ from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.core.timefmt import format_igt
 from sm64_events.detectors.counter_epoch import LEVEL_LOAD_TAIL_FRAMES
 from sm64_events.detectors.igt_clock import IgtClock
-from sm64_events.detectors.moment import MomentDetector
+from sm64_events.detectors.moment import display_lag_for
 from sm64_events.memory import addresses as A
 
 
@@ -154,10 +154,11 @@ class CausedMomentDetector:
     def _emit(self, kind: str, before, state, curr: GameSnapshot) -> Event:
         self._counts[kind] = self._counts.get(kind, 0) + 1
         reading, source = self._clock.igt_at(curr.global_timer, curr)
-        # The door's constant, like the cannon: unmeasured for these kinds
-        # until one screenshot says otherwise (tools/score_moment_clock.py is
-        # the instrument, and moment.py's docstring is the evidence trail).
-        igt_frames = reading + MomentDetector.DISPLAY_LAG_FRAMES
+        # The kind's own display lag, through moment.py's ONE reader: these
+        # kinds have no screenshot of their own yet, so they carry the door's
+        # value and follow it if it ever moves (tools/score_moment_clock.py is
+        # the instrument, and moment.py's constant is the evidence trail).
+        igt_frames = reading + display_lag_for(kind)
         found = Landmark(
             level=curr.curr_level, area=curr.curr_area,
             behaviour=state.behaviour,

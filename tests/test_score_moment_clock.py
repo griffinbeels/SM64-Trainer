@@ -12,6 +12,7 @@ published — so a door journaled before a change and one journaled after score
 identically off the same screen reading.
 """
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -122,12 +123,40 @@ def test_the_shipped_offset_is_derived_from_the_detector_not_restated():
     assert code_offset() == events[0].payload["igt_frames"] - 777
 
 
-def test_the_shipped_offset_tracks_the_constant_it_is_scoring():
-    """Mutation proof in code: move the constant and the tool's report moves
-    with it, so a stale literal in the tool cannot survive."""
-    original = MomentDetector.DISPLAY_LAG_FRAMES
-    try:
-        MomentDetector.DISPLAY_LAG_FRAMES = original + 3
-        assert code_offset() == original + 3 + 1  # + IgtClock.DISPLAY_TICK
-    finally:
-        MomentDetector.DISPLAY_LAG_FRAMES = original
+def test_the_shipped_offset_tracks_the_value_it_is_scoring(monkeypatch):
+    """Mutation proof in code: move the registry's own value and the tool's
+    report moves with it, so a stale literal in the tool cannot survive."""
+    import sm64_events.detectors.moment as moment_module
+
+    door = next(m for m in moment_module.MOMENTS if m.kind == "door_open")
+    moved = replace(door, display_lag=door.display_lag + 3)
+    monkeypatch.setattr(moment_module, "MOMENTS",
+                        tuple(moved if m.kind == "door_open" else m
+                              for m in moment_module.MOMENTS))
+    # + IgtClock.DISPLAY_TICK, which the clock adds under the lag
+    assert code_offset() == door.display_lag + 3 + 1
+
+
+def test_the_shipped_offset_is_answered_PER_KIND():
+    """A door reads counter + 2 and a textbox counter + 0, both from his own
+    screen (2026-08-06 and 2026-08-10). One global number would have to be
+    wrong for one of them, and acting on a global verdict is exactly the
+    mistake this split prevents."""
+    assert code_offset("door_open") == 2
+    assert code_offset("textbox") == 0
+
+
+def test_a_caused_kind_has_no_synthetic_edge_to_derive_from():
+    """`switch_press`/`enemy_defeated` carry an empty action set on purpose, so
+    the tool says so rather than reporting the door's number as theirs."""
+    with pytest.raises(LookupError):
+        code_offset("switch_press")
+
+
+def test_two_kinds_reading_differently_is_not_a_disagreement():
+    """Scored globally these two true readings look like a contradiction."""
+    rows = [row(1, 100, 102, kind="door_open"),
+            row(2, 500, 500, kind="textbox")]
+    scored = score(rows, ["0'03\"40", "0'16\"66"])
+    assert verdict(scored, "door_open")[0] == 2
+    assert verdict(scored, "textbox")[0] == 0

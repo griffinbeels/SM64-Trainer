@@ -76,6 +76,12 @@ class Moment:
     kind: str            # the wire + trigger vocabulary ("door_open", ...)
     actions: frozenset   # entering ANY of these IS this moment
     label: str           # the sentence the builder's picker shows
+    # How far Usamune's SCREEN sits above `counter + IgtClock.DISPLAY_TICK` on
+    # the frame this moment fires -- see MomentDetector.DISPLAY_LAG_FRAMES for
+    # why it is per-kind and what each value was measured from. Defaulted to
+    # the door's, so an unmeasured kind carries the one value that has a
+    # screenshot behind it and says so.
+    display_lag: int = 1
 
 
 # THE registry. One row per moment kind; the sets are the ones addresses.py
@@ -83,7 +89,10 @@ class Moment:
 # the anchor detector can never drift apart.
 MOMENTS: tuple[Moment, ...] = (
     Moment("door_open", A.DOOR_ACTIONS, "Open a door"),
-    Moment("textbox", A.DIALOG_ACTIONS, "Trigger a textbox"),
+    # A TEXTBOX READS THE RAW COUNTER -- his frame-stepped replay, 2026-08-10,
+    # is the only kind of evidence this number has ever moved on. See
+    # MomentDetector.DISPLAY_LAG_FRAMES.
+    Moment("textbox", A.DIALOG_ACTIONS, "Trigger a textbox", display_lag=-1),
     Moment("pole_grab", A.POLE_GRAB_ACTIONS, "Grab a pole"),
     Moment("pickup", A.PICKUP_ACTIONS, "Pick up an object"),
     # Round 9 item 6: *"We also need to detect when the user enters a cannon"*
@@ -106,6 +115,16 @@ MOMENTS: tuple[Moment, ...] = (
     Moment("switch_press", frozenset(), "Press a switch"),
     Moment("enemy_defeated", frozenset(), "Defeat an enemy"),
 )
+
+
+def display_lag_for(kind: str) -> int:
+    """THE one reading of a kind's display lag — `caused.py` emits moments too
+    and must not grow a second answer. Reads the registry live so a test can
+    move a row and watch every consumer follow."""
+    for moment in MOMENTS:
+        if moment.kind == kind:
+            return moment.display_lag
+    return MomentDetector.DISPLAY_LAG_FRAMES
 
 
 class MomentDetector:
@@ -149,6 +168,31 @@ class MomentDetector:
     # survived the round; a clean Lakitu run's delta is `counter + 1`, which is
     # exactly why one report could be satisfied by either and why the residual
     # came straight back.
+    #
+    # IT IS PER-KIND SINCE 2026-08-10, and this is the value only for kinds
+    # with no screenshot of their own. A TEXTBOX reads the RAW COUNTER --
+    # `display_lag = -1`, total `counter + 0` -- and the evidence is the best
+    # this number has ever moved on, because it is FRAME-STEPPED rather than
+    # caught live: his replay paused on the star door's dialogue shows Usamune
+    # at 0'11"53 while the practice log recorded 0'11"60 (journal id 28790,
+    # raw `counter` 346; 346/30 = 11.53, and we published 348). His words:
+    # *"we marked down 11\"60... Need to make sure we're detecting when the
+    # trigger occurs more tightly."* `tools/score_moment_clock.py --usamune
+    # 0'11"53` attributed it to that row and returned `counter + 0`.
+    #
+    # A GLOBAL FLIP WOULD HAVE BROKEN THE DOOR, which is the reason the field
+    # moved onto the registry rather than this constant changing again: the
+    # door's own screenshot says +2 and stands untouched, so the two readings
+    # are not in conflict and neither has to be re-litigated to move the other.
+    # WHY they differ is OPEN and is deliberately not guessed at -- the obvious
+    # story, that a dialogue stops Usamune's counter, was MEASURED AND IS
+    # FALSE: across every textbox in his journal the counter advances 1:1 with
+    # `global_timer` through the dialogue (25 samples, 0 frozen frames).
+    #
+    # Every other kind carries the door's value and says so here rather than
+    # in a second place: pole_grab, pickup, cannon_enter, and caused.py's
+    # switch_press/enemy_defeated. One screenshot each settles them, through
+    # the same instrument, without touching the two that are already answered.
     #
     # The two inert payload fields below are what made this a measurement
     # rather than an argument -- keep them.
@@ -290,7 +334,7 @@ class MomentDetector:
         """
         self._counts[kind] = self._counts.get(kind, 0) + 1
         reading, source = self._clock.igt_at(curr.global_timer, curr)
-        igt_frames = reading + self.DISPLAY_LAG_FRAMES
+        igt_frames = reading + display_lag_for(kind)
         # WHICH door, as opposed to how many doors ago. The ordinal above stays
         # -- it is a property of the moment now rather than its name, which is
         # his own sentence -- and `landmark` is what a label and a subsection key

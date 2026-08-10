@@ -96,26 +96,51 @@ def score(rows: list[dict], readings: list[str], band=BAND) -> list[Scored]:
     return scored
 
 
-def verdict(scored: list[Scored]) -> tuple[int | None, str]:
-    """The offset every scored reading agrees on, or why there isn't one."""
-    settled = [s.matches[0].offset for s in scored if s.state == "scored"]
+def verdict(scored: list[Scored], kind: str | None = None) -> tuple[int | None, str]:
+    """The offset every scored reading agrees on, or why there isn't one.
+
+    SCOPED TO ONE KIND since 2026-08-10, because the lead is NOT one number:
+    a door reads `counter + 2` (screenshot, 2026-08-06) and a textbox reads
+    `counter + 0` (frame-stepped replay, 2026-08-10). Judged globally those
+    two true readings look like a contradiction, and acting on the verdict
+    would have broken whichever kind was measured first."""
+    settled = [s.matches[0].offset for s in scored
+               if s.state == "scored"
+               and (kind is None or s.matches[0].row["kind"] == kind)]
     if not settled:
         return None, "no reading could be attributed to a single moment"
     distinct = sorted(set(settled))
     if len(distinct) > 1:
         return None, (f"readings disagree: offsets {distinct} — Usamune's lead "
-                      f"over the counter is not a constant, which is itself "
-                      f"the finding")
+                      f"over the counter is not a constant for this kind, "
+                      f"which is itself the finding")
     return distinct[0], f"{len(settled)} reading(s), unanimous"
 
 
-def code_offset() -> int:
-    """What the SHIPPED code adds to the counter, derived by running it.
+def kinds_read(scored: list[Scored]) -> list[str]:
+    """Every moment kind the readings landed on, in listing order."""
+    seen = []
+    for entry in scored:
+        if entry.state != "scored":
+            continue
+        kind = entry.matches[0].row["kind"]
+        if kind not in seen:
+            seen.append(kind)
+    return seen
 
-    Not read off a constant and not restated here: a synthetic door edge goes
-    through the real `MomentDetector` and the real `IgtClock`, so this number
-    cannot drift from what the server would journal, whatever the constants
-    are called or how many of them there are.
+
+def code_offset(kind: str = "door_open") -> int:
+    """What the SHIPPED code adds to the counter for one KIND, derived by
+    running it.
+
+    Not read off a constant and not restated here: a synthetic edge of that
+    kind goes through the real `MomentDetector` and the real `IgtClock`, so
+    this number cannot drift from what the server would journal, whatever the
+    constants are called or how many of them there are.
+
+    Raises LookupError for a CAUSED kind (`switch_press`, `enemy_defeated`) —
+    those carry an empty action set on purpose and no synthetic edge can drive
+    them, so there is nothing here to restate on their behalf.
     """
     def snap(action: int, frame: int) -> GameSnapshot:
         return GameSnapshot(
@@ -124,14 +149,17 @@ def code_offset() -> int:
             num_stars=0, last_completed_course=0, last_completed_star=0,
             igt_overall=1000, curr_level=6, curr_area=1)
 
-    door = next(iter(next(m for m in MOMENTS if m.kind == "door_open").actions))
+    actions = next((m.actions for m in MOMENTS if m.kind == kind), frozenset())
+    if not actions:
+        raise LookupError(kind)
+    edge = next(iter(actions))
     walking = 0x04000440
     detector = MomentDetector()
-    detector.process(snap(walking, 100), snap(door, 101))
+    detector.process(snap(walking, 100), snap(edge, 101))
     # The SETTLE poll: a moment is a one-poll held emit since 2026-08-07 (its
     # landmark is re-read after the edge — detectors/moment.py), so the edge
     # alone publishes nothing. The number this scores is still the EDGE's.
-    events = detector.process(snap(door, 101), snap(door, 102))
+    events = detector.process(snap(edge, 101), snap(edge, 102))
     return events[0].payload["igt_frames"] - 1000
 
 
@@ -178,7 +206,7 @@ def render_table(rows: list[dict], offsets: range) -> str:
     return "\n".join(lines)
 
 
-def render_scores(scored: list[Scored], shipped: int) -> str:
+def render_scores(scored: list[Scored]) -> str:
     lines = []
     for entry in scored:
         if entry.state == "unmatched":
@@ -196,19 +224,31 @@ def render_scores(scored: list[Scored], shipped: int) -> str:
             f"  {entry.reading:>10} = counter {match.row['counter']} + "
             f"{match.offset}  (moment #{match.row['id']}, {match.row['kind']}, "
             f"we published {format_igt(match.row['ours'])})")
-    offset, why = verdict(scored)
     lines.append("")
-    if offset is None:
-        lines.append(f"VERDICT: unsettled — {why}")
-        return "\n".join(lines)
-    lines.append(f"VERDICT: Usamune reads counter + {offset}  ({why})")
-    if offset == shipped:
-        lines.append(f"         the shipped code adds {shipped}. AGREES.")
-    else:
-        lines.append(
-            f"         the shipped code adds {shipped}, so every moment it "
-            f"journals is {abs(offset - shipped)} frame(s) "
-            f"{'fast' if shipped < offset else 'slow'}.")
+    # ONE VERDICT PER KIND. The lead is a property of the kind, not of the
+    # clock, so a door reading and a textbox reading answer two questions and
+    # neither disturbs the other.
+    for kind in kinds_read(scored) or [None]:
+        offset, why = verdict(scored, kind)
+        name = kind or "moments"
+        if offset is None:
+            lines.append(f"VERDICT [{name}]: unsettled — {why}")
+            continue
+        lines.append(f"VERDICT [{name}]: Usamune reads counter + {offset}"
+                     f"  ({why})")
+        try:
+            shipped = code_offset(kind)
+        except LookupError:
+            lines.append("         a caused moment: no synthetic edge can "
+                         "drive it, so compare by hand against the registry.")
+            continue
+        if offset == shipped:
+            lines.append(f"         the shipped code adds {shipped}. AGREES.")
+        else:
+            lines.append(
+                f"         the shipped code adds {shipped}, so every {name} it "
+                f"journals is {abs(offset - shipped)} frame(s) "
+                f"{'fast' if shipped < offset else 'slow'}.")
     return "\n".join(lines)
 
 
@@ -248,15 +288,16 @@ def main() -> int:
         print("No moments carrying a raw counter. Play through a door first.")
         return 1
 
-    shipped = code_offset()
-    print(f"shipped code: Usamune counter + {shipped}\n")
+    print("shipped code: " + ", ".join(
+        f"{moment.kind} = counter + {code_offset(moment.kind)}"
+        for moment in MOMENTS if moment.actions) + "\n")
     print(render_table(rows, range(0, 4)))
     if not args.usamune:
         print("\nNow read the emulator for one of these and re-run with"
               "\n  --usamune <what Usamune showed>")
         return 0
     print()
-    print(render_scores(score(rows, args.usamune), shipped))
+    print(render_scores(score(rows, args.usamune)))
     return 0
 
 
