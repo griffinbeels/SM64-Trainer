@@ -76,22 +76,27 @@ def main(argv: list[str]) -> int:
             story = next(s for s in STORIES if s.name == name)
             selector = selector or ".modal"
 
-    # A star wearing its pieces as badges needs a fixture with a `parent` in
-    # it -- no shipped definition has one, so the default project literally
-    # cannot draw this surface. `--folded` shoots the same fixture with one
-    # badge switched OFF (the name predates round 22's redesign and is kept so
-    # the flag in CLAUDE.md keeps working).
+    # A star wearing its pieces needs a fixture with a `parent` in it -- no
+    # shipped definition has one, so the default project literally cannot
+    # draw this surface. `--folded` (a badge switched OFF) is RETIRED with
+    # the badge itself: round 31 (task 2/3, 2026-08-10) deleted the
+    # enable/disable badge outright -- a piece is always tracked and always
+    # shows, so there is no "off" state left to shoot. `--subsections` is
+    # the one story worth a picture now: every piece drawn, unconditionally.
     project = PROJECT
     if "--nested" in argv:
         project = SUBSECTION_PROJECT
         story = next(s for s in SUBSECTION_STORIES if s.name == "page")
         selector = selector or ".log-card"
-    if "--subsections" in argv or "--folded" in argv:
+    if "--subsections" in argv:
         project = SUBSECTION_PROJECT
-        wanted = ("selector-piece-off" if "--folded" in argv
-                  else "selector-pieces-on")
-        story = next(s for s in SUBSECTION_STORIES if s.name == wanted)
+        story = next(s for s in SUBSECTION_STORIES if s.name == "selector-pieces-on")
         selector = selector or ".stagebanner"
+    if "--folded" in argv:
+        raise SystemExit(
+            "--folded is retired: round 31 deleted the enable/disable badge "
+            "it used to shoot switched off, so there is no folded state left "
+            "to render. Use --subsections.")
 
     floor = project.min_viewport_width
     assert min(WIDTHS) >= floor, (

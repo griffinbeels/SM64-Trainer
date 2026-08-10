@@ -16,11 +16,13 @@
 //                     its progress surfaces on the Active Target card
 //                     (practice.js's armed_detail row), never as a second
 //                     cell here or a borrowed rank on this one.
-//   "bowser_course" : BitDW/BitFS/BitS -> TWO targets: the "reds" 8-coin star
-//                     AND the level's "no reds" pipe-entry segment. Picking one
-//                     flips the pipe segment's `enabled` (mutual exclusion):
-//                     "no reds" enables + targets it, "reds" disables it +
-//                     targets the star.
+//   "bowser_course" : BitDW/BitFS/BitS -> TWO targets: the "Reds" movement
+//                     (seg:reds->pipe:<abbrev>, stage entry -> grab -> pipe)
+//                     and the level's "No Reds" pipe-entry segment. The reds
+//                     STAR is a [[subsection]] of the Reds movement (round 31,
+//                     task 3) -- picking Reds targets the movement, and the
+//                     star's own grab/PB/rank draw NESTED inside its
+//                     practice-log card with no pick of their own.
 //   "arena"         : a Bowser 1/2/3 fight arena -> the single fight segment,
 //                     AUTO-selected on entry (always overriding the current
 //                     target — you fell in to fight, so that's the practice).
@@ -41,27 +43,19 @@
 // enable/disable) -- the same endpoints the rest of the UI uses, so the normal
 // target_changed flow updates the header, the pinned section, and this.
 import { h } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect } from "preact/hooks";
 import htm from "htm";
 import { CellRow, SurfaceExchange } from "./cellrow.js";
 import { CollapseToggle, cardClass, useCollapsed } from "./collapsible.js";
 import { send } from "../api.js";
 import { armedSegments, hasPracticeContext, hasStandardsFor,
-         justCompletedSegment, justCompletedStar, practiceMode,
+         justCompletedSegment, practiceMode,
          selectorSurfaceId } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
 import { handIsEmpty, loneOption } from "../loneoption.js";
-import { CellToggles } from "./celltoggles.js";  // RedsCell only -- round 31 retired the subsection badge (below)
-import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
-import { caveatOf, cellBadge } from "./marks.js";
 import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
-import { entityIconSrc, fallbackToGenericStar, genericStarSrc } from "./entityicons.js";
-import { RankIcon } from "./rankicon.js";
-import { RANK_FLOOR } from "./caps.js";
-import { useRouteSwap } from "../routeswap.js";
-import { mareloTuning } from "../marelotuning.js";
-import { familyLabel } from "../redsfamily.js";
+import { entityIconSrc } from "./entityicons.js";
 import { isPiece } from "../subsections.js";
 
 const html = htm.bind(h);
@@ -159,44 +153,14 @@ const STAR_DIM_IDLE = true;  // false = every star equally bright
 // different one from the same entity. The start-level lookup now happens once,
 // inside entityicons.js's iconContext; the Bowser/cap courses this row had no
 // branch for resolve there too (2026-07-26).
-// Which half of a Bowser Reds run the player is timing, REMEMBERED per level
-// (user, 2026-07-30: "We need to remember the option that the user selected ...
-// the last time they visited a bowser stage. Currently we do not remember
-// this").
-//
-// It used to be DERIVED from the target (`pipeMode = !starActive`), and that is
-// exactly why it could not be remembered AND why it flipped on its own: grabbing
-// the reds star makes that star the thing the app last saw you do, the derived
-// value went true, and the Star button lit itself mid-run. Explicit state cannot
-// be flipped by something you did in the level.
-//
-// localStorage, keyed by LEVEL, alongside the other per-client look/preference
-// keys (`sm64.starIcons`, `sm64.runFocus`, `sm64.activeRoute`). Not server state:
-// it selects which of two real entities you are pointed at, and the pointing
-// itself is already server state via the target.
-const BOWSER_MODE_KEY = "sm64.bowserMode";
-const BOWSER_MODES = ["pipe", "star"];
-const DEFAULT_BOWSER_MODE = "pipe";   // "By default, the PIPE should be selected"
-
-function readBowserModes() {
-  try { return JSON.parse(localStorage.getItem(BOWSER_MODE_KEY)) || {}; }
-  catch { return {}; }
-}
-export function bowserModeFor(level) {
-  const stored = readBowserModes()[String(level)];
-  return BOWSER_MODES.includes(stored) ? stored : DEFAULT_BOWSER_MODE;
-}
-function writeBowserMode(level, mode) {
-  if (!BOWSER_MODES.includes(mode)) return;
-  const all = readBowserModes();
-  all[String(level)] = mode;
-  try { localStorage.setItem(BOWSER_MODE_KEY, JSON.stringify(all)); } catch { /* full */ }
-}
-
 // WHICH of the two top-level cells (Reds vs No Reds) was last explicitly
-// practiced, remembered per level — the sibling of BOWSER_MODE_KEY above
-// (that one is the star/pipe TOGGLE *within* Reds; this is the choice
-// between Reds and No Reds itself). Round 2, item 5 (user, 2026-07-30: "If I
+// practiced, remembered per level. Its own sibling key, `sm64.bowserMode`
+// (the star-vs-pipe TOGGLE that used to live *within* Reds), is retired as of
+// round 31 (task 3, 2026-08-10) — the reds STAR is a [[subsection]] of the
+// Reds movement now, not a second thing this row picks between, so there is
+// nothing left for a sub-mode to remember. This key survives unchanged: Reds
+// vs No Reds is still a real choice between two segments that both still
+// exist. Round 2, item 5 (user, 2026-07-30: "If I
 // have selected reds (or no reds) and leave a bowser stage, and come back, I
 // would expect that same selection to persist to my next session. This is
 // different than a normal stage, we generally are swapping between the two
@@ -493,46 +457,52 @@ function StarRow({ t, v, stage }) {
   </section>`;
 }
 
-// BitDW/BitFS/BitS: TWO cells since 2026-07-30 (spec 2026-07-28-multi-step-
-// segments, "the Bowser Reds star/pipe toggle") — "No Reds" (the legacy
-// EXCLUSIVE pipe-only segment, "seg:<abbrev>-pipe", cancelled the moment any
-// star is grabbed) and "Reds", which folds what used to be a THIRD cell
-// (the STRICT "seg:reds->pipe:<abbrev>" segment, a waypoint on the reds grab
-// then the pipe entry) into a star/pipe TOGGLE inside the Reds cell itself:
-// a reds run is ONE practiced thing worth timing two ways -- the grab alone
-// or the whole run to the pipe -- never three separate cells (user's own
-// words: "the third cell goes away... what replaces it is a toggle inside
-// the Reds cell").
+// BitDW/BitFS/BitS: TWO plain cells, both rendered through the shared
+// StandardSegmentCell -- "Reds" (the STRICT "seg:reds->pipe:<abbrev>"
+// segment: stage entry -> the reds grab as its own waypoint -> the pipe) and
+// "No Reds" (the legacy EXCLUSIVE pipe-only segment, "seg:<abbrev>-pipe",
+// cancelled the moment any star is grabbed).
+//
+// This is round 31 (task 3, 2026-08-10), and it is a DELETION, not a
+// redesign: earlier rounds tried three cells (912466d), then folded the
+// third into a hand-written star/pipe TOGGLE living inside a bespoke Reds
+// cell (2026-07-30, "the third cell goes away... what replaces it is a
+// toggle inside the Reds cell") -- full history of both in
+// tests/test_stagebanner_bowser_row.py's own docstring. The toggle picked
+// between grading the star grab alone or the whole run to the pipe, and it
+// is gone because that choice no longer exists to make: the reds STAR is a
+// [[subsection]] of the Reds movement now (task 1, views.py stamps the
+// star's section with `parents: ["segment:<reds->pipe id>"]`), so it draws
+// NESTED inside the movement's own practice-log card with its own PB and
+// rank, never picked from here. Griffin, approving the design: "You pick
+// Reds; the star grab records underneath" -- and "Fundamentally, Bowser
+// Reds STAR is just... a subsection of Bowser Reds Pipe entry."
 //
 // `is_reds_pipe` (views.py's segment_targets) is the server-provided
-// discriminator between the two Bowser segments sharing a level -- replacing
-// the by-NAME guess this row's own docstring used to flag as a future-rename
-// risk ("<Abbrev> — 8 Red Coins → Pipe" vs "<Abbrev> Pipe Entry", no other
-// signal to tell them apart).
+// discriminator between the two Bowser segments sharing a level.
 //
-// Clicking the STAR icon targets the star (ends at the grab, grades the
-// " (Star)" strategies); clicking the PIPE icon targets seg:reds->pipe:
-// <abbrev> (stage entry -> grab -> pipe, grades " (Pipe)") -- both feed the
-// SAME requestTarget every other cell uses, so the normal target_changed
-// flow updates everything else. The displayed selection is DERIVED from the
-// current target (star vs the paired segment), never stored client-side --
-// the same "memory can't disagree with what's tracking" reasoning the
-// retired mutual-exclusion memory used, and default PIPE (user's mock-up)
-// falls out for free as "anything but an explicit star pick".
+// Clicking Reds targets seg:reds->pipe:<abbrev> through the SAME
+// requestTarget every other cell uses (via StandardSegmentCell's own
+// pickSegmentTarget), so the normal target_changed flow updates everything
+// else. The star still records its own attempt on every grab regardless of
+// which segment is targeted (projection.py's _close_by_grab, caveat 12) --
+// nothing about detection, matching or attribution changed; only what this
+// row offers a PICK on shrank.
 //
-// NO ROUTE OVERRIDE -- deleted 2026-08-02, and written down because the thing
-// that was wrong was the PREMISE, not the code. An active route naming this
-// stage's reds used to force Pipe and disable the star half (user, 2026-07-27:
-// "you can't just stop at the star grab for reds, you HAVE to do the pipe
-// timing"), justified here by the claim that every seeded Bowser Reds route
-// step "already names seg:reds->pipe:<abbrev>, never the bare star". That claim
-// was false in all eight instances: tools/corpus_routes_main.py pairs
-// `star(16, 0, "BitDW - 8 Red Coins")` WITH `*BOWSER_1_REDS` every time (and
-// 17/18 likewise), so the bare grab is a graded route step in its own right and
-// the lock hid a half the route itself measures. It read as a plain bug too --
-// 16 Star does reds only in BitDW, so BitDW sat dead beside two freely
-// toggleable siblings (live report 2026-08-02, three screenshots). Pinned by
-// tests/test_stagebanner_bowser_row.py.
+// `sm64.bowserFamily` (Reds-vs-No-Reds, `bowserFamilyFor`/`writeBowserFamily`)
+// is REMEMBERED per level and the return-to-stage re-target still applies --
+// it picks between two cells that both still exist. `sm64.bowserMode` (the
+// retired star-vs-pipe sub-toggle) and the `justCompletedStar` half of the
+// detection-driven memory that served it are DELETED with the toggle: a
+// fresh STAR completion could previously only ever mean "light Star mode",
+// which no longer exists, and the movement's own completion
+// (`justCompletedSegment` on the reds->pipe segment) is still the signal
+// Reds-vs-No-Reds reads.
+//
+// NO ROUTE OVERRIDE -- deleted 2026-08-02 and still true here: nothing in
+// this row may consult the active route to decide anything (routes grade
+// the bare star grab too, so a route lock hid a half the route itself
+// measures -- see tests/test_stagebanner_bowser_row.py).
 function BowserCourseRow({ t, v, stage, freshIds }) {
   const [fold, toggleFold] = useCollapsed("selector");
   const [setPicking, pickerModal] = useIconPicking(t);
@@ -542,90 +512,42 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
   const pipeSeg = segs.find((s) => s.is_reds_pipe);
   const noRedsSeg = segs.find((s) => !s.is_reds_pipe);
 
-  const starActive = tgt.kind !== "segment"
-    && tgt.course_id === stage.course_id && tgt.star_id === 0;
-  const pipeTargeted = !!pipeSeg
+  const redsActive = !!pipeSeg
     && tgt.kind === "segment" && tgt.segment_id === pipeSeg.segment_id;
-  const redsActive = starActive || pipeTargeted;
 
-  // EXPLICIT, remembered per level -- never derived from the target. Deriving it
-  // is what made the Star button light itself the moment you grabbed the reds
-  // star while timing to the pipe (user, 2026-07-30: "it incorrectly SWAPS OVER
-  // TO STAR MODE ... despite me being in pipe mode"). Nothing that happens in
-  // the level moves this now; only a click does.
-  const [mode, setModeState] = useState(() => bowserModeFor(stage.level));
-  const setMode = (next) => { writeBowserMode(stage.level, next); setModeState(next); };
-  // Re-read on level change: one mounted row serves BitDW, BitFS and BitS in
-  // turn, so without this the first stage's choice would follow you into the
-  // next one and read as the memory being broken rather than shared.
-  useEffect(() => { setModeState(bowserModeFor(stage.level)); }, [stage.level]);
-
-  // The remembered choice is the ONLY input -- see the route-lock paragraph in
-  // this function's own docstring for the override that used to sit here.
-  const pipeMode = mode === "pipe";
-
-  async function pickStar(options) {
-    setMode("star");
-    writeBowserFamily(stage.level, "reds");
-    await requestTarget(t, { course_id: stage.course_id, star_id: 0 }, options);
-  }
-  async function pickPipe(options) {
-    setMode("pipe");
-    writeBowserFamily(stage.level, "reds");
+  // Both cells' own explicit picks -- StandardSegmentCell's onPicked prop
+  // (below) already covers the CLICK path for each; these are the same
+  // writes for the auto-retarget effect, which has no cell click to hang
+  // off.
+  async function pickReds(options) {
     if (!pipeSeg) return;
-    if (!pipeSeg.enabled)
-      await send("PUT", `/api/segments/${pipeSeg.segment_id}`, { enabled: true });
-    await requestTarget(t, { kind: "segment", segment_id: pipeSeg.segment_id },
-                        options);
+    await pickSegmentTarget(t, pipeSeg, options);
+    writeBowserFamily(stage.level, "reds");
   }
-  // Clicking the CARD selects it in whatever mode is already chosen (user,
-  // 2026-07-30, with a mock-up box drawn round the whole cell: "if we just click
-  // on the card itself normally, it should activate it (with whatever pipe/star
-  // mode we have selected already)"). The two toggle buttons stay their own
-  // targets and stopPropagation, so this never double-fires.
-  const pickCard = () => (pipeMode ? pickPipe() : pickStar());
-  // The "No Reds" cell's own explicit pick -- StandardSegmentCell's onPicked
-  // prop (below) already covers the CLICK path; this is the same write for
-  // the auto-retarget effect (item 5), which has no cell click to hang off.
   async function pickNoReds(options) {
     if (!noRedsSeg) return;
     await pickSegmentTarget(t, noRedsSeg, options);
     writeBowserFamily(stage.level, "no_reds");
   }
 
-  // DETECTION drives the remembered choice too, not only a click (item 2,
-  // round 2, user 2026-07-30: "if I successfully complete a Star Reds / Pipe
-  // Reds run, then we should highlight the Reds card... Same can be said in
-  // the inverse; if I enter the pipe without grabbing the star, then we
-  // chose to do No Reds"). `freshIds` is practice.js's own attempt-id
-  // recency Set (useFreshAttemptIds), threaded down through StageBanner for
-  // exactly this -- both an earlier session on this branch and the sibling
-  // that shipped the 100-coin star independently found they needed it here
-  // and declined to half-build the plumbing; this finishes it.
-  //
-  // The star half is gated on `starActive` (the CURRENT target really is
-  // this star) specifically to tell "a stand-alone Star-timed run just
-  // finished" apart from "the reds star was merely GRABBED as this Pipe
-  // segment's own waypoint" -- projection.py's _close_by_grab always
-  // records a real star attempt on every reds grab, pipe run or not, so a
-  // fresh success alone can't tell the two apart. What can: projection.py
-  // now protects an explicitly-targeted, still-armed segment's target from
-  // being stolen by its own mid-sequence grab (the round-2 flash fix, item
-  // 3), so while a Pipe run is genuinely in progress the target never
-  // becomes the star at all and `starActive` stays false throughout --
-  // only a real stand-alone star pick ever satisfies this guard. A flip on
-  // the wrong event would be worse than the manual toggle it replaces.
-  const starJustDone = starActive
-    && justCompletedStar(v, freshIds, stage.course_id, 0);
-  const pipeJustDone = !!pipeSeg
+  // DETECTION drives the remembered choice too, not only a click (round 2,
+  // user 2026-07-30: "if I successfully complete a Star Reds / Pipe Reds
+  // run, then we should highlight the Reds card... Same can be said in the
+  // inverse; if I enter the pipe without grabbing the star, then we chose to
+  // do No Reds"). `freshIds` is practice.js's own attempt-id recency Set
+  // (useFreshAttemptIds), threaded down through StageBanner for exactly
+  // this. The star half of this detection (`justCompletedStar`, gated on a
+  // stand-alone star pick) is deleted with the toggle it served -- with no
+  // star pick left on this row, only the MOVEMENT's own completion can mean
+  // "he chose Reds" now.
+  const redsJustDone = !!pipeSeg
     && justCompletedSegment(v, freshIds, pipeSeg.segment_id);
   const noRedsJustDone = !!noRedsSeg
     && justCompletedSegment(v, freshIds, noRedsSeg.segment_id);
   useEffect(() => {
-    if (starJustDone) { setMode("star"); writeBowserFamily(stage.level, "reds"); }
-    else if (pipeJustDone) { setMode("pipe"); writeBowserFamily(stage.level, "reds"); }
-    else if (noRedsJustDone) { writeBowserFamily(stage.level, "no_reds"); }
-  }, [starJustDone, pipeJustDone, noRedsJustDone]);
+    if (redsJustDone) writeBowserFamily(stage.level, "reds");
+    else if (noRedsJustDone) writeBowserFamily(stage.level, "no_reds");
+  }, [redsJustDone, noRedsJustDone]);
 
   // Returning to a Bowser stage RE-TARGETS the remembered family (item 5,
   // round 2: "If I have selected reds (or no reds) and leave a bowser
@@ -636,11 +558,6 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
   // (including this very effect's own write, on the next render) must
   // never be clobbered, and a level with no remembered family is left
   // exactly as the row already renders it (no target, both cells idle).
-  // The remembered star/pipe SUB-mode is read fresh off localStorage here
-  // rather than off `mode` state: this effect and the mode-refresh effect
-  // above both fire off the same [stage.level] change, and a `setState`
-  // call doesn't update its own variable inside the same commit -- reading
-  // bowserModeFor directly sidesteps that ordering question entirely.
   //
   // A SEGMENT ALREADY IN HAND IS NEVER TAKEN OUT OF IT (live report
   // 2026-08-02). This row was the third thief, after _close_by_grab's star
@@ -649,9 +566,9 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
   // 17 ms after the level change this effect re-targeted the remembered
   // reds family (journal ids 240 → 246), so the movement lost its target,
   // its arm and its card. *"If I selected a segment that spans multiple
-  // courses / areas, it should stay selected."* The old guard only declined
-  // when the target was one of THIS row's own two cells, which is exactly
-  // the case that was never the problem — a convenience default may fill an
+  // courses / areas, it should stay selected."* The guard declines on ANY
+  // segment target, not only this row's own two cells, which is exactly the
+  // case that was never the problem — a convenience default may fill an
   // empty hand; it may not take something out of one.
   useEffect(() => {
     const family = bowserFamilyFor(stage.level);
@@ -660,12 +577,8 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
     if (tgt.kind === "segment") return;
     // `auto`: the remembered-family retarget is a fill, not a click — the
     // cell's own onPick path passes nothing and stays sovereign.
-    if (family === "reds") {
-      if (bowserModeFor(stage.level) === "pipe") pickPipe({ auto: true });
-      else pickStar({ auto: true });
-    } else if (noRedsSeg) {
-      pickNoReds({ auto: true });
-    }
+    if (family === "reds") pickReds({ auto: true });
+    else if (noRedsSeg) pickNoReds({ auto: true });
   }, [stage.level]);
 
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
@@ -675,15 +588,16 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
 
   return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
     <div class="shead"><b>${course.name}</b>
-      <span class="meta">tap Star or Pipe to pin the reds run</span>
+      <span class="meta">tap Reds or No Reds to practice</span>
 
       <${CollapseToggle} collapsed=${fold} toggle=${toggleFold}
         label="the course selector" /></div>
     <${CellRow} class="starrow segcells">
-      <${RedsCell} t=${t} v=${v} stage=${stage} course=${course}
-        redsActive=${redsActive} pipeMode=${pipeMode}
-        pipeSeg=${pipeSeg} onPickStar=${pickStar} onPickPipe=${pickPipe}
-        onPickCard=${pickCard} setPicking=${setPicking} />
+      ${pipeSeg ? html`<${StandardSegmentCell}
+        key=${`seg:${pipeSeg.segment_id}`} t=${t} s=${pipeSeg}
+        nameOverride="Reds" setPicking=${setPicking}
+        onPicked=${() => writeBowserFamily(stage.level, "reds")} />`
+        : null}
       ${noRedsSeg ? html`<${StandardSegmentCell}
         key=${`seg:${noRedsSeg.segment_id}`} t=${t} s=${noRedsSeg}
         nameOverride="No Reds" setPicking=${setPicking}
@@ -693,142 +607,6 @@ function BowserCourseRow({ t, v, stage, freshIds }) {
     <//>
     ${pickerModal}
   </section>`;
-}
-
-// The Reds cell's own rank badge -- shaped {tier, division, fill, label} for
-// useRouteSwap, which only ever reads tier/division/fill numerically; label
-// is unused here (no text crossfade in this compact cell, unlike the route
-// rank card) but kept non-null so two different ranks in the same tier still
-// count as "changed enough to know which one is shown" is unnecessary --
-// useRouteSwap keys off tier/division/fill itself, this is just the shape it
-// expects.
-function redsSwapEntry(rank) {
-  return { tier: rank ? rank.rank : null, division: rank ? rank.division : null,
-           fill: 0, label: "" };
-}
-
-// Reds cell: the star's own art as the base (same entityIconSrc chain every
-// other cell uses -- user overrides / course-icon mode apply here exactly as
-// anywhere else), with the star/pipe toggle OVERLAID at the bottom-centre
-// (mock-up: "star_3.png ... overlaid on top of the Reds segment icon in the
-// bottom center"). Not a <button> itself (unlike PracticeCell) -- the two
-// toggle icons ARE the only interactive surface here (mock-up: "Both icons
-// should be a button"), and a <button> cannot legally nest two more.
-// star_3.png is entities.js's own GENERIC_STAR_SLOTS asset (slot 2,
-// genericStarSrc) rather than a literal path -- tests/test_single_source.py
-// guards "/ui/assets/star_" to entities.js/entityicons.js only, since three
-// surfaces once each derived their own star-art stem and disagreed.
-// pipe_icon.png is a new, single-purpose glyph with no other consumer, so it
-// is named directly here rather than adding a second door for one call site.
-function RedsCell({ t, v, stage, course, redsActive, pipeMode,
-                   pipeSeg, onPickStar, onPickPipe, onPickCard, setPicking }) {
-  const starRank = (v.rank_by_star || {})[`${stage.course_id}:0`];
-  const pipeRank = pipeSeg ? pipeSeg.rank : null;
-  const shownRank = pipeMode ? pipeRank : starRank;
-  // This cell cannot BE a PracticeCell (it nests two toggle buttons and a
-  // <button> may not contain one), so rule 11 has to be honoured by hand here
-  // -- which is the standing risk with this cell and the reason the caveat is
-  // taken from the same two server fields the shared cell reads, per family.
-  const mark = caveatOf(pipeMode
-    ? (pipeSeg ? pipeSeg.caveat : null)
-    : (v.caveat_by_star || {})[`${stage.course_id}:0`]);
-  // Unranked but rankable shows the ladder FLOOR rather than "-". Both
-  // families live on the STAR entity (the pipe segment has no ladder of its
-  // own -- views.py pairs it to the star's ek), so the standards question is
-  // asked of the star for either mode.
-  const floorRank = !shownRank
-      && !(mark && mark.suppressFloor)
-      && hasStandardsFor(v, starKey(stage.course_id, 0))
-    ? { rank: RANK_FLOOR.tier, division: RANK_FLOOR.division } : null;
-
-  // Squash/pop between families on every toggle -- REUSE of marelo.js's own
-  // route-swap hook, not a second hand-tuned curve (user named the
-  // reference explicitly: "like how we do it identically in the route
-  // change MARELO transition"). Keyed on course + which family is shown, so
-  // switching courses never carries a stale swap over.
-  const swap = useRouteSwap(`${stage.course_id}:${pipeMode ? "pipe" : "star"}`,
-    redsSwapEntry(shownRank), mareloTuning());
-  const swapping = !!swap;
-  const iconTier = swapping ? (swap.crossed ? swap.to.tier : swap.from.tier)
-    : (shownRank ? shownRank.rank : null);
-  const iconDivision = swapping ? (swap.crossed ? swap.to.division : swap.from.division)
-    : (shownRank ? shownRank.division : null);
-  const iconProps = swapping ? swap.icon : null;
-
-  function editKey(keyEvent) {
-    if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
-    keyEvent.preventDefault(); keyEvent.stopPropagation();
-    setPicking(iconIdentityForKey(starKey(stage.course_id, 0)));
-  }
-
-  // The whole card is a click target, in the mode already selected. Kept a
-  // <div role="button"> rather than a real <button>: this cell nests two
-  // buttons and the ✎, and a <button> may not contain a button.
-  const cardKey = (keyEvent) => {
-    if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
-    keyEvent.preventDefault(); onPickCard();
-  };
-  return html`<div class="starcell reds-cell ${redsActive ? "active-star" : ""}"
-      role="button" tabindex="0"
-      title=${pipeMode ? "Practice Reds, timed to the pipe"
-                       : "Practice Reds, timed to the star grab"}
-      onclick=${() => onPickCard()} onkeydown=${cardKey}>
-    ${/* First child, a direct sibling of .starholder -- .caveat-badge is
-         absolutely positioned against .starcell, which this cell also is, so
-         it lands in the same corner it does on every shared cell. */""}
-    ${mark ? cellBadge(mark) : null}
-    <span class="starholder">
-      <img class="starimg ${redsActive ? "" : "dim"}"
-           src=${entityIconSrc(t, starKey(stage.course_id, 0))}
-           onerror=${(errorEvent) => fallbackToGenericStar(errorEvent, 0)}
-           alt="" draggable="false" />
-      ${/* components/celltoggles.js's CellToggles -- the LAST consumer since
-           round 31 retired the subsection badge that used to share it. Two
-           buttons here, mutually exclusive, with the clock between them.
-           Exclusivity lives in these two handlers, not the component. */""}
-      <${CellToggles}
-        separator=${html`<span class="reds-toggle-clock" aria-hidden="true">
-          <${Icon} name="clock" size=${12} /></span>`}
-        toggles=${[
-          { key: "star", iconSrc: genericStarSrc(2), ariaLabel: "Star",
-            title: "Track the star grab alone",
-            selected: !pipeMode, onToggle: onPickStar },
-          { key: "pipe", iconSrc: "/ui/assets/pipe_icon.png", ariaLabel: "Pipe",
-            title: "Track the run to the pipe",
-            selected: pipeMode, onToggle: onPickPipe },
-        ]} />
-      <span class="reds-arrows" aria-hidden="true">
-        <span class="reds-arrow left ${!pipeMode ? "is-lit" : ""}">◀</span>
-        <span class="reds-arrow right ${pipeMode ? "is-lit" : ""}">▶</span>
-      </span>
-    </span>
-    <span class="starrank">
-      ${iconTier ? html`<${RankIcon} ...${iconProps} tier=${iconTier}
-          division=${iconDivision} size=${16} />`
-        : (floorRank ? html`<${RankIcon} tier=${floorRank.rank}
-            division=${floorRank.division} size=${16} />` : "–")}
-    </span>
-    <span class="starname">Reds</span>
-    ${/* The FAMILY, spelled out, because the two are graded against different
-         ladders and a medal that changes with no label to explain it reads as a
-         rendering fault (user, 2026-07-30: 'When Pipe is selected, it should be
-         displayed as "8 Red Coins (Pipe)", and when Star is selected, it\'s
-         displayed as "8 Red Coins (Star)"'). The star's own corpus name leads,
-         so this still says what you are practising; the suffix says which half
-         is on the clock. `Reds`/`No Reds` stay the cell NAMES, which is the
-         pair he asked for one item later. familyLabel (../redsfamily.js) is
-         the ONE place the " (Star)"/" (Pipe)" suffix is spelled -- the pinned
-         card (practice.js) composes the SAME literal through the same call,
-         never a second copy (round 2, item 4's star half). */""}
-    <span class="starsub"><span class="strat">
-      ${familyLabel(course.stars[0] || "8 Red Coins", pipeMode)}
-    </span></span>
-    <span class="editicon" role="button" tabindex="0"
-        title="Choose icon…" aria-label="Choose icon"
-        onclick=${(clickEvent) => { clickEvent.stopPropagation();
-          setPicking(iconIdentityForKey(starKey(stage.course_id, 0))); }}
-        onkeydown=${editKey}>✎</span>
-  </div>`;
 }
 
 // Bowser 1/2/3 arena: the single fight segment, auto-selected on entry.

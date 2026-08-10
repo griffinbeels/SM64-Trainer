@@ -735,65 +735,6 @@
   .strat-current { font-size: .68rem; color: var(--gold-soft); }
   .strat-pb { font-size: .7rem; }
   .starsub .strat.none { opacity: .6; }
-  /* CELL TOGGLES -- the small icon buttons overlaying a practice cell's own
-     art, bottom-centred (his mock-up). ONE consumer since round 31
-     (2026-08-10): the Bowser Reds cell's exclusive star/pipe pair
-     (components/celltoggles.js). A star's own [[subsection]] switches were
-     the second consumer from round 22 (2026-08-08) until this round retired
-     the badge outright -- "we don't need a button to enable / disable them
-     now" -- so `PracticeCell` no longer has a `toggles` prop and no ordinary
-     `.starcell` ever wears `.has-toggles`; only RedsCell's hand-written
-     `.reds-cell` still hosts one.
-     A hosting cell is never a .starcell BUTTON (a button may not contain a
-     button, see practicecell.js), and position:relative is scoped to the
-     hosting cell only, never the shared base rule: every other cell has
-     exactly one child and needs no positioning context. */
-  .reds-cell .starholder { position: relative; }
-  .cell-toggles {
-    position: absolute; left: 50%; bottom: 6%; transform: translateX(-50%);
-    display: flex; align-items: center; gap: .18rem; z-index: 1;
-  }
-  /* "if there are only 2 options, then it's 2 in a row; if there are 4, then
-     it's a 2x2 grid" -- three draws 2 + 1, centred. */
-  .cell-toggles.is-grid {
-    display: grid; grid-template-columns: repeat(2, auto);
-    gap: .18rem; justify-items: center;
-  }
-  .cell-toggle-btn {
-    display: flex; align-items: center; justify-content: center;
-    width: 24px; height: 24px; padding: 3px; border-radius: 6px;
-    background: rgba(10,23,38,.85); border: 1px solid var(--border-soft);
-    cursor: pointer;
-    /* ONE declaration for both directions -- a `.is-selected` rule below
-       must never declare its own `transition`, or it would WHOLESALE
-       replace this one while selected and the glow-in/glow-out would snap
-       on one side (ui-core.md's standing CSS trap). Opacity rides it too,
-       because an UNSELECTED toggle is the dimmed state he asked for ("it
-       should be dimmed out"), not merely an unlit one. */
-    transition: background .18s ease, border-color .18s ease,
-                box-shadow .18s ease, opacity .18s ease;
-    opacity: .45;
-  }
-  .cell-toggle-btn img { width: 100%; height: 100%; object-fit: contain;
-                          -webkit-user-select: none; user-select: none; }
-  /* No :disabled rule -- neither Bowser half can be disabled since the route
-     lock was deleted (2026-08-02, stagebanner.js's BowserCourseRow docstring). */
-  .cell-toggle-btn.is-selected {
-    border-color: #ffd75f; background: rgba(64,50,10,.92);
-    box-shadow: 0 0 6px rgba(255,215,95,.85), 0 0 2px rgba(255,215,95,.9);
-    opacity: 1;
-  }
-  .reds-toggle-clock { display: flex; align-items: center; color: var(--muted);
-                        opacity: .8; }
-  .reds-arrows {
-    position: absolute; left: 50%; bottom: -14%; transform: translateX(-50%);
-    display: flex; gap: .85rem; font-size: .62rem; line-height: 1; z-index: 1;
-  }
-  .reds-arrow {
-    color: var(--muted); opacity: .35;
-    transition: opacity .18s ease, color .18s ease;   /* one declaration, both directions */
-  }
-  .reds-arrow.is-lit { opacity: 1; color: #ffd75f; }
   @media (prefers-reduced-motion: no-preference) {
     .starcell.active-star .starholder { animation: starbob 2.4s ease-in-out infinite; }
     @keyframes starbob { 0%, 100% { transform: scale(1.16) translateY(0); }

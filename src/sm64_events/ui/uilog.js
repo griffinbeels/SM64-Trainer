@@ -31,9 +31,10 @@ const text = (el) => (el ? (el.textContent || "").trim() : "");
 
 // A cell's identity as the human sees it: the name under the art, plus
 // whether it is the highlighted one. `.starcell` / `.starname` /
-// `.active-star` are PracticeCell's own classes, and RedsCell's hand-rolled
-// cell (the standing rule-11 exception on that surface) uses the same three,
-// so both are covered by one query rather than by knowing which row rendered.
+// `.active-star` are PracticeCell's own classes -- every cell in the
+// selector renders through it since round 31 (task 3, 2026-08-10) retired
+// the Bowser row's hand-rolled RedsCell, so one query covers every row
+// without knowing which one rendered it.
 export function readSelector(root) {
   const card = root.querySelector(".stagebanner");
   if (!card) return null;

@@ -942,7 +942,7 @@ BOWSER_PROJECT = dataclasses.replace(
 )
 
 
-# -- the SELECTOR'S SUBSECTION BADGES (task 0087; round 22, 2026-08-08) -------
+# -- the SELECTOR'S SUBSECTION NESTING (task 0087; round 22, 2026-08-08) -----
 #
 # Nothing in the shipped corpus carries a `parent`, so a star with pieces was
 # unreachable by every instrument until `ui_fixture.seed_subsections` existed
@@ -953,18 +953,17 @@ BOWSER_PROJECT = dataclasses.replace(
 # back, and `arm_level` could not place a moment, so a subsection defined by
 # one appeared in no row anywhere.
 #
-# The two stories were `selector-expanded`/`selector-folded` until round 22
-# replaced progressive disclosure with badges. There is no expanded row to
-# measure now, and the states worth measuring are the two the BADGES have --
-# every piece tracked, and one of them dimmed off.
-_TOGGLE_A_PIECE_OFF = _script("""
-const badge = document.querySelector('.stagebanner .cell-toggle-btn.is-selected');
-if (badge) {
-  badge.click();
-  await waitFor(() => !document.querySelector(
-    '.stagebanner .cell-toggle-btn.is-selected:first-of-type'));
-}
-""")
+# Round 22 replaced progressive disclosure (`selector-expanded`/
+# `selector-folded`) with a per-piece enable/disable badge; round 31 (task 3,
+# 2026-08-10) retired the badge in turn -- a piece is ALWAYS tracked and
+# always shows, so there is nothing left for a switch to say, and
+# `components/celltoggles.js` is deleted. There is therefore only ONE state
+# left worth measuring: every piece drawn, unconditionally. The dimmed-off
+# story this comment used to describe (`selector-piece-off`, toggling a badge
+# that no longer existed) is gone WITH the badge -- its own setup script's
+# `if (badge)` guard made it silently render byte-identical to the story
+# below the moment the badge was retired, measuring nothing while looking
+# healthy (Task 2's own report flagged it as owed to this task).
 
 SUBSECTION_STORIES = [
     # `page` first, for the reason BOWSER_STORIES states: uilab's probe never
@@ -972,8 +971,6 @@ SUBSECTION_STORIES = [
     # see `.stagebanner`'s OWN clipping.
     Story(name="page", at="", setup=_EXPAND_ALL),
     Story(name="selector-pieces-on", at=".stagebanner"),
-    Story(name="selector-piece-off", at=".stagebanner",
-          setup=_TOGGLE_A_PIECE_OFF),
 ]
 
 SUBSECTION_PROJECT = dataclasses.replace(
@@ -985,7 +982,7 @@ SUBSECTION_PROJECT = dataclasses.replace(
     # row is one of the SAME two long-owed classes PROJECT and BOWSER_PROJECT
     # already exempt (the `.stagebanner` card's own fixed-height shortfall and
     # `.starcell`'s starholder/starrank overlap), classified rather than
-    # assumed: 26 clipped + 78 overlap, and nothing else. So the expanded row
+    # assumed: 26 clipped + 52 overlap, and nothing else. So the expanded row
     # and its child treatment introduce no defect of their own.
     #
     # RE-TAKEN 2026-08-06 after merging main, which deleted the Active Target
@@ -993,6 +990,11 @@ SUBSECTION_PROJECT = dataclasses.replace(
     # and eight viewports joined the matrix, so all 104 keys moved at once.
     # Re-taken by running the sweep and classifying its output (0 rows outside
     # the two owed classes), never by patching the numbers that went red.
+    #
+    # RE-TAKEN AGAIN 2026-08-10 (task 3): deleting the dead `selector-piece-off`
+    # story dropped its 26 duplicate overlap rows (78 -> 52); every remaining
+    # key and value is untouched, since the story it belonged to rendered
+    # byte-identical to `selector-pieces-on` and measured nothing new.
     known_defects={
         '1019x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 222 > clientHeight 220',
@@ -1000,15 +1002,11 @@ SUBSECTION_PROJECT = dataclasses.replace(
             'overlap 26x2px inside button.starcell',
         '1019x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
-        '1019x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '1020x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 222 > clientHeight 220',
         '1020x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1020x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1020x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1060x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 228 > clientHeight 226',
@@ -1016,15 +1014,11 @@ SUBSECTION_PROJECT = dataclasses.replace(
             'overlap 26x2px inside button.starcell',
         '1060x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
-        '1060x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '1061x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 228 > clientHeight 226',
         '1061x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1061x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1061x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1100x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
@@ -1032,15 +1026,11 @@ SUBSECTION_PROJECT = dataclasses.replace(
             'overlap 26x2px inside button.starcell',
         '1100x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
-        '1100x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '1101x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
         '1101x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1101x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1101x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1180x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
@@ -1048,15 +1038,11 @@ SUBSECTION_PROJECT = dataclasses.replace(
             'overlap 26x2px inside button.starcell',
         '1180x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
-        '1180x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '1181x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 227 > clientHeight 225',
         '1181x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1181x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1181x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1250x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
@@ -1064,15 +1050,11 @@ SUBSECTION_PROJECT = dataclasses.replace(
             'overlap 26x2px inside button.starcell',
         '1250x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
-        '1250x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '1251x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
         '1251x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1251x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1251x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1280x720 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
@@ -1080,15 +1062,11 @@ SUBSECTION_PROJECT = dataclasses.replace(
             'overlap 26x2px inside button.starcell',
         '1280x720 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
-        '1280x720 [selector-piece-off] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '1400x760 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
         '1400x760 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1400x760 [selector-pieces-on] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1400x760 [selector-piece-off] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1400x761 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
@@ -1096,15 +1074,11 @@ SUBSECTION_PROJECT = dataclasses.replace(
             'overlap 26x2px inside button.starcell',
         '1400x761 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
-        '1400x761 [selector-piece-off] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '1500x900 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
         '1500x900 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1500x900 [selector-pieces-on] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1500x900 [selector-piece-off] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1920x1080 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 230 > clientHeight 228',
@@ -1112,15 +1086,11 @@ SUBSECTION_PROJECT = dataclasses.replace(
             'overlap 26x2px inside button.starcell',
         '1920x1080 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
-        '1920x1080 [selector-piece-off] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '850x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 199 > clientHeight 197',
         '850x1180 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '850x1180 [selector-pieces-on] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '850x1180 [selector-piece-off] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '851x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 199 > clientHeight 197',
@@ -1128,15 +1098,11 @@ SUBSECTION_PROJECT = dataclasses.replace(
             'overlap 26x2px inside button.starcell',
         '851x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
-        '851x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '860x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 200 > clientHeight 198',
         '860x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '860x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '860x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '861x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 200 > clientHeight 198',
@@ -1144,15 +1110,11 @@ SUBSECTION_PROJECT = dataclasses.replace(
             'overlap 26x2px inside button.starcell',
         '861x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
-        '861x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '900x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 206 > clientHeight 204',
         '900x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '900x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '900x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '900x1180 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 206 > clientHeight 204',
@@ -1160,15 +1122,11 @@ SUBSECTION_PROJECT = dataclasses.replace(
             'overlap 26x2px inside button.starcell',
         '900x1180 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
-        '900x1180 [selector-piece-off] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '901x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 206 > clientHeight 204',
         '901x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '901x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '901x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '912x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 207 > clientHeight 205',
@@ -1176,15 +1134,11 @@ SUBSECTION_PROJECT = dataclasses.replace(
             'overlap 26x2px inside button.starcell',
         '912x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
-        '912x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '913x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 208 > clientHeight 206',
         '913x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '913x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '913x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '979x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 217 > clientHeight 215',
@@ -1192,15 +1146,11 @@ SUBSECTION_PROJECT = dataclasses.replace(
             'overlap 26x2px inside button.starcell',
         '979x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
-        '979x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '980x1000 [page] clipped :: section.practice-card.selector-card.stagebanner':
             'scrollHeight 217 > clientHeight 215',
         '980x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '980x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '980x1000 [selector-piece-off] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
     },
 )

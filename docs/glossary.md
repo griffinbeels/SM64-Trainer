@@ -680,20 +680,6 @@ all now; it shows up only in the [[practice log]], inside its parent's card.
 - **Lives** — the quick-select row
   (`src/sm64_events/ui/components/stagebanner.js`)
 
-### Cell toggle
-
-A small icon button the [[selector]] draws inside a [[practice cell]]'s own
-art. One consumer remains: a Bowser course's [[practice cell]] carries a pair
-choosing whether the trainer times the grab alone or everything up to the
-pipe. A [[subsection]] used to carry one per piece, saying whether the
-trainer tracked it — round 31 (2026-08-10) retired that switch, since a
-piece now tracks unconditionally with nothing left for it to say. Clicking
-one never moves
-your [[target]] — the cell around it still does that.
-
-- **Lives** — the overlay
-  (`src/sm64_events/ui/components/celltoggles.js`)
-
 ### Segment recorder
 
 The screen turning what you just played into a [[segment]]. It lists your recent

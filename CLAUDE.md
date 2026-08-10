@@ -40,7 +40,7 @@ uv run python tools/scrape_sheet.py                  # rebuild the Ultimate Shee
 uv run python tools/audit_library.py                 # AUDIT that snapshot by eye: every target, its verdict, the ratio behind each row; corrections save into the repo
 uv run python tools/corpus_from_db.py --landmarks    # every landmark name HE typed, as corpus_landmarks.py rows to paste (read-only)
 uv run python tools/contact_sheet.py .objective-card # one surface at 1500/1200/900/850, in one image -- LOOK at it
-uv run python tools/contact_sheet.py --subsections    # a STAR wearing its subsections as badges (--folded = one switched off); --nested = the practice-log card with its pieces inside it. No shipped definition has a parent, so this is the only fixture that can draw either
+uv run python tools/contact_sheet.py --subsections    # a star row with a [[subsection]] in the corpus (no badge, no toggle -- round 31 retired both; every piece just shows); --nested = the practice-log card with its pieces inside it. No shipped definition has a parent, so this is the only fixture that can draw either
 uv run python tools/contact_sheet.py --recorder       # the RECORDER on arrival (--recording = two moments picked, --waypoints = three); it is a modal, so no plain page load reaches it
 uv run pytest tests/test_ui_recorder_latency.py -q -s  # MEASURE the recorder's live half: publish -> painted row, in ms, printed every run
 uv run pytest tests/test_responsive_subsections.py -q # that state's own sweep + the four reach assertions (badges, the badge write, nesting, folding)
@@ -94,7 +94,7 @@ automatically when you touch matching files. Zones:
 | The segment recorder — the journal read back as pointable sentences | `tracking/eventlabel.py`, `tracking/synthesize.py`, `ui/components/segmenttimeline.js` | `.claude/rules/recorder.md` |
 | Server, REST/WS APIs, wiring, paths, perf probes | `server/`, `main.py`, `core/paths.py`, `core/procmem.py`, `core/perfmon.py` | `.claude/rules/server.md` |
 | UI shell, shared primitives, **verification norms** (loads for all of `ui/`) | `ui/` | `.claude/rules/ui-core.md` |
-| The SELECTOR — quick-select row, cells, their badges and art | `ui/components/stagebanner.js`, `practicecell.js`, `celltoggles.js`, `entityicons.js`, `cellrow.js`, `ui/entities.js`, `ui/subsections.js` | `.claude/rules/ui-selector.md` |
+| The SELECTOR — quick-select row, cells and art | `ui/components/stagebanner.js`, `practicecell.js`, `entityicons.js`, `cellrow.js`, `ui/entities.js`, `ui/subsections.js` | `.claude/rules/ui-selector.md` |
 | Practice cards + the practice log, pickers, segments, routes, runs, strategies, graphs | `ui/components/practice*`, `ui/components/attemptlog.js`, `ui/entitysection.js`, `ui/focustarget.js`, `entitymodal.js`, `segments.js`, `routes.js`, `runview.js`, `strat*`, `links.py` | `.claude/rules/ui-practice.md` |
 | Rank icons + caps, banners, Rank tab, MARELO pill | `ui/components/caps.js`, `rankicon.js`, `hat.js`, `ranks.js`, `rankpage.js`, `marelo.js`, `standards.js` | `.claude/rules/ui-ranks.md` |
 | Celebrations, the level-up climb, the tuning inspector | `ui/celebrations.js`, `rankclimb.js`, `climb*.js`, `tune*`, `components/celebrate.js`, `server/tuning_api.py` | `.claude/rules/ui-climb.md` |

@@ -4,12 +4,15 @@
 //
 // This module used to answer a different question -- which cells the SELECTOR
 // draws, under progressive disclosure -- and round 22 (2026-08-08) retired
-// that question outright. A [[subsection]] is never a cell now: it is a small
-// enable/disable badge inside its parent's own art (components/celltoggles.js),
-// so there is no family for a row to expand into and no fold to come back
-// from. What survives is the one thing that was always really here: the
-// piece -> parent mapping, `parents.includes(<entity key>)`, now read by the
-// practice LOG so a piece draws inside its parent's card.
+// that question outright in favour of a small enable/disable badge on the
+// parent's own art (components/celltoggles.js). Round 31 (task 3, 2026-08-10)
+// retired the badge in turn: a piece is ALWAYS tracked and always shows, so
+// there is nothing left for a switch to say, and celltoggles.js is deleted.
+// A [[subsection]] is never a cell and never a badge now -- there is no
+// family for a row to expand into and no fold to come back from. What
+// survives is the one thing that was always really here: the piece -> parent
+// mapping, `parents.includes(<entity key>)`, read by the practice LOG so a
+// piece draws inside its parent's card.
 //
 // Import-free apart from `entitysection.js` (itself node-driven for the same
 // reason), so tests/test_ui_subsections.py drives the REAL rule under node --

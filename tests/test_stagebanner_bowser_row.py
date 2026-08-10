@@ -1,33 +1,61 @@
 # tests/test_stagebanner_bowser_row.py
-"""BitDW/BitFS/BitS: two cells since 2026-07-30 (spec 2026-07-28-multi-step-
-segments, "the Bowser Reds star/pipe toggle"), superseding the THREE-cell row
-912466d landed (live report 2026-07-29, same surface/root-cause class as the
-100-coin fix in test_stagebanner_hundred_coin.py) and this file's own earlier
-version, which pinned that three-cell shape.
+"""BitDW/BitFS/BitS: two plain cells since round 31 (task 3, 2026-08-10),
+superseding TWO earlier designs -- both kept here as prose because each was a
+real live-reported bug this row must never regrow.
 
-Background, in order: the corpus reshape that arms the pipe-entry segments on
-stage ENTRY gave every Bowser level TWO segment_targets entries sharing the
-same start_levels — the legacy EXCLUSIVE pipe-only segment and the new STRICT
-reds->pipe segment (waypointed on the reds grab). `BowserCourseRow` used to
-render exactly ONE pipe cell hardcoded "No reds" and ENFORCE mutual exclusion
-by writing the OTHER segment's `enabled` flag whenever one was picked — with
-two real segments sharing a level that flag-toggle (a) hid one of them under
-a duplicate "No reds" label and (b) fought the matcher, which already keeps
-both armed in parallel by design ("if 1 is armed, 2 should always be armed",
-user). 912466d deleted the toggle and rendered both pipe segments through the
-shared StandardSegmentCell, giving THREE cells total (the reds star + both
-pipe segments). This task folds the reds->pipe cell into a star/pipe TOGGLE
-inside the Reds cell itself ("the third cell goes away... what replaces it is
-a toggle inside the Reds cell", user) — TWO cells: "No Reds" (still the
-legacy exclusive pipe-only segment, unchanged) and "Reds" (the star, now with
-an internal toggle picking between its own grab-only timing and the
-reds->pipe segment's timing).
+Design 1 (912466d, live report 2026-07-29): THREE cells -- the reds star, the
+STRICT "seg:reds->pipe:<abbrev>" segment (a waypoint on the reds grab then the
+pipe entry), and the legacy EXCLUSIVE pipe-only segment ("No Reds"). Before
+that, an even earlier row rendered exactly ONE hardcoded "No reds" pipe cell
+and enforced mutual exclusion by writing the OTHER segment's `enabled` flag
+whenever one was picked -- which stranded two of the user's real definitions
+at `enabled=0` (migration v16) and fought the matcher, which already keeps
+both armed in parallel by design.
 
-stagebanner.js is not import-free, so — same approach as
-test_stagebanner_hundred_coin.py and test_star_icons.py — these are
+Design 2 (2026-07-30, spec 2026-07-28-multi-step-segments, "the Bowser Reds
+star/pipe toggle"): TWO cells. The reds->pipe segment's own cell was folded
+into a star/pipe TOGGLE living inside a hand-written `RedsCell` -- "the third
+cell goes away... what replaces it is a toggle inside the Reds cell" -- so
+clicking the STAR icon graded the grab alone (" (Star)") and clicking the
+PIPE icon graded the whole run (" (Pipe)"), both feeding the same
+requestTarget. `RedsCell` could not be a `PracticeCell` (it nested two toggle
+buttons and a `<button>` may not contain one), so it was hand-written as a
+`<div role="button">` -- the standing rule-11 risk this file's own comments
+named at every retarget. Round 2 (2026-07-30, five live reports, then four
+more) added: the remembered per-level star/pipe sub-mode (`bowserModeFor`) so
+a Star/Pipe pick survived a stage revisit; a detection-driven memory
+(`justCompletedStar`/`justCompletedSegment` via `freshIds`) that updated the
+remembered choice on a fresh completion, not only a click; a remembered
+Reds-vs-No-Reds family (`bowserFamilyFor`) with its own return-to-stage
+re-target; and cell UNIFICATION, deleting `PracticeCell`'s `armed` prop
+outright so a segment cell renders byte-identically to a star cell. A route
+lock that forced Pipe mode whenever the active route named this stage's reds
+was added and then deleted again (2026-08-02, live report: "I cannot click on
+the star icon for Reds ... in the dark world") once measurement showed its
+justifying premise was false in all eight seeded Bowser Reds routes.
+
+Design 3 (round 31, task 3, THIS design): the toggle is deleted, not
+redesigned again, because the CHOICE it made ("grab alone or whole run")
+stopped existing. The reds STAR is a [[subsection]] of the reds->pipe
+MOVEMENT now (task 1, 0dfc983) -- Griffin, approving: "Fundamentally, Bowser
+Reds STAR is just... a subsection of Bowser Reds Pipe entry", and "You pick
+Reds; the star grab records underneath." So the row is two ORDINARY
+StandardSegmentCells, exactly like every other segment row in this file:
+"Reds" now names the reds->pipe MOVEMENT itself (not the star), and "No
+Reds" is unchanged. `RedsCell`, `bowserModeFor`/`writeBowserMode`, and the
+`justCompletedStar` half of the detection memory are deleted outright, along
+with `components/celltoggles.js` -- the LAST consumer of that module, so its
+deletion here finishes what task 2 (round 31's badge retirement) could not:
+`tests/test_ui_no_cell_toggles.py::test_no_surface_renders_a_cell_toggle` was
+`xfail(strict=True)` naming this exact task and is a real assertion again.
+`bowserFamilyFor`/`writeBowserFamily` (Reds-vs-No-Reds) and the "no route
+override" rule both survive unchanged -- they never depended on the toggle.
+
+stagebanner.js is not import-free, so -- same approach as
+test_stagebanner_hundred_coin.py and test_star_icons.py -- these are
 SOURCE-SCAN assertions; the rendered behaviour is verified by rendering (see
-this task's own report, including a mid-transition frame of the rank icon's
-squash/pop between the two families).
+this task's own report: a contact sheet of the row plus a driven render
+confirming both cells are real `<button>`s with nothing nested inside them).
 """
 import re
 from pathlib import Path
@@ -49,19 +77,14 @@ def _bowser_row_body() -> str:
     return _function_body("BowserCourseRow", source)
 
 
-def _reds_cell_body() -> str:
-    source = strip_comments(BANNER.read_text(encoding="utf-8"))
-    return _function_body("RedsCell", source)
-
-
 def test_bowser_row_never_writes_the_enabled_flag_to_the_OTHER_segment():
     """The retired mutual-exclusion mechanism disabled the sibling segment
-    whenever one was picked -- that write must stay gone. `RedsCell`'s own
-    `onPickPipe` (wired from `pickPipe` below) DOES legitimately write
-    `enabled: true` to enable the segment it is ABOUT to target, the exact
-    same pattern `StandardSegmentCell.pick()` already uses elsewhere in this
-    file -- an enable-before-targeting write, never a disable-the-sibling
-    one. What must never come back is `enabled: false`."""
+    whenever one was picked -- that write must stay gone. Both cells'
+    `pick()` (StandardSegmentCell) and `pickReds`/`pickNoReds` (the
+    auto-retarget effect's own writes) legitimately write `enabled: true` to
+    enable the segment they are ABOUT to target -- an enable-before-
+    targeting write, never a disable-the-sibling one. What must never come
+    back is `enabled: false`."""
     body = _bowser_row_body()
     assert "enabled: false" not in body, (
         "BowserCourseRow writes enabled:false -- the retired mutual-exclusion "
@@ -85,7 +108,10 @@ def test_bowser_row_never_restores_a_pick_from_the_enabled_flag():
     user's definitions at `enabled=0` and cost him two recorded runs (migration
     v16). The memory is now localStorage keyed by level and touches no server
     state -- so `enabledPipe` and any write of `enabled: false` stay banned
-    while the effect itself is allowed.
+    while the effect itself is allowed. Round 31 deleted the star/pipe
+    SUB-mode memory (`bowserModeFor`) this test used to also require; the
+    Reds-vs-No-Reds family memory (`bowserFamilyFor`) it restores from is the
+    only memory left to restore.
     """
     body = _bowser_row_body()
     assert "enabledPipe" not in body, (
@@ -94,87 +120,72 @@ def test_bowser_row_never_restores_a_pick_from_the_enabled_flag():
     assert "enabled: false" not in body and "enabled:false" not in body, (
         "BowserCourseRow must never DISABLE a segment; all options track "
         "together since 912466d")
-    assert "bowserModeFor" in body, (
-        "the row no longer restores the remembered star/pipe mode on entry "
-        "(user, 2026-07-30)")
+    assert "bowserFamilyFor" in body, (
+        "the row no longer restores the remembered Reds/No-Reds family on "
+        "entry")
 
 
-def test_bowser_row_renders_the_no_reds_cell_through_standard_segment_cell():
-    """The remaining "No Reds" cell shows its OWN name/rank/strat (the
-    shared cell already does this) instead of a hand-rolled cell hardcoding
-    a label -- and the Reds cell's own toggle is a NEW cell, not another
-    StandardSegmentCell (it is a star's art + an in-cell control, not a
-    segment's cell)."""
+def test_bowser_row_renders_two_plain_cells_and_nothing_else():
+    """Round 31 (task 3): `RedsCell` -- the one hand-written cell in this
+    row, a `<div role="button">` nesting two toggle buttons and the standing
+    rule-11 risk since round 2 -- is gone outright. Both cells are the
+    ordinary StandardSegmentCell every other row in this file already uses,
+    which is ALREADY a real `<button>` (practicecell.js) that cannot itself
+    nest another button -- so "both cells are real buttons with nothing
+    nested inside them" follows from this row rendering through the shared
+    cell and nothing else; render-verified in this task's own report.
+
+    "Reds" now names the seg:reds->pipe:<abbrev> MOVEMENT -- StandardSegmentCell's
+    `s` prop is `pipeSeg`, not the star -- so a pick targets the movement,
+    and the star grab records underneath it as a [[subsection]] with no pick
+    of its own."""
     body = _bowser_row_body()
-    assert "<${StandardSegmentCell}" in body, \
-        "BowserCourseRow no longer reuses StandardSegmentCell for 'No Reds'"
-    assert "<${RedsCell}" in body, \
-        "BowserCourseRow no longer renders the Reds star/pipe toggle cell"
-    assert '"No reds"' not in body, \
-        "a hardcoded \"No reds\" label belongs to the segment's own name now"
+    assert body.count("<${StandardSegmentCell}") == 2, (
+        "BowserCourseRow must render EXACTLY two cells, both through the "
+        "shared StandardSegmentCell")
+    assert "RedsCell" not in body, "the hand-written Reds cell is back"
+    assert "CellToggles" not in body, "the retired star/pipe toggle is back"
+    assert 'nameOverride="Reds"' in body, (
+        "the movement's cell no longer shows the row-local 'Reds' label")
+    assert 'nameOverride="No Reds"' in body, (
+        "the pipe-entry cell no longer shows 'No Reds'")
+    assert "s=${pipeSeg}" in body, (
+        "the Reds cell no longer passes the reds->pipe segment as its own "
+        "entity -- a pick must target the MOVEMENT, not the star")
+    assert "star_id: 0" not in body, (
+        "BowserCourseRow writes a star target directly again -- picking Reds "
+        "must only ever target the reds->pipe segment; the star records "
+        "underneath it as a subsection with no pick of its own")
 
 
-def test_bowser_row_star_pick_is_a_plain_target_write():
-    """pickStar (the toggle's STAR half) must not touch any segment's
-    enabled flag -- picking the star grades the grab alone and never arms
-    or disarms anything."""
+def test_bowser_row_reds_pick_only_ever_enables_never_disables():
+    """`pickReds` (the auto-retarget effect's own Reds write -- the click
+    path goes through StandardSegmentCell's shared `pick()` instead) may
+    enable the reds->pipe segment before targeting it (a segment can start
+    disabled), but must never write `enabled: false` to ANY segment -- that
+    write, on the SIBLING segment, is exactly the retired mutual-exclusion
+    mechanism this file exists to keep out."""
     body = _bowser_row_body()
-    pick_star = re.search(
-        r"async function pickStar\(options\) \{.*?\n  \}\n", body, re.S)
-    assert pick_star, "pickStar not found (or changed shape) in BowserCourseRow"
-    assert "requestTarget(" in pick_star.group(0)
-    assert "send(" not in pick_star.group(0)
-    assert "enabled" not in pick_star.group(0)
+    pick_reds = re.search(
+        r"async function pickReds\(options\) \{.*?\n  \}\n", body, re.S)
+    assert pick_reds, "pickReds not found (or changed shape) in BowserCourseRow"
+    assert "pickSegmentTarget(" in pick_reds.group(0)
+    assert "enabled: false" not in pick_reds.group(0)
 
 
-def test_bowser_row_pipe_pick_only_ever_enables_never_disables():
-    """pickPipe (the toggle's PIPE half) may enable the reds->pipe segment
-    before targeting it (a segment can start disabled), but must never write
-    `enabled: false` to ANY segment -- that write, on the SIBLING segment, is
-    exactly the retired mutual-exclusion mechanism this file exists to keep
-    out."""
-    body = _bowser_row_body()
-    pick_pipe = re.search(
-        r"async function pickPipe\(options\) \{.*?\n  \}\n", body, re.S)
-    assert pick_pipe, "pickPipe not found (or changed shape) in BowserCourseRow"
-    assert "requestTarget(" in pick_pipe.group(0)
-    assert "enabled: false" not in pick_pipe.group(0)
-
-
-def test_reds_cell_never_disables_the_star_half():
-    """The ROUTE LOCK is gone (2026-08-02, live report: "I cannot click on the
-    star icon for Reds here in bowser in the dark world"). It disabled the star
-    half whenever the active route named that stage's reds, on the stated
-    premise that "every seeded Bowser Reds route step already names
+def test_bowser_row_ignores_the_active_route():
+    """The route lock is gone (2026-08-02, live report: "I cannot click on
+    the star icon for Reds here in bowser in the dark world"). It disabled
+    the star half whenever the active route named that stage's reds, on the
+    stated premise that "every seeded Bowser Reds route step already names
     seg:reds->pipe:<abbrev>, never the bare star". That premise was false in
-    every instance: all eight reds routes in tools/corpus_routes_main.py pair
-    `star(16, 0, "BitDW - 8 Red Coins")` (and 17/18 for BitFS/BitS) WITH
+    every instance: all eight reds routes in tools/corpus_routes_main.py
+    pair `star(16, 0, "BitDW - 8 Red Coins")` (and 17/18 for BitFS/BitS) WITH
     `*BOWSER_n_REDS`, so the bare grab is a graded route step of its own and
-    the lock hid a half the route itself measures. It also read as broken from
-    the outside, because a route that skips reds in BitFS/BitS leaves those two
-    stages freely toggleable beside a dead BitDW.
-
-    RedsCell must also not carry a segment-enable write of its own -- that
-    belongs to BowserCourseRow's onPickPipe, passed in as a prop, so there is
-    exactly one place that ever does it."""
-    body = _reds_cell_body()
-    assert "disabled" not in body, \
-        "RedsCell disables part of the star/pipe toggle again -- the route " \
-        "lock was deleted because routes grade the bare star grab too"
-    assert "send(" not in body, \
-        "RedsCell should not itself write segment state -- that belongs to " \
-        "BowserCourseRow's onPickPipe, passed down as a prop"
-
-
-def test_bowser_row_reds_toggle_ignores_the_active_route():
-    """The other half of the same deletion: nothing in BowserCourseRow may
-    consult the active route to decide which family the toggle shows. The
-    remembered per-level choice (`bowserModeFor`) is the only input, so the
-    row cannot start disagreeing with the cell about why a half is unavailable.
-
-    Note `routeStarFilter`/`routeSegmentFilter` themselves stay -- StarRow and
-    SegmentRow use them to NARROW what a route offers, which is a different
-    (and still wanted) job."""
+    the lock hid a half the route itself measures. With the star pick gone
+    entirely (round 31) there is even less for a route to lock -- but the
+    general rule survives: nothing in this row may consult the active route
+    to decide which segment a pick targets."""
     body = _bowser_row_body()
     for symbol in ("routeStarFilter", "routeSegmentFilter", "forcedPipe"):
         assert symbol not in body, \
@@ -184,10 +195,12 @@ def test_bowser_row_reds_toggle_ignores_the_active_route():
 def test_bowser_row_subtitle_no_longer_implies_a_choice():
     """The old subtitle framed the two PIPE cells as an either/or ("... or the
     pipe-entry skip (no reds)"); that phrasing is wrong here regardless of
-    cell count."""
+    cell count. The round-31 subtitle names both real cells plainly."""
     source = strip_comments(BANNER.read_text(encoding="utf-8"))
     assert "or the pipe-entry skip (no reds)" not in source, \
         "the subtitle still frames this as a two-way choice"
+    assert "Star or Pipe" not in source, \
+        "the subtitle still names the retired star/pipe toggle"
 
 
 def test_the_guards_can_still_fail():
@@ -200,7 +213,7 @@ def test_the_guards_can_still_fail():
     real_code = (
         'async function pickReds() {\n'
         '  await send("PUT", `/api/segments/${s.segment_id}`, { enabled: false });\n'
-        '  await requestTarget(t, { course_id: stage.course_id, star_id: 0 });\n'
+        '  await requestTarget(t, { kind: "segment", segment_id: s.segment_id });\n'
         '}\n')
     stripped_comment = strip_comments(comment_only)
     stripped_code = strip_comments(real_code)
@@ -209,67 +222,17 @@ def test_the_guards_can_still_fail():
 
 
 # --- 2026-07-30 live feedback: memory, card click, labels, floor rank -------
-
-def test_the_selected_mode_is_explicit_state_not_derived_from_the_target():
-    """The bug behind "it incorrectly SWAPS OVER TO STAR MODE".
-
-    While the mode was `!starActive`, grabbing the reds star mid-run made that
-    star the most recent thing the app had seen, the derived value went true, and
-    the Star button lit ITSELF while the user was timing to the pipe. Explicit
-    state cannot be moved by anything that happens in the level -- only a click
-    moves it. Pipe therefore never auto-swaps to Star, which is the asymmetry he
-    asked for ("But pipe mode should not swap to star mode").
-    """
-    body = _bowser_row_body()
-    assert "const pipeMode = !starActive" not in body, (
-        "pipeMode is derived from the target again -- a star grab will relight "
-        "the Star button mid-run (user, 2026-07-30)")
-    assert "useState(() => bowserModeFor(stage.level))" in body, (
-        "the mode is no longer explicit per-level state")
-
-
-def test_the_whole_reds_card_is_a_click_target():
-    """User drew a box round the entire cell: "if we just click on the card
-    itself normally, it should activate it (with whatever pipe/star mode we have
-    selected already)". The two toggle buttons remain their own targets."""
-    body = _reds_cell_body()
-    assert 'role="button"' in body, "the Reds card is not clickable as a whole"
-    assert "onPickCard" in body, "the card click does not select in the current mode"
-
-
-def test_the_reds_cell_names_which_family_is_on_the_clock():
-    """'When Pipe is selected, it should be displayed as "8 Red Coins (Pipe)",
-    and when Star is selected ... "8 Red Coins (Star)"'. The two are graded
-    against different ladders, so a medal that changes with no label to explain
-    it reads as a rendering fault. Round 2 part 2: composed through the
-    shared familyLabel (../redsfamily.js), not a second inline template --
-    see tests/test_single_source.py for the guard banning a third one."""
-    body = _reds_cell_body()
-    assert "familyLabel(course.stars[0] || \"8 Red Coins\", pipeMode)" in body, (
-        "the Reds cell no longer spells out which family is being timed "
-        "via the shared familyLabel composer")
-
-
-def test_the_no_reds_cell_is_labelled_no_reds():
-    """"For all bowser stages, it's Reds or No Reds." The corpus name stays
-    "BitDW Pipe Entry" -- right in the library and in a route, where "No Reds"
-    would name nothing -- so this is a row-local short label, exactly as the
-    star is shown as "Reds" rather than its own name."""
-    body = _bowser_row_body()
-    assert 'nameOverride="No Reds"' in body, (
-        "the pipe-entry cell shows its corpus name again instead of 'No Reds'")
-
-
-def test_an_unranked_but_rankable_reds_cell_draws_the_ladder_floor():
-    """"instead of displaying a '-' we should display the Capless 5 icon in its
-    place (or, generically, the default lowest rank icon)". Generic: RANK_FLOOR
-    is derived from RANK_NAMES/DIVISION_NUMERALS, so this must not name a tier."""
-    body = _reds_cell_body()
-    assert "RANK_FLOOR" in body or "floorRank" in body, (
-        "the Reds cell shows a bare dash for an unranked-but-rankable entity")
-    assert '"Iron"' not in body and '"Capless"' not in body, (
-        "the floor is hardcoded here -- it must come from caps.js's RANK_FLOOR, "
-        "which derives it from the ladder registries")
+#
+# The star/pipe sub-mode tests this section used to hold
+# (`test_the_selected_mode_is_explicit_state_not_derived_from_the_target`,
+# `test_the_whole_reds_card_is_a_click_target`,
+# `test_the_reds_cell_names_which_family_is_on_the_clock`,
+# `test_an_unranked_but_rankable_reds_cell_draws_the_ladder_floor`) are
+# DELETED with `RedsCell` -- there is no mode to derive-vs-explicit, no
+# hand-written card to click-test, no cell-local family label (StandardSegmentCell
+# shows the segment's own name, "Reds"/"No Reds"), and no cell-local floor-rank
+# logic (PracticeCell's own floor-rank handling, shared by every segment cell
+# in the app, already covers it -- see practicecell.js's own tests).
 
 
 # --- 2026-07-30 round 2 live feedback: 5 more reports ------------------------
@@ -368,21 +331,21 @@ def test_star_row_and_standard_segment_cell_make_the_identical_practicecell_call
 def test_bowser_row_detects_completions_via_freshids_not_only_clicks():
     """Item 2: "if I successfully complete a Star Reds / Pipe Reds run, then
     we should highlight the Reds card... if I enter the pipe without
-    grabbing the star, then we chose to do No Reds." The star half must be
-    gated on `starActive` -- projection.py's _close_by_grab records a real
-    star attempt on EVERY reds grab, pipe run or not, so a fresh success
-    alone can't tell a stand-alone Star pick apart from a mid-Pipe-run
-    waypoint grab; only the CURRENT target (protected from that grab by the
-    round-2 projection.py fix) can."""
+    grabbing the star, then we chose to do No Reds." Round 31 deletes the
+    STAR half of this detection (`justCompletedStar`, gated on `starActive`)
+    with the toggle it served -- there is no stand-alone star pick left on
+    this row for a fresh star success to disambiguate. Only the MOVEMENT's
+    own completion (`redsJustDone`, via `justCompletedSegment` on the
+    reds->pipe segment) and No Reds's remain."""
     body = _bowser_row_body()
+    assert "justCompletedStar" not in body, (
+        "the star half of the detection memory is back -- there is no "
+        "stand-alone star pick left on this row for it to disambiguate")
     assert re.search(
-        r"const starJustDone = starActive\s*"
-        r"&& justCompletedStar\(v, freshIds, stage\.course_id, 0\);", body), (
-        "the star completion check is missing or no longer gated on "
-        "starActive -- a mid-Pipe-run grab would relight Star mode")
-    assert re.search(
-        r"const pipeJustDone = !!pipeSeg\s*"
-        r"&& justCompletedSegment\(v, freshIds, pipeSeg\.segment_id\);", body)
+        r"const redsJustDone = !!pipeSeg\s*"
+        r"&& justCompletedSegment\(v, freshIds, pipeSeg\.segment_id\);", body), (
+        "the Reds completion check is missing or no longer reads the "
+        "reds->pipe segment")
     assert re.search(
         r"const noRedsJustDone = !!noRedsSeg\s*"
         r"&& justCompletedSegment\(v, freshIds, noRedsSeg\.segment_id\);", body)
@@ -404,7 +367,10 @@ def test_returning_to_a_bowser_stage_retargets_the_remembered_family():
     my next session" -- read as RE-TARGETING (his own words), not merely
     pre-selecting a toggle nobody has clicked. Must never fire while either
     of this row's own things is already the target (an explicit pick just
-    made, including this effect's own write, must not be clobbered)."""
+    made, including this effect's own write, must not be clobbered).
+    Round 31 drops the star/pipe sub-mode branch this effect used to read
+    (`bowserModeFor(stage.level) === "pipe" ? pickPipe : pickStar"`) -- there
+    is only ONE way to pick Reds now."""
     body = _bowser_row_body()
     retarget = re.search(
         r"useEffect\(\(\) => \{\s*"
@@ -418,9 +384,11 @@ def test_returning_to_a_bowser_stage_retargets_the_remembered_family():
     # write under the target queue's detection rules (round 19), so the
     # projector holds it like a detection and it can never steal a
     # promoted one. The cells' own click paths pass no options.
-    assert "pickPipe({ auto: true });" in effect \
-        and "pickStar({ auto: true });" in effect
+    assert "pickReds({ auto: true });" in effect
     assert "pickNoReds({ auto: true });" in effect
+    assert "bowserModeFor" not in effect, (
+        "the retired star/pipe sub-mode is still read here -- there is "
+        "only one way to pick Reds now")
 
 
 def test_returning_to_a_bowser_stage_never_steals_a_segment_already_picked():
@@ -452,12 +420,12 @@ def test_returning_to_a_bowser_stage_never_steals_a_segment_already_picked():
         "not only this row's own cells")
     # And it must come BEFORE either pick, or the guard is decoration.
     assert effect.index('if (tgt.kind === "segment") return;') < effect.index(
-        "pickPipe({ auto: true });")
+        "pickReds({ auto: true });")
 
 
 def test_bowser_family_memory_has_no_default_unlike_the_star_pipe_submode():
-    """Unlike bowserModeFor (which needs SOME visual default even before a
-    pick -- DEFAULT_BOWSER_MODE), bowserFamilyFor must return null with
+    """Unlike the retired star/pipe sub-mode (which needed SOME visual
+    default even before a pick), `bowserFamilyFor` must return null with
     nothing chosen: a default here would invent a "the user chose Reds/No
     Reds" fact for a level the player has never touched, and retarget on
     that fiction."""
@@ -466,16 +434,17 @@ def test_bowser_family_memory_has_no_default_unlike_the_star_pipe_submode():
     assert "return BOWSER_FAMILIES.includes(stored) ? stored : null;" in body
 
 
-def test_the_family_and_submode_memories_stay_two_separate_keys():
-    """bowserFamilyFor (Reds vs No Reds) must not collapse into
-    bowserModeFor (star vs pipe WITHIN Reds) -- they answer different
-    questions and a level can have one without the other (e.g. "no_reds"
-    chosen, star/pipe sub-mode irrelevant)."""
+def test_the_family_memory_is_the_only_bowser_localstorage_key_left():
+    """`sm64.bowserMode` (star vs pipe WITHIN Reds) is deleted with the
+    toggle it served -- `sm64.bowserFamily` (Reds vs No Reds) is the only
+    remembered choice left on this row."""
     source = strip_comments(BANNER.read_text(encoding="utf-8"))
-    assert 'const BOWSER_MODE_KEY = "sm64.bowserMode";' in source
     assert 'const BOWSER_FAMILY_KEY = "sm64.bowserFamily";' in source
-    assert source.count('const BOWSER_MODE_KEY') == 1
     assert source.count('const BOWSER_FAMILY_KEY') == 1
+    assert "BOWSER_MODE_KEY" not in source, (
+        "the retired star/pipe sub-mode's own storage key is back")
+    assert "bowserModeFor" not in source and "writeBowserMode" not in source, (
+        "the retired star/pipe sub-mode functions are back")
 
 
 # -- the arena keeps a pick made FOR HERE, and only that ---------------------
