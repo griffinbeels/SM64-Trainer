@@ -59,10 +59,12 @@
   /* PROGRESSIVE DISCLOSURE is GONE (round 22, 2026-08-08), and its whole
      treatment with it: `.selector-expanded` and `.starcell.subsection-cell`
      styled the child-tray look a row wore while expanded into one parent and
-     its subsections. A subsection is never a cell now -- it is a badge inside
-     its parent's own art (`.cell-toggles`, below) -- so there is no child cell
-     left for a tray to group, and the classes are deleted rather than left
-     unused. Griffin: "as a complete redesign / upgrade, we should actually
+     its subsections. A subsection is never a cell here -- round 22 made it a
+     badge inside its parent's own art, and round 31 (2026-08-10) retired the
+     badge too, so it now nests only inside the parent's practice-log card
+     (`.log-card-children`, below) -- there is no child cell left for a tray to
+     group, and the classes are deleted rather than left unused. Griffin,
+     opening round 22: "as a complete redesign / upgrade, we should actually
      re-use the same exact design we use as the Pipe/Star selector for the
      Bowser stages." The indent rule those styles were answering ("any time we
      have child rows that imply a parent/child relationship, we should indent
@@ -734,17 +736,19 @@
   .strat-pb { font-size: .7rem; }
   .starsub .strat.none { opacity: .6; }
   /* CELL TOGGLES -- the small icon buttons overlaying a practice cell's own
-     art, bottom-centred (his mock-up). TWO consumers since round 22
-     (2026-08-08): the Bowser Reds cell's exclusive star/pipe pair, and a
-     star's own [[subsection]] switches, which are MULTI-select. One class set,
-     one component (components/celltoggles.js) -- his instruction was to reuse
-     the Bowser system rather than build a second one beside it.
+     art, bottom-centred (his mock-up). ONE consumer since round 31
+     (2026-08-10): the Bowser Reds cell's exclusive star/pipe pair
+     (components/celltoggles.js). A star's own [[subsection]] switches were
+     the second consumer from round 22 (2026-08-08) until this round retired
+     the badge outright -- "we don't need a button to enable / disable them
+     now" -- so `PracticeCell` no longer has a `toggles` prop and no ordinary
+     `.starcell` ever wears `.has-toggles`; only RedsCell's hand-written
+     `.reds-cell` still hosts one.
      A hosting cell is never a .starcell BUTTON (a button may not contain a
-     button, see practicecell.js), and position:relative is scoped to hosting
-     cells only, never the shared base rule: every other cell has exactly one
-     child and needs no positioning context. */
-  .reds-cell .starholder,
-  .starcell.has-toggles .starholder { position: relative; }
+     button, see practicecell.js), and position:relative is scoped to the
+     hosting cell only, never the shared base rule: every other cell has
+     exactly one child and needs no positioning context. */
+  .reds-cell .starholder { position: relative; }
   .cell-toggles {
     position: absolute; left: 50%; bottom: 6%; transform: translateX(-50%);
     display: flex; align-items: center; gap: .18rem; z-index: 1;
@@ -764,8 +768,8 @@
        must never declare its own `transition`, or it would WHOLESALE
        replace this one while selected and the glow-in/glow-out would snap
        on one side (ui-core.md's standing CSS trap). Opacity rides it too,
-       because an UNSELECTED subsection toggle is the dimmed state he asked
-       for ("it should be dimmed out"), not merely an unlit one. */
+       because an UNSELECTED toggle is the dimmed state he asked for ("it
+       should be dimmed out"), not merely an unlit one. */
     transition: background .18s ease, border-color .18s ease,
                 box-shadow .18s ease, opacity .18s ease;
     opacity: .45;

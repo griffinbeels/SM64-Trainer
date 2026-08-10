@@ -116,10 +116,14 @@ its own rows in the [[practice log]], drawn INSIDE its parent's own card and
 indented under it. The [[star]] owns the hand: a piece arms
 and records underneath its parent without ever taking the [[target]] slot
 by detection — its completion points the slot at the parent [[star]], never
-at itself. Its [[cell toggle]] on the [[selector]] says whether the trainer
-tracks it at all; dimming one stops it recording and takes its card out of
-the [[practice log]] everywhere, since a piece serving several [[star]]s is
-still one definition with one timer. Inside a course a piece always
+at itself. It has no switch on the [[selector]] — a piece always tracks and
+always draws its card, and the only doors that turn one off are the ones
+that were always separate: its own editor's enabled checkbox and its
+library row's hide/show button. A [[star]] can be a subsection too, of a
+[[segment]] rather than of another [[star]]: a Bowser course's reds [[star]]
+already rides its Reds→Pipe [[segment]] as that movement's own waypoint, so
+its section carries the movement as its parent and its card nests inside
+the movement's, the same as any other piece. Inside a course a piece always
 belongs to something specific; a castle-side
 piece belongs either to a [[segment]] recorded in its area or to the area
 itself, which is as high as the castle goes. The [[recorder]]'s parent picker
@@ -669,9 +673,9 @@ keeps every [[star]] rather than hiding one wrongly. It narrows only once you
 have arrived: a course load moves the game through a subarea on its way in, so
 the row keeps every [[star]] until you walk somewhere yourself, which is what
 the course's own entry screen shows. Clicking a cell sets your
-[[target]]. A cell shows every [[subsection]] it owns as a [[cell toggle]]
-inside its own art, so the row draws [[star]]s and castle movements at all times, never a [[subsection]] beside
-its parent.
+[[target]]. The row draws [[star]]s and castle movements at all times, never
+a [[subsection]] beside its parent — a piece has nothing of its own here at
+all now; it shows up only in the [[practice log]], inside its parent's card.
 
 - **Lives** — the quick-select row
   (`src/sm64_events/ui/components/stagebanner.js`)
@@ -679,11 +683,13 @@ its parent.
 ### Cell toggle
 
 A small icon button the [[selector]] draws inside a [[practice cell]]'s own
-art. Two kinds share one implementation: a Bowser course's [[practice cell]]
-carries a pair choosing whether the trainer times the grab alone or everything
-up to the pipe, and any cell that owns [[subsection]]s carries one per piece saying
-whether the trainer tracks that piece. Clicking one never moves your
-[[target]] — the cell around it still does that.
+art. One consumer remains: a Bowser course's [[practice cell]] carries a pair
+choosing whether the trainer times the grab alone or everything up to the
+pipe. A [[subsection]] used to carry one per piece, saying whether the
+trainer tracked it — round 31 (2026-08-10) retired that switch, since a
+piece now tracks unconditionally with nothing left for it to say. Clicking
+one never moves
+your [[target]] — the cell around it still does that.
 
 - **Lives** — the overlay
   (`src/sm64_events/ui/components/celltoggles.js`)

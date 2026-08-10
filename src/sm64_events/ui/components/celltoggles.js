@@ -12,32 +12,31 @@ const html = htm.bind(h);
 // reuse the same system as the bowser level icons, because we already put in a
 // lot of work to getting that to work."
 //
-// TWO consumers, and the difference between them is one prop:
+// ONE CONSUMER since round 31 (2026-08-10): RedsCell's star/pipe pair, two
+// buttons, MUTUALLY EXCLUSIVE, with the clock glyph between them and exactly
+// one `selected`. A star's own [[subsection]] pieces used to be the second
+// consumer -- one button per piece, MULTI-SELECT, enabling/disabling it -- and
+// that badge is retired outright: "There's actually no point. We should just
+// ALWAYS display the subsegments inside of the practice log... we don't need a
+// button to enable / disable them now." A piece still nests inside its
+// parent's practice-log card (`ui/subsections.js`); it simply has no switch on
+// the selector any more.
 //
-//   RedsCell          two buttons, MUTUALLY EXCLUSIVE (star vs pipe), with the
-//                     clock glyph between them. Exactly one is `selected`.
-//   a star's pieces   one button per [[subsection]], MULTI-SELECT: each is
-//                     independently on or off. His own framing of the delta --
-//                     "it's basically different by the fact that it's more like
-//                     a multi-selection rather than a toggle version" -- and no
-//                     clock, because nothing here is a choice of clock.
-//
-// This module has NO opinion about which of those it is drawing. Exclusivity
+// This module still has NO opinion about which cell is drawing it. Exclusivity
 // lives in the caller's click handler; all that arrives here is which buttons
-// are lit. That is what keeps one implementation honest rather than a shared
-// component with two modes inside it.
+// are lit.
 //
 // LAYOUT is a function of COUNT, and it is his: "It should just be a straight
 // line on the bottom, or a 2 by 2 grid. (if there are only 2 options, then it's
-// 2 in a row; if there are 4, then it's a 2x2 grid)." So one row up to two
-// buttons, a two-column grid from three (three draws 2 + 1). The ceiling he
-// named is "probably 3-4 subsections per star at max"; nothing here enforces
-// one, and a fifth simply adds a third grid row.
+// 2 in a row; if there are 4, then it's a 2x2 grid)." With one consumer left
+// (always exactly 2) only the two-in-a-row branch is reachable; the grid
+// branch is dead code kept alive by nothing but this module surviving Task 3.
 //
 // A cell that hosts these CANNOT be a `<button>` -- a button may not contain a
-// button -- which is why `PracticeCell` switches to `<div role="button">` the
-// moment it is given any. That constraint is the whole reason RedsCell was
-// hand-written in the first place; see practicecell.js.
+// button -- which is why RedsCell is hand-written as a `<div role="button">`
+// rather than a `PracticeCell` call; see practicecell.js. `PracticeCell` itself
+// no longer has a `toggles` prop or an element swap (round 31) -- it was built
+// for the badge and has no other caller.
 
 /**
  * @param toggles   [{key, iconSrc, title, selected, onToggle, ariaLabel}]

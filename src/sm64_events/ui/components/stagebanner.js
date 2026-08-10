@@ -51,7 +51,7 @@ import { armedSegments, hasPracticeContext, hasStandardsFor,
          selectorSurfaceId } from "../stagecontext.js";
 import { requestTarget } from "../target.js";
 import { handIsEmpty, loneOption } from "../loneoption.js";
-import { CellToggles } from "./celltoggles.js";
+import { CellToggles } from "./celltoggles.js";  // RedsCell only -- round 31 retired the subsection badge (below)
 import { Icon } from "./icons.js";
 import { PracticeCell } from "./practicecell.js";
 import { caveatOf, cellBadge } from "./marks.js";
@@ -62,7 +62,7 @@ import { RANK_FLOOR } from "./caps.js";
 import { useRouteSwap } from "../routeswap.js";
 import { mareloTuning } from "../marelotuning.js";
 import { familyLabel } from "../redsfamily.js";
-import { isPiece, piecesFor } from "../subsections.js";
+import { isPiece } from "../subsections.js";
 
 const html = htm.bind(h);
 
@@ -305,12 +305,9 @@ function useLoneRouteOption(v, lone, key, commit) {
 // reason. `onPicked` fires after a successful explicit pick so a caller can
 // remember "the user chose THIS family" (Bowser's own writeBowserFamily);
 // every other caller omits it and nothing changes for them.
-// THIS CELL DERIVES ITS OWN BADGES, and no caller may pass them. A `toggles`
-// prop was the shape until round 30 (2026-08-09) and exactly one of the four
-// call sites remembered to fill it, so a movement drawn by any other path --
-// the armed-extras one, which is how a castle movement usually arrives --
-// wore none and its pieces went looking for a cell of their own. Deriving
-// here makes forgetting unwriteable rather than merely discouraged.
+// A PIECE OF THIS SEGMENT no longer draws a badge here (round 31) -- it still
+// nests inside this cell's practice-log card via `ui/subsections.js`, the same
+// mechanism a star's pieces use.
 // An `onPickOverride` prop lived here for the expanded family's fold gesture
 // and was deleted with it in round 22: a cell's click is its target write
 // again, with no second meaning to dispatch on.
@@ -322,7 +319,6 @@ function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked }) {
   }
   return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
     active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
-    toggles=${subsectionToggles(t, segKey(s))}
     iconSrc=${entityIconSrc(t, segKey(s))}
     rank=${s.rank} hasStandards=${hasStandardsFor(t.view, segKey(s))}
     caveat=${s.caveat}
@@ -336,12 +332,12 @@ function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked }) {
 // cells for every armed segment a row's own filter did not already show.
 // Pinned into every row by tests/test_star_icons.py.
 // A PIECE IS NEVER A LOOSE CELL, on any row (`isPiece`, ui/subsections.js).
-// It rides its parent's cell as a badge, and this filter is why no row has to
-// remember that: the extras path is the one that drew "Key Door (R) → Wooden
-// Door" beside its own parent (2026-08-09) and the stray "Volcano Entry"
-// beside his LLL stars a day earlier, both because each row kept its own
-// list of what to exclude. "A running segment is never invisible" still
-// holds -- it is visible ON its parent, lit.
+// It rides its parent's practice-log card instead, and this filter is why no
+// row has to remember that: the extras path is the one that drew "Key Door
+// (R) → Wooden Door" beside its own parent (2026-08-09) and the stray
+// "Volcano Entry" beside his LLL stars a day earlier, both because each row
+// kept its own list of what to exclude. "A running segment is never
+// invisible" still holds -- it is visible on its parent's card.
 const armedExtraCells = (t, v, shownIds, setPicking, keep = () => true) =>
   armedSegments(t, v)
     .filter((s) => !shownIds.has(s.segment_id) && !isPiece(s) && keep(s))
@@ -360,58 +356,21 @@ const armedExtraCells = (t, v, shownIds, setPicking, keep = () => true) =>
 // course row is not invisible.
 const startsInLevel = (level) => (s) => (s.start_levels || []).includes(level);
 
-// A STAR'S PIECES ARE SWITCHES ON THE STAR, NOT CELLS BESIDE IT (round 22,
-// 2026-08-08). This replaces PROGRESSIVE DISCLOSURE outright -- `useFamilyView`
-// and the whole of `ui/subsections.js` (familyRoot / visibleEntities /
-// isExpanded), the `.selector-expanded` treatment and the "tap the parent again
-// to go back" fold are DELETED, not disabled.
-//
-// Griffin, opening the round: "as a complete redesign / upgrade, we should
-// actually re-use the same exact design we use as the Pipe/Star selector for
-// the Bowser stages... EVERY SUBSECTION ADDED TO A STAR just appears as a new
-// small button overlayed... the buttons are not toggles BETWEEN options, but
-// rather enable/disable options."
-//
-// What that retires and why it is a deletion rather than a patch: with no
-// subsection ever loose in the row there is no family to expand INTO, so there
-// is no fold to come back FROM and no `preferredRoot` tie to break when a piece
-// has several parents. Round 20's plural parents survive intact -- the question
-// simply moved from "which family does the row expand into" to "which stars
-// draw this badge", and `parents.includes(starKey)` answers both.
-//
-// The switch is the definition's own `enabled` flag, which already exists and
-// is per-DEFINITION rather than per-parent. His call, asked and answered at
-// capture: dimming a piece dims it EVERYWHERE. The argument he took is that
-// per-parent could only ever hide a CARD -- one definition has one live timer,
-// so it cannot record under one parent and not another -- and he asked for
-// tracking to stop, not for a display filter.
-//
-// ONE ARGUMENT, and that is the point (round 30, 2026-08-09). It used to take
-// the caller's own list of pieces, and the two callers built that list
-// differently -- the star row over the LEVEL, the castle segment row over the
-// AREA -- so a piece whose start area differed from its parent's was a badge
-// on neither and a loose cell instead. Reading `segment_targets` here means
-// there is no list for a row to get wrong: *"We should reuse the exact system
-// used for stars… Both should use the same underlying system here."* DISABLED
-// pieces are deliberately included -- the badge is the only control that turns
-// one back on, so filtering them out would make the switch one-way.
-function subsectionToggles(t, parentKey) {
-  const mine = piecesFor(((t.view || {}).segment_targets) || [], parentKey);
-  if (!mine.length) return null;
-  const flip = (s) => send("PUT", `/api/segments/${s.segment_id}`,
-                           { enabled: !s.enabled });
-  return html`<${CellToggles} toggles=${mine.map((s) => ({
-    key: `seg:${s.segment_id}`,
-    iconSrc: entityIconSrc(t, segKey(s)),
-    selected: !!s.enabled,
-    title: s.enabled
-      ? `${s.name} — tracked; click to stop tracking it`
-      : `${s.name} — not tracked; click to track it`,
-    onToggle: () => flip(s),
-    onIconError: (errorEvent) => fallbackToGenericStar(errorEvent, 0),
-  }))} />`;
-}
-
+// A STAR'S PIECES ALWAYS SHOW, WITH NO SWITCH ON THE ROW (round 31,
+// 2026-08-10). Round 22's badge -- one small button per [[subsection]],
+// overlaid on the parent's own art -- is gone outright, not merely unused:
+// Griffin, retiring it, "There's actually no point. We should just ALWAYS
+// display the subsegments inside of the practice log that are associated with
+// a specific star / segment. They will always be displayed / enabled and shown
+// inside the practice log, just we don't need a button to enable / disable
+// them now." The badge wrote the definition's own `enabled` flag via `PUT
+// /api/segments/{id}` -- that flag, and its two OTHER doors (the Segments
+// tab's editor checkbox and the library row's hide/show button), are
+// untouched; the selector simply stopped being a third one. A piece still
+// nests inside its parent's card in the practice log regardless
+// (`ui/subsections.js::nestSubsections`) -- that mechanism is what "always
+// displayed... inside the practice log" already meant, and needed no change
+// here.
 function StarRow({ t, v, stage }) {
   const [fold, toggleFold] = useCollapsed("selector");
   // hooks first — the early return below must never change the hook count
@@ -500,12 +459,11 @@ function StarRow({ t, v, stage }) {
   useLoneRouteOption(v, lone, `star:${stage.course_id}:${lone ? lone.i : ""}`,
                      () => pick(lone.i, { quiet: true }));
 
-  // A STAR'S SUBSECTIONS BELONG HERE (task 0087, and the case Griffin named
-  // first: "sometimes we want to practice only a small portion of a star"),
-  // and since round 22 they belong INSIDE the star's own cell rather than
-  // beside it -- see `subsectionToggles`, which reads them itself. This row
-  // kept its own level-scoped list until round 30; nothing here does now, and
-  // the stray-cell half it also bought is `armedExtraCells`' own rule.
+  // A STAR'S SUBSECTIONS (task 0087, and the case Griffin named first:
+  // "sometimes we want to practice only a small portion of a star") no longer
+  // draw anything ON this row at all (round 31) -- they nest inside the
+  // star's own practice-log card instead (`ui/subsections.js`), always shown,
+  // with no switch here to forget.
   if (!course) return html`<${StagePlaceholder} t=${t} />`;
 
   return html`<section class="practice-card selector-card stagebanner ${cardClass(fold)}">
@@ -526,7 +484,6 @@ function StarRow({ t, v, stage }) {
         caveat=${caveatFor(i)}
         name=${name}
         sub=${stratSub(lastStratFor(i))}
-        toggles=${subsectionToggles(t, starKey(stage.course_id, i))}
         onPick=${() => pick(i)}
         onEdit=${() => setPicking(iconIdentityForKey(starKey(stage.course_id, i)))} />`)}
       ${armedExtraCells(t, v, new Set(), setPicking,
@@ -825,11 +782,10 @@ function RedsCell({ t, v, stage, course, redsActive, pipeMode,
            src=${entityIconSrc(t, starKey(stage.course_id, 0))}
            onerror=${(errorEvent) => fallbackToGenericStar(errorEvent, 0)}
            alt="" draggable="false" />
-      ${/* THE SAME overlay a star's subsections use (components/celltoggles.js)
-           -- two buttons here, mutually exclusive, with the clock between
-           them; N buttons and no clock there. Exclusivity lives in these two
-           handlers and nowhere inside the shared component, which is what
-           lets one implementation serve both without growing a mode. */""}
+      ${/* components/celltoggles.js's CellToggles -- the LAST consumer since
+           round 31 retired the subsection badge that used to share it. Two
+           buttons here, mutually exclusive, with the clock between them.
+           Exclusivity lives in these two handlers, not the component. */""}
       <${CellToggles}
         separator=${html`<span class="reds-toggle-clock" aria-hidden="true">
           <${Icon} name="clock" size=${12} /></span>`}
@@ -959,10 +915,12 @@ function SegmentRow({ t, v, stage }) {
 
   const offered = inRoute.length ? inRoute : here;   // never empty the row
 
-  // A PIECE IS A BADGE ON ITS PARENT, NEVER A CELL (round 22 — the same rule
-  // the star row follows, and the same reason: rule 11, one implementation).
-  // Here the parent is a castle MOVEMENT rather than a star, so `segs` is the
-  // top-level offer and each piece rides whichever movement claims it.
+  // A PIECE IS NEVER A CELL OF ITS OWN (round 22 — the same rule the star
+  // row follows, and the same reason: rule 11, one implementation). Here the
+  // parent is a castle MOVEMENT rather than a star, so `segs` is the
+  // top-level offer and each piece nests inside whichever movement's own
+  // practice-log card claims it (round 31 dropped the selector badge; the
+  // nesting itself is untouched).
   //
   // `isPiece` (ui/subsections.js) is that test, and asking it of the ROW alone
   // is round 30's correction: this line used to require the parent to be in

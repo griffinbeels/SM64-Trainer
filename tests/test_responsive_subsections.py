@@ -59,24 +59,27 @@ def test_the_known_defect_list_does_not_outlive_its_defects(uilab_sweep):
     assert_no_stale_exemptions(SUBSECTION_PROJECT, uilab_sweep)
 
 
-# --- the fixture must actually REACH the subsection badges ------------------
+# --- the fixture must actually REACH the star row with pieces attached ------
 # The sweep proves the row does not overflow or clip. It says nothing about
 # WHICH row it measured, and `at=".stagebanner"` matches an ordinary
 # seven-star row perfectly well. This is that other half.
 #
-# REWRITTEN 2026-08-08 (round 22). The state these two reached was the
-# EXPANDED row -- parent plus its pieces as peer cells -- and that state no
-# longer exists: a piece is a badge inside its parent's art, so the row always
-# draws the course's stars and never a subsection cell.
+# REWRITTEN 2026-08-08 (round 22), then again 2026-08-10 (round 31). The state
+# these reached was first the EXPANDED row (parent plus its pieces as peer
+# cells), then the badged row (parent plus a toggle overlay) -- neither exists
+# any more. A piece is never a cell and wears no switch on the selector; the
+# row always draws the course's plain stars, unchanged by whether any of them
+# has pieces.
 
 
-def test_the_parent_star_wears_its_subsections_as_badges():
-    """The course's own stars, with the fixture star carrying two toggles.
+def test_a_star_with_pieces_draws_no_different_from_one_without():
+    """Round 31 (2026-08-10) retired the badge outright: "we don't need a
+    button to enable / disable them now." A piece still exists and still
+    nests inside its parent's practice-log card (see the tests below); the
+    SELECTOR row simply has nothing left to show about it.
 
-    Mutation-proved both ways before it was trusted: drop `arm_level`'s
-    `moment_reached` branch and the badge count reads 0 (the subsections are
-    placed nowhere, so `segment_targets` never offers them here); drop the
-    STAR row's `subsectionToggles` wiring and it reads 0 as well.
+    Mutation-proved: restoring `subsectionToggles`' wiring on the star row
+    makes `.cell-toggle-btn`/`.has-toggles` reappear here.
     """
     with SUBSECTION_PROJECT.open() as url, get_driver().launch() as page:
         page.goto(url)
@@ -84,35 +87,11 @@ def test_the_parent_star_wears_its_subsections_as_badges():
         assert page.count(".stagebanner .starcell") == 7, (
             "the row must draw the whole course -- a subsection is never a "
             "cell since round 22")
-        assert page.count(".stagebanner .starcell.has-toggles") == 1, (
-            "exactly the fixture star hosts pieces; a cell with toggles is a "
-            "div rather than a button, so this also pins the element swap")
-        assert page.count(".stagebanner .cell-toggle-btn") == 2, (
-            "the two seeded subsections draw one badge each, INSIDE the star")
-
-
-def test_a_badge_click_toggles_that_piece_rather_than_selecting_it():
-    """His whole point about the redesign: "the buttons are not toggles
-    BETWEEN options, but rather enable/disable options." So a click dims the
-    badge and must NOT move the practice target -- the star keeps the hand
-    (round 21) and the piece merely stops being tracked."""
-    with SUBSECTION_PROJECT.open() as url, get_driver().launch() as page:
-        page.goto(url)
-        page.wait_for(SUBSECTION_PROJECT.ready_selector)
-        before = page.evaluate(
-            "document.querySelectorAll("
-            "'.stagebanner .cell-toggle-btn.is-selected').length")
-        assert before == 2, "a piece is TRACKED by default"
-        page.evaluate(
-            "document.querySelector('.stagebanner .cell-toggle-btn').click()")
-        page.wait_ms(400)
-        assert page.evaluate(
-            "document.querySelectorAll("
-            "'.stagebanner .cell-toggle-btn.is-selected').length") == 1, (
-            "the clicked badge must dim -- and stay dimmed, which means the "
-            "PUT landed and the refreshed view carried enabled=false back")
-        assert page.count(".stagebanner .starcell.active-star") <= 1, (
-            "a badge click is not a target pick")
+        assert page.count(".stagebanner .starcell.has-toggles") == 0, (
+            "no ordinary star cell wears a toggle overlay any more (round 31)")
+        assert page.count(".stagebanner .cell-toggle-btn") == 0, (
+            "the badge is gone -- a piece is tracked unconditionally, with "
+            "nothing on the selector left to switch")
 
 
 # --- and the PRACTICE LOG half ----------------------------------------------
@@ -313,7 +292,7 @@ def test_a_piece_with_no_strategies_does_not_shout_for_one():
 # `test_fixture_reaches_the_real_page.py`'s own standalone instances use).
 
 
-def test_a_piece_of_a_segment_is_a_badge_on_that_segment_and_not_a_cell():
+def test_a_piece_of_a_segment_is_not_a_cell_of_its_own():
     """Round 30, 2026-08-09, against three pieces of his BLJs movement drawn
     as loose cells beside it: *"I would therefore expect NOT to see 'Key Door
     (R) - Wooden Door' next to BLJs, because it should instead be a button on
@@ -324,8 +303,11 @@ def test_a_piece_of_a_segment_is_a_badge_on_that_segment_and_not_a_cell():
     had to: a star row draws stars, so a piece of a SEGMENT has no parent cell
     there to ride. This is the case none of them can reach.
 
-    Both claims, because only the pair is the ask -- the parent wears the
-    badge, AND the piece is not also a cell of its own.
+    Round 30's claim was that the parent wears a badge for its piece AND the
+    piece is not also a cell of its own; round 31 (2026-08-10) retired the
+    badge, so only the second half still holds -- the piece nests inside its
+    parent's practice-log card instead (see the reds-star test below and
+    `tests/test_ui_subsections.py`).
     """
     with serve_ui(castle_stage=2, seed_castle_pieces=True) as url, \
             get_driver().launch() as page:
@@ -339,11 +321,11 @@ def test_a_piece_of_a_segment_is_a_badge_on_that_segment_and_not_a_cell():
             f"the seeded movement is not on the row at all; drew {names!r}")
         assert not any("Key Door" in name for name in names), (
             f"the piece drew its own cell -- the round-30 bug exactly: {names!r}")
-        assert page.count(".stagebanner .starcell.has-toggles") == 1, (
-            "the movement's cell must host its piece's badge; a cell with "
-            "toggles is a div rather than a button, so this pins the swap too")
-        assert page.count(".stagebanner .cell-toggle-btn") == 1, (
-            "one seeded piece, one badge, inside its parent's art")
+        assert page.count(".stagebanner .starcell.has-toggles") == 0, (
+            "no cell wears a toggle overlay for its piece any more (round 31)")
+        assert page.count(".stagebanner .cell-toggle-btn") == 0, (
+            "the badge is gone; the piece's parent has nothing to draw for it "
+            "here")
 
 
 # --- and the STAR-as-piece half (spec 2026-08-10-reds-as-subsection) --------
