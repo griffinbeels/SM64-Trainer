@@ -1,6 +1,8 @@
 # tests/test_moment.py
 from datetime import datetime, timezone
 
+import pytest
+
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.detectors.moment import MOMENTS, MomentDetector
 from sm64_events.memory.addresses import (ACT_IN_CANNON, ACT_PULLING_DOOR,
@@ -237,6 +239,52 @@ def test_a_textbox_publishes_the_RAW_counter_where_a_door_publishes_it_plus_two(
     door = run([snap(ACT_WALKING, 100, igt_overall=2003),
                 snap(ACT_PULLING_DOOR, 101, igt_overall=2003)])
     assert door[0].payload["igt_frames"] == 2005
+
+
+# -- the guard that would have caught the blanket gate ------------------------
+# A rule measured on ONE kind and applied to EVERY kind is what shipped on
+# 2026-08-10 and cost 21 of 51 door rows their name. The hand-written door case
+# above is the specific bug; these two are the class. Both mutation-proved:
+# flipping `Moment.needs_fresh_engagement`'s default to True reddens FOUR kinds
+# here at once, where a single hand-written test would have caught one.
+
+@pytest.mark.parametrize(
+    "moment", [m for m in MOMENTS if m.actions], ids=lambda m: m.kind)
+def test_every_kind_still_names_an_object_it_had_already_engaged(moment):
+    """Doing the same thing to the same object twice must keep naming it —
+    for every kind in the registry, including ones added after this was
+    written. The pointer does not retarget on a repeat, so any rule that
+    demands a retarget silently costs a kind its identity."""
+    edge = next(iter(moment.actions))
+    events = run([
+        snap(ACT_WALKING, 100, level=6),
+        snap(ACT_WALKING, 101, level=6, landmark_behaviour=WOODEN_DOOR,
+             landmark_home=(-997.0, 1203.0, 1178.0)),
+        snap(ACT_WALKING, 600, level=6, landmark_behaviour=WOODEN_DOOR,
+             landmark_home=(-997.0, 1203.0, 1178.0)),
+        snap(edge, 601, level=6, landmark_behaviour=WOODEN_DOOR,
+             landmark_home=(-997.0, 1203.0, 1178.0)),
+    ])
+    assert [e.payload["kind"] for e in events] == [moment.kind]
+    landmark = events[0].payload["landmark"]
+    if moment.needs_fresh_engagement:
+        assert landmark is None, (
+            f"{moment.kind} demands a fresh engagement, so a repeat must name "
+            f"nothing — see test_only_the_textbox_may_demand_a_fresh_engagement")
+    else:
+        assert landmark is not None and landmark["behaviour"] == WOODEN_DOOR, (
+            f"{moment.kind} lost its identity on a REPEAT of the same "
+            f"interaction — the regression of 2026-08-10")
+
+
+def test_only_the_textbox_may_demand_a_fresh_engagement():
+    """An allowlist with its reason, the shape this repo already uses for
+    exemptions. A kind belongs here only when its action is NOT itself
+    operating an object — reading text is the only one, which is why a
+    textbox can be left holding a door from fifteen seconds ago while a door
+    pull, a pole grab, a pickup and a cannon entry cannot."""
+    demanding = {m.kind for m in MOMENTS if m.needs_fresh_engagement}
+    assert demanding == {"textbox"}
 
 
 def test_the_engagement_age_rides_along_so_the_window_can_be_re_measured():
