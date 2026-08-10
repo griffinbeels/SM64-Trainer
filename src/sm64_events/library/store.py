@@ -128,6 +128,18 @@ class LibraryStore:
                 "miss_reason": target["miss_reason"],
                 "approaches": len(target["approaches"]),
                 "subsections": len(target["subsections"]),
+                # The names of every way of doing this target, so the Library's
+                # search box can match on them without a lookup per keystroke.
+                # Griffin's call (round 12): a result row is always a TARGET,
+                # matched on its own label AND on its approaches' names, so
+                # typing "LBLJ" finds the target that documents it. The whole
+                # snapshot's 631 names are 15.9 KB of text against an index
+                # already carrying 252 rows -- cheap enough that a second
+                # endpoint would cost more than it saved, and this way the
+                # match runs on data the page already holds.
+                "approach_names": [way["name"] for way
+                                   in target["approaches"] + target["subsections"]
+                                   if way.get("name")],
                 "entries": sum(len(item["entries"]) for item
                                in target["approaches"] + target["subsections"])})
         return {"sheet_revision": self.revision, "groups": list(groups.values())}

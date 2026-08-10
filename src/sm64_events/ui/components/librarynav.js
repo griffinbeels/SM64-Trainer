@@ -26,6 +26,7 @@ import { useState } from "preact/hooks";
 import htm from "htm";
 import { PracticeCell } from "./practicecell.js";
 import { Icon } from "./icons.js";
+import { searchTargets, resultSub } from "../librarysearch.js";
 
 const html = htm.bind(h);
 
@@ -65,14 +66,57 @@ function targetSub(target) {
  */
 export function LibraryNav({ index, onPick, iconFor }) {
   const [openGroupKey, setOpenGroupKey] = useState(null);
+  const [query, setQuery] = useState("");
 
   if (!index)
     return html`<div class="library-courses"><p class="meta">Loading the library…</p></div>`;
 
   const openGroup = index.groups.find((group) => group.group === openGroupKey) || null;
 
+  // THE SEARCH BOX (round 12). Rendered above whichever layer is showing, and
+  // typing REPLACES that layer with the results -- his call over a panel
+  // floating on a dimmed grid, so the page never holds two scrolling regions
+  // at once (the same rule that shaped the entity picker: "the user clicks on
+  // the course -> clicks on the star / segment. No scrolling"). Clearing the
+  // box puts back exactly what was there, including a drilled-into group,
+  // because `openGroupKey` is never touched by searching -- a search that
+  // silently dropped you back to the top would punish a mistyped letter.
+  const hits = searchTargets(index, query);
+  const searching = query.trim().length > 0;
+  const searchBox = html`<div class="library-find">
+    <input type="search" class="library-find-input" value=${query}
+      placeholder="type to search for a strat…"
+      aria-label="Search the library"
+      oninput=${(event) => setQuery(event.target.value)} />
+    ${searching && html`<button type="button" class="library-find-clear"
+        title="Clear the search" aria-label="Clear the search"
+        onclick=${() => setQuery("")}>✕</button>`}
+  </div>`;
+
+  if (searching)
+    return html`<div class="library-courses library-searching">
+      ${searchBox}
+      ${hits.length === 0
+        ? html`<p class="meta library-find-empty">Nothing in the library matches
+            ${" "}“${query.trim()}”.</p>`
+        : html`<div class="library-results">
+            ${hits.map((hit) => html`<button type="button" class="library-result"
+              key=${hit.target.index}
+              title=${`${hit.group} — ${hit.target.label}`}
+              onclick=${() => onPick(hit.target.entity_key || hit.target.index)}>
+              <img class="library-result-icon" src=${iconFor(hit.target.entity_key)}
+                alt="" />
+              <span class="library-result-text">
+                <span class="library-result-name">${hit.group}${" — "}${hit.target.label}</span>
+                <span class="library-result-sub">${resultSub(hit)}</span>
+              </span>
+            </button>`)}
+          </div>`}
+    </div>`;
+
   if (openGroup)
     return html`<div class="library-group">
+      ${searchBox}
       <button type="button" class="entity-back" onclick=${() => setOpenGroupKey(null)}>
         <${Icon} name="chevron" size=${15} /> Back
       </button>
@@ -89,6 +133,7 @@ export function LibraryNav({ index, onPick, iconFor }) {
     </div>`;
 
   return html`<div class="library-courses">
+    ${searchBox}
     <div class="entity-grid">
       ${index.groups.map((group) => html`<${PracticeCell} key=${group.group}
         iconSrc=${iconFor(groupEntityKey(group))}

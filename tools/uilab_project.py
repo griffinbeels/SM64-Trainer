@@ -293,17 +293,15 @@ if ({picks} >= 2) {{
 # OWED to this task by the Task 3 reviewer: `.library-target` had no story at
 # all while the page was a placeholder (a story for a placeholder would be
 # thrown away), and Task 4 makes it real content. `serve_ui`'s default seeding
-# already sets `lastPracticed` onto star:2:4 (FIXTURE_STAR), so clicking the
-# tab is the whole setup -- no course-grid navigation needed, same as how
-# `test_ui_library_nav.py::test_auto_open_lands_on_the_last_practiced_target`
-# reaches it.
-_LIBRARY_TARGET_SETUP = _script("""
-const libBtn = document.querySelector('button.nav-item[title="Library"]');
-if (libBtn && libBtn.getAttribute('aria-current') !== 'page') {
-  libBtn.click();
-}
-await waitFor(() => !!document.querySelector('.library-target .library-section'));
-""")
+# already sets `lastPracticed` onto star:2:4 (FIXTURE_STAR), so auto-open is
+# normally the whole setup.
+#
+# It is `_LIBRARY_NAV` itself since round 12, rather than its own copy of the
+# same three lines: this tab REMEMBERS where the last story left it, and a
+# setup that only clicks the tab and waits cannot recover from a sibling
+# story having searched or backed out. Two copies of one navigation is also
+# how the two drifted into disagreeing about what "the Library is open" means.
+_LIBRARY_TARGET_SETUP = None   # assigned below, once _LIBRARY_NAV exists
 
 # The tray and the grid overlay (Task 5, spec 2026-08-07-library-page).
 # Shares its navigation with `_LIBRARY_TARGET_SETUP` above and its own
@@ -315,6 +313,35 @@ _LIBRARY_NAV = """
 const libBtn = document.querySelector('button.nav-item[title="Library"]');
 if (libBtn && libBtn.getAttribute('aria-current') !== 'page') {
   libBtn.click();
+}
+// SELF-HEALING, because a Story's setup has to be idempotent and
+// order-independent (uilab's own contract) and this tab remembers where the
+// last story left it. Two things another story can leave behind: a typed
+// search (round 12's own story), and the browse grid instead of a target --
+// auto-open fires ONCE per mount (library.js's `autoOpenedRef`), so anything
+// that backs out of the target page makes it unreachable by waiting. Clear
+// the box, then drill in by hand if there is no target showing. Without this
+// the whole sweep died on viewport 2 with "scope selector matched nothing:
+// .library-target", which reads as a broken story rather than as a page
+// legitimately left somewhere else.
+const findBox = document.querySelector('.library-page .library-find-input');
+if (findBox && findBox.value) {
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype, 'value').set;
+  setter.call(findBox, '');
+  findBox.dispatchEvent(new Event('input', {bubbles: true}));
+}
+// Settle FIRST, then decide. Auto-open is async, so a check made straight
+// after the tab click sees neither surface and would drill into a grid that
+// has not rendered yet -- `null.click()`, which is a broken story rather
+// than a page left somewhere odd.
+await waitFor(() => !!document.querySelector('.library-target')
+                 || !!document.querySelector('.library-courses .entity-grid button'));
+if (!document.querySelector('.library-target')) {
+  document.querySelector('.library-courses .entity-grid button').click();
+  await waitFor(() => !!document.querySelector('.library-group .entity-grid button'));
+  const first = document.querySelector('.library-group .entity-grid button');
+  if (first) first.click();
 }
 await waitFor(() => !!document.querySelector('.library-target .library-section'));
 """
@@ -340,6 +367,33 @@ if (document.querySelectorAll('.library-tray-chip').length < 2) {
   await waitFor(() => document.querySelectorAll('.library-tray-chip').length >= 2);
 }
 """
+# The search RESULTS (round 12). Its own story because the results REPLACE
+# the course grid: a sweep of the landing page measures the grid and can never
+# see a result row, and a row is where the long names live -- a target's name
+# is drawn beside its group's ("14. Tick Tock Clock — Stop Watch, Get Wet"),
+# which is the longest single string this tab draws anywhere.
+# `_LIBRARY_NAV` first, because the box only exists once the tab is open;
+# "star" is a deliberately fat query (it appears in labels AND in approach
+# names) so the row list is long enough for a sweep to have something to
+# measure and for a contact sheet to be worth looking at.
+_LIBRARY_SEARCH_SETUP = _script(_LIBRARY_NAV + """
+// Auto-open lands this tab on the last practiced TARGET, not the grid (the
+// same reason test_ui_library_nav.py keeps a separate `empty_page`), and the
+// search box lives on the grid -- so back out first or this story measures a
+// page with no box on it and reports the surface simply absent.
+const back = document.querySelector('.library-page .entity-back');
+if (back) back.click();
+await waitFor(() => !!document.querySelector('.library-page .library-find-input'));
+const box = document.querySelector('.library-page .library-find-input');
+if (box && !box.value) {
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype, 'value').set;
+  setter.call(box, 'star');
+  box.dispatchEvent(new Event('input', {bubbles: true}));
+}
+await waitFor(() => !!document.querySelector('.library-page .library-result'));
+""")
+_LIBRARY_TARGET_SETUP = _script(_LIBRARY_NAV)
 _LIBRARY_TRAY_SETUP = _script(_LIBRARY_NAV + _LIBRARY_ADD_TWO)
 # Play all, on top of the tray setup -- `.library-grid-panel` rather than the
 # inner `.library-grid` so the sheet also shows the honesty line and the
@@ -415,6 +469,10 @@ STORIES = [
     Story(name="library-target", at=".library-target", setup=_LIBRARY_TARGET_SETUP),
     Story(name="library-tray", at=".library-tray", setup=_LIBRARY_TRAY_SETUP),
     Story(name="library-grid", at=".library-grid-panel", setup=_LIBRARY_GRID_SETUP),
+    # LAST of the library stories on purpose: it is the only one that leaves
+    # this tab somewhere other than a target page, and `_LIBRARY_NAV` heals
+    # that for whatever runs next.
+    Story(name="library-search", at=".library-searching", setup=_LIBRARY_SEARCH_SETUP),
     # The four SEGMENTS-tab stories below are last on purpose: `_EXPAND_ALL`
     # (the "page" story's own setup, which runs first on every viewport) is
     # what returns the app to Practice for the next pass, so nothing after

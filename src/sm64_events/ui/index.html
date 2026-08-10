@@ -3489,6 +3489,65 @@
   .library-overall-division.is-you { background: rgba(96,152,209,.20); }
   .library-overall-division.is-next { background: rgba(233,196,106,.13); }
   .library-overall-you, .library-overall-next { margin-left: auto; }
+  /* The Library's own FIND box (round 12) and the result rows it swaps the
+     course grid for. A third `.library-*search*` class was deliberately not
+     minted here: the two above are each owned by one surface and the comment
+     on the first records what sharing one cost, so this takes its own name
+     rather than a third variant of theirs. */
+  .library-find { position: relative; margin: 0 0 .8rem; }
+  .library-find-input {
+    width: 100%; padding: .55rem 2.2rem .55rem .75rem; font-size: .9rem;
+    color: var(--text); background: rgba(8,20,34,.58);
+    border: 1px solid var(--border-soft); border-radius: 9px;
+  }
+  .library-find-input::placeholder { color: var(--muted); }
+  .library-find-input:focus {
+    outline: none; border-color: #6287aa; background: rgba(8,20,34,.85);
+  }
+  /* Chrome draws its own clear affordance on type=search; ours is a real
+     button so it can carry a label and a hit target, and two of them side by
+     side reads as a rendering fault. */
+  .library-find-input::-webkit-search-cancel-button { display: none; }
+  .library-find-clear {
+    position: absolute; top: 50%; right: .45rem; transform: translateY(-50%);
+    width: 1.6rem; height: 1.6rem; padding: 0; line-height: 1;
+    color: var(--muted); background: none; border: 0; border-radius: 6px;
+    cursor: pointer;
+  }
+  .library-find-clear:hover { color: var(--text); background: rgba(255,255,255,.06); }
+  .library-find-empty { margin: .6rem 0 0; }
+  .library-results { display: grid; gap: .4rem; align-content: start; }
+  /* justify-content is NAMED, not left to the default: a bare `display:flex`
+     on a <button> centres its children in Chromium (the UA sheet's own
+     `justify-content: center` for buttons wins over flex's initial value), so
+     every row drew its icon and both lines floating in the middle of a
+     full-width card -- correct content, visibly off its own left edge. */
+  .library-result {
+    display: flex; align-items: center; justify-content: flex-start;
+    gap: .7rem; width: 100%;
+    padding: .5rem .65rem; text-align: left; cursor: pointer;
+    color: var(--text); background: rgba(8,20,34,.4);
+    border: 1px solid var(--border-soft); border-radius: 10px;
+    transition: background .18s ease, border-color .18s ease;
+  }
+  .library-result:hover { background: rgba(14,32,52,.72); border-color: #6287aa; }
+  .library-result-icon {
+    flex: 0 0 auto; width: 38px; height: 38px; border-radius: 8px;
+    object-fit: cover;
+  }
+  /* min-width: 0 is what lets the two lines below ellipsise instead of
+     pushing the row wider than its pane -- a flex child's default min-width
+     is its content, so without this a long target name overflows the card
+     rather than truncating inside it. */
+  .library-result-text { display: grid; gap: .1rem; min-width: 0; }
+  .library-result-name {
+    font-weight: 600; font-size: .92rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .library-result-sub {
+    font-size: .78rem; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .segment-list {
     min-height: 0; flex: 1 1 auto;
     overflow: auto; display: grid; align-content: start; gap: .55rem;

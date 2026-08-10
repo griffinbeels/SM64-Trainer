@@ -659,7 +659,10 @@ Opens straight on whichever [[star]] or [[segment]] you last practiced,
 otherwise a course grid to browse into; open one and its [[approach]]es lay
 out beginner to expert, each one's community times banded by the [[rank]]
 they earn, and each [[rank]] band split into its five [[division]]s —
-collapsed until you open the exact one you want to study. An [[sheet entry]] with a
+collapsed until you open the exact one you want to study. A search box above
+the grid finds a [[star]] or [[segment]] by name as you type, matching its
+[[approach]]es' names too, and its results stand in place of the grid until
+you clear it. A [[sheet entry]] with a
 video draws a playable card; one without draws a compact [[runner]]-and-time
 row. The [[tray]] collects [[sheet entry]] rows to compare side by side.
 
