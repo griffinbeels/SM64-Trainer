@@ -133,9 +133,13 @@ and a row reshuffling four times in a tenth of a second is the flicker.
 - **`CellRow` is the single door**, and `tests/test_ui_exchange.py` fails if any
   row renders `<div class="starrow">` itself: a second door looks completely
   correct and reintroduces the flicker in one row while the others stay smooth.
-  It flattens htm's ragged children, keeps a KEYLESS cell (the Bowser row's Reds
-  cell) and lets its index speak for it — dropping the unkeyed ones was the first
-  version and it deleted that cell from the row outright.
+  It flattens htm's ragged children, keeps a KEYLESS cell (if one arrives) and
+  lets its index speak for it — dropping the unkeyed ones was the first version
+  and it deleted a cell from the row outright. No cell on the shipped row is
+  keyless any more (the Bowser row's Reds cell, this rule's original named
+  example, is deleted with the star/pipe toggle it belonged to, round 31, task
+  3, 2026-08-10), but the flattener still has to tolerate one for whatever
+  arrives next.
 - **ONE element carries the opacity** — never a wrapper per cell (it would break
   every `.starrow > .starcell` child-combinator rule) and no per-cell stagger
   (*"ALL of cards fade away"*).

@@ -28,9 +28,13 @@ const html = htm.bind(h);
 
 // Rows pass `${cells.map(...)}` beside `${extras}`, so children arrive as a
 // ragged nest of arrays with holes where a conditional cell said null. Flatten
-// and drop the holes; KEEP a keyless cell (the Bowser row's Reds cell is one)
-// and let its position speak for it — dropping the unkeyed ones was the first
-// version of this and it deleted that cell from the row outright.
+// and drop the holes; KEEP any keyless cell and let its position speak for it
+// — dropping the unkeyed ones was the first version of this and it deleted a
+// cell from the row outright. No cell on the shipped row is keyless any more
+// (the Bowser row's Reds cell, the named example when this was written, is
+// deleted with the star/pipe toggle it belonged to, round 31, task 3,
+// 2026-08-10 — every cell here now carries an explicit `key=`), but a future
+// one might, and `identity` below still has to handle it correctly.
 const cells = (children) => [children].flat(Infinity).filter(Boolean);
 
 // A keyless cell contributes its INDEX, so the set's identity still changes

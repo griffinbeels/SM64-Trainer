@@ -6,9 +6,10 @@ This drives the whole chain in a real browser, because the rule was never the
 part that broke. Both bugs this feature has had were the same shape: the slot
 named a card that was NOT ON SCREEN -- once because the page resolved it
 against the unfiltered view while the log renders a filtered one (a Bowser
-reds star and its pipe segment tie on `last_activity`, and exclusivity draws
-one of them), and once because the active entity took the slot with nothing
-recorded. A key naming an unrendered card is indistinguishable from "nothing
+reds star and its pipe segment tie on `last_activity`, and the exclusivity
+rule that used to pick one of them -- retired 2026-08-10, reds-as-subsection
+-- drew only that one), and once because the active entity took the slot
+with nothing recorded. A key naming an unrendered card is indistinguishable from "nothing
 qualifies", so `isCardOpen` matches nothing and EVERY card sits closed -- with
 every test of the rule green.
 

@@ -982,8 +982,9 @@ SUBSECTION_PROJECT = dataclasses.replace(
     # row is one of the SAME two long-owed classes PROJECT and BOWSER_PROJECT
     # already exempt (the `.stagebanner` card's own fixed-height shortfall and
     # `.starcell`'s starholder/starrank overlap), classified rather than
-    # assumed: 26 clipped + 52 overlap, and nothing else. So the expanded row
-    # and its child treatment introduce no defect of their own.
+    # assumed: 26 clipped + 52 overlap, and nothing else. So the selector
+    # itself -- there is no expanded row and no child treatment on it any
+    # more, round 31, 2026-08-10 -- introduces no defect of its own.
     #
     # RE-TAKEN 2026-08-06 after merging main, which deleted the Active Target
     # card: every fixed-height shortfall in the selector shifted by two pixels

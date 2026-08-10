@@ -90,9 +90,10 @@ def test_the_auto_open_slot_is_resolved_against_the_rendered_list():
     It was resolved in practice.js against the UNFILTERED view, and the two
     lists genuinely disagree: a Bowser course's reds star and its pipe segment
     tie on `last_activity` (measured on his live session -- both 1414), stars
-    sort first, and `applyRedsPipeExclusivity` renders whichever half his
-    star/pipe toggle names. So the slot named the star while the log drew the
-    segment, and every card sat closed.
+    sort first, and `applyRedsPipeExclusivity` (retired 2026-08-10,
+    reds-as-subsection) rendered whichever half his star/pipe toggle names.
+    So the slot named the star while the log drew the segment, and every card
+    sat closed.
 
     Mutation-prove by resolving it in practice.js again and passing `topKey`
     down: this goes red, and every pure-rule test stays green -- which is the

@@ -43,7 +43,7 @@ uv run python tools/contact_sheet.py .objective-card # one surface at 1500/1200/
 uv run python tools/contact_sheet.py --subsections    # a star row with a [[subsection]] in the corpus (no badge, no toggle -- round 31 retired both; every piece just shows); --nested = the practice-log card with its pieces inside it. No shipped definition has a parent, so this is the only fixture that can draw either
 uv run python tools/contact_sheet.py --recorder       # the RECORDER on arrival (--recording = two moments picked, --waypoints = three); it is a modal, so no plain page load reaches it
 uv run pytest tests/test_ui_recorder_latency.py -q -s  # MEASURE the recorder's live half: publish -> painted row, in ms, printed every run
-uv run pytest tests/test_responsive_subsections.py -q # that state's own sweep + the four reach assertions (badges, the badge write, nesting, folding)
+uv run pytest tests/test_responsive_subsections.py -q # that state's own sweep + the reach assertions: the selector row draws unchanged, a piece nests in and closes with its parent, the reds star's not-armed and disabled-parent cases
 uv run python tools/contact_sheet.py .log-card       # one surface at 1500/1200/900/850, in one image -- LOOK at it
 uv run python tools/mark_sheet.py                    # the caveat badge on both surfaces, side by side (the PICK is made: corner badge, 2026-08-01)
 uv run python tools/topology_map.py                  # DRAW the world graph the segment matcher judges moves against -- LOOK at it, a wrong edge is invisible to every test
