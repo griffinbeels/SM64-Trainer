@@ -261,15 +261,22 @@ function divisionShells(tier, ladderCs, defined) {
   });
 }
 
-export function bandsOf(ladder, entries) {
+/**
+ * A ladder's bands and their subdivision shells, EASIEST FIRST, with the
+ * Capless floor at the top -- no entries anywhere. `bandsOf` fills these with
+ * real sheet rows; the Library's Overall Rank Standards section shows them
+ * empty, since a rank standard is a fact about the ladder and holds whether or
+ * not anyone has published a time in that band. Both go through here so the
+ * two surfaces can never disagree about where a band or a subdivision starts
+ * (2026-08-10: "show subdivision caps and everything, just like below").
+ *
+ * `[]` for a ladder with no tiers at all -- there is nothing to be capless AT,
+ * which is the same reasoning `bandsOf`'s own no-ladder branch applies.
+ */
+export function ladderBands(ladder) {
   const ladderCs = ladderCsOf(ladder);
   const defined = definedTiers(ladderCs);
-  // No ladder at all: one honest catch-all with no tier and no divisions --
-  // "Unranked", never Capless, because there is nothing to be capless AT.
-  if (!defined.length) {
-    return [{ tier: null, cutoffCs: null, divisions: null,
-              entries: [...(entries || [])].sort((a, b) => b.time_cs - a.time_cs) }];
-  }
+  if (!defined.length) return [];
   const bands = [{ tier: "Iron", cutoffCs: null,
                    fastCs: tierFastBoundCs("Iron", ladderCs, defined),
                    entries: [], divisions: divisionShells("Iron", ladderCs, defined) }];
@@ -279,6 +286,43 @@ export function bandsOf(ladder, entries) {
                    fastCs: tierFastBoundCs(tier, ladderCs, defined),
                    entries: [], divisions: divisionShells(tier, ladderCs, defined) });
     }
+  }
+  return bands;
+}
+
+// The two bracket LABELS, here rather than beside either renderer: the
+// Overall Rank Standards section and the entry bands below it print the same
+// spans, and a second copy of "one centisecond slower than the next unit's
+// own slow end" is the divergence this project has a rule against.
+export function bandRangeLabel(band) {
+  if (!band.tier) return "no ladder for this approach";
+  const fast = band.fastCs != null ? fmtSeconds(band.fastCs / 100) : "—";
+  if (band.cutoffCs != null) return `${fmtSeconds(band.cutoffCs / 100)} – ${fast}`;
+  const slowest = (band.entries || []).length ? band.entries[0].time_cs : null;
+  return slowest != null
+    ? `${fmtSeconds(slowest / 100)}+ – ${fast}`
+    : `${fast}+`;
+}
+
+export function divisionRangeLabel(division) {
+  // Every boundary number is DISTINCT (the fast end is exclusive, one
+  // centisecond slower than the next unit's own slow end -- divisionShells
+  // above). An `empty` shell owns no whole centisecond at all -- real on
+  // tight vetted ladders -- and says so rather than printing a backwards span.
+  if (division.empty) return "—";
+  if (division.slowCs != null && division.fastCs != null)
+    return `${fmtSeconds(division.slowCs / 100)} – ${fmtSeconds(division.fastCs / 100)}`;
+  return division.fastCs != null ? `${fmtSeconds(division.fastCs / 100)}+` : "";
+}
+
+export function bandsOf(ladder, entries) {
+  const ladderCs = ladderCsOf(ladder);
+  // No ladder at all: one honest catch-all with no tier and no divisions --
+  // "Unranked", never Capless, because there is nothing to be capless AT.
+  const bands = ladderBands(ladder);
+  if (!bands.length) {
+    return [{ tier: null, cutoffCs: null, divisions: null,
+              entries: [...(entries || [])].sort((a, b) => b.time_cs - a.time_cs) }];
   }
   const byTier = Object.fromEntries(bands.map((band) => [band.tier, band]));
   for (const entry of entries || []) {

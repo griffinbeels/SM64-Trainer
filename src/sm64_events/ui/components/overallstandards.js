@@ -17,31 +17,43 @@
 // every strategy, so a tier can be set by one way and the next tier by
 // another. `overall_owners` names them, because "what does it take to rank up
 // overall" is only half an answer without "and by doing what" — and that is
-// the half that tells him which strategy to go and practice.
+// the half that tells him which strategy to go and practice. Both fields are
+// SERVER-derived (ranks/scoring.py::best_ladder + best_ladder_owners, served
+// by ranks_api): a second pointwise-min written in JS would silently disagree
+// with the banner sitting beside it the next time the Python side changed.
 //
-// Both fields are SERVER-derived (ranks/scoring.py::best_ladder +
-// best_ladder_owners, served by ranks_api). A second pointwise-min written in
-// JS is exactly the divergence this project has a rule against, and it would
-// silently disagree with the banner sitting beside it the next time the
-// Python side changed.
+// ROUND 2 (2026-08-10) — it is the SAME SHAPE as the entry bands below it,
+// and that is the whole of his correction: "displaying the table in the same
+// order as the below tables — that is, Capless first at the top, then Toad,
+// etc, all the way to mario. We also need to remember to include the capless
+// times, as well as subdivision times. The subdivision times should be
+// indented within each division. It should use the caps, just like the rank
+// standard display below." So: easiest-first, the Capless floor included,
+// every band opening into its five subdivision shells, and cap ART rather
+// than the coloured name chips the first version drew. It shares the bands
+// themselves with those tables (librarymodel.js::ladderBands) and both bracket
+// labels (bandRangeLabel/divisionRangeLabel) rather than deriving a second
+// set — a standards table and an entry table that disagreed about where
+// Wario III starts would be the worst possible version of this feature.
+//
+// The one thing it does NOT share is entries: a rank standard is a fact about
+// the ladder and holds whether or not anyone has published a time in that
+// band, which is exactly why the Capless floor has a row here and is filtered
+// out of the entry tables.
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { Disclose } from "./collapsible.js";
 import { Icon } from "./icons.js";
+import { RankIcon } from "./rankicon.js";
 import { getJSON } from "../api.js";
-import { fmtSeconds } from "../format.js";
-import { RANK_NAMES, rankColor, capName, capGradient } from "./caps.js";
-import { standingOn } from "./librarymodel.js";
+import { capName, divisionDigit } from "./caps.js";
+import {
+  ladderBands, bandRangeLabel, divisionRangeLabel, standingOn,
+} from "./librarymodel.js";
 
 const html = htm.bind(h);
 const enc = encodeURIComponent;
-
-// Hardest first, Iron excluded — the same list and the same order
-// standards.js walks, so the two tables read as one vocabulary. Iron is the
-// capless floor and carries no threshold anywhere (ranks/classify.py), so a
-// row for it would be a row with no number in it.
-const TIERS = RANK_NAMES.filter((tier) => tier !== "Iron");
 
 /**
  * entity   entity key this page grades on ("star:c:s" / "segment:id"), or null
@@ -50,7 +62,7 @@ const TIERS = RANK_NAMES.filter((tier) => tier !== "Iron");
  * pbCs     the viewer's best saved time on that entity across every strategy,
  *          or null. Graded through librarymodel's `standingOn`, the SAME walk
  *          every other ◀ you pin on this page uses, rather than a second
- *          grader that could put the header and the rows in different tiers.
+ *          grader that could put this table and those in different tiers.
  */
 export function OverallStandards({ entity, label, pbCs = null }) {
   const [open, setOpen] = useState(false);
@@ -74,16 +86,23 @@ export function OverallStandards({ entity, label, pbCs = null }) {
 
   const overall = (data && data.overall) || {};
   const owners = (data && data.overall_owners) || {};
-  const rows = TIERS.filter((tier) => overall[tier] != null);
+  const bands = ladderBands(overall);
   const you = entity ? standingOn(overall, pbCs) : null;
-  // The tier ABOVE the one he is in is the whole question the section asks,
-  // so it is marked as well as his own row. `TIERS` runs hardest-first, so
-  // "up" is the PREVIOUS entry.
-  const yourIndex = you ? rows.indexOf(you.rank) : -1;
-  const nextTier = yourIndex > 0 ? rows[yourIndex - 1] : null;
   // Rule 11 in one word: a star and a segment are two kinds of the same
   // practiced thing, and only the noun differs on screen.
   const noun = entity && entity.startsWith("segment:") ? "segment" : "star";
+  // "Next" is the very next SUBDIVISION he can reach, which is the finest
+  // honest answer to "what does it take to rank up" — and with the bands
+  // running easiest-first it is simply the step after his own.
+  // Concatenated rather than templated, twice over: a `${band.tier}` reads to
+  // tests/test_ui_cap_names.py as printing the raw key (it cannot tell a JS
+  // string key from markup), and ui-core.md's own law forbids a backtick
+  // inside an html`` template, which the sibling below sits in.
+  const steps = bands.flatMap((band) =>
+    (band.divisions || []).map((division) => band.tier + "/" + division.numeral));
+  const yourStep = you ? steps.indexOf(you.rank + "/" + you.division) : -1;
+  const nextStep = yourStep >= 0 && yourStep + 1 < steps.length
+    ? steps[yourStep + 1] : null;
 
   return html`<div class="library-overall">
     <button type="button" class="disc library-overall-toggle"
@@ -108,44 +127,59 @@ export function OverallStandards({ entity, label, pbCs = null }) {
         ${entity && !failed && !data ? html`<div class="inline-state loading">
           <${Icon} name="updates" size=${16} />${" "}Loading standards…
         </div>` : null}
-        ${entity && data && rows.length === 0 ? html`<p class="library-overall-note">
+        ${entity && data && !bands.length ? html`<p class="library-overall-note">
           ${label || entity}${" "}has no published rank standards, so it carries
           no overall rank yet.
         </p>` : null}
-        ${rows.length ? html`
+        ${bands.length ? html`
           <p class="library-overall-note">
-            One ladder for the whole ${noun},
-            built from the best time any strategy reaches at each tier — so
-            beating a slow strategy's Mario is not the same as ranking up here.
+            One ladder for the whole ${noun}, built from the best time any
+            strategy reaches at each tier — so beating a slow strategy's Mario
+            is not the same as ranking up here.
           </p>
-          <table class="library-overall-table">
-            <thead><tr>
-              <th>Rank</th><th>You need</th><th>Set by</th>
-            </tr></thead>
-            <tbody>
-              ${rows.map((tier) => {
-                const names = owners[tier] || [];
-                const isYou = you && tier === you.rank;
-                const isNext = tier === nextTier;
-                return html`<tr class=${isYou ? "is-you" : (isNext ? "is-next" : "")}>
-                  <td class="library-overall-cap"
-                      style=${`background:${capGradient(tier) || rankColor(tier)}`}
-                      title=${`${capName(tier)} on this ${noun} overall`}>${capName(tier)}</td>
-                  <td class="library-overall-time">${fmtSeconds(overall[tier])}
-                    ${isNext ? html`<span class="chip library-overall-next">next</span>` : null}
-                    ${isYou ? html`<span class="chip library-overall-you">◀ you${
-                      you.division ? ` · ${capName(tier)} ${you.division}` : ""}</span>` : null}
-                  </td>
-                  <td class="library-overall-by">${names.length
-                    ? names.join(" · ")
-                    : html`<span class="meta">—</span>`}</td>
-                </tr>`;
-              })}
-            </tbody>
-          </table>
+          <div class="library-overall-ladder">
+            ${bands.map((band) => {
+              const names = owners[band.tier] || [];
+              return html`<div class="library-overall-band"
+                  key=${"overall-" + band.tier} data-tier=${band.tier}>
+                <div class=${`library-overall-band-head${
+                    you && you.rank === band.tier ? " is-you" : ""}`}>
+                  <span class="rank-icon-slot" style="--icon-size: 18px">
+                    <${RankIcon} tier=${band.tier} division=${"I"} size=${18} /></span>
+                  ${" "}<b>${capName(band.tier)}</b>
+                  <span class="meta library-overall-range">${bandRangeLabel(band)}</span>
+                  ${names.length ? html`<span class="meta library-overall-by"
+                      title=${`the strategy that sets this cutoff on the ${noun}'s own ladder`}>
+                      set by ${names.join(" · ")}</span>` : ""}
+                </div>
+                <div class="library-overall-divisions">
+                  ${(band.divisions || []).map((division) => {
+                    const key = band.tier + "/" + division.numeral;
+                    return html`<div key=${division.numeral}
+                        class=${`library-overall-division${
+                          you && you.rank === band.tier && you.division === division.numeral
+                            ? " is-you" : ""}${key === nextStep ? " is-next" : ""}`}>
+                      <span class="library-overall-division-label">
+                        <span class="rank-icon-slot" style="--icon-size: 16px">
+                          <${RankIcon} tier=${band.tier} division=${division.numeral}
+                              size=${16} /></span>
+                        ${" "}${capName(band.tier)}${" "}${divisionDigit(division.numeral)}
+                      </span>
+                      <span class="meta">${divisionRangeLabel(division)}</span>
+                      ${key === nextStep
+                        ? html`<span class="chip library-overall-next">next</span>` : ""}
+                      ${you && you.rank === band.tier && you.division === division.numeral
+                        ? html`<span class="chip library-overall-you">◀ you</span>` : ""}
+                    </div>`;
+                  })}
+                </div>
+              </div>`;
+            })}
+          </div>
           ${pbCs == null ? html`<p class="library-overall-note meta">
-            No saved time here yet, so you sit at the capless floor — the
-            slowest row above is the first thing to beat.
+            No saved time here yet, so you sit at the capless floor — the top
+            row is where you are, and the row under it is the first thing to
+            beat.
           </p>` : null}
         ` : null}
       </div>

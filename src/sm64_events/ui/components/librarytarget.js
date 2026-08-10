@@ -23,8 +23,8 @@ import { Icon } from "./icons.js";
 import { SearchMenu } from "./searchselect.js";
 import { OverallStandards } from "./overallstandards.js";
 import {
-  sectionOrder, autoExpandName, bandsOf, matchesRunner, videoSource, linkable,
-  standingOn,
+  sectionOrder, autoExpandName, bandsOf, bandRangeLabel, divisionRangeLabel,
+  matchesRunner, videoSource, linkable, standingOn,
 } from "./librarymodel.js";
 
 const html = htm.bind(h);
@@ -328,14 +328,7 @@ function DivisionGroup({ approach, band, division, query, isYou, trayKeys, entit
   if (searching && !visible.length) return null;
   const effectiveOpen = searching || open;
   const label = `${capName(band.tier)} ${divisionDigit(division.numeral)}`;
-  // Round 3: every boundary number is DISTINCT (the fast end is exclusive,
-  // one centisecond slower than the next unit's own slow end -- see
-  // librarymodel.js::divisionShells). An `empty` shell owns no whole
-  // centisecond at all -- real on tight vetted ladders -- and says "—".
-  const bracket = division.empty ? "—"
-    : division.slowCs != null && division.fastCs != null
-    ? `${fmtSeconds(division.slowCs / 100)} – ${fmtSeconds(division.fastCs / 100)}`
-    : division.fastCs != null ? `${fmtSeconds(division.fastCs / 100)}+` : "";
+  const bracket = divisionRangeLabel(division);
   const you = isYou
     ? html`<span class="library-toc-you" title="your current rank on this strategy"> ◀ you</span>` : "";
 
@@ -398,15 +391,10 @@ function DivisionGroup({ approach, band, division, query, isYou, trayKeys, entit
 // notation; a Capless band with no entries never renders (bandsOf filters
 // it). The fast end is the exclusive bound (librarymodel.js::tierFastBoundCs),
 // so no number repeats between adjacent tiers.
-function bandRangeLabel(band) {
-  if (!band.tier) return "no ladder for this approach";
-  const fast = band.fastCs != null ? fmtSeconds(band.fastCs / 100) : "—";
-  if (band.cutoffCs != null) return `${fmtSeconds(band.cutoffCs / 100)} – ${fast}`;
-  const slowest = band.entries.length ? band.entries[0].time_cs : null;
-  return slowest != null
-    ? `${fmtSeconds(slowest / 100)}+ – ${fast}`
-    : `${fast}+`;
-}
+// `bandRangeLabel` / `divisionRangeLabel` moved to librarymodel.js on
+// 2026-08-10 -- the Overall Rank Standards section prints the same spans, and
+// two copies of "the fast end is one centisecond slower than the next unit's
+// slow end" is exactly the divergence this project has a rule against.
 
 // One tier row of the TOC. `cutoffCs` is null for the Capless floor (no
 // cutoff — the catch-all for anything that has not beaten one yet) and for

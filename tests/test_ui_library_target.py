@@ -544,10 +544,30 @@ def test_a_click_the_instant_the_header_exists_is_never_reverted(library_server)
 
 OPEN_OVERALL = (
     "document.querySelector('.library-target .library-overall-toggle').click()")
-OVERALL_ROWS = (
-    "Array.from(document.querySelectorAll("
-    "'.library-target .library-overall-table tbody tr'))"
-    ".map(tr => Array.from(tr.children).map(td => td.textContent.trim()))")
+# Round 2 (2026-08-10): the section is the same SHAPE as the entry bands below
+# it -- cap art, Capless first, five indented subdivisions per band -- so the
+# guards read bands and divisions, not table rows.
+READ_LADDER = """
+  (() => {
+    const bands = Array.from(document.querySelectorAll(
+      '.library-target .library-overall-band'));
+    return bands.map(band => ({
+      tier: band.dataset.tier,
+      name: band.querySelector('b').textContent.trim(),
+      range: band.querySelector('.library-overall-range').textContent.trim(),
+      by: (band.querySelector('.library-overall-by') || {}).textContent || '',
+      headCaps: band.querySelectorAll(
+        '.library-overall-band-head .rank-icon-slot').length,
+      divisions: Array.from(band.querySelectorAll('.library-overall-division'))
+        .map(d => ({
+          label: d.querySelector('.library-overall-division-label')
+                  .textContent.trim().replace(/\s+/g, ' '),
+          range: d.querySelector('.meta').textContent.trim(),
+          caps: d.querySelectorAll('.rank-icon-slot').length,
+          cls: d.className,
+        })),
+    }));
+  })()"""
 
 
 def test_the_overall_section_sits_above_every_strategy_section(library_page):
@@ -566,41 +586,83 @@ def test_the_overall_section_sits_above_every_strategy_section(library_page):
     assert placement["section"] > placement["overall"], placement
 
 
+def test_the_overall_ladder_reads_capless_first_down_to_mario(library_page):
+    """Round 2, verbatim: "displaying the table in the same order as the below
+    tables -- that is, Capless first at the top, then Toad, etc, all the way to
+    mario. We also need to remember to include the capless times". The Capless
+    floor is the one band the ENTRY tables filter out (it has no cutoff and
+    usually no rows), so it is the assertion most likely to rot."""
+    library_page.evaluate(OPEN_OVERALL)
+    library_page.wait_for(".library-overall-band", timeout_ms=10000)
+    bands = library_page.evaluate(READ_LADDER)
+    tiers = [band["tier"] for band in bands]
+    assert tiers[0] == "Iron", tiers
+    assert tiers[-1] == "Mario", tiers
+    assert bands[0]["name"] == "Capless", bands[0]
+    # The floor has no cutoff, so its span is open-ended rather than absent.
+    assert bands[0]["range"].endswith("+"), bands[0]["range"]
+
+
+def test_every_band_opens_into_five_subdivisions_wearing_their_own_caps(library_page):
+    """"as well as subdivision times. The subdivision times should be indented
+    within each division... (and show subdivision caps and everything, just
+    like below)". Indent is asserted structurally -- each division is INSIDE
+    its band -- because a padding value is not the claim; belonging is."""
+    library_page.evaluate(OPEN_OVERALL)
+    library_page.wait_for(".library-overall-band", timeout_ms=10000)
+    bands = library_page.evaluate(READ_LADDER)
+    assert len(bands) >= 6, [band["tier"] for band in bands]
+    for band in bands:
+        assert len(band["divisions"]) == 5, (band["tier"], band["divisions"])
+        assert band["headCaps"] == 1, band
+        for division in band["divisions"]:
+            assert division["caps"] == 1, (band["tier"], division)
+            # The cap art renders its own numeral as text, so the label reads
+            # "5 Capless 5" -- the claim is that the subdivision is NAMED for
+            # its band and carries a digit, not where the art's glyph lands.
+            assert band["name"] in division["label"], (band["name"], division)
+            assert any(char.isdigit() for char in division["label"]), division
+            assert division["range"], (band["tier"], division)
+
+
 def test_the_overall_ladder_is_the_best_across_strategies_not_one_of_them(library_page):
     """The load-bearing assertion, and it cannot pass by accident: on star:2:4
     the pointwise-best ladder is SPLIT -- one strategy sets the hardest tiers
-    and another the rest -- so a table echoing any single strategy's ladder
-    would name one owner throughout. Times are asserted non-empty separately,
-    because a table of rank names with no cutoffs would satisfy the owner
-    check on its own."""
+    and another the rest -- so a ladder echoing any single strategy's would
+    name one owner throughout. Ranges are asserted non-empty separately,
+    because a list of cap names with no times would satisfy the owner check on
+    its own. The Capless floor has no cutoff and so names no owner: that is
+    correct, not a gap."""
     library_page.evaluate(OPEN_OVERALL)
-    library_page.wait_for(".library-overall-table", timeout_ms=10000)
-    rows = library_page.evaluate(OVERALL_ROWS)
-    assert len(rows) >= 5, rows
-    assert all(row[1] for row in rows), rows            # every tier has a cutoff
-    owners = {row[2] for row in rows}
+    library_page.wait_for(".library-overall-band", timeout_ms=10000)
+    bands = library_page.evaluate(READ_LADDER)
+    graded = [band for band in bands if band["tier"] != "Iron"]
+    assert all(band["range"] for band in graded), graded
+    owners = {band["by"] for band in graded}
     assert len(owners) >= 2, owners
-    assert "" not in owners and "\u2014" not in owners, owners
+    assert "" not in owners, owners
 
 
 def test_the_overall_section_marks_where_you_are_and_what_is_next(library_page):
-    """Without the two marks the table is a price list: his ask is "what it
-    takes for YOU to rank up overall"."""
+    """Without the two marks the ladder is a price list: his ask is "what it
+    takes for YOU to rank up overall". Round 2 moved both onto SUBDIVISIONS,
+    which is the finest honest answer -- the next step is one division, not a
+    whole tier."""
     library_page.evaluate(OPEN_OVERALL)
-    library_page.wait_for(".library-overall-table", timeout_ms=10000)
-    marks = library_page.evaluate("""
+    library_page.wait_for(".library-overall-band", timeout_ms=10000)
+    steps = library_page.evaluate("""
       (() => {
         const rows = Array.from(document.querySelectorAll(
-          '.library-target .library-overall-table tbody tr'));
+          '.library-target .library-overall-division'));
         return {
           you: rows.findIndex(r => r.classList.contains('is-you')),
           next: rows.findIndex(r => r.classList.contains('is-next')),
           total: rows.length,
         };
       })()""")
-    assert marks["you"] > 0, marks           # a real standing, not the top row
-    # "Next" is the tier ABOVE, and the table runs hardest-first.
-    assert marks["next"] == marks["you"] - 1, marks
+    assert steps["you"] > 0, steps          # a real standing, not the floor
+    # Easiest-first, so the next step up is the row immediately below.
+    assert steps["next"] == steps["you"] + 1, steps
 
 
 def test_an_ungraded_movement_says_so_rather_than_rendering_nothing(library_server):
@@ -638,8 +700,8 @@ def test_an_ungraded_movement_says_so_rather_than_rendering_nothing(library_serv
         page.wait_for(".library-overall-note", timeout_ms=10000)
         note = page.evaluate(
             "document.querySelector('.library-target .library-overall-note')"
-            ".textContent.replace(/[ \\n\\t]+/g, ' ').trim()")
+            r".textContent.replace(/\s+/g, ' ').trim()")
         assert "Link one above" in note, note
         assert page.evaluate(
-            "document.querySelectorAll('.library-target .library-overall-table')"
+            "document.querySelectorAll('.library-target .library-overall-band')"
             ".length") == 0, "an ungraded target must draw no ladder"

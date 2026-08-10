@@ -72,7 +72,18 @@ RAW_TIER_EXPRESSIONS = (
 # (`banner=` to RankBanner reads banner.rank/banner.next_tier; `sectionRank=`
 # to standards.js reads sectionRank.score/sectionRank.basis). That is the
 # legitimate unwrapped handoff in both shapes.
-_PROP_PREFIXES = ("tier=", "rank=", "division=", "banner=", "sectionRank=")
+#
+# `data-tier=` is the same distinction one step further out (2026-08-10): a
+# `data-` attribute is a machine hook -- a test selector, a CSS handle -- and
+# is never rendered to anyone, so the RAW key is the correct value to put
+# there and wrapping it in capName() would make the hook read the display
+# vocabulary instead of the ladder's own. Widening the list is a reviewed
+# edit, never a way to make a test pass; what keeps this honest is that it
+# lengthens the lookbehind only, so every TEXT position in every file stays
+# exactly as guarded as it was -- proved by `test_the_guard_still_catches_a_
+# real_print` below.
+_PROP_PREFIXES = ("tier=", "rank=", "division=", "banner=", "sectionRank=",
+                  "data-tier=")
 
 
 def _bare_interpolation_pattern(expr: str) -> str:
@@ -154,3 +165,17 @@ def test_the_guard_can_still_fail():
     # ...but printing the raw key INSIDE that walk is still the same bug.
     assert raw_tier_print_offenders(
         'RANK_NAMES.map((rank) => html`<td>${rank}</td>`)') == ["rank"]
+
+    # A `data-` attribute is a machine hook, never rendered text, so the RAW
+    # key belongs there (2026-08-10, the Library's Overall Rank Standards
+    # bands). The exemption is narrow by construction...
+    assert raw_tier_print_offenders(
+        "html`<div data-tier=${band.tier}>x</div>`") == []
+    # ...and lengthening the lookbehind must not have blunted the guard for
+    # the same expression in a TEXT position, which is the whole point.
+    assert raw_tier_print_offenders("html`<b>${band.tier}</b>`") == ["band.tier"]
+    # Nor for a `data-tier` sitting anywhere other than immediately before the
+    # interpolation -- an attribute earlier in the tag must not license a
+    # print later in it.
+    assert raw_tier_print_offenders(
+        "html`<div data-tier=${band.tier}><b>${band.tier}</b></div>`") == ["band.tier"]

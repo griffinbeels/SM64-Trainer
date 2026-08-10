@@ -3429,20 +3429,40 @@
     padding: .26rem .4rem; border-bottom: 1px solid rgba(255,255,255,.05);
     vertical-align: middle;
   }
-  /* Rank and time shrink to their content so the OWNER column takes the
-     slack — a cap filling a third of the row reads as a progress bar, which
-     is a thing this app draws elsewhere and means something else. */
-  .library-overall-table th:nth-child(-n+2),
-  .library-overall-table td:nth-child(-n+2) { width: 1%; white-space: nowrap; }
-  .library-overall-cap {
-    white-space: nowrap; color: #111; font-weight: 700;
-    border-radius: 6px; text-align: center;
+  /* Round 2: the same shape as the entry bands below — a cap-art band head
+     with its span, opening into five INDENTED subdivision rows. The indent is
+     expressed by the nesting (one `.library-overall-divisions` padding), the
+     project's own parent/child rule, not by a depth variable. */
+  .library-overall-ladder { display: grid; gap: .3rem; }
+  .library-overall-band {
+    border: 1px solid var(--border-soft); border-radius: 8px;
+    background: rgba(8,20,34,.42); overflow: hidden;
   }
-  .library-overall-time { white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .library-overall-by { color: var(--muted); }
-  .library-overall-table tr.is-you td { background: rgba(96,152,209,.14); }
-  .library-overall-table tr.is-next td { background: rgba(233,196,106,.10); }
-  .library-overall-you, .library-overall-next { margin-left: .35rem; }
+  .library-overall-band-head {
+    display: flex; align-items: center; gap: .35rem; flex-wrap: wrap;
+    padding: .34rem .5rem; font-size: .82rem;
+    background: rgba(255,255,255,.03);
+  }
+  .library-overall-range {
+    white-space: nowrap; font-variant-numeric: tabular-nums;
+  }
+  .library-overall-by { margin-left: auto; text-align: right; min-width: 0; }
+  .library-overall-divisions {
+    padding: .16rem .5rem .3rem 1.35rem;   /* the child indent */
+    display: grid; gap: .1rem;
+  }
+  .library-overall-division {
+    display: flex; align-items: center; gap: .4rem;
+    padding: .16rem .3rem; border-radius: 6px; font-size: .78rem;
+  }
+  .library-overall-division-label {
+    display: flex; align-items: center; gap: .3rem; white-space: nowrap;
+  }
+  .library-overall-division .meta { font-variant-numeric: tabular-nums; }
+  .library-overall-band-head.is-you { background: rgba(96,152,209,.16); }
+  .library-overall-division.is-you { background: rgba(96,152,209,.20); }
+  .library-overall-division.is-next { background: rgba(233,196,106,.13); }
+  .library-overall-you, .library-overall-next { margin-left: auto; }
   .segment-list {
     min-height: 0; flex: 1 1 auto;
     overflow: auto; display: grid; align-content: start; gap: .55rem;
