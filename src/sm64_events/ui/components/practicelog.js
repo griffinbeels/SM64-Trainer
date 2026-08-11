@@ -36,7 +36,6 @@ import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
   from "./attemptlog.js";
 import { logTuning, logTuningVars, logTuningClasses, rankPlacementFor,
          nextStepModeFor, NARROW_CONTAINER_PX } from "../logtuning.js";
-import { bowserModeFor } from "./stagebanner.js";
 import { nestSubsections } from "../subsections.js";
 
 const html = htm.bind(h);
@@ -152,41 +151,6 @@ export function hasEarnedACard(sec, activeKey, t) {
 }
 
 /**
- * A Bowser course's Reds star and its paired reds->pipe segment are ONE run
- * graded two ways, never two things practiced -- Griffin: "if I have pipe
- * selected, it shouldn't show the card for (Star). If I have (Star)
- * selected, and I grab the star, it shouldn't show the pipe card... if I
- * enter the pipe, it should show the pipe card (and swap to pipe mode)."
- *
- * Only excludes when BOTH halves of a pair are present at once (a course
- * he has only ever practiced one way keeps its one card regardless of what
- * `modeForCourse` happens to answer for it, including the untouched
- * "pipe" default -- there is nothing to resolve a conflict between). When
- * both are present, the one matching `modeForCourse(sec.course_id)` wins;
- * everything else, including every OTHER course's Bowser pair, passes
- * through untouched.
- *
- * `modeForCourse` is injected rather than read from storage in here on
- * purpose -- `stagebanner.js`'s `bowserModeFor` already owns that memory
- * (keyed by LEVEL, not course_id) and this function stays a pure,
- * node-testable transform of a `(sections, lookup)` pair, never a second
- * reader of `localStorage`.
- */
-export function applyRedsPipeExclusivity(sections, modeForCourse) {
-  if (!modeForCourse) return sections;
-  const byKey = new Map(sections.map((sec) => [entityKey(sec), sec]));
-  const exclude = new Set();
-  for (const sec of sections) {
-    if (isSegment(sec) || sec.pipe_segment_id == null) continue;
-    const pipeKey = `segment:${sec.pipe_segment_id}`;
-    if (!byKey.has(pipeKey)) continue;    // only one half present -- nothing to resolve
-    const mode = modeForCourse(sec.course_id);
-    exclude.add(mode === "pipe" ? entityKey(sec) : pipeKey);
-  }
-  return exclude.size ? sections.filter((sec) => !exclude.has(entityKey(sec))) : sections;
-}
-
-/**
  * The entity key of the TOP card -- the newest thing practiced, and the one
  * the system's single auto-open slot always points at (Griffin, 2026-08-04:
  * "We should automatically keep open the last entry in the system... the top
@@ -260,9 +224,12 @@ export function topEntityKey(view) {
  * reason `orderedSections` above is.
  */
 // WHICH CARD HOLDS THE ONE AUTO-OPEN SLOT, decided against the list actually
-// ON SCREEN. Pure; `sections` is the RENDERED list (post-membership,
-// post-Reds/Pipe exclusivity), `playedKeys` is `playedEntityKeys(view)` in
-// recency order, frozen by the caller's celebration hold.
+// ON SCREEN. Pure; `sections` is every RENDERED card (post-membership,
+// top-level AND nested -- the caller hands in `openCandidates`, which is both
+// halves flattened, since a [[subsection]] can win the slot too and
+// `isCardOpen` needs `topKey` to name a card that actually exists somewhere
+// in the tree), `playedKeys` is `playedEntityKeys(view)` in recency order,
+// frozen by the caller's celebration hold.
 //
 // Two rules, in order:
 //
@@ -282,17 +249,44 @@ export function topEntityKey(view) {
 // resolved in practice.js against the UNFILTERED view, and the two lists
 // genuinely disagree: a Bowser course's reds star and its pipe segment tie on
 // `last_activity` (measured on his live session -- both 1414), stars sort
-// before segments, and `applyRedsPipeExclusivity` renders whichever half his
-// star/pipe toggle names. So the slot named the STAR while the log drew the
-// SEGMENT, `isCardOpen` matched nothing, and every card sat closed -- which is
-// exactly the screenshot that opened this round. A key that names no rendered
-// card is indistinguishable from "nothing qualifies", which is why it survived
-// a rule whose own tests were all green.
-export function autoOpenKey(sections, activeKey = null, playedKeys = []) {
+// before segments, and `applyRedsPipeExclusivity` (retired 2026-08-10,
+// reds-as-subsection) rendered whichever half his star/pipe toggle names. So
+// the slot named the STAR while the log drew the SEGMENT, `isCardOpen`
+// matched nothing, and every card sat closed -- which is exactly the
+// screenshot that opened this round. A key that names no rendered card is
+// indistinguishable from "nothing qualifies", which is why it survived a
+// rule whose own tests were all green.
+export function autoOpenKey(sections, activeKey = null, playedKeys = [],
+                             nestedKeys = []) {
   const rendered = sections || [];
   if (activeKey != null) {
     const active = rendered.find((sec) => entityKey(sec) === activeKey);
-    if (active && hasRecordedAttempts(active)) return activeKey;
+    // A NESTED active entity does not get the same second chance a
+    // top-level one does. "Only once it has recorded something" (the rule
+    // this clause otherwise enforces) was written for a card that stays
+    // VISIBLE, closed, either way -- but `Disclose` never mounts a closed
+    // body at all, so a piece that fails this check is not merely folded,
+    // it is ABSENT from the DOM until something else opens its parent.
+    // Before this (final review 2026-08-10, the suite's own stray failure)
+    // a freshly-targeted reds star with zero attempts -- the entity he is
+    // standing in front of RIGHT NOW -- rendered nowhere on the page at
+    // all, top-level or nested, even though its own section existed. A
+    // top-level active-but-empty card keeps the old, stricter rule
+    // unchanged: it is already visible with nothing open, so there is
+    // nothing broken to fix.
+    //
+    // `nestedKeys` -- the keys the caller ACTUALLY rendered as children this
+    // pass (its own `childrenOf`, flattened) -- is what decides "nested",
+    // not a static read of `sec.parents`. A star's `parents` stays truthy
+    // even when its only parent is a DISABLED movement, and such a star
+    // promotes to TOP LEVEL (the round's own promotion rule) rather than
+    // nesting -- an already-visible, empty, top-level card, exactly the
+    // "nothing broken to fix" case two paragraphs up. Asking `sec.parents`
+    // instead of the render let that promoted card auto-open anyway (NEW-1,
+    // final re-review 2026-08-10).
+    if (active && (hasRecordedAttempts(active) || nestedKeys.includes(activeKey))) {
+      return activeKey;
+    }
   }
   for (const key of playedKeys || []) {
     if (rendered.some((sec) => entityKey(sec) === key)) return key;
@@ -300,10 +294,18 @@ export function autoOpenKey(sections, activeKey = null, playedKeys = []) {
   return null;
 }
 
-export function isCardOpen(overrides, topKey, key) {
+// `childKeys` (round 2026-08-10, reds-as-subsection): a [[subsection]]'s own
+// card cannot open without its PARENT's -- `Disclose` does not mount closed
+// body content at all, so a nested piece that wins the auto-open slot is
+// invisible until the card wrapping it is ALSO open. A parent whose own key
+// is not `topKey` still opens when `topKey` names one of ITS children;
+// unset (the default) reproduces the pre-nesting behaviour byte for byte,
+// which is what every existing top-level-only call keeps doing.
+export function isCardOpen(overrides, topKey, key, childKeys = []) {
   const manual = (overrides || {})[key];
   if (manual != null) return manual === "open";
-  return topKey != null && key === topKey;
+  if (topKey == null) return false;
+  return key === topKey || childKeys.includes(topKey);
 }
 
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
@@ -785,15 +787,15 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
  * freezes it alongside `target`/`stage`/`newestAttemptId`). This component
  * turns it into the ONE auto-open slot itself, via `autoOpenKey` against its
  * own rendered `sections` -- the caller cannot do that, because the caller
- * does not know which cards survive membership and Reds/Pipe exclusivity, and
- * a slot naming an unrendered card silently opens nothing at all. A DIFFERENT
- * signal from `focusKey`/`activeKey`: the newest thing PRACTICED is routinely
- * not the thing currently SELECTED or ACTIVE (this component's own comment on
+ * does not know which cards survive membership, and a slot naming an
+ * unrendered card silently opens nothing at all. A DIFFERENT signal from
+ * `focusKey`/`activeKey`: the newest thing PRACTICED is routinely not the
+ * thing currently SELECTED or ACTIVE (this component's own comment on
  * `activeKey`, below).
  *
- * `enforceMembership` (default true) gates `hasEarnedACard`/
- * `applyRedsPipeExclusivity` -- both ask "did the SERVER publish this section
- * for a real reason", which only means something for a genuine session view.
+ * `enforceMembership` (default true) gates `hasEarnedACard` -- it asks "did
+ * the SERVER publish this section for a real reason", which only means
+ * something for a genuine session view.
  * `ui/tunelog.js`'s own inspector reuses this exact component for fidelity
  * ("PracticeLog, and therefore the REAL LogCard") over a HAND-BUILT `view` of
  * arbitrary rank states to judge side by side (a ladder floor, an unranked
@@ -885,26 +887,6 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   const tuning = logTuning();
   const nameOverflow = tuning.nameOverflow;
   const rankIconSize = tuning.rankIconSize;
-  // The Reds/Pipe exclusivity check (below) needs a course -> LEVEL lookup:
-  // `stagebanner.js`'s `bowserModeFor` is keyed by level (a Bowser course's
-  // own `course_id` and its LEVEL are different numbers -- BitDW is course
-  // 16, level 17), and the log has no live "stage" to read the level off of
-  // for a course he is not currently standing in. Inverted from the SAME
-  // server-shipped `vocab.course_by_level` `entityicons.js`'s `iconContext`
-  // already reads for the identical reason (a segment's start level, off
-  // the same map) -- never a second hand-written course<->level table, which
-  // is exactly the kind of duplicated domain fact this project keeps paying
-  // for. Memoised on the vocab's own identity, which changes once per fetch.
-  const levelByCourse = useMemo(() => {
-    const courseByLevel = (t.vocab || {}).course_by_level || {};
-    const out = {};
-    for (const [level, course] of Object.entries(courseByLevel)) out[course] = Number(level);
-    return out;
-  }, [t.vocab]);
-  const modeForCourse = (courseId) => {
-    const level = levelByCourse[courseId];
-    return level != null ? bowserModeFor(level) : null;
-  };
   const ordered = orderedSections(v, activeKey);
   // NESTING RUNS BEFORE MEMBERSHIP, not after, and the order is load-bearing:
   // `nestSubsections` has to see a parent that earned no card of its own so it
@@ -912,7 +894,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   // the piece must not orphan it back to the top level). So the earned test is
   // injected rather than pre-applied.
   const groups = nestSubsections(
-    applyRedsPipeExclusivity(ordered, modeForCourse),
+    ordered,
     enforceMembership ? (sec) => hasEarnedACard(sec, activeKey, t) : () => true);
   const sections = groups.map((group) => group.sec);
   const childrenOf = new Map(
@@ -933,11 +915,32 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
     if (idx === -1) return;                // not a classified entity (unassigned)
     setShown((current) => (idx >= current ? idx + 1 : current));
   }, [focusKey]);
-  // Resolved HERE, never handed down pre-decided: `sections` is the list
-  // the user is looking at, and `autoOpenKey`'s own comment records what it
-  // cost to learn that those are two different lists.
-  const topKey = autoOpenKey(sections, activeKey, playedKeys);
   const page = sections.slice(0, shown);
+  // Resolved HERE, never handed down pre-decided: `openCandidates` is every
+  // card that ACTUALLY RENDERS, top-level and nested alike -- bounded to
+  // `page` (final review 2026-08-10, I2), not every group's `sec` plus every
+  // child regardless of pagination. `sections` alone let a [[subsection]]
+  // win the slot with nowhere for `isCardOpen` to ever find it (round
+  // 2026-08-10, reds-as-subsection: the reds star, freshly grabbed and
+  // therefore the newest thing PRACTICED, nests inside its Reds/Pipe
+  // movement now instead of leading the page on its own) -- but the
+  // UNBOUNDED version traded that bug for a narrower one: a piece can be
+  // newer than its own PARENT, so `topKey` could name a child whose parent
+  // sits past "Show 5 more", and then nothing on screen opens at all --
+  // exactly the "zero open cards is the failure signature" this file's own
+  // render gate exists to catch. Bounding to `page` costs nothing a real
+  // session needs: `autoOpenKey`'s `playedKeys` fallback simply moves on to
+  // the next-newest key that IS rendered, the same self-heal it already
+  // does for an off-page TOP-LEVEL section.
+  const openCandidates = page.flatMap(
+    (sec) => [sec, ...(childrenOf.get(entityKey(sec)) || [])]);
+  // The keys `nestSubsections` actually placed as children THIS render --
+  // `childrenOf`'s own values, flattened -- is what `autoOpenKey` asks to
+  // tell a genuinely nested active entity from a PROMOTED one (NEW-1, final
+  // re-review 2026-08-10): a star whose only parent is disabled renders
+  // top-level, not nested, and must not borrow the nested case's leniency.
+  const nestedKeys = [...childrenOf.values()].flat().map(entityKey);
+  const topKey = autoOpenKey(openCandidates, activeKey, playedKeys, nestedKeys);
   // ONE renderer, used for a top-level card and for a nested [[subsection]]
   // alike (round 22) -- his "These cards should work exactly the same way as
   // normal" is structural here rather than a promise: a child goes through
@@ -957,14 +960,15 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
     // keeping LogCard's own computation is what lets it stay a self-contained
     // component a test can render with no page-level wiring at all.
     const twoLadder = showsEntityBanner(sec);
-    const kids = (childrenOf.get(ek) || []).map(cardFor);
+    const children = childrenOf.get(ek) || [];
+    const kids = children.map(cardFor);
     return html`<${LogCard} key=${ek} sec=${sec} t=${t} ui=${ui}
       freshIds=${freshIds} openCompare=${openCompare}
       openLibrary=${openLibrary}
       focus=${focus} clearFocus=${clearFocus} pick=${pick}
       selected=${ek === focusKey} onSelect=${onSelect}
       forceOpen=${ek === focusKey}
-      open=${isCardOpen(openOverrides, topKey, ek)}
+      open=${isCardOpen(openOverrides, topKey, ek, children.map(entityKey))}
       onSetOpen=${(next) => setCardOpen(ek, next)}
       active=${activeKey != null && ek === activeKey}
       pieces=${kids}

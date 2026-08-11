@@ -7,8 +7,11 @@ from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.detectors.moment import MOMENTS, MomentDetector
 from sm64_events.memory.addresses import (ACT_IN_CANNON, ACT_PULLING_DOOR,
                                           ACT_PUSHING_DOOR,
+                                          ACT_READING_AUTOMATIC_DIALOG,
                                           ACT_READING_NPC_DIALOG,
-                                          ACT_SPAWN_SPIN_AIRBORNE)
+                                          ACT_SPAWN_SPIN_AIRBORNE,
+                                          ACT_WAITING_FOR_DIALOG,
+                                          BOX_OPENS_AT_STATE)
 
 ACT_IDLE = 0x0C400201
 ACT_WALKING = 0x04000440
@@ -154,8 +157,12 @@ def test_the_settle_never_crosses_a_place_change():
 # door he had walked through 453 frames earlier (journal ids 28313/28316).
 
 WOODEN_DOOR, STAR_DOOR = 0x800EBC8C, 0x800EB180
-ACT_AUTOMATIC_DIALOG = next(iter(next(m for m in MOMENTS
-                                      if m.kind == "textbox").actions))
+# These landmark tests only need SOME textbox action, at its box-OPEN state —
+# they are about the engaged-object pointer, not about the open-state gate
+# itself (that gate has its own section below). ACT_READING_NPC_DIALOG opens
+# at state 8, addresses.BOX_OPENS_AT_STATE.
+ACT_TEXTBOX_DIALOG = ACT_READING_NPC_DIALOG
+TEXTBOX_OPEN_STATE = BOX_OPENS_AT_STATE[ACT_TEXTBOX_DIALOG]
 
 
 def test_a_moment_that_engaged_nothing_new_names_nothing():
@@ -166,7 +173,7 @@ def test_a_moment_that_engaged_nothing_new_names_nothing():
         # the star door's textbox is not about it.
         snap(ACT_WALKING, 553, level=6,
              landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
-        snap(ACT_AUTOMATIC_DIALOG, 554, level=6,
+        snap(ACT_TEXTBOX_DIALOG, 554, level=6, mario_action_state=TEXTBOX_OPEN_STATE,
              landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
     ])
     assert [e.payload["kind"] for e in events] == ["textbox"]
@@ -204,7 +211,7 @@ def test_a_moment_that_engaged_something_of_its_own_still_names_it():
     events = run([
         snap(ACT_WALKING, 100, level=6,
              landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
-        snap(ACT_AUTOMATIC_DIALOG, 101, level=6,
+        snap(ACT_TEXTBOX_DIALOG, 101, level=6, mario_action_state=TEXTBOX_OPEN_STATE,
              landmark_behaviour=STAR_DOOR, landmark_home=(-127.0, 3174.0, 3772.0)),
     ])
     assert events[0].payload["landmark"]["behaviour"] == STAR_DOOR
@@ -218,21 +225,24 @@ def test_a_stale_edge_reading_is_refused_even_when_the_settle_cannot_help():
              landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
         snap(ACT_WALKING, 553, level=6,
              landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
-        snap(ACT_AUTOMATIC_DIALOG, 554, level=6,
+        snap(ACT_TEXTBOX_DIALOG, 554, level=6, mario_action_state=TEXTBOX_OPEN_STATE,
              landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
-        snap(ACT_AUTOMATIC_DIALOG, 555, level=24, curr_area=1,
-             landmark_behaviour=TREE),
+        snap(ACT_TEXTBOX_DIALOG, 555, level=24, curr_area=1,
+             mario_action_state=TEXTBOX_OPEN_STATE, landmark_behaviour=TREE),
     ])
     assert events[0].payload["landmark"] is None
 
 
-def test_a_textbox_publishes_the_RAW_counter_where_a_door_publishes_it_plus_two():
+def test_automatic_dialogue_publishes_the_RAW_counter_where_a_door_publishes_it_plus_two():
     """His frame-stepped replay, 2026-08-10: Usamune 0'11"53 against our
-    0'11"60 on journal id 28790, raw counter 346. A door's own screenshot
-    (2026-08-06) says +2 and is untouched, so this is per-kind rather than a
-    fourth flip of one constant."""
+    0'11"60 on journal id 28790 (the star door, automatic dialogue), raw
+    counter 346. A door's own screenshot (2026-08-06) says +2 and is
+    untouched, so this is per-ACTION rather than a fourth flip of one
+    constant -- and it stays automatic dialogue's OWN number even after NPC
+    dialogue got its own gated lag in round 3 (see
+    test_a_textbox_moment_lags_one_frame_beyond_a_door below)."""
     textbox = run([snap(ACT_WALKING, 100, igt_overall=346),
-                   snap(ACT_AUTOMATIC_DIALOG, 101, igt_overall=346)])
+                   snap(ACT_READING_AUTOMATIC_DIALOG, 101, igt_overall=346)])
     assert textbox[0].payload["igt_frames"] == 346
     assert textbox[0].payload["igt"] == "0'11\"53"
 
@@ -248,6 +258,24 @@ def test_a_textbox_publishes_the_RAW_counter_where_a_door_publishes_it_plus_two(
 # flipping `Moment.needs_fresh_engagement`'s default to True reddens FOUR kinds
 # here at once, where a single hand-written test would have caught one.
 
+def _repeatable_edge(moment):
+    """One action for `moment` that fires on a SINGLE entry snap, for tests
+    that don't care about the open-state gate. `textbox` is the one kind
+    with a gated action (NPC dialogue) sharing its `actions` with an
+    ungated one (automatic dialogue, module docstring) -- prefer the
+    ungated one so the shape below stays a plain two-touch edge for every
+    kind, including ones added after this was written. Falls back to a
+    gated action's own key for a kind with no ungated one at all."""
+    if not moment.open_states:
+        return next(iter(moment.actions))
+    ungated = [action for action in moment.actions
+               if action not in moment.open_states]
+    if ungated:
+        return ungated[0]
+    return next(action for action, threshold in moment.open_states.items()
+                if threshold is not None)
+
+
 @pytest.mark.parametrize(
     "moment", [m for m in MOMENTS if m.actions], ids=lambda m: m.kind)
 def test_every_kind_still_names_an_object_it_had_already_engaged(moment):
@@ -255,7 +283,7 @@ def test_every_kind_still_names_an_object_it_had_already_engaged(moment):
     for every kind in the registry, including ones added after this was
     written. The pointer does not retarget on a repeat, so any rule that
     demands a retarget silently costs a kind its identity."""
-    edge = next(iter(moment.actions))
+    edge = _repeatable_edge(moment)
     events = run([
         snap(ACT_WALKING, 100, level=6),
         snap(ACT_WALKING, 101, level=6, landmark_behaviour=WOODEN_DOOR,
@@ -294,10 +322,121 @@ def test_the_engagement_age_rides_along_so_the_window_can_be_re_measured():
              landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
         snap(ACT_WALKING, 900, level=6,
              landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
-        snap(ACT_AUTOMATIC_DIALOG, 1006, level=6,
+        snap(ACT_TEXTBOX_DIALOG, 1006, level=6, mario_action_state=TEXTBOX_OPEN_STATE,
              landmark_behaviour=WOODEN_DOOR, landmark_home=(-997.0, 1203.0, 1178.0)),
     ])
     assert events[0].payload["engaged_age_frames"] == 1006 - 553
+
+
+# -- the box actually opens, not the turn (round 2, 2026-08-10) ---------------
+# His report: two King Whomp screenshots, both several frames ahead of
+# Usamune's own screen. Mario TURNS to face the NPC for 6-8 frames before the
+# box exists (decomp act_reading_npc_dialog: MARIO_ACTION_STATE 0..7 is the
+# turn, 8 is the box), so the old entry-edge trigger fired on the turn's first
+# frame. `Moment.open_states` gates on the real state instead of subtracting a
+# constant — his own run measured a 6-8 frame spread, never one fixed number.
+
+def test_the_npc_textbox_moment_fires_when_the_box_opens_not_when_the_turn_begins():
+    events = run([
+        snap(ACT_WALKING, 100),
+        *[snap(ACT_READING_NPC_DIALOG, 101 + state, mario_action_state=state)
+          for state in range(9)],   # 0..8 inclusive — the box opens at 8
+    ])
+    assert [e.payload["kind"] for e in events] == ["textbox"]
+    assert events[0].frame == 109, (
+        "the box-open frame (state 8), not the turn's first frame (101)")
+
+
+def test_automatic_dialog_still_fires_on_the_plain_entry_edge():
+    """Round 4 (2026-08-11) reverted the gate this test used to check: a
+    threshold of 9 for automatic dialogue was reasoned from decomp alone and
+    never checked against a screenshot, while automatic dialogue already
+    carried its OWN, independently live-measured number at the plain entry
+    edge (module docstring, "AUTOMATIC DIALOGUE KEEPS ITS OWN, OLDER,
+    INDEPENDENT MEASUREMENT"). Gating it would have fired the moment on a
+    different frame than the one that measurement was taken at."""
+    events = run([
+        snap(ACT_WALKING, 100),
+        snap(ACT_READING_AUTOMATIC_DIALOG, 101, mario_action_state=0),
+    ])
+    assert [e.payload["kind"] for e in events] == ["textbox"]
+    assert events[0].frame == 101, "the entry edge, not a box-open state"
+
+
+def test_automatic_dialog_has_no_gate_in_the_registry():
+    """The regression guard for the above: an unmeasured threshold must not
+    quietly come back for this action."""
+    assert ACT_READING_AUTOMATIC_DIALOG not in BOX_OPENS_AT_STATE
+
+
+def test_a_variable_length_turn_still_lands_on_the_real_box_open_frame():
+    """The gap is NOT a constant — his ten King Whomp captures ranged 6-8
+    frames. The detector must watch the real state every poll, never subtract
+    a fixed offset, or a run with a different turn length records wrong."""
+    fast_turn = run([
+        snap(ACT_WALKING, 200),
+        snap(ACT_READING_NPC_DIALOG, 201, mario_action_state=0),
+        snap(ACT_READING_NPC_DIALOG, 202, mario_action_state=8),
+    ])
+    slow_turn = run([
+        snap(ACT_WALKING, 300),
+        snap(ACT_READING_NPC_DIALOG, 301, mario_action_state=0),
+        snap(ACT_READING_NPC_DIALOG, 302, mario_action_state=3),
+        snap(ACT_READING_NPC_DIALOG, 303, mario_action_state=6),
+        snap(ACT_READING_NPC_DIALOG, 304, mario_action_state=8),
+    ])
+    assert fast_turn[0].frame == 202
+    assert slow_turn[0].frame == 304
+
+
+def test_waiting_for_dialog_alone_never_opens_the_box():
+    """ACT_WAITING_FOR_DIALOG carries no entry in BOX_OPENS_AT_STATE — the
+    decomp gives it no state machine of its own, so it can sit in
+    DIALOG_ACTIONS without ever firing the moment by itself."""
+    events = run([
+        snap(ACT_WALKING, 100),
+        snap(ACT_WAITING_FOR_DIALOG, 101),
+        snap(ACT_WAITING_FOR_DIALOG, 102),
+        snap(ACT_WAITING_FOR_DIALOG, 103),
+    ])
+    assert events == []
+
+
+def test_waiting_then_reading_still_gates_on_the_box_state():
+    """His one live WAITING sighting (a castle NPC) moved into a reading
+    action within a frame — the WAITING prefix must not shortcut the gate."""
+    events = run([
+        snap(ACT_WALKING, 100),
+        snap(ACT_WAITING_FOR_DIALOG, 101),
+        snap(ACT_READING_NPC_DIALOG, 102, mario_action_state=0),
+        snap(ACT_READING_NPC_DIALOG, 103, mario_action_state=8),
+    ])
+    assert [e.payload["kind"] for e in events] == ["textbox"]
+    assert events[0].frame == 103
+
+
+def test_a_dialog_that_never_reaches_the_open_state_fires_no_moment():
+    """He leaves the dialog action before the box ever opens — no box ever
+    existed, so no moment should be recorded."""
+    events = run([
+        snap(ACT_WALKING, 100),
+        snap(ACT_READING_NPC_DIALOG, 101, mario_action_state=0),
+        snap(ACT_READING_NPC_DIALOG, 102, mario_action_state=3),
+        snap(ACT_WALKING, 103),
+    ])
+    assert events == []
+
+
+def test_the_moment_carries_usamunes_counter_from_the_box_open_frame():
+    """The number the recorder shows must be Usamune's counter AT THE BOX,
+    not at the turn's first frame — the actual live bug."""
+    events = run([
+        snap(ACT_WALKING, 100, igt_overall=2000),
+        snap(ACT_READING_NPC_DIALOG, 101, mario_action_state=0, igt_overall=2001),
+        snap(ACT_READING_NPC_DIALOG, 102, mario_action_state=4, igt_overall=2002),
+        snap(ACT_READING_NPC_DIALOG, 103, mario_action_state=8, igt_overall=2003),
+    ])
+    assert events[0].payload["counter"] == 2003
 
 
 # -- what this module deliberately does NOT emit ------------------------------
@@ -370,6 +509,28 @@ def test_a_moment_carries_the_number_usamune_shows_not_the_raw_counter():
     assert events[0].payload["counter"] == 2003
     assert events[0].payload["igt_frames"] == 2005
     assert events[0].payload["igt"] == "1'06\"83"
+
+
+# -- an NPC dialogue lags one frame beyond a door (round 3, 2026-08-11) -------
+# His re-run of round 2's own fix: *"it clearly says 11"30 here, but we show
+# 11"26."* Scored with `tools/score_moment_clock.py --usamune "0'11\"30"`
+# against the live journal: row 355, raw counter 336, Usamune reads
+# counter + 3 -- one frame beyond a door's own counter + 2. One screenshot;
+# see the module docstring for the caveat. (Automatic dialogue keeps its OWN,
+# older number -- see test_automatic_dialogue_publishes_the_RAW_counter above.)
+
+def test_a_textbox_moment_lags_one_frame_beyond_a_door():
+    events = run([
+        snap(ACT_WALKING, 100, igt_overall=336),
+        *[snap(ACT_READING_NPC_DIALOG, 101 + state, mario_action_state=state,
+               igt_overall=336)
+          for state in range(9)],   # box opens at state 8, frame 109
+    ])
+    assert events[0].payload["counter"] == 336
+    assert events[0].payload["igt_frames"] == 336 + 3, (
+        "counter + 1 (Usamune's DISPLAY_TICK) + 2 (NPC dialogue's own gated "
+        "display lag, Moment.gated_display_lag)")
+    assert events[0].payload["igt"] == "0'11\"30"
 
 
 # -- cannon entry (round 9 item 6) --------------------------------------------

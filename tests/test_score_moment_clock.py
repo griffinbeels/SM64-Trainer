@@ -20,12 +20,12 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 
-from score_moment_clock import code_offset, score, verdict  # noqa: E402
+from score_moment_clock import code_offset, render_scores, score, verdict  # noqa: E402
 
 # The parser is asserted at its canonical home -- the tool only imports it.
 from sm64_events.core.timefmt import format_igt, parse_igt  # noqa: E402
-from sm64_events.detectors.moment import MomentDetector  # noqa: E402
-from sm64_events.memory.addresses import ACT_PULLING_DOOR  # noqa: E402
+from sm64_events.memory.addresses import (ACT_PULLING_DOOR,  # noqa: E402
+                                          ACT_READING_NPC_DIALOG)
 
 sys.path.insert(0, str(REPO / "tests"))
 from test_moment import ACT_WALKING, run, snap  # noqa: E402
@@ -137,13 +137,43 @@ def test_the_shipped_offset_tracks_the_value_it_is_scoring(monkeypatch):
     assert code_offset() == door.display_lag + 3 + 1
 
 
+# -- kind-aware shipped offsets (round 4, 2026-08-11) --------------------------
+# `code_offset()` used to hardcode a DOOR edge as "the shipped code", so a
+# CORRECT NPC-dialogue reading (counter + 3, since round 3's gated lag) would
+# score as a mismatch against a door's counter + 2. Both derive their own
+# offset from the same MOMENTS registry moment.py itself reads, rather than
+# one literal standing in for every kind.
+
 def test_the_shipped_offset_is_answered_PER_KIND():
-    """A door reads counter + 2 and a textbox counter + 0, both from his own
-    screen (2026-08-06 and 2026-08-10). One global number would have to be
-    wrong for one of them, and acting on a global verdict is exactly the
-    mistake this split prevents."""
+    """A door reads counter + 2 (screenshot, 2026-08-06) and `textbox`
+    defaults to NPC dialogue's counter + 3 (screenshots, round 2+3,
+    2026-08-10/11) -- the GATED, evidence-backed case. One global number
+    would have to be wrong for one of them, and acting on a global verdict is
+    exactly the mistake this split prevents."""
     assert code_offset("door_open") == 2
-    assert code_offset("textbox") == 0
+    assert code_offset("textbox") == 3
+
+
+def test_a_textbox_carries_one_more_shipped_frame_than_a_door():
+    """Mirrors moment.py's own measured claim (round 3): NPC dialogue's
+    shipped offset is a door's plus its own `Moment.gated_display_lag`
+    override, not a copy of the door's number."""
+    assert code_offset("textbox") == code_offset("door_open") + 1
+
+
+def test_the_textbox_offset_is_cross_checked_against_a_real_detector_run():
+    """Same synthetic shape as moment.py's own round-3 test (the turn through
+    mario_action_state 0..8, then the box opens), via the SAME `run()` helper
+    that test -- independent proof that `code_offset("textbox")` doesn't
+    just agree with itself, it agrees with the detector everyone else's
+    tests drive."""
+    events = run([
+        snap(ACT_WALKING, 100, igt_overall=336),
+        *[snap(ACT_READING_NPC_DIALOG, 101 + state, mario_action_state=state,
+               igt_overall=336)
+          for state in range(9)],
+    ])
+    assert code_offset("textbox") == events[0].payload["igt_frames"] - 336
 
 
 def test_a_caused_kind_has_no_synthetic_edge_to_derive_from():
@@ -156,7 +186,35 @@ def test_a_caused_kind_has_no_synthetic_edge_to_derive_from():
 def test_two_kinds_reading_differently_is_not_a_disagreement():
     """Scored globally these two true readings look like a contradiction."""
     rows = [row(1, 100, 102, kind="door_open"),
-            row(2, 500, 500, kind="textbox")]
-    scored = score(rows, ["0'03\"40", "0'16\"66"])
+            row(2, 500, 503, kind="textbox")]
+    scored = score(rows, ["0'03\"40", "0'16\"76"])
     assert verdict(scored, "door_open")[0] == 2
-    assert verdict(scored, "textbox")[0] == 0
+    assert verdict(scored, "textbox")[0] == 3
+
+
+def test_a_door_row_and_a_textbox_row_each_score_against_their_own_shipped_offset():
+    """The false-report class this project has fixed twice: a reading that
+    genuinely agrees with the shipped code must not be told it disagrees
+    because the tool checked it against a DIFFERENT kind's constant."""
+    door = row(2279, counter=2003, ours=2005, kind="door_open")
+    textbox = row(355, counter=336, ours=339, kind="textbox")
+    scored = score([door, textbox], ["1'06\"83", "0'11\"30"])
+    door_offset, _ = verdict(scored, "door_open")
+    textbox_offset, _ = verdict(scored, "textbox")
+    assert door_offset == code_offset("door_open")
+    assert textbox_offset == code_offset("textbox")
+    assert door_offset != textbox_offset
+
+
+def test_the_verdict_line_names_its_kind_and_reads_as_agreeing():
+    """What the controller shows him: a reader who lands on this line needs
+    no other context to know a textbox reading agreed with the shipped
+    code."""
+    textbox = row(355, counter=336, ours=339, kind="textbox")
+    output = render_scores(score([textbox], ["0'11\"30"]))
+    verdict_lines = [line for line in output.splitlines()
+                     if line.startswith("VERDICT") or "shipped code adds" in line]
+    assert verdict_lines == [
+        "VERDICT [textbox]: Usamune reads counter + 3  (1 reading(s), unanimous)",
+        "         the shipped code adds 3. AGREES.",
+    ]

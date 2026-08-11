@@ -199,24 +199,6 @@ export const justCompletedSegment = (v, freshIds, segmentId) => {
   return latest.outcome === "success" && freshIds.has(latest.id);
 };
 
-// "Just completed" a STAR -- the same question as justCompletedSegment, one
-// level up (spec 2026-07-28-multi-step-segments round 2, item 2: the
-// Bowser Reds row's detection-driven family memory). True only when the
-// star's own most-recent attempt landed as a FRESH success. Mirrors
-// justCompletedSegment exactly; kept as a sibling function rather than a
-// shared generic (a star section is keyed by course_id/star_id, a segment
-// section by segment_id -- two different lookups, one small body each) so
-// neither call site has to build a fake identity to satisfy the other's
-// shape.
-export const justCompletedStar = (v, freshIds, courseId, starId) => {
-  if (!freshIds || !freshIds.size) return false;
-  const sec = (v.stars || [])
-    .find((s) => s.course_id === courseId && s.star_id === starId);
-  if (!sec || !sec.attempts.length) return false;
-  const latest = sec.attempts.reduce((a, b) => (a.id > b.id ? a : b));
-  return latest.outcome === "success" && freshIds.has(latest.id);
-};
-
 // Does a ladder EXIST for this entity, whatever this player has run on it?
 //
 // `rank` is null both when nothing can be graded and when the player simply has

@@ -48,7 +48,7 @@ export declare function DS_ASSET(path: string): string;
 export const ASSET_DIRS = ["hat", "empty", "course_icons"];
 export const ASSET_FILES = [
   "star_1.png", "star_2.png", "star_3.png",
-  "star_4.png", "star_5.png", "star_6.png", "pipe_icon.png",
+  "star_4.png", "star_5.png", "star_6.png",
 ];
 
 export const COMPONENTS = [
@@ -139,7 +139,6 @@ export const COMPONENTS = [
       ["onPick?", "() => void", "Called when the cell is chosen."],
       ["onEdit?", "() => void", "Called when the cell's edit affordance is used."],
       ["caveat?", "string | null", "Names a caveat on the result; renders the caveat mark."],
-      ["toggles?", "any", "Small enable/disable buttons drawn inside the cell's art (CellToggles). Passing any switches the host element to a div, since a button may not contain a button."],
     ],
   },
   {

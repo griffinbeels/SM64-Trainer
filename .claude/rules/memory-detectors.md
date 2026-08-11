@@ -24,7 +24,7 @@ paths:
 | Star-grab + IGT logic | `detectors/star_grab.py` — docstrings carry the domain rationale; IGT itself comes from the shared `detectors/igt_clock.py` (result→counter→reconstructed) which ALSO stamps key.py's grand star and warp.py's pipe — every displayed time routes through it, never a frame delta. **A star is timed at the X-CAM, not the grab, and Usamune's own result store — not our counter — is the number.** Both halves were live-measured on 2026-08-01 and neither is re-derivable by reading the code; the evidence, the four `STOP` values, the subarea-local counter, and the bracket on the settle wait are in **`## Star timing`** below. `key.py` is deliberately NOT changed: whether `STOP` moves the grand star's number is unmeasured, and `ACT_JUMBO_STAR_CUTSCENE` has no fall/dance pair to derive one from |
 | Whether an action counts as Mario ACTING | `memory/addresses.py` — three sets, read by `anchors.py`'s activity flag: `PASSIVE_ACTIONS` (idle/spawn, and ALSO `replay/activity.py`'s idle check — do not extend it for anchor-only reasons), `DEATH_ACTIONS`, and **`LEVEL_EXIT_ACTIONS` (2026-08-03)**. The last is the contiguous decomp block `0x1926-0x192D`: Mario is FLUNG out of a level with no control, **and the byte then LINGERS**. He died in WF, was flung to the castle, sat in the pause menu 92 s, and menu-warped back into WF with `mario_action` still reading `ACT_DEATH_EXIT` — so both of the arrival's anchors reported `mario_acted: true`, the unacted-reset discard could not fire, and the 44 frames between them banked a phantom 1.5 s reset (*"there's sometimes a Reset entry RIGHT when we start the map… The first time we enter a map should never be considered a reset"*). Measured across both journals: **62 anchors land on one of these and 62 of 62 read as having acted**; six of the seven members appear in his real play. Same lingering-state shape as the teleport fade-in. **FORWARD-ONLY** — `mario_acted` is baked into every historical anchor, so existing phantom rows are not repaired by this. **STILL OPEN**: a menu warp taken while Mario was mid-action (paused on a walk) still arrives with a real action on the byte, so the arrival can still bank a phantom; closing that needs the arrival's anchors COLLAPSED into one, which moves attempt start frames and is a decision, not a fix. **A FOURTH source, and it is not a set at all (2026-08-04, task 0084)**: the action the anchor ITSELF interrupted. The docstring has always said that one is swallowed; it swallowed one POLL, and a 60 Hz poll reads a 30 fps frame twice, so the next poll re-read the identical byte onto the FRESH attempt — *"warping to the beginning of a course inside a subarea results in an extra reset… this is a really common problem within subareas."* Exact, since `global_timer` IS the frame counter and a second poll of one value cannot have seen a new action: **1,325 of 3,558 anchors in the repo journal and 811 of 2,447 in the exe's**. `AnchorDetector._anchor_action` holds the action INSTANCE, not a frame window, and the first differing byte clears it for good — which the reload's own spawn supplies within 3 frames on 1,657 of the 1,686 anchors that see one, so anything longer than a blink behaves exactly as before. Every place that starts an anchor period latches, the console reset included. **The old journals cannot score this and `tools/measure_reset_stubs.py` says why** — `mario_acted` recorded the frame and never the action, so a walk resumed after the reload is indistinguishable after the fact from the anchor's own lingering byte; its question 3 is a strict upper bound, not a blast radius. The event carries `action` from this change on (inert), which makes the next round exact. **STILL OPEN, and it is the gravity half**: a reload that drops Mario into a fall or a slide enters a DIFFERENT action from the one latched, so it clears the latch and reads as the player acting. One instance in his journal (a CCM death respawn, journal ids 24768-24772, `mario_acted` 37 frames after the anchor); separating what the game did to Mario from what he did needs evidence task 0084's report did not carry, and the `action` field above is the head start for it |
 | game_reset | `detectors/lifecycle.py` |
-| Mid-course MOMENTS (the vocabulary a subsection is built from) | `detectors/moment.py` — **A moment is a ONE-POLL HELD EMIT and the detector sits THIRD because of it — full detail below: [A moment's landmark settles one poll late](#a-moments-landmark-settles-one-poll-late).** `MOMENTS` is THE registry, one row per kind (`door_open`, `textbox`, and since 2026-08-06 `pole_grab` and `pickup`), and adding one touches nothing else: `segments.TRIGGERS["moment_reached"]` matches the payload's `kind` rather than naming any. ENTRY EDGE only (an action byte reads the same for every frame of a door animation). **NOT TARGET-GATED, since 2026-08-06, and the reversal is his own.** Task 0087's rule ("these should ONLY be tracked when we explicitly select / autoselect a star or segment") predates the recorder in the form that consumes moments, and the recorder is used with NO target set — pointing at what you just did is HOW a definition gets made. Two live reports in one message, one cause: *"I went into Whomp's Fortress, triggered the Whomp King dialogue, and now nothing popped up in the segment recorder tool"* and *"briefly I was able to detect the doors in HMC, but... I lost the ability to detect those"*. His journal scored it exactly: **207 moments, every one inside a target window, then a whole session across WF, HMC and SSL with ZERO of any kind** — the HMC target had retired on the level change into WF (projection's different-course rule) and every door and dialogue after it was correctly suppressed. A RECORDER-OPEN gate does not work either and is written into the guard so it is not re-proposed: he does the thing FIRST and opens the recorder afterwards. What the gate really protected is journal volume (the 2026-08-04 trim), so the ceiling is now the MOMENTS registry itself — a door and a textbox cost ~200 rows per two days of his play; a moment per wall kick would still undo the trim. The `target_active` parameter survives as an injection seam and `tests/test_composition.py::test_the_composition_root_gates_moments_on_NOTHING` fails if `build()` wires the target into it (mutation-proved). **A MOMENT'S TIME IS PER-KIND — a door reads `counter + 2`, a TEXTBOX reads the RAW `counter` — full detail below: [A moment's time is per-kind](#a-moments-time-is-per-kind).** **`cannon_enter` joined 2026-08-07** (round 9 item 6: *"We also need to detect when the user enters a cannon"* / *"(cannon entry xcam)"*) — one row plus `CANNON_ACTIONS`, and its landmark resolves `bhvCannon` out of the shipped catalogue so the row names the specific cannon for free. ENTRY only: `ACT_IN_CANNON` is the frame the game commits Mario to the in-cannon view, which IS the camera cut he named; `ACT_SHOT_FROM_CANNON` is deliberately not a moment (one kind, one boundary), pinned by a test. Its OFFSET against Usamune is the open half and is left to `score_moment_clock.py` — a cannon carries the door's constant until one screenshot says otherwise, which is that instrument's whole purpose. **The two kinds added 2026-08-06 are the registry working as designed** — one row plus its action set, no other file touched. `POLE_GRAB_ACTIONS` is the two GRAB actions only (the climb, the top transition and the top itself all follow from one successful grab, and **a TREE IS A POLE to the engine**, so the BoB tree, the WF pole and every LLL cage pole are one kind): *"We don't detect poles / trees when I would expect this to be there"*. `PICKUP_ACTIONS` is `ACT_PICKING_UP` plus the Bowser-tail variant, and the entry edge IS the frame the grab succeeds, which is exactly what he asked for: *"I want to be able to detect WHEN i grabbed them. The frame I managed to successfully grab them."* Both action sets carry a `VERIFY` and want the live gate. ORDINALS count since `reset()`, wired by `main.build()` to `TrackerService.on_attempt_boundary` (practice_reset/state_loaded only — `game_reset` moves the clock backward and the base contract already self-heals). **There is no `first_controllable` moment on purpose**: `spawn.py` already emits the edge out of `ACT_INTRO_CUTSCENE`, which addresses.py calls the canonical Lakitu-skip timing start, and a second door onto one frame is the class `test_single_source.py` exists to stop |
+| Mid-course MOMENTS (the vocabulary a subsection is built from) | `detectors/moment.py` — **A moment is a ONE-POLL HELD EMIT and the detector sits THIRD because of it — full detail below: [A moment's landmark settles one poll late](#a-moments-landmark-settles-one-poll-late).** `MOMENTS` is THE registry, one row per kind (`door_open`, `textbox`, and since 2026-08-06 `pole_grab` and `pickup`), and adding one touches nothing else: `segments.TRIGGERS["moment_reached"]` matches the payload's `kind` rather than naming any. ENTRY EDGE only for every kind and every action but `textbox`'s NPC dialogue, which since 2026-08-10 gates on the box actually OPENING rather than Mario's turn toward the NPC — full detail below: [A textbox is timed at the BOX, not at Mario's turn toward the NPC](#a-textbox-is-timed-at-the-box-not-at-marios-turn-toward-the-npc). Automatic dialogue (a sign, the star door) keeps the plain entry-edge rule every other kind uses. **A MOMENT'S TIME IS PER-KIND, AND SINCE ROUND 4 PER-ACTION WITHIN `textbox` — a door reads `counter + 2`, automatic dialogue reads the RAW `counter`, NPC dialogue reads `counter + 3` — full detail below: [A moment's time is per-kind](#a-moments-time-is-per-kind) and [Round 4: two dialogue kinds, two measurements](#round-4-two-dialogue-kinds-two-measurements).** **NOT TARGET-GATED, since 2026-08-06, and the reversal is his own.** Task 0087's rule ("these should ONLY be tracked when we explicitly select / autoselect a star or segment") predates the recorder in the form that consumes moments, and the recorder is used with NO target set — pointing at what you just did is HOW a definition gets made. Two live reports in one message, one cause: *"I went into Whomp's Fortress, triggered the Whomp King dialogue, and now nothing popped up in the segment recorder tool"* and *"briefly I was able to detect the doors in HMC, but... I lost the ability to detect those"*. His journal scored it exactly: **207 moments, every one inside a target window, then a whole session across WF, HMC and SSL with ZERO of any kind** — the HMC target had retired on the level change into WF (projection's different-course rule) and every door and dialogue after it was correctly suppressed. A RECORDER-OPEN gate does not work either and is written into the guard so it is not re-proposed: he does the thing FIRST and opens the recorder afterwards. What the gate really protected is journal volume (the 2026-08-04 trim), so the ceiling is now the MOMENTS registry itself — a door and a textbox cost ~200 rows per two days of his play; a moment per wall kick would still undo the trim. The `target_active` parameter survives as an injection seam and `tests/test_composition.py::test_the_composition_root_gates_moments_on_NOTHING` fails if `build()` wires the target into it (mutation-proved). **`cannon_enter` joined 2026-08-07** (round 9 item 6: *"We also need to detect when the user enters a cannon"* / *"(cannon entry xcam)"*) — one row plus `CANNON_ACTIONS`, and its landmark resolves `bhvCannon` out of the shipped catalogue so the row names the specific cannon for free. ENTRY only: `ACT_IN_CANNON` is the frame the game commits Mario to the in-cannon view, which IS the camera cut he named; `ACT_SHOT_FROM_CANNON` is deliberately not a moment (one kind, one boundary), pinned by a test. Its OFFSET against Usamune is the open half and is left to `score_moment_clock.py` — a cannon carries the door's constant until one screenshot says otherwise, which is that instrument's whole purpose. **The two kinds added 2026-08-06 are the registry working as designed** — one row plus its action set, no other file touched. `POLE_GRAB_ACTIONS` is the two GRAB actions only (the climb, the top transition and the top itself all follow from one successful grab, and **a TREE IS A POLE to the engine**, so the BoB tree, the WF pole and every LLL cage pole are one kind): *"We don't detect poles / trees when I would expect this to be there"*. `PICKUP_ACTIONS` is `ACT_PICKING_UP` plus the Bowser-tail variant, and the entry edge IS the frame the grab succeeds, which is exactly what he asked for: *"I want to be able to detect WHEN i grabbed them. The frame I managed to successfully grab them."* Both action sets carry a `VERIFY` and want the live gate. ORDINALS count since `reset()`, wired by `main.build()` to `TrackerService.on_attempt_boundary` (practice_reset/state_loaded only — `game_reset` moves the clock backward and the base contract already self-heals). **There is no `first_controllable` moment on purpose**: `spawn.py` already emits the edge out of `ACT_INTRO_CUTSCENE`, which addresses.py calls the canonical Lakitu-skip timing start, and a second door onto one frame is the class `test_single_source.py` exists to stop |
 | Attempt anchors (practice_reset / state_loaded) | `detectors/anchors.py` — anchors carry mario_acted + paused_frames_before + acted_tracking + save_pending (post-star save-screen latch → segment echo) + frames_since_dialog (textbox/intro-cutscene recency → segment echo shape 5: a run never splits/resets on a textbox); emits the mario_acted event; docstring covers classification (incl. the pause-warp shape: menu warp with IGT already ~0 → anchor from position change + pause streak), pause streak, and VERIFY notes. **An in-course AREA LOAD fires a `practice_reset` too** — Usamune zeroes the overall IGT on an area warp exactly as it does on an L-reset, and nothing here can tell them apart: measured 2026-08-01 against a read-only backup of the live journal, **496 of 825 in-course area edges carry a co-frame `practice_reset`**. The segment matcher already treats involuntary anchors as echoes (door, save prompt, dialogue); the ATTEMPT projector does not, so entering the pyramid closed the run as a reset and opened a new one. **FIXED 2026-08-01 — the anchor payload's `area_load`, and the discriminator is the DESTINATION area**: a course always starts in area 1, so a zero paired (by recency, not co-frame equality) with an edge into a NON-1 area is Mario going deeper, while a reset's own reload walks the byte 1→2→1 and zeroes on the way BACK. Three readings that look right and are not — warp action (6% of entries vs 21% of resets, backwards), nearby `warp_entered` (6% vs 4%), door recency (0%) — plus the 424 back-to-1 anchors that are load TAILS rather than resets, are all in `anchors.py`'s docstring with their counts. `projection._dispatch` records no attempt for one and opens an attempt only if none is open. Forward-only: a historical anchor has no such key, so `.get()` is falsy and every old row replays unchanged (verified against a backup of the live journal, 3220 rows, zero differences). STILL OPEN: walking back OUT of a subarea zeroes the counter the same way and is indistinguishable from a reset by destination — the inert `warp_op` on every anchor is the evidence for that one. **An IN-LEVEL TELEPORTER fires one too, and `area_load` structurally cannot see it (2026-08-03, task 0082)** — the CCM broken bridge and the WDW corner warps relocate Mario inside the SAME area, so there is no area edge to pair the zero with, and *"we can't complete these stars in the practice tool"*. The discriminator is **how recently `ACT_TELEPORT_FADE_OUT` ran**, not what Mario's action reads now: measured on the three demonstrated warps (journal ids 23199/23200, 23218/23219, 23231/23232), the counter zeroes on the very frame Mario crosses fade-out → fade-in, 42 frames after the pad (`act_teleport_fade_out` calls `level_trigger_warp` at actionTimer 20, and the delayed warp takes 20 more), so recency is 1 frame; but the action byte still reads `ACT_TELEPORT_FADE_IN` **125 and 172 frames later**, across a menu warp into WDW, so an `action`-only test would have swallowed two real boundaries. A level edge clears the pairing the way it already clears `_last_area_edge` — the action is shared with cap-course warps that really do leave the level. Payload key `teleport`, read by `projection._dispatch` (no attempt) and by `segments._anchor_echo` shape (6) (invisible to the matcher). **NOT suppressed at the detector, and that is the interesting call**: `segments._zeroes_usamune_igt` reads every anchor to know when Usamune's counter last restarted, so a dropped anchor would leave a segment running through the warp banking a time measured from the warp. Population across all four journals: **4 in-level teleports, 4 bogus resets — 4/4, with no anchor of that shape from any other cause** |
 | Death detection | `detectors/death.py` — action-set edge + pending-warp pulse for void-outs (pit falls fire BEFORE level_changed; docstring carries why); closes open attempt as outcome "death". **CLOSED 2026-08-01 — measured, and it is CORRECT as it stands. Do not "fix" it.** This is the one time source that does not go through `igt_clock.py`: the payload carries `curr.igt_overall` RAW, while star/key/pipe times all add `DISPLAY_TICK`. The live gate (`uv run python tools/verify_death_clock.py`, behavioural not address — `USAMUNE_OVERALL` is already sampled, so no `VERIFY` row and `verify_addresses.py` is not the instrument) asked the human to pause and read the frozen timer. **Eight readings across three Usamune TIMER presets, unanimously the RAW counter.** So `DISPLAY_TICK` is a star-PATH calibration — it compensates for `_primary` back-computing to a touch frame, not for any offset in Usamune's display — and routing death through the clock would have put every historical death row 3 cs ABOVE what he saw, stars included (projection stamps a star's death attempt from this same payload). The same sitting retired a false alarm in the gate itself: `counter_tracked_cleanly` demanded the counter and the game frame move EXACTLY together and so cried PROBLEM on seven of eight healthy deaths, three of them for the counter moving MORE than the frame — impossible for a stall, and the tell that a 12-call non-atomic snapshot skews ±1 at each window end (`READ_SKEW_FRAMES`). Pure core pinned by `tests/test_verify_death_clock.py`, seven mutations proved |
 | Level-change detection | `detectors/level.py` — stateful: remembers last EMITTED level, journals establishing/corrective events (from may equal to) so projection-side level tracking never runs stale; closes open attempts as abandoned |
@@ -482,10 +482,21 @@ is why star 6 rides every row); a subarea with no row filters nothing.
 
 ## A moment's time is per-kind
 
-**2026-08-10.** `Moment.display_lag` — one field on the registry row, read by
+**2026-08-10, and SUPERSEDED for `textbox` by round 4 (2026-08-11) — see
+[Round 4: two dialogue kinds, two measurements](#round-4-two-dialogue-kinds-two-measurements)
+below.** This section's own measurement was AUTOMATIC dialogue's (the star
+door), even though it was written as if it covered `textbox` generally; NPC
+dialogue (King Whomp) turned out to need a different number once round 2/3
+found it fires on a different frame. What stands from here: the door's
+`counter + 2`, the whole per-kind MECHANISM (`Moment.display_lag`,
+`display_lag_for(kind)`), and the instrument (`score_moment_clock.py`). What
+moved: `textbox` is no longer one number — read the round-4 section for the
+split.
+
+`Moment.display_lag` — one field on the registry row, read by
 `display_lag_for(kind)`, which `caused.py` also goes through so a switch press
-cannot grow a second answer. A DOOR reads `counter + 2`; a TEXTBOX reads the
-RAW `counter`.
+cannot grow a second answer. A DOOR reads `counter + 2`; AUTOMATIC dialogue
+reads the RAW `counter` (this section's own evidence, below).
 
 The textbox evidence is the best this number has ever had, because it is
 FRAME-STEPPED rather than caught live: his replay paused on the star door's
@@ -589,6 +600,111 @@ landmark is journaled in the payload, and unlike an entrance — whose identity
 derives from place + destination, which is why `eventlabel.entrance_key` could
 repair history — a textbox has NO derivable owner. A row journaled before this
 keeps the wrong name and still renames the group.
+
+## A textbox is timed at the BOX, not at Mario's turn toward the NPC
+
+**Round 2, 2026-08-10.** His report, two screenshots holding both numbers:
+Usamune read 12"00 and 11"93 at the King Whomp textbox; the practice log
+recorded both several frames faster. Round 1's hypothesis (the trigger firing
+on `ACT_WAITING_FOR_DIALOG`, a frame or eight before the reading action) was
+REFUTED by his live run: all ten King Whomp encounters entered
+`ACT_READING_NPC_DIALOG` directly, `WAITING` never observed. His own read of
+the footage supplied the real lead: *"I definitely see a turning animation as
+part of it... 'i triggered the npc' versus 'the text box actually started to
+appear.'"* Mario turns to face the NPC for several frames INSIDE the reading
+action before the box exists at all — decomp `act_reading_npc_dialog`
+(`src/game/mario_actions_cutscene.c`): `MARIO_ACTION_STATE` (the field right
+before `MARIO_ACTION_TIMER`, `MARIO_STRUCT+0x18`) climbs 0..7 during the turn
+and the game creates the dialog box only at 8, holding there for as long as
+the box is open. `act_reading_automatic_dialog` increments the same field
+BEFORE checking it each frame, so ITS box was REASONED to open at 9, not 8 —
+**reverted round 4 (2026-08-11), never live-verified, see
+[Round 4](#round-4-two-dialogue-kinds-two-measurements) below.**
+`addresses.BOX_OPENS_AT_STATE` gates NPC dialogue only.
+
+**THE GAP IS NOT A CONSTANT.** His run measured it at 6-8 frames across ten
+King Whomp encounters (7 in nine cases, 8 in three, 6 in one), so no fixed
+subtraction could have fixed every grab. `Moment.open_states`
+(`detectors/moment.py`) is the fix: an optional per-kind gate on the MOMENTS
+registry row, `None` for every kind but `textbox` (which reduces to the
+original plain entry-edge rule, unchanged by construction). When set, entering
+the action set is necessary but not sufficient — the moment fires on the
+frame `mario_action_state` reaches that action's own threshold, watched every
+poll rather than assumed. `ACT_WAITING_FOR_DIALOG` carries no entry in
+`BOX_OPENS_AT_STATE` (the decomp gives it no state machine of its own), so it
+can sit inside `DIALOG_ACTIONS` without ever opening the box by itself.
+
+**`DIALOG_ACTIONS` itself is untouched — this is a narrower READ, not a
+narrower constant.** `anchors.py`'s `_last_dialog_frame` still reads the full
+three-action set directly, never through `moment.py`'s registry, and a test
+proves the two stayed decoupled: `AnchorDetector` still recognises
+`ACT_WAITING_FOR_DIALOG` alone as recent dialogue, a case `moment.py` now
+explicitly does NOT call open.
+
+**LIVE-VERIFIED the same day**, so `MARIO_ACTION_STATE`'s `VERIFY` marking is
+cleared: 13 captured textboxes, the field reading exactly as the decomp
+describes.
+
+**FORWARD-ONLY.** `tracking/projection.py::replay()` re-derives
+attempts/segments from the JOURNAL's already-written events — it does not
+re-run detectors over raw memory. A historical `moment_reached` row's
+`frame`/`igt_frames`/`counter` were computed and written by the OLD
+entry-edge logic at capture time, so replay reads that payload as-is: his four
+existing "Whomp King Textbox" rows do not move, on this replay or any future
+one, unless a deliberate backfill is built for them later.
+
+**OPEN, deliberately not expanded into this fix**: a walked-up-to signpost
+uses a THIRD, separate decomp action (`ACT_READING_SIGN`) not in
+`DIALOG_ACTIONS` at all, using `actionTimer` as an honest frame count rather
+than this action-state machine — confirmed still undefined anywhere in this
+codebase. A real signpost may therefore still journal no `textbox` moment.
+Needs its own address discovery and live gate, not a line added here.
+
+## Round 4: two dialogue kinds, two measurements
+
+**2026-08-11.** Two sessions each fixed the SAME `textbox` moment from
+opposite ends, on DIFFERENT dialogue actions, under DIFFERENT firing rules —
+and both fixes are real and both survive, because neither one is wrong about
+the action it measured.
+
+**NPC dialogue** (`ACT_READING_NPC_DIALOG`, King Whomp) is round 2+3's own
+case, unchanged here: fires at the BOX-OPEN state (`BOX_OPENS_AT_STATE`,
+threshold 8) and carries its own lag, `Moment.gated_display_lag
+[ACT_READING_NPC_DIALOG] = 2`, total `counter + 3`. This is the case he
+verified live twice — once for WHERE it fires (round 2), once for the
+NUMBER (round 3).
+
+**Automatic dialogue** (`ACT_READING_AUTOMATIC_DIALOG`, a sign or the star
+door) keeps the OLDER, separately measured result from [A moment's time is
+per-kind](#a-moments-time-is-per-kind): fires at the plain ACTION EDGE,
+`Moment.display_lag = -1`, total `counter + 0`. Round 2 had ALSO gated this
+action, at a threshold of 9 reasoned from decomp
+(`act_reading_automatic_dialog` increments `mario_action_state` before
+checking it) — but that threshold was never checked against a screenshot,
+while the `-1` measurement was taken at the plain entry edge. Gating the
+action on the unmeasured 9 would have fired the moment on a DIFFERENT frame
+than the one `-1` was calibrated against, silently invalidating a real
+result to make room for a guess. So `BOX_OPENS_AT_STATE` carries only
+`ACT_READING_NPC_DIALOG`; automatic dialogue is absent from it, which
+`detectors/moment.py::_boundary_reached` reads as the plain entry-edge rule.
+
+**`ACT_WAITING_FOR_DIALOG`** carries an explicit `None` in
+`BOX_OPENS_AT_STATE` rather than being absent, because absence now means
+"plain entry edge" (see above) and WAITING must not fire the moment on its
+own — unchanged from round 2's own reasoning.
+
+**Doors are untouched by both sessions and stay `counter + 2`.**
+
+**OPEN QUESTION, deliberately left open rather than guessed at again:**
+nobody has ever measured where an AUTOMATIC dialogue's own box actually
+opens relative to its entry edge — only NPC dialogue's turn-then-box shape
+has a screenshot behind it. `counter + 0` is correct algebra for the frame
+it was measured at (the entry edge); it is not a claim that automatic
+dialogue opens its box on that same frame. If a future screenshot shows
+otherwise, that is a new measurement of a new frame, not a contradiction of
+this one — `tools/probe_textbox.py`'s `box_opens()` already returns `None`
+for automatic dialogue (no entry in `BOX_OPENS_AT_STATE`) rather than
+guessing, and is the instrument to run when someone wants to settle it.
 
 ## A moment's landmark settles one poll late
 

@@ -34,6 +34,7 @@ REPO = Path(__file__).resolve().parent.parent
 UI = REPO / "src" / "sm64_events" / "ui"
 LOG_JS = UI / "components" / "practicelog.js"
 ENTITY_SECTION_JS = UI / "entitysection.js"
+SUBSECTIONS_JS = UI / "subsections.js"
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node not on PATH")
@@ -264,18 +265,28 @@ def test_a_course_less_target_the_player_has_left_earns_nothing_even_though_acti
     assert earned(course_less, "segment:8") is False
 
 
-# ---- applyRedsPipeExclusivity -- one Bowser Reds run, one card -------------
+# ---- the reds pair -- both halves show, star nested inside the movement ---
+#
+# `applyRedsPipeExclusivity` is DELETED (design spec 2026-08-10-reds-as-
+# subsection item 5): a Bowser course's reds run is no longer two things
+# practiced with one hidden by a star/pipe toggle -- the star is a
+# [[subsection]] of its paired reds->pipe movement now (views.py's `parents`
+# stamp, task 1), and `nestSubsections` (ui/subsections.js) draws it nested
+# inside the movement's card instead of a mode picking one of the two to
+# hide. This suite replaces the deleted one and proves the composition
+# `PracticeLog` actually runs -- `orderedSections` (this file) feeding the
+# REAL `nestSubsections` -- at the same pure level the old one lived at; the
+# render-level proof that this composition actually PAINTS that way lives in
+# tests/test_responsive_subsections.py::test_the_reds_star_draws_inside_its_movement_s_card.
 
-def _reds_pipe_source() -> str:
-    log_source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
-    return "\n".join([_entity_key_source_early(),
-                       _extract(log_source, "applyRedsPipeExclusivity")])
+SUBSECTIONS_JS = UI / "subsections.js"
 
 
 def _reds_star(course_id=16, pipe_segment_id=5, last_activity=10):
     return {"course_id": course_id, "star_id": 0,
-            "pipe_segment_id": pipe_segment_id, "last_activity": last_activity,
-            "attempts": [{"id": 1}]}
+            "pipe_segment_id": pipe_segment_id,
+            "parents": [f"segment:{pipe_segment_id}"],
+            "last_activity": last_activity, "attempts": [{"id": 1}]}
 
 
 def _pipe_segment(course_id=16, segment_id=5, last_activity=20):
@@ -284,53 +295,61 @@ def _pipe_segment(course_id=16, segment_id=5, last_activity=20):
             "attempts": [{"id": 2}]}
 
 
-def reds_pipe_visible(sections, mode_by_course) -> list:
-    lookup = json.dumps(mode_by_course)
-    script = (_reds_pipe_source() + "\n"
-              f"const modeByCourse = {lookup};\n"
-              "const modeForCourse = (courseId) => modeByCourse[String(courseId)] ?? null;\n"
-              f"console.log(JSON.stringify(applyRedsPipeExclusivity("
-              f"{json.dumps(sections)}, modeForCourse)"
-              ".map(s => s.kind === \"segment\" ? `segment:${s.segment_id}` "
-              "     : `star:${s.course_id}:${s.star_id}`)));")
+def reds_pipe_groups(sections) -> list:
+    """`orderedSections` (extracted, as `ordered()` above) piped straight
+    into the REAL `nestSubsections` -- imported for real, since
+    ui/subsections.js is import-free the same way test_ui_subsections.py's
+    own `nest()` helper relies on. Returns `[(key, (child keys...))]`, the
+    same shape that helper returns.
+
+    `orderedSections` takes a VIEW (`{stars, segments}`), not a flat list --
+    split by `kind` the same way `star()`/`segment()`'s own callers never
+    have to, since this is the one place in this file that hands it a mixed
+    reds/pipe pair rather than one bucket at a time."""
+    view = {"stars": [sec for sec in sections if sec.get("kind") != "segment"],
+            "segments": [sec for sec in sections if sec.get("kind") == "segment"]}
+    script = (
+        f"import {{ nestSubsections }} from {SUBSECTIONS_JS.as_uri()!r};\n"
+        + _ordered_sections_source() + "\n"
+        "const key = (s) => s.kind === 'segment' ? `segment:${s.segment_id}`"
+        " : `star:${s.course_id}:${s.star_id}`;\n"
+        f"const ordered = orderedSections({json.dumps(view)});\n"
+        "const groups = nestSubsections(ordered);\n"
+        "console.log(JSON.stringify(groups.map("
+        "(g) => [key(g.sec), g.children.map(key)])));")
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True,
                             timeout=30)
     assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
+    return [(k, tuple(kids)) for k, kids in json.loads(result.stdout)]
 
 
-def test_pipe_mode_shows_only_the_pipe_card():
-    sections = [_reds_star(), _pipe_segment()]
-    assert reds_pipe_visible(sections, {"16": "pipe"}) == ["segment:5"]
+def test_both_halves_of_a_reds_pair_are_present_star_nested_inside():
+    """Neither half is dropped any more -- the movement leads at the top
+    level and the star nests inside it, not beside it."""
+    groups = reds_pipe_groups([_reds_star(), _pipe_segment()])
+    assert groups == [("segment:5", ("star:16:0",))]
 
 
-def test_star_mode_shows_only_the_star_card():
-    sections = [_reds_star(), _pipe_segment()]
-    assert reds_pipe_visible(sections, {"16": "star"}) == ["star:16:0"]
-
-
-def test_only_one_half_present_is_never_excluded():
-    """A course he has only ever practiced ONE way keeps its one card --
-    there is nothing to resolve a conflict between."""
-    assert reds_pipe_visible([_reds_star()], {"16": "pipe"}) == ["star:16:0"]
-    assert reds_pipe_visible([_pipe_segment()], {"16": "star"}) == ["segment:5"]
-
-
-def test_a_different_courses_pair_is_untouched():
-    """Excluding BitDW's own pair must never touch BitFS's."""
+def test_each_courses_pair_nests_independently():
+    """A second Bowser course's pair nests under ITS OWN movement -- the
+    parents stamp is per-instance (`segment:<id>`), so there is no shared
+    'mode' left for one course's pairing to leak into another's the way
+    `applyRedsPipeExclusivity`'s course-keyed lookup could have."""
     sections = [_reds_star(course_id=16, pipe_segment_id=5),
                 _pipe_segment(course_id=16, segment_id=5),
-                _reds_star(course_id=17, pipe_segment_id=6),
-                _pipe_segment(course_id=17, segment_id=6)]
-    result = reds_pipe_visible(sections, {"16": "pipe", "17": "star"})
-    assert set(result) == {"segment:5", "star:17:0"}
+                _reds_star(course_id=17, pipe_segment_id=6, last_activity=30),
+                _pipe_segment(course_id=17, segment_id=6, last_activity=25)]
+    assert dict(reds_pipe_groups(sections)) == {
+        "segment:5": ("star:16:0",), "segment:6": ("star:17:0",)}
 
 
-def test_a_plain_star_with_no_pipe_pairing_is_never_touched():
+def test_a_plain_star_with_no_pipe_pairing_is_unaffected():
+    """No `parents` at all -- unrelated to any Bowser pairing -- stays a lone
+    top-level card, same as it always did."""
     plain = star("s", 5, course_id=13, star_id=2)
     plain["pipe_segment_id"] = None
-    assert reds_pipe_visible([plain], {"13": "pipe"}) == ["star:13:2"]
+    assert reds_pipe_groups([plain]) == [("star:13:2", ())]
 
 
 # ---- topEntityKey / isCardOpen -- the auto-open-newest feature -------------
@@ -434,11 +453,21 @@ def _is_card_open_source() -> str:
     return _extract(source, "isCardOpen")
 
 
-def is_open(overrides, top, key):
+_NO_CHILD_KEYS = object()  # sentinel: distinguishes "not passed" from "()"
+
+
+def is_open(overrides, top, key, child_keys=_NO_CHILD_KEYS):
+    """`child_keys` defaults to genuinely OMITTED, not `[]` -- a caller that
+    does not pass it must reach `isCardOpen`'s own `childKeys = []` default
+    parameter, not a `[]` this wrapper forwards on its behalf. Passing `()`
+    or `[]` explicitly still serialises a real fourth argument; a `null`
+    fourth arg would reach `childKeys.includes` and throw, so the omitted
+    case must drop the argument from the call entirely, never pass `null`."""
+    args = f"{json.dumps(overrides)}, {json.dumps(top)}, {json.dumps(key)}"
+    if child_keys is not _NO_CHILD_KEYS:
+        args += f", {json.dumps(list(child_keys))}"
     script = (_is_card_open_source() + "\n"
-              f"console.log(JSON.stringify(isCardOpen("
-              f"{json.dumps(overrides)}, {json.dumps(top)}, "
-              f"{json.dumps(key)})));")
+              f"console.log(JSON.stringify(isCardOpen({args})));")
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True,
                             timeout=30)
@@ -516,6 +545,34 @@ def test_a_displaced_top_card_closes_with_no_override_needed():
     slot, so it closes by falling through to the auto-open rule -- exactly
     as if it had never been touched."""
     assert is_open({}, "star:9:3", "star:2:4") is False
+
+
+def test_a_parent_opens_when_its_own_child_holds_the_slot():
+    """A [[subsection]]'s own card cannot open without its PARENT's --
+    `Disclose` does not mount closed body content at all, so a nested piece
+    that wins the auto-open slot must ALSO open the card wrapping it, or the
+    piece is computed correctly and invisible anyway (round 2026-08-10,
+    reds-as-subsection: the render gate this fixes)."""
+    assert is_open({}, "star:16:0", "segment:67", child_keys=["star:16:0"]) is True
+
+
+def test_a_card_with_an_unrelated_child_does_not_open():
+    assert is_open({}, "star:16:0", "segment:67", child_keys=["star:9:3"]) is False
+
+
+def test_a_manual_close_on_the_parent_still_wins_over_its_child():
+    """His rule outranks this one too -- a card he closed himself stays
+    closed even while one of its own pieces holds the slot."""
+    assert is_open({"segment:67": "closed"}, "star:16:0", "segment:67",
+                    child_keys=["star:16:0"]) is False
+
+
+def test_no_child_keys_at_all_is_the_old_behaviour_byte_for_byte():
+    """Every pre-nesting call site (three positional args, no fourth) must
+    keep working exactly as it did -- this is the default the omitted
+    argument falls back to."""
+    assert is_open({}, "star:2:4", "star:2:4") is True
+    assert is_open({}, "star:2:4", "star:9:3") is False
 
 
 def test_an_unassigned_reset_can_never_take_the_top_slot():
@@ -681,11 +738,16 @@ def _auto_open_source() -> str:
                         _extract(log_source, "autoOpenKey")])
 
 
-def auto_open(sections, active_key, played):
+def auto_open(sections, active_key, played, nested_keys=()):
+    """`nested_keys` names which of `sections` the CALLER actually rendered
+    as a nested child this pass -- `autoOpenKey` no longer asks `isPiece`
+    (a static read of `sec.parents`), because a star whose only parent is
+    disabled still answers `isPiece` truthfully while rendering top-level,
+    not nested (NEW-1, final re-review 2026-08-10)."""
     script = (_auto_open_source() + "\n"
               f"console.log(JSON.stringify(autoOpenKey("
               f"{json.dumps(sections)}, {json.dumps(active_key)}, "
-              f"{json.dumps(played)})));")
+              f"{json.dumps(played)}, {json.dumps(list(nested_keys))})));")
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True,
                             timeout=30)
@@ -730,3 +792,26 @@ def test_a_played_key_that_is_not_rendered_is_skipped_not_returned():
 def test_nothing_played_and_nothing_active_leaves_every_card_closed():
     fresh = star("fresh", 99, course_id=2, star_id=2, attempts=0)
     assert auto_open([fresh], "star:2:2", []) is None
+
+
+def test_a_genuinely_nested_active_entity_with_nothing_recorded_still_takes_the_slot():
+    """The suite's own stray failure, preserved: a freshly-targeted piece
+    with zero attempts is invisible everywhere -- top-level AND nested --
+    until its parent's card opens, so it must win the slot regardless of
+    the eligibility rule. `nested_keys` says the caller actually rendered
+    it as a child this pass."""
+    piece = star("piece", 99, course_id=2, star_id=2, attempts=0)
+    assert auto_open([piece], "star:2:2", [], nested_keys=["star:2:2"]) == "star:2:2"
+
+
+def test_a_promoted_star_with_nothing_recorded_does_not_take_the_slot():
+    """NEW-1. `promoted` carries a `parents` stamp -- exactly what the old
+    `isPiece(active)` check read, and would have answered true for -- but its
+    only parent is a disabled movement, so `nestSubsections` promotes it to
+    TOP LEVEL instead of nesting it (the round's own promotion rule) and
+    `nested_keys` is empty. A top-level active-but-empty card is already
+    visible with nothing open, so it must fall through to the eligibility
+    rule like any other top-level card, whatever its `parents` field says."""
+    promoted = star("promoted", 99, course_id=2, star_id=2, attempts=0)
+    promoted["parents"] = ["segment:71"]
+    assert auto_open([promoted], "star:2:2", []) is None

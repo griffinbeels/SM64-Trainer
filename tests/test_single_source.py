@@ -341,10 +341,11 @@ INVARIANTS = (
         owners=frozenset({"subsections.js", "entities.js"}),
         tokens=('startsWith("area:")',),
         files=ui_js(),
-        why="A piece is a badge on its parent's cell and a card inside its "
-            "parent's card, and both surfaces have to agree about WHICH rows "
-            "those are. They did not: the practice log asked subsections.js, "
-            "the star row asked `parents.length > 0` over its own level, and "
+        why="A piece nests inside its parent's card in the practice log (it "
+            "wore a badge on its parent's SELECTOR cell too, until round 31, "
+            "2026-08-10, retired that), and every surface deciding WHICH rows "
+            "those are has to agree. They did not: the practice log asked "
+            "subsections.js, the star row asked `parents.length > 0` over its own level, and "
             "the castle segment row asked whether the parent happened to be "
             "offered in the same subarea -- so a piece of a castle MOVEMENT "
             "was a badge on neither and a loose cell instead (round 30, "

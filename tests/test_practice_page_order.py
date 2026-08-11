@@ -90,9 +90,10 @@ def test_the_auto_open_slot_is_resolved_against_the_rendered_list():
     It was resolved in practice.js against the UNFILTERED view, and the two
     lists genuinely disagree: a Bowser course's reds star and its pipe segment
     tie on `last_activity` (measured on his live session -- both 1414), stars
-    sort first, and `applyRedsPipeExclusivity` renders whichever half his
-    star/pipe toggle names. So the slot named the star while the log drew the
-    segment, and every card sat closed.
+    sort first, and `applyRedsPipeExclusivity` (retired 2026-08-10,
+    reds-as-subsection) rendered whichever half his star/pipe toggle names.
+    So the slot named the star while the log drew the segment, and every card
+    sat closed.
 
     Mutation-prove by resolving it in practice.js again and passing `topKey`
     down: this goes red, and every pure-rule test stays green -- which is the
@@ -104,14 +105,22 @@ def test_the_auto_open_slot_is_resolved_against_the_rendered_list():
         "pre-resolved key")
     assert "topKey" not in practice.replace("topKey:", ""), (
         "the page must not resolve the auto-open slot -- only PracticeLog "
-        "knows which cards survive membership and Reds/Pipe exclusivity")
+        "knows which cards survive membership and where nesting puts them")
 
     log = strip_comments((UI / "components" / "practicelog.js")
                          .read_text(encoding="utf-8"))
-    assert re.search(r"const topKey = autoOpenKey\(sections, activeKey, "
-                     r"playedKeys\)", log), (
-        "PracticeLog must resolve the slot from `sections` -- its own rendered "
-        "list -- and nothing else")
+    # The first three arguments in order ARE the property -- resolved here,
+    # from this component's own rendered candidates, nothing pre-decided.
+    # Deliberately open-ended after `playedKeys`: pinning the closing paren
+    # made this go red on `nestedKeys` being added (2026-08-10,
+    # reds-as-subsection), which is a change to HOW nesting is judged and not
+    # to WHO decides -- the only question this guard is about. It still bites:
+    # swap `openCandidates` for the top-level `page` and it fails.
+    assert re.search(r"const topKey = autoOpenKey\(openCandidates, activeKey, "
+                     r"playedKeys[,)]", log), (
+        "PracticeLog must resolve the slot from its OWN rendered candidates "
+        "-- every card it actually draws, top-level and nested alike -- and "
+        "nothing handed down pre-resolved")
 
 
 def _tops(page):

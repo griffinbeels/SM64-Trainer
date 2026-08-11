@@ -22,8 +22,10 @@ sweep with its own `Project`. Deliberately does NOT repeat
 `test_component_layout_gates_on_the_container` -- that law is a project-wide
 stylesheet scan and already runs once in `tests/test_responsive.py`.
 """
+import json
 import os
 import sys
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -39,8 +41,8 @@ if _MISSING:
 from uilab.driver import get_driver  # noqa: E402
 from uilab.pytest_plugin import (  # noqa: E402,F401
     assert_no_new_defects, assert_no_stale_exemptions, uilab_sweep)
-from uilab_project import SUBSECTION_PROJECT  # noqa: E402
-from ui_fixture import serve_ui  # noqa: E402
+from uilab_project import SUBSECTION_PROJECT, BOWSER_COURSE, BOWSER_LEVEL  # noqa: E402
+from ui_fixture import serve_ui, _disable_segment, _target_segment  # noqa: E402
 
 # The plugin's `uilab_sweep` fixture reads this off the module.
 uilab_project = SUBSECTION_PROJECT
@@ -59,24 +61,27 @@ def test_the_known_defect_list_does_not_outlive_its_defects(uilab_sweep):
     assert_no_stale_exemptions(SUBSECTION_PROJECT, uilab_sweep)
 
 
-# --- the fixture must actually REACH the subsection badges ------------------
+# --- the fixture must actually REACH the star row with pieces attached ------
 # The sweep proves the row does not overflow or clip. It says nothing about
 # WHICH row it measured, and `at=".stagebanner"` matches an ordinary
 # seven-star row perfectly well. This is that other half.
 #
-# REWRITTEN 2026-08-08 (round 22). The state these two reached was the
-# EXPANDED row -- parent plus its pieces as peer cells -- and that state no
-# longer exists: a piece is a badge inside its parent's art, so the row always
-# draws the course's stars and never a subsection cell.
+# REWRITTEN 2026-08-08 (round 22), then again 2026-08-10 (round 31). The state
+# these reached was first the EXPANDED row (parent plus its pieces as peer
+# cells), then the badged row (parent plus a toggle overlay) -- neither exists
+# any more. A piece is never a cell and wears no switch on the selector; the
+# row always draws the course's plain stars, unchanged by whether any of them
+# has pieces.
 
 
-def test_the_parent_star_wears_its_subsections_as_badges():
-    """The course's own stars, with the fixture star carrying two toggles.
+def test_a_star_with_pieces_draws_no_different_from_one_without():
+    """Round 31 (2026-08-10) retired the badge outright: "we don't need a
+    button to enable / disable them now." A piece still exists and still
+    nests inside its parent's practice-log card (see the tests below); the
+    SELECTOR row simply has nothing left to show about it.
 
-    Mutation-proved both ways before it was trusted: drop `arm_level`'s
-    `moment_reached` branch and the badge count reads 0 (the subsections are
-    placed nowhere, so `segment_targets` never offers them here); drop the
-    STAR row's `subsectionToggles` wiring and it reads 0 as well.
+    Mutation-proved: restoring `subsectionToggles`' wiring on the star row
+    makes `.cell-toggle-btn`/`.has-toggles` reappear here.
     """
     with SUBSECTION_PROJECT.open() as url, get_driver().launch() as page:
         page.goto(url)
@@ -84,35 +89,11 @@ def test_the_parent_star_wears_its_subsections_as_badges():
         assert page.count(".stagebanner .starcell") == 7, (
             "the row must draw the whole course -- a subsection is never a "
             "cell since round 22")
-        assert page.count(".stagebanner .starcell.has-toggles") == 1, (
-            "exactly the fixture star hosts pieces; a cell with toggles is a "
-            "div rather than a button, so this also pins the element swap")
-        assert page.count(".stagebanner .cell-toggle-btn") == 2, (
-            "the two seeded subsections draw one badge each, INSIDE the star")
-
-
-def test_a_badge_click_toggles_that_piece_rather_than_selecting_it():
-    """His whole point about the redesign: "the buttons are not toggles
-    BETWEEN options, but rather enable/disable options." So a click dims the
-    badge and must NOT move the practice target -- the star keeps the hand
-    (round 21) and the piece merely stops being tracked."""
-    with SUBSECTION_PROJECT.open() as url, get_driver().launch() as page:
-        page.goto(url)
-        page.wait_for(SUBSECTION_PROJECT.ready_selector)
-        before = page.evaluate(
-            "document.querySelectorAll("
-            "'.stagebanner .cell-toggle-btn.is-selected').length")
-        assert before == 2, "a piece is TRACKED by default"
-        page.evaluate(
-            "document.querySelector('.stagebanner .cell-toggle-btn').click()")
-        page.wait_ms(400)
-        assert page.evaluate(
-            "document.querySelectorAll("
-            "'.stagebanner .cell-toggle-btn.is-selected').length") == 1, (
-            "the clicked badge must dim -- and stay dimmed, which means the "
-            "PUT landed and the refreshed view carried enabled=false back")
-        assert page.count(".stagebanner .starcell.active-star") <= 1, (
-            "a badge click is not a target pick")
+        assert page.count(".stagebanner .starcell.has-toggles") == 0, (
+            "no ordinary star cell wears a toggle overlay any more (round 31)")
+        assert page.count(".stagebanner .cell-toggle-btn") == 0, (
+            "the badge is gone -- a piece is tracked unconditionally, with "
+            "nothing on the selector left to switch")
 
 
 # --- and the PRACTICE LOG half ----------------------------------------------
@@ -313,7 +294,7 @@ def test_a_piece_with_no_strategies_does_not_shout_for_one():
 # `test_fixture_reaches_the_real_page.py`'s own standalone instances use).
 
 
-def test_a_piece_of_a_segment_is_a_badge_on_that_segment_and_not_a_cell():
+def test_a_piece_of_a_segment_is_not_a_cell_of_its_own():
     """Round 30, 2026-08-09, against three pieces of his BLJs movement drawn
     as loose cells beside it: *"I would therefore expect NOT to see 'Key Door
     (R) - Wooden Door' next to BLJs, because it should instead be a button on
@@ -324,8 +305,11 @@ def test_a_piece_of_a_segment_is_a_badge_on_that_segment_and_not_a_cell():
     had to: a star row draws stars, so a piece of a SEGMENT has no parent cell
     there to ride. This is the case none of them can reach.
 
-    Both claims, because only the pair is the ask -- the parent wears the
-    badge, AND the piece is not also a cell of its own.
+    Round 30's claim was that the parent wears a badge for its piece AND the
+    piece is not also a cell of its own; round 31 (2026-08-10) retired the
+    badge, so only the second half still holds -- the piece nests inside its
+    parent's practice-log card instead (see the reds-star test below and
+    `tests/test_ui_subsections.py`).
     """
     with serve_ui(castle_stage=2, seed_castle_pieces=True) as url, \
             get_driver().launch() as page:
@@ -339,8 +323,344 @@ def test_a_piece_of_a_segment_is_a_badge_on_that_segment_and_not_a_cell():
             f"the seeded movement is not on the row at all; drew {names!r}")
         assert not any("Key Door" in name for name in names), (
             f"the piece drew its own cell -- the round-30 bug exactly: {names!r}")
-        assert page.count(".stagebanner .starcell.has-toggles") == 1, (
-            "the movement's cell must host its piece's badge; a cell with "
-            "toggles is a div rather than a button, so this pins the swap too")
-        assert page.count(".stagebanner .cell-toggle-btn") == 1, (
-            "one seeded piece, one badge, inside its parent's art")
+        assert page.count(".stagebanner .starcell.has-toggles") == 0, (
+            "no cell wears a toggle overlay for its piece any more (round 31)")
+        assert page.count(".stagebanner .cell-toggle-btn") == 0, (
+            "the badge is gone; the piece's parent has nothing to draw for it "
+            "here")
+
+
+# --- and the ALWAYS-VISIBLE half (round 32, 2026-08-10) --------------------
+# Every gate above seeds a piece that has ALREADY recorded or armed --
+# `nestSubsections` used to require that (its `earned` gate) before it would
+# nest a piece at all. This is the state none of them reach: a piece with
+# ZERO attempts of its own, never armed, whose parent nonetheless has a card.
+
+
+def _click_parent_fold(page):
+    """`Disclose` never mounts a CLOSED body's contents at all, and the
+    castle movement in this fixture starts closed -- a real practiced star
+    elsewhere on the page legitimately wins the one auto-open slot instead
+    (see the render gate below). So the piece is only reachable in the DOM
+    once its parent is opened by a real click, same as `_one_line_at` above
+    already does for a parent that starts open on its own."""
+    page.evaluate(
+        "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+        ".find(c => (c.querySelector('.log-card-name')||{}).innerText"
+        ".includes('Upstairs Run') && !(c.querySelector('.log-card-name')"
+        "||{}).innerText.includes('Key Door'))"
+        ".querySelector('.log-card-fold').click()")
+    page.wait_ms(600)
+
+
+def test_a_zero_attempt_piece_still_draws_inside_its_parent_s_card():
+    """Griffin, 2026-08-10: "the subsections should always be visible inside
+    of the parent practice log (i.e., we don't wait for the subsection to
+    trigger for it to have its own card inside the parent practice log
+    card's card)... It just starts out empty in a new session."
+
+    `castle_piece_arms=False` leaves the piece defined, enabled and parented,
+    but never arms it -- the parent (`Upstairs Run`) still earns its own card
+    off its OWN arm, and the piece (`Upstairs Run — Key Door`) has recorded
+    and armed nothing at all.
+
+    Mutation-proved: restoring the `earned` check inside `nestSubsections`'
+    own nesting loop (`ui/subsections.js`) or reverting `views.py`'s new
+    piece-publish loop makes this go red with the piece absent from BOTH
+    `top` and `nested` -- exactly the pre-round-32 shape.
+    """
+    with serve_ui(castle_stage=2, seed_castle_pieces=True,
+                  castle_piece_arms=False) as url, \
+            get_driver().launch() as page:
+        page.goto(url)
+        page.wait_for(".log-list-card")
+        page.wait_ms(400)
+        top = page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert any("Upstairs Run" in name and "Key Door" not in name
+                   for name in top), (
+            f"the parent movement earned no card of its own; top {top!r}")
+        assert not any("Key Door" in name for name in top), (
+            f"the piece must not be its OWN top-level card; top {top!r}")
+        _click_parent_fold(page)
+        nested = page.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.log-card-children > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert any("Key Door" in name for name in nested), (
+            "the zero-attempt piece is not nested inside its now-open parent"
+            f" -- an empty list means it never got a section at all; "
+            f"nested {nested!r}")
+
+
+def test_a_zero_attempt_piece_draws_closed_and_never_steals_the_open_slot():
+    """The other half of the same ask: an always-visible empty card must not
+    also be an always-OPEN one. `autoOpenKey`'s slot is earned by recorded
+    activity (`playedEntityKeys`) or by being the live target -- a piece with
+    neither must render closed, exactly like any other unearned card. Two
+    things are checked, in order, so a vacuous "everything closed" pass could
+    not masquerade as this: something ELSE on the page must genuinely hold
+    the slot BEFORE the parent is even opened (this fixture's own default
+    seeded star, with real attempts), and the never-practiced castle movement
+    must not be it.
+
+    Mutation-proved: reverting `practicelog.js`'s `nestedKeys` plumbing (or
+    `isCardOpen`'s own `childKeys` clause) so a nested-but-unearned piece
+    could win `topKey` makes the piece's own card lose `.is-closed` once its
+    parent is opened.
+    """
+    with serve_ui(castle_stage=2, seed_castle_pieces=True,
+                  castle_piece_arms=False) as url, \
+            get_driver().launch() as page:
+        page.goto(url)
+        page.wait_for(".log-list-card")
+        page.wait_ms(400)
+        open_before = page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".filter(c => !c.classList.contains('is-closed'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert open_before, (
+            "nothing is open at all before the parent is even opened -- the "
+            "auto-open slot must land on a genuinely earned card")
+        assert not any("Upstairs Run" in name for name in open_before), (
+            f"the never-practiced parent must not hold the slot; {open_before!r}")
+        _click_parent_fold(page)
+        piece_closed = page.evaluate(
+            "(() => { const cards = Array.from(document.querySelectorAll("
+            "'.log-card-children > .log-card'));"
+            " const piece = cards.find(c => (c.querySelector("
+            "'.log-card-name')||{}).innerText.includes('Key Door'));"
+            " return piece ? piece.classList.contains('is-closed') : null; })()")
+        assert piece_closed is True, (
+            "the zero-attempt piece rendered open, or did not render at all "
+            f"(piece_closed={piece_closed!r})")
+
+
+# --- and the STAR-as-piece half (spec 2026-08-10-reds-as-subsection) --------
+# The reds star names its own movement as a parent (task 1, views.py's
+# `parents` stamp); this is the render half, proving `nestSubsections`' rule
+# 4 ("a parent with a nesting child earns a card") actually meets the
+# ambient-arm exemption (`.claude/rules/hundred-coin.md`) that would
+# otherwise leave the movement with no section to nest the star inside.
+
+
+def test_the_reds_star_draws_inside_its_movement_s_card():
+    """Griffin, 2026-08-10: "the Reds card should contain the star subsection
+    inside of it, and if we do the star subsection, it'll show it inside and
+    earns the card in this case, yes."
+
+    The interaction this exists for: seg:reds->pipe:* `arms_ambiently`, and an
+    ambient arm with nothing chosen publishes NO section (2026-08-05) -- while
+    `nestSubsections`' rule 4 says a parent with a nesting child earns a card.
+    Those two rules meet here for the first time. If the exemption wins, the
+    star vanishes from the log instead of nesting, silently."""
+    with serve_ui(reconcile_full_corpus=True,
+                  bowser_stage=(BOWSER_COURSE, BOWSER_LEVEL),
+                  enter_level=BOWSER_LEVEL,
+                  seed_reds_run=True) as url, \
+            get_driver().launch() as page:
+        page.goto(url)
+        page.wait_for(".log-list-card")
+        page.wait_ms(400)
+        top = page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        nested = page.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.log-card-children > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert any("Pipe" in name for name in top), (
+            f"the Reds movement earned no card of its own; top cards {top!r}")
+        assert any("Star" in name for name in nested), (
+            f"the reds star is not nested inside it; nested {nested!r}")
+        assert not any("Star" in name for name in top), (
+            "the star must not ALSO be a top-level card")
+
+
+def test_the_reds_star_nests_even_when_its_movement_is_not_armed():
+    """The exact regression the final review reproduced as C1, 2026-08-10:
+    "a Bowser reds star that has recorded real attempts loses its
+    practice-log card entirely whenever its paired seg:reds->pipe:<abbrev>
+    movement is not armed. On his own database that is BitS's reds star,
+    today, in lifetime scope."
+
+    The render gate above only ever exercised the ARMED case (`enter_level`
+    is always given), which is why C1 survived review-free until the final
+    whole-branch pass caught it three independent ways. This is the same
+    fixture with `enter_level` OMITTED -- the star is grabbed for real
+    (`seed_reds_run`), but nobody has ever stood in the stage, so the
+    movement has never armed. Before the fix (`views.py`'s unconditional
+    `reds_pipe_with_a_nesting_star` publish) the star's card simply did not
+    exist anywhere on the page.
+
+    Mutation-proved: reverting the hoist back inside the armed loop's own
+    `continue` (i.e. gating the movement's section on `sid in armed` again)
+    makes this go red with an empty `top` and an empty `nested`."""
+    with serve_ui(reconcile_full_corpus=True,
+                  bowser_stage=(BOWSER_COURSE, BOWSER_LEVEL),
+                  seed_reds_run=True) as url, \
+            get_driver().launch() as page:
+        page.goto(url)
+        page.wait_for(".log-list-card")
+        page.wait_ms(400)
+        top = page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        nested = page.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.log-card-children > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert any("Pipe" in name for name in top), (
+            "the never-armed Reds movement earned no card of its own -- "
+            f"top cards {top!r}")
+        assert any("Star" in name for name in nested), (
+            f"the reds star vanished instead of nesting; nested {nested!r}")
+        assert not any("Star" in name for name in top), (
+            "the star must not ALSO be a top-level card")
+
+
+def test_a_star_promotes_to_top_level_when_its_movement_is_disabled():
+    """Decision 1, final review 2026-08-10: "a star must NOT vanish from the
+    practice log because a MOVEMENT was disabled. So when a star's only
+    parent has no card, the star promotes to top level rather than
+    disappearing." The review's own second reproduction of C1: disabling the
+    reds->pipe definition -- a supported control, untouched by this branch --
+    used to take the star's card down with it, because `nestSubsections`
+    still found the (disabled, unrendered) parent in the raw section list
+    and nested the star there instead of promoting it.
+
+    Mutation-proved: restoring `subsections.js`'s `present` set to include
+    disabled sections (or dropping the `isSegment` guard on the round-28
+    drop rule) makes this go red -- the star's name disappears from BOTH
+    `top` and `nested` instead of appearing in `top` alone."""
+    with serve_ui(reconcile_full_corpus=True,
+                  bowser_stage=(BOWSER_COURSE, BOWSER_LEVEL),
+                  enter_level=BOWSER_LEVEL,
+                  seed_reds_run=True) as base, \
+            get_driver().launch() as page:
+        segments = json.loads(urllib.request.urlopen(
+            f"{base}/api/segments", timeout=10).read())
+        pipe = next(s for s in segments
+                   if (s.get("seed_key") or "") == "seg:reds->pipe:bitdw")
+        _disable_segment(base, pipe["id"])
+        page.goto(f"{base}/ui/index.html")
+        page.wait_for(".log-list-card")
+        page.wait_ms(400)
+        top = page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        nested = page.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.log-card-children > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert not any("Pipe" in name for name in top), (
+            f"the disabled movement must not draw its own card; top {top!r}")
+        assert any("Star" in name for name in top), (
+            f"the star must promote to a top-level card of its own instead "
+            f"of vanishing; top {top!r}, nested {nested!r}")
+        assert not any("Star" in name for name in nested), (
+            "a promoted star has no card left to nest inside -- it must not "
+            f"also appear as a child; nested {nested!r}")
+
+
+# --- and the ZERO-ATTEMPT star half (round 33, 2026-08-10) -----------------
+# His live report, with a screenshot of Bowser in the Dark World: "i don't see
+# the 8 Red Coins (Star) here, when I should. I just started the stage, I
+# should see all of the subsections associated with this stage." The
+# screenshot showed the reds->pipe movement ALREADY carrying a card -- it was
+# his live TARGET, zero attempts -- with no nested star. Every gate above
+# that reaches the star nested seeds a real `star_collected`
+# (`seed_reds_run`); this is the case none of them cover: the movement has a
+# card for a reason that has nothing to do with the star (it is the target),
+# and the star itself has never been grabbed.
+
+
+def test_the_reds_star_nests_with_zero_attempts_when_its_movement_is_targeted():
+    """views.py's new star-half hoist: a Bowser reds star publishes a section
+    the instant its ONE paired movement already has one, exactly as an
+    ordinary segment piece borrows its parent's card (round 32) -- mirrored
+    onto the star side of the same pairing. Before the fix, only a star with
+    its OWN attempt or its OWN target could ever nest
+    (`reds_pipe_with_a_nesting_star` reads `seen` from the star's side only);
+    a movement that earned its card by being the TARGET published nothing
+    for the star at all.
+
+    Mutation-proved: reverting the new `for course_id, seg_id in
+    reds_pipe_by_course.items(): ...` loop in views.py makes this go red with
+    the star absent from both `top` and `nested`."""
+    with serve_ui(reconcile_full_corpus=True,
+                  bowser_stage=(BOWSER_COURSE, BOWSER_LEVEL),
+                  enter_level=BOWSER_LEVEL) as base, \
+            get_driver().launch() as page:
+        segments = json.loads(urllib.request.urlopen(
+            f"{base}/api/segments", timeout=10).read())
+        pipe = next(s for s in segments
+                   if (s.get("seed_key") or "") == "seg:reds->pipe:bitdw")
+        _target_segment(base, pipe["id"])
+        page.goto(f"{base}/ui/index.html")
+        page.wait_for(".log-list-card")
+        page.wait_ms(400)
+        top = page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert any("Pipe" in name for name in top), (
+            f"the targeted movement earned no card of its own; top {top!r}")
+        # The movement is the ACTIVE target but has zero attempts of its own,
+        # so `autoOpenKey`'s first rule (active + recorded, or active +
+        # nested) does not hand it the auto-open slot -- some OTHER, already-
+        # played card wins it instead (the fixture's own default star), and
+        # the movement draws CLOSED. `Disclose` never mounts a closed body,
+        # so the nested star is unreachable in the DOM until the fold is
+        # clicked open by hand, same as every other zero-attempt-parent gate
+        # in this file (`_click_parent_fold` above).
+        page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".find(c => (c.querySelector('.log-card-name')||{}).innerText"
+            ".includes('Pipe'))"
+            ".querySelector('.log-card-fold').click()")
+        page.wait_ms(600)
+        nested = page.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.log-card-children > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert any("Star" in name for name in nested), (
+            "the zero-attempt star did not nest inside its targeted "
+            f"movement; nested {nested!r}")
+        assert not any("Star" in name for name in top), (
+            f"the star must not ALSO be a top-level card; top {top!r}")
+
+
+def test_an_unentered_bowser_course_draws_neither_the_movement_nor_the_star():
+    """The no-phantom property both new-in-round-33 and pre-existing hoists
+    must hold: a Bowser course nobody has entered, attempted or targeted
+    publishes NO section for its movement (not armed, not the target, no
+    attempts, and the star side of `reds_pipe_with_a_nesting_star` finds
+    nothing either) -- and therefore the new star-half hoist, reading that
+    same absence, must leave the star untouched too. Neither hoist may
+    manufacture a section from the other's absence.
+
+    Mutation-proved: dropping the `f"segment:{seg_id}" in published_keys`
+    guard from the new star hoist (i.e. publishing unconditionally for every
+    course `reds_pipe_by_course` names) makes this go red with the star
+    appearing in `top` for a course that was never touched."""
+    with serve_ui(reconcile_full_corpus=True) as url, \
+            get_driver().launch() as page:
+        page.goto(url)
+        page.wait_for(".log-list-card")
+        page.wait_ms(400)
+        top = page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        nested = page.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.log-card-children > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert not any("Pipe" in name for name in top), (
+            f"an unentered Bowser movement must draw no card; top {top!r}")
+        assert not any(name for name in top if "8 Red Coins" in name), (
+            f"an unentered Bowser reds star must draw no card; top {top!r}")
+        assert not nested or not any(
+            "8 Red Coins" in name or "Pipe" in name for name in nested), (
+            "an unentered Bowser reds pair must not appear nested under "
+            f"someone else's card either; nested {nested!r}")

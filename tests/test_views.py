@@ -2806,3 +2806,113 @@ def test_route_candidate_ranks_the_reds_pipe_segment_against_the_star_ladder(tmp
     route = build_route_view(db, svc, rid)
     assert route["steps"][0]["rank"] is not None
     assert route["steps"][0]["rank"]["rank"] == "Iron"   # see the docstring above
+
+
+def _service_with_corpus(tmp_path):
+    """A fresh service with the SHIPPED 84-def corpus reconciled -- unlike
+    `_make_with_def`'s hand-built reds->pipe stand-in above, this exercises
+    the REAL seg:reds->pipe:bitdw definition `_reds_pipe_segments` pairs by
+    seed_key prefix, which is what the star section's own `parents` stamp
+    (spec 2026-08-10-reds-as-subsection) has to read.
+
+    Reconciles BEFORE constructing the service, not after -- `TrackerService`
+    caches `segment_defs` at construction (`_load_segment_defs`) and never
+    re-reads the table on its own, exactly like `main.py`'s real startup
+    order and `tools/ui_fixture.py`'s `reconcile_full_corpus`. Reconciling on
+    an already-started `make()` service left `_segment_defs` holding only the
+    10 legacy rows that predate the corpus, which stayed invisible until this
+    branch's C1 fix started building a section for a corpus-only segment id
+    (67) that `seg_defs.get()` could not find -- `TypeError` inside
+    `star_name`, not a missing section (final review 2026-08-10, fix wave)."""
+    import json
+    from sm64_events.core.paths import bundled_defaults_seed
+    from sm64_events.tracking.defaults import reconcile_defaults
+    db = Database(tmp_path / "t.db")
+    db.set_state("stat_menu", REFERENCE_STAT_MENU)
+    seed_data = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
+    assert reconcile_defaults(db, seed_data) == []
+    svc = TrackerService(db, Broadcaster())
+    asyncio.run(svc.start())
+    return db, svc
+
+
+def _star_section(view, course_id, star_id):
+    return next(s for s in view["stars"]
+                if s["course_id"] == course_id and s["star_id"] == star_id)
+
+
+def test_a_bowser_reds_star_names_its_movement_as_a_parent(tmp_path):
+    """Round 31. The reds star is a piece of seg:reds->pipe:<abbrev> -- the
+    movement that already carries its grab as a waypoint -- so the practice
+    log nests it there. Stamped from `_reds_pipe_segments`, the pairing this
+    module already computes for the shared ladder, never a second table."""
+    db, svc = _service_with_corpus(tmp_path)
+    # A section only exists for a scoped entity (attempts, target, or armed) --
+    # reconciling the corpus alone seeds definitions, not history. Course 16
+    # (BitDW) carries the shipped seg:reds->pipe:bitdw pairing; course 2 star
+    # 4 is an ordinary WF star with no such pairing.
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, course=16, star_id=0)))
+    asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1750, course=2, star_id=4)))
+    view = build_session_view(db, svc, clock="igt", scope="lifetime")
+    reds = _star_section(view, course_id=16, star_id=0)
+    assert reds["parents"], "the reds star carries no parent at all"
+    assert reds["parents"][0].startswith("segment:")
+    ordinary = _star_section(view, course_id=2, star_id=4)
+    assert ordinary["parents"] == [], (
+        "only a Bowser reds star is a piece; every other star is top-level")
+
+
+def _reds_pipe_id_for_course(db, course_id):
+    from sm64_events.tracking.views import _reds_pipe_segments
+    by_course, _ = _reds_pipe_segments(db.segment_defs())
+    return by_course[course_id]
+
+
+def test_a_zero_attempt_reds_star_publishes_when_its_movement_is_targeted(tmp_path):
+    """Round 33, live report with a screenshot of Bowser in the Dark World:
+    "i don't see the 8 Red Coins (Star) here, when I should. I just started
+    the stage, I should see all of the subsections associated with this
+    stage." His movement was the live TARGET with zero attempts -- nothing
+    about the STAR's own `seen` membership -- so `reds_pipe_with_a_nesting_star`
+    (which reads the star's side only) never fired, and no other rule ever
+    walked a STAR the way round 32's segment-piece loop walks `seg_defs`.
+
+    Unlike the render gate in test_responsive_subsections.py, this asserts
+    directly on `build_session_view`'s own `stars` list -- no client-side
+    `earned`/promotion fallback can rescue a mutation here, which is the
+    property a pure server-side guard needs pinned at its own layer."""
+    db, svc = _service_with_corpus(tmp_path)
+    seg_id = _reds_pipe_id_for_course(db, 16)
+    asyncio.run(svc.set_target_segment(seg_id))
+
+    view = build_session_view(db, svc, clock="igt", scope="lifetime")
+    reds = _star_section(view, course_id=16, star_id=0)
+    assert reds["attempts"] == [], "this star must be reachable with ZERO history"
+    assert reds["parents"] == [f"segment:{seg_id}"]
+    assert seg_section(view, seg_id)["segment_id"] == seg_id, (
+        "the targeted movement must publish its own section too")
+
+
+def test_an_untouched_bowser_course_publishes_neither_section(tmp_path):
+    """The no-phantom half: a Bowser course with no attempt, no target, and
+    no arm anywhere in its history must publish NEITHER the movement's
+    section nor the star's -- the new star loop's guard
+    (`f"segment:{seg_id}" in published_keys`) must never fire from an empty
+    `published_keys`. Course 17 (BitFS) is reconciled into the corpus exactly
+    like course 16 above and is simply never touched.
+
+    Mutation-proved: dropping the guard clause (publishing
+    `seen.setdefault((course_id, 0), None)` unconditionally for every course
+    `reds_pipe_by_course` names) makes this go red with a star section for
+    (17, 0) appearing where none existed before."""
+    db, svc = _service_with_corpus(tmp_path)
+    view = build_session_view(db, svc, clock="igt", scope="lifetime")
+    assert not any(s["course_id"] == 17 and s["star_id"] == 0
+                   for s in view["stars"]), (
+        "an untouched course must publish no star section at all")
+    pipe_id = _reds_pipe_id_for_course(db, 17)
+    assert not any(s["segment_id"] == pipe_id for s in view["segments"]), (
+        "an untouched course must publish no segment section for its "
+        "movement either")

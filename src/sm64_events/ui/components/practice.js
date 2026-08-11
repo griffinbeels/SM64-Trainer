@@ -329,13 +329,17 @@ export function Practice({ t, openCompare, openLibrary }) {
     : null;
   const selectFocus = (key) => setManualFocus({ key, at: live });
   // THE AUTO-OPEN SLOT IS NOT DECIDED HERE. `PracticeLog` resolves it from
-  // `playedKeys` against its OWN rendered list (`autoOpenKey`, practicelog.js)
-  // -- this page cannot, because it does not know which cards survive
-  // membership and Reds/Pipe exclusivity, and a slot naming an unrendered
-  // card opens nothing while looking exactly like "nothing qualifies". That
-  // was a real, shipped bug: the reds STAR and its pipe SEGMENT tie on
-  // `last_activity`, so the slot named the half the log had filtered out and
-  // every card sat closed.
+  // `playedKeys` against its OWN rendered candidates (`autoOpenKey`,
+  // practicelog.js) -- this page cannot, because it does not know which
+  // cards survive membership or where nesting draws them, and a slot naming
+  // an unrendered card opens nothing while looking exactly like "nothing
+  // qualifies". That was a real, shipped bug: the reds STAR and its pipe
+  // SEGMENT used to tie on `last_activity` while a star/pipe toggle showed
+  // only one of them, so the slot named the half the log had filtered out
+  // and every card sat closed. The toggle is gone (the star nests inside its
+  // movement's card now, never hidden), but the shape of the bug survives as
+  // the reason for the rule: a slot resolved against anything but the page's
+  // own rendered output can always drift from it again.
   //
   // What stays here is the FREEZE. `playedKeys` rides the celebration hold
   // (the `useHeldWhileCelebrating` call above) because attempt data on `v` is

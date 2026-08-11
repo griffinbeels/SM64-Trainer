@@ -48,6 +48,7 @@ def test_castle_secret_star_names_match_the_decomp_flag_order():
 
 def test_mario_offsets_derive_from_struct_base():
     assert A.MARIO_ACTION == A.MARIO_STRUCT + 0x0C
+    assert A.MARIO_ACTION_STATE == A.MARIO_STRUCT + 0x18
     assert A.MARIO_ACTION_TIMER == A.MARIO_STRUCT + 0x1A
     assert A.MARIO_NUM_STARS == A.MARIO_STRUCT + 0xAA
 

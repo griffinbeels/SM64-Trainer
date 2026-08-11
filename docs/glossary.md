@@ -116,10 +116,25 @@ its own rows in the [[practice log]], drawn INSIDE its parent's own card and
 indented under it. The [[star]] owns the hand: a piece arms
 and records underneath its parent without ever taking the [[target]] slot
 by detection — its completion points the slot at the parent [[star]], never
-at itself. Its [[cell toggle]] on the [[selector]] says whether the trainer
-tracks it at all; dimming one stops it recording and takes its card out of
-the [[practice log]] everywhere, since a piece serving several [[star]]s is
-still one definition with one timer. Inside a course a piece always
+at itself. It has no switch on the [[selector]] — a piece always tracks and
+always draws its card as soon as its parent has one, even with nothing
+recorded yet (empty, closed, never stealing the parent's auto-open slot) —
+so its history, its [[ladder]] and the fact that it exists at all are
+reachable from a fresh [[session]], not only after it first records something.
+The only doors that turn a piece off are the ones that were always
+separate: its own editor's enabled checkbox and its library row's hide/show
+button. A [[star]] can be a subsection too, of a
+[[segment]] rather than of another [[star]]: a Bowser course's reds [[star]]
+already rides its Reds→Pipe [[segment]] as that movement's own waypoint, so
+its section carries the movement as its parent and its card nests inside
+the movement's, the same as any other piece — with one exception a
+[[segment]] piece does not get: when its parent [[segment]] draws no card of
+its own (disabled, or simply not armed anywhere the player has stood),
+the [[star]] promotes to an ordinary top-level card instead of disappearing.
+A [[star]] carried its own [[practice log]] entry and its own [[ladder]] long
+before it could ever be a piece of anything, so hiding it as a side effect of
+its parent's card going away would erase real history a [[segment]] piece —
+which has never stood alone — has none of. Inside a course a piece always
 belongs to something specific; a castle-side
 piece belongs either to a [[segment]] recorded in its area or to the area
 itself, which is as high as the castle goes. The [[recorder]]'s parent picker
@@ -693,24 +708,12 @@ keeps every [[star]] rather than hiding one wrongly. It narrows only once you
 have arrived: a course load moves the game through a subarea on its way in, so
 the row keeps every [[star]] until you walk somewhere yourself, which is what
 the course's own entry screen shows. Clicking a cell sets your
-[[target]]. A cell shows every [[subsection]] it owns as a [[cell toggle]]
-inside its own art, so the row draws [[star]]s and castle movements at all times, never a [[subsection]] beside
-its parent.
+[[target]]. The row draws [[star]]s and castle movements at all times, never
+a [[subsection]] beside its parent — a piece has nothing of its own here at
+all now; it shows up only in the [[practice log]], inside its parent's card.
 
 - **Lives** — the quick-select row
   (`src/sm64_events/ui/components/stagebanner.js`)
-
-### Cell toggle
-
-A small icon button the [[selector]] draws inside a [[practice cell]]'s own
-art. Two kinds share one implementation: a Bowser course's [[practice cell]]
-carries a pair choosing whether the trainer times the grab alone or everything
-up to the pipe, and any cell that owns [[subsection]]s carries one per piece saying
-whether the trainer tracks that piece. Clicking one never moves your
-[[target]] — the cell around it still does that.
-
-- **Lives** — the overlay
-  (`src/sm64_events/ui/components/celltoggles.js`)
 
 ### Segment recorder
 
@@ -804,9 +807,10 @@ stand where you set it), each carrying its own [[personal best]], its
 [[caveat mark]] and its own [[attempt]]s. A [[subsection]] draws inside its
 parent's card rather than beside it, indented and folding with it, so the
 piece you just ran names the [[star]] it belongs to. It highlights the card
-for whatever you are practicing right now, and a Bowser course's Reds/Pipe
-pair never shows both halves at once — only the one matching how you are
-currently grading it.
+for whatever you are practicing right now. A Bowser course's Reds/Pipe pair is
+the worked example: the reds [[star]] is a [[subsection]] of its paired
+pipe-entry [[segment]], so grabbing it draws its own card nested inside the
+movement's rather than beside it — never a toggle hiding either half.
 
 - **Lives** — the log
   (`src/sm64_events/ui/components/practicelog.js`)

@@ -152,6 +152,15 @@ def test_nesting_is_ONE_level_deep():
 
 
 # --- interaction with hasEarnedACard ---------------------------------------
+# Round 32 (2026-08-10) stopped `earned` gating NESTING MEMBERSHIP at all --
+# "the subsections should always be visible inside of the parent practice
+# log... we don't wait for the subsection to trigger for it to have its own
+# card... It just starts out empty in a new session." `earned` still gates
+# two OTHER questions below: whether a card-less section is promoted to the
+# top level at all (round 28's rule, untouched), and -- via the rule right
+# above -- whether a parent that earned nothing itself still gets a card
+# because it has a nesting child (unaffected in shape, just no longer able
+# to be denied a child for the child's OWN lack of history).
 
 def test_a_parent_that_earned_nothing_still_gets_a_card_for_its_child():
     # Practising ONLY the piece must not orphan it back to the top level on
@@ -161,14 +170,32 @@ def test_a_parent_that_earned_nothing_still_gets_a_card_for_its_child():
     assert rows == [("star:7:4", ("segment:90",))]
 
 
-def test_a_piece_that_earned_nothing_is_dropped_rather_than_nested():
+def test_a_piece_that_earned_nothing_still_nests():
+    # Before round 32 this piece was dropped from `nested` entirely (the
+    # nesting loop's own `earned` check) and fell through to round 28's
+    # "no card" rule, same as if it had no parent at all. Now it nests
+    # exactly like an earned one -- an unpractised piece is not a hidden
+    # piece any more.
     rows = nest([star(7, 4), seg(90, ["star:7:4"])],
                 earned_keys=["star:7:4"])
-    assert rows == [("star:7:4", ())]
+    assert rows == [("star:7:4", ("segment:90",))]
 
 
-def test_a_pair_that_earned_nothing_at_all_leaves_no_card_behind():
-    assert nest([star(7, 4), seg(90, ["star:7:4"])], earned_keys=[]) == []
+def test_a_pair_that_earned_nothing_at_all_still_nests():
+    # Both this star and its piece are pure synthetic input: server-side, a
+    # star with no attempts and no target is never `seen` in the first
+    # place, and every segment the server publishes is earned by
+    # construction (attempts, armed, or being the target) except a piece
+    # admitted purely because ITS parent has a card -- and a piece can never
+    # itself be a nesting parent (nesting is one level). So this exact
+    # "neither earned anything" pair cannot occur for a real parent/child in
+    # the shipped app; it exists to pin what the pure function does anyway.
+    # Before round 32 this returned `[]` -- an all-unearned pair left no
+    # card behind at all. Now the piece nests unconditionally, and the
+    # PARENT then earns a card off having a nesting child (the rule above),
+    # regardless of whether that child brought any history of its own.
+    rows = nest([star(7, 4), seg(90, ["star:7:4"])], earned_keys=[])
+    assert rows == [("star:7:4", ("segment:90",))]
 
 
 # --- the rule the SELECTOR shares with this module --------------------------

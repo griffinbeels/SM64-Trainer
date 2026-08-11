@@ -50,7 +50,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 from sm64_events.core.snapshot import GameSnapshot  # noqa: E402
 from sm64_events.core.timefmt import format_igt, parse_igt  # noqa: E402
-from sm64_events.detectors.moment import MOMENTS, MomentDetector  # noqa: E402
+from sm64_events.detectors.moment import Moment, MOMENTS, MomentDetector  # noqa: E402
 from what_happened import (describe_age, label_for,  # noqa: E402
                            open_readonly, survey_journals)
 
@@ -100,10 +100,12 @@ def verdict(scored: list[Scored], kind: str | None = None) -> tuple[int | None, 
     """The offset every scored reading agrees on, or why there isn't one.
 
     SCOPED TO ONE KIND since 2026-08-10, because the lead is NOT one number:
-    a door reads `counter + 2` (screenshot, 2026-08-06) and a textbox reads
-    `counter + 0` (frame-stepped replay, 2026-08-10). Judged globally those
-    two true readings look like a contradiction, and acting on the verdict
-    would have broken whichever kind was measured first."""
+    a door reads `counter + 2` (screenshot, 2026-08-06), and inside kind
+    `textbox` an NPC dialogue's box-open state reads `counter + 3` while an
+    automatic dialogue's plain entry edge reads `counter + 0` (round 2-4,
+    2026-08-10/11). Judged globally those readings look like a contradiction,
+    and acting on the verdict would have broken whichever one was measured
+    first."""
     settled = [s.matches[0].offset for s in scored
                if s.state == "scored"
                and (kind is None or s.matches[0].row["kind"] == kind)]
@@ -129,38 +131,82 @@ def kinds_read(scored: list[Scored]) -> list[str]:
     return seen
 
 
+def _moment_for(kind: str) -> Moment:
+    moment = next((m for m in MOMENTS if m.kind == kind), None)
+    if moment is None:
+        raise ValueError(f"no such moment kind: {kind!r}")
+    return moment
+
+
 def code_offset(kind: str = "door_open") -> int:
     """What the SHIPPED code adds to the counter for one KIND, derived by
     running it.
 
     Not read off a constant and not restated here: a synthetic edge of that
-    kind goes through the real `MomentDetector` and the real `IgtClock`, so
-    this number cannot drift from what the server would journal, whatever the
-    constants are called or how many of them there are.
+    kind goes through the real `MomentDetector` — its `Moment.open_states`
+    gate and `Moment.gated_display_lag` override included — and the real
+    `IgtClock`, so this number cannot drift from what the server would
+    journal, whatever the constants are called or how many of them there are.
+
+    For a kind whose actions do not all carry ONE offset — `textbox`, since
+    round 4 (2026-08-11): NPC dialogue's box-open state reads `counter + 3`
+    and automatic dialogue's plain entry edge reads `counter + 0` — this
+    reports the GATED action's number, the evidence-backed case a live
+    screenshot has actually checked. A reading that came off an automatic
+    dialogue (a sign, the star door) needs its own comparison; this tool does
+    not yet split a `textbox` row by which action produced it (open
+    question, `detectors/moment.py`'s module docstring).
 
     Raises LookupError for a CAUSED kind (`switch_press`, `enemy_defeated`) —
     those carry an empty action set on purpose and no synthetic edge can drive
     them, so there is nothing here to restate on their behalf.
     """
-    def snap(action: int, frame: int) -> GameSnapshot:
+    moment = _moment_for(kind)
+    if not moment.actions:
+        raise LookupError(kind)
+    # The representative action: the first GATED one if `open_states` has
+    # one (the evidence-backed case for a heterogeneous kind), else the
+    # kind's own first action. An `open_states` entry may map to `None`
+    # (never fires standalone, e.g. WAITING) — skip those, they have no
+    # threshold to climb.
+    gated = [action for action, threshold in (moment.open_states or {}).items()
+             if threshold is not None]
+    action = gated[0] if gated else next(iter(moment.actions))
+    walking = 0x04000440
+
+    def snap(mario_action: int, frame: int, state: int = 0) -> GameSnapshot:
         return GameSnapshot(
             wall_time_utc=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            global_timer=frame, mario_action=action, mario_action_timer=0,
+            global_timer=frame, mario_action=mario_action,
+            mario_action_timer=0, mario_action_state=state,
             num_stars=0, last_completed_course=0, last_completed_star=0,
             igt_overall=1000, curr_level=6, curr_area=1)
 
-    actions = next((m.actions for m in MOMENTS if m.kind == kind), frozenset())
-    if not actions:
-        raise LookupError(kind)
-    edge = next(iter(actions))
-    walking = 0x04000440
-    detector = MomentDetector()
-    detector.process(snap(walking, 100), snap(edge, 101))
+    frame = 100
+    snaps = [snap(walking, frame)]
+    threshold = (moment.open_states or {}).get(action)
+    if threshold is None:
+        frame += 1
+        snaps.append(snap(action, frame))
+    else:
+        # THE TURN, THEN THE BOX (moment.py's own docstring): entering the
+        # action alone is not enough here — climb `mario_action_state` one
+        # frame at a time, exactly as the poller would, until it reaches
+        # this action's own open threshold.
+        for state in range(threshold + 1):
+            frame += 1
+            snaps.append(snap(action, frame, state))
     # The SETTLE poll: a moment is a one-poll held emit since 2026-08-07 (its
     # landmark is re-read after the edge — detectors/moment.py), so the edge
     # alone publishes nothing. The number this scores is still the EDGE's.
-    events = detector.process(snap(edge, 101), snap(edge, 102))
-    return events[0].payload["igt_frames"] - 1000
+    snaps.append(snap(action, frame + 1, snaps[-1].mario_action_state))
+
+    detector = MomentDetector()
+    events = []
+    for prev, curr in zip(snaps, snaps[1:]):
+        events.extend(detector.process(prev, curr))
+    return next(e for e in events
+                if e.payload["kind"] == kind).payload["igt_frames"] - 1000
 
 
 def moment_rows(conn: sqlite3.Connection, limit: int) -> list[dict]:

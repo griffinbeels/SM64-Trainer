@@ -617,6 +617,28 @@ def _target_segment(base: str, segment_id: int) -> None:
             f"{error.read()[:200]!r}") from error
 
 
+def _disable_segment(base: str, segment_id: int) -> None:
+    """Flip a definition's `enabled` off through the real editor endpoint
+    (`PUT /api/segments/{id}`, the same PATCH the Segments tab's checkbox
+    sends) -- the render half of the disabled-parent gate (final review
+    2026-08-10, decision 1): the reds->pipe movement's OWN card must stop
+    rendering while its nesting star promotes to a top-level card of its
+    own, rather than both cards vanishing together."""
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(
+        f"{base}/api/segments/{segment_id}",
+        data=json.dumps({"enabled": False}).encode(),
+        method="PUT", headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(request, timeout=10)
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(
+            f"fixture could not disable segment {segment_id}: {error.code} "
+            f"{error.read()[:200]!r}") from error
+
+
 def _publish_bowser_stage(service, course_id: int, level: int) -> None:
     """Publish a `stage_changed` naming a Bowser-course PIPE stage (BitDW/
     BitFS/BitS) -- the one `mode` `seed_practice`'s own stage_changed call can
@@ -849,7 +871,8 @@ def _seed_subsections(base: str) -> None:
                                **_subsection_definition(ordinal)})
 
 
-def _seed_castle_pieces(base: str, service, area: int) -> None:
+def _seed_castle_pieces(base: str, service, area: int,
+                        arm_piece: bool = True) -> None:
     """POST a castle MOVEMENT plus a piece of that movement, and arm both --
     the only fixture state that reaches a SEGMENT wearing subsection badges.
 
@@ -864,6 +887,13 @@ def _seed_castle_pieces(base: str, service, area: int) -> None:
     made the bug invisible: a moment-started definition carries no
     `start_areas`, so the castle row offers neither of them and the whole row
     is drawn by `armedExtraCells` -- the one path that never carried badges.
+
+    `arm_piece=False` (round 32, 2026-08-10) publishes only the PARENT's own
+    door moment and withholds the piece's -- the piece stays defined,
+    enabled and parented, but never arms and records nothing. That is the
+    exact state the "always visible" fix exists for: a card-bearing parent
+    with an ENTIRELY UNPRACTICED piece, which no earlier fixture state could
+    reach (both moments always fired together before this).
     """
     import urllib.error
     import urllib.request
@@ -917,12 +947,41 @@ def _seed_castle_pieces(base: str, service, area: int) -> None:
         await service.publish(Event(
             type="practice_reset", frame=5205, timestamp_utc=now,
             payload={"igt_frames_before": 0}))
-        for ordinal in (1, 2):
+        for ordinal in (1, 2) if arm_piece else (1,):
             await service.publish(Event(
                 type="moment_reached", frame=5210 + ordinal, timestamp_utc=now,
                 payload=_place_time({"kind": "door_open", "ordinal": ordinal,
                                      "landmark": None, "level": CASTLE_LEVEL,
                                      "area": area, "action": 0}, 272 + ordinal)))
+
+    asyncio.run(go())
+
+
+def _seed_reds_run(service, course_id: int) -> None:
+    """Publish a real, x-cam-timed `star_collected` for a Bowser course's
+    reds star -- the star half of the reds/pipe pair (spec
+    2026-08-10-reds-as-subsection). Callers already published `bowser_stage`/
+    `enter_level` for the same course, which is what arms the paired
+    `seg:reds->pipe:<abbrev>` movement AMBIENTLY; that ambient arm alone
+    gives the star nothing (`views.py`'s `seen` needs an attempt or a
+    target), so this is what puts the star into its OWN section and gives
+    it a real `pipe_segment_id`/`parents` stamp to nest under.
+
+    `igt_timed_at: "xcam"`, same as `seed_practice`'s own rows -- WITHOUT it
+    a star replays as the pre-2026-08-01 GRAB-quantity shape (projection.py),
+    which the render this fixture exists to reach does not depend on, but
+    keeping every seeded grab the same shape avoids a second one to reason
+    about."""
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    async def go() -> None:
+        await service.publish(Event(
+            type="practice_reset", frame=9100, timestamp_utc=now,
+            payload={"igt_frames_before": 0}))
+        await service.publish(Event(
+            type="star_collected", frame=9350, timestamp_utc=now,
+            payload={"course_id": course_id, "star_id": 0,
+                     "igt_frames": 400, "igt_timed_at": "xcam"}))
 
     asyncio.run(go())
 
@@ -992,8 +1051,10 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               bowser_stage: tuple[int, int] | None = None,
               castle_stage: int | None = None,
               seed_castle_pieces: bool = False,
+              castle_piece_arms: bool = True,
               enter_level: int | None = None,
               arm_hundred_coin: tuple[int, int] | None = None,
+              seed_reds_run: bool = False,
               pad_journal: int = 0):
     """Yield the base URL of an offline instance; stop it on the way out.
 
@@ -1044,7 +1105,10 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     `seed_castle_pieces` (with `castle_stage`) additionally POSTs a castle
     MOVEMENT and a piece OF that movement, both armed (see
     `_seed_castle_pieces`) -- the segment-side half of the same feature, which
-    `seed_subsections` structurally cannot reach.
+    `seed_subsections` structurally cannot reach. `castle_piece_arms=False`
+    leaves the piece unarmed and therefore attempt-less -- the parent still
+    earns its own card, and the piece must borrow it rather than vanish
+    (round 32, 2026-08-10).
 
     `reconcile_full_corpus` additionally applies the bundled 84-segment
     default corpus (`tracking/defaults.reconcile_defaults` against `data/
@@ -1081,6 +1145,14 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     both (a foreign level change disarms an armed def), so this and
     `arm_segment` are for two separate, independent fixture instances, not
     one shared one.
+
+    `seed_reds_run` additionally publishes a real, x-cam-timed `star_collected`
+    for `bowser_stage`'s course's reds star (see `_seed_reds_run`) -- the star
+    half of the reds/pipe pair (spec 2026-08-10-reds-as-subsection), needed
+    alongside `reconcile_full_corpus`+`bowser_stage`+`enter_level` to reach a
+    star SECTION carrying a real `pipe_segment_id`/`parents` stamp. Pass a
+    `bowser_stage` naming the same course `enter_level` arms, or the star
+    records for a course with no paired reds->pipe movement to nest under.
 
     `pad_journal` bulk-inserts that many inert journal rows before the server
     starts, so per-poll endpoint costs match a LIVE-sized journal instead of a
@@ -1208,7 +1280,8 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                 # that name the castle, and publishing the stage last leaves
                 # the banner showing the subarea the row is measured in.
                 if seed_castle_pieces:
-                    _seed_castle_pieces(base, service, castle_stage)
+                    _seed_castle_pieces(base, service, castle_stage,
+                                       arm_piece=castle_piece_arms)
                 _publish_castle_stage(service, castle_stage)
             if bowser_stage is not None:
                 # AFTER _seed_target, not instead of it: broadcast-only and
@@ -1218,6 +1291,8 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                 _publish_bowser_stage(service, *bowser_stage)
             if enter_level is not None:
                 _enter_level(service, enter_level)
+            if seed_reds_run:
+                _seed_reds_run(service, bowser_stage[0])
             if arm_hundred_coin is not None:
                 _arm_hundred_coin_star(base, service, *arm_hundred_coin)
         yield base, service

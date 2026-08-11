@@ -16,10 +16,72 @@ compares the payload's `kind` rather than naming any kind itself. That is the
 user's requirement made structural: "we need this to be flexible so that we
 allow for the invention and innovation of new sections as needed" (2026-08-05).
 
-ENTRY EDGE, never level. An action byte reads the same for every frame of a
-door animation, so a moment is the frame Mario ENTERED it: `prev` outside the
-set, `curr` inside it. Same discipline as star_grab's action edge, and the
-reason re-collection works there.
+ENTRY EDGE, never level, for every kind but `textbox`. An action byte reads
+the same for every frame of a door animation, so a moment is the frame Mario
+ENTERED it: `prev` outside the set, `curr` inside it. Same discipline as
+star_grab's action edge, and the reason re-collection works there.
+
+`TEXTBOX IS A TURN, THEN A BOX` (round 2, 2026-08-10). His report: two
+screenshots of the King Whomp dialogue, both several frames ahead of Usamune's
+own screen. Mario turns to face the NPC for 6-8 frames BEFORE the box exists
+at all (decomp `act_reading_npc_dialog`: `MARIO_ACTION_STATE` climbs 0..7
+during the turn and the game creates the dialog only at 8), so the entry edge
+into `ACT_READING_NPC_DIALOG` names the turn's first frame, not the box's.
+`Moment.open_states` is the gate for this: when set, entering `actions` is
+necessary but not sufficient, and the moment fires on the frame
+`mario_action_state` reaches that action's threshold
+(`addresses.BOX_OPENS_AT_STATE`) instead. THE GAP IS NOT A CONSTANT -- his own
+run measured 6-8 frames across ten King Whomp encounters -- so this watches
+the real state every poll rather than subtracting a fixed offset.
+`ACT_WAITING_FOR_DIALOG` (also in `DIALOG_ACTIONS`) carries no entry in
+`BOX_OPENS_AT_STATE` and so can never open the box on its own; his one live
+WAITING sighting moved into a reading action within a frame regardless.
+Every other kind leaves `open_states` at its default `None`, which reduces to
+the plain entry-edge rule above -- see `_boundary_reached`.
+
+`A TEXTBOX'S DISPLAY LAG IS ONE FRAME BEYOND A DOOR'S` (round 3, 2026-08-11).
+His re-run of round 2's own fix: *"it looks like we still are timing it
+incorrectly (maybe we're 1 frame too early?). It clearly says 11"30 here, but
+we show 11"26."* One screenshot holding both numbers, scored with
+`tools/score_moment_clock.py --usamune "0'11\"30"` against the live journal:
+row 355, raw `counter` 336, we published `counter + 2` (0'11"26) -- Usamune's
+screen is `counter + 3`. A door's own measured lag (`DISPLAY_LAG_FRAMES`
+below) is `counter + 2` and stays there -- doors were measured independently
+and this reading does not touch them. `Moment.gated_display_lag` is the seam
+for a per-ACTION difference on top of `display_lag`, the same shape
+`open_states` added for the open-gate; `ACT_READING_NPC_DIALOG` carries `2`
+(one more than a door's own `display_lag=1`). Why a gated reading would
+legitimately differ from the kind's plain-edge default: it fires on a STATE
+THRESHOLD read mid-poll rather than on the entry edge, a different
+relationship to the poll that samples Usamune's counter. **ONE SCREENSHOT.**
+The theory predicts the direction and this is the first reading that could
+test it; it agrees, but a single sample cannot rule out that this particular
+King Whomp encounter was itself a frame unusual. The next disagreement (or
+agreement) is one more screenshot and the same command away -- do not
+re-derive this by re-deriving frame arithmetic from decomp.
+
+`AUTOMATIC DIALOGUE KEEPS ITS OWN, OLDER, INDEPENDENT MEASUREMENT` (round 4,
+2026-08-11, reconciling two sessions that each fixed a different dialogue).
+Round 2 gated `ACT_READING_AUTOMATIC_DIALOG` the same way as the NPC case, on
+a threshold of 9 reasoned from decomp (`act_reading_automatic_dialog`
+increments `mario_action_state` before checking it, so its box was assumed to
+open one frame later than the NPC's 8) -- but that number was never checked
+against a screenshot the way the NPC's 8 was. Meanwhile the STAR DOOR message
+(`ACT_READING_AUTOMATIC_DIALOG`) already had its own live measurement, older
+and unrelated to this gate: a frame-stepped replay (2026-08-10, journal id
+28790) showing Usamune at 0'11"53 against our 0'11"60 on the OLD plain-edge
+firing rule, which resolved to `display_lag=-1`, total `counter + 0`. Gating
+automatic dialogue on the unmeasured 9 would have fired the moment on a DIFFERENT
+frame than the one that `-1` was calibrated against, silently invalidating a
+real measurement to make room for a guess. So `A.BOX_OPENS_AT_STATE` carries
+only `ACT_READING_NPC_DIALOG`; automatic dialogue is simply ABSENT from it,
+which `_boundary_reached` treats as the plain entry-edge rule -- see there.
+**OPEN QUESTION, deliberately left open rather than guessed at again:**
+nobody has ever measured where an automatic dialogue's OWN box actually
+opens relative to its entry edge. If it turns out to open on a later frame
+like the NPC case, `counter + 0` at the edge is still correct algebra for
+the frame it was measured at, and only a NEW screenshot naming that frame can
+settle it -- not decomp reasoning.
 
 ORDINALS count occurrences since `reset()`, which the service ties to the
 attempt opening. They exist for START triggers: waypoints already order
@@ -78,9 +140,10 @@ class Moment:
     label: str           # the sentence the builder's picker shows
     # How far Usamune's SCREEN sits above `counter + IgtClock.DISPLAY_TICK` on
     # the frame this moment fires -- see MomentDetector.DISPLAY_LAG_FRAMES for
-    # why it is per-kind and what each value was measured from. Defaulted to
-    # the door's, so an unmeasured kind carries the one value that has a
-    # screenshot behind it and says so.
+    # what each value was measured from. Defaulted to the door's, so an
+    # unmeasured kind carries the one value that has a screenshot behind it
+    # and says so. THE reader for any action with no entry in
+    # `gated_display_lag` below -- every kind but `textbox`'s NPC case.
     display_lag: int = 1
     # Whether this moment must see the engaged-object pointer RETARGET before
     # it will believe it. FALSE for every kind whose action IS operating the
@@ -91,6 +154,42 @@ class Moment:
     # MomentDetector.ENGAGE_FRESH_FRAMES for the measurement that split this
     # out of a blanket rule.
     needs_fresh_engagement: bool = False
+    # None (every kind but `textbox`): entering ANY action in `actions` IS
+    # the moment -- the plain entry-edge rule. When set, an action ABSENT
+    # from this dict ALSO uses that plain entry-edge rule -- automatic
+    # dialogue's own case, module docstring's "AUTOMATIC DIALOGUE KEEPS ITS
+    # OWN, OLDER, INDEPENDENT MEASUREMENT". An action PRESENT with an int
+    # fires only once `mario_action_state` reaches it; present with `None`
+    # never fires the moment on its own (WAITING, which always resolves into
+    # a reading action within a frame -- module docstring's "TEXTBOX IS A
+    # TURN, THEN A BOX"). Keyed exactly like `addresses.BOX_OPENS_AT_STATE`.
+    open_states: dict | None = None
+    # Per-action override of `display_lag`, for an action `open_states`
+    # gates -- see the module docstring's "A TEXTBOX'S DISPLAY LAG IS ONE
+    # FRAME BEYOND A DOOR'S". A box-open reading has a different
+    # relationship to the poll that samples Usamune's counter than a plain
+    # entry edge does, so it earned its own measurement rather than
+    # inheriting the kind's. An action absent here (or a kind with no
+    # `open_states` at all) uses `display_lag` unchanged -- this is NOT a
+    # second shared constant, only a per-action override of the one field.
+    gated_display_lag: dict | None = None
+
+
+def _boundary_reached(moment: "Moment", snap: GameSnapshot) -> bool:
+    """Is `snap` INSIDE this moment's trigger, per its own gate?
+
+    Called on both `prev` and `curr`; the moment fires on the RISING edge
+    (false -> true). `open_states=None` reduces exactly to the original
+    entry-edge rule, and so does an action inside `actions` but ABSENT from
+    `open_states` -- automatic dialogue keeps that plain rule while its
+    kind-mate NPC dialogue gates on a state threshold (module docstring).
+    """
+    if snap.mario_action not in moment.actions:
+        return False
+    if moment.open_states is None or snap.mario_action not in moment.open_states:
+        return True
+    threshold = moment.open_states[snap.mario_action]
+    return threshold is not None and snap.mario_action_state >= threshold
 
 
 # THE registry. One row per moment kind; the sets are the ones addresses.py
@@ -98,14 +197,20 @@ class Moment:
 # the anchor detector can never drift apart.
 MOMENTS: tuple[Moment, ...] = (
     Moment("door_open", A.DOOR_ACTIONS, "Open a door"),
-    # A TEXTBOX READS THE RAW COUNTER -- his frame-stepped replay, 2026-08-10,
-    # is the only kind of evidence this number has ever moved on. See
-    # MomentDetector.DISPLAY_LAG_FRAMES.
-    # ...and it is the ONE kind that must see the pointer retarget: reading
-    # text is not operating an object, so the pointer may be holding something
-    # from minutes ago (the star door, 2026-08-10).
+    # AUTOMATIC DIALOGUE READS THE RAW COUNTER (`display_lag=-1`, total
+    # `counter + 0`) -- his frame-stepped star-door replay, 2026-08-10, is the
+    # only kind of evidence that number has ever moved on. NPC DIALOGUE gates
+    # on the box-open state instead and carries its OWN lag, `+2` (total
+    # `counter + 3`) -- his King Whomp screenshots, round 2+3, 2026-08-10/11.
+    # Two different measurements of two different actions inside one kind;
+    # see the module docstring's "AUTOMATIC DIALOGUE KEEPS ITS OWN, OLDER,
+    # INDEPENDENT MEASUREMENT" for why they are not in conflict.
+    # `textbox` is also the ONE kind that must see the pointer retarget:
+    # reading text is not operating an object, so the pointer may be holding
+    # something from minutes ago (the star door, 2026-08-10).
     Moment("textbox", A.DIALOG_ACTIONS, "Trigger a textbox", display_lag=-1,
-           needs_fresh_engagement=True),
+           needs_fresh_engagement=True, open_states=A.BOX_OPENS_AT_STATE,
+           gated_display_lag={A.ACT_READING_NPC_DIALOG: 2}),
     Moment("pole_grab", A.POLE_GRAB_ACTIONS, "Grab a pole"),
     Moment("pickup", A.PICKUP_ACTIONS, "Pick up an object"),
     # Round 9 item 6: *"We also need to detect when the user enters a cannon"*
@@ -189,24 +294,34 @@ class MomentDetector:
     # came straight back.
     #
     # IT IS PER-KIND SINCE 2026-08-10, and this is the value only for kinds
-    # with no screenshot of their own. A TEXTBOX reads the RAW COUNTER --
-    # `display_lag = -1`, total `counter + 0` -- and the evidence is the best
-    # this number has ever moved on, because it is FRAME-STEPPED rather than
-    # caught live: his replay paused on the star door's dialogue shows Usamune
-    # at 0'11"53 while the practice log recorded 0'11"60 (journal id 28790,
-    # raw `counter` 346; 346/30 = 11.53, and we published 348). His words:
-    # *"we marked down 11\"60... Need to make sure we're detecting when the
-    # trigger occurs more tightly."* `tools/score_moment_clock.py --usamune
-    # 0'11"53` attributed it to that row and returned `counter + 0`.
+    # with no screenshot of their own. AUTOMATIC DIALOGUE (a sign, the star
+    # door) reads the RAW COUNTER -- `display_lag = -1`, total `counter + 0`
+    # -- and the evidence is the best this number has ever moved on, because
+    # it is FRAME-STEPPED rather than caught live: his replay paused on the
+    # star door's dialogue shows Usamune at 0'11"53 while the practice log
+    # recorded 0'11"60 (journal id 28790, raw `counter` 346; 346/30 = 11.53,
+    # and we published 348). His words: *"we marked down 11\"60... Need to
+    # make sure we're detecting when the trigger occurs more tightly."*
+    # `tools/score_moment_clock.py --usamune 0'11"53` attributed it to that
+    # row and returned `counter + 0`.
+    #
+    # NPC DIALOGUE (round 2+3, 2026-08-10/11) reads a DIFFERENT number --
+    # `Moment.gated_display_lag[ACT_READING_NPC_DIALOG] = 2`, total
+    # `counter + 3`, from a box-open frame rather than the entry edge -- see
+    # the module docstring's "TEXTBOX IS A TURN, THEN A BOX" and "A
+    # TEXTBOX'S DISPLAY LAG IS ONE FRAME BEYOND A DOOR'S". The two live
+    # inside one `kind` ("textbox") because that is the wire vocabulary the
+    # recorder shows him; they are two independently measured ACTIONS.
     #
     # A GLOBAL FLIP WOULD HAVE BROKEN THE DOOR, which is the reason the field
     # moved onto the registry rather than this constant changing again: the
     # door's own screenshot says +2 and stands untouched, so the two readings
     # are not in conflict and neither has to be re-litigated to move the other.
-    # WHY they differ is OPEN and is deliberately not guessed at -- the obvious
-    # story, that a dialogue stops Usamune's counter, was MEASURED AND IS
-    # FALSE: across every textbox in his journal the counter advances 1:1 with
-    # `global_timer` through the dialogue (25 samples, 0 frozen frames).
+    # WHY automatic and NPC dialogue differ is OPEN and is deliberately not
+    # guessed at -- the obvious story, that a dialogue stops Usamune's
+    # counter, was MEASURED AND IS FALSE: across every textbox in his journal
+    # the counter advances 1:1 with `global_timer` through the dialogue (25
+    # samples, 0 frozen frames).
     #
     # Every other kind carries the door's value and says so here rather than
     # in a second place: pole_grab, pickup, cannon_enter, and caused.py's
@@ -215,6 +330,13 @@ class MomentDetector:
     #
     # The two inert payload fields below are what made this a measurement
     # rather than an argument -- keep them.
+    #
+    # THIS IS A DOOR'S NUMBER, not every action's -- since round 3
+    # (2026-08-11) an NPC dialogue carries one more frame on top, via
+    # `Moment.gated_display_lag` (module docstring: "A TEXTBOX'S DISPLAY LAG
+    # IS ONE FRAME BEYOND A DOOR'S"). Moving THIS constant instead would have
+    # moved doors, which were measured independently and were not in
+    # question.
     DISPLAY_LAG_FRAMES = 1
 
     # A MOMENT NAMES ONLY WHAT IT ENGAGED, and the engaged-object pointer
@@ -314,9 +436,9 @@ class MomentDetector:
         if not self._target_active():
             return released
         for moment in MOMENTS:
-            if (curr.mario_action in moment.actions
-                    and prev.mario_action not in moment.actions):
-                self._pending.append(self._emit(moment.kind, curr))
+            if (_boundary_reached(moment, curr)
+                    and not _boundary_reached(moment, prev)):
+                self._pending.append(self._emit(moment, curr))
         return released
 
     def _release(self, curr: GameSnapshot, backward: bool) -> list[Event]:
@@ -357,7 +479,7 @@ class MomentDetector:
             event.payload["landmark"] = settled.payload()
         return released
 
-    def _emit(self, kind: str, curr: GameSnapshot) -> Event:
+    def _emit(self, moment: "Moment", curr: GameSnapshot) -> Event:
         """One moment, stamped with Usamune's own number at that frame.
 
         WHY IT CARRIES A TIME AT ALL. A segment closing on a moment used to be
@@ -378,9 +500,17 @@ class MomentDetector:
         `igt` rides along pre-formatted, matching every other IGT-bearing
         event's payload, so a consumer never re-derives the display form.
         """
+        kind = moment.kind
         self._counts[kind] = self._counts.get(kind, 0) + 1
         reading, source = self._clock.igt_at(curr.global_timer, curr)
-        igt_frames = reading + display_lag_for(kind)
+        # The kind's own lag (`display_lag_for`), UNLESS this specific
+        # ACTION is gated and carries its own measured override -- NPC
+        # dialogue's `+2` beside automatic dialogue's kind-level `-1`. See
+        # `Moment.gated_display_lag`.
+        lag = display_lag_for(kind)
+        if moment.gated_display_lag and curr.mario_action in moment.gated_display_lag:
+            lag = moment.gated_display_lag[curr.mario_action]
+        igt_frames = reading + lag
         # WHICH door, as opposed to how many doors ago. The ordinal above stays
         # -- it is a property of the moment now rather than its name, which is
         # his own sentence -- and `landmark` is what a label and a subsection key
