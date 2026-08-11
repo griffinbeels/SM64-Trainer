@@ -51,11 +51,15 @@ exit, a door [[moment]]) takes an empty hand and becomes a
 [[hooked target]]; a detection that fires while the hand already holds
 something waits its turn; when the front completes or dies, the oldest
 detection still alive takes over, and an empty queue leaves the hand
-neutral. A [[segment]] that
-arms by mere presence — LBLJ on a castle entry, a pipe family on a course
-entry — never enters the queue, and neither does a [[subsection]] whatever
-its clause shape: only your click selects a piece, and its detection
-speaks through its parent [[star]] instead.
+neutral. A queued detection also takes a [[leftover target]], which is the
+one hand nobody chose. A [[segment]] that
+arms by mere presence — a pipe family on a course
+entry — never enters the queue, and neither does a [[subsection]] a
+[[star]] or another [[segment]] owns, whatever its clause shape: only your
+click selects such a piece, and its detection speaks through its parent
+instead. A piece of a castle area is not one of those — an area cannot hold
+the [[target]], so its detection has nobody to speak through and queues on
+its own account.
 
 - **Lives** — the projector (`src/sm64_events/tracking/projection.py`)
   → the [[selector]] and the [[practice log]]
@@ -75,6 +79,17 @@ through that grab, because explicit choices take priority.
   → the [[selector]]
 - **Not** — a [[picked target]]. A click is sovereign; a hook is the
   trainer following your play.
+
+### Leftover target
+
+The [[segment]] the trainer followed onto after you finished one somewhere
+else, still in the hand and no longer armed where you stand — neither a
+[[picked target]] nor a [[hooked target]], so nothing bounds it. A detection
+in the [[target queue]] displaces it: performing a [[segment]]'s own start
+here beats a guess about a place you have walked out of.
+
+- **Lives** — the projector (`src/sm64_events/tracking/projection.py`)
+  → the [[selector]]
 
 ### Picked target
 

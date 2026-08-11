@@ -1842,6 +1842,25 @@ def hooks_on_arm(start_triggers: list) -> bool:
                    for clause in start_triggers)
 
 
+def speaks_through_a_parent(parents: list | None) -> bool:
+    """True when this def has a parent that can HOLD THE PRACTICE TARGET.
+
+    Round 21's rule is that a subsection never takes the hand by detection
+    because its detection speaks through its PARENT instead — the completed
+    piece points the slot at the star it belongs to. That reasoning needs a
+    parent capable of being pointed AT, and only a `star:` or `segment:` key
+    is: a castle-area parent (`area:6:1`) is a PLACE, so "speak through your
+    parent" silently degrades to "never speak at all".
+
+    Live, 2026-08-11: LBLJ — filed under `area:6:1` since the recorder's
+    terminal tile, and restarted by him on the lobby's CCM wooden door —
+    armed four times in one session (journal ids 30512, 30525, 30554, 30558)
+    and the target queue stayed empty through every one, so the only thing
+    that ever lit it was his own tap. *"If there's only one option, and we
+    trigger its start condition, it should be highlighted."*"""
+    return any(not parent.startswith("area:") for parent in (parents or []))
+
+
 def origin_view(node: str | None) -> dict:
     """{key, label, region, region_label} for one origin node — the shape the
     API stamps on a segment row and the UI groups by. None = "Anywhere"."""

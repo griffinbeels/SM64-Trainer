@@ -104,13 +104,38 @@ differ, **0 attempt rows lost, gained or changed**.
 
 **What enters the queue**: a `segment_armed` notice for a def
 `segments.hooks_on_arm` accepts — no presence-type start clause
-(`level_enter`/`area_enter`/`attempt_anchor`/`spawned`). LBLJ (castle
-entry) and the pipe/100-coin families (course entry) never hook and never
-queue, which is also why the lone-option client rule was NOT dissolved into
-this: it fills presence-armed defs, and folding it in would auto-select
-LBLJ on every castle crossing. Queue entries scrub to the armed set every
-event; promotion takes the oldest survivor; all of it is journal-derived so
-replay rebuilds head, flavor and queue.
+(`level_enter`/`area_enter`/`attempt_anchor`/`spawned`). The pipe/100-coin
+families (course entry) never hook and never queue, which is also why the
+lone-option client rule was NOT dissolved into this: it fills
+presence-armed defs, and folding it in would auto-select on every crossing.
+Queue entries scrub to the armed set every event; promotion takes the
+oldest survivor; all of it is journal-derived so replay rebuilds head,
+flavor and queue.
+
+**LBLJ used to be the worked example on that list and no longer is** — he
+redefined it 2026-08-11 to start on the lobby's CCM wooden door, which is a
+deliberate arm, so it hooks like any movement. Two things had to change
+before it could reach the hand, and the first is the interesting one:
+
+1. `speaks_through_a_parent` replaced `(armed_def.parents or [])` in the
+   enqueue loop. Round 21's never-hooks rule rests on the piece's detection
+   speaking through its PARENT, and only a `star:`/`segment:` parent can be
+   spoken through — LBLJ's is `area:6:1`, a PLACE, so it had nobody to
+   speak through and was simply discarded. It armed four times in one
+   session (journal ids 30512/30525/30554/30558) with the queue empty
+   throughout.
+2. `_hand_is_a_leftover` widened promotion past "the hand is empty". His
+   hand held `Lakitu Skip`, auto-followed onto after finishing it on the
+   castle grounds — neither picked nor hooked nor armed in the lobby, so
+   nothing bounded it and nothing could displace it. A click still cannot
+   be stolen (`_picked_target` stores WHICH target he chose, so any other
+   writer invalidates it without needing a matching clear) and a hooked
+   head still holds by round 19's own bounds.
+
+Measured over his journal with `tools/measure_target_queue.py --before HEAD`:
+76 of 1841 target readings differ, **0 attempt rows lost or changed, 16
+gained** — all of them LBLJ/BLJs `reset` attempts that were previously made
+and never attributed.
 
 **A stale hooked head YIELDS to a valid star grab** where a pick never does
 (`_grab_may_take_the_hand`) — with the armed-read deferred past the matcher
@@ -154,8 +179,12 @@ Family membership is `SegmentDef.parents` containing an entity key —
 patched):
 
 1. **A piece never hooks or queues, whatever its clause shape** — the
-   enqueue loop skips any def with parents. A subsection is selected by
-   CLICK only.
+   enqueue loop skips any def whose parent can HOLD THE HAND
+   (`segments.speaks_through_a_parent`: a `star:` or `segment:` key, not an
+   `area:` one). Such a subsection is selected by CLICK only. A piece of a
+   castle AREA is not one of these and queues on its own account — see the
+   target-queue section above for why the distinction is the whole rule
+   rather than a special case.
 2. **A piece arming never suspends its parent star's target** (the
    `_clears_star_target` family exemption — what keeps the star LIT while
    its pieces run underneath).

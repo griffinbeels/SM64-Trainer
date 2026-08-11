@@ -26,7 +26,7 @@ families' course entry) never hooks and never queues.
 from sm64_events.storage.db import EventRow
 from sm64_events.tracking.projection import Projector, replay
 from sm64_events.tracking.segments import (
-    MIN_BUDGET_FRAMES, SegmentDef, hooks_on_arm)
+    MIN_BUDGET_FRAMES, SegmentDef, hooks_on_arm, speaks_through_a_parent)
 
 W = "2026-08-08T12:00:00Z"
 
@@ -426,3 +426,101 @@ def test_the_burst_count_ignores_arms_that_could_never_hook():
     assert 2 in p.armed_segment_ids(), "the piece really did arm"
     assert p.target == ("segment", 1), (
         "a subsection never hooks, so it cannot make a lone arm ambiguous")
+
+
+# -- a piece of a PLACE is not a piece (2026-08-11) -------------------------
+
+def test_only_a_parent_that_can_hold_the_hand_silences_a_detection():
+    """Round 21's never-hooks rule rests on the piece speaking through its
+    PARENT — which needs a parent that can be pointed at. A castle-area key
+    is a PLACE, so `area:6:1` degrades "speak through your parent" into
+    "never speak", and that is what kept LBLJ dark on his own door: it armed
+    four times in one session with the queue empty throughout."""
+    assert speaks_through_a_parent(["star:1:1"])
+    assert speaks_through_a_parent(["segment:7"])
+    assert not speaks_through_a_parent(["area:6:1"])
+    assert not speaks_through_a_parent(["area:6"])
+    assert not speaks_through_a_parent([])
+    assert not speaks_through_a_parent(None)
+    # one owner among several is still an owner
+    assert speaks_through_a_parent(["area:6:1", "star:1:1"])
+
+
+def area_piece_def(id=1, name="LBLJ", start_from=30, end_to=17):
+    return SegmentDef(id=id, name=name, enabled=True,
+                      start_triggers=[{"type": "level_exit",
+                                       "from": start_from}],
+                      end_triggers=[{"type": "level_enter", "to": end_to}],
+                      guards=[], parents=["area:6:1"])
+
+
+def test_a_piece_of_a_castle_area_hooks_like_any_other_segment():
+    p = Projector(segments=[area_piece_def()])
+    p.feed(jev(1, "level_changed", 1000, {"from": 30, "to": 6}))
+    assert p.target == ("segment", 1), (
+        "an area cannot hold the hand, so its piece must take it itself")
+
+
+# -- the leftover hand (2026-08-11) ----------------------------------------
+
+def followed_onto_def(id=9, name="Lakitu-ish"):
+    """Arms by PRESENCE, so it hooks nothing, and ends on a moment rather
+    than a stage entry — so its success lands in an empty hand and the
+    auto-follow points the slot at it. That is the leftover shape: in the
+    hand, neither picked nor hooked, and nothing bounds it."""
+    return SegmentDef(id=id, name=name, enabled=True,
+                      start_triggers=[{"type": "level_enter", "to": 16}],
+                      end_triggers=[{"type": "moment_reached",
+                                     "kind": "door_open", "level": 16}],
+                      guards=[])
+
+
+def _leftover_in_hand(segments):
+    p = Projector(segments=segments)
+    p.feed(jev(1, "level_changed", 1000, {"from": 6, "to": 16}))
+    p.feed(jev(2, "moment_reached", 1200,
+               {"kind": "door_open", "level": 16, "area": 1}))
+    assert p.target == ("segment", 9), "auto-followed onto what it finished"
+    return p
+
+
+def test_a_deliberate_arm_displaces_a_leftover_hand():
+    """His report, 2026-08-11: the hand held `Lakitu Skip`, followed onto
+    after finishing it on the castle grounds — neither his click nor a
+    hooked head, and not armed anywhere near the lobby. It sat there through
+    four LBLJ arms. "If there's only one option, and we trigger its start
+    condition, it should be highlighted (if nothing else in the queue is
+    first)."""
+    p = _leftover_in_hand([area_piece_def(start_from=16), followed_onto_def()])
+    p.feed(jev(3, "level_changed", 1500, {"from": 16, "to": 6}))
+    assert p.target == ("segment", 1)
+
+
+def test_a_leftover_still_armed_where_he_stands_is_not_a_leftover():
+    """The exemption that keeps a visible retry loop: a followed-onto segment
+    he is plainly still running holds the slot, whatever else arms around
+    it."""
+    # a deliberate arm that fires WITHOUT a level change, so 9 can still be
+    # armed underneath it
+    deliberate = SegmentDef(id=1, name="LBLJ", enabled=True,
+                            start_triggers=[{"type": "moment_reached",
+                                             "kind": "textbox", "level": 16}],
+                            end_triggers=[{"type": "level_enter", "to": 17}],
+                            guards=[], parents=["area:6:1"])
+    p = _leftover_in_hand([deliberate, followed_onto_def()])
+    p.feed(jev(3, "level_changed", 1500, {"from": 16, "to": 6}))
+    p.feed(jev(4, "level_changed", 1800, {"from": 6, "to": 16}))  # 9 re-arms
+    p.feed(jev(5, "moment_reached", 2000, {"kind": "textbox", "level": 16}))
+    assert {1, 9} <= p.armed_segment_ids()
+    assert p.target == ("segment", 9)
+    assert p.target_queue() == [1], "the fresh detection waits its turn"
+
+
+def test_a_click_is_never_displaced_by_a_deliberate_arm():
+    """The bound on the rule above, and the one that has cost three bugs on
+    this surface: a convenience may fill an empty hand, never empty a full
+    one. A click is sovereign."""
+    p = _leftover_in_hand([area_piece_def(start_from=16), followed_onto_def()])
+    p.feed(jev(3, "target_set", 1300, {"kind": "segment", "segment_id": 9}))
+    p.feed(jev(4, "level_changed", 1500, {"from": 16, "to": 6}))
+    assert p.target == ("segment", 9), "his pick outranks a fresh detection"

@@ -252,7 +252,7 @@ from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
     SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, arms_ambiently,
     hooks_on_arm, hundred_coin_entity, origin_course, reachable_places,
-    segment_origin, stage_origin, time_bounds)
+    segment_origin, speaks_through_a_parent, stage_origin, time_bounds)
 
 
 @dataclass(frozen=True)
@@ -618,6 +618,11 @@ class Projector:
         # rebuilds head, flavor and queue with no service-side field.
         self._target_queue: list[int] = []
         self._target_hooked = False
+        # WHICH target his click chose, rather than a boolean — so it
+        # self-invalidates the moment anything else moves the hand, instead
+        # of needing a matching clear at all nine sites that do (one missed
+        # clear and a leftover wears the sovereignty of a click forever).
+        self._picked_target: tuple | None = None
         # Where the hooked head's arm stood (level, area) and the last frame
         # it was seen armed — the forfeit's position and the expiry's clock.
         self._hook_level: int | None = None
@@ -815,6 +820,32 @@ class Projector:
         self._hook_level = arm.level if arm is not None else self._level
         self._hook_area = arm.area if arm is not None else self._area
         self._hook_alive_frame = frame
+
+    def _hand_is_a_leftover(self, armed_now) -> bool:
+        """Is the held segment the trainer's own stale guess?
+
+        Three things can put a segment in the hand and only one of them is a
+        LEFTOVER. His CLICK is sovereign — nothing detected may steal it. A
+        HOOKED head is round 19's FIFO head and holds by its own bounds
+        (complete / forfeit / expire), so a later detection waits its turn.
+        What is left is the auto-follow onto a segment he just finished
+        SOMEWHERE ELSE, which is the trainer guessing what he will do next —
+        and a deliberate arm he has just performed is a strictly better guess
+        than a guess about a place he has walked out of.
+
+        Live, 2026-08-11: the hand held `Lakitu Skip`, followed onto after
+        finishing it on the castle grounds and neither picked nor hooked, all
+        the way through four LBLJ arms in the lobby. *"If there's only one
+        option, and we trigger its start condition, it should be highlighted
+        (if nothing else in the queue is first)."*
+
+        Still armed WHERE HE STANDS is the last exemption: a followed-onto
+        segment he is visibly retrying is not a leftover, whatever else arms
+        around it."""
+        return (self.target is not None and self.target[0] == "segment"
+                and self._picked_target != self.target
+                and not self._target_hooked
+                and self.target[1] not in armed_now)
 
     def _promote_or_neutral(self, frame: int) -> None:
         """The hand is empty: the oldest detection that is STILL armed takes
@@ -1306,7 +1337,7 @@ class Projector:
             sid = n["segment_id"]
             armed_def = self._segments.definition(sid)
             if (armed_def is None or not hooks_on_arm(armed_def.start_triggers)
-                    or (armed_def.parents or [])
+                    or speaks_through_a_parent(armed_def.parents)
                     or sid == head_seg or sid in self._target_queue
                     or sid in hooking):
                 continue
@@ -1329,7 +1360,9 @@ class Projector:
         self._pending_grab_take = None
         self._target_queue = [sid for sid in self._target_queue
                               if sid in armed_now]
-        if self.target is None and self._target_queue:
+        if (self.target is None or self._hand_is_a_leftover(armed_now)) \
+                and self._target_queue:
+            self.target = None
             self._promote_or_neutral(ev.frame)
         # Run engine sees the same event + the attempts just closed (star AND
         # segment successes/failures); it owns the run lifecycle independently.
@@ -1591,6 +1624,7 @@ class Projector:
                 self._target_hooked = False
                 if "strat_tag" in ev.payload:
                     self.strat_by_star[(c, s)] = ev.payload["strat_tag"]
+            self._picked_target = None if auto else self.target
             if not auto:
                 self._target_queue.clear()
             return []
