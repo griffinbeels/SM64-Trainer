@@ -42,7 +42,7 @@ from uilab.driver import get_driver  # noqa: E402
 from uilab.pytest_plugin import (  # noqa: E402,F401
     assert_no_new_defects, assert_no_stale_exemptions, uilab_sweep)
 from uilab_project import SUBSECTION_PROJECT, BOWSER_COURSE, BOWSER_LEVEL  # noqa: E402
-from ui_fixture import serve_ui, _disable_segment  # noqa: E402
+from ui_fixture import serve_ui, _disable_segment, _target_segment  # noqa: E402
 
 # The plugin's `uilab_sweep` fixture reads this off the module.
 uilab_project = SUBSECTION_PROJECT
@@ -562,3 +562,105 @@ def test_a_star_promotes_to_top_level_when_its_movement_is_disabled():
         assert not any("Star" in name for name in nested), (
             "a promoted star has no card left to nest inside -- it must not "
             f"also appear as a child; nested {nested!r}")
+
+
+# --- and the ZERO-ATTEMPT star half (round 33, 2026-08-10) -----------------
+# His live report, with a screenshot of Bowser in the Dark World: "i don't see
+# the 8 Red Coins (Star) here, when I should. I just started the stage, I
+# should see all of the subsections associated with this stage." The
+# screenshot showed the reds->pipe movement ALREADY carrying a card -- it was
+# his live TARGET, zero attempts -- with no nested star. Every gate above
+# that reaches the star nested seeds a real `star_collected`
+# (`seed_reds_run`); this is the case none of them cover: the movement has a
+# card for a reason that has nothing to do with the star (it is the target),
+# and the star itself has never been grabbed.
+
+
+def test_the_reds_star_nests_with_zero_attempts_when_its_movement_is_targeted():
+    """views.py's new star-half hoist: a Bowser reds star publishes a section
+    the instant its ONE paired movement already has one, exactly as an
+    ordinary segment piece borrows its parent's card (round 32) -- mirrored
+    onto the star side of the same pairing. Before the fix, only a star with
+    its OWN attempt or its OWN target could ever nest
+    (`reds_pipe_with_a_nesting_star` reads `seen` from the star's side only);
+    a movement that earned its card by being the TARGET published nothing
+    for the star at all.
+
+    Mutation-proved: reverting the new `for course_id, seg_id in
+    reds_pipe_by_course.items(): ...` loop in views.py makes this go red with
+    the star absent from both `top` and `nested`."""
+    with serve_ui(reconcile_full_corpus=True,
+                  bowser_stage=(BOWSER_COURSE, BOWSER_LEVEL),
+                  enter_level=BOWSER_LEVEL) as base, \
+            get_driver().launch() as page:
+        segments = json.loads(urllib.request.urlopen(
+            f"{base}/api/segments", timeout=10).read())
+        pipe = next(s for s in segments
+                   if (s.get("seed_key") or "") == "seg:reds->pipe:bitdw")
+        _target_segment(base, pipe["id"])
+        page.goto(f"{base}/ui/index.html")
+        page.wait_for(".log-list-card")
+        page.wait_ms(400)
+        top = page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert any("Pipe" in name for name in top), (
+            f"the targeted movement earned no card of its own; top {top!r}")
+        # The movement is the ACTIVE target but has zero attempts of its own,
+        # so `autoOpenKey`'s first rule (active + recorded, or active +
+        # nested) does not hand it the auto-open slot -- some OTHER, already-
+        # played card wins it instead (the fixture's own default star), and
+        # the movement draws CLOSED. `Disclose` never mounts a closed body,
+        # so the nested star is unreachable in the DOM until the fold is
+        # clicked open by hand, same as every other zero-attempt-parent gate
+        # in this file (`_click_parent_fold` above).
+        page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".find(c => (c.querySelector('.log-card-name')||{}).innerText"
+            ".includes('Pipe'))"
+            ".querySelector('.log-card-fold').click()")
+        page.wait_ms(600)
+        nested = page.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.log-card-children > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert any("Star" in name for name in nested), (
+            "the zero-attempt star did not nest inside its targeted "
+            f"movement; nested {nested!r}")
+        assert not any("Star" in name for name in top), (
+            f"the star must not ALSO be a top-level card; top {top!r}")
+
+
+def test_an_unentered_bowser_course_draws_neither_the_movement_nor_the_star():
+    """The no-phantom property both new-in-round-33 and pre-existing hoists
+    must hold: a Bowser course nobody has entered, attempted or targeted
+    publishes NO section for its movement (not armed, not the target, no
+    attempts, and the star side of `reds_pipe_with_a_nesting_star` finds
+    nothing either) -- and therefore the new star-half hoist, reading that
+    same absence, must leave the star untouched too. Neither hoist may
+    manufacture a section from the other's absence.
+
+    Mutation-proved: dropping the `f"segment:{seg_id}" in published_keys`
+    guard from the new star hoist (i.e. publishing unconditionally for every
+    course `reds_pipe_by_course` names) makes this go red with the star
+    appearing in `top` for a course that was never touched."""
+    with serve_ui(reconcile_full_corpus=True) as url, \
+            get_driver().launch() as page:
+        page.goto(url)
+        page.wait_for(".log-list-card")
+        page.wait_ms(400)
+        top = page.evaluate(
+            "Array.from(document.querySelectorAll('.log-list > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        nested = page.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.log-card-children > .log-card'))"
+            ".map(c => (c.querySelector('.log-card-name')||{}).innerText)")
+        assert not any("Pipe" in name for name in top), (
+            f"an unentered Bowser movement must draw no card; top {top!r}")
+        assert not any(name for name in top if "8 Red Coins" in name), (
+            f"an unentered Bowser reds star must draw no card; top {top!r}")
+        assert not nested or not any(
+            "8 Red Coins" in name or "Pipe" in name for name in nested), (
+            "an unentered Bowser reds pair must not appear nested under "
+            f"someone else's card either; nested {nested!r}")

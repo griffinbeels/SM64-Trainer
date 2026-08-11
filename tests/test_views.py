@@ -2862,3 +2862,57 @@ def test_a_bowser_reds_star_names_its_movement_as_a_parent(tmp_path):
     ordinary = _star_section(view, course_id=2, star_id=4)
     assert ordinary["parents"] == [], (
         "only a Bowser reds star is a piece; every other star is top-level")
+
+
+def _reds_pipe_id_for_course(db, course_id):
+    from sm64_events.tracking.views import _reds_pipe_segments
+    by_course, _ = _reds_pipe_segments(db.segment_defs())
+    return by_course[course_id]
+
+
+def test_a_zero_attempt_reds_star_publishes_when_its_movement_is_targeted(tmp_path):
+    """Round 33, live report with a screenshot of Bowser in the Dark World:
+    "i don't see the 8 Red Coins (Star) here, when I should. I just started
+    the stage, I should see all of the subsections associated with this
+    stage." His movement was the live TARGET with zero attempts -- nothing
+    about the STAR's own `seen` membership -- so `reds_pipe_with_a_nesting_star`
+    (which reads the star's side only) never fired, and no other rule ever
+    walked a STAR the way round 32's segment-piece loop walks `seg_defs`.
+
+    Unlike the render gate in test_responsive_subsections.py, this asserts
+    directly on `build_session_view`'s own `stars` list -- no client-side
+    `earned`/promotion fallback can rescue a mutation here, which is the
+    property a pure server-side guard needs pinned at its own layer."""
+    db, svc = _service_with_corpus(tmp_path)
+    seg_id = _reds_pipe_id_for_course(db, 16)
+    asyncio.run(svc.set_target_segment(seg_id))
+
+    view = build_session_view(db, svc, clock="igt", scope="lifetime")
+    reds = _star_section(view, course_id=16, star_id=0)
+    assert reds["attempts"] == [], "this star must be reachable with ZERO history"
+    assert reds["parents"] == [f"segment:{seg_id}"]
+    assert seg_section(view, seg_id)["segment_id"] == seg_id, (
+        "the targeted movement must publish its own section too")
+
+
+def test_an_untouched_bowser_course_publishes_neither_section(tmp_path):
+    """The no-phantom half: a Bowser course with no attempt, no target, and
+    no arm anywhere in its history must publish NEITHER the movement's
+    section nor the star's -- the new star loop's guard
+    (`f"segment:{seg_id}" in published_keys`) must never fire from an empty
+    `published_keys`. Course 17 (BitFS) is reconciled into the corpus exactly
+    like course 16 above and is simply never touched.
+
+    Mutation-proved: dropping the guard clause (publishing
+    `seen.setdefault((course_id, 0), None)` unconditionally for every course
+    `reds_pipe_by_course` names) makes this go red with a star section for
+    (17, 0) appearing where none existed before."""
+    db, svc = _service_with_corpus(tmp_path)
+    view = build_session_view(db, svc, clock="igt", scope="lifetime")
+    assert not any(s["course_id"] == 17 and s["star_id"] == 0
+                   for s in view["stars"]), (
+        "an untouched course must publish no star section at all")
+    pipe_id = _reds_pipe_id_for_course(db, 17)
+    assert not any(s["segment_id"] == pipe_id for s in view["segments"]), (
+        "an untouched course must publish no segment section for its "
+        "movement either")

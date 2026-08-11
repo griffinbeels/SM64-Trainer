@@ -1372,6 +1372,39 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             continue
         if any(parent in published_keys for parent in d.parents):
             seen_segs.setdefault(sid, None)
+    # The STAR half of the same rule (Griffin, round 33, 2026-08-10, live
+    # report with a screenshot of Bowser in the Dark World: "I don't see the
+    # 8 Red Coins (Star) here, when I should. I just started the stage, I
+    # should see all of the subsections associated with this stage."). His
+    # screenshot showed the reds->pipe movement already carrying a card (it
+    # was his live target) with no nested star -- the star had zero
+    # attempts, so `reds_pipe_with_a_nesting_star` above found nothing to
+    # publish from, and the segment-piece loop just above only ever walks
+    # `seg_defs`, never a star. `reds_pipe_by_course` is total over the
+    # three Bowser courses regardless of enabled/attempt state, so this is
+    # simply that same loop's body, keyed by the ONE pairing a Bowser reds
+    # star can ever have instead of by `d.parents`.
+    #
+    # WHY THIS CANNOT LOOP WITH `reds_pipe_with_a_nesting_star` ABOVE: that
+    # hoist tests `(course_id, 0) in seen` as `seen` stood BEFORE it ran --
+    # attempts and the star-target branch only, never anything a hoist
+    # added -- and it runs to completion, unconditionally, before
+    # `published_keys` is even built. This loop reads `published_keys`, a
+    # snapshot frozen once, after every other section-granting rule
+    # (attempts, targets, the reds hoist, the armed loop) has already run.
+    # So the star hoist's own output can never reach this loop's input, and
+    # this loop's output (added to `seen`, never to `published_keys` or
+    # `seen_segs`) can never reach the star hoist's input either -- there is
+    # no shared mutable state for a second pass to read, because neither
+    # hoist is allowed to see the other's work, only real doors. A course
+    # nobody has entered publishes no section for the movement (not armed,
+    # not targeted, not attempted), so `published_keys` never names it and
+    # this loop leaves the star exactly where it found it -- untouched, the
+    # same "no phantom pair" property the segment-piece loop above already
+    # holds.
+    for course_id, seg_id in reds_pipe_by_course.items():
+        if (course_id, 0) not in seen and f"segment:{seg_id}" in published_keys:
+            seen.setdefault((course_id, 0), None)
 
     scoped_set = set(scoped)
     igt_of = lambda a: a.igt_frames
