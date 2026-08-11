@@ -175,6 +175,22 @@ and a row reshuffling four times in a tenth of a second is the flicker.
   the mirror of the global rule about untested LIMITS, and it is the more
   dangerous direction: a false limit stops you doing something, a false
   guarantee makes everyone downstream believe a wrong number.
+- **A RENDER gate can be masked by a fallback at a different layer, so assert
+  at the layer the bug lives in.** 2026-08-11: a new server rule risked
+  publishing a practice-log section for a course nobody had touched, and its
+  no-phantom guard was a render check — which stayed GREEN under the mutation,
+  because `ui/subsections.js`'s own "an orphaned star only shows if it earned a
+  card" fallback hid the bad payload client-side. The guard asserted real
+  content and got it, through a path that would survive the server rule being
+  wrong in either direction. The fix was a second test asserting directly on
+  `build_session_view`'s `stars`/`segments` lists, where nothing can mask the
+  value; the same mutation turns it red immediately. **Both were kept, and that
+  is the shape**: the unit test proves the payload, the render test proves the
+  card actually draws — neither substitutes for the other. Read it as the
+  layered twin of the vacuous-guard rule above: there, the assertion was too
+  weak; here, the assertion was fine and the LAYER was wrong. When a fix lives
+  on the server, a browser-level guard is one forgiving fallback away from
+  proving nothing.
 - **A reader that can return "nothing" must not be able to look like "nothing
   happened".** `ui/uilog.js`'s own header names this failure and the new reader
   reproduced it exactly — the guard for it is the RENDER test asserting a
