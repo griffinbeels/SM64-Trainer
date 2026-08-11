@@ -563,6 +563,38 @@ ACT_WAITING_FOR_DIALOG = 0x0000130A        # dialog about to begin
 DIALOG_ACTIONS = frozenset({ACT_READING_AUTOMATIC_DIALOG,
                             ACT_READING_NPC_DIALOG, ACT_WAITING_FOR_DIALOG})
 
+# The dialog actions' own SUB-STATE -- the field immediately preceding
+# MARIO_ACTION_TIMER, u16, same struct. `tools/probe_textbox.py` round 2
+# (2026-08-10) needed this to explain a live report: King Whomp's textbox
+# journals 8 frames before Usamune's own screen shows it. Source: decomp
+# src/game/mario_actions_cutscene.c (n64decomp/sm64 master, fetched
+# 2026-08-10), act_reading_npc_dialog's own leading comment --
+#   actionstate values: 0-7 looking toward npc, 8 in dialog,
+#                        9-22 looking away from npc, 23 end
+# -- and act_reading_automatic_dialog, which increments BEFORE checking and
+# opens the box at 9. set_mario_action() zeroes this exactly like the timer
+# on every action change, but the ENTRY into ACT_READING_NPC_DIALOG is the
+# TURN toward the NPC, not the box: act_reading_npc_dialog increments this
+# field once per frame while turning (0->7) and HOLDS it at 8 for the whole
+# time the box is actually open (advanced only by the NPC's own script
+# sending MARIO_DIALOG_STOP), which is exactly the shape of an 8-frame-early
+# "textbox" moment built on the action edge alone. `moment.py`'s trigger is
+# unchanged by this -- this is a new read, not a narrower one.
+# VERIFY (live gate pending): must confirm this climbs 0..8 in his own King
+# Whomp encounter and holds at 8 for the duration of the box.
+MARIO_ACTION_STATE = MARIO_STRUCT + 0x18  # u16
+
+# The SAME field is repurposed by act_reading_npc_dialog as the Mario head-
+# turn PITCH ANGLE while actionState < 8 (`actionTimer += headTurnAmount`,
+# +-1024/384 per frame depending on look-up/look-down), not a frame count --
+# which is why probe_textbox.py's round-1 capture read MARIO_ACTION_TIMER as
+# 64512/63488 (0xFC00/0xF800, i.e. -1024/-2048 as s16) on the very first
+# frame of a King Whomp encounter and looked like a misread. It was not: the
+# comment above ("resets to 0 on action change") is still true at the
+# instant set_mario_action fires, this action's own handler just overwrites
+# it again the same frame. Do not trust MARIO_ACTION_TIMER as a frame count
+# while mario_action is ACT_READING_NPC_DIALOG.
+
 # Pole / tree grabs — decomp include/sm64.h. A TREE IS A POLE to the engine:
 # both use the same climbing action group, which is why one moment kind covers
 # the BoB tree, the WF pole and every LLL cage pole. His report, 2026-08-06:
