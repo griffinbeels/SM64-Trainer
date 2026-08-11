@@ -393,6 +393,26 @@ def test_a_moment_carries_the_number_usamune_shows_not_the_raw_counter():
     assert events[0].payload["igt"] == "1'06\"83"
 
 
+# -- a textbox lags one frame beyond a door (round 3, 2026-08-11) -------------
+# His re-run of round 2's own fix: *"it clearly says 11"30 here, but we show
+# 11"26."* Scored with `tools/score_moment_clock.py --usamune "0'11\"30"`
+# against the live journal: row 355, raw counter 336, Usamune reads
+# counter + 3 -- one frame beyond a door's own counter + 2. One screenshot;
+# see the module docstring for the caveat.
+
+def test_a_textbox_moment_lags_one_frame_beyond_a_door():
+    events = run([
+        snap(ACT_WALKING, 100, igt_overall=336),
+        *[snap(ACT_READING_NPC_DIALOG, 101 + state, mario_action_state=state,
+               igt_overall=336)
+          for state in range(9)],   # box opens at state 8, frame 109
+    ])
+    assert events[0].payload["counter"] == 336
+    assert events[0].payload["igt_frames"] == 336 + 3, (
+        "counter + 2 (a door's own measured lag) + 1 (textbox's own extra)")
+    assert events[0].payload["igt"] == "0'11\"30"
+
+
 # -- cannon entry (round 9 item 6) --------------------------------------------
 # "We also need to detect when the user enters a cannon" / "(cannon entry
 # xcam)". ACT_IN_CANNON is the frame the game commits Mario to the in-cannon

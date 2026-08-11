@@ -39,6 +39,26 @@ WAITING sighting moved into a reading action within a frame regardless.
 Every other kind leaves `open_states` at its default `None`, which reduces to
 the plain entry-edge rule above -- see `_boundary_reached`.
 
+`A TEXTBOX'S DISPLAY LAG IS ONE FRAME BEYOND A DOOR'S` (round 3, 2026-08-11).
+His re-run of round 2's own fix: *"it looks like we still are timing it
+incorrectly (maybe we're 1 frame too early?). It clearly says 11"30 here, but
+we show 11"26."* One screenshot holding both numbers, scored with
+`tools/score_moment_clock.py --usamune "0'11\"30"` against the live journal:
+row 355, raw `counter` 336, we published `counter + 2` (0'11"26) -- Usamune's
+screen is `counter + 3`. A door's own measured lag (`DISPLAY_LAG_FRAMES`
+below) is `counter + 2` and stays there -- doors were measured independently
+and this reading does not touch them. `Moment.extra_lag_frames` is the seam
+for a per-kind difference on top of the shared constant, the same shape
+`open_states` added for the open-gate; textbox carries `1`. Why a textbox
+would legitimately differ: the moment now fires on a STATE THRESHOLD read
+mid-poll rather than on the plain entry edge every other kind still uses, and
+that is a different relationship to the poll that samples Usamune's counter.
+**ONE SCREENSHOT.** The theory predicts the direction and this is the first
+reading that could test it; it agrees, but a single sample cannot rule out
+that this particular King Whomp encounter was itself a frame unusual. The
+next disagreement (or agreement) is one more screenshot and the same command
+away -- do not re-derive this by re-deriving frame arithmetic from decomp.
+
 ORDINALS count occurrences since `reset()`, which the service ties to the
 attempt opening. They exist for START triggers: waypoints already order
 everything after the arm, but "the 5th door in Big Boo's Haunt" is a start and
@@ -102,6 +122,13 @@ class Moment:
     # passed here -- see the module docstring's "TEXTBOX IS A TURN, THEN A
     # BOX".
     open_states: dict | None = None
+    # 0 for every kind but `textbox`. Added ON TOP of
+    # `MomentDetector.DISPLAY_LAG_FRAMES`, the shared door-measured lag --
+    # see the module docstring's "A TEXTBOX'S DISPLAY LAG IS ONE FRAME BEYOND
+    # A DOOR'S". A per-kind field rather than a second shared constant
+    # because moving the shared one would move doors, which were measured
+    # independently and are not in question.
+    extra_lag_frames: int = 0
 
 
 def _boundary_reached(moment: "Moment", snap: GameSnapshot) -> bool:
@@ -126,7 +153,7 @@ def _boundary_reached(moment: "Moment", snap: GameSnapshot) -> bool:
 MOMENTS: tuple[Moment, ...] = (
     Moment("door_open", A.DOOR_ACTIONS, "Open a door"),
     Moment("textbox", A.DIALOG_ACTIONS, "Trigger a textbox",
-           open_states=A.BOX_OPENS_AT_STATE),
+           open_states=A.BOX_OPENS_AT_STATE, extra_lag_frames=1),
     Moment("pole_grab", A.POLE_GRAB_ACTIONS, "Grab a pole"),
     Moment("pickup", A.PICKUP_ACTIONS, "Pick up an object"),
     # Round 9 item 6: *"We also need to detect when the user enters a cannon"*
@@ -195,6 +222,12 @@ class MomentDetector:
     #
     # The two inert payload fields below are what made this a measurement
     # rather than an argument -- keep them.
+    #
+    # THIS IS A DOOR'S NUMBER, not every kind's -- since round 3 (2026-08-11)
+    # a textbox carries one more frame on top, via `Moment.extra_lag_frames`
+    # (module docstring: "A TEXTBOX'S DISPLAY LAG IS ONE FRAME BEYOND A
+    # DOOR'S"). Moving THIS constant instead would have moved doors, which
+    # were measured independently and were not in question.
     DISPLAY_LAG_FRAMES = 1
 
     # A MOMENT NAMES ONLY WHAT IT ENGAGED, and the engaged-object pointer
@@ -270,7 +303,7 @@ class MomentDetector:
         for moment in MOMENTS:
             if (_boundary_reached(moment, curr)
                     and not _boundary_reached(moment, prev)):
-                self._pending.append(self._emit(moment.kind, curr))
+                self._pending.append(self._emit(moment, curr))
         return released
 
     def _release(self, curr: GameSnapshot, backward: bool) -> list[Event]:
@@ -310,7 +343,7 @@ class MomentDetector:
             event.payload["landmark"] = settled.payload()
         return released
 
-    def _emit(self, kind: str, curr: GameSnapshot) -> Event:
+    def _emit(self, moment: "Moment", curr: GameSnapshot) -> Event:
         """One moment, stamped with Usamune's own number at that frame.
 
         WHY IT CARRIES A TIME AT ALL. A segment closing on a moment used to be
@@ -331,9 +364,12 @@ class MomentDetector:
         `igt` rides along pre-formatted, matching every other IGT-bearing
         event's payload, so a consumer never re-derives the display form.
         """
+        kind = moment.kind
         self._counts[kind] = self._counts.get(kind, 0) + 1
         reading, source = self._clock.igt_at(curr.global_timer, curr)
-        igt_frames = reading + self.DISPLAY_LAG_FRAMES
+        # A door's own measured lag, plus this KIND's own extra (0 for every
+        # kind but `textbox` -- see `Moment.extra_lag_frames`).
+        igt_frames = reading + self.DISPLAY_LAG_FRAMES + moment.extra_lag_frames
         # WHICH door, as opposed to how many doors ago. The ordinal above stays
         # -- it is a property of the moment now rather than its name, which is
         # his own sentence -- and `landmark` is what a label and a subsection key
