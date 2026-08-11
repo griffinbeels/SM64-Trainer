@@ -329,14 +329,32 @@ def test_clicking_outside_the_popup_closes_it(library_page):
     library_page.evaluate(
         "document.querySelector('.library-target-titleline .library-link-button').click()")
     library_page.wait_for(".search-menu", timeout_ms=10000)
+    # SearchMenu's outside-pointerdown listener is attached in a plain
+    # `useEffect`, which preact/hooks defers to the NEXT animation frame after
+    # commit (queued via `requestAnimationFrame`, not a microtask -- see
+    # vendor/hooks.module.js's effect flush). `.search-menu` is already in the
+    # DOM the instant the component commits, a full frame before that effect
+    # runs, so a dispatch landing in that window has NO listener to catch it
+    # and the menu never closes. Wait two real animation frames -- the actual
+    # mechanism preact schedules effects on -- so the listener is provably
+    # attached before we fire the outside click.
+    library_page.evaluate(
+        "new Promise((resolve) => "
+        "requestAnimationFrame(() => requestAnimationFrame(resolve)))")
 
     # an outside pointerdown (the page heading) closes it immediately
     library_page.evaluate("""(() => {
       const outside = document.querySelector('.library-target-search');
       outside.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
     })()""")
-    library_page.wait_for(".library-target-titleline .library-link-button",
-                          timeout_ms=10000)
+    # The trigger button never leaves the DOM -- open or closed, it is always
+    # there -- so waiting on it alone resolves instantly (it was ALREADY
+    # visible before the pointerdown) and proves nothing about Preact having
+    # actually processed the close. Wait on the CLOSED state itself instead
+    # (aria-expanded flips to "false" only once the re-render lands).
+    library_page.wait_for(
+        '.library-target-titleline .library-link-button[aria-expanded="false"]',
+        timeout_ms=10000)
     assert library_page.evaluate(
         "document.querySelectorAll('.search-menu').length") == 0
 
@@ -350,6 +368,11 @@ def test_clicking_outside_the_popup_closes_it(library_page):
       trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
       trigger.click();
     })()""")
+    # Same fix as above: wait on the closed state before reading, not on the
+    # ever-present trigger.
+    library_page.wait_for(
+        '.library-target-titleline .library-link-button[aria-expanded="false"]',
+        timeout_ms=10000)
     deadline_ok = library_page.evaluate(
         "document.querySelectorAll('.search-menu').length")
     assert deadline_ok == 0, f"trigger click while open must close; {deadline_ok} menus"
