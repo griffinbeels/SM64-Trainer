@@ -50,7 +50,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 from sm64_events.core.snapshot import GameSnapshot  # noqa: E402
 from sm64_events.core.timefmt import format_igt, parse_igt  # noqa: E402
-from sm64_events.detectors.moment import MOMENTS, MomentDetector  # noqa: E402
+from sm64_events.detectors.moment import Moment, MOMENTS, MomentDetector  # noqa: E402
 from what_happened import (describe_age, label_for,  # noqa: E402
                            open_readonly, survey_journals)
 
@@ -97,7 +97,14 @@ def score(rows: list[dict], readings: list[str], band=BAND) -> list[Scored]:
 
 
 def verdict(scored: list[Scored]) -> tuple[int | None, str]:
-    """The offset every scored reading agrees on, or why there isn't one."""
+    """The offset every scored reading agrees on, or why there isn't one.
+
+    Operates on readings of ONE KIND — a caller comparing readings that
+    matched rows of different kinds must partition with `scored_by_kind`
+    first, because two kinds legitimately carrying different shipped offsets
+    (a door's `counter + 2` beside a textbox's `counter + 3`, since round 3)
+    is not disagreement, it is the registry working as designed.
+    """
     settled = [s.matches[0].offset for s in scored if s.state == "scored"]
     if not settled:
         return None, "no reading could be attributed to a single moment"
@@ -109,30 +116,97 @@ def verdict(scored: list[Scored]) -> tuple[int | None, str]:
     return distinct[0], f"{len(settled)} reading(s), unanimous"
 
 
-def code_offset() -> int:
-    """What the SHIPPED code adds to the counter, derived by running it.
+def scored_by_kind(scored: list[Scored]) -> dict[str, list[Scored]]:
+    """Partition SCORED (unambiguously matched) readings by the KIND of the
+    row each one matched, so `verdict` and `code_offset` are asked about the
+    same kind together — never a textbox reading checked against a door's
+    constant. Unmatched/ambiguous readings carry no kind and stay out; they
+    still get their own line in `render_scores`."""
+    by_kind: dict[str, list[Scored]] = {}
+    for entry in scored:
+        if entry.state != "scored":
+            continue
+        by_kind.setdefault(entry.matches[0].row["kind"], []).append(entry)
+    return by_kind
 
-    Not read off a constant and not restated here: a synthetic door edge goes
-    through the real `MomentDetector` and the real `IgtClock`, so this number
-    cannot drift from what the server would journal, whatever the constants
-    are called or how many of them there are.
+
+def _moment_for(kind: str) -> Moment:
+    moment = next((m for m in MOMENTS if m.kind == kind), None)
+    if moment is None:
+        raise ValueError(f"no such moment kind: {kind!r}")
+    return moment
+
+
+def code_offset(kind: str = "door_open") -> int:
+    """What the SHIPPED code adds to the counter for THIS KIND, derived by
+    running it.
+
+    Not read off a constant and not restated here: a synthetic edge for
+    `kind` goes through the real `MomentDetector` — its `Moment.open_states`
+    gate and `Moment.extra_lag_frames` included — and the real `IgtClock`, so
+    this number cannot drift from what the server would journal, whatever the
+    constants are called, how many of them there are, or which kind is asked
+    about. A door and a textbox moved by DIFFERENT amounts on 2026-08-11
+    (round 3: a textbox carries one frame beyond a door's own measured lag)
+    precisely because they are two rows in one registry, not two copies of
+    one number — so this reads the registry per kind rather than hardcoding
+    either row's arithmetic. Defaults to `door_open` so a caller asking about
+    "the shipped code" with no kind in mind gets the constant this tool has
+    always reported.
+
+    Raises for a kind with an EMPTY action set (`switch_press`,
+    `enemy_defeated`, ...): those are CAUSED moments, published by
+    `detectors/caused.py` off the object pool on its own edge, not by an
+    action edge — a different code path this tool does not run.
     """
-    def snap(action: int, frame: int) -> GameSnapshot:
+    moment = _moment_for(kind)
+    if not moment.actions:
+        raise ValueError(
+            f"{kind!r} is a CAUSED moment (detectors/caused.py, empty action "
+            f"set) — it has no action edge for this tool to run through "
+            f"MomentDetector")
+    # An action with a gate (`open_states`) may sit in `actions` without ever
+    # opening one on its own — `ACT_WAITING_FOR_DIALOG` is in `DIALOG_ACTIONS`
+    # but carries no entry in `BOX_OPENS_AT_STATE` (moment.py's own
+    # docstring), so picking an arbitrary member of `actions` can land on one
+    # that never fires. `open_states`' own keys are the ones that DO.
+    action = next(iter(moment.open_states)) if moment.open_states \
+        else next(iter(moment.actions))
+    walking = 0x04000440
+
+    def snap(mario_action: int, frame: int, state: int = 0) -> GameSnapshot:
         return GameSnapshot(
             wall_time_utc=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            global_timer=frame, mario_action=action, mario_action_timer=0,
+            global_timer=frame, mario_action=mario_action,
+            mario_action_timer=0, mario_action_state=state,
             num_stars=0, last_completed_course=0, last_completed_star=0,
             igt_overall=1000, curr_level=6, curr_area=1)
 
-    door = next(iter(next(m for m in MOMENTS if m.kind == "door_open").actions))
-    walking = 0x04000440
-    detector = MomentDetector()
-    detector.process(snap(walking, 100), snap(door, 101))
+    frame = 100
+    snaps = [snap(walking, frame)]
+    if moment.open_states is None:
+        frame += 1
+        snaps.append(snap(action, frame))
+    else:
+        # THE TURN, THEN THE BOX (moment.py's own docstring): entering the
+        # action alone is not enough here — climb `mario_action_state` one
+        # frame at a time, exactly as the poller would, until it reaches
+        # this action's own open threshold.
+        threshold = moment.open_states[action]
+        for state in range(threshold + 1):
+            frame += 1
+            snaps.append(snap(action, frame, state))
     # The SETTLE poll: a moment is a one-poll held emit since 2026-08-07 (its
     # landmark is re-read after the edge — detectors/moment.py), so the edge
     # alone publishes nothing. The number this scores is still the EDGE's.
-    events = detector.process(snap(door, 101), snap(door, 102))
-    return events[0].payload["igt_frames"] - 1000
+    snaps.append(snap(action, frame + 1, snaps[-1].mario_action_state))
+
+    detector = MomentDetector()
+    events = []
+    for prev, curr in zip(snaps, snaps[1:]):
+        events.extend(detector.process(prev, curr))
+    return next(e for e in events
+                if e.payload["kind"] == kind).payload["igt_frames"] - 1000
 
 
 def moment_rows(conn: sqlite3.Connection, limit: int) -> list[dict]:
@@ -178,7 +252,7 @@ def render_table(rows: list[dict], offsets: range) -> str:
     return "\n".join(lines)
 
 
-def render_scores(scored: list[Scored], shipped: int) -> str:
+def render_scores(scored: list[Scored]) -> str:
     lines = []
     for entry in scored:
         if entry.state == "unmatched":
@@ -196,19 +270,35 @@ def render_scores(scored: list[Scored], shipped: int) -> str:
             f"  {entry.reading:>10} = counter {match.row['counter']} + "
             f"{match.offset}  (moment #{match.row['id']}, {match.row['kind']}, "
             f"we published {format_igt(match.row['ours'])})")
-    offset, why = verdict(scored)
     lines.append("")
-    if offset is None:
-        lines.append(f"VERDICT: unsettled — {why}")
+    by_kind = scored_by_kind(scored)
+    if not by_kind:
+        lines.append("VERDICT: unsettled — no reading could be attributed to "
+                     "a single moment")
         return "\n".join(lines)
-    lines.append(f"VERDICT: Usamune reads counter + {offset}  ({why})")
-    if offset == shipped:
-        lines.append(f"         the shipped code adds {shipped}. AGREES.")
-    else:
+    # ONE VERDICT PER KIND — never one shared shipped offset for every
+    # reading, which is exactly the bug this replaced: a textbox scoring
+    # `+3` against a door's `+2` read as a mismatch even when the textbox
+    # was correct by design (round 3, 2026-08-11).
+    for kind in sorted(by_kind):
+        offset, why = verdict(by_kind[kind])
+        if offset is None:
+            lines.append(f"VERDICT ({kind}): unsettled — {why}")
+            continue
+        try:
+            shipped = code_offset(kind)
+        except ValueError as exc:
+            lines.append(f"VERDICT ({kind}): +{offset} measured — {exc}")
+            continue
+        agrees = offset == shipped
         lines.append(
-            f"         the shipped code adds {shipped}, so every moment it "
-            f"journals is {abs(offset - shipped)} frame(s) "
-            f"{'fast' if shipped < offset else 'slow'}.")
+            f"VERDICT ({kind}): +{offset} measured, +{shipped} shipped — "
+            f"{'AGREES' if agrees else 'MISMATCH'} ({why})")
+        if not agrees:
+            lines.append(
+                f"         every {kind} the shipped code journals is "
+                f"{abs(offset - shipped)} frame(s) "
+                f"{'fast' if shipped < offset else 'slow'}.")
     return "\n".join(lines)
 
 
@@ -248,15 +338,20 @@ def main() -> int:
         print("No moments carrying a raw counter. Play through a door first.")
         return 1
 
-    shipped = code_offset()
-    print(f"shipped code: Usamune counter + {shipped}\n")
+    print("shipped code:")
+    for kind in sorted({row["kind"] for row in rows if row["kind"]}):
+        try:
+            print(f"  {kind}: counter + {code_offset(kind)}")
+        except ValueError as exc:
+            print(f"  {kind}: {exc}")
+    print()
     print(render_table(rows, range(0, 4)))
     if not args.usamune:
         print("\nNow read the emulator for one of these and re-run with"
               "\n  --usamune <what Usamune showed>")
         return 0
     print()
-    print(render_scores(score(rows, args.usamune), shipped))
+    print(render_scores(score(rows, args.usamune)))
     return 0
 
 
