@@ -310,6 +310,25 @@ PENDING_WARP_OP = 0x8033B252  # s16 sDelayedWarpOp; 0 = no warp pending
 WARP_OP_WARP_FLOOR = 0x13  # void-out: resolves to the death node (or game
                            # over at 0 lives) unless the level has node 0xF3
 
+# The COUNTDOWN beside that op (`sDelayedWarpTimer`, same FORCE_BSS walk), and
+# the reason it is read at all is that PENDING_WARP_OP alone is ambiguous: the
+# game zeroes the op both when the delayed warp INITIATES and when a reset
+# KILLS it, and those two want opposite events. The countdown separates them.
+#
+# LIVE-VERIFIED 2026-08-11 (tools/probe_warp_block.py, 15 lobby touches through
+# the BitDW hole plus a WF and a CCM painting):
+#   * armed at 19-20 within 0-2 frames of the touch on every hole entry, and
+#     ticking down one per frame;
+#   * a COMPLETED ride reaches 0 with the op still 4 — sWarpDest is written on
+#     that same frame, the level byte moves 2 frames later, and the op only
+#     clears after that;
+#   * a CANCELLED ride has op and countdown zeroed TOGETHER with frames still
+#     on the clock (12, 10, 13 and 4 remaining across four of his resets);
+#   * the Usamune menu FREEZES it mid-count without clearing the op — one
+#     touch held at 11 for 106 frames and then completed normally.
+DELAYED_WARP_TIMER = 0x8033B254  # s16 sDelayedWarpTimer; frames until the
+                                 # delayed warp fires, 0 when none is running
+
 # The WARP DESTINATION (level_update.c `struct WarpDest sWarpDest`), same
 # FORCE_BSS block as PENDING_WARP_OP and pinned by the same walk:
 #   struct WarpDest { u8 type; u8 levelNum; u8 areaIdx; u8 nodeId; s32 arg; }

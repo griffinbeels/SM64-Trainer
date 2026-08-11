@@ -36,6 +36,30 @@ survives a COMPLETED painting warp (read live standing idle in DDD). Freshness
 is therefore "was the struct just written" — all four bytes watched for a
 change, with the two stale pipe reads as the negative cases that prove it.
 
+## A DELAYED warp cannot name its destination early, and 20 frames is the floor
+
+Asked for the touch frame itself on every entrance — *"the frame mario touches
+the warp, we need to be able to detect it"* — the candidate was
+`sSourceWarpNodeId`, which `level_trigger_warp()` writes on the touch and which
+would key the area's warp-node table. **Refuted live, 2026-08-11**: across 15
+touches it read the same value (11, twice 0) for the BitDW hole, the WF painting
+and the CCM painting alike, so it does not distinguish destinations and no table
+lookup can be built on it. The 20-frame countdown is the game's own, ran
+19-20 on every one of those touches, and `sWarpDest` is written on the frame it
+reaches zero — 2 frames before the level byte moves. So a hole or pipe costs 20
+frames and a painting costs 0, and closing that last 0.67 s needs an address
+this codebase does not have (`gCurrentArea`), not a better reading of one it
+does.
+
+## A SECOND touch is never swallowed
+
+`_touch` used to refuse to arm while one was held, so a reset-and-retry loop at
+his cadence lost whole attempts rather than delaying them — the reading behind
+*"sometimes it appears after a couple seconds; other times, after, say, 30
+seconds"*. A new entry edge now SUPERSEDES the held one: the old touch
+publishes with `to` = None and `released_by` = "superseded", the new one arms.
+Every touch produces exactly one event, always.
+
 The destination matters at all because the castle basement alone hosts five
 exits (HMC, LLL, SSL, DDD, BitFS): an end condition reading only "a warp in
 the castle" would let walking into HMC record a false MIPS Clip success.
@@ -74,11 +98,19 @@ PUBLISH, in the order checked:
     rule is correct under both answers, and `released_by`/`held_frames` on
     every published touch record which clause fired so the next latency
     report is a journal query, not an inference;
-  * HOLD_CAP_FRAMES elapsed -> `to` = None. This is what covers an in-level
-    teleporter (CCM broken bridge, WDW corners; every one
-    ACT_TELEPORT_FADE_OUT), which relocates Mario inside his own area and so
-    produces no edge to wait for at all — its op cleared ~40 frames in, so
-    the pause release cannot see it.
+  * the RIDE WAS CANCELLED -> `to` = None, published on the frame the game
+    gives up. A delayed warp arms `sDelayedWarpOp` within a frame or two of
+    the touch and counts down; if that op returns to 0 with nothing written
+    and no edge, the warp is not coming. Live probe, 2026-08-11, 15 lobby
+    touches through the BitDW hole: eight of them were reset out of
+    mid-countdown and every one CLEARED the op — at +8, +9, +10, +16, +17,
+    +18 and +164 frames. The old ceiling made each of those cost 240.
+    This also covers an in-level teleporter (CCM broken bridge, WDW corners;
+    every one ACT_TELEPORT_FADE_OUT), which relocates Mario inside his own
+    area and so produces no edge to wait for at all — its op clears ~40
+    frames in, which the pause release cannot see and this one can.
+  * HOLD_CAP_FRAMES elapsed -> `to` = None. The backstop for a touch whose
+    op never armed at all, so nothing above can bound it.
 
 The last five bounds are why nothing that fired before this change can stop
 firing: a hold with no clock is how an event disappears. `to` is therefore
@@ -188,6 +220,9 @@ class WarpDetector:
         self._dest_written_at: int | None = None
         self._engaged = EngagementWatch()
         self._igt_ticked_at: int | None = None
+        # The HELD touch's delayed-warp countdown: the last non-zero reading,
+        # or None if none has been seen. Cleared with the hold in _publish.
+        self._ride_countdown: int | None = None
 
     def process(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         if self._clock.empty():
@@ -244,8 +279,29 @@ class WarpDetector:
     def _touch(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         entered = (curr.mario_action in WARP_ENTRY_ACTIONS
                    and prev.mario_action not in WARP_ENTRY_ACTIONS)
-        if not entered or self._held is not None:
+        if not entered:
             return []
+        # A NEW touch supersedes a held one rather than being dropped (see
+        # the module docstring): whatever the old one was waiting for, it is
+        # not coming, because Mario has entered another entrance since.
+        #
+        # Bounded by the ride window, which is what keeps the old rule's
+        # guarantee intact: inside 26 frames of a touch, an action edge is
+        # the SAME entrance seen twice — a flicker out of ACT_DISAPPEARED
+        # mid-fade — and stacking a second held touch there journals one
+        # entrance as two. The game's own countdown is 20 frames, so nothing
+        # real can arrive sooner, and his retry loop's touches sit hundreds
+        # of frames apart.
+        #
+        # The BBH pair cannot trip this either: both its actions are in
+        # WARP_ENTRY_ACTIONS, so jump -> spin has `prev` in the set and is
+        # not an edge at all.
+        superseded = []
+        if self._held is not None:
+            if (curr.global_timer - self._held["frame"]
+                    < self.RIDE_WINDOW_FRAMES):
+                return []
+            superseded = self._publish(None, "superseded", curr)
         # The touch frame IS the observed edge frame: unlike a star dance,
         # ACT_DISAPPEARED counts down actionArg rather than actionTimer
         # (decomp act_disappeared), so there is no action-timer backdating to
@@ -276,18 +332,28 @@ class WarpDetector:
                       "landmark": found.payload() if found else None,
                       "wall_time_utc": curr.wall_time_utc}
         if self._destination_is_live(curr):
-            return self._publish(curr.warp_dest_level, "destination", curr)
+            return superseded + self._publish(curr.warp_dest_level,
+                                              "destination", curr)
         # A rollout enters the cage airborne and its FIRST action is the
         # SPIN — the commit is on this very tick (see _release's spin
         # branch for the whole argument).
         if curr.mario_action == ACT_BBH_ENTER_SPIN:
-            return self._publish(BBH_LEVEL, "destination", curr)
-        return []
+            return superseded + self._publish(BBH_LEVEL, "destination", curr)
+        return superseded
 
     def _release(self, prev: GameSnapshot, curr: GameSnapshot) -> list[Event]:
         held = self._held
         if held is None:
             return []
+        # The countdown arrives 0-2 frames after the touch (probe 2026-08-11:
+        # +0 on three of fifteen, +1 or +2 on the rest), so it is watched for
+        # the whole hold rather than sampled once at the touch.
+        if curr.pending_warp_op != 0:
+            # Reaching 0 with the op still armed IS the ride firing, so it
+            # stops being cancellable right there — the op clearing a few
+            # frames later is the warp happening, not the warp dying.
+            self._ride_countdown = (curr.delayed_warp_timer
+                                    if curr.delayed_warp_timer > 0 else None)
         # The one-poll-late engagement write: a pipe's object can land in the
         # pointer on the tick AFTER the action edge (the same lag
         # detectors/moment.py holds a poll for). A touch that read nothing
@@ -336,6 +402,19 @@ class WarpDetector:
                 and curr.global_timer - self._igt_ticked_at
                 >= self.PAUSE_CONFIRM_FRAMES):
             return self._publish(None, "pause", curr)
+        # THE RIDE WAS CANCELLED — the op went quiet WITH FRAMES STILL ON THE
+        # COUNTDOWN. Both halves are load-bearing, and the op alone is not
+        # enough: the game zeroes it when the delayed warp INITIATES too, ~57
+        # frames before a painting's level byte moves, and publishing on that
+        # is the 2026-08-05 live bug (`to: None` on every real painting entry,
+        # his journal ids 25415/25371, pinned by test_warp.py). A ride that
+        # runs its course reaches 0 first and clears the op after; a ride a
+        # reset killed has both zeroed together (probe 2026-08-11: 12, 10, 13
+        # and 4 frames left across four of his BitDW resets). A countdown the
+        # Usamune menu merely FROZE keeps its op armed and never reaches this
+        # branch at all — the pause release above owns that case.
+        if self._ride_countdown is not None and curr.pending_warp_op == 0:
+            return self._publish(None, "cancelled", curr)
         if elapsed >= self.HOLD_CAP_FRAMES:
             return self._publish(None, "cap", curr)
         return []
@@ -343,6 +422,7 @@ class WarpDetector:
     def _publish(self, to: int | None, released_by: str,
                  curr: GameSnapshot) -> list[Event]:
         held, self._held = self._held, None
+        self._ride_countdown = None
         return [Event(type="warp_entered", frame=held["frame"],
                       timestamp_utc=held["wall_time_utc"],
                       payload={"level": held["level"], "area": held["area"],

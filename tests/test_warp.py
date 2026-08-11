@@ -413,6 +413,91 @@ def test_no_second_touch_while_one_is_already_held():
     assert events[0].frame == 2001, "the FIRST touch, not the second"
 
 
+def _ride(detector, *, frames, kill_at=None, level=6):
+    """Touch the BitDW hole and run its 20-frame countdown, optionally killed
+    mid-count the way his reset kills it (op and countdown zeroed together).
+    Returns every event the ride produced."""
+    touch = snap(global_timer=2000, curr_level=level,
+                 mario_action=ACT_DISAPPEARED)
+    out = detector.process(snap(global_timer=1999, curr_level=level), touch)
+    prev, countdown = touch, 20
+    for offset in range(1, frames + 1):
+        killed = kill_at is not None and offset >= kill_at
+        countdown = max(countdown - 1, 0)
+        curr = snap(global_timer=2000 + offset, curr_level=level,
+                    mario_action=ACT_DISAPPEARED,
+                    pending_warp_op=0 if killed else 0x04,
+                    delayed_warp_timer=0 if killed else countdown)
+        out += detector.process(prev, curr)
+        prev = curr
+    return out
+
+
+def test_a_reset_mid_countdown_publishes_the_touch_at_once():
+    """His LBLJ loop, 2026-08-11: he touches the BitDW hole and resets
+    immediately so the fight never loads, which means the destination is never
+    written and no level edge ever comes. That used to run the full 240-frame
+    ceiling -- 8.0 s of dead air on 8 of his 12 lobby touches -- before
+    publishing exactly the same payload this now publishes on the frame the
+    game gives up. *"That type of lag is never acceptable."*"""
+    detector = WarpDetector()
+    events = _ride(detector, frames=40, kill_at=9)
+    assert len(events) == 1, "one touch, one event"
+    [cancelled] = events
+    assert cancelled.frame == 2000, "back-dated to the touch, as always"
+    assert cancelled.payload["to"] is None
+    assert cancelled.payload["released_by"] == "cancelled"
+    assert cancelled.payload["held_frames"] == 9, (
+        "published the frame the op went quiet, not at the 240-frame ceiling")
+
+
+def test_a_countdown_that_runs_out_is_not_a_cancel():
+    """The mirror case, and the one that makes the countdown load-bearing
+    rather than decorative: a ride that FIRES also zeroes the op, a few frames
+    after the countdown reaches 0. Reading that as a cancel would publish
+    `to: None` on every real entry -- the 2026-08-05 bug, one door along."""
+    detector = WarpDetector()
+    events = _ride(detector, frames=19)
+    assert events == [], "still riding"
+    # countdown hits 0 with the op ARMED (the ride firing), op clears after
+    prev = snap(global_timer=2019, curr_level=6, mario_action=ACT_DISAPPEARED,
+                pending_warp_op=0x04, delayed_warp_timer=1)
+    fired = snap(global_timer=2020, curr_level=6, mario_action=ACT_DISAPPEARED,
+                 pending_warp_op=0x04, delayed_warp_timer=0)
+    assert detector.process(prev, fired) == []
+    quiet = snap(global_timer=2021, curr_level=6,
+                 mario_action=ACT_DISAPPEARED, pending_warp_op=0,
+                 delayed_warp_timer=0)
+    assert detector.process(fired, quiet) == [], "the op clearing is the warp"
+    [landed] = detector.process(
+        quiet, snap(global_timer=2022, curr_level=17,
+                    mario_action=ACT_DISAPPEARED))
+    assert landed.payload["to"] == 17 and landed.frame == 2000
+
+
+def test_a_genuinely_later_touch_supersedes_instead_of_vanishing():
+    """The other half of the rule above, and his live report: in a
+    reset-and-retry loop the SECOND entrance used to be dropped outright while
+    the first was still held, so an attempt did not arrive late — it never
+    arrived. Past the ride window an action edge can only be a new entrance
+    (the game's countdown is 20 frames), so the held one publishes and the new
+    one arms."""
+    detector = WarpDetector()
+    during = snap(global_timer=2001, mario_action=ACT_DISAPPEARED)
+    detector.process(snap(global_timer=2000), during)
+    detector.process(during, snap(global_timer=2002))
+    [first] = detector.process(
+        snap(global_timer=2100),
+        snap(global_timer=2101, mario_action=ACT_DISAPPEARED))
+    assert first.frame == 2001 and first.payload["to"] is None
+    assert first.payload["released_by"] == "superseded"
+    [second] = detector.process(
+        snap(global_timer=2101, mario_action=ACT_DISAPPEARED),
+        snap(global_timer=2178, mario_action=ACT_DISAPPEARED, curr_level=23))
+    assert second.frame == 2101, "the SECOND touch was armed, not swallowed"
+    assert second.payload["to"] == 23
+
+
 def test_teleport_fade_out_also_emits_warp_entered():
     detector = WarpDetector()
     during = snap(mario_action=ACT_TELEPORT_FADE_OUT)

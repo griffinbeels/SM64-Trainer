@@ -271,12 +271,38 @@ castle" lets walking into HMC record a false MIPS Clip.
 
 Publish order: the struct was just written (`to` = its level — the touch frame
 for a painting, touch+20 for a pipe) → a level edge (`to` = the new level) → an
-area edge (`to` = the unchanged level) → three bounds that guarantee nothing
+area edge (`to` = the unchanged level) → four bounds that guarantee nothing
 that fired before this can stop firing, each publishing `to: None` — a backward
-`global_timer` (console reset), **a FROZEN countdown (2026-08-07)**, and
-`HOLD_CAP_FRAMES` 240, which is also what covers an in-level teleporter (it
-relocates Mario inside his own area, so no edge ever arrives). `frame` and the
-igt trio stay the TOUCH's however late the publish lands.
+`global_timer` (console reset), **a FROZEN countdown (2026-08-07)**, **a
+CANCELLED ride (2026-08-11, below)**, and `HOLD_CAP_FRAMES` 240 as the backstop
+for a touch that armed no countdown at all. `frame` and the igt trio stay the
+TOUCH's however late the publish lands.
+
+**The cancelled-ride release is the LBLJ fix (2026-08-11), and it needed a new
+address to tell a cancel from a completion.** His loop touches the BitDW hole
+and resets at once so the fight never loads, which means the destination is
+never written and no level edge ever comes: 8 of his 12 lobby touches that
+session sat the full ceiling at **8.0 s**, the other 4 released on the
+destination at exactly 20 frames. `PENDING_WARP_OP` alone cannot say which
+happened — the game zeroes it both when the delayed warp INITIATES (~57 frames
+before a painting's level byte moves, the 2026-08-05 bug) and when a reset
+kills it. `DELAYED_WARP_TIMER` (`sDelayedWarpTimer` 0x8033B254, live-verified
+by the same probe run) separates them: a ride that runs its course reaches 0
+with the op still armed, a ride a reset killed has both zeroed together with
+frames still on the clock (12, 10, 13 and 4 across four of his resets). Both
+new guards mutation-proved in `test_warp.py`.
+
+**A SECOND touch now supersedes a held one** instead of being dropped, bounded
+by `RIDE_WINDOW_FRAMES` so a flicker out of ACT_DISAPPEARED mid-fade still
+cannot journal one entrance as two. The old drop is why his retries did not
+arrive late but did not arrive at all — *"sometimes after, say, 30 seconds"*.
+
+**20 frames is the floor for a hole or pipe and no reading of RAM we have will
+beat it.** `sSourceWarpNodeId` was the candidate for naming the destination at
+the touch; **REFUTED live 2026-08-11** — the same value (11, twice 0) for the
+BitDW hole, the WF painting and the CCM painting alike, so no warp-node table
+lookup can be keyed on it. Closing that last 0.67 s needs `gCurrentArea`, which
+this codebase has never pinned.
 
 **The frozen-countdown release is the bowser-pipe fix (2026-08-07).** His
 pipe-segment flow touches the pipe and goes straight into the Usamune menu —
