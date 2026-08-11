@@ -16,10 +16,28 @@ compares the payload's `kind` rather than naming any kind itself. That is the
 user's requirement made structural: "we need this to be flexible so that we
 allow for the invention and innovation of new sections as needed" (2026-08-05).
 
-ENTRY EDGE, never level. An action byte reads the same for every frame of a
-door animation, so a moment is the frame Mario ENTERED it: `prev` outside the
-set, `curr` inside it. Same discipline as star_grab's action edge, and the
-reason re-collection works there.
+ENTRY EDGE, never level, for every kind but `textbox`. An action byte reads
+the same for every frame of a door animation, so a moment is the frame Mario
+ENTERED it: `prev` outside the set, `curr` inside it. Same discipline as
+star_grab's action edge, and the reason re-collection works there.
+
+`TEXTBOX IS A TURN, THEN A BOX` (round 2, 2026-08-10). His report: two
+screenshots of the King Whomp dialogue, both several frames ahead of Usamune's
+own screen. Mario turns to face the NPC for 6-8 frames BEFORE the box exists
+at all (decomp `act_reading_npc_dialog`: `MARIO_ACTION_STATE` climbs 0..7
+during the turn and the game creates the dialog only at 8), so the entry edge
+into `ACT_READING_NPC_DIALOG` names the turn's first frame, not the box's.
+`Moment.open_states` is the gate for this: when set, entering `actions` is
+necessary but not sufficient, and the moment fires on the frame
+`mario_action_state` reaches that action's threshold
+(`addresses.BOX_OPENS_AT_STATE`) instead. THE GAP IS NOT A CONSTANT -- his own
+run measured 6-8 frames across ten King Whomp encounters -- so this watches
+the real state every poll rather than subtracting a fixed offset.
+`ACT_WAITING_FOR_DIALOG` (also in `DIALOG_ACTIONS`) carries no entry in
+`BOX_OPENS_AT_STATE` and so can never open the box on its own; his one live
+WAITING sighting moved into a reading action within a frame regardless.
+Every other kind leaves `open_states` at its default `None`, which reduces to
+the plain entry-edge rule above -- see `_boundary_reached`.
 
 ORDINALS count occurrences since `reset()`, which the service ties to the
 attempt opening. They exist for START triggers: waypoints already order
@@ -76,6 +94,30 @@ class Moment:
     kind: str            # the wire + trigger vocabulary ("door_open", ...)
     actions: frozenset   # entering ANY of these IS this moment
     label: str           # the sentence the builder's picker shows
+    # None (every kind but `textbox`): entering ANY action in `actions` IS
+    # the moment -- the plain entry-edge rule. When set, entering `actions`
+    # is necessary but not sufficient: the moment fires only once
+    # `mario_action_state` reaches that action's threshold. Keyed exactly
+    # like `addresses.BOX_OPENS_AT_STATE`, which is the only value ever
+    # passed here -- see the module docstring's "TEXTBOX IS A TURN, THEN A
+    # BOX".
+    open_states: dict | None = None
+
+
+def _boundary_reached(moment: "Moment", snap: GameSnapshot) -> bool:
+    """Is `snap` INSIDE this moment's trigger, per its own gate?
+
+    Called on both `prev` and `curr`; the moment fires on the RISING edge
+    (false -> true). `open_states=None` reduces exactly to the original
+    entry-edge rule, so every kind but `textbox` is unchanged by this
+    function's existence.
+    """
+    if snap.mario_action not in moment.actions:
+        return False
+    if moment.open_states is None:
+        return True
+    threshold = moment.open_states.get(snap.mario_action)
+    return threshold is not None and snap.mario_action_state >= threshold
 
 
 # THE registry. One row per moment kind; the sets are the ones addresses.py
@@ -83,7 +125,8 @@ class Moment:
 # the anchor detector can never drift apart.
 MOMENTS: tuple[Moment, ...] = (
     Moment("door_open", A.DOOR_ACTIONS, "Open a door"),
-    Moment("textbox", A.DIALOG_ACTIONS, "Trigger a textbox"),
+    Moment("textbox", A.DIALOG_ACTIONS, "Trigger a textbox",
+           open_states=A.BOX_OPENS_AT_STATE),
     Moment("pole_grab", A.POLE_GRAB_ACTIONS, "Grab a pole"),
     Moment("pickup", A.PICKUP_ACTIONS, "Pick up an object"),
     # Round 9 item 6: *"We also need to detect when the user enters a cannon"*
@@ -225,8 +268,8 @@ class MomentDetector:
         if not self._target_active():
             return released
         for moment in MOMENTS:
-            if (curr.mario_action in moment.actions
-                    and prev.mario_action not in moment.actions):
+            if (_boundary_reached(moment, curr)
+                    and not _boundary_reached(moment, prev)):
                 self._pending.append(self._emit(moment.kind, curr))
         return released
 

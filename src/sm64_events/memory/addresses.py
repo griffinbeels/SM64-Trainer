@@ -578,11 +578,26 @@ DIALOG_ACTIONS = frozenset({ACT_READING_AUTOMATIC_DIALOG,
 # field once per frame while turning (0->7) and HOLDS it at 8 for the whole
 # time the box is actually open (advanced only by the NPC's own script
 # sending MARIO_DIALOG_STOP), which is exactly the shape of an 8-frame-early
-# "textbox" moment built on the action edge alone. `moment.py`'s trigger is
-# unchanged by this -- this is a new read, not a narrower one.
-# VERIFY (live gate pending): must confirm this climbs 0..8 in his own King
-# Whomp encounter and holds at 8 for the duration of the box.
+# "textbox" moment built on the action edge alone. `moment.py`'s `textbox`
+# trigger now gates on this field -- see BOX_OPENS_AT_STATE below.
+# LIVE-VERIFIED 2026-08-10: his run captured 13 textboxes in Whomp's
+# Fortress. The field read exactly as the decomp describes -- 0,1,2...8
+# during the head turn, holding at 8 for the whole time the box was open,
+# advancing again only once the dialogue ended.
 MARIO_ACTION_STATE = MARIO_STRUCT + 0x18  # u16
+
+# The frame each reading action's OWN handler actually creates the dialog
+# box -- keyed off MARIO_ACTION_STATE, not off entering the action. THE FIX
+# for the 2026-08-10 live report (his two screenshots: Usamune 12"00 and
+# 11"93 against a practice log reading faster, both exactly the King Whomp
+# head-turn's length). Measured on his run: the WAITING/turn -> box gap
+# ranged 6-8 frames across ten King Whomp encounters -- 7 in nine cases, 8 in
+# three, 6 in one -- so this is watched per grab, never subtracted as a
+# constant. `ACT_WAITING_FOR_DIALOG` carries no entry here on purpose: the
+# decomp gives it no state machine of its own, so a threshold for it would be
+# a guess, and it never fires the moment before a reading action is entered.
+BOX_OPENS_AT_STATE = {ACT_READING_NPC_DIALOG: 8,
+                      ACT_READING_AUTOMATIC_DIALOG: 9}
 
 # The SAME field is repurposed by act_reading_npc_dialog as the Mario head-
 # turn PITCH ANGLE while actionState < 8 (`actionTimer += headTurnAmount`,

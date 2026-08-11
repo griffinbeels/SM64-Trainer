@@ -415,6 +415,7 @@ def test_frames_since_door_tracks_star_and_key_doors(door_action):
 
 ACT_INTRO_CUTSCENE = 0x04001301
 ACT_READING_NPC_DIALOG = 0x20001306  # decomp include/sm64.h (a textbox action)
+ACT_WAITING_FOR_DIALOG = 0x0000130A  # decomp include/sm64.h ("dialog about to begin")
 
 
 def test_frames_since_dialog_present_after_intro_cutscene():
@@ -442,6 +443,23 @@ def test_frames_since_dialog_present_after_textbox():
                        snap(2008, igt=0, action=ACT_WALKING))
     assert len(events) == 1 and events[0].type == "practice_reset"
     assert events[0].payload["frames_since_dialog"] == 4
+
+
+def test_frames_since_dialog_present_after_waiting_for_dialog_alone():
+    """The textbox-timing fix (round 2, 2026-08-10) narrowed `moment.py`'s
+    OWN notion of "the box is open" to the two reading actions -- it never
+    touched `addresses.DIALOG_ACTIONS` itself, which this detector reads
+    directly. Proof the two stayed decoupled: a dialogue that sits in
+    ACT_WAITING_FOR_DIALOG and never reaches a reading action at all (his
+    one live sighting of this shape) must still count as recent here, even
+    though moment.py's textbox gate would never have called it open."""
+    d = AnchorDetector()
+    d.process(snap(3000, igt=700, action=ACT_WALKING),
+              snap(3003, igt=700, action=ACT_WAITING_FOR_DIALOG))
+    events = d.process(snap(3003, igt=700, action=ACT_WAITING_FOR_DIALOG),
+                       snap(3006, igt=0, action=ACT_WALKING))
+    assert len(events) == 1 and events[0].type == "practice_reset"
+    assert events[0].payload["frames_since_dialog"] == 3
 
 
 def test_frames_since_dialog_none_when_no_dialogue_seen():

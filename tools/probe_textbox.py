@@ -72,7 +72,8 @@ import time
 
 from sm64_events.memory.addresses import (ACT_READING_AUTOMATIC_DIALOG,
                                            ACT_READING_NPC_DIALOG,
-                                           ACT_WAITING_FOR_DIALOG, CURR_AREA,
+                                           ACT_WAITING_FOR_DIALOG,
+                                           BOX_OPENS_AT_STATE, CURR_AREA,
                                            CURR_LEVEL, DIALOG_ACTIONS,
                                            GLOBAL_TIMER, MARIO_ACTION,
                                            MARIO_ACTION_STATE,
@@ -89,15 +90,9 @@ ACTION_NAMES = {
     ACT_READING_NPC_DIALOG: "READING_NPC_DIALOG",
 }
 
-# The MARIO_ACTION_STATE value at which each reading action's handler
-# actually creates the dialog box -- see addresses.MARIO_ACTION_STATE's own
-# comment for the decomp lines this comes from. Not in DIALOG_ACTIONS/
-# READING_ACTIONS because it answers a different question (WHEN inside the
-# action, not WHICH action).
-BOX_OPENS_AT_STATE = {
-    ACT_READING_NPC_DIALOG: 8,
-    ACT_READING_AUTOMATIC_DIALOG: 9,
-}
+# BOX_OPENS_AT_STATE now lives in addresses.py -- it is what `moment.py`'s
+# `textbox` gate ships on (Moment.open_states), and this probe reads the
+# SAME dict rather than a second copy of it.
 
 # A textbox that never resolves (Mario walks away, a reset) should not hang
 # the trace forever -- generous ceiling, a real dialog opens well inside it.

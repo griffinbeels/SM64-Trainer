@@ -52,6 +52,12 @@ class GameSnapshot:
     last_completed_star: int    # 1-based
     # Defaulted fields (added after goal one; defaults keep old call sites valid).
     igt_overall: int = 0   # Usamune running overall star time (USAMUNE_OVERALL)
+    # A dialog action's own sub-state (MARIO_ACTION_STATE) -- 0 outside a
+    # dialog action (the field the game itself zeroes on every action
+    # change). `moment.py`'s textbox gate reads this to find the frame the
+    # box actually OPENS, not the frame Mario started turning toward the
+    # NPC -- addresses.BOX_OPENS_AT_STATE.
+    mario_action_state: int = 0
     igt_result: int = 0    # Usamune final star time, written at the grab
                            # (USAMUNE_STAR_RESULT); 0 before the first grab
     curr_level: int = 0    # gCurrLevelNum: LEVEL ids (WF=24, SSL=8...), NOT course ids — see addresses.py trap note
@@ -151,6 +157,7 @@ class SnapshotReader:
             global_timer=m.read_u32(A.GLOBAL_TIMER),
             mario_action=m.read_u32(A.MARIO_ACTION),
             mario_action_timer=m.read_u16(A.MARIO_ACTION_TIMER),
+            mario_action_state=m.read_u16(A.MARIO_ACTION_STATE),
             num_stars=m.read_s16(A.MARIO_NUM_STARS),
             last_completed_course=m.read_s8(A.LAST_COMPLETED_COURSE),
             last_completed_star=m.read_s8(A.LAST_COMPLETED_STAR),
