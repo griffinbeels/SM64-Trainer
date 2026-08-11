@@ -59,6 +59,37 @@ at all: the bug only exists at his cell count. Clone into the REAL row (the
 `.stagebanner` — an unscoped `.starcell` finds the target picker's 21 HIDDEN
 cells, all of height 0, which is the trap `.claude/rules/ui-core.md` names.
 
+### Round three, 2026-08-11: the declared square was not real either
+
+Same column, same shape of cause, one element up — *"the text for the strategy
+'Standard' displays underneath the quick selector card."* `.starholder`
+declares `aspect-ratio: 1 / 1`, and a column-flex item's automatic minimum size
+is its CONTENT's height: `.starimg` is `height: 100%` of a height the
+aspect-ratio has not resolved yet, so it falls back to the image's INTRINSIC
+height and drags the holder with it. Every star in the corpus is a square PNG,
+which is why this sat here for months; a segment's portrait Mario art made the
+holder **82x93 inside an 82px square** and pushed the sub-line 12.09px past the
+gold border. `min-height: 0` + `flex: 0 0 auto` makes the declaration real.
+
+Two things worth keeping from the fix:
+
+- **The clearance came from the ROW, and a cell's own bottom padding CANNOT
+  give it.** Measured identical to the hundredth of a pixel at `.1rem` and
+  `.4rem`, because this column already overflows its content box — a bottom
+  padding reserves space nothing is laid out in. The row's 8px of bottom
+  padding sits OUTSIDE each cell's border, so 6px of it was clearance nobody
+  could see; 8px → 2px hands it to the cells and (the row being border-box)
+  nothing else on the page moves. That padding was named for the active star's
+  glow; the art clears the card's bottom by 81-95px at every width, so nothing
+  was using it.
+- **The guard has to PLANT the state, because the corpus cannot reach it.**
+  Every shipped icon is square, so a portrait holder never renders here and
+  `test_selector_strat_line_fits.py` was green right through the report. Its
+  new companion injects a 100x220 SVG into one cell and asserts both halves —
+  the holder keeps its square, and the sub-line clears the cell's bottom edge.
+  Same lesson as the rank-slot test above, from the other direction: there the
+  fixture had too FEW cells, here it has the wrong ART.
+
 ## Subsections nest, with no switch on the row
 
 **A [[subsection]] IS NEVER A CELL OR A BADGE ON THE SELECTOR — IT NESTS INSIDE ITS PARENT'S PRACTICE-LOG CARD, ALWAYS SHOWN, WITH NO SWITCH ANYWHERE** (round 31, task 2/3, 2026-08-10). This retires TWO earlier designs in turn, both real live-reported bugs in their own right:

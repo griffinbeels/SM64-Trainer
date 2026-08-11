@@ -114,8 +114,20 @@
   .starrank { display: flex; align-items: center; justify-content: center;
               flex: 0 0 18px; margin-top: -6px; color: #6c7686;
               font-size: .9rem; line-height: 1; }
+  /* `min-height: 0` + `flex: 0 0 auto` are what make the declared square
+     REAL, and without them a non-square icon quietly wins. The holder is a
+     column-flex item, so its automatic minimum size is its CONTENT's height
+     -- and `.starimg` is `height: 100%` of a height the aspect-ratio has not
+     resolved yet, which falls back to the image's own intrinsic height. A
+     square star PNG makes that a no-op, which is why this hid for months; the
+     segment cells' portrait art inflated the holder to 82x93 at 1400px and
+     pushed the strat sub-line 12.09px BELOW the cell's gold border -- live
+     report 2026-08-11, *"the text for the strategy 'Standard' displays
+     underneath the quick selector card"*. Measured at 850/1200/1400: 69, 90
+     and 93px tall inside an 82px-wide square. */
   .starholder { display: block; width: min(74px, 72%);
-                aspect-ratio: 1 / 1; transition: transform .18s ease; }
+                aspect-ratio: 1 / 1; min-height: 0; flex: 0 0 auto;
+                transition: transform .18s ease; }
   .starcell.active-star .starholder { transform: scale(1.16); }
   /* PNG star art (ui/assets/star_N.png). object-fit:contain honours the
      transparent top/bottom margin baked into the 256x256 art, so the star
@@ -1498,14 +1510,30 @@
      row 2px too tall for the space it is given. The sweep had been carrying
      it as 78 exempted "scrollHeight 222 > clientHeight 220" rows rather than
      as a bug; it is what left the strat sub-line with no slack of its own. */
+  /* The row's bottom padding sits OUTSIDE each cell's border, so 6px of it
+     was clearance nobody could see under a gold box whose own text was
+     touching the edge. 8px -> 2px hands those 6px to the CELLS, which is the
+     only lever that moves the sub-line inside (a cell's own bottom padding
+     cannot: its column already overflows, see below). The row is border-box,
+     so nothing else on the page moves -- measured, the cell's bottom goes
+     from 8px inside the row to 2px, clearance under the strat line goes from
+     -1.36/-12.09 to +4.64, and the active art still clears the card's bottom
+     by 81-95px at every width, so the glow this padding is named for was
+     never the thing using it. */
   .selector-card .starrow {
     height: calc(var(--selector-height) - 58px); align-items: stretch;
-    gap: clamp(3px, .82cqw, 8px); margin: 0; padding: 4px 1px 8px;
+    gap: clamp(3px, .82cqw, 8px); margin: 0; padding: 4px 1px 2px;
+    /* MUTATION TARGET for tests/test_selector_strat_line_fits.py: restore
+       the 8px and the inside-the-cell guard goes red. */
   }
   .selector-card .starcell {
     flex: 1 1 0; min-width: 0; height: 100%;
-    /* bottom padding pays for .starname's descender room (see its rule): the
-       cell height is a fixed OBS slot, so the space had to come from inside. */
+    /* bottom padding pays for .starname's descender room (see its rule). It
+       does NOT buy the strat sub-line its clearance and raising it cannot:
+       the column already overflows this box, so a bottom padding reserves
+       space nothing is laid out in -- measured identical at .1rem and .4rem,
+       to the hundredth of a pixel, at all five widths. The row's padding
+       above is the only lever, because it changes the cell's HEIGHT. */
     justify-content: flex-start; padding: .35rem .15rem .1rem;
   }
   .selector-card .starholder { width: min(82px, 8.4cqw); }

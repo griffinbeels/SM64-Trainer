@@ -100,3 +100,95 @@ def test_no_strategy_line_is_shaved_by_its_own_cell():
                 f"({shaved[0]['shaved']}px of descender lost). `.starsub` is "
                 "a shrinkable flex item that clips its own content; it needs "
                 "flex-shrink: 0.")
+
+
+# The sub-line must also sit INSIDE the cell's own border, which is a
+# different failure from being clipped by it -- and the one the corpus cannot
+# provoke on its own. See the injection below.
+INSIDE = """
+(() => {
+  const card = document.querySelector('.selector-card');
+  if (!card) return {error: 'no selector card on the page'};
+  const cells = Array.from(card.querySelectorAll('.starcell'));
+  return {
+    count: cells.length,
+    rows: cells.map(cell => {
+      const box = cell.getBoundingClientRect();
+      const sub = cell.querySelector('.starsub');
+      const name = cell.querySelector('.starname');
+      const holder = cell.querySelector('.starholder');
+      const s = sub && sub.getBoundingClientRect();
+      return {
+        cell: name ? name.innerText.trim() : '(unnamed)',
+        text: sub ? sub.innerText.trim() : null,
+        clearance: s ? +(box.bottom - s.bottom).toFixed(2) : null,
+        holderW: holder ? holder.offsetWidth : null,
+        holderH: holder ? holder.offsetHeight : null,
+      };
+    }),
+  };
+})()
+"""
+
+# Give ONE cell portrait art. The whole bug is that `.starimg` is `height:
+# 100%` of a height `aspect-ratio` has not resolved, so it falls back to the
+# image's INTRINSIC height and the holder's automatic minimum size grows to
+# match. Every star in the corpus is a square PNG, which makes that a no-op --
+# so a guard driven by the fixture's own art is green either way, and the test
+# above was green right through the live report. The injection is the state the
+# corpus cannot reach.
+PORTRAIT = """
+(() => {
+  const img = document.querySelector('.selector-card .starcell .starimg');
+  if (!img) return {error: 'no cell art to replace'};
+  return new Promise(resolve => {
+    img.onload = () => resolve({ok: true});
+    img.onerror = () => resolve({error: 'portrait art failed to load'});
+    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='100' height='220'>"
+      + "<rect width='100' height='220' fill='#c33'/></svg>");
+  });
+})()
+"""
+
+
+def test_the_strategy_line_sits_inside_the_cell_even_under_portrait_art():
+    """Live report 2026-08-11: *"the text for the strategy 'Standard'
+    displays underneath the quick selector card -- I would expect the
+    'standard' text to be INSIDE the yellow box centre aligned above the
+    bottom edge of the box."*
+
+    His cell was a SEGMENT, whose icon is portrait Mario art rather than a
+    square star, and it inflated the holder from the 82px square it declares
+    to 82x93 -- shoving the sub-line 12.09px past the gold border. Two
+    assertions, because either one alone passes over a real defect: the
+    holder must honour its own aspect-ratio whatever shape the art is, and
+    the sub-line must have room UNDER it rather than merely not be clipped."""
+    with SUBSECTION_PROJECT.open() as url, get_driver().launch() as page:
+        page.goto(url)
+        page.wait_for(SUBSECTION_PROJECT.ready_selector)
+        page.wait_ms(400)
+        planted = page.evaluate(PORTRAIT)
+        assert planted.get("ok"), planted
+        for width in WIDTHS:
+            page.set_viewport(width, 1000)
+            page.wait_ms(350)
+            data = page.evaluate(INSIDE)
+            assert not data.get("error"), data
+            assert data["count"] >= 1, f"{width}px: no cells rendered"
+            square = [row for row in data["rows"]
+                      if abs(row["holderH"] - row["holderW"]) > 1]
+            assert not square, (
+                f"{width}px: {len(square)} of {data['count']} art holders lost "
+                f"their declared square -- e.g. {square[0]['cell']!r} is "
+                f"{square[0]['holderW']}x{square[0]['holderH']}. A column-flex "
+                "item's automatic minimum size is its content height, so the "
+                "art's intrinsic ratio beats `aspect-ratio` without "
+                "`min-height: 0`.")
+            outside = [row for row in data["rows"] if row["clearance"] < 1]
+            assert not outside, (
+                f"{width}px: the strategy line reaches the cell's bottom edge "
+                f"in {len(outside)} of {data['count']} cells -- e.g. "
+                f"{outside[0]['text']!r} in {outside[0]['cell']!r} clears it "
+                f"by {outside[0]['clearance']}px. It has to sit ABOVE the "
+                "edge, not on it.")
