@@ -315,7 +315,7 @@ export function useGraphPick(rows, visible, setVisible) {
 // own answer to "does this saved time mean what the rank beside it implies".
 // Derived in tracking/views.py from `timed_by`/`closed_by`/`timed_at`, so this
 // surface and the quick-select cell can never word the same fact two ways.
-export function PbTag({ pb, mode, rows, pick, t }) {
+export function PbTag({ pb, mode, rows, pick, t, showCaveat = true }) {
   if (!pb) return html`<span class="pbtag">no PB yet</span>`;
   function jump() {
     if (!pick) return;
@@ -323,7 +323,7 @@ export function PbTag({ pb, mode, rows, pick, t }) {
       t.pickScope("lifetime");
     pick(pb.attempt_id);
   }
-  const mark = caveatOf(pb.caveat);
+  const mark = showCaveat ? caveatOf(pb.caveat) : null;
   return html`<span class="pbtag">PB ${pick
     ? html`<a class="pblink" onclick=${jump}
         title="jump to this PB in the list below">${pb.display}</a>`

@@ -78,6 +78,23 @@ verification norms — read both.
 | Per-star external links | `links.py` — Ukikipedia RTA-guide URLs + `xcams_url(entity_key)` (the xcams Daily Star page, identity-derived from the live-confirmed `…/home/history?star=<abbrev>_<id>` pattern; secret-star prefix VERIFY) |
 
 
+## Practice-log caveats sit before strategy, never inside the PB track
+
+**2026-08-12.** A `? Unattributed` chip appended inside `PbTag` enlarged the
+PB grid track until the identity track became narrower than its strategy
+select; the select kept painting past that boundary and the PB painted over
+it. `LogCard` now resolves the PB caveat once and draws `cardBadge` in a
+reserved `.log-card-caveat-slot` immediately LEFT of the strategy picker,
+while its `PbTag` call passes `showCaveat=false`. The slot exists even when
+empty, so a live caveat change cannot move the picker. Its width responds to
+the identity allocation itself (`container: log-card-identity`), not the page:
+below 430px the word drops and the same glyph-only mark remains. Parent and
+nested entries need no second rule because both are the same `LogCard`;
+`tests/test_log_card_caveat_layout.py` plants the longest marker on a real
+top-level star and the nested Bowser Reds star and checks caveat → strategy →
+PB geometry at 1500/1200/900/850px.
+
+
 ## Practice-log Strategy / Overall rank view
 
 Task 0097 (2026-08-12) retired the side-by-side Strategy + Star/Segment

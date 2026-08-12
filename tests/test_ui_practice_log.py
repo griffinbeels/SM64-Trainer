@@ -114,6 +114,25 @@ def test_rank_display_preference_is_per_entity_and_shared_ladders_force_overall(
     }
 
 
+def test_card_caveat_owns_the_slot_before_the_strategy_picker():
+    """A PB caveat may never return to the PB track.
+
+    The screenshot that produced this guard had ``? Unattributed`` appended
+    to ``PbTag``. Its min-content width took space from the identity column,
+    while the strategy select kept painting past that column and the PB text
+    painted over it. ``LogCard`` is the one renderer for top-level cards and
+    nested pieces, so one ordered slot protects both kinds and both depths.
+    """
+    source = strip_comments(LOG_JS.read_text(encoding="utf-8"))
+    body = _extract(source, "LogCard")
+    caveat = body.index('class="log-card-caveat-slot"')
+    picker = body.index('class="log-card-strat-picker"')
+    assert caveat < picker, "the caveat slot must precede the strategy picker"
+    assert re.search(
+        r"<\$\{PbTag\}[^>]*showCaveat=\$\{false\}", body, re.S), (
+        "the PB tag would draw a second caveat back in the PB track")
+
+
 def _rows(count, first_id=1):
     """`count` stub attempt rows. Only their EXISTENCE matters to the
     ordering and auto-open rules under test here."""

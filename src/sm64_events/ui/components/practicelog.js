@@ -39,6 +39,7 @@ import { logTuning, logTuningVars, logTuningClasses, rankPlacementFor,
 import { nestSubsections } from "../subsections.js";
 import { effectiveRankDisplayMode, readRankDisplayMode,
          writeRankDisplayMode } from "../rankdisplaymode.js";
+import { caveatOf, cardBadge } from "./marks.js";
 
 const html = htm.bind(h);
 
@@ -370,6 +371,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   }, [forceOpen, focus && focus.nonce]);
   const standards = standardsIdentity(sec);
   const clock = sectionClock(sec, t.clock);
+  const pb = sectionPb(sec, t.clock);
+  const pbCaveat = caveatOf(pb && pb.caveat);
   const named = displayName(sec, (t.view.catalog || {}).courses || []);
   const base = showHidden ? sec.attempts
     : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
@@ -492,6 +495,15 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
               enabled=${nameOverflow === "shrinkToFit"} />
           </span>
         </button>
+        ${/* A caveat is optional, but its PLACE is not. It owns a reserved
+             slot immediately before the strategy picker, so adding the
+             longest current marker ("Unattributed") cannot make the PB
+             track consume the identity track and paint across the select.
+             Every parent and nested child is this same LogCard, so there is
+             no second subsection layout to keep in sync. */""}
+        <span class="log-card-caveat-slot">
+          ${pbCaveat ? cardBadge(pbCaveat) : null}
+        </span>
         ${/* NO STEP TRACK HERE, and that is a deliberate deletion rather than
              a gap (Griffin, 2026-08-06): "we should just remove the step
              indicator entirely from the display here. It's too cramped. The
@@ -577,8 +589,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            (above) and the page-turn effect (above) already exist for a
            trend-graph dot; a PB link needs no second implementation of
            "open + turn to the right page + scroll + flash". */""}
-      <${PbTag} pb=${sectionPb(sec, t.clock)} mode=${clock} rows=${rows}
-        pick=${pbPick} t=${t} />
+      <${PbTag} pb=${pb} mode=${clock} rows=${rows}
+        pick=${pbPick} t=${t} showCaveat=${false} />
       ${/* The book mark -- a doorway OUT to the community sheet for whatever
            this card is showing: it opens the Library at this card's target
            and strategy. It is the ONLY such doorway on the card now; the one

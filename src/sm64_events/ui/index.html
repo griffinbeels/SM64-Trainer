@@ -5530,6 +5530,27 @@
   .log-card-identity {
     grid-area: identity;
     min-width: 0; display: flex; flex-direction: row; align-items: center; gap: .5rem;
+    container: log-card-identity / inline-size;
+  }
+  /* A PB caveat belongs immediately LEFT of the strategy picker, never in
+     the PB track. Reserve the slot even when no caveat is present: a saved PB
+     gaining or losing a marker must not shove the selector sideways at a
+     fixed window size. The full word fits when the identity allocation can
+     afford it; the identity's OWN container (not the page width) collapses
+     the slot to the same glyph-only treatment the quick selector uses. */
+  .log-card-caveat-slot {
+    flex: 0 0 7rem; min-width: 0;
+    display: inline-flex; align-items: center; justify-content: flex-end;
+  }
+  .log-card-caveat-slot:empty { visibility: hidden; }
+  .log-card-caveat-slot .caveat-chip {
+    margin-left: 0; gap: .22rem; padding: .04rem .38rem;
+  }
+  .log-card-caveat-slot .caveat-chip-word { display: inline; }
+  @container log-card-identity (max-width: 430px) {
+    .log-card-caveat-slot { flex-basis: 1.45rem; }
+    .log-card-caveat-slot .caveat-chip { gap: 0; padding-inline: .3rem; }
+    .log-card-caveat-slot .caveat-chip-word { display: none; }
   }
   /* NO STEP TRACK ON THIS ROW ANY MORE (2026-08-06). Everything that used to
      live here -- the track's own placement, the `align-self` baseline pair
