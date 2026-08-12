@@ -38,6 +38,8 @@ from uilab.driver import get_driver  # noqa: E402
 # robust if the fixture list in ui/tunelog.js is ever reordered again.
 FLOOR_CARD_NAME = "Go on a Ghost Hunt"
 GRADED_CARD_NAME = "Blast Away the Wall in Front"
+SHARED_STAR_CARD_NAME = "Plunder in the Sunken Ship"
+SHARED_SEGMENT_CARD_NAME = "DDD → BITFS"
 
 
 def _alpha(rgba: str) -> float:
@@ -107,6 +109,16 @@ def _open_and_read_card(page, pane_index: int, name: str) -> dict:
     return result
 
 
+def _read_rank_buttons(page, pane_index: int, name: str) -> list[list[str]]:
+    return page.evaluate(
+        "(() => {"
+        f"  const card = {_find_card(pane_index, name)};"
+        "  if (!card) return null;"
+        "  return [...card.querySelectorAll('.rank-mode-button')]"
+        "    .map(b => [b.textContent.trim(), b.getAttribute('aria-pressed')]);"
+        "})()")
+
+
 @pytest.fixture(scope="module")
 def tunelog_demo():
     with serve_ui() as base:
@@ -146,3 +158,25 @@ def test_a_graded_card_still_reads_its_fill_clearly(tunelog_demo, pane_index, pa
     assert alpha > 0.9, (
         f"the {pane_label} graded card's fill lost its own opacity (alpha "
         f"{alpha}) -- it must stay a solid, clearly-readable colour")
+
+
+@pytest.mark.parametrize("card_name", [SHARED_STAR_CARD_NAME,
+                                        SHARED_SEGMENT_CARD_NAME])
+def test_shared_ladder_star_and_segment_only_offer_overall(tunelog_demo, card_name):
+    """One ladder means one inert Overall control for either entity kind."""
+    assert tunelog_demo.evaluate(_open_card_script(0, card_name)), card_name
+    tunelog_demo.wait_ms(150)
+    assert _read_rank_buttons(tunelog_demo, 0, card_name) == [["Overall", "true"]]
+    tunelog_demo.evaluate(
+        "(() => {"
+        f"  const card = {_find_card(0, card_name)};"
+        "  card.querySelector('.rank-mode-button').click();"
+        "  return true;"
+        "})()")
+    tunelog_demo.wait_ms(40)
+    swapping = tunelog_demo.evaluate(
+        "(() => {"
+        f"  const card = {_find_card(0, card_name)};"
+        "  return card.querySelectorAll('.rank-banner.is-swapping').length;"
+        "})()")
+    assert swapping == 0

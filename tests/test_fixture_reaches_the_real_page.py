@@ -9,12 +9,12 @@ clean page nobody is looking at. Three times, each hidden by the one before:
                                 practice here". 26 real defects invisible, and
                                 a whole feature (per-card collapse) served
                                 correctly and rendered zero times, no error.
-  2026-07-28  no strat/PB    -> the card rendered, the two RANK BANNERS did
-                                not. The banners are the crowded part.
+  2026-07-28  no strat/PB    -> the card rendered, but its rank display did
+                                not. That display is the crowded part.
   2026-07-29  a one-strategy star -> the strategy ladder was also the star's
                                 best ladder, so the card drew ONE combined
-                                banner instead of two, and the entire class of
-                                "the two banners crowd each other" defects was
+                                banner instead of the two-measure layout, and
+                                that entire class of crowding defects was
                                 unreachable. The user reported that overlap
                                 three times over two days while every sweep
                                 stayed green.
@@ -313,18 +313,61 @@ def test_the_active_target_card_is_populated_not_the_empty_state(page):
         "serve_ui() must publish a stage_changed and a target first.")
 
 
-def test_both_rank_banners_render(page):
-    """The crowded row, and the one three separate bugs lived in. TWO, not one:
-    a star with a single strategy collapses them into one combined banner and
-    the whole two-banner layout stops existing."""
+def test_one_rank_banner_with_both_mode_buttons_renders(page):
+    """The active multi-ladder fixture reaches the new combined rank display."""
     banners = count(page, PRIMARY + ".rank-banner")
-    assert banners == 2, (
-        f"{banners} rank banner(s), expected 2. If this is 1, the seeded star "
-        "has one strategy, so its ladder IS the star's best ladder and the two "
-        "measures merged (views.py::ranks_share_ladder) — pick a star with "
-        "several strategies, see ui_fixture.py::FIXTURE_STAR. If 0, there is "
-        "no strategy or no PB and the card says 'pick a strat to see your "
-        "rank'.")
+    assert banners == 1, f"{banners} rank banners rendered; expected exactly one"
+    buttons = page.evaluate(
+        "return Array.from(document.querySelectorAll("
+        "'.log-card.log-card-active .rank-mode-button'))"
+        ".map(b => [b.textContent.trim(), b.getAttribute('aria-pressed')])")
+    assert buttons == [["Strategy", "true"], ["Overall", "false"]]
+
+
+def test_rank_mode_button_runs_the_shared_swap_and_remembers_the_entity(page):
+    """A mode pick is only an exchange, never a second earned-rank climb.
+
+    Strategy alone carries a climb `replayKey`, so changing to Overall changes
+    that key at the same moment as the rank. That used to outrank the ordinary
+    identity guard and start a full Capless-5 climb underneath MARELO's short
+    exchange. Once the exchange finished, the floor climb became visible and
+    made a measurement swap feel like another rank-up.
+    """
+    page.evaluate(
+        "Array.from(document.querySelectorAll("
+        "'.log-card.log-card-active .rank-mode-button'))"
+        ".find(b => b.textContent.trim() === 'Overall').click()")
+    page.wait_ms(40)
+    assert count(page, PRIMARY + ".rank-banner.is-swapping") == 1
+    assert count(page, PRIMARY + ".rank-banner.is-climbing") == 0, (
+        "a Strategy/Overall exchange also started the earned-rank climb")
+    pressed = page.evaluate(
+        "return Array.from(document.querySelectorAll("
+        "'.log-card.log-card-active .rank-mode-button'))"
+        ".filter(b => b.getAttribute('aria-pressed') === 'true')"
+        ".map(b => b.textContent.trim())")
+    assert pressed == ["Overall"]
+    remembered = page.evaluate("""
+const card = document.querySelector('.log-card.log-card-active');
+const modes = JSON.parse(localStorage.getItem('sm64.practiceRankModes'));
+return [card.dataset.feedKey, modes[card.dataset.feedKey]];
+""")
+    assert remembered[1] == "overall", remembered
+    page.wait_ms(500)
+    assert count(page, PRIMARY + ".rank-banner.is-swapping") == 0
+    assert count(page, PRIMARY + ".rank-banner.is-climbing") == 0, (
+        "the hidden floor climb outlived the short rank exchange")
+
+    # Restore the module-scoped browser fixture for the rest of this file.
+    page.evaluate(
+        "Array.from(document.querySelectorAll("
+        "'.log-card.log-card-active .rank-mode-button'))"
+        ".find(b => b.textContent.trim() === 'Strategy').click()")
+    page.wait_ms(40)
+    assert count(page, PRIMARY + ".rank-banner.is-swapping") == 1
+    assert count(page, PRIMARY + ".rank-banner.is-climbing") == 0, (
+        "returning to Strategy replayed its floor climb instead of swapping")
+    page.wait_ms(460)
 
 
 def test_exactly_the_grab_timed_row_wears_a_caveat_mark(page):
@@ -359,39 +402,14 @@ def test_neither_banner_is_the_sentinel_variant(page):
     assert count(page, PRIMARY + ".rank-banner-empty") == 0
 
 
-def test_a_log_card_still_draws_two_rank_banners(page):
-    """This branch's OWN instance of the exact bug the star's test above
-    exists to catch. LBLJ (segment id 1) -- the segment `_arm_segment` used
-    until 2026-07-29 -- has exactly one bundled strategy, so its ladder IS
-    its best ladder (views.py::ranks_share_ladder) and its card drew ONE
-    combined banner. ui_fixture.FIXTURE_SEGMENT (four bundled strategies)
-    fixed that for the ARMED-SEGMENT scenario this file used to measure.
-
-    2026-08-03 (practice-log-entity-cards, task 6): that scenario's own card
-    is gone by design, not by regression. `_arm_segment` deliberately does
-    NOT touch the active star target ("this composes with whatever star
-    target `serve_ui` already seeded" -- its own docstring), so this fixture
-    always leaves the STAR active and the segment merely armed alongside it.
-    Before this task an armed-but-not-active segment still got a full
-    `.objective-card` of its own, inside the practice INDEX (a closed
-    `<details>` -- still queryable, just not visible). The index is deleted
-    now: "the objective card is the active target, always" (spec section 1),
-    and everything else -- armed or not -- is a `LogCard` in the practice log.
-    So the two-banner assertion moved to whichever `LogCard` this fixture's
-    multi-strategy entities render through -- LogCard is now the ONE
-    component either kind renders through (rule 11 made structural), so
-    proving it does not collapse a multi-strategy entity's banners on ANY
-    card is the same proof the old per-kind check gave, without needing to
-    single out this fixture's specific segment."""
+def test_no_visible_log_card_draws_more_than_one_rank_banner(page):
+    """The simplification is global, not special-cased to the active card."""
     per_card = page.evaluate(
         "return Array.from(document.querySelectorAll('.log-card'))"
         ".map(c => c.querySelectorAll('.rank-banner').length)")
-    assert 2 in per_card, (
-        f"no `.log-card` drew 2 rank banners (found {per_card}) -- either "
-        "no seeded entity has multiple strategies any more (see "
-        "ui_fixture.py::FIXTURE_STAR/FIXTURE_SEGMENT) or LogCard collapsed "
-        "them (ranks.py::ranks_share_ladder / attemptlog.js::"
-        "showsEntityBanner)")
+    assert 1 in per_card, f"the fixture reached no rendered rank banner: {per_card}"
+    assert all(n <= 1 for n in per_card), \
+        f"a log card still paints side-by-side rank banners: {per_card}"
 
 
 def test_no_log_card_draws_a_step_track_any_more(page):

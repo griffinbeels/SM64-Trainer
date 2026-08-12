@@ -103,60 +103,21 @@ def test_the_page_level_drawer_still_offers_a_failure_compilation():
         "EntityDrawer is missing the failure-compilation control"
 
 
-def test_two_rank_banners_are_rendered_for_both_kinds():
-    """Rule 11: a feature built for one kind ships for both in the same
-    change. Round 2 of the rank-legibility fix (2026-07-25) merged the old
-    RankBanner + EntityRankTag pair into ONE component, rendered TWICE with
-    different data ("Strategy" graded on the active strategy, the ENTITY's
-    own label graded on its best-possible ladder) -- deliberately never two
-    components that happen to look similar, since a labelled banner next to
-    a bare unlabelled chip is exactly the bug this fixed (live report
-    2026-07-25). A raw `_components()` set can't tell "one usage" from "two"
-    apart (it dedupes by name), so this counts RankBanner occurrences in
-    each section's own body instead, the same way the strategy-picker and
-    failure-compilation tests above do.
+def test_one_switchable_rank_banner_is_rendered_for_both_kinds():
+    """Rule 11 is structural: stars and segments both render through LogCard.
 
-    The entity kicker is per-kind ("Star" / "Segment"), not one shared word,
-    and that is what the second assertion pins: `RankBanner` renders on BOTH
-    kinds, so a hardcoded "Star" would be a lie on a segment card. Round 4
-    (2026-07-25) also dropped the trailing "Rank" from both kickers -- 13
-    characters of label did not fit a ~390px banner row, which is what left
-    every fixture ellipsized mid-word. Asserting the exact kicker each
-    section passes is what stops a future edit from quietly reintroducing
-    either fault.
-
-    Round 6 (2026-07-25) made the STRATEGY kicker dynamic: when both
-    measures grade identically -- always so for a star whose only strategy
-    carries standards -- the entity banner is suppressed and the survivor
-    reads "Strategy · Star", because a lone "STRATEGY" banner read as a star
-    rank that had failed to load. So that side is pinned as
-    `bannerLabel(sec, "<Kind>")`, which carries the per-kind noun into the
-    merged case; the entity banner's own kicker stays the literal it always
-    was.
-
-    2026-08-03 (practice-log-entity-cards, task 2): each section's own
-    hardcoded `"Star"`/`"Segment"` literal was replaced by
-    `entityNoun(sec)` (`ui/entitysection.js`) -- the SAME per-kind noun both
-    cards now ask for, rather than two literals that could drift apart if a
-    section were ever miscopied. That is a strengthening of this test's
-    original concern, not a loosening of it: `entityNoun` is single-sourced
-    off `sec.kind`, so a hardcoded lie is no longer even expressible here.
-
-    2026-08-04 (amendment A8): StarSection/SegmentSection are deleted --
-    `LogCard` (practicelog.js) is the one function either kind renders
-    through, so there is one body to check rather than two to compare."""
+    Task 0097 replaces the side-by-side Strategy/entity pair with one banner
+    whose existing kicker slot contains Strategy/Overall controls. Because
+    both kinds share this single body, "Overall" cannot accidentally regress
+    to a star-only label on segment cards."""
     source = strip_comments(PRACTICELOG_JS.read_text(encoding="utf-8"))
     body = _exported_body(source, "LogCard")
-    assert body.count("<${RankBanner}") >= 2, \
-        "LogCard does not render both the strategy and entity rank banners"
-    assert "bannerLabel(sec, entityNoun(sec))" in body, \
-        ("LogCard's strategy banner must take its kicker from "
-         "bannerLabel(sec, entityNoun(sec)) -- a hardcoded "
-         '"Strategy" cannot say "Strategy · Segment" on the merged card')
-    assert "label=${entityNoun(sec)}" in body, \
-        ("LogCard's entity rank banner must be labelled with "
-         "entityNoun(sec) -- the kicker names the entity this half "
-         "grades, and RankBanner renders on both kinds")
+    assert body.count("<${RankBanner}") == 1, \
+        "LogCard must paint exactly one rank banner"
+    assert '>Strategy</button>' in body
+    assert '>Overall</button>' in body
+    assert "shownBanner" in body and "rankModeButtons" in body
+    assert "swapKey=${hasSeparateRank ? rankMode : null}" in body
 
 
 def test_both_section_builders_emit_entity_rank():

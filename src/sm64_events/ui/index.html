@@ -1122,7 +1122,7 @@
        288 was itself measured, honestly, against a card the fixture could only
        render as "Nothing to practice here". Once the fixture could stand in a
        stage and hold a target with a strategy and a PB (ui_fixture's `stage=`
-       and `target=`), the card grew the two rank banners, the strategy select
+       and `target=`), the card grew its full rank display, the strategy select
        and the PB tag it always had in the real app -- and the constant
        measured off the empty state was 39px short of holding them. Every
        number in this block is only as good as the state the fixture reached;
@@ -1857,6 +1857,28 @@
     flex: 0 0 auto; color: var(--muted); text-transform: uppercase;
     letter-spacing: .06em; font-size: .62rem; font-weight: 650;
   }
+  /* Practice-log rank view picker. It occupies the existing kicker slot, so
+     changing Strategy/Overall never adds a row or shifts the cap/bar geometry.
+     These are real pressed-state buttons (not tabs: there is no tabpanel),
+     stripped down to read like the compact kicker they replace. */
+  .rank-mode-buttons {
+    display: inline-flex; align-items: center; gap: .16rem;
+    white-space: nowrap;
+  }
+  .rank-mode-button {
+    appearance: none; border: 0; border-bottom: 2px solid transparent;
+    border-radius: 2px; background: transparent; color: var(--muted);
+    padding: .08rem .2rem .11rem; margin: 0;
+    font: inherit; font-weight: inherit; letter-spacing: inherit;
+    text-transform: inherit; line-height: 1.05; cursor: pointer;
+  }
+  .rank-mode-button:hover { color: var(--text); }
+  .rank-mode-button.is-selected {
+    color: var(--gold); border-bottom-color: currentColor;
+  }
+  .rank-mode-button:focus-visible {
+    outline: 2px solid var(--gold); outline-offset: 2px;
+  }
   /* Also un-clipped, for the wings (see `.rank-slot` above) -- this row is the
      icon's DIRECT parent and was the closer of the two clippers. Each child
      now owns its own truncation instead: the name and the "next" span
@@ -1905,6 +1927,16 @@
   .rank-banner-name {
     font-weight: 800; letter-spacing: .4px;
     min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* Same sequential text exchange used by the MARELO route swap. Both values
+     occupy one grid cell, so the longer rank/basis never changes layout while
+     the old text fades fully out before the new text fades in. */
+  .rank-banner-swap-text {
+    display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0;
+  }
+  .rank-banner-swap-text > * {
+    grid-area: 1 / 1; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
   }
   /* FADES with the bar (`--climb-reveal`, written per frame by
      ui/rankclimb.js off the same step and the same curve the bar uses, on a
@@ -5597,7 +5629,7 @@
      option). */
   .log-list-card.log-coursename-show .log-card-context { display: block; }
   .log-list-card.log-coursename-hide .log-card-context { display: none; }
-  /* The two rank banners for this entity (strategy + star/segment). Row or
+  /* The switchable rank banner for this entity (Strategy or Overall). Row or
      column depending on `collapsedLayout` (below). No overflow clip here: a
      hat's wings paint outside its own box, same reason as `.rank-slot`. */
   /* BUG 1 (2026-08-04 round): this box's own GRID CELL is the flexible one
@@ -5827,14 +5859,14 @@
   /* ---- Layout matrix: which of the six variants a card shows, per cell -----
      (2026-08-04, spec practice-log-entity-cards round 2). Four CHOICES rows
      (ui/logtuning.js) replace the single `rankStyle` this section used to
-     read -- one per cell of narrow/wide x two-ladder/one-ladder -- and this
-     is the CSS that resolves them: which of the six shapes applies to a
-     given `.rank-banner` is `.log-list-card`'s four `log-rankstyle-<width>-`
-     `<ladder>-<value>` classes (logTuningClasses) crossed with `.log-card`'s
-     OWN `log-card-two-ladder`/`log-card-one-ladder` class (practicelog.js,
-     from `showsEntityBanner(sec)` -- the SAME server-derived fact
-     `views.py::ranks_share_ladder` publishes as `sec.one_ladder`, never a
-     second derivation) crossed with an `@container` query at 860px
+     read -- historically one per cell of narrow/wide x two-ladder/one-ladder
+     -- and this is the CSS that resolves them. Task 0097 made every practice
+     card a one-banner display, so practicelog.js now always supplies
+     `log-card-one-ladder`; the `*-two-*` selectors remain only so the tuning
+     registry's older saved values still parse, not as a reachable card shape.
+     Which of the six shapes applies is therefore `.log-list-card`'s
+     `log-rankstyle-<width>-one-<value>` class crossed with an `@container`
+     query at 860px
      against `.practice-page` -- never `@media`, this file's own law, above.
      Measured DIRECTLY IN CONTAINER-WIDTH terms, not the pane/window
      width a first pass measured by mistake: `.practice-page` sits
@@ -6724,11 +6756,11 @@
   .rank-banner-nextstep-hover .rank-progress-track {
     position: relative; overflow: visible;
   }
-  .rank-banner-nextstep-hover:not(.is-climbing) .rank-progress-track:hover .rank-next-popup {
+  .rank-banner-nextstep-hover:not(.is-climbing):not(.is-swapping) .rank-progress-track:hover .rank-next-popup {
     opacity: 1; transform: translate(-50%, 0);
   }
   @media (prefers-reduced-motion: no-preference) {
-    .rank-banner-nextstep-hover:not(.is-climbing) .rank-progress-track:hover::after {
+    .rank-banner-nextstep-hover:not(.is-climbing):not(.is-swapping) .rank-progress-track:hover::after {
       animation: rank-next-blink 900ms ease-in-out infinite;
     }
   }
@@ -6736,7 +6768,7 @@
     /* No blink keyframe, but the popup itself still reveals -- same
        reduced-motion contract every other celebration effect in this file
        follows (the information still arrives, just without the motion). */
-    .rank-banner-nextstep-hover:not(.is-climbing) .rank-progress-track:hover::after {
+    .rank-banner-nextstep-hover:not(.is-climbing):not(.is-swapping) .rank-progress-track:hover::after {
       opacity: .5;
     }
   }

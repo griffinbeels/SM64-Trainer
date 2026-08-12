@@ -460,12 +460,12 @@ STORIES = [
     # satisfied by nothing -- this time skipping silently rather than erroring,
     # which is the worse of the two failures and exactly what this file's own
     # history keeps warning about.
-    # What survives of the crowded combination it exists to protect is the
-    # TWO-LADDER card (two stacked rank banners in one head), which is the
-    # same `_arm_segment` seeding drawn by `LogCard` -- so the story follows
-    # that class instead of the row that used to sit under it.
-    Story(name="armed-segment", at=".log-card.log-card-two-ladder",
-          skip_if="!document.querySelector('.log-card.log-card-two-ladder')"),
+    # Task 0097 retired the two-banner class too. The crowded surface that
+    # survives is the active card's one rank banner plus its two-button mode
+    # picker, so the story follows that control instead of silently skipping
+    # every viewport on a class the product can no longer emit.
+    Story(name="armed-segment", at=".log-card.log-card-active .rank-mode-buttons",
+          skip_if="!document.querySelector('.log-card.log-card-active .rank-mode-buttons')"),
     # Renamed 2026-08-03 (Task 7): `.attempts-card` died with StarSection/
     # SegmentSection's own attempts table (Task 6) -- the practice log is
     # now the page-level `.log-list-card` (practicelog.js). The old selector
@@ -515,8 +515,8 @@ PROJECT = Project(
     # in this empty, deterministic fixture with no defaults-corpus reconcile
     # (that only runs from main.py). Picked over LBLJ (id 1) specifically for
     # its four bundled strategies -- see FIXTURE_SEGMENT's own comment: LBLJ
-    # has exactly one, so its strategy ladder IS its best ladder and the
-    # armed-segment card drew a single combined rank banner instead of two.
+    # has exactly one, so its strategy ladder IS its best ladder and cannot
+    # exercise the Strategy/Overall switch the active multi-ladder star does.
     # `seed_editor_fixtures=True` additionally seeds the two segments the
     # segments-editor story opens (see `_EDITOR_SETUP` above).
     serve=functools.partial(serve_ui, arm_segment=FIXTURE_SEGMENT,

@@ -242,6 +242,10 @@ function renderState(level, bar, beats, atMs, tune, reveal = 1, line = "rest") {
  * `rank` is `{tier, division, fill}` — identity only, the three values the
  * server already grades. `identity` is what the caller considers "the same
  * measurement": when it changes, the hook SNAPS instead of climbing.
+ * `exchangeKey` is the stronger version of that boundary for a caller that
+ * draws its own old-to-new exchange. When it changes, snapping wins even if
+ * `replayKey` also changed: the exchange animation owns that gesture, and a
+ * second climb from the floor would falsely read as a rank being earned.
  *
  * That gate is what stops a false celebration. Switching the active strategy
  * re-grades the banner on a different ladder, changing the rank mode
@@ -257,6 +261,7 @@ function renderState(level, bar, beats, atMs, tune, reveal = 1, line = "rest") {
  */
 export function useRankClimb(rank, identity = null,
                              { lane = null, order = 0, replayKey = null,
+                               exchangeKey = null,
                                tune: tuneOverride = null } = {}) {
   // Level and fill are kept APART from here down. `rankPosition(..., 0)` is
   // exactly the level, and asking for it with a fill of 1 (which ranks.js
@@ -315,6 +320,7 @@ export function useRankClimb(rank, identity = null,
   // runs before every re-entry and so cannot tell "interrupted" from "done".
   const climbingToRef = useRef(null);
   const replayKeyRef = useRef(replayKey);
+  const exchangeKeyRef = useRef(exchangeKey);
   useEffect(() => {
     if (!lane) return undefined;
     laneMembers.set(lane, (laneMembers.get(lane) || 0) + 1);
@@ -351,6 +357,12 @@ export function useRankClimb(rank, identity = null,
 
     const identityChanged = identityRef.current !== identity;
     identityRef.current = identity;
+    // A rank-mode exchange owns its own old -> new movement (bar, colour,
+    // cap squash and text). Record this before the null-target return too, so
+    // ranked -> sentinel -> ranked cannot lose the boundary and replay a
+    // floor climb on the way back.
+    const exchangeChanged = exchangeKeyRef.current !== exchangeKey;
+    exchangeKeyRef.current = exchangeKey;
 
     setClimbing(climbToken.current, false);
 
@@ -425,7 +437,8 @@ export function useRankClimb(rank, identity = null,
     const startLevel = earnedFirstRank ? 0 : (from ? from.level : null);
     const startBar = earnedFirstRank ? 0 : (from ? from.bar : 0);
     const startPosition = startLevel == null ? null : startLevel + startBar;
-    const snap = (from == null && !earnedFirstRank)   // nothing to climb from
+    const snap = exchangeChanged                    // caller owns this exchange
+      || (from == null && !earnedFirstRank)          // nothing to climb from
       || (!earnedFirstRank && !continuing && identityChanged)  // a different measurement
       || (startPosition != null && target <= startPosition)   // never a regression
       || !celebrationsEnabled()            // the user turned celebrations off
@@ -650,7 +663,7 @@ export function useRankClimb(rank, identity = null,
       // not keep its sibling waiting for a slot it will never use.
       if (lane && laneEnds.get(lane) === laneEndsAt) laneEnds.delete(lane);
     };
-  }, [target, identity, lane, order, replayKey, tuneOverride]);
+  }, [target, identity, lane, order, replayKey, exchangeKey, tuneOverride]);
 
   // `atTarget` answers "is what you are looking at the rank you just handed
   // me", and it is resolved HERE rather than inside the loop for one reason:

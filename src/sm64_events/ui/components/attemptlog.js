@@ -330,14 +330,13 @@ export function PbTag({ pb, mode, rows, pick, t }) {
     : pb.display} (${mode})${mark ? cardBadge(mark) : null}</span>`;
 }
 
-// True when the strategy banner and the entity banner are the SAME MEASURE:
+// True when the strategy rank and the entity rank are the SAME MEASURE:
 // the active strategy's ladder grades this time exactly where the entity's
 // best-possible ladder does. Always the case for a star with only ONE
 // strategy carrying standards -- its ladder IS the pointwise best -- and in
 // general whenever no other strategy beats it around the player's current
-// time. Two identical banners read as a duplicated widget (spec round 3), so
-// only one renders; see bannerLabel for why it can't render as a plain
-// "Strategy" one either.
+// time. The practice log now always renders one banner; this tells its rank
+// picker whether there is a second measurement to offer.
 //
 // One measure or two? Answered by the SERVER, from the ladders themselves
 // (views.py::ranks_share_ladder), not by comparing the two graded values.
@@ -360,34 +359,13 @@ export function ranksAreAtFloor(sec) {
   return !!(sec.rank && !sec.rank.rank && sec.rank.reason === "unranked");
 }
 
-// Whether the entity's own RankBanner renders beside the strategy one. Both
-// the render and the wash below read this ONE predicate on purpose: a card
-// whose wash is split in half while only one banner rendered would draw a
-// colour boundary under nothing, which is the same class of "correct data,
-// unexplainable picture" bug the split exists to fix.
+// Whether the practice card has a separate Overall measurement to offer.
+// A floor has no entity payload yet, but its distinct ladder is still real and
+// both modes honestly draw Capless V. A missing payload in any other state is
+// not exposed as a button whose destination has nothing to say.
 export function showsEntityBanner(sec) {
   if (ranksShareOneLadder(sec)) return false;
   return !!sec.entity_rank || ranksAreAtFloor(sec);
-}
-
-// The lone banner names BOTH measures when it IS both. Suppressing the
-// entity banner and leaving the survivor labelled "STRATEGY" reads as a
-// star rank that failed to load -- "it reads as there being a bug where the
-// star ranking is missing. In fact, it's both the same thing, right?" (live
-// report 2026-07-25 round 6, on a star whose only strategy is Standard).
-// The dual label costs nothing here: this is exactly the case where one
-// banner has the whole row, which is why the round-4 label budget (13
-// characters unaffordable when TWO banners share ~390px) doesn't bind.
-export function bannerLabel(sec, entityNoun) {
-  return ranksShareOneLadder(sec) ? `Strategy · ${entityNoun}` : "Strategy";
-}
-
-// Why the one banner carries two names, for anyone who hovers it.
-export function bannerHint(sec, entityNoun) {
-  if (!ranksShareOneLadder(sec)) return null;
-  return `This strategy's standards are the best this ${entityNoun.toLowerCase()}`
-    + ` has, so the strategy rank and the ${entityNoun.toLowerCase()}'s own`
-    + " rank are the same right now.";
 }
 
 // What a rank banner considers "the same measurement", so its level-up climb

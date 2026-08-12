@@ -97,7 +97,8 @@ const GRADED = (tier, division, fillPct) => ({
 });
 
 const SECTIONS = [
-  // 1. Two DIFFERENT rank ladders -- both banners render. Long name +
+  // 1. Two DIFFERENT rank ladders -- one banner with both rank-view buttons.
+  //    Long name +
   //    attempts, so it also carries the OPEN-card / item-4 demonstration.
   {
     course_id: 1, star_id: 6,
@@ -114,7 +115,7 @@ const SECTIONS = [
   },
   // 2. Ladder FLOOR -- a strategy is picked, but no PB has landed on it yet,
   //    so `sec.rank.reason` is "unranked" (never "no_strat", item 4's own
-  //    case below): both banners draw Capless V, empty bar (ranks.js's own
+  //    case below): both rank views draw Capless V, empty bar (ranks.js's own
   //    `atFloor`), the ordinary state for a target the player just set and
   //    has not yet run. Missing from this fixture entirely until live report
   //    2026-08-04: "rank standard displays show a line in the middle of the
@@ -138,8 +139,8 @@ const SECTIONS = [
           rta: { display: null, attempt_id: null, caveat: null } },
     last_activity: 4.5,
   },
-  // 3. ONE combined banner (`one_ladder: true`) -- the strategy ladder IS
-  //    the star's own best-possible ladder.
+  // 3. ONE shared ladder (`one_ladder: true`) -- the strategy ladder IS the
+  //    star's own best-possible ladder, so only Overall is offered.
   {
     course_id: 3, star_id: 1,
     course_name: "Jolly Roger Bay", star_name: "Plunder in the Sunken Ship",

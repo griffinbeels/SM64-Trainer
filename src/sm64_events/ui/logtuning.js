@@ -86,11 +86,11 @@ export const TUNABLES = {
     why: "The active-strategy dropdown that now sits beside the identity display instead of stacked under it (one-line-heads round, 2026-08-04 — \"move the selector to the right of the identity display\"). Lives INSIDE the identity column's own share rather than a grid track of its own, so it can never take room from the ranks/PB columns; `.log-card-select` (the icon+name button) has the identity row's other flex slot and gives up space to this one first as the card narrows.",
   },
 
-  // ---- Ranks: the strategy + star/segment rank display --------------------
+  // ---- Ranks: the switchable Strategy / Overall display -------------------
   ranksPercent: {
     group: "Ranks", label: "Rank column width", value: 70,
     min: 10, max: 90, step: 1, unit: "%",
-    why: "A SHARE of the row's own width — same normalizing rule as Identity column width above, doesn't need to sum to 100 with the other two. Replaces a FIXED 420px cap that stayed 420px on a 2000px-wide card (leaving the rank banners stranded well short of the card's true right edge) and was ALSO the tightest squeeze on a narrow one (two rank banners genuinely need the most room exactly where a fixed cap gave them the least). A share fixes both ends at once by construction — it is a FRACTION of whatever the card actually is, never a number that was only ever right once.",
+    why: "A SHARE of the row's own width — same normalizing rule as Identity column width above, doesn't need to sum to 100 with the other two. Replaces a FIXED 420px cap that stayed 420px on a 2000px-wide card (leaving the rank display stranded well short of the card's true right edge) and was ALSO the tightest squeeze on a narrow one. A share fixes both ends at once by construction — it is a FRACTION of whatever the card actually is, never a number that was only ever right once.",
   },
   rankBarHeight: {
     group: "Ranks", label: "Progress bar height", value: 5,

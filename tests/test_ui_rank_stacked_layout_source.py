@@ -118,11 +118,13 @@ def test_the_render_fork_guard_can_fail(tmp_path):
     # ternary would.
     forked = real.replace(
         'return html`<div class=${`rank-banner${climb.climbing ? " is-climbing" : ""}${\n'
+        '      swapping ? " is-swapping" : ""}${\n'
         '      layout === "stacked" ? " rank-banner-stacked" : ""}${\n'
         '      layout === "column" ? " rank-banner-column" : ""}${\n'
         '      nextStepMode === "hover" ? " rank-banner-nextstep-hover" : ""}`} style=${vars}>',
         'return html`<div class="rank-banner-stacked-mutant"></div>`;\n'
         '  return html`<div class=${`rank-banner${climb.climbing ? " is-climbing" : ""}${\n'
+        '      swapping ? " is-swapping" : ""}${\n'
         '      layout === "stacked" ? " rank-banner-stacked" : ""}${\n'
         '      layout === "column" ? " rank-banner-column" : ""}${\n'
         '      nextStepMode === "hover" ? " rank-banner-nextstep-hover" : ""}`} style=${vars}>',
@@ -139,9 +141,15 @@ def test_the_climb_hook_count_guard_can_fail(tmp_path):
     assert climb_hook_call_count(real) == 1, (
         "the real file already fails this check -- fix ranks.js first")
     duplicated = real.replace(
-        "const climb = useRankClimb(graded, identity, { lane, order, replayKey });",
-        "const climb = useRankClimb(graded, identity, { lane, order, replayKey });\n"
-        "  const secondClimb = useRankClimb(graded, identity, { lane, order, replayKey });",
+        "const climb = useRankClimb(graded, identity, {\n"
+        "    lane, order, replayKey, exchangeKey: swapKey,\n"
+        "  });",
+        "const climb = useRankClimb(graded, identity, {\n"
+        "    lane, order, replayKey, exchangeKey: swapKey,\n"
+        "  });\n"
+        "  const secondClimb = useRankClimb(graded, identity, {\n"
+        "    lane, order, replayKey, exchangeKey: swapKey,\n"
+        "  });",
         1)
     assert duplicated != real, "the mutation's anchor text did not match ranks.js -- update it"
     mutated_path = tmp_path / "ranks.js"

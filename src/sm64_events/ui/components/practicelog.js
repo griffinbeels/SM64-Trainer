@@ -18,7 +18,7 @@
 import { h } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { displayName, entityIdentity, entityKey, entityNoun, isSegment,
+import { displayName, entityIdentity, entityKey, isSegment,
          sectionClock, sectionPb, standardsIdentity } from "../entitysection.js";
 import { entityIconSrc, fallbackToGenericStar, fallbackSlotForEntityKey }
   from "./entityicons.js";
@@ -31,12 +31,14 @@ import { useFeedMotion } from "./feedmotion.js";
 import { StratPicker } from "./stratpicker.js";
 import { StandardsPanel } from "./standards.js";
 import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
-         ResetFilterToggle, StatMenuTrigger, comparator, bannerLabel,
-         bannerHint, ranksAreAtFloor, showsEntityBanner, rankIdentity, PbTag }
+         ResetFilterToggle, StatMenuTrigger, comparator, ranksAreAtFloor,
+         showsEntityBanner, rankIdentity, PbTag }
   from "./attemptlog.js";
 import { logTuning, logTuningVars, logTuningClasses, rankPlacementFor,
          nextStepModeFor, NARROW_CONTAINER_PX } from "../logtuning.js";
 import { nestSubsections } from "../subsections.js";
+import { effectiveRankDisplayMode, readRankDisplayMode,
+         writeRankDisplayMode } from "../rankdisplaymode.js";
 
 const html = htm.bind(h);
 
@@ -316,6 +318,13 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           rankPlacement = "head", nextStepMode = "classic" }) {
   const [showHidden, setShowHidden] = useState(false);
   const [page, setPage] = useState(0);
+  const ek = entityKey(sec);
+  // A card remembers this preference by ENTITY, not by its current strategy:
+  // switching from Standard to Cannonless should keep showing whichever rank
+  // the player chose to watch here. A shared ladder temporarily forces the
+  // only honest reading (Overall) without erasing that remembered preference.
+  const [preferredRankMode, setPreferredRankMode] = useState(
+    () => readRankDisplayMode(ek));
   // `forceOpen` exists for exactly one moment (Task 6 brief, Step 1): "so a
   // pick on a COLLAPSED card has a scroll target to find" -- it must win
   // just long enough to make the row exist, never permanently. Folding
@@ -359,7 +368,6 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   useEffect(() => {
     if (forceOpen && focus) onSetOpen(true);
   }, [forceOpen, focus && focus.nonce]);
-  const ek = entityKey(sec);
   const standards = standardsIdentity(sec);
   const clock = sectionClock(sec, t.clock);
   const named = displayName(sec, (t.view.catalog || {}).courses || []);
@@ -413,14 +421,34 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   // `rows` includes the picked attempt.
   const pbPick = (attemptId) => { onSelect(ek); pick(attemptId); };
   const broken = isSegment(sec) && sec.broken;
-  // Which of the layout matrix's two ladder-count cells this card falls
-  // into (index.html's "Layout matrix" CSS section) -- the SAME predicate
-  // that decides whether the second `<RankBanner>` below renders at all, so
-  // the class can never disagree with what is actually on screen. Server
-  // truth end to end: `sec.one_ladder` (views.py::ranks_share_ladder) ->
-  // `showsEntityBanner` -> this class -> CSS picks the cell; nothing here
-  // re-derives it.
-  const twoLadder = showsEntityBanner(sec);
+  // One rank display, always. `showsEntityBanner` now answers only whether
+  // that one display has a genuinely different Overall measurement to offer;
+  // it controls the two-button switch, never the number of banners painted.
+  const hasSeparateRank = showsEntityBanner(sec);
+  const rankMode = effectiveRankDisplayMode(preferredRankMode, hasSeparateRank);
+  const pickRankMode = (mode) => {
+    if (!hasSeparateRank || mode === rankMode) return;
+    writeRankDisplayMode(ek, mode);
+    setPreferredRankMode(mode);
+  };
+  const rankModeButtons = html`<span class="rank-mode-buttons" role="group"
+      aria-label="Rank view">
+    ${hasSeparateRank && html`<button type="button"
+        class=${`rank-mode-button${rankMode === "strategy" ? " is-selected" : ""}`}
+        aria-pressed=${rankMode === "strategy" ? "true" : "false"}
+        title="Show the rank for the strategy selected on this card"
+        onclick=${() => pickRankMode("strategy")}>Strategy</button>`}
+    <button type="button"
+        class=${`rank-mode-button${rankMode === "overall" ? " is-selected" : ""}`}
+        aria-pressed=${rankMode === "overall" ? "true" : "false"}
+        title=${hasSeparateRank
+          ? "Show the best overall rank across this entity's strategies"
+          : "Strategy and overall use the same rank standards"}
+        onclick=${() => pickRankMode("overall")}>Overall</button>
+  </span>`;
+  const shownBanner = rankMode === "strategy"
+    ? sec.rank : (hasSeparateRank ? sec.entity_rank : sec.rank);
+  const shownIdentity = rankMode === "strategy" ? "strategy" : "entity";
   // Whether this card's rank displays live in the head (today) or the body
   // (spec practice-log-entity-cards, round 3 -- Griffin: "imagine we display
   // the ranked display inside the dropdown when it's opened... If I close
@@ -436,24 +464,18 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   // which would double-run `useRankClimb` for the same lane/order identity.
   const inBody = rankPlacement === "body";
   const ranksBlock = html`<div class="log-card-ranks">
-      <${RankBanner} label=${bannerLabel(sec, entityNoun(sec))}
-          hint=${bannerHint(sec, entityNoun(sec))} banner=${sec.rank}
-          atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${0}
-          replayKey=${sec.last_strat || ""}
-          identity=${rankIdentity(ek, "strategy", sec, t)}
+      <${RankBanner} label=${rankModeButtons} banner=${shownBanner}
+          atFloor=${ranksAreAtFloor(sec)}
+          replayKey=${rankMode === "strategy" ? (sec.last_strat || "") : null}
+          identity=${rankIdentity(ek, shownIdentity, sec, t)}
+          swapKey=${hasSeparateRank ? rankMode : null}
           showNext=${active} iconSize=${rankIconSize}
           nextStepMode=${nextStepMode} />
-      ${twoLadder && html`<${RankBanner}
-          label=${entityNoun(sec)} banner=${sec.entity_rank}
-          atFloor=${ranksAreAtFloor(sec)} lane=${ek} order=${1}
-          identity=${rankIdentity(ek, "entity", sec, t)}
-          showNext=${active} iconSize=${rankIconSize}
-          nextStepMode=${nextStepMode} />`}
     </div>`;
   return html`<section data-feed-key=${ek}
       class="log-card ${selected ? "is-selected" : ""}
       ${active ? "log-card-active" : ""}
-      ${isOpen ? "" : "is-closed"} ${twoLadder ? "log-card-two-ladder" : "log-card-one-ladder"}
+      ${isOpen ? "" : "is-closed"} log-card-one-ladder
       ${inBody ? "log-card-ranks-in-body" : ""}">
     ${/* The HEADING selects; the chevron opens. Two gestures, two targets,
          so browsing a card's graphs and folding it away never fight. */""}
@@ -954,12 +976,10 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
     // Resolved here, per section, and handed to LogCard as plain strings --
     // see this component's own comment above for why this (unlike
     // nameOverflow/rankIconSize) cannot be a single page-level value.
-    // `twoLadder` is computed a second time (LogCard also computes its own,
-    // for the `log-card-two-ladder`/`-one-ladder` class) rather than threaded
-    // down -- both calls are the same pure, cheap function of `sec`, and
-    // keeping LogCard's own computation is what lets it stay a self-contained
-    // component a test can render with no page-level wiring at all.
-    const twoLadder = showsEntityBanner(sec);
+    // Rank rendering is always the one-banner/combined layout now. Whether
+    // Strategy and Overall differ is a control-state question inside LogCard,
+    // not a layout quadrant for the surrounding card.
+    const twoLadder = false;
     const children = childrenOf.get(ek) || [];
     const kids = children.map(cardFor);
     return html`<${LogCard} key=${ek} sec=${sec} t=${t} ui=${ui}

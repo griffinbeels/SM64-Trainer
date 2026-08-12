@@ -103,11 +103,11 @@ export const COMPONENTS = [
   {
     name: "RankBanner", module: "./components/ranks.js", group: "Rank",
     also: ["RANK_MODE_OPTIONS"],
-    doc: "The wide rank band a page leads with: the icon, the tier's name, and the distance to the next rung.",
+    doc: "The rank band: icon, tier name, progress and next rung. A caller may supply swapKey to exchange measurements with the MARELO route-swap motion.",
     props: [
-      ["label", "string", "What is being ranked, in the user's words."],
+      ["label", "React.ReactNode", "The kicker slot. Usually text; the practice log supplies its Strategy/Overall controls here."],
       ["banner", "RankBadge | null", "The rank to show. Null renders the unranked state."],
-      ["hint?", "string | null", "One line under the band — usually what would raise the rank."],
+      ["hint?", "string | null", "Optional tooltip for the kicker."],
       ["identity?", "string | null", "Stable key for the band, so a change animates instead of cutting."],
       ["atFloor?", "boolean", "True when the entity has standards but no time of its own."],
       ["lane?", "string | null", "Which animation lane the band belongs to."],
@@ -116,7 +116,8 @@ export const COMPONENTS = [
       ["layout?", "'row' | 'stacked' | 'column'", "Which of the band's shapes to draw. The practice log leaves this alone and lets @container pick, because the choice depends on the card's own width rather than the page's."],
       ["showNext?", "boolean", "Whether the distance-to-the-next-rung line is drawn at all."],
       ["iconSize?", "number", "Pixel size the rank sprite draws itself at. A CSS variable alone only ever reserved its margin, never resized it."],
-      ["nextStepMode?", "'classic' | 'hover'", "Whether the next-rung line is always visible, or revealed by hovering the progress bar."],
+      ["nextStepMode?", "'classic' | 'always' | 'compact' | 'hidden' | 'hover'", "How the next-rung timesave is shown."],
+      ["swapKey?", "string | null", "Changing this exchanges the old and new measurement with the shared MARELO route-swap animation."],
     ],
   },
 

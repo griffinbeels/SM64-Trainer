@@ -100,13 +100,14 @@ def snapshot_db(source: Path, destination: Path) -> Path:
 # The star the fixture practises, chosen for a reason that is very easy to lose
 # in a default argument. `star:2:4` has FIVE strategies in the bundled
 # standards, so whichever one is active is not the entity's best ladder and
-# BOTH rank banners render (tracking/views.py::ranks_share_ladder).
+# both Strategy and Overall views render with different values
+# (tracking/views.py::ranks_share_ladder).
 #
 # Until 2026-07-29 this was `star:2:0`, which has exactly one strategy. One
 # strategy means the strategy ladder IS the star's best, the two measures are
-# one measure, and the card draws a SINGLE banner labelled "Strategy · Star".
-# So every sweep ever run measured a one-banner card -- and the entire class of
-# "the two banners crowd each other" defects was unreachable by the gate. The
+# one measure, and the card offers only its inert Overall view. So every sweep
+# ever run measured the shared-ladder state -- and the entire class of
+# two-measure crowding defects was unreachable by the gate. The
 # user reported the stacked washes overlapping three times over two days; it
 # could only ever be measured by hand, against his own database.
 #
@@ -329,14 +330,14 @@ def _seed_target(base: str, course_id: int = FIXTURE_COURSE,
     if not with_pb:
         return          # the dev db already has its own strat and PB
     # A strategy AND a saved PB, because without them the card renders
-    # "pick a strat to see your rank" and the two RANK BANNERS never mount --
-    # and the banners are the part the user reports crowding. A fixture that
+    # "pick a strat to see your rank" and the rank display never mounts --
+    # and that display is the part the user reports crowding. A fixture that
     # stops at "a target is set" measures a card with the interesting row
     # missing (2026-07-28).
     # The strategy must exist in the bundled standards for THIS star, or both
-    # banners stay null and the fixture measures a card with its most crowded
-    # row absent. See FIXTURE_STRAT for why this particular one -- it is not
-    # the star's best ladder, which is what makes the SECOND banner render.
+    # measurements stay null and the fixture measures a card with its most
+    # crowded row absent. See FIXTURE_STRAT for why this particular one -- it
+    # is not the star's best ladder, so Strategy and Overall visibly differ.
     post("/api/strat", {"course_id": course_id, "star_id": star_id,
                         "strat_tag": FIXTURE_STRAT})
     attempts = json.loads(urllib.request.urlopen(
@@ -1087,8 +1088,8 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     `target_segment` additionally makes an armed segment the ACTIVE target
     (see `_target_segment`), retiring whatever star `target`/`_seed_target`
     set. Pass the SAME id as `arm_segment` to reach the one state that puts
-    two rank banners AND a `.seg-waiting` row on the SAME `.log-card`, the
-    one also carrying `.log-card-active`.
+    the rank-view switch AND a `.seg-waiting` row on the SAME `.log-card`,
+    the one also carrying `.log-card-active`.
 
     `seed_editor_fixtures` additionally POSTs two saved, byte-identical
     segments purpose-built for opening in the Segments editor (see

@@ -82,6 +82,23 @@ def test_no_card_text_pairs_a_value_with_its_own_complement():
     assert "swap.fade.out" in card and "swap.fade.in" in card
 
 
+def test_practice_rank_mode_reuses_the_route_exchange_contract():
+    """Task 0097 names the MARELO route swap as the animation, not inspiration.
+
+    The practice RankBanner therefore consumes the same hook, its icon motion,
+    its exchange pivot/fade pair, and the shared bar easing. A parallel local
+    animation would inevitably drift when MARELO is tuned."""
+    from source_scan import code_only
+    ranks = code_only(UI / "components" / "ranks.js")
+    assert "useRouteSwap(swapKey" in ranks
+    assert "mareloTuning()" in ranks
+    assert "rankSwap.icon" in ranks
+    assert "rankSwap.crossed" in ranks
+    assert "rankSwap.fade.out" in ranks and "rankSwap.fade.in" in ranks
+    assert "barEase(rankSwap.progress)" in ranks
+    assert "exchangeKey: swapKey" in ranks
+
+
 def test_the_swap_commits_its_first_frame_before_paint():
     """The exchange must not be preceded by a flash of the new text.
 

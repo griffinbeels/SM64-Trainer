@@ -3,7 +3,7 @@
 
 Ordering is pure and is driven under node. The card itself is verified by
 RENDERING (tests/test_responsive.py + tools/contact_sheet.py) -- a unit test
-cannot tell whether two rank banners crowd each other, and this project has
+cannot tell whether a rank exchange crowds or jumps, and this project has
 shipped an invisible feature on unit tests plus `node --check` before.
 
 `orderedSections`'s own declaration is extracted from source rather than
@@ -35,6 +35,7 @@ UI = REPO / "src" / "sm64_events" / "ui"
 LOG_JS = UI / "components" / "practicelog.js"
 ENTITY_SECTION_JS = UI / "entitysection.js"
 SUBSECTIONS_JS = UI / "subsections.js"
+RANK_DISPLAY_MODE_JS = UI / "rankdisplaymode.js"
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node not on PATH")
@@ -61,6 +62,56 @@ def ordered(view) -> list:
                             timeout=30)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
+
+
+def rank_mode_results() -> dict:
+    script = f"""
+import {{ readRankDisplayMode, writeRankDisplayMode,
+  effectiveRankDisplayMode }} from {RANK_DISPLAY_MODE_JS.as_uri()!r};
+const values = new Map();
+const storage = {{
+  getItem: (key) => values.has(key) ? values.get(key) : null,
+  setItem: (key, value) => values.set(key, value),
+}};
+const out = {{}};
+out.defaultMode = readRankDisplayMode('star:1:1', storage);
+out.sharedDefault = effectiveRankDisplayMode(out.defaultMode, false);
+out.firstWrite = writeRankDisplayMode('star:1:1', 'overall', storage);
+out.secondWrite = writeRankDisplayMode('segment:7', 'strategy', storage);
+out.star = readRankDisplayMode('star:1:1', storage);
+out.segment = readRankDisplayMode('segment:7', storage);
+out.other = readRankDisplayMode('star:1:2', storage);
+out.sharedRemembered = effectiveRankDisplayMode(out.star, false);
+out.separateRemembered = effectiveRankDisplayMode(out.star, true);
+out.invalidWrite = writeRankDisplayMode('star:1:1', 'star', storage);
+out.afterInvalid = readRankDisplayMode('star:1:1', storage);
+values.set('sm64.practiceRankModes', '{{not json');
+out.malformed = readRankDisplayMode('star:1:1', storage);
+console.log(JSON.stringify(out));
+"""
+    result = subprocess.run(["node", "--input-type=module", "-"],
+                            input=script, capture_output=True, text=True,
+                            timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_rank_display_preference_is_per_entity_and_shared_ladders_force_overall():
+    out = rank_mode_results()
+    assert out == {
+        "defaultMode": "strategy",
+        "sharedDefault": "overall",
+        "firstWrite": True,
+        "secondWrite": True,
+        "star": "overall",
+        "segment": "strategy",
+        "other": "strategy",
+        "sharedRemembered": "overall",
+        "separateRemembered": "overall",
+        "invalidWrite": False,
+        "afterInvalid": "overall",
+        "malformed": "strategy",
+    }
 
 
 def _rows(count, first_id=1):

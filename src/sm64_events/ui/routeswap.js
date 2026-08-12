@@ -45,10 +45,11 @@ function swapIcon(progress, exchangeAt, tune) {
 /**
  * `swapKey` is what counts as "a genuinely different measurement to
  * cross-fade to" -- the route's own scope id, the one gesture this feature
- * covers (never the rank MODE, which still snaps exactly as it did before).
+ * covers. The MARELO card uses route scope; the practice log uses rank view.
  *
  * `current` is the DISPLAY the card would show with no swap in flight --
- * `{tier, division, fill, label}`, primitives only. It is a dependency of
+ * `{tier, division, fill, label}` for the route card, with an optional stable
+ * `key` when the visible label is a component rather than a primitive. It is a dependency of
  * this hook's own effect on every field, not just `swapKey`, so the "from"
  * snapshot a swap starts from is always what was actually last on screen --
  * a route's own rating can keep moving between two picks, and a swap begun
@@ -84,6 +85,7 @@ export function useRouteSwap(swapKey, current, tune) {
   // Same root cause as the rAF fix already recorded below, one layer up: that
   // one stopped the FIRST swap frame being skipped, this one stops a frame
   // being painted before the swap exists at all.
+  const displayKey = current && (current.key ?? current.label);
   useLayoutEffect(() => {
     const prior = priorRef.current;
     const changed = prior.key !== swapKey;
@@ -151,7 +153,7 @@ export function useRouteSwap(swapKey, current, tune) {
       if (frameRef.current != null) cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
     };
-  }, [swapKey, current.tier, current.division, current.fill, current.label]);
+  }, [swapKey, current.tier, current.division, current.fill, displayKey]);
 
   return swap;
 }

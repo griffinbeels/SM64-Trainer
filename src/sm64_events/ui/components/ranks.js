@@ -7,9 +7,12 @@ import { h } from "preact";
 import { useRef } from "preact/hooks";
 import htm from "htm";
 import { useRankClimb } from "../rankclimb.js";
-import { capName, divisionDigit, rankAt } from "./caps.js";
+import { barFill, capName, divisionDigit, rankAt, rankColor } from "./caps.js";
 import { RankIcon } from "./rankicon.js";
 import { tightenedNextStepText } from "../nextstep.js";
+import { useRouteSwap } from "../routeswap.js";
+import { mareloTuning } from "../marelotuning.js";
+import { barEase } from "../climbcurve.js";
 const html = htm.bind(h);
 
 // Mirrors ranks/classify.RANK_MODES keys+labels (keep in lockstep) in
@@ -55,27 +58,14 @@ function sentinelMsg(banner) {
   return RANK_SENTINEL[banner.reason] || RANK_SENTINEL.no_strat;
 }
 
-// Rendered inside the objective card's rank slot, TWICE with different
-// data: once for the strategy rank (`sec.rank` — graded on the ACTIVE
-// strategy's own ladder, from _section_banner) and once for the entity's
-// own rank (`sec.entity_rank` — graded on the entity's best-possible ladder
-// across every strategy, from entity_rank). Same component, same layout,
-// same gradient wash, same progress bar — a labelled, gradient banner
-// sitting next to a small unlabelled chip read as a RENDERING FAULT to the
-// user, not two deliberate measures (live report 2026-07-25, round 2 —
-// "it feels like it's just a visual error entirely"). ONE component
-// rendered twice, never two components that happen to look similar:
-// those drift apart visually, and this bug was exactly that kind of drift.
+// The reusable rank banner. A practice-log card renders exactly ONE and swaps
+// its payload between `sec.rank` (the active strategy's ladder) and
+// `sec.entity_rank` (the entity's best-possible ladder) through `swapKey`.
+// Other callers omit `swapKey` and retain the ordinary climb-only behaviour.
 //
-// `label` names which measure this is — "Strategy" on both banners' left
-// half, and the ENTITY's own noun on the right: "Star" from StarSection,
-// "Segment" from SegmentSection. It comes from the call site rather than
-// being hardcoded here precisely because this component renders on both
-// kinds (rule 11 parity) — a fixed "Star" would be a lie on a segment card.
-// The word "Rank" was dropped from both in round 4 (2026-07-25): 13
-// characters of label is unaffordable on a ~390px row, the two sit adjacent
-// so the short forms can't be confused, and the medal + tier beside them
-// already say "rank" louder than the kicker did.
+// `label` owns the existing kicker slot and may be text or a component. Task
+// 0097 passes the Strategy/Overall button group here so the controls inherit
+// the exact old position rather than adding a new row or overlay.
 //
 // `.objective-card` is a HARD fixed height (122px at desktop, 258px under
 // 760px, both `overflow` values that do NOT reflow the grid) — everything
@@ -103,12 +93,8 @@ function sentinelMsg(banner) {
 // component's job shrank back to what always fit: rank / division / bar /
 // next, none of which can be abbreviated.
 //
-// `hint` is the kicker's tooltip, and today has exactly one caller: the
-// merged "Strategy · Star" label practice.js uses when the two measures
-// grade identically (bannerLabel/bannerHint). It stays a prop rather than
-// wording built here because the reason is a fact about the CALL SITE's
-// data, and this component is deliberately ignorant of which two ladders
-// produced the banner it was handed.
+// `hint` is the kicker's optional tooltip. It stays a prop because this
+// component is deliberately ignorant of the measurement it was handed.
 // `layout` is a LAYOUT VARIANT, not a second implementation: "row" (default,
 // today's single-line shape, byte-identical), "stacked" (the MARELO-shaped
 // compact form -- cap icon + name in a left column, the bar and the next-step
@@ -199,11 +185,39 @@ function nextStepWords(mode, nextLabel, gap) {
   return tightenedNextStepText(mode, nextLabel, gap);
 }
 
+function entryRankName(entry) {
+  if (!entry || !entry.tier) return "";
+  return `${capName(entry.tier).toUpperCase()}${
+    entry.division ? ` ${divisionDigit(entry.division)}` : ""}`;
+}
+
+function entryBasis(entry) {
+  const basis = entry && entry.banner && entry.banner.rank
+    ? entry.banner.basis : null;
+  return basis
+    ? `${basis.count}${basis.window ? `/${basis.window}` : ""}·${basis.display}`
+    : "";
+}
+
+function entryNextSentence(entry, nextStepMode) {
+  if (!entry) return "";
+  const payload = entry.banner;
+  const ranked = !!(payload && payload.rank);
+  const next = ranked && payload.next_tier
+    ? { tier: payload.next_tier, division: payload.next_division }
+    : entry.atFloor ? rankAt(1) : null;
+  const nextLabel = next
+    ? `${capName(next.tier)} ${divisionDigit(next.division)}` : null;
+  const gap = ranked && payload.next_gap_cs != null
+    ? (payload.next_gap_cs / 100).toFixed(2) : null;
+  return nextStepWords(nextStepMode, nextLabel, gap);
+}
+
 export function RankBanner({ label, banner, hint = null, identity = null,
                              atFloor: atFloorProp = false,
                              lane = null, order = 0, replayKey = null,
                              layout = "row", showNext = true, iconSize = 24,
-                             nextStepMode = "classic" }) {
+                             nextStepMode = "classic", swapKey = null }) {
   const ranked = !!(banner && banner.rank);
   // Called unconditionally (rules of hooks) even on the sentinel/empty path
   // below — `null` passes straight through with no animation, which is what
@@ -247,11 +261,35 @@ export function RankBanner({ label, banner, hint = null, identity = null,
     // bar is simply full — the same sentinel the old tween used.
     fill: banner.next_tier ? (banner.fill || 0) : 1,
   } : atFloor ? { ...rankAt(0), fill: 0 } : null;
-  // `lane`/`order` sequence the two banners on one card: the STRATEGY rank
-  // climbs, then the star's (user, 2026-07-27 -- "Strategy first. Then
-  // star"). A lone banner, and the MARELO bar, pass neither and start
-  // immediately.
-  const climb = useRankClimb(graded, identity, { lane, order, replayKey });
+  // Practice-log Strategy/Overall changes are the same kind of event as a
+  // route change: a different measurement nobody earned. Reuse the route
+  // exchange whole -- its pre-paint first frame, squash/pop, exchange pivot,
+  // sequential fade and bar clock. `exchangeKey` gives that gesture priority
+  // inside useRankClimb even though the Strategy-only `replayKey` necessarily
+  // changes when the button changes; otherwise that replay request starts a
+  // second, false Capless-floor climb underneath the swap. Callers that omit
+  // `swapKey` keep the original RankBanner path byte-for-byte.
+  const rankSwap = useRouteSwap(swapKey, {
+    // Stable primitive for routeswap's snapshot resync. The kicker itself is
+    // a freshly-created Preact node every render, and using it as a dependency
+    // would cancel/restart the exchange on every animation frame.
+    key: `${swapKey}|${graded && graded.tier}|${graded && graded.division}`
+      + `|${graded ? graded.fill : 0}|${banner && banner.next_gap_cs}`
+      + `|${banner && banner.basis && banner.basis.count}`
+      + `|${banner && banner.basis && banner.basis.window}`
+      + `|${banner && banner.basis && banner.basis.display}|${atFloor}`,
+    tier: graded && graded.tier,
+    division: graded && graded.division,
+    fill: graded ? graded.fill : 0,
+    banner,
+    atFloor,
+  }, mareloTuning());
+  // `lane`/`order` can sequence several banners in an inspector or legacy
+  // caller. The practice log now passes neither because it paints one banner;
+  // a lone banner and the MARELO bar start immediately.
+  const climb = useRankClimb(graded, identity, {
+    lane, order, replayKey, exchangeKey: swapKey,
+  });
   // The next-step sentence currently ON SCREEN, and the one before it. A
   // fade-out has to show the sentence the reader was ALREADY reading: `banner`
   // has been replaced by the new payload before the climb's first frame runs,
@@ -347,7 +385,18 @@ export function RankBanner({ label, banner, hint = null, identity = null,
   // progress of the rank being LANDED ON -- the number that answers "how
   // close am I", which the anchoring deliberately stops the bar from telling,
   // and a settled statement rather than one that ticks every frame of a climb.
-  const fillPct = climb.bar * 100;
+  // The mode swap uses the exact same clock and progress-bar easing as the
+  // MARELO route exchange. Its snapshots carry RAW within-division fills;
+  // convert each endpoint before interpolating so crossing ladder rungs never
+  // jumps at the exchange pivot (the same barFill contract as marelo.js).
+  const swapping = !!rankSwap;
+  const swapEase = swapping ? barEase(rankSwap.progress) : 0;
+  const drawnFill = (entry) => (entry
+    ? barFill(entry.tier, entry.division, entry.fill) : 0);
+  const fillPct = (swapping
+    ? drawnFill(rankSwap.from)
+      + (drawnFill(rankSwap.to) - drawnFill(rankSwap.from)) * swapEase
+    : climb.bar) * 100;
   const displayFillPct = Math.round(graded.fill * 100);
   // The mode name (e.g. "Avg 10") is dropped from the VISIBLE basis text —
   // round 4, 2026-07-25: it's global app state already shown in the
@@ -394,6 +443,10 @@ export function RankBanner({ label, banner, hint = null, identity = null,
   // nothing when the mode is something else.
   const vars = { ...climb.vars, "--climb-reveal": climb.reveal,
     "--next-fill-pct": `${fillPct}%` };
+  if (swapping) {
+    vars["--climb-color"] = `color-mix(in srgb, ${rankColor(rankSwap.to.tier)} `
+      + `${(swapEase * 100).toFixed(1)}%, ${rankColor(rankSwap.from.tier)})`;
+  }
   const showInlineNext = showNext
     && (nextStepMode === "classic" || nextStepMode === "always" || nextStepMode === "compact");
   // Only offered on a REAL, SETTLED gap -- `gap == null` covers both "top
@@ -406,7 +459,19 @@ export function RankBanner({ label, banner, hint = null, identity = null,
   // frame where `gap` is still the stale pre-climb value (the "leaving"
   // phase briefly keeps showing it before it clears).
   const showHoverNext = showNext && nextStepMode === "hover" && nextLabel && gap != null;
+  const iconTier = swapping
+    ? (rankSwap.crossed ? rankSwap.to.tier : rankSwap.from.tier) : climb.tier;
+  const iconDivision = swapping
+    ? (rankSwap.crossed ? rankSwap.to.division : rankSwap.from.division) : climb.division;
+  const iconProps = swapping ? rankSwap.icon : climb.icon;
+  const swapText = (className, from, to, tag = "span") => swapping
+    ? html`<${tag} class=${`${className} rank-banner-swap-text`}>
+        <span style=${{ opacity: rankSwap.fade.out }}>${from}</span>
+        <span style=${{ opacity: rankSwap.fade.in }}>${to}</span>
+      </${tag}>`
+    : null;
   return html`<div class=${`rank-banner${climb.climbing ? " is-climbing" : ""}${
+      swapping ? " is-swapping" : ""}${
       layout === "stacked" ? " rank-banner-stacked" : ""}${
       layout === "column" ? " rank-banner-column" : ""}${
       nextStepMode === "hover" ? " rank-banner-nextstep-hover" : ""}`} style=${vars}>
@@ -429,10 +494,18 @@ export function RankBanner({ label, banner, hint = null, identity = null,
            other. This wrapper's own margin reserves that spill so the
            row's real painted content stops overlapping, without widening
            the whole row's gap for every OTHER pair of children too. -->
-      <span class="rank-icon-slot rank-banner-icon"><${RankIcon} ...${climb.icon}
-          tier=${climb.tier} division=${climb.division} size=${iconSize} /></span>
-      <b class="rank-banner-name">${capName(climb.tier).toUpperCase()}${climb.division ? ` ${divisionDigit(climb.division)}` : ""}</b>
-      ${basis && html`<span class="meta rank-banner-basis" title=${basisTitle}>${basisText}</span>`}
+      <span class="rank-icon-slot rank-banner-icon"><${RankIcon} ...${iconProps}
+          tier=${iconTier} division=${iconDivision} size=${iconSize} /></span>
+      ${swapping
+        ? swapText("rank-banner-name", entryRankName(rankSwap.from),
+            entryRankName(rankSwap.to), "b")
+        : html`<b class="rank-banner-name">${entryRankName(climb)}</b>`}
+      ${swapping
+        ? (entryBasis(rankSwap.from) || entryBasis(rankSwap.to))
+          ? swapText("meta rank-banner-basis", entryBasis(rankSwap.from),
+              entryBasis(rankSwap.to))
+          : null
+        : basis && html`<span class="meta rank-banner-basis" title=${basisTitle}>${basisText}</span>`}
       <!-- "X.XXs to rank up", not a bare "−0.22s" (user, 2026-07-27) -- the
            number is the thing you chase, and a signed delta made the reader
            work out what it was a delta FROM. It FADES with the bar -- out as the
@@ -450,8 +523,12 @@ export function RankBanner({ label, banner, hint = null, identity = null,
            deliberate -- the climb-reveal variable still drives the fade
            whenever the line is present, so the rule above is untouched in
            every case where it can be observed at all. -->
-      ${showInlineNext && html`<span class="meta rank-banner-next">${
-        nextStepWords(nextStepMode, nextLabel, gap)}</span>`}
+      ${showInlineNext && (swapping
+        ? swapText("meta rank-banner-next",
+            entryNextSentence(rankSwap.from, nextStepMode),
+            entryNextSentence(rankSwap.to, nextStepMode))
+        : html`<span class="meta rank-banner-next">${
+            nextStepWords(nextStepMode, nextLabel, gap)}</span>`)}
     </div>
     <div class="rank-progress-track" title=${trackTitle}>
       <i style=${`width:${fillPct}%`}></i>
