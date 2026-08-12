@@ -66,6 +66,18 @@ CUT = 0.5
 
 # The line is unreadable below this, so its wording may change here and only
 # here. Not zero: the exchange pivot lands a fraction of a frame either side.
+#
+# On its own this number is NOT the tolerance for the exchange check below, and
+# using it as one was a flaky test rather than a strict one. Measured over 15
+# consecutive runs on an idle machine (30 exchanges, frame gaps 15.0-18.5ms
+# throughout -- no dropped frames anywhere): the last frame before the wording
+# changed landed anywhere in 0.000-0.052, because ONE FRAME of the fade covers
+# about 0.05 of opacity at the pivot. Where in that span the sample lands is
+# sub-frame phase, i.e. a coin flip. So 0.05 has no headroom at all and 2 of
+# those 30 exchanges cleared it -- ~13% of runs of this test, which is what was
+# failing a release build roughly every other attempt. The fix is not a bigger
+# constant (at 30fps one frame covers ~0.10 and any fixed number is wrong
+# again) but allowing exactly one frame of travel, below.
 INVISIBLE = 0.05
 
 # Total time the line spends PARTLY visible across a climb -- out plus in. A
@@ -111,7 +123,7 @@ def check(name, rows):
     assert travel > 0.5, (
         f"{name}: the line never moved ({len(rows)} frames) -- the climb did "
         "not play, so this measured nothing")
-    for (t0, v0, s0), (t1, v1, s1) in zip(rows, rows[1:]):
+    for index, ((t0, v0, s0), (t1, v1, s1)) in enumerate(zip(rows, rows[1:])):
         assert abs(v1 - v0) <= CUT, (
             f"{name}: the line CUT at {t1:.0f}ms -- opacity {v0:.3f} -> "
             f"{v1:.3f} in one frame. It must always fade.")
@@ -120,9 +132,22 @@ def check(name, rows):
             # replaced. The incoming one is then free to rise on the very next
             # frame -- that is the fade-in, not an overlap. Checking the frame
             # AFTER instead would only be measuring the frame rate.
-            assert v0 <= INVISIBLE, (
+            #
+            # The tolerance is INVISIBLE plus ONE FRAME of this run's own fade,
+            # never INVISIBLE alone (see its comment for the measurement). We
+            # only ever sample the curve, so the true pivot sits somewhere
+            # inside the gap we did not see, and the sentence had at most one
+            # more frame of travel left to reach zero. Taking the step from the
+            # frames THEMSELVES is what makes this hold at any frame rate.
+            # It cannot forgive the defect this test exists for: a wording that
+            # changes without fading has a step of ~0 for the same reason it
+            # has an opacity of ~1, so the tolerance stays at INVISIBLE and 1.0
+            # fails it by twenty times over.
+            step = abs(v0 - rows[index - 1][1]) if index else 0.0
+            assert v0 <= INVISIBLE + step, (
                 f"{name}: the wording changed at {t1:.0f}ms while it was still "
-                f"READABLE (opacity {v0:.3f} -> {v1:.3f}): {s0!r} -> {s1!r}")
+                f"READABLE (opacity {v0:.3f} -> {v1:.3f}, one frame of fade is "
+                f"{step:.3f}): {s0!r} -> {s1!r}")
     assert rows[-1][1] > 0.9, (
         f"{name}: the line never came back (ended at {rows[-1][1]:.3f})")
     fading = [t for t, v, _ in rows if INVISIBLE < v < 1 - INVISIBLE]

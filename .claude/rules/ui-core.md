@@ -315,6 +315,34 @@ and a row reshuffling four times in a tenth of a second is the flicker.
   order-dependence and was not. What makes this expensive rather than annoying
   is the message: `no exit-star control on a 100-coin star` is
   indistinguishable from the feature being absent (2026-08-03).
+- **A ONE-SHOT `if (el) el.click()` cannot undo something that has not happened
+  yet, and it fails silently in exactly the case it was written for.** The
+  Library auto-opens onto the last-practiced target, so two setup helpers
+  backed out to the course grid with a guarded single click. Measured
+  2026-08-11, 12 runs of 12: `.library-page` and its grid cells render at
+  6-16ms and the auto-open lands at 30-49ms, so the back button was **never
+  present** at the moment either helper looked for it. The click was always a
+  no-op; what decided the outcome was whether the following
+  `wait_for('.entity-grid button')` got its first look in before the auto-open
+  replaced the grid. It usually did — hence "flaky" — and when it did not, the
+  buttons never became visible again and the test died on a 15s timeout.
+  Reproduced at **2 runs in 4**, and it took down a different test in each of
+  two release builds. The shape that works: click back until nothing is left
+  to go back from, then require the destination to survive a second look past
+  the late-arrival window. Waiting for the auto-open itself would pin the
+  helper to a fixture that happens to seed a last-practiced target.
+- **A frame-sampled threshold must allow ONE FRAME of travel, or it is a coin
+  flip.** `tests/test_ui_rank_line.py` asserted that the fade's outgoing text
+  was under 0.05 opacity on the last frame before the wording changed. One
+  frame of that fade covers about 0.05 at the exchange pivot, so where the
+  sample lands inside it is sub-frame phase: measured over 15 runs (30
+  exchanges, frame gaps 15.0-18.5ms — no dropped frames, so this was never
+  about machine load), the value landed anywhere in 0.000-0.052 and **2 of 30
+  cleared the threshold**. A bigger constant is not the fix, because at 30fps
+  one frame covers ~0.10 and any fixed number is wrong again; take the step
+  from the recorded frames themselves and allow it. It keeps its teeth for
+  free — a value that changes without animating has a per-frame step of ~0 for
+  the same reason it has an opacity of ~1.
 - **A driven test writes to the REAL store, and `data/` is gitignored, so its
   edits outlive its fixture.** `serve_ui` leaves `rank_standards_path()`
   pointing at the worktree's own `data/rank_standards.json`; a test that edits a

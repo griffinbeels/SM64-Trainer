@@ -25,6 +25,7 @@ import gzip
 import json
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -140,21 +141,68 @@ def _pick_jp_only_chip_approach(payload):
     return best
 
 
+# Scoped to `.library-page`, never a bare `.entity-grid`: this tab and Compare
+# both stay mounted with `display:none` while you are elsewhere, and the
+# recorder's parent dialog draws the SAME picker component, so an unscoped
+# query can answer with a grid belonging to another surface entirely
+# (2026-08-09 -- `.claude/rules/ui-core.md`'s own norm, written after that swap
+# read as the recorder refusing to close). `getClientRects()` rather than mere
+# presence, for the same reason: a hidden tab's grid is still in the DOM.
+LIBRARY_LEVEL = """
+(() => {
+  const visible = (el) => !!el && el.getClientRects().length > 0;
+  const back = document.querySelector('.library-page .entity-back');
+  const cells = [...document.querySelectorAll(
+    '.library-page .entity-grid button')];
+  return {back: visible(back), cells: cells.some(visible)};
+})()
+"""
+
+
+def _to_course_grid(page):
+    """Leave the Library showing its top-level COURSE grid.
+
+    Clicking the tab does not land here. The Library auto-opens onto the
+    last-practiced target, and that lands about 25ms AFTER `.library-page`
+    first renders -- measured 12 runs out of 12, back button never once
+    present at the moment this helper used to look for it. So the one-shot
+    `if (back) back.click()` fired on arrival was ALWAYS a no-op, and whether
+    the wait after it found any grid buttons was a race against the auto-open
+    replacing them. It won that race most of the time, which is exactly why
+    this read as flakiness rather than as a bug: reproduced at 2 runs in 4,
+    each time as a 15s timeout on `.entity-grid button`, and it took down two
+    different tests across two release builds.
+
+    Click back until there is nothing left to go back from, and require the
+    grid to survive a second look 60ms later -- longer than the auto-open
+    window, so a late one is caught rather than raced. Waiting for the
+    auto-open instead would pin this helper to a fixture that happens to seed
+    a last-practiced target.
+    """
+    page.wait_for(".library-page", timeout_ms=15000)
+    deadline = time.monotonic() + 15
+    state = None
+    settled = 0
+    while time.monotonic() < deadline:
+        state = page.evaluate(LIBRARY_LEVEL)
+        if state["back"]:
+            page.evaluate(
+                "document.querySelector('.library-page .entity-back').click()")
+            settled = 0
+        elif state["cells"]:
+            settled += 1
+            if settled >= 2:
+                return
+        page.wait_ms(60)
+    raise AssertionError(
+        f"the Library never settled on its course grid; last saw {state!r}")
+
+
 def _navigate_to_section(page, group_name, target_name, section_name):
     """Course grid -> a group's target grid -> the named target -> the named
     section, opened."""
     page.evaluate(CLICK_LIBRARY_TAB)
-    page.wait_for(".library-page", timeout_ms=15000)
-    # Scoped to `.library-page`, never a bare `.entity-grid`: this tab and
-    # Compare both stay mounted with `display:none` while you are elsewhere,
-    # and the recorder's parent dialog draws the SAME picker component, so an
-    # unscoped query can answer with a grid belonging to another surface
-    # entirely (2026-08-09 -- `.claude/rules/ui-core.md`'s own norm, written
-    # after that swap read as the recorder refusing to close).
-    page.evaluate(
-        "(() => { const b = document.querySelector('.library-page .entity-back'); "
-        "if (b) b.click(); })()")
-    page.wait_for(".library-page .entity-grid button", timeout_ms=15000)
+    _to_course_grid(page)
 
     for label, name in (("group", group_name), ("target", target_name)):
         result = page.evaluate(f"""

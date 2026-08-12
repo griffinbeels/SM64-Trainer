@@ -381,8 +381,24 @@ _LIBRARY_SEARCH_SETUP = _script(_LIBRARY_NAV + """
 // same reason test_ui_library_nav.py keeps a separate `empty_page`), and the
 // search box lives on the grid -- so back out first or this story measures a
 // page with no box on it and reports the surface simply absent.
-const back = document.querySelector('.library-page .entity-back');
-if (back) back.click();
+//
+// Backing out is a LOOP, never the one-shot `if (back) back.click()` this
+// used to be. That auto-open lands about 25ms AFTER `.library-page` first
+// renders (measured 12 runs of 12), so the button is reliably absent at the
+// moment a one-shot looks for it: the click was always a no-op and the story
+// then measured whichever page won the race. The same one-shot in
+// tests/test_ui_library_version_treatment.py timed out 2 runs in 4.
+for (let attempt = 0; attempt < 40; attempt++) {
+  const back = document.querySelector('.library-page .entity-back');
+  if (back) { back.click(); await sleep(40); continue; }
+  if (!document.querySelector('.library-page .library-find-input')) {
+    await sleep(40);
+    continue;
+  }
+  // Survive a second look past the auto-open window, or a late one still wins.
+  await sleep(60);
+  if (!document.querySelector('.library-page .entity-back')) break;
+}
 await waitFor(() => !!document.querySelector('.library-page .library-find-input'));
 const box = document.querySelector('.library-page .library-find-input');
 if (box && !box.value) {
