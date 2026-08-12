@@ -34,6 +34,7 @@ from ui_fixture import FIXTURE_SEGMENT, serve_ui  # noqa: E402
 from uilab import driver  # noqa: E402
 
 CLICK_LIBRARY_TAB = 'document.querySelector(\'.nav-item[title="Library"]\').click()'
+CLICK_PRACTICE_TAB = 'document.querySelector(\'.nav-item[title="Practice"]\').click()'
 
 # A segment of the test's OWN so the adopt can never collide with a vetted
 # strategy an existing corpus segment might already carry ("Standard" is the
@@ -94,6 +95,53 @@ def _navigate_to_target(page, group_name, target_label):
     """)
     assert picked_target == "clicked", picked_target
     page.wait_for(".library-target", timeout_ms=15000)
+
+
+def _fixture_segment_strategy_options(page):
+    """Every strategy select on the fixture's BitFS Pipe Entry card.
+
+    The card is displayed as No Reds in Bowser in the Fire Sea; both facts
+    identify it because other padding cards share the short family name.
+    """
+    return page.evaluate("""
+      (() => {
+        const card = Array.from(document.querySelectorAll('.log-card')).find((c) => {
+          const context = (c.querySelector('.log-card-context') || {}).textContent;
+          const name = (c.querySelector('.log-card-name b') || {}).textContent;
+          return context === 'Bowser in the Fire Sea' && name === 'No Reds';
+        });
+        if (!card) return null;
+        return Array.from(card.querySelectorAll(
+          '.log-card-strat-picker select, .attempt-strategy select'))
+          .map((select) => Array.from(select.options).map((option) => option.value));
+      })()
+    """)
+
+
+def _open_fixture_segment_card(page):
+    result = page.evaluate("""
+      (() => {
+        const card = Array.from(document.querySelectorAll('.log-card')).find((c) => {
+          const context = (c.querySelector('.log-card-context') || {}).textContent;
+          const name = (c.querySelector('.log-card-name b') || {}).textContent;
+          return context === 'Bowser in the Fire Sea' && name === 'No Reds';
+        });
+        if (!card) return 'no fixture segment card';
+        if (card.classList.contains('is-closed')) card.querySelector('.log-card-fold').click();
+        return 'opened';
+      })()
+    """)
+    assert result == "opened", result
+
+
+def _wait_for_fixture_options(page, predicate, timeout_s=10):
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        groups = _fixture_segment_strategy_options(page)
+        if groups and len(groups) >= 2 and predicate(groups):
+            return groups
+        time.sleep(0.05)
+    return None
 
 
 def test_link_unlink_round_trip_links_every_strategy_at_once(library_page):
@@ -174,6 +222,83 @@ def test_a_stars_subsections_render_as_pieces_with_the_link_door(library_page):
     assert header_doors == 0, (
         f"a star target links nothing -- its approaches auto-adopt; "
         f"found {header_doors} header doors")
+
+
+def test_linking_a_piece_updates_every_practice_picker_without_reload(
+        library_page, library_server):
+    """Task 0099: a linked subsection contributes its timings as Standard,
+    and both the card-head and attempt-row dropdowns see it immediately.
+    Unlink removes it through the same live refresh path; no page reload is
+    performed anywhere in this test."""
+    segments = json.loads(urllib.request.urlopen(
+        f"{library_server}/api/segments", timeout=10).read())
+    fixture_name = next(row["name"] for row in segments
+                        if row["id"] == FIXTURE_SEGMENT)
+
+    # Establish the precondition on the actual Practice card and mount its
+    # attempt rows so both StratPicker call sites are part of the assertion.
+    library_page.evaluate(CLICK_PRACTICE_TAB)
+    library_page.wait_for(".log-list-card", timeout_ms=15000)
+    _open_fixture_segment_card(library_page)
+    before = _wait_for_fixture_options(
+        library_page, lambda groups: all("Standard" not in group for group in groups))
+    assert before and len(before) >= 2, before
+
+    library_page.evaluate(CLICK_LIBRARY_TAB)
+    library_page.wait_for(".library-target", timeout_ms=15000)
+    _navigate_to_target(library_page, "1. Bob-omb Battlefield",
+                        "Big Bob-omb on the Summit")
+    library_page.wait_for(".library-pieces .library-link-button", timeout_ms=15000)
+    piece_name = library_page.evaluate("""
+      (() => {
+        const piece = Array.from(document.querySelectorAll('.library-piece'))
+          .find((row) => row.querySelector('.library-link-button'));
+        if (!piece) return null;
+        const name = piece.querySelector('.library-piece-name').textContent;
+        piece.querySelector('.library-link-button').click();
+        return name;
+      })()
+    """)
+    assert piece_name, "no unlinked subsection row on Big Bob-omb"
+    library_page.wait_for(".library-piece .search-menu-option", timeout_ms=10000)
+    picked = library_page.evaluate(f"""
+      (() => {{
+        const option = Array.from(document.querySelectorAll(
+          '.library-piece .search-menu-option'))
+          .find((row) => row.textContent === {fixture_name!r});
+        if (!option) return 'no fixture segment option';
+        option.click();
+        return 'clicked';
+      }})()
+    """)
+    assert picked == "clicked", picked
+    library_page.wait_for(
+        ".library-pieces .library-link-state.is-linked", timeout_ms=15000)
+
+    # Switching tabs is not a page reload. The linked-state wait above only
+    # resolves after Library's relink callback has refreshed the shared view.
+    library_page.evaluate(CLICK_PRACTICE_TAB)
+    library_page.wait_for(".log-list-card", timeout_ms=15000)
+    _open_fixture_segment_card(library_page)
+    linked = _wait_for_fixture_options(
+        library_page, lambda groups: all("Standard" in group for group in groups))
+    assert linked and len(linked) >= 2, linked
+    assert all(piece_name not in group for group in linked), (
+        f"a subsection's own name is the piece identity, not its strategy: {linked}")
+
+    library_page.evaluate(CLICK_LIBRARY_TAB)
+    library_page.wait_for(
+        ".library-pieces .library-link-state.is-linked", timeout_ms=15000)
+    library_page.evaluate(
+        "document.querySelector('.library-pieces .library-unlink').click()")
+    library_page.wait_for(".library-pieces .library-link-button", timeout_ms=15000)
+
+    library_page.evaluate(CLICK_PRACTICE_TAB)
+    library_page.wait_for(".log-list-card", timeout_ms=15000)
+    _open_fixture_segment_card(library_page)
+    unlinked = _wait_for_fixture_options(
+        library_page, lambda groups: all("Standard" not in group for group in groups))
+    assert unlinked and len(unlinked) >= 2, unlinked
 
 
 def test_a_name_matched_movement_shows_the_association_and_its_standing(library_page):

@@ -291,14 +291,25 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
   // page whichever door originally opened it. A failed refresh keeps the
   // last good rows; the next navigation refetches anyway.
   function reloadRows() {
-    setEntry((prev) => {
-      if (prev && prev.rows.length) {
-        Promise.all(prev.rows.map((row) => getJSON(`/api/library/target/${row.index}`)))
-          .then((rows) => setEntry((current) => (current ? { ...current, rows } : current)))
-          .catch(() => {});
-      }
-      return prev;
-    });
+    const current = entry;
+    const rowIndexes = current ? current.rows.map((row) => row.index) : [];
+    const pageIdentity = rowIndexes.join(",");
+    const rowsRefresh = rowIndexes.length
+      ? Promise.all(rowIndexes.map((index) =>
+          getJSON(`/api/library/target/${index}`)))
+        .then((rows) => setEntry((latest) => {
+          if (!latest || latest.rows.map((row) => row.index).join(",") !== pageIdentity)
+            return latest;
+          return { ...latest, rows };
+        }))
+        .catch(() => {})
+      : Promise.resolve();
+    // Linking changes the rank store synchronously, but the Practice pickers
+    // read their options from the shared session view. Refresh both views as
+    // one relink operation so no tab switch or page reload is needed, and so
+    // unlink removes the option through the exact same path.
+    const sessionRefresh = t && t.refresh ? t.refresh() : Promise.resolve();
+    return Promise.all([rowsRefresh, sessionRefresh]);
   }
 
   // Runs on every activation, not gated on `!active` staying false — an

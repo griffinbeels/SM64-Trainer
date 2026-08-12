@@ -502,11 +502,11 @@ function LinkControl({ row, kind, entityKey, adoptable, segments, segmentsError,
       doAdopt=${async (segmentId) => {
         await send("POST", "/api/library/adopt",
           { row_key: row.row_key, entity_key: `segment:${segmentId}` });
-        onRelink();
+        await onRelink();
       }}
       doUnlink=${async () => {
         await send("POST", "/api/library/unadopt", { row_key: row.row_key });
-        onRelink();
+        await onRelink();
       }}
       segments=${segments} segmentsError=${segmentsError} />`;
 }
@@ -544,12 +544,12 @@ function TargetLinkControl({ rows, approaches, linkCtx }) {
       doAdopt=${async (segmentId) => {
         await send("POST", "/api/library/adopt_target",
           { target_index: target.index, entity_key: `segment:${segmentId}` });
-        linkCtx.onRelink();
+        await linkCtx.onRelink();
       }}
       doUnlink=${async () => {
         await send("POST", "/api/library/unadopt_target",
           { target_index: target.index });
-        linkCtx.onRelink();
+        await linkCtx.onRelink();
       }}
       segments=${linkCtx.segments} segmentsError=${linkCtx.segmentsError} />`;
 }

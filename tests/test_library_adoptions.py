@@ -35,7 +35,7 @@ def _payload():
                  "version": None, "miss_reason": "castle_movement",
                  "approaches": [item("Lobby door (L) - BoB door"),
                                 item("Thin one", ladder=False, entries=3)],
-                 "subsections": []}]}
+                 "subsections": [item("Volcano Entry")]}]}
 
 
 @pytest.fixture()
@@ -48,7 +48,8 @@ def wiring(tmp_path):
     adoptions.load()
     target = store.payload["targets"][0]
     keys = {item["name"]: row_key(target, item["name"], item["ids"])
-            for item in target["approaches"]}
+            for kind in ("approaches", "subsections")
+            for item in target[kind]}
     return adoptions, standards, keys, tmp_path
 
 
@@ -62,6 +63,18 @@ def test_adopting_gives_the_segment_the_communitys_ladder(wiring):
     assert standards.ladder_cs("segment:42", ad.DEFAULT_STRATEGY)["Mario"] == 276
     assert standards.is_fitted("segment:42", ad.DEFAULT_STRATEGY)
     assert "segment:42" in standards.graded_entities()
+
+
+def test_adopting_a_subsection_uses_standard_not_the_pieces_name(wiring):
+    """A subsection row names the piece, not a distinct way to perform it.
+    Linking Volcano Entry to the user's Volcano Entry segment therefore
+    contributes its timings as Standard rather than a stuttering strategy
+    called Volcano Entry."""
+    adoptions, standards, keys, _ = wiring
+    result = adoptions.adopt(keys["Volcano Entry"], "segment:42")
+    assert result["strategy"] == ad.DEFAULT_STRATEGY
+    assert standards.strategies("segment:42") == [ad.DEFAULT_STRATEGY]
+    assert standards.ladder_cs("segment:42", ad.DEFAULT_STRATEGY)["Mario"] == 276
 
 
 def test_unadopting_actually_takes_the_strategy_away(wiring):

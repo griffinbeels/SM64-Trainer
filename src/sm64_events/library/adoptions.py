@@ -47,9 +47,17 @@ def save(path, rows: dict) -> None:
                     encoding="utf-8", newline="")
 
 
-def strategy_name(target_label: str, approach_name: str) -> str:
-    return (DEFAULT_STRATEGY if approach_name.strip() == target_label.strip()
-            else approach_name)
+def strategy_name(target_label: str, row_name: str, *, kind: str = "approach") -> str:
+    """The strategy identity one adopted Library row contributes.
+
+    An approach names a distinct way to complete its target, except for the
+    common target-named row whose name would merely stutter. A subsection is
+    different: the row names the *piece being practised*, not a way to perform
+    that piece, so its community timing is the piece's Standard strategy.
+    """
+    return (DEFAULT_STRATEGY
+            if kind == "subsection" or row_name.strip() == target_label.strip()
+            else row_name)
 
 
 def _normalized(name: str) -> str:
@@ -82,17 +90,19 @@ def auto_match(target_label: str, segments) -> dict | None:
 def _rows(payload):
     from sm64_events.library.audit import row_key
     for target in payload["targets"]:
-        for kind in ("approaches", "subsections"):
-            for item in target[kind]:
-                yield target, item, row_key(target, item["name"], item["ids"])
+        for collection, kind in (("approaches", "approach"),
+                                 ("subsections", "subsection")):
+            for item in target[collection]:
+                yield (target, item,
+                       row_key(target, item["name"], item["ids"]), kind)
 
 
 def find_row(payload: dict, key: str):
-    """(target, item) for one row key, or (None, None)."""
-    for target, item, candidate in _rows(payload):
+    """(target, item, kind) for one row key, or three ``None`` values."""
+    for target, item, candidate, kind in _rows(payload):
         if candidate == key:
-            return target, item
-    return None, None
+            return target, item, kind
+    return None, None, None
 
 
 def ladders(payload: dict, rows: dict) -> dict:
@@ -103,11 +113,11 @@ def ladders(payload: dict, rows: dict) -> dict:
     assigned to one segment simply become two strategies on it, which is the
     point — a movement with three documented ways to do it is three strategies."""
     out = {}
-    for target, item, key in _rows(payload):
+    for target, item, key, kind in _rows(payload):
         entity = rows.get(key)
         if not entity or not item.get("ladder"):
             continue
-        name = strategy_name(target["label"], item["name"])
+        name = strategy_name(target["label"], item["name"], kind=kind)
         layers = out.setdefault(entity, {"strategies": {}, "jp_strategies": {}})
         layers["strategies"].setdefault(name, item["ladder"])
         if item.get("ladder_jp"):
@@ -244,7 +254,7 @@ def validate(payload: dict, key: str, entity: str, qualified=()):
 
     Every refusal names its reason: an assignment that silently does nothing is
     indistinguishable from one that worked until a rank fails to appear."""
-    target, item = find_row(payload, key)
+    target, item, kind = find_row(payload, key)
     if target is None:
         raise AdoptionError(f"no library row called {key!r}")
     if not item.get("ladder"):
@@ -257,7 +267,7 @@ def validate(payload: dict, key: str, entity: str, qualified=()):
         raise AdoptionError(
             f"{entity} names its strategies by exit-star variant, and the sheet "
             f"row does not say which exit star it ran")
-    name = strategy_name(target["label"], item["name"])
+    name = strategy_name(target["label"], item["name"], kind=kind)
     # A vetted strategy of the same name is NOT a refusal (round 6, reversing
     # round 5's arm): the standards read-merge keeps the vetted ladder
     # structurally, so the assignment cannot touch grading -- and it now
