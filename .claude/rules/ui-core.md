@@ -661,6 +661,17 @@ string**, because both are where the fixture sits at the floor:
   it drives the WIDEST value in the corpus through the real column instead of
   whatever the fixture happens to seed.
 
+**And when the corpus cannot supply the hard input AT ALL, PLANT it.** Deriving
+the extreme from the corpus is the right move only while the corpus contains
+one. Every icon this app ships is a SQUARE PNG, so a portrait art holder never
+renders here in any state — and `test_selector_strat_line_fits.py` was green
+right through a live report about exactly that (2026-08-11: an image's intrinsic
+height beating `aspect-ratio: 1/1`, pushing a cell's strategy line 12px below
+its own border). Its companion injects a 100x220 SVG into one cell and then
+asserts. The tell that you are in this case rather than the widest-value one:
+the property under test is about a SHAPE or a KIND of input, not about a length
+— no amount of picking from what exists reaches it.
+
 **A defect can be entirely in PAINT, and four of the five probes walk the DOM.**
 A pseudo-element is not in the DOM, so nothing that queries the tree can see
 one. The rank banners' colour wash is a `::before`; it bled sideways onto the

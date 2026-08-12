@@ -300,6 +300,12 @@ DEATH_ACTIONS = {
 #   ">> death: fall" detector line BEFORE the level unloads. Also confirm a
 #   normal (quicksand) death does NOT double-fire (Usamune's in-level death
 #   respawn must not pulse 0x13).
+#   THE ADDRESS ITSELF IS NOW LIVE-CORROBORATED, the VERIFY above is not:
+#   probe_warp_block 2026-08-11 watched this pulse 0x04 within 0-2 frames of
+#   15 consecutive entrance touches and go quiet on each of the 8 he reset out
+#   of, which no wrong address does. What stays pending is the DEATH path
+#   named above — 0x13 on an HMC pit, and whether a warp-floor level
+#   mislabels — because nothing in that run went near it.
 PENDING_WARP_OP = 0x8033B252  # s16 sDelayedWarpOp; 0 = no warp pending
 # Op values (decomp level_update.h): 0x12 WARP_OP_DEATH is the NORMAL death
 # warp, pended ~48 frames AFTER the death action already fired our event —
