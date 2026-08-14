@@ -276,7 +276,19 @@ def _scope_label(service, scope_id: str) -> str:
     return scope_id
 
 
-def create_ranks_router(service) -> APIRouter:
+def create_ranks_router(service, library=None, adoptions=None) -> APIRouter:
+    """`library`/`adoptions` (the LibraryStore + Adoptions app.py already
+    builds) let the standards payload widen its example clips with library
+    entries (task 0098); both optional so every existing caller — and a
+    broadcast-only instance — keeps its exact behaviour."""
+
+    def _library_clips(entity: str) -> dict:
+        if library is None or service.ranks is None:
+            return {}
+        from sm64_events.library.examples import example_clips
+        rows = adoptions.rows() if adoptions is not None else {}
+        return example_clips(library.payload, rows, entity,
+                             service.ranks.has_jp_ladder)
     router = APIRouter(prefix="/api")
 
     @router.get("/ranks/standards")
@@ -286,6 +298,7 @@ def create_ranks_router(service) -> APIRouter:
         if entity is None:
             return service.ranks.to_json()
         ladders = service.ranks.ladders(entity)
+        extra_clips = _library_clips(entity)
         return {"entity": entity, "clock": service.ranks.clock_for(entity),
                 "strategies": ladders,
                 # THE entity's own ladder -- the pointwise best across every
@@ -311,7 +324,18 @@ def create_ranks_router(service) -> APIRouter:
                 # would collide with its own tier names (Mario, Bronze, ...).
                 "fitted_strategies": service.ranks.fitted_strategies(entity),
                 "videos": service.ranks.videos(entity),
-                "cutoff_videos": service.ranks.cutoff_videos(entity),
+                "cutoff_videos": service.ranks.cutoff_videos(entity, extra_clips),
+                # The RAW pool those links were resolved from (vetted xcams
+                # clips + library entries, task 0098), per strategy, as
+                # [[time_cs, url], ...]. The browser bands these into
+                # SUBDIVISION examples itself via librarymodel.js::bandsOf —
+                # the same walk the Library page files entries with — so the
+                # expanded standards rows and the Library cannot disagree
+                # about which division a clip belongs to, and a division-level
+                # resolver here would be a second door onto that rule.
+                "clips": {strat: (service.ranks.clips(entity).get(strat, [])
+                                  + extra_clips.get(strat, []))
+                          for strat in ladders},
                 "user_videos": service.ranks.user_videos(entity),
                 "seeded": service.ranks.seeded_strategies(entity),
                 # Grouping is resolved HERE, not in the browser: a 100-coin

@@ -80,6 +80,29 @@ def test_clips_and_cutoff_videos_accessors(tmp_path):
     assert s.clips("segment:99") == {}                 # absent entity -> empty
 
 
+def test_cutoff_videos_merges_extra_clips_into_the_band_resolution(tmp_path):
+    """Task 0098: library clips widen the pool BEFORE banding, so the fastest
+    example within a tier's band wins whichever source it came from, and a
+    user override still outranks both."""
+    import json
+    p = tmp_path / "rs.json"
+    p.write_text(json.dumps({"version": 3, "entities": {
+        "star:8:2": {"clock": "igt",
+            "strategies": {"Nuts": {"Mario": 12.93, "Diamond": 13.36}},
+            "clips": {"Nuts": [[1326, "diamond-vetted"]]},
+            "user_videos": {"Nuts": {"Diamond": "diamond-override"}}}}}))
+    s = RankStandards(p); s.load()
+    extra = {"Nuts": [[1290, "mario-library"], [1320, "diamond-library"]]}
+    resolved = s.cutoff_videos("star:8:2", extra)["Nuts"]
+    assert resolved["Mario"] == "mario-library"        # a gap the library fills
+    assert resolved["Diamond"] == "diamond-override"   # override still wins
+    without_override = RankStandards(p)
+    without_override.load()
+    without_override.clear_video("star:8:2", "Nuts", "Diamond")
+    resolved = without_override.cutoff_videos("star:8:2", extra)["Nuts"]
+    assert resolved["Diamond"] == "diamond-library"    # 1320 beats vetted 1326
+
+
 def test_set_and_clear_video_override(tmp_path):
     s = RankStandards(tmp_path / "rs.json", seed_path=_seed(tmp_path)); s.load()
     s.set_video("star:9:2", "Nuts Pless", "Gold", "https://youtu.be/gold")

@@ -972,6 +972,23 @@
      the button would silently vanish. */
   .std-tier-link{border:none;background:transparent;color:inherit;cursor:pointer;padding:0;margin-left:4px;line-height:1;vertical-align:middle;opacity:.7}
   .std-tier-link:hover{opacity:1}
+  /* The tier label is the EXPAND control for its subdivision rows (task
+     0098): the whole icon+name+chevron run is one button, wearing the
+     division-I cap. Ink stays the dark #111 the gradient cells always used --
+     it moved from the td's inline style to this class when the cell grew
+     children that must inherit it. */
+  .std-tier-cell{color:#111;font-weight:700}
+  .std-tier-btn{display:inline-flex;align-items:center;gap:4px;border:none;background:transparent;color:inherit;font:inherit;font-weight:700;cursor:pointer;padding:0;vertical-align:middle}
+  .std-tier-chevron{opacity:.55;transition:transform .2s ease}
+  .std-tier-btn[aria-expanded="true"] .std-tier-chevron{transform:rotate(180deg)}
+  /* Subdivision rows: cell padding lives INSIDE the animated clip, so a
+     closing row really reaches 0px tall instead of leaving a padded sliver
+     that snaps away when the row unmounts (standards.js::StdSubRows). */
+  .stdtable .std-sub td{padding:0}
+  .std-sub-clip{overflow:hidden}
+  .std-sub-pad{padding:3px 7px}
+  .std-sub-name{display:inline-flex;align-items:center;gap:4px;padding-left:16px;font-size:10px;white-space:nowrap}
+  @media (prefers-reduced-motion: reduce){.std-tier-chevron{transition:none}}
   .stdtable td a{color:#6cb6ff;text-decoration:none}
   .stdtable td a:hover{text-decoration:underline}
   .stdtable th a{color:#cdd3da}

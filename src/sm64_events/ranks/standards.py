@@ -335,15 +335,23 @@ class RankStandards:
             return []
         return list(seed["entities"].get(ek, {}).get("strategies", {}).keys())
 
-    def cutoff_videos(self, ek) -> dict:
+    def cutoff_videos(self, ek, extra_clips=None) -> dict:
         """{strat: {rank: url}} — auto band videos (from clips) merged with the
         user's hand-attached overrides, resolved against each strat's ladder. THE
-        per-cutoff video map the standards table links each time cell to."""
+        per-cutoff video map the standards table links each time cell to.
+
+        `extra_clips` ({strat: [[cs, url], ...]}) widens the clip pool per
+        strategy — the library entries `library/examples.py` resolves (task
+        0098). Merged INTO the band resolution rather than layered over it, so
+        the fastest example within a tier's band wins whichever source it came
+        from; user overrides still outrank both."""
         clips, overrides = self.clips(ek), self.user_videos(ek)
+        extra = extra_clips or {}
         out = {}
         for strat in self.ladders(ek):
+            merged = list(clips.get(strat, [])) + list(extra.get(strat, []))
             resolved = resolve_cutoff_videos(
-                self.ladder_cs(ek, strat), clips.get(strat, []), overrides.get(strat))
+                self.ladder_cs(ek, strat), merged, overrides.get(strat))
             if resolved:
                 out[strat] = resolved
         return out

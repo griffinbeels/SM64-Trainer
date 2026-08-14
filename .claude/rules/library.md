@@ -30,6 +30,7 @@ before it goes away. Phases 2 (fitted ladders), 3 (serving + refresh), 4
 | The library's REST surface | `server/library_api.py`, documented in `docs/api.md`. Mounted unconditionally in `server/app.py` — reference data needs no tracker service, so a broadcast-only second instance still serves it. The refresh runs in a worker thread: it downloads ~5.6 MB and re-fits 617 ladders, and the POLLER shares this process, so a blocked event loop is a dropped star grab. An entity nobody has timed is a 200 with an empty list, never a 404 |
 | Assigning a library row to a segment the user BUILT | `library/adoptions.py` — a star approach adopts itself at scrape time (`adopt.py`), a movement cannot: the sheet is finer than our segments (113 rows against 63) and its subsections have no segment at all, so the user builds one and points a row at it rather than us inventing 113 (user's ruling, 2026-08-05). An assignment is the USER's fact — it lives in their data dir, keyed by the row's stable name so a refresh keeps it — and must not be confused with `library_overrides.json`, which is a correction to our READING of the sheet, is committed, and is the same for everybody. An approach contributes its own name unless that merely repeats its target; a subsection ALWAYS contributes `Standard`, because the row names the piece being practised rather than a distinct way to perform that piece (Volcano Entry, 2026-08-12). Adopted ladders merge into the SAME sheet-derived layer as the bundled ones, and `apply_sheet_ladders` re-merges from scratch on every change, which is what makes an unadopt actually remove a strategy. Every refusal names its reason (409, not 400 — the request is well formed and the refusal is about the world): a silent no-op is indistinguishable from success until a rank fails to appear |
 | Where the sheet is fetched from | `library/source.py` — one place, because the tool and the server both need it now |
+| Library entries as example clips for the standards table | `library/examples.py` — `example_clips(payload, adoption_rows, entity, has_jp_ladder)`, the join behind the practice log's threshold links (task 0098; see the BUILT section below). Wired in `server/ranks_api.py::create_ranks_router(service, library=, adoptions=)` from app.py |
 | Refreshing the bundled snapshot | `tools/scrape_sheet.py` — and **READ the `unknown:` list it prints**; that list is the deliverable, because a target we cannot name looks identical to a target the sheet does not have. `--from <file.xlsx>` re-derives offline. Output is gzipped with `mtime=0`: 4.51 MB of JSON becomes 0.42 MB for 7 ms of load (26 ms against 19 ms), the exe ships it as-is, and an unchanged sheet produces a byte-identical file |
 | The Library tab's own rules (section order, bands + subdivisions, the scoring twin, the video-provider registry, the grid math, the trim→import mapping) | `ui/components/librarymodel.js` — import-free of Preact/the DOM on purpose (caps.js and format.js, both themselves import-free, are the only imports), so `tests/test_library_model_js.py` drives every one of these under node with no browser. `sectionOrder` is a SECOND door beside `ladderorder.js::slowestFirst` on purpose, not an unpinned duplicate of it: that one orders a standings TABLE's columns (a run getting faster on one already-chosen strategy), this one orders a PAGE's sections (which strategy a climbing reader meets first) — an unproven approach sorts LAST here and FIRST there, and neither reads the other's ladder key. **The floor tier is the registry key `Iron`** (round 1, 2026-08-07 — "it's the CAPLESS rank", rendered via `capName`), never a third name. **The scoring twin** (`SCORE_ANCHORS`/`scoreFor`/`divisionWithin`/`timeForScore`, mirroring `ranks/scoring.py`) is what lets `bandsOf` split every tier band into five subdivision shells with time brackets — a deliberate duplicate of a curve the browser cannot round-trip for (44k entries re-banded per JP/US flip), so it carries the standing remedy: `tests/test_cross_language_parity.py` drives BOTH real implementations over real ladders and every division edge, mutation-proved. Python's `round()` is half-even; the twin's `pyRound` matches it. **`videoSource(url, parentHost)`** names a player per format (census 2026-08-07: YouTube 6,579 · Twitch 397 · X 384 · bsky 22 · files/images · link-out fallback); Twitch players refuse to load without `parent=` matching the embedding host, and embed.bsky.app takes only a DID — a handle URL ships `embed: null` and the card resolves it on click. `trayToImport` is the tray→`POST /api/compare/import` translation (below) |
 | SEARCHING the library — the box on the landing grid, and what a hit means | `ui/librarysearch.js` (`searchTargets`/`resultSub`/`fold`, import-free so node drives the RULE — `tests/test_library_search.py`) + `ui/components/librarynav.js`, which draws the box above whichever layer is showing. Round 12, his words: *"when you type the search query, it automatically finds the segment/star that you want to find… show the terminal nodes within this library (e.g., the segments / stars that we'd click into)"*. Three decisions, each his, each a fork offered and answered rather than guessed: **a result row is always a TARGET**, matched on its own label AND on its approaches' names (so "LBLJ" finds the target that documents it and the row's second line says which approach matched — the rejected alternative listed targets and approaches as two kinds of row, which gives one click two destinations); **the results REPLACE the grid** rather than floating over a dimmed one, so the page never holds two scrolling regions; and searching never touches `openGroupKey`, so clearing the box puts back exactly the layer you were on. Matching is prefix-per-word and AND-ed over a fold that turns punctuation into spaces — "bob omb" finds "Bob-omb", "cage tock" finds "Tick Tock Clock — Roll Into the Cage". **THREE things are searched, in a fixed order of increasing coarseness, and each only gets a target the ones before it did not claim**: the target's own name (with its course), its approaches' names, then WHO has a time on it (2026-08-10, his ask the moment the round landed). A runner shares the word list with the target's name, so "cheese05 ttc" narrows a prolific name to one course instead of returning all 324 targets they appear on; candidate runners are those at least one word touches, which keeps an ordinary query from walking 448 names across every target. The names ride `GET /api/library`'s `approach_names` (`library/store.py::index`, 631 names / 15.9 KB) and its `runners` ROSTER — `{name: [target position]}`, measured at 139 KB deduped against 340 KB for the obvious per-target shape, which is why the roster and not symmetry with `approach_names` — so nothing fetches per keystroke; an older index without that key degrades to label-only rather than throwing. `.library-find*`/`.library-result*` are their OWN classes — `.library-search` and `.library-target-search` each belong to another surface, and index.html's own comment records what sharing one cost. `.library-result` names `justify-content` explicitly: a bare `display:flex` on a `<button>` centres its children in Chromium, which drew every row floating in the middle of its card. Sweep story: `library-search` in `tools/uilab_project.py`, which has to back OUT of auto-open's target page first, because the box lives on the grid |
@@ -123,32 +124,26 @@ covered. `tests/test_ui_library_target.py` now browses to a star the fixture
 seeds nothing for. Before trusting this file's guards on a NEW state, ask
 which fixture entity can actually reach it.
 
-## Owed to phase 5: every standard links to its own examples
+## Every standard links to its own examples — BUILT (task 0098, 2026-08-14)
 
-User's ask, 2026-08-05, recorded before it is built. Each row of the
-[[standards ladder]] on the [[practice log]] should link into the Library and
-land on **the examples for that threshold specifically** — not the target's
-whole video list. "What are all the examples of achieving this rank?" for
-every tier, resolved as the entries whose time sits closest to that cutoff.
-
-Three things make it cheap, and one makes it a real design question:
-
-- The data is already there. Every [[entry]] in the library carries a time and
-  the video its [[runner]] linked, and a fitted [[ladder]] already sits on the
-  same row — so "the entries nearest this cutoff" is a slice of a list we
-  ship, not a new fetch.
-- It is the plural of something that exists. `classify.resolve_cutoff_videos`
-  already bands example clips into `{rank: url}`, ONE per tier, fastest first.
-  This is the same question asked for all of them, so the two must agree about
-  which entries belong to a cutoff or the card and the Library will disagree in
-  front of the user.
-- **Not every link resolves** — see below. A threshold whose single nearest
-  entry has been privated must not read as having no examples, which is the
-  argument for showing several rather than the closest one.
-- The open question is what "belongs to a threshold" means: entries between
-  this cutoff and the next faster one is the obvious reading, but a tier with
-  few entries then shows an empty list while the tier below it is crowded.
-  Decide it against the real distribution rather than in the abstract.
+The 2026-08-05 ask ("what are all the examples of achieving this rank?"), and
+his 0098 wording answered the open question this section used to carry: an
+example belongs to the threshold whose band holds its time — *"within Waluigi,
+we would show an example closest to the next highest tier of 12"60 here, so
+between 12"60 and 12"96"* — which is exactly `classify.resolve_cutoff_videos`'s
+existing fastest-in-band rule, so the build only widened the clip SOURCES.
+`library/examples.py::example_clips` files every library entry carrying a time
+and a video under the strategy its row grades as (the same three doors that
+give a strategy its ladder: explicit adoption → matched/own-name approach on
+the target's entity; an unadopted subsection never reaches its target's
+entity, and a JP entry drops only where `has_jp_ladder` annotates a
+difference). `ranks_api.py::get_standards` merges those into `cutoff_videos`
+and ships the raw pool as `clips`, which `standards.js` bands into per-
+subdivision examples through `librarymodel.js::bandsOf` — the Library page's
+own filing walk, so the two surfaces cannot disagree about a clip's division.
+Measured on the bundled data: linked tier cells 330/3069 → 1500/3069; the
+residue is 802 cells whose strategy has no sheet row at all and 767 whose band
+holds no published video — his "(if it exists)" case, not a join bug.
 
 ## Two facts about the data that are not bugs
 
