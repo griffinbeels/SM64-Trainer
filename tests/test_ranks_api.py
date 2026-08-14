@@ -211,3 +211,38 @@ def test_delete_without_purge_keeps_clear_semantics(tmp_path):
         r = client.delete(f"/api/ranks/standards/{ek}/customy")
         assert r.status_code == 200
         assert "customy" not in svc.db.get_state("deleted_strats", {}).get(ek, [])
+
+
+def test_a_dead_example_video_never_reaches_the_payload(tmp_path):
+    """Round 2 of task 0098, end to end at the endpoint: every community pool
+    (clips, cutoff_videos, videos) is filtered through the liveness verdicts,
+    the tier link falls back to the next eligible clip, and a hand-attached
+    override survives its own URL being marked dead."""
+    from fastapi import FastAPI
+    from sm64_events.library import videocheck
+    from sm64_events.server.ranks_api import create_ranks_router
+
+    rs = tmp_path / "rs2.json"
+    rs.write_text(json.dumps({"version": 3, "entities": {
+        "star:8:2": {"clock": "igt",
+            "strategies": {"Nuts": {"Mario": 12.93, "Diamond": 13.36}},
+            "clips": {"Nuts": [[1280, "https://v/dead-fastest"],
+                               [1290, "https://v/alive-next"]]},
+            "videos": {"Nuts": "https://v/dead-fastest"},
+            "user_videos": {"Nuts": {"Diamond": "https://v/dead-fastest"}}}}}))
+    ranks = RankStandards(rs); ranks.load()
+    checks_path = tmp_path / "checks.json.gz"
+    videocheck.save_checks(checks_path, {
+        "https://v/dead-fastest": {"status": "dead",
+                                   "checked": "2026-08-14T00:00:00Z"}})
+    db = Database(tmp_path / "t2.db")
+    svc = TrackerService(db, Broadcaster(), ranks=ranks)
+    app = FastAPI()
+    app.include_router(create_ranks_router(svc, video_checks_path=checks_path))
+    payload = TestClient(app).get("/api/ranks/standards",
+                                  params={"entity": "star:8:2"}).json()
+    assert payload["clips"]["Nuts"] == [[1290, "https://v/alive-next"]]
+    assert payload["cutoff_videos"]["Nuts"]["Mario"] == "https://v/alive-next"
+    assert payload["videos"] == {}
+    # the override is HIS fact — never filtered
+    assert payload["cutoff_videos"]["Nuts"]["Diamond"] == "https://v/dead-fastest"

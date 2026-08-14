@@ -112,6 +112,19 @@ TIER_ICON = """
     const card = Array.from(document.querySelectorAll('.log-card'))
       .find((c) => c.querySelector('.stdtable'));
     const buttons = Array.from(card.querySelectorAll('.std-tier-btn'));
+    // Round 2 geometry, his words: caps "aligned with each other", the
+    // chevron "larger and on the far right of the box". Alignment is every
+    // icon slot sharing one x; far-right is the chevron's right edge sitting
+    // within the cell's own right padding.
+    const slotLefts = buttons.map((b) =>
+      Math.round(b.querySelector('.rank-icon-slot').getBoundingClientRect().left));
+    const chevrons = Array.from(card.querySelectorAll('.std-tier-expand'))
+      .map((b) => {
+        const cell = b.closest('td').getBoundingClientRect();
+        const own = b.getBoundingClientRect();
+        return Math.round(cell.right - own.right);
+      });
+    const chevronSize = card.querySelector('.std-tier-expand svg');
     return {
       buttons: buttons.length,
       withCap: buttons.filter((b) => b.querySelector('.hat')).length,
@@ -120,6 +133,10 @@ TIER_ICON = """
         const hat = b.querySelector('.hat');
         return hat && /\\s1$/.test(hat.title);
       }).length,
+      distinctSlotLefts: [...new Set(slotLefts)],
+      chevronRightGaps: [...new Set(chevrons)],
+      chevronWidth: chevronSize
+        ? Math.round(chevronSize.getBoundingClientRect().width) : 0,
     };
   })()
 """
@@ -165,6 +182,18 @@ def test_every_tier_label_wears_the_numbered_winged_division_one_cap(page_state)
     # digit, the registry's own design.
     assert icons["withWings"] == icons["buttons"], icons
     assert icons["withDivisionOne"] == icons["buttons"], icons
+
+
+def test_the_caps_align_and_the_chevron_sits_large_at_the_far_right(page_state):
+    """Round 2, his words: "make sure the symbols are aligned with each other
+    (right now without alignment, this looks messy)" and "the dropdown symbol
+    should be larger and on the far right of the box"."""
+    icons = page_state["icons"]
+    assert len(icons["distinctSlotLefts"]) == 1, (
+        f"the tier caps start at different x positions: {icons}")
+    assert all(gap <= 10 for gap in icons["chevronRightGaps"]), (
+        f"a chevron sits away from its cell's right edge: {icons}")
+    assert icons["chevronWidth"] >= 15, icons
 
 
 def test_expanding_a_tier_shows_its_five_subdivision_rows(page_state):

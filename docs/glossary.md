@@ -781,9 +781,9 @@ you pick looks like what you get.
 ### Standards ladder
 
 The table of every [[standard]] for one [[target]], each row wearing the
-[[rank icon]] of its top [[division]] and linking to the fastest video inside
-that [[rank]]'s own band. A row expands into the five [[division]] thresholds
-inside its [[rank]], each linked the same way.
+[[rank icon]] of its top [[division]] and linking to the fastest watchable
+video inside that [[rank]]'s own band. A row expands into the five
+[[division]] thresholds inside its [[rank]], each linked the same way.
 
 - **Lives** — the standards panel
   (`src/sm64_events/ui/components/standards.js`)

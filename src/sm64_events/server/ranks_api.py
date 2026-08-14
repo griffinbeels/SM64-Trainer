@@ -276,11 +276,14 @@ def _scope_label(service, scope_id: str) -> str:
     return scope_id
 
 
-def create_ranks_router(service, library=None, adoptions=None) -> APIRouter:
+def create_ranks_router(service, library=None, adoptions=None,
+                        video_checks_path=None) -> APIRouter:
     """`library`/`adoptions` (the LibraryStore + Adoptions app.py already
     builds) let the standards payload widen its example clips with library
     entries (task 0098); both optional so every existing caller — and a
-    broadcast-only instance — keeps its exact behaviour."""
+    broadcast-only instance — keeps its exact behaviour. `video_checks_path`
+    overrides where the liveness verdicts load from (tests; production takes
+    the bundled seed)."""
 
     def _library_clips(entity: str) -> dict:
         if library is None or service.ranks is None:
@@ -289,6 +292,15 @@ def create_ranks_router(service, library=None, adoptions=None) -> APIRouter:
         rows = adoptions.rows() if adoptions is not None else {}
         return example_clips(library.payload, rows, entity,
                              service.ranks.has_jp_ladder)
+
+    # Videos the liveness sweep (tools/check_videos.py) marked gone — round 2
+    # of task 0098: a dead video must never be THE example a standard links
+    # to. Loaded once per process, like every other bundled seed; an absent
+    # file filters nothing.
+    from sm64_events.core.paths import bundled_video_checks
+    from sm64_events.library import videocheck
+    dead_videos = videocheck.dead_urls(videocheck.load_checks(
+        video_checks_path or bundled_video_checks() or ""))
     router = APIRouter(prefix="/api")
 
     @router.get("/ranks/standards")
@@ -298,7 +310,9 @@ def create_ranks_router(service, library=None, adoptions=None) -> APIRouter:
         if entity is None:
             return service.ranks.to_json()
         ladders = service.ranks.ladders(entity)
-        extra_clips = _library_clips(entity)
+        alive = lambda clips: [c for c in clips if c[1] not in dead_videos]
+        extra_clips = {strat: alive(clips) for strat, clips
+                       in _library_clips(entity).items()}
         return {"entity": entity, "clock": service.ranks.clock_for(entity),
                 "strategies": ladders,
                 # THE entity's own ladder -- the pointwise best across every
@@ -323,8 +337,17 @@ def create_ranks_router(service, library=None, adoptions=None) -> APIRouter:
                 # {name: ladder} dict and a "fitted" key inside a ladder
                 # would collide with its own tier names (Mario, Bronze, ...).
                 "fitted_strategies": service.ranks.fitted_strategies(entity),
-                "videos": service.ranks.videos(entity),
-                "cutoff_videos": service.ranks.cutoff_videos(entity, extra_clips),
+                # `videos` and both clip pools are filtered through the
+                # liveness verdicts (round 2): a URL the sweep marked dead
+                # never reaches a link. `alive` is applied to every pool in
+                # ONE place each, and `cutoff_videos` applies the same set
+                # internally, so the tier links and the subdivision links
+                # cannot disagree about whether a clip exists.
+                "videos": {strat: url for strat, url
+                           in service.ranks.videos(entity).items()
+                           if url not in dead_videos},
+                "cutoff_videos": service.ranks.cutoff_videos(
+                    entity, extra_clips, dead_urls=dead_videos),
                 # The RAW pool those links were resolved from (vetted xcams
                 # clips + library entries, task 0098), per strategy, as
                 # [[time_cs, url], ...]. The browser bands these into
@@ -333,7 +356,7 @@ def create_ranks_router(service, library=None, adoptions=None) -> APIRouter:
                 # expanded standards rows and the Library cannot disagree
                 # about which division a clip belongs to, and a division-level
                 # resolver here would be a second door onto that rule.
-                "clips": {strat: (service.ranks.clips(entity).get(strat, [])
+                "clips": {strat: (alive(service.ranks.clips(entity).get(strat, []))
                                   + extra_clips.get(strat, []))
                           for strat in ladders},
                 "user_videos": service.ranks.user_videos(entity),

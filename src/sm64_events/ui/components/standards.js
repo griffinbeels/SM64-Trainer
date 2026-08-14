@@ -424,21 +424,27 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
           <td class="std-tier-cell"
               style=${`background:${capGradient(rank) || rankColor(rank)}`}
               title=${`${capName(rank)} · ${rank} on xcams`}>
-            <!-- The whole tier label is the EXPAND control (task 0098 item 3),
-                 wearing the division-I cap: tier-level surfaces show the
+            <!-- The tier label expands its subdivision rows (task 0098 item
+                 3), wearing the division-I cap: tier-level surfaces show the
                  numbered, fully-winged cap, the same round-2 ruling the
                  Library's TOC already renders ("the empty cap kinda looks
-                 weird") — item 2 of the same task. -->
-            <button type="button" class="std-tier-btn"
-                aria-expanded=${expandedTier === rank}
-                title=${`${expandedTier === rank ? "hide" : "show"} ${capName(rank)} subdivision standards`}
-                onclick=${() => setExpandedTier(
-                  (prev) => (prev === rank ? null : rank))}>
-              <span class="rank-icon-slot" style="--icon-size: 15px">
-                <${RankIcon} tier=${rank} division=${"I"} size=${15} /></span>
-              <span class="std-tier-name">${capName(rank)}</span>
-              <${Icon} name="chevron" size=${12} className="std-tier-chevron" />
-            </button>${
+                 weird") — item 2 of the same task. Round 2: the row is a
+                 left-anchored flex (every cap starts at the same x — "we
+                 need to make sure the symbols are aligned with each other")
+                 and the chevron is its own larger button pinned to the far
+                 right of the cell ("the dropdown symbol should be larger and
+                 on the far right of the box"); both halves toggle the same
+                 expansion. -->
+            <span class="std-tier-row">
+              <button type="button" class="std-tier-btn"
+                  aria-expanded=${expandedTier === rank}
+                  title=${`${expandedTier === rank ? "hide" : "show"} ${capName(rank)} subdivision standards`}
+                  onclick=${() => setExpandedTier(
+                    (prev) => (prev === rank ? null : rank))}>
+                <span class="rank-icon-slot" style="--icon-size: 15px">
+                  <${RankIcon} tier=${rank} division=${"I"} size=${15} /></span>
+                <span class="std-tier-name">${capName(rank)}</span>
+              </button>${
             /* The standards-ladder deep link (spec 2026-08-07-library-page,
                section 3: "each tier row... links into the Library at that
                tier's band for the current target + strategy") -- one link
@@ -457,7 +463,15 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
                         strat: activeStrat, tier: rank })}>
                   <${Icon} name="library" size=${12} />
                 </button>`
-              : ""}</td>
+              : ""}
+            <button type="button" class="std-tier-expand"
+                aria-expanded=${expandedTier === rank}
+                title=${`${expandedTier === rank ? "hide" : "show"} ${capName(rank)} subdivision standards`}
+                onclick=${() => setExpandedTier(
+                  (prev) => (prev === rank ? null : rank))}>
+              <${Icon} name="chevron" size=${16} className="std-tier-chevron" />
+            </button>
+            </span></td>
           ${strats.map((strat) => {
             const v = (data.strategies[strat] || {})[rank];
             const vid = cutoffVid(strat, rank);

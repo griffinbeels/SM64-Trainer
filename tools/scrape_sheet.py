@@ -65,6 +65,8 @@ def _redundant(data: bytes, overrides: dict) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--no-check-videos", action="store_true",
+                        help="skip the video-liveness sweep (tools/check_videos.py)")
     parser.add_argument("--from", dest="source", type=Path,
                         help="read a saved .xlsx instead of fetching")
     args = parser.parse_args()
@@ -144,6 +146,16 @@ def main() -> None:
     for target in payload["targets"]:
         if target["entity_key"] is None and target["miss_reason"] == "unknown":
             print(f"    unknown: {target['section']} | {target['label']}")
+    if not args.no_check_videos:
+        # Round 2 of task 0098, his suggestion taken: the scraper is where new
+        # video URLs first appear, so it is where their liveness gets checked.
+        # The committed verdicts cache makes this incremental — a routine
+        # re-scrape only probes URLs it has not seen or whose verdict expired.
+        import check_videos
+        report = check_videos.run()
+        print(f"  video liveness: probed {report['checked']} "
+              f"({report['skipped_fresh']} fresh, {report['unknown']} unknown), "
+              f"ok {report['ok_total']} / dead {report['dead_total']} on file")
 
 
 if __name__ == "__main__":
