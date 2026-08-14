@@ -47,7 +47,7 @@
              margin-top: .4rem; padding: 4px 0; }
              /* padding: vertical breathing room so the active star's
                 drop-shadow glow + scale/bob clear the card's overflow clip. */
-  .starcell { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
+  .starcell { flex: 1 1 0; min-width: 0; display: flex;justify-content:center; flex-direction: column;
               align-items: center; gap: .28rem; padding: .5rem .25rem .45rem;
               border: 1px solid transparent; border-radius: 10px; cursor: pointer;
               text-align: center; background: none; color: inherit; font: inherit;
@@ -186,7 +186,7 @@
   .icongrid { display: grid; gap: 8px; max-height: 55vh; overflow-y: auto;
               grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
               padding: 2px; }
-  .icontile { display: flex; flex-direction: column; align-items: center;
+  .icontile { display: flex;justify-content:center; flex-direction: column; align-items: center;
               gap: 4px; padding: 6px 4px; cursor: pointer;
               border: 1px solid var(--border-soft); border-radius: 8px;
               background: none; color: var(--muted); font-size: .68rem; }
@@ -216,7 +216,7 @@
   /* Entity picker (spec 2026-07-25-entity-picker-icons). The trigger reads
      like the select it replaced; the dialog rows carry art. */
   .entity-trigger {
-    display: inline-flex; align-items: center; gap: .45rem;
+    display: inline-flex;justify-content:center; align-items: center; gap: .45rem;
     min-height: 34px; min-width: 0; max-width: 100%;
     padding: .3rem .5rem; text-align: left;
   }
@@ -338,7 +338,7 @@
     font-size: .72rem; letter-spacing: .04em; text-transform: uppercase;
   }
   .entity-back {
-    display: inline-flex; align-items: center; gap: .3rem;
+    display: inline-flex;justify-content:center; align-items: center; gap: .3rem;
     margin-bottom: .6rem; padding: .25rem .5rem;
     background: transparent; border-color: var(--border-soft);
     color: var(--muted); font-size: .78rem;
@@ -484,7 +484,7 @@
   .library-link-state.is-linked { color: var(--gold-soft); }
   .library-link-state.is-linked b { font-weight: 700; }
   .library-link-button, .library-record-button, .library-unlink {
-    display: inline-flex; align-items: center; gap: .35rem;
+    display: inline-flex;justify-content:center; align-items: center; gap: .35rem;
   }
   .library-link-error { color: var(--coral); font-size: .8rem; margin: 0; }
 
@@ -533,7 +533,7 @@
     background: rgba(4,13,23,.35); margin: .35rem 0 .35rem .9rem;
   }
   .library-division-head {
-    width: 100%; display: flex; align-items: center; gap: .55rem;
+    width: 100%; display: flex;justify-content:center; align-items: center; gap: .55rem;
     padding: .45rem .65rem; border: none; background: transparent;
     color: #dfe7ef; cursor: pointer; text-align: left;
   }
@@ -830,7 +830,7 @@
      value chip it configures, plus the affordances a <button> needs that a
      <span> chip doesn't: a pointer cursor and a hover border. */
   .chip-button {
-    display: inline-flex; align-items: center; gap: .3rem;
+    display: inline-flex;justify-content:center; align-items: center; gap: .3rem;
     background: transparent; color: inherit; cursor: pointer;
   }
   .chip-button:hover { border-color: var(--blue); }
@@ -981,7 +981,7 @@
      <button> centres its children in Chromium (the .library-result lesson),
      which is exactly the per-name-length cap drift round 2 reported. */
   .std-tier-btn{flex:1;min-width:0;display:flex;align-items:center;justify-content:flex-start;gap:6px;border:none;background:transparent;color:inherit;font:inherit;font-weight:700;cursor:pointer;padding:0;text-align:left}
-  .std-tier-expand{flex:0 0 auto;display:inline-flex;align-items:center;border:none;background:transparent;color:inherit;cursor:pointer;padding:0;line-height:1}
+  .std-tier-expand{flex:0 0 auto;display:inline-flex;justify-content:center;align-items:center;border:none;background:transparent;color:inherit;cursor:pointer;padding:0;line-height:1}
   .std-tier-chevron{opacity:.55;transition:transform .2s ease}
   .std-tier-expand[aria-expanded="true"] .std-tier-chevron{transform:rotate(180deg)}
   /* Subdivision rows: cell padding lives INSIDE the animated clip, so a
@@ -1667,7 +1667,7 @@
   .step-chip.skipped { color: var(--muted); opacity: .5; }
   /* A chip that toggles is a real button; strip the chrome, keep the ring. */
   .step-toggle, .step-track-door {
-    display: flex; align-items: baseline; gap: .22rem; min-width: 0;
+    display: flex;justify-content:center; align-items: baseline; gap: .22rem; min-width: 0;
     background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
     font: inherit; color: inherit; border-radius: 4px;
   }
@@ -2594,7 +2594,7 @@
      looks like it did nothing. */
   .scope-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
   .scope-chip {
-    display: flex; align-items: center; gap: 8px; padding: 5px 10px 5px 6px;
+    display: flex;justify-content:center; align-items: center; gap: 8px; padding: 5px 10px 5px 6px;
     border: 1px solid var(--border-soft); border-radius: 10px;
     background: rgba(8, 20, 34, .4); cursor: pointer; text-align: left;
   }
@@ -3454,7 +3454,7 @@
     background: rgba(8,20,34,.5);
   }
   .library-overall-toggle {
-    width: 100%; display: flex; align-items: center; gap: .4rem;
+    width: 100%; display: flex;justify-content:center; align-items: center; gap: .4rem;
     padding: .5rem .65rem; font-size: .85rem; font-weight: 600;
     color: var(--text); background: none; border: 0; cursor: pointer;
     text-align: left;
@@ -3771,7 +3771,7 @@
      the context cards are built on (a chevron beside a heading gives one
      gesture two targets, and the mismatch reads as a bug). */
   .record-card-head {
-    width: 100%; display: flex; align-items: center; gap: .5rem;
+    width: 100%; display: flex;justify-content:center; align-items: center; gap: .5rem;
     padding: .45rem .6rem; text-align: left; cursor: pointer;
     background: rgba(255,255,255,.03); color: var(--text);
     border: 0; border-bottom: 1px solid var(--border-soft);
@@ -4021,7 +4021,7 @@
   .routestep-actions .icon-button { width: 31px; min-width: 31px; min-height: 31px; }
   .routecands { margin: .45rem 0 .25rem 34px; }
   .routecands .chip {
-    display: inline-flex; align-items: center; max-width: 100%;
+    display: inline-flex;justify-content:center; align-items: center; max-width: 100%;
     border-color: #3d5770; background: #102137;
   }
   .routestep-foot { margin: .42rem 0 0 34px; }
@@ -5022,7 +5022,7 @@
     }
     .mobile-nav .nav-item {
       width: auto; min-width: 0; min-height: 52px;
-      display: flex; flex-direction: column; gap: .18rem;
+      display: flex;justify-content:center; flex-direction: column; gap: .18rem;
       font-size: .68rem; padding: .3rem .1rem;
     }
     .mobile-nav .nav-item span { display: inline; }
@@ -5605,7 +5605,7 @@
        room a wide card offers, and the one that gives up space first as the
        row narrows (a bigger flex-basis loses proportionally more under
        flex-shrink) -- the name ellipsises before the picker gets crowded. */
-    min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: var(--log-identity-gap, 10px);
+    min-width: 0; flex: 1 1 auto; display: flex;justify-content:center; align-items: center; gap: var(--log-identity-gap, 10px);
     padding: 0; border: 0; border-radius: 6px; background: none;
     color: inherit; font: inherit; text-align: left; cursor: pointer;
     /* Same shape as `.log-card` above: one declaration here, `:hover` sets
