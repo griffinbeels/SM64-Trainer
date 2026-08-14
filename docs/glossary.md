@@ -632,12 +632,16 @@ matches only inside the exit its [[runner]]s actually used.
 
 A stretch inside one way of doing a [[target]] that the [[Ultimate Sheet]] times separately — the
 sheet's own [[subsection]] rows, a third kind of row beside whole
-[[approach]]es. A piece grades nobody until you link it (see [[adoption]]):
-the sheet is finer than your [[segment]]s, so you build the [[segment]] first
-and point the piece at it.
+[[approach]]es. On the [[Library tab]]'s [[target]] page a piece draws the
+same full card an [[approach]] does — [[rank]] bands, [[division]]s, example
+videos — under its own Pieces heading; its one difference is the link/record
+strip. A piece grades nobody until you link it (see [[adoption]]): the sheet
+is finer than your [[segment]]s, so you either build the [[segment]] first
+and point the piece at it, or record one from the strip itself and the save
+links alone.
 
 - **Lives** — the library builder (`src/sm64_events/library/build.py`)
-  → the Pieces list on the [[Library tab]]'s target page
+  → the Pieces cards on the [[Library tab]]'s target page
 
 ### Adoption
 
@@ -651,7 +655,14 @@ laddered [[approach]] as its own [[strategy]] on the [[segment]]; a
 [[sheet piece]] keeps its own row-level door; unlink reverses the whole batch.
 The [[segment]] builder carries the same door from the other side — pick a
 sheet [[target]] while making or editing a [[segment]], and the link lands
-when you save. A [[segment]] whose name equals an entity-less
+when you save. A row with no [[segment]] to link also offers recording one on
+the spot: the strip's record button opens the [[recorder]] right there,
+pre-named after the row and pre-parented to its [[target]]'s [[star]] or
+[[segment]]; one save then names, links and — for a [[sheet piece]] — mints
+the [[subsection]] in one step. The connection works backwards too: a
+[[practice log]] card's book button on a linked or name-matched [[segment]]
+lands on the [[target]] page the link points at — the linked [[sheet piece]]
+already open, centered on your own standing — never on an empty page. A [[segment]] whose name equals an entity-less
 [[target]]'s label
 associates by itself — no click — and an associated row shows your standing
 at once: your [[segment]]'s best [[personal best]] graded on the row's own

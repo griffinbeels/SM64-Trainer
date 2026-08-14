@@ -104,7 +104,11 @@ Runs with video play in place — YouTube, Twitch, X, Bluesky, Streamable,
 Drive, or a raw clip file — and runs without one still count as times. Dock
 clips to the tray to watch several side by side, or send the tray to Compare
 — pulled from YouTube, a local file, or a browser upload — for one
-frame-accurate transport driving them all in lockstep.
+frame-accurate transport driving them all in lockstep. The pieces of a run
+(the sheet's own subsections) get the same full rank-and-video cards, and any
+row you have no segment for yet offers **Record a segment** right there — the
+recorder opens pre-named, you pick the moments you just played, and the save
+links itself to the row so it grades immediately.
 
 **Debug report.** Something behaving oddly? **Settings → Debug report** writes
 a single file capturing what the trainer was doing (logs, recent events,

@@ -250,7 +250,12 @@ if (segBtn && segBtn.getAttribute('aria-current') !== 'page') {{
   await waitFor(() => !!document.querySelector('.segments-page'));
 }}
 if (!document.querySelector('.record-rows, .record-picks')) {{
-  const openBtn = Array.from(document.querySelectorAll('button'))
+  // Scoped to .segments-page: the Library stays MOUNTED behind display:none
+  // when you leave it, and since task 0096 it carries its own "Record a
+  // segment…" doors — an unscoped text match would click a hidden one and
+  // open the recorder with the LIBRARY's prefill (ui-core.md's hidden-copy
+  // trap, third sighting).
+  const openBtn = Array.from(document.querySelectorAll('.segments-page button'))
     .find((b) => b.textContent.includes('Record a segment'));
   if (openBtn) {{
     openBtn.click();

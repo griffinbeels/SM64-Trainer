@@ -76,10 +76,48 @@ def create_library_router(store, overrides=None, adoptions=None,
     def library_for_entity(entity_key: str):
         """Every target mapped to one entity -- what the objective card's book
         mark jumps to. An entity with none is a 200 carrying an empty list,
-        not a 404: "the community has not timed this" is an answer."""
-        return {"entity_key": entity_key,
-                "targets": [decorated(target)
-                            for target in store.for_entity(entity_key)]}
+        not a 404: "the community has not timed this" is an answer.
+
+        A LINK counts as a mapping (his rule, 2026-08-14: "once there's a
+        connection to a library page, we should be brought there
+        automatically"): an entity the sheet never mapped -- every linked
+        segment -- resolves to the target(s) whose rows are ADOPTED onto it,
+        else to the target it name-matches. `focus_row_key` names the piece
+        the link points at (subsection assignments only), so the page can
+        open that piece rather than the target's first strategy; a
+        whole-target link has no single row to focus."""
+        targets = [decorated(target) for target in store.for_entity(entity_key)]
+        focus = None
+        if not targets and adoptions is not None:
+            assigned = adoptions.rows()
+            for position, target in enumerate(store.payload["targets"]):
+                focus_here, linked_here = None, False
+                for collection, kind in (("approaches", "approach"),
+                                         ("subsections", "subsection")):
+                    for item in target[collection]:
+                        key = row_key(target, item["name"], item["ids"])
+                        if assigned.get(key) == entity_key:
+                            linked_here = True
+                            if kind == "subsection" and focus_here is None:
+                                focus_here = key
+                if linked_here:
+                    targets.append(decorated({"index": position, **target}))
+                    if focus is None:
+                        focus = focus_here
+        if (not targets and segment_names is not None
+                and entity_key.startswith("segment:")):
+            try:
+                pairs = list(segment_names())
+                for position, target in enumerate(store.payload["targets"]):
+                    if target.get("entity_key"):
+                        continue
+                    hit = adoptions_store.auto_match(target["label"], pairs)
+                    if hit and hit["entity"] == entity_key:
+                        targets.append(decorated({"index": position, **target}))
+            except Exception:      # a degraded db must not sink the page
+                pass
+        return {"entity_key": entity_key, "targets": targets,
+                "focus_row_key": focus}
 
     @router.get("/runners")
     def library_runners():

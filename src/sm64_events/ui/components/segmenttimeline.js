@@ -264,7 +264,15 @@ function VisitCard({ card, collapsed, onToggleFold, icon, order, onToggleRow,
 // strategies and ladders all stay attached; only the recording itself moves.
 // The new recording's own defaults win over the row's stored modes
 // (clock "move" + Strict) — a re-record IS a new recording, stated in copy.
-export function SegmentTimeline({ t, onSaved, onCancel, replaces = null }) {
+//
+// `prefill` (task 0096): `{name, parents}` from a caller that already knows
+// the answers this surface would otherwise ask — the Library's record door
+// opens the recorder ON the row being recorded, so the row's own name and its
+// target's entity arrive filled in. The name lands pre-marked as his (same
+// rule as a re-record: the auto-name may never overwrite a name that arrived
+// with the intent); `parents` are ENTITY keys, translated once here.
+export function SegmentTimeline({ t, onSaved, onCancel, replaces = null,
+                                  prefill = null }) {
   // Task 11's own carried concern: the default view (view=steps) is only
   // ~10% of the journal by design, and the rarer reset/spawn-triggered
   // starts are reachable ONLY through view=all -- without this control here
@@ -308,13 +316,15 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null }) {
   // A re-record opens carrying the row's own name, PRE-MARKED as his: the
   // name field keeps HIS name (it already exists), so the auto-name may
   // never overwrite it. Emptying the field still hands it back.
-  const [name, setName] = useState(replaces ? replaces.name : "");
+  const [name, setName] = useState(
+    replaces ? replaces.name : (prefill && prefill.name) || "");
   // THE AUTO-NAME MAY ONLY FILL A FIELD HE HAS NOT EDITED (round 12 item 4:
   // "once I set the name for the segment name it shouldn't change" — every
   // pick toggle re-derived and overwrote what he typed). A ref, not state:
   // derive()'s .then would otherwise read the value frozen at call time.
   // Emptying the field hands it back to the auto-name; Clear resets both.
-  const nameEditedRef = useRef(!!replaces);
+  // A prefilled name counts as his for the same reason a re-record's does.
+  const nameEditedRef = useRef(!!replaces || !!(prefill && prefill.name));
   // Which entities this is a piece of (`SegmentDef.parents`) -- the ONLY way
   // a subsection can be created, and it is asked HERE because this is the
   // moment you know the answer: "nothing asks 'you just recorded this, what
@@ -335,7 +345,8 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null }) {
   // fine. `entityKeyForOption` is the one translation, applied where the
   // definition is built.
   const [parentOptions, setParentOptions] = useState(
-    replaces ? (replaces.parents || []).map(optionForEntityKey) : []);
+    replaces ? (replaces.parents || []).map(optionForEntityKey)
+    : prefill ? (prefill.parents || []).map(optionForEntityKey) : []);
   // null = closed; an index = re-picking that pill; "add" = the + button.
   const [pickingParentAt, setPickingParentAt] = useState(null);
   const parents = parentOptions.map(entityKeyForOption);
@@ -605,6 +616,13 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null }) {
     });
   }
 
+  // The id a CREATE already minted, if a Save got that far. `onSaved` is
+  // awaited (a caller may still have work to finish — the Library's record
+  // door LINKS the new segment, and its refusal belongs beside Save, where
+  // the click landed), so a Save can fail AFTER the segment exists. A second
+  // click must then re-use the id (a PUT, same as a re-record) rather than
+  // mint a duplicate — the definition still lands if he re-picked meanwhile.
+  const savedIdRef = useRef(null);
   async function save() {
     if (!synth || !btReport) return;   // see Save's disabled= below
     setSaving(true); setSaveErr(null);
@@ -616,11 +634,16 @@ export function SegmentTimeline({ t, onSaved, onCancel, replaces = null }) {
         // survives untouched (SegmentPatch's exclude_unset).
         await send("PUT", `/api/segments/${replaces.id}`,
                    definitionFor(synth, required));
-        onSaved(replaces.id);
+        await onSaved(replaces.id);
+      } else if (savedIdRef.current != null) {
+        await send("PUT", `/api/segments/${savedIdRef.current}`,
+                   definitionFor(synth, required));
+        await onSaved(savedIdRef.current);
       } else {
         const body = await send("POST", "/api/segments",
                                 definitionFor(synth, required));
-        onSaved(body.id);
+        savedIdRef.current = body.id;
+        await onSaved(body.id);
       }
     } catch (err) { setSaveErr(String(err)); }
     finally { setSaving(false); }

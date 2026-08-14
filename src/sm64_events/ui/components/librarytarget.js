@@ -22,6 +22,7 @@ import { Disclose } from "./collapsible.js";
 import { Icon } from "./icons.js";
 import { SearchMenu } from "./searchselect.js";
 import { OverallStandards } from "./overallstandards.js";
+import { SegmentTimeline } from "./segmenttimeline.js";
 import {
   sectionOrder, autoExpandName, bandsOf, bandRangeLabel, divisionRangeLabel,
   matchesRunner, videoSource, linkable, standingOn,
@@ -64,8 +65,15 @@ function slug(text) {
 // this file keys on — target index PLUS the display identity, so two
 // sections that happen to share a name (matched or not) are still two
 // independently addressable things.
+// A PIECE keys on its `row_key`, not its name: 19 targets repeat a row name
+// ("Warp fadeout" appears twice under Big Bob-omb) and the audit's own
+// uniqueness guarantee is on row keys, never names. Approaches keep the
+// display identity — their name-sharing case (matched_strategy across
+// siblings) is deliberately unresolved (see the focusStrat effect).
 const approachIdentity = (approach) =>
-  `${approach._targetIndex}-${slug(approach.matched_strategy || approach.name)}`;
+  approach._piece && approach.row_key
+    ? `${approach._targetIndex}-piece-${slug(approach.row_key)}`
+    : `${approach._targetIndex}-${slug(approach.matched_strategy || approach.name)}`;
 const sectionAnchorId = (approach) => `lib-section-${approachIdentity(approach)}`;
 const bandAnchorId = (approach, tier) =>
   `lib-band-${approachIdentity(approach)}-${slug(tier)}`;
@@ -437,7 +445,7 @@ function TocRow({ band, count, you, onJump }) {
  * mis-click never dead-ends into the audit tool.
  */
 function LinkDoor({ linkedName, linkedNote, offerNote, doAdopt, doUnlink,
-                    segments, segmentsError }) {
+                    segments, segmentsError, onRecord = null }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -471,6 +479,15 @@ function LinkDoor({ linkedName, linkedNote, offerNote, doAdopt, doUnlink,
         onclick=${() => setOpen((prev) => !prev)}>
       <${Icon} name="link" size=${14} /> Link a segment…
     </button>
+    ${/* Task 0096: the row that has no segment yet should not send him to
+         the Segments tab to make one — the SAME recorder opens right here,
+         pre-named after the row, and the save links itself. One recorder
+         implementation (segmenttimeline.js), so the two doors cannot
+         drift. */""}
+    ${onRecord ? html`<button type="button"
+        class="quiet-button library-record-button" onclick=${onRecord}>
+      <${Icon} name="bookmark" size=${14} /> Record a segment…
+    </button>` : ""}
     ${open ? html`<${SearchMenu}
         title="Link to one of your segments"
         groups=${segments && segments.length
@@ -490,7 +507,7 @@ function LinkDoor({ linkedName, linkedNote, offerNote, doAdopt, doUnlink,
 // A PIECE's own row-level door (round 5, narrowed round 7: approaches no
 // longer carry one -- the whole-target door in the page header covers them).
 function LinkControl({ row, kind, entityKey, adoptable, segments, segmentsError,
-                       onRelink, resolveLabel }) {
+                       onRelink, resolveLabel, openRecorder }) {
   const linked = !!row.adopted;
   if (!linked && !(adoptable && linkable({ entity_key: entityKey }, row, kind))) {
     return null;
@@ -508,7 +525,19 @@ function LinkControl({ row, kind, entityKey, adoptable, segments, segmentsError,
         await send("POST", "/api/library/unadopt", { row_key: row.row_key });
         await onRelink();
       }}
-      segments=${segments} segmentsError=${segmentsError} />`;
+      segments=${segments} segmentsError=${segmentsError}
+      onRecord=${openRecorder ? () => openRecorder({
+        key: `piece-${row.row_key}`,
+        // The row's own name IS the segment's name — "it gets automatically
+        // named and associated with that star" (task 0096) — and the target's
+        // entity pre-fills `parents`, which is what makes the recording a
+        // [[subsection]] of the star he is looking at.
+        name: row.name,
+        parents: entityKey ? [entityKey] : [],
+        link: async (segmentId) => {
+          await send("POST", "/api/library/adopt",
+            { row_key: row.row_key, entity_key: `segment:${segmentId}` });
+        } }) : null} />`;
 }
 
 /**
@@ -551,49 +580,47 @@ function TargetLinkControl({ rows, approaches, linkCtx }) {
           { target_index: target.index });
         await linkCtx.onRelink();
       }}
-      segments=${linkCtx.segments} segmentsError=${linkCtx.segmentsError} />`;
+      segments=${linkCtx.segments} segmentsError=${linkCtx.segmentsError}
+      onRecord=${linkCtx.openRecorder ? () => linkCtx.openRecorder({
+        key: `target-${target.index}`,
+        // A whole movement, not a piece of anything: name it after the
+        // target, leave `parents` empty (a castle movement is as high as
+        // the castle goes — round 14's own ruling), link the whole target.
+        name: target.label,
+        parents: [],
+        link: async (segmentId) => {
+          await send("POST", "/api/library/adopt_target",
+            { target_index: target.index, entity_key: `segment:${segmentId}` });
+        } }) : null} />`;
 }
 
 /**
  * ROUND 5: the sheet's subsections -- stretches inside a run that no
  * strategy section owns -- rendered nowhere until the link door needed a
- * place to click them. A compact row each (name, best, how many times), not
- * the full band structure: the link affordance is the ask; the full display
- * can come later if browsing pieces turns out to matter.
+ * place to click them. They were compact rows ("the full display can come
+ * later if browsing pieces turns out to matter") until task 0100, when it
+ * did: "each piece should still have the same exact card layout +
+ * information as a normal star strategy". Each piece is now the SAME
+ * `Section` a strategy renders through -- full band TOC, subdivisions,
+ * example cards, JP/US mode -- joining the page's single-open accordion.
+ * The one difference is the door: a piece keeps its own link/record strip
+ * (a strategy's linking is target-level, round 7).
  */
-function PiecesList({ pieces, query, linkCtx }) {
-  const shown = query
-    ? pieces.filter((piece) =>
-        (piece.entries || []).some((entry) => matchesRunner(entry, query)))
-    : pieces;
-  if (!shown.length) return null;
+function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
+                      onAdd, linkCtx }) {
+  if (!pieces.length) return null;
   return html`<div class="library-pieces">
     <h4 class="library-pieces-head">Pieces of this run</h4>
-    ${shown.map((piece) => {
-      // Round 6: a linked piece shows the same standing a linked section
-      // does -- the segment's best PB graded by the piece's own ladder,
-      // Capless when no times.
-      const assoc = linkCtx
-        ? assocFor(piece, linkCtx.assocStandings, linkCtx.resolveLabel) : null;
-      const standing = assoc && assoc.loaded
-        ? standingOn(piece.ladder, assoc.pbCs) : null;
-      return html`<div class="library-piece" key=${piece.row_key || piece.name}>
-      <div class="library-piece-facts">
-        <span class="library-piece-name">${piece.name}</span>
-        ${piece._target ? html`<span class="meta">${piece._target}</span>` : ""}
-        ${piece.best_cs != null
-          ? html`<span class="meta">Best ${fmtSeconds(piece.best_cs / 100)} · ${piece.best_runner}</span>` : ""}
-        <span class="meta">${(piece.entries || []).length} times</span>
-        ${standing
-          ? html`<span class="meta library-your-standing"
-              title=${assoc.pbCs == null ? "Capless — no recorded time on this segment yet." : undefined}>
-              <${RankIcon} tier=${standing.rank} division=${standing.division} size=${14} />
-              ${assoc.pbDisplay ? ` ${assoc.pbDisplay}` : " no times yet"}</span>` : ""}
-      </div>
-      <${LinkControl} row=${piece} kind="subsection" entityKey=${piece._entityKey}
-          adoptable=${piece._adoptable} ...${linkCtx} />
-    </div>`;
-    })}
+    ${pieces.map((piece) => html`<${Section} key=${approachIdentity(piece)}
+        approach=${piece} open=${expanded === approachIdentity(piece)}
+        onOpen=${() => onOpen(approachIdentity(piece))}
+        query=${query} stratInfo=${null}
+        trayKeys=${trayKeys}
+        entityKey=${piece.entity_key || entityKey} onAdd=${onAdd}
+        linkCtx=${linkCtx}
+        door=${html`<${LinkControl} row=${piece} kind="subsection"
+            entityKey=${piece._entityKey} adoptable=${piece._adoptable}
+            ...${linkCtx} />`} />`)}
   </div>`;
 }
 
@@ -605,7 +632,7 @@ function PiecesList({ pieces, query, linkCtx }) {
  * something every section has to negotiate).
  */
 function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey, onAdd,
-                   linkCtx }) {
+                   linkCtx, door = null }) {
   // ROUND 1 (2026-08-07), superseding the round-2 version-badge ruling: the
   // JP/US control is a MODE now, and a mode FILTERS -- "We should have 2
   // modes: JP (shows only JP entries), US (shows only US entries)." An entry
@@ -651,7 +678,9 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
     : null;
   const standing = stratInfo || assocInfo;
 
-  return html`<div class="library-section ${open ? "open" : ""}" data-mario=${marioKey}
+  return html`<div class=${`library-section ${open ? "open" : ""}`
+        + (approach._piece ? " library-piece-section" : "")}
+      data-mario=${marioKey}
       id=${sectionAnchorId(approach)}>
     <button type="button" class="library-section-head" onclick=${onOpen}
         aria-expanded=${open}>
@@ -692,6 +721,12 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
       </div>
       <${Icon} name="chevron" size=${16} className="library-section-chevron" />
     </button>
+    ${/* A PIECE's link/record door (task 0100) — OUTSIDE the fold, because
+         "Linked to your segment X" and the record offer are the row's
+         at-a-glance state, and outside the head <button>, because a button
+         may not contain a button. Approaches pass no door (round 7: the
+         whole-target control owns theirs). */""}
+    ${door ? html`<div class="library-section-door">${door}</div>` : ""}
     <${Disclose} open=${open} className="library-section-disclose">
       <div class="library-section-body">
         ${/* Round 7: approaches carry NO row-level door -- the whole-target
@@ -774,6 +809,7 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
  * never has to branch on which door it came through.
  */
 export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTier,
+                               focusRow = null,
                                fallbackLabel = null, onRelink = () => {},
                                resolveEntityLabel = null }) {
   const [query, setQuery] = useState("");
@@ -836,6 +872,8 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
   const pieces = useMemo(() => rows.flatMap((target) =>
     (target.subsections || []).map((piece) => (
       { ...piece, _target: rows.length > 1 ? target.label : null,
+        _targetIndex: target.index,
+        _piece: true,
         _entityKey: target.entity_key || null,
         _adoptable: !!target.adoptable }))), [rows]);
 
@@ -879,8 +917,14 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
   }, [approaches, pieces]);
   const assocStandings = useAssocStandings(assocEntities);
 
+  // Task 0096: the record door's intent — `{key, name, parents, link}`.
+  // Held here (not in the door) because the recorder is ONE page-level
+  // mount, and `link` is what the door wants done with the id the save
+  // mints (adopt this row / adopt the whole target).
+  const [recording, setRecording] = useState(null);
+
   const linkCtx = { segments, segmentsError, onRelink, resolveLabel,
-                    assocStandings };
+                    assocStandings, openRecorder: setRecording };
 
   const activeStrat = activeStratFor(t && t.view, entityKey);
   const stratsData = useEntityStrategies(entityKey);
@@ -995,6 +1039,36 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
   // reuse the same strategy name is a fresh link, never "the same one
   // already consumed" (pageIdentity's own comment, above, has the reasoning
   // for why it — not `entityKey` — is what names a page).
+  // 2026-08-14: arriving through a LINK ("once there's a connection to a
+  // library page, we should be brought there automatically"). `focusRow` is
+  // the piece the entity's link points at, resolved server-side by the
+  // entity door. Open that piece's own section and center him on the band
+  // his standing sits in — the same consume-once shape as `focusStrat`
+  // below, with one extra wait: the standing rides `useAssocStandings`,
+  // which loads async, and scrolling before it lands would center the
+  // section head instead of his rank. A piece with no band for his standing
+  // (Capless — the entry tables filter that floor out) centers the section.
+  const consumedRowRef = useRef(null);
+  useEffect(() => {
+    if (!focusRow) return undefined;
+    const focusId = `${pageIdentity}::${focusRow}`;
+    if (consumedRowRef.current === focusId) return undefined;
+    const piece = pieces.find((candidate) => candidate.row_key === focusRow);
+    if (!piece) return undefined;      // rows not loaded yet -- retry next render
+    const assoc = assocFor(piece, assocStandings, resolveLabel);
+    if (assoc && !assoc.loaded) return undefined;   // standing still in flight
+    consumedRowRef.current = focusId;
+    setExpanded(approachIdentity(piece));
+    const standing = assoc ? standingOn(piece.ladder, assoc.pbCs) : null;
+    const timer = setTimeout(() => {
+      const band = standing && standing.rank
+        ? document.getElementById(bandAnchorId(piece, standing.rank)) : null;
+      (band || document.getElementById(sectionAnchorId(piece)))
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [focusRow, pieces, assocStandings, pageIdentity]);
+
   const consumedFocusRef = useRef(null);
   useEffect(() => {
     if (!focusStrat) return undefined;
@@ -1079,6 +1153,28 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
           stratInfo=${approach.matched_strategy ? stratByName[approach.matched_strategy] : null}
           trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
           linkCtx=${linkCtx} />`)}
-    <${PiecesList} pieces=${pieces} query=${query} linkCtx=${linkCtx} />
+    <${PiecesList} pieces=${pieces} query=${query}
+        expanded=${expanded}
+        onOpen=${(identity) => setExpanded((prev) =>
+          prev === identity ? null : identity)}
+        trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
+        linkCtx=${linkCtx} />
+    ${/* Task 0096: the record door's recorder — the IDENTICAL surface the
+         Segments tab opens (one implementation, his own requirement), seeded
+         with the row's name and its target's entity. The save's own
+         `onSaved` is awaited by the recorder, so a link refusal lands
+         beside Save (where the click is) and the recorder stays open; the
+         segment itself is already saved, and a second Save re-uses its id.
+         On success the fresh /api/segments fetch lands BEFORE the rows
+         reload, so the linked chip never flashes a raw `segment:<id>`. */""}
+    ${recording && html`<${SegmentTimeline} t=${t} key=${recording.key}
+        prefill=${{ name: recording.name, parents: recording.parents }}
+        onCancel=${() => setRecording(null)}
+        onSaved=${async (segmentId) => {
+          await recording.link(segmentId);
+          setRecording(null);
+          setSegments(await getJSON("/api/segments"));
+          await onRelink();
+        }} />`}
   </div>`;
 }

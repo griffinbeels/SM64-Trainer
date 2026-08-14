@@ -47,7 +47,8 @@ _OPEN_RECORDER = """
   };
   const seg = document.querySelector('button.nav-item[title="Segments"]');
   if (seg) { seg.click(); await waitFor(() => !!document.querySelector('.segments-page')); }
-  const open = Array.from(document.querySelectorAll('button'))
+  // Scoped: the hidden Library page carries its own record doors (task 0096).
+  const open = Array.from(document.querySelectorAll('.segments-page button'))
     .find((b) => b.textContent.includes('Record a segment'));
   if (open) { open.click(); await waitFor(() => !!document.querySelector('.record-picks')); }
   await waitFor(() => !!document.querySelector('.record-row-wrap'));

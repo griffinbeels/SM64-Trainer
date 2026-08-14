@@ -483,27 +483,21 @@
   .library-target-titleline h3 { margin: 0; }
   .library-link-state.is-linked { color: var(--gold-soft); }
   .library-link-state.is-linked b { font-weight: 700; }
-  .library-link-button, .library-unlink {
+  .library-link-button, .library-record-button, .library-unlink {
     display: inline-flex; align-items: center; gap: .35rem;
   }
   .library-link-error { color: var(--coral); font-size: .8rem; margin: 0; }
 
-  /* Round 5 -- the sheet's subsections, finally on the page: compact rows,
-     one per piece, each carrying the same link door. */
-  .library-pieces {
-    display: grid; gap: .5rem; padding: .6rem .8rem;
-    border: 1px solid var(--border-soft); border-radius: 8px;
-    background: rgba(7,18,30,.6);
-  }
-  .library-pieces-head { margin: 0; font-size: .88rem; }
-  .library-piece {
-    display: grid; gap: .35rem; padding-top: .45rem;
-    border-top: 1px solid var(--border-soft);
-  }
-  .library-piece-facts {
-    display: flex; align-items: baseline; flex-wrap: wrap; gap: .5rem;
-  }
-  .library-piece-name { font-weight: 700; font-size: .85rem; }
+  /* Round 5 -- the sheet's subsections, finally on the page. Task 0100
+     retired the compact rows: each piece is now the SAME .library-section a
+     strategy renders through (full bands, subdivisions, examples), so the
+     wrapper is just the "Pieces of this run" heading over ordinary
+     sections. */
+  .library-pieces { display: grid; gap: .6rem; }
+  .library-pieces-head { margin: .4rem 0 0; font-size: .88rem; }
+  /* A piece's own link/record strip: a sibling of the section head (a
+     button may not contain a button), indented to read as part of it. */
+  .library-section-door { padding: 0 .8rem .6rem; }
   /* A row fitted from ONLY one ROM's times, with too few of the other to earn
      a second ladder -- no toggle exists to carry the label the toggle button
      above would otherwise say, so this inert chip says it instead (final

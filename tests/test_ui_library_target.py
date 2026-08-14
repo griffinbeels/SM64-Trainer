@@ -69,11 +69,15 @@ def library_page(library_server):
 # ---- the three tests the plan's own contract specifies verbatim ----------
 
 def test_sections_run_beginner_to_expert_and_bands_slowest_first(library_page):
+    # Scoped to STRATEGY sections: pieces (task 0100) render through the same
+    # Section but keep the sheet's own run order, not the difficulty sort.
     order = library_page.evaluate(
-        "Array.from(document.querySelectorAll('.library-section-name'))"
+        "Array.from(document.querySelectorAll("
+        "'.library-section:not(.library-piece-section) .library-section-name'))"
         ".map(e => e.textContent)")
     marios = library_page.evaluate(
-        "Array.from(document.querySelectorAll('.library-section'))"
+        "Array.from(document.querySelectorAll("
+        "'.library-section:not(.library-piece-section)'))"
         ".map(e => +e.dataset.mario)")
     assert marios == sorted(marios, reverse=True), (order, marios)
     tiers = library_page.evaluate(

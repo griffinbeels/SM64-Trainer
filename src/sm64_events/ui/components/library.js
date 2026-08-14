@@ -239,6 +239,11 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
       .then((data) => {
         setEntry({ entityKey, rows: data.targets || [],
                    focusStrat: focus.strat || null, focusTier: focus.tier || null,
+                   // 2026-08-14: a LINKED entity resolves to the target its
+                   // rows are adopted onto (server-side, same door), and
+                   // `focus_row_key` names the piece the link points at --
+                   // LibraryTarget opens that piece and centers his standing.
+                   focusRow: data.focus_row_key || null,
                    // FINAL REVIEW FIX (important: blank-titled book mark). An
                    // entity the sheet never maps (78 of every 84 segments,
                    // measured) returns `{targets: []}` here -- `rows[0]` never
@@ -489,6 +494,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
               onAdd=${addToTray} trayKeys=${trayKeys}
               focusStrat=${entry ? entry.focusStrat : null}
               focusTier=${entry ? entry.focusTier : null}
+              focusRow=${entry ? entry.focusRow : null}
               fallbackLabel=${entry ? entry.fallbackLabel : null}
               onRelink=${reloadRows}
               resolveEntityLabel=${(key) => entityLabel(t, key)} />

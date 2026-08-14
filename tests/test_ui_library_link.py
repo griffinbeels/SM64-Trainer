@@ -197,22 +197,43 @@ def test_link_unlink_round_trip_links_every_strategy_at_once(library_page):
 
 def test_a_stars_subsections_render_as_pieces_with_the_link_door(library_page):
     """Subsections rendered NOWHERE before round 5 -- 122 sheet rows the page
-    silently dropped. On a star target ('Big Bob-omb on the Summit' carries
-    four, all laddered) they are compact Pieces rows, each with the link
-    affordance; the star's own strategy sections offer NO link strip (a
-    star's approaches auto-adopt at scrape time -- linking them again is
+    silently dropped. Task 0100 upgraded them from compact rows to FULL
+    sections: on a star target ('Big Bob-omb on the Summit' carries four, all
+    laddered) each piece is the same Section a strategy renders through --
+    band TOC and all -- plus the link AND record doors, which are the one
+    difference. The star's own strategy sections still offer NO link strip
+    (a star's approaches auto-adopt at scrape time -- linking them again is
     noise)."""
     _navigate_to_target(library_page, "1. Bob-omb Battlefield",
                         "Big Bob-omb on the Summit")
     library_page.wait_for(".library-pieces", timeout_ms=15000)
     pieces = library_page.evaluate(
-        "document.querySelectorAll('.library-pieces .library-piece').length")
+        "document.querySelectorAll('.library-pieces .library-piece-section').length")
     assert pieces >= 4, pieces
+    # The full-card half: an opened piece shows the same band TOC a strategy
+    # section does (the fold's body only mounts open, so open one first --
+    # it joins the page's single-open accordion).
+    opened = library_page.evaluate(
+        "document.querySelector("
+        "'.library-pieces .library-piece-section .library-section-head')"
+        ".click(), 'clicked'")
+    assert opened == "clicked"
+    library_page.wait_for(
+        ".library-pieces .library-piece-section.open .library-toc",
+        timeout_ms=10000)
+    toc_rows = library_page.evaluate(
+        "document.querySelectorAll("
+        "'.library-pieces .library-piece-section.open .library-toc tr').length")
+    assert toc_rows > 0, "an open piece must render the full band structure"
     piece_buttons = library_page.evaluate(
         "document.querySelectorAll('.library-pieces .library-link-button').length")
     assert piece_buttons >= 4, piece_buttons
+    record_buttons = library_page.evaluate(
+        "document.querySelectorAll('.library-pieces .library-record-button').length")
+    assert record_buttons >= 4, record_buttons
     section_strips = library_page.evaluate(
-        "document.querySelectorAll('.library-section .library-link-state').length")
+        "document.querySelectorAll("
+        "'.library-section:not(.library-piece-section) .library-link-state').length")
     assert section_strips == 0, (
         f"a star target's strategy sections must not offer the link door; "
         f"found {section_strips}")
@@ -251,20 +272,21 @@ def test_linking_a_piece_updates_every_practice_picker_without_reload(
     library_page.wait_for(".library-pieces .library-link-button", timeout_ms=15000)
     piece_name = library_page.evaluate("""
       (() => {
-        const piece = Array.from(document.querySelectorAll('.library-piece'))
+        const piece = Array.from(document.querySelectorAll('.library-piece-section'))
           .find((row) => row.querySelector('.library-link-button'));
         if (!piece) return null;
-        const name = piece.querySelector('.library-piece-name').textContent;
+        const name = piece.querySelector('.library-section-name').textContent;
         piece.querySelector('.library-link-button').click();
         return name;
       })()
     """)
     assert piece_name, "no unlinked subsection row on Big Bob-omb"
-    library_page.wait_for(".library-piece .search-menu-option", timeout_ms=10000)
+    library_page.wait_for(".library-piece-section .search-menu-option",
+                          timeout_ms=10000)
     picked = library_page.evaluate(f"""
       (() => {{
         const option = Array.from(document.querySelectorAll(
-          '.library-piece .search-menu-option'))
+          '.library-piece-section .search-menu-option'))
           .find((row) => row.textContent === {fixture_name!r});
         if (!option) return 'no fixture segment option';
         option.click();
@@ -501,3 +523,124 @@ def test_clicking_outside_the_popup_closes_it(library_page):
     deadline_ok = library_page.evaluate(
         "document.querySelectorAll('.search-menu').length")
     assert deadline_ok == 0, f"trigger click while open must close; {deadline_ok} menus"
+
+
+def test_the_practice_cards_library_door_follows_the_link(library_server):
+    """2026-08-14, his report with the screenshots: the practice log's book
+    button on a linked subsection card opened "a blank library page" -- the
+    segment's own entity door, which the sheet never maps. His rule: "once
+    there's a connection to a library page, we should be brought there
+    automatically."
+
+    The server half (an unmapped entity resolves to the target its rows are
+    adopted onto, `focus_row_key` naming the piece) is unit-tested in
+    test_library_api.py. This is the CLIENT half against the real app: every
+    fixture segment with a practice card happens to be sheet-mapped (its own
+    page wins, correctly), so the one response the fallback changes is
+    doctored through a rewriting proxy -- the established fixture technique
+    -- and the assertion is what he asked for: the book lands on the linked
+    target's page with the linked piece's section already open."""
+    import copy
+    import http.server
+    import threading
+    import urllib.error
+
+    entity = json.loads(urllib.request.urlopen(
+        f"{library_server}/api/library/entity/star:1:0", timeout=10).read())
+    target = entity["targets"][0]
+    piece = next(p for p in target["subsections"] if p.get("ladder"))
+    # The linked shape the server would serve: the piece rides as ADOPTED
+    # onto the segment, so the page's own standing machinery runs too.
+    linked_targets = copy.deepcopy(entity["targets"])
+    for row in linked_targets[0]["subsections"]:
+        if row["row_key"] == piece["row_key"]:
+            row["adopted"] = f"segment:{FIXTURE_SEGMENT}"
+    doctored = json.dumps({
+        "entity_key": f"segment:{FIXTURE_SEGMENT}",
+        "targets": linked_targets,
+        "focus_row_key": piece["row_key"]}).encode()
+    rewrite_path = f"/api/library/entity/segment%3A{FIXTURE_SEGMENT}"
+
+    class Proxy(http.server.BaseHTTPRequestHandler):
+        def _forward(self, body=None):
+            if self.path in (rewrite_path,
+                             rewrite_path.replace("%3A", ":")):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(doctored)))
+                self.end_headers()
+                self.wfile.write(doctored)
+                return
+            request = urllib.request.Request(
+                f"{library_server}{self.path}", data=body,
+                headers={k: v for k, v in self.headers.items()
+                         if k.lower() not in ("host", "connection")},
+                method=self.command)
+            try:
+                with urllib.request.urlopen(request, timeout=15) as upstream:
+                    payload = upstream.read()
+                    self.send_response(upstream.status)
+                    for key, value in upstream.headers.items():
+                        if key.lower() not in ("transfer-encoding", "connection"):
+                            self.send_header(key, value)
+                    self.end_headers()
+                    self.wfile.write(payload)
+            except urllib.error.HTTPError as err:
+                payload = err.read()
+                self.send_response(err.code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+        def do_GET(self):
+            self._forward()
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            self._forward(self.rfile.read(length) if length else None)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    proxy_base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with driver.get_driver().launch(headless=True) as page:
+            page.goto(f"{proxy_base}/ui/index.html")
+            page.wait_for(".log-list-card", timeout_ms=20000)
+            clicked = page.evaluate("""
+              (() => {
+                const card = Array.from(document.querySelectorAll('.log-card')).find((c) => {
+                  const context = (c.querySelector('.log-card-context') || {}).textContent;
+                  const name = (c.querySelector('.log-card-name b') || {}).textContent;
+                  return context === 'Bowser in the Fire Sea' && name === 'No Reds';
+                });
+                if (!card) return 'no fixture segment card';
+                const book = card.querySelector('.log-card-library-link');
+                if (!book) return 'no library button on the card';
+                book.click();
+                return 'clicked';
+              })()
+            """)
+            assert clicked == "clicked", clicked
+            page.wait_for(".library-target", timeout_ms=15000)
+            heading = page.evaluate(
+                "document.querySelector('.library-target-heading h3').textContent")
+            assert heading == target["label"], (
+                f"the book must land on the LINKED target's page, not a blank "
+                f"one; got {heading!r}")
+            # ...with the linked piece's own section opened by the focus
+            # effect (it waits for the association's standing, so give it the
+            # full wait rather than a single frame).
+            page.wait_for(".library-pieces .library-piece-section.open",
+                          timeout_ms=15000)
+            opened = page.evaluate(
+                "document.querySelector('.library-pieces .library-piece-section.open"
+                " .library-section-name').textContent")
+            assert opened == piece["name"], (opened, piece["name"])
+    finally:
+        server.shutdown()
+        server.server_close()

@@ -193,6 +193,82 @@ def test_without_a_segment_list_no_target_claims_a_match(client):
     assert body.get("matched_segment") is None
 
 
+def test_the_entity_door_follows_a_link(tmp_path):
+    """2026-08-14, his rule: "once there's a connection to a library page, we
+    should be brought there automatically." An entity the sheet never mapped
+    (every linked segment) resolves to the target its rows are adopted onto —
+    a piece link also names WHICH piece (`focus_row_key`), a whole-target
+    link does not; an unlinked segment still gets the honest empty page; and
+    a name-matched segment resolves to the target that matches it."""
+    from sm64_events.library import adoptions as ad
+    from sm64_events.ranks.standards import RankStandards
+
+    def item(name):
+        return {"ids": ["1"], "name": name, "best_cs": 276,
+                "best_runner": "r", "times": {}, "ideal_cs": None,
+                "fill_rate": 0.2, "ladder": {"Mario": 2.76, "Gold": 3.10},
+                "ladder_samples": 40, "entries": []}
+
+    store = LibraryStore()
+    store._payload = {
+        "schema_version": 1, "sheet_revision": "2026-08-05T09:15:18",
+        "fetched_at": "x", "runners": [], "ladder_model": {}, "targets": [
+            {"entity_key": "star:2:0", "group": "2. Whomp's Fortress",
+             "section": "★ WF", "label": "Chip off Whomp's Block",
+             "version": None, "miss_reason": None,
+             "approaches": [item("Chip off Whomp's Block")],
+             "subsections": [item("Whomp text Xcam")]},
+            {"entity_key": None, "group": "Castle Movements (Lobby)",
+             "section": "★ BoB", "label": "Lobby door (L) - BoB door",
+             "version": None, "miss_reason": "castle_movement",
+             "approaches": [item("Lobby door (L) - BoB door")],
+             "subsections": []},
+            {"entity_key": None, "group": "Castle Movements (Misc)",
+             "section": "★ Misc", "label": "Lakitu skip",
+             "version": None, "miss_reason": "castle_movement",
+             "approaches": [], "subsections": []}]}
+    standards = RankStandards(tmp_path / "rank_standards.json")
+    standards.load()
+    adoptions = ad.Adoptions(tmp_path / "library_adoptions.json", store, standards)
+    adoptions.load()
+    app = FastAPI()
+    app.include_router(create_library_router(
+        store, adoptions=adoptions,
+        segment_names=lambda: [(3, "Lakitu Skip")]))
+    api = TestClient(app)
+
+    # A piece link: the segment's page IS the owning target, piece named.
+    piece_key = api.get("/api/library/target/0").json()["subsections"][0]["row_key"]
+    api.post("/api/library/adopt",
+             json={"row_key": piece_key, "entity_key": "segment:7"})
+    body = api.get("/api/library/entity/segment:7").json()
+    assert [target["label"] for target in body["targets"]] == [
+        "Chip off Whomp's Block"]
+    assert body["targets"][0]["index"] == 0
+    assert body["focus_row_key"] == piece_key
+
+    # A whole-target link: the target serves, but no single piece to focus.
+    api.post("/api/library/adopt_target",
+             json={"target_index": 1, "entity_key": "segment:9"})
+    body = api.get("/api/library/entity/segment:9").json()
+    assert [target["label"] for target in body["targets"]] == [
+        "Lobby door (L) - BoB door"]
+    assert body["focus_row_key"] is None
+
+    # Unlinked: the honest empty page, exactly as before.
+    body = api.get("/api/library/entity/segment:99").json()
+    assert body["targets"] == [] and body["focus_row_key"] is None
+
+    # Name-matched: the connection exists without any click, so it resolves.
+    body = api.get("/api/library/entity/segment:3").json()
+    assert [target["label"] for target in body["targets"]] == ["Lakitu skip"]
+
+    # An entity the sheet maps directly is untouched by any of this.
+    body = api.get("/api/library/entity/star:2:0").json()
+    assert [target["label"] for target in body["targets"]] == [
+        "Chip off Whomp's Block"]
+
+
 def test_adopt_target_route_links_the_batch_and_names_refusals(tmp_path):
     from sm64_events.library import adoptions as ad
     from sm64_events.ranks.standards import RankStandards
