@@ -416,7 +416,11 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     if service is not None:
         app.include_router(create_api_router(service))
         from sm64_events.server.ranks_api import create_ranks_router
-        app.include_router(create_ranks_router(service))
+        # library + adoptions widen the standards payload's example clips with
+        # library entries (task 0098) — the same instances the library router
+        # above already owns, so the two surfaces read one copy of the sheet.
+        app.include_router(create_ranks_router(
+            service, library=library, adoptions=adoptions))
     if replay is not None:
         from sm64_events.server.replay_api import create_replay_router
         app.include_router(create_replay_router(replay))

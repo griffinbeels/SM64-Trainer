@@ -39,6 +39,7 @@ uv run pytest tests/test_responsive.py -q            # render every breakpoint; 
 uv run python tools/check_glossary.py                # docs/glossary.md's own gate: closure, active voice, live Lives paths
 uv run python tools/scrape_sheet.py                  # rebuild the Ultimate Sheet library snapshot -- READ the "unknown:" list, it IS the deliverable
 uv run python tools/audit_library.py                 # AUDIT that snapshot by eye: every target, its verdict, the ratio behind each row; corrections save into the repo
+uv run python tools/check_videos.py                  # sweep every example-video URL for liveness -> data/video_checks.seed.json.gz (a dead video must never be THE example a standard links to); incremental via the committed verdicts, also runs after scrape_sheet
 uv run python tools/corpus_from_db.py --landmarks    # every landmark name HE typed, as corpus_landmarks.py rows to paste (read-only)
 uv run python tools/contact_sheet.py .objective-card # one surface at 1500/1200/900/850, in one image -- LOOK at it
 uv run python tools/contact_sheet.py --subsections    # a star row with a [[subsection]] in the corpus (no badge, no toggle -- round 31 retired both; every piece just shows); --nested = the practice-log card with its pieces inside it. No shipped definition has a parent, so this is the only fixture that can draw either

@@ -196,6 +196,19 @@ def bundled_sheet_library() -> Path | None:
     return cand if cand.exists() else None
 
 
+def bundled_video_checks() -> Path | None:
+    """The video-liveness verdicts (library/videocheck.py) shipped with the
+    release — written by tools/check_videos.py, read by the standards API so
+    a dead example URL never becomes THE example for a cutoff (task 0098
+    round 2). Mirrors bundled_sheet_library() exactly."""
+    if is_frozen():
+        cand = Path(getattr(sys, "_MEIPASS", "")) / "video_checks.seed.json.gz"
+        return cand if cand.exists() else None
+    cand = (Path(__file__).resolve().parent.parent / "data"
+            / "video_checks.seed.json.gz")
+    return cand if cand.exists() else None
+
+
 def bundled_library_overrides() -> Path | None:
     """The human's audit corrections to our READING of the sheet
     (tools/audit_library.py), shipped beside a frozen exe (PyInstaller

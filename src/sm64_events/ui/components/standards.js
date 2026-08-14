@@ -1,12 +1,17 @@
 // src/sm64_events/ui/components/standards.js — collapsible, view-by-default
 // rank-standards table for one entity (star:c:s or segment:id). Each cutoff time
 // links to the fastest example video that RANKS that tier (server-resolved
-// cutoff_videos: auto band from xcams clips + the user's per-cell overrides); the
-// strat header links to the Mario-row video (= the overall fastest). Edit mode
-// adds a ▶ button per cell to paste/clear an override, and the section links out
-// to the xcams Daily Star page for browsing every example.
+// cutoff_videos: auto band from xcams clips + library entries + the user's
+// per-cell overrides); the strat header links to the Mario-row video (= the
+// overall fastest). Each tier row EXPANDS into its five subdivision threshold
+// rows (task 0098), whose brackets and example filing come from
+// librarymodel.js::bandsOf — the SAME walk the Library page files entries
+// with, so this table and that page cannot disagree about where a division
+// starts. Edit mode adds a ▶ button per cell to paste/clear an override, and
+// the section links out to the xcams Daily Star page for browsing every
+// example.
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { Disclose } from "./collapsible.js";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
@@ -14,12 +19,111 @@ import { fmtIgtShort, fmtSeconds } from "../format.js";
 import { TimeFields } from "./timefields.js";
 import { ceilingOf, slowestFirst } from "../ladderorder.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
-import { capName, capGradient } from "./caps.js";
+import { capName, capGradient, divisionDigit, DIVISION_NUMERALS } from "./caps.js";
+import { bandsOf, divisionRangeLabel } from "./librarymodel.js";
+import { RankIcon } from "./rankicon.js";
+import { disclosurePlan } from "../disclosure.js";
+import { feedTuning } from "../feedtuning.js";
 import { StratModal } from "./stratmodal.js";
 import { Modal } from "./modal.js";
 import { Icon } from "./icons.js";
 const html = htm.bind(h);
 const enc = encodeURIComponent;
+
+const reducedMotion = () => typeof matchMedia === "function"
+  && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// Hardest first (I at the top), matching the table's own direction — Mario is
+// the top row, so within an expanded tier the best subdivision reads first.
+// DIVISION_NUMERALS itself is bottom-first (caps.js mirrors scoring.py).
+const NUMERALS_TOP_DOWN = [...DIVISION_NUMERALS].reverse();
+
+// The five subdivision rows one expanded tier inserts (task 0098 item 3).
+// Real `<tr>`s in the SAME table, never a nested one, so the columns stay
+// aligned with the tier rows by construction. They mount on expand and
+// unmount after the close lands (Disclose's own mounted/settle contract —
+// that component animates a DIV's height and cannot wrap table rows, so the
+// pattern is reimplemented here at row grain: each cell's `.std-sub-clip`
+// animates height with the SAME disclosurePlan/feedTuning numbers, and the
+// padding lives inside the clip so a closed row is genuinely 0px tall).
+function StdSubRows({ rank, open, strats, bandFor, cellClass, cellStyle,
+    labelStyle }) {
+  const rowRefs = useRef([]);
+  const running = useRef([]);
+  const wasOpen = useRef(open);
+  const [mounted, setMounted] = useState(open);
+  useLayoutEffect(() => { if (open) setMounted(true); }, [open]);
+  useLayoutEffect(() => {
+    if (open && !mounted) return undefined;      // contents not in the DOM yet
+    if (open === wasOpen.current) return undefined;
+    wasOpen.current = open;
+    const clips = rowRefs.current.filter(Boolean).flatMap(
+      (row) => [...row.querySelectorAll(".std-sub-clip")]);
+    running.current.forEach((animation) => animation.cancel());
+    running.current = [];
+    const settle = () => {
+      running.current.forEach((animation) => animation.cancel());
+      running.current = [];
+      if (!wasOpen.current) setMounted(false);
+    };
+    if (reducedMotion() || !clips.length
+        || typeof clips[0].animate !== "function") {
+      settle();
+      return undefined;
+    }
+    const tuning = feedTuning();
+    let plan = null;
+    running.current = clips.map((clip) => {
+      // Each clip measures ITSELF (a cancelled fill has already been cleared,
+      // so scrollHeight is the natural height); duration and easing are the
+      // shared disclosure numbers, so every cell of every row moves as one.
+      const cellPlan = disclosurePlan(open, clip.scrollHeight, tuning);
+      plan = plan || cellPlan;
+      return clip.animate(
+        [{ height: `${cellPlan.from}px` }, { height: `${cellPlan.to}px` }],
+        { duration: cellPlan.durationMs, easing: cellPlan.easing, fill: "both" });
+    });
+    if (!plan || plan.durationMs <= 0) { settle(); return undefined; }
+    running.current[0].onfinish = settle;
+    return () => {
+      running.current.forEach((animation) => animation.cancel());
+      running.current = [];
+    };
+  }, [open, mounted]);
+  if (!mounted) return null;
+  return html`${NUMERALS_TOP_DOWN.map((numeral, rowIndex) => html`<tr
+      class="std-sub" key=${numeral}
+      ref=${(row) => { rowRefs.current[rowIndex] = row; }}>
+    <td class="std-sub-label" style=${labelStyle}>
+      <div class="std-sub-clip"><div class="std-sub-pad std-sub-name">
+        <span class="rank-icon-slot" style="--icon-size: 14px">
+          <${RankIcon} tier=${rank} division=${numeral} size=${14} /></span>
+        <span>${capName(rank)} ${divisionDigit(numeral)}</span>
+      </div></div>
+    </td>
+    ${strats.map((strat) => {
+      const band = bandFor(strat, rank);
+      const division = band
+        ? band.divisions[DIVISION_NUMERALS.indexOf(numeral)] : null;
+      const cutoff = division && !division.empty && division.slowCs != null
+        ? division.slowCs : null;
+      const label = cutoff != null ? fmtSeconds(cutoff / 100) : "—";
+      // bandsOf sorts a division's entries slowest first, so the FASTEST
+      // example within the subdivision — his band rule, one level finer —
+      // is the last one; every clip entry carries a video by construction.
+      const example = division && division.entries.length
+        ? division.entries[division.entries.length - 1] : null;
+      return html`<td class=${cellClass(strat)} style=${cellStyle(strat)}>
+        <div class="std-sub-clip"><div class="std-sub-pad">
+          ${example && cutoff != null
+            ? html`<a href=${example.video} target="_blank" rel="noopener"
+                title=${`example ${capName(rank)} ${divisionDigit(numeral)} run (${divisionRangeLabel(division)})`}>${label}</a>`
+            : label}
+        </div></div>
+      </td>`;
+    })}
+  </tr>`)}`;
+}
 
 // Each exit-star variant gets its OWN hue from the site palette, so the
 // columns under one heading read as one group instead of as a run of
@@ -93,6 +197,9 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   const [editing, setEditing] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [videoEdit, setVideoEdit] = useState(null);
+  // Which tier's subdivision rows are showing — single-open, like the Library
+  // target page's accordion; null = all collapsed (the default).
+  const [expandedTier, setExpandedTier] = useState(null);
   async function load() { setData(await getJSON(`/api/ranks/standards?entity=${enc(entity)}`)); }
   // When opened by default (or when the card remounts for a new entity while
   // open), fetch on mount — toggle() only loads on a user click, so an
@@ -115,7 +222,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // `load()` is idempotent and this component is only mounted for cards the
   // log is actually rendering, so the traffic is one request per visible card
   // per entity change, not per card in the corpus.
-  useEffect(() => { load(); }, [entity]);
+  useEffect(() => { load(); setExpandedTier(null); }, [entity]);
   // Reload on EVERY open, not just the first: a strat created from the
   // practice dropdown or header picker while this panel sat cached would
   // otherwise show empty cells forever (its data is fetched out-of-band,
@@ -229,6 +336,24 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   const leafOf = new Map(((data && data.strategy_groups) || [])
     .flatMap((group) => group.strategies.map((s) => [s.name, s.leaf])));
   const colHead = (strat) => leafOf.get(strat) || strat;
+  // Subdivision brackets + example filing, per strategy, through the Library
+  // page's OWN walk (librarymodel.js::bandsOf) — the payload's `clips` are the
+  // raw [time_cs, url] pool the server resolved the tier links from, so a
+  // subdivision example and its tier cell can never come from different pools,
+  // and this table and the Library cannot disagree about where a division
+  // starts (task 0098 item 3).
+  const stratBands = {};
+  for (const strat of strats) {
+    const ladder = (data && data.strategies[strat]) || {};
+    if (!Object.keys(ladder).length) continue;
+    const clipEntries = (((data && data.clips) || {})[strat] || [])
+      .map(([timeCs, url]) => ({ time_cs: timeCs, video: url }));
+    stratBands[strat] = {};
+    for (const band of bandsOf(ladder, clipEntries)) {
+      stratBands[strat][band.tier] = band;
+    }
+  }
+  const subBandFor = (strat, rank) => (stratBands[strat] || {})[rank] || null;
   // "You are here": the grading basis under the ACTIVE strategy. Avg rank
   // modes carry it on sectionRank.basis; pb mode carries none (the same
   // split _section_banner already encodes server-side), so it falls back to
@@ -290,14 +415,36 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
           ${marker && strat === activeStrat ? html`<span class="std-you-badge"
               title="your current time and score on this ladder">◀ you · ${fmtIgtShort(basisFrames)}${entityScore != null ? ` · ${fmtScore(entityScore)}` : ""}</span>` : ""}</th>`)}</tr></thead>
         <tbody>
-        ${RANK_NAMES.filter((r) => r !== "Iron").map((rank) => html`<tr>
+        ${RANK_NAMES.filter((r) => r !== "Iron").map((rank) => html`<tr key=${rank}>
           <!-- Large flat surface -> the tier's own gradient where it has
                one (Toadsworth/Toad, addendum 2, 2026-07-25): a flat fill
                here is a lie for a cap that's actually two-tone, and a
                white slab (old Toad) was the live complaint that started
                this. capGradient falls back to null for a flat tier. -->
-          <td style=${`background:${capGradient(rank) || rankColor(rank)};color:#111;font-weight:700`}
-              title=${`${capName(rank)} · ${rank} on xcams`}>${capName(rank)}${
+          <td class="std-tier-cell"
+              style=${`background:${capGradient(rank) || rankColor(rank)}`}
+              title=${`${capName(rank)} · ${rank} on xcams`}>
+            <!-- The tier label expands its subdivision rows (task 0098 item
+                 3), wearing the division-I cap: tier-level surfaces show the
+                 numbered, fully-winged cap, the same round-2 ruling the
+                 Library's TOC already renders ("the empty cap kinda looks
+                 weird") — item 2 of the same task. Round 2: the row is a
+                 left-anchored flex (every cap starts at the same x — "we
+                 need to make sure the symbols are aligned with each other")
+                 and the chevron is its own larger button pinned to the far
+                 right of the cell ("the dropdown symbol should be larger and
+                 on the far right of the box"); both halves toggle the same
+                 expansion. -->
+            <span class="std-tier-row">
+              <button type="button" class="std-tier-btn"
+                  aria-expanded=${expandedTier === rank}
+                  title=${`${expandedTier === rank ? "hide" : "show"} ${capName(rank)} subdivision standards`}
+                  onclick=${() => setExpandedTier(
+                    (prev) => (prev === rank ? null : rank))}>
+                <span class="rank-icon-slot" style="--icon-size: 15px">
+                  <${RankIcon} tier=${rank} division=${"I"} size=${15} /></span>
+                <span class="std-tier-name">${capName(rank)}</span>
+              </button>${
             /* The standards-ladder deep link (spec 2026-08-07-library-page,
                section 3: "each tier row... links into the Library at that
                tier's band for the current target + strategy") -- one link
@@ -316,7 +463,15 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
                         strat: activeStrat, tier: rank })}>
                   <${Icon} name="library" size=${12} />
                 </button>`
-              : ""}</td>
+              : ""}
+            <button type="button" class="std-tier-expand"
+                aria-expanded=${expandedTier === rank}
+                title=${`${expandedTier === rank ? "hide" : "show"} ${capName(rank)} subdivision standards`}
+                onclick=${() => setExpandedTier(
+                  (prev) => (prev === rank ? null : rank))}>
+              <${Icon} name="chevron" size=${16} className="std-tier-chevron" />
+            </button>
+            </span></td>
           ${strats.map((strat) => {
             const v = (data.strategies[strat] || {})[rank];
             const vid = cutoffVid(strat, rank);
@@ -348,7 +503,14 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
                 : (vid
                     ? html`<a href=${vid} target="_blank" rel="noopener" title=${`example ${capName(rank)} run`}>${label}</a>`
                     : label)}</td>`;
-          })}</tr>`)}
+          })}</tr>
+          <${StdSubRows} key=${"sub-" + rank} rank=${rank}
+              open=${expandedTier === rank} strats=${strats}
+              bandFor=${subBandFor}
+              cellClass=${(strat) => bandClass(strat,
+                strat === activeStrat ? "col-active" : "")}
+              cellStyle=${bandStyle}
+              labelStyle=${`background:color-mix(in srgb, ${rankColor(rank)} 18%, transparent)`} />`)}
         </tbody></table>
     </div>` : null}
     <//>

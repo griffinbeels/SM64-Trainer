@@ -93,6 +93,11 @@ def app_args(ffmpeg: "str | None") -> list[str]:
         # bundled, corrected one until the next release.
         "--add-data",
         f"{REPO / 'src' / 'sm64_events' / 'data' / 'library_overrides.json'}{SEP}.",
+        # Video-liveness verdicts (bundled_video_checks()). Same silent
+        # failure as the snapshot if omitted: the released exe filters no dead
+        # example links while dev does.
+        "--add-data",
+        f"{REPO / 'src' / 'sm64_events' / 'data' / 'video_checks.seed.json.gz'}{SEP}.",
     ]
     for pkg in COLLECT:
         argv += ["--collect-all", pkg]

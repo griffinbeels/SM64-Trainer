@@ -82,8 +82,13 @@ RAW_TIER_EXPRESSIONS = (
 # lengthens the lookbehind only, so every TEXT position in every file stays
 # exactly as guarded as it was -- proved by `test_the_guard_still_catches_a_
 # real_print` below.
+#
+# `key=` is the same category as `data-tier=` (2026-08-14, task 0098): a
+# Preact reconciliation key is a machine hook, never rendered to anyone, and
+# the standards table keys its tier rows on the raw tier so an expanded row's
+# identity survives the display vocabulary changing.
 _PROP_PREFIXES = ("tier=", "rank=", "division=", "banner=", "sectionRank=",
-                  "data-tier=")
+                  "data-tier=", "key=")
 
 
 def _bare_interpolation_pattern(expr: str) -> str:
