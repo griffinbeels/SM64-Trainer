@@ -229,3 +229,10 @@ documentation here is treated as a broken build.
 Building your own client instead? Speak only to the API: `ws://…/ws/events`,
 `GET /state` for initial state, `GET /health` for liveness. Schemas in
 [`docs/api.md`](docs/api.md).
+
+## License
+
+SM64 Trainer is free software: [GPL-3.0-or-later](LICENSE). Fork it, build on
+it, learn from it — but if you distribute it or anything derived from it, you
+must keep it open source under the same license. The SM64 community's tools
+and knowledge stay free.
