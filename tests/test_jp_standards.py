@@ -2,9 +2,10 @@
 
 The user's rule (2026-08-07): a JP time that is ANNOTATED as different gets its
 own standard; where nothing is annotated, the base ladder is COMBINED and
-applies to both modes. WHICH version a given attempt grades on is deliberately
-not decided here -- that is the console-support branch's N64-mode spec, and
-`ladder_cs(ek, strat, version=)` is the door it resolves through.
+applies to both modes. WHICH version a given attempt grades on is the game
+version setting (core/modes.py, 2026-08-15): its effective version becomes the
+store's `grading_version`, which every unversioned read inherits, and
+`ladder_cs(ek, strat, version=)` names one explicitly (the visual switches).
 
 Two sources, one rule: the vetted seed annotates SPARSELY (jp_strategies holds
 only the ranks whose JP time differs -- tools/scrape_ranks.py has emitted them
