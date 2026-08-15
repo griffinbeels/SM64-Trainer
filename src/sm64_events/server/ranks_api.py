@@ -304,17 +304,36 @@ def create_ranks_router(service, library=None, adoptions=None,
     router = APIRouter(prefix="/api")
 
     @router.get("/ranks/standards")
-    def get_standards(entity: str | None = None):
+    def get_standards(entity: str | None = None, version: str | None = None):
+        """`version` ("us"/"jp") resolves the WHOLE payload -- strategies,
+        overall, owners, cutoff links -- on that game version; absent, it is
+        the grading version (what the setting says). This is the standards
+        panel's visual JP/US switch: it asks by name and grades nothing."""
         if service.ranks is None:
             raise HTTPException(503, "rank standards unavailable")
         if entity is None:
             return service.ranks.to_json()
-        ladders = service.ranks.ladders(entity)
+        if version is not None and version not in ("us", "jp"):
+            raise HTTPException(400, f"unknown game version {version!r}")
+        resolved = version or service.ranks.grading_version
+        ladders = service.ranks.ladders(entity, resolved)
         alive = lambda clips: [c for c in clips if c[1] not in dead_videos]
         extra_clips = {strat: alive(clips) for strat, clips
                        in _library_clips(entity).items()}
         return {"entity": entity, "clock": service.ranks.clock_for(entity),
                 "strategies": ladders,
+                # Which version the ladders above are resolved on, and which
+                # one grading is on right now -- when they differ the panel
+                # says so ("Viewing JP standards · you are graded on US")
+                # rather than letting a rank that does not move read as a bug.
+                "version": resolved,
+                "grading_version": service.ranks.grading_version,
+                # The OTHER version's answer to the same question, and the
+                # names that actually differ between the two: the editor draws
+                # a US and a JP field side by side from one fetch, and opens
+                # the JP field only where a JP time is annotated.
+                "strategies_jp": service.ranks.ladders(entity, "jp"),
+                "jp_strategies": service.ranks.jp_strategies(entity),
                 # THE entity's own ladder -- the pointwise best across every
                 # strategy, which is what `views.entity_rank` grades against
                 # and therefore what "rank up OVERALL" actually costs. It has
@@ -347,7 +366,7 @@ def create_ranks_router(service, library=None, adoptions=None,
                            in service.ranks.videos(entity).items()
                            if url not in dead_videos},
                 "cutoff_videos": service.ranks.cutoff_videos(
-                    entity, extra_clips, dead_urls=dead_videos),
+                    entity, extra_clips, dead_urls=dead_videos, version=resolved),
                 # The RAW pool those links were resolved from (vetted xcams
                 # clips + library entries, task 0098), per strategy, as
                 # [[time_cs, url], ...]. The browser bands these into
@@ -378,9 +397,25 @@ def create_ranks_router(service, library=None, adoptions=None,
                 "xcams_url": xcams_url(entity)}
 
     @router.put("/ranks/standards/{entity}/{strategy}/{rank}")
-    async def put_threshold(entity: str, strategy: str, rank: str, body: ThresholdBody):
+    async def put_threshold(entity: str, strategy: str, rank: str, body: ThresholdBody,
+                            version: str = "us"):
+        """`?version=jp` writes the strategy's JP time for that rank (its JP
+        overlay); the default writes the base ladder both versions share."""
+        if version not in ("us", "jp"):
+            raise HTTPException(400, f"unknown game version {version!r}")
         try:
-            await service.set_rank_threshold(entity, strategy, rank, body.seconds)
+            await service.set_rank_threshold(entity, strategy, rank, body.seconds,
+                                             version=version)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return {"ok": True}
+
+    @router.delete("/ranks/standards/{entity}/{strategy}/jp")
+    async def clear_jp(entity: str, strategy: str):
+        """The editor's "JP timed differently" toggle turned OFF: drops the
+        strategy's JP overlay so both versions grade on its base ladder."""
+        try:
+            await service.clear_rank_jp(entity, strategy)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}

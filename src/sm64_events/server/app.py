@@ -250,7 +250,10 @@ def _quiet_connection_resets(loop, context) -> None:
 def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, updater=None, compare=None,
                compilation=None, db_retry=None, debug_hooks: bool = False,
-               adoptions_path=None) -> FastAPI:
+               adoptions_path=None, mode_path=None) -> FastAPI:
+    # `mode_path` overrides where the game version setting persists
+    # (server/mode_api.py) -- tests pass a scratch file; None (production)
+    # resolves to core.paths.mode_settings_path().
     # `adoptions_path` overrides where the user's library->segment
     # assignments live -- the UI fixture passes a scratch file so a render
     # test clicking the link door can never write into the real data dir.
@@ -421,6 +424,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         # above already owns, so the two surfaces read one copy of the sheet.
         app.include_router(create_ranks_router(
             service, library=library, adoptions=adoptions))
+        from sm64_events.server.mode_api import create_mode_router
+        app.include_router(create_mode_router(service, mode_path=mode_path))
     if replay is not None:
         from sm64_events.server.replay_api import create_replay_router
         app.include_router(create_replay_router(replay))
