@@ -81,7 +81,9 @@ def test_the_composition_root_gates_moments_on_NOTHING():
     calls = [line.strip() for line in src.splitlines()
              if "build_detectors(" in line and not line.lstrip().startswith("def ")]
     assert calls, "nothing in main.py builds the detector chain any more"
-    assert all(call.endswith("build_detectors()") for call in calls), (
+    # `version=` is the other seam (2026-08-15) and IS wired; the target is
+    # what may not be.
+    assert all("target_active" not in call for call in calls), (
         "the composition root must not gate moments on the practice target — "
         "the recorder is used with no target set, and gating makes it blind "
         f"exactly then. Calls: {calls}")
