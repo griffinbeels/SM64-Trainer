@@ -25,7 +25,8 @@ import { OverallStandards } from "./overallstandards.js";
 import { SegmentTimeline } from "./segmenttimeline.js";
 import {
   sectionOrder, autoExpandName, bandsOf, bandRangeLabel, divisionRangeLabel,
-  matchesRunner, videoSource, linkable, standingOn,
+  matchesRunner, videoSource, linkable, standingOn, bandFor, divisionWithin,
+  ladderCsOf,
 } from "./librarymodel.js";
 
 const html = htm.bind(h);
@@ -274,7 +275,7 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd 
     </div>`;
   }
 
-  return html`<div class="library-example">
+  return html`<div class="library-example" data-video=${entry.video}>
     <div class="library-example-media ${canEmbed ? "is-clickable" : ""}"
         onclick=${canEmbed && playing ? () => setPlaying(false) : null}
         title=${canEmbed ? (playing ? "Close" : "Play inline") : ""}>
@@ -323,8 +324,17 @@ function PlainEntry({ entry, tier, division }) {
 // An empty subdivision renders as a plain dimmed row, NOT a button -- a
 // control that expands to nothing is a dead control, and the reason ("no
 // examples") sits where the click would land.
-function DivisionGroup({ approach, band, division, query, isYou, trayKeys, entityKey, onAdd }) {
+function DivisionGroup({ approach, band, division, query, isYou, trayKeys,
+                         entityKey, onAdd, autoOpen = false }) {
   const [open, setOpen] = useState(false);
+  // A standards-table deep link names THIS subdivision (round 3, task 0098):
+  // open once per arrival, during render (the openedPage pattern below — an
+  // effect would land a frame after the header is already clickable), and
+  // re-arm when the mark moves elsewhere so a later link can land again. The
+  // user's own toggle stays free in between.
+  const [autoConsumed, setAutoConsumed] = useState(false);
+  if (autoOpen && !autoConsumed) { setAutoConsumed(true); setOpen(true); }
+  if (!autoOpen && autoConsumed) setAutoConsumed(false);
   const visible = division.entries.filter((entry) => matchesRunner(entry, query));
   // ROUND 4: a live query filters the STRUCTURE, not just the cards --
   // "hide the subdivisions / ranks that don't show up for the search ...
@@ -632,7 +642,7 @@ function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
  * something every section has to negotiate).
  */
 function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey, onAdd,
-                   linkCtx, door = null }) {
+                   linkCtx, door = null, focusMark = null }) {
   // ROUND 1 (2026-08-07), superseding the round-2 version-badge ruling: the
   // JP/US control is a MODE now, and a mode FILTERS -- "We should have 2
   // modes: JP (shows only JP entries), US (shows only US entries)." An entry
@@ -773,6 +783,8 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
             ? band.divisions.map((division) => html`<${DivisionGroup}
                 key=${`${bandAnchorId(approach, band.tier)}-${division.numeral}`}
                 approach=${approach} band=${band} division=${division} query=${query}
+                autoOpen=${!!(focusMark && focusMark.tier === band.tier
+                              && focusMark.division === division.numeral)}
                 isYou=${!!(standing && standing.rank === band.tier
                            && standing.division === division.numeral)}
                 trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd} />`)
@@ -809,6 +821,7 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
  * never has to branch on which door it came through.
  */
 export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTier,
+                               focusDivision = null, focusEntryUrl = null,
                                focusRow = null,
                                fallbackLabel = null, onRelink = () => {},
                                resolveEntityLabel = null }) {
@@ -1070,9 +1083,17 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
   }, [focusRow, pieces, assocStandings, pageIdentity]);
 
   const consumedFocusRef = useRef(null);
+  // Round 3 (task 0098): a standards-table time link names an exact
+  // subdivision and entry. The mark rides to the hit approach's Section,
+  // which auto-opens that DivisionGroup; once its Disclose has mounted, the
+  // second timer below finds the entry card, centers it, and plays the
+  // arrival blink ("hey it's me, i'm the one that loaded!").
+  const [focusMark, setFocusMark] = useState(null);
+  const rootRef = useRef(null);
   useEffect(() => {
     if (!focusStrat) return undefined;
-    const focusId = `${pageIdentity}::${focusStrat}::${focusTier || ""}`;
+    const focusId = `${pageIdentity}::${focusStrat}::${focusTier || ""}`
+      + `::${focusDivision || ""}::${focusEntryUrl || ""}`;
     if (consumedFocusRef.current === focusId) return undefined;
     // `approaches.find` here still resolves by NAME alone and can still land
     // on the first of two sibling sections that share one `matched_strategy`
@@ -1087,20 +1108,64 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
                                   // unconsumed, try again next render
     consumedFocusRef.current = focusId;
     setExpanded(approachIdentity(hit));
+    // WHERE the entry sits is resolved HERE, against the approach's own
+    // displayed ladder — never trusted from the intent. The standards table
+    // banded the clip against the VETTED ladder; this page files entries by
+    // the row's own (usually sheet-fitted) ladder, and the two legitimately
+    // disagree about a tier/division (round 6's ruling: "where the sheet's
+    // span differs, this page's answer is where your time sits among THESE
+    // times"). Landing must open the division the card is actually IN. The
+    // intent's tier/division survive only as the fallback when the URL
+    // matches no entry (a vetted-only example, a JP-filtered one).
+    let mark = null;
+    if (focusEntryUrl) {
+      const entry = (hit.entries || []).find(
+        (one) => one.video === focusEntryUrl);
+      if (entry) {
+        const ladder = hit.ladder || {};
+        const tier = bandFor(ladder, entry.time_cs);
+        mark = { approachId: approachIdentity(hit), tier,
+                 division: divisionWithin(ladderCsOf(ladder), tier, entry.time_cs),
+                 entryUrl: focusEntryUrl };
+      }
+    }
+    if (!mark && focusTier && focusDivision) {
+      mark = { approachId: approachIdentity(hit), tier: focusTier,
+               division: focusDivision, entryUrl: focusEntryUrl || null };
+    }
+    setFocusMark(mark);
     // Disclose mounts the section body a tick after `open` flips — see its
     // own docstring ("Preact commits after the tick"). A short timer beats a
     // race against that mount rather than guessing a single rAF is enough.
     const timer = setTimeout(() => {
-      const id = focusTier ? bandAnchorId(hit, focusTier) : sectionAnchorId(hit);
+      const id = mark ? bandAnchorId(hit, mark.tier)
+        : focusTier ? bandAnchorId(hit, focusTier) : sectionAnchorId(hit);
       document.getElementById(id)?.scrollIntoView({ block: "start", behavior: "smooth" });
     }, 80);
-    return () => clearTimeout(timer);
-  }, [focusStrat, focusTier, approaches, pageIdentity]);
+    // The entry card exists only after the auto-opened DivisionGroup's own
+    // Disclose mounts, so the refinement runs on a later look: center the
+    // exact card and blink it. Scoped to THIS page's root — a bare selector
+    // would find a hidden mounted copy (ui-core's scoping rule). A card the
+    // mode filter hides (a JP entry in US mode) is simply not found, and the
+    // band scroll above has already landed somewhere honest.
+    const helloTimer = setTimeout(() => {
+      const root = rootRef.current;
+      const card = root && focusEntryUrl
+        ? root.querySelector(`[data-video="${CSS.escape(focusEntryUrl)}"]`)
+        : null;
+      if (!card) return;
+      card.scrollIntoView({ block: "center", behavior: "smooth" });
+      card.classList.add("library-arrival");
+      setTimeout(() => card.classList.remove("library-arrival"), 2200);
+    }, 550);
+    return () => { clearTimeout(timer); clearTimeout(helloTimer); };
+  }, [focusStrat, focusTier, focusDivision, focusEntryUrl, approaches,
+      pageIdentity]);
 
   const iconSrc = entityKey ? entityIconSrc(t, entityKey) : genericStarSrc();
   const activeStratInfo = activeStrat ? stratByName[activeStrat] : null;
 
-  return html`<div class="library-target">
+  return html`<div class="library-target" ref=${rootRef}>
     <div class="library-target-header">
       <img class="library-target-icon" src=${iconSrc} alt="" draggable="false" />
       <div class="library-target-heading">
@@ -1150,6 +1215,8 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
             () => setExpanded((prev) =>
               prev === approachIdentity(approach) ? null : approachIdentity(approach))}
           query=${query}
+          focusMark=${focusMark && focusMark.approachId === approachIdentity(approach)
+            ? focusMark : null}
           stratInfo=${approach.matched_strategy ? stratByName[approach.matched_strategy] : null}
           trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
           linkCtx=${linkCtx} />`)}

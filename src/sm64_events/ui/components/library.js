@@ -239,6 +239,11 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
       .then((data) => {
         setEntry({ entityKey, rows: data.targets || [],
                    focusStrat: focus.strat || null, focusTier: focus.tier || null,
+                   // Round 3 of task 0098: a standards-table time link lands
+                   // on the EXACT entry it exemplifies — the subdivision to
+                   // auto-open and the entry card to blink ride the intent.
+                   focusDivision: focus.division || null,
+                   focusEntryUrl: focus.entryUrl || null,
                    // 2026-08-14: a LINKED entity resolves to the target its
                    // rows are adopted onto (server-side, same door), and
                    // `focus_row_key` names the piece the link points at --
@@ -328,7 +333,9 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
       // whatever was last practiced" auto-open below, or it would race a
       // fetch this activation is about to abandon anyway.
       autoOpenedRef.current = true;
-      openEntity(intent.entity, { strat: intent.strat, tier: intent.tier });
+      openEntity(intent.entity, { strat: intent.strat, tier: intent.tier,
+                                  division: intent.division,
+                                  entryUrl: intent.entryUrl });
     } else if (intent.kind === "compare") {
       // FINAL REVIEW FIX (broad review finding #7, never landed until now):
       // this is a straight PASS-THROUGH into Compare -- the Library's own
@@ -494,6 +501,8 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
               onAdd=${addToTray} trayKeys=${trayKeys}
               focusStrat=${entry ? entry.focusStrat : null}
               focusTier=${entry ? entry.focusTier : null}
+              focusDivision=${entry ? entry.focusDivision : null}
+              focusEntryUrl=${entry ? entry.focusEntryUrl : null}
               focusRow=${entry ? entry.focusRow : null}
               fallbackLabel=${entry ? entry.fallbackLabel : null}
               onRelink=${reloadRows}

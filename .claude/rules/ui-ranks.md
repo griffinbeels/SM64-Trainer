@@ -61,6 +61,32 @@ Guarded by `tests/test_ui_standards_subdivisions.py`, mutation-proved three
 ways (division prop dropped, links suppressed, extra clips dropped
 server-side).
 
+**Round 3 (2026-08-15) reshaped the surface on his first live use.** Rows run
+SLOWEST FIRST — Capless, Toad … Mario — the Library's own progression
+direction ("it gives a sense of progression as the player reads from top to
+bottom"), with a Capless row that has no threshold cell and no editor (the
+floor has no cutoff; `set_threshold` rejects Iron) but expands into its five
+subdivisions, whose edge times the scoring tail defines (`ladderBands`
+supplies the empty Iron structure that `bandsOf` filters when no entry bands
+there); subdivisions run 5→1 so the whole table is monotone slow→fast. The
+tier cell is ONE full-cell button — cohesive hover, a single soft lift, with
+an explicit `:hover` background because the design system's global
+`button:hover` outranks a bare class (the round-3 "each button visually has
+its own background" report); the fixed-width label block centres as a group
+so every cap sits on one vertical line; the chevron pins to the cell's right
+edge. The library glyph is GONE: **every time link deep-links to its exact
+library entry** — intent `{kind:"target", entity, strat, tier, division,
+entryUrl}` through the existing openLibrary door, gated on the payload's
+`library_urls` (a vetted-only URL keeps the plain external link; the href
+stays the real video either way, so middle-click works). The library side
+re-resolves WHERE the entry sits against the approach's OWN displayed ladder
+— the standards table bands against the vetted ladder and the two
+legitimately disagree — then auto-opens that DivisionGroup and plays the
+`.library-arrival` blink on the entry card (`data-video` attr). All guarded
+in `tests/test_ui_standards_subdivisions.py` (row order, alignment +
+chevron geometry, 5→1 order, the deep-link landing + blink — the blink
+mutation-proved, the alignment guard watched red before its fix).
+
 ## How full a rank bar is DRAWN (and the one bar that is never anchored)
 
 **The bar's own scale is `caps.js::barFill(tier, division, fill)`** (2026-07-29), not the raw `fill`: every rank draws `0.5 + 0.5 × fill` so the bar starts HALF FULL, and only the ladder FLOOR (position 0, Capless V — where a strategy nobody has practiced grades) draws its true fill and so reads as empty. User: "All rank displays… should start from the MIDDLE OF THE BAR… The intention is to anchor the user towards feeling like they ALWAYS are making progress to the next rank", with the one carve-out "we've literally never practiced this thing, so it should be empty. Once we level up to Capless 4, it should start at least from the middle, hence forth for the remainder of the ranks." The floor test is `rankPosition(tier, division, 0) === 0`, never a `tier === "Iron"` literal, so a registry swap cannot strand it. **`ui/rankclimb.js` converts ONCE, at the plan's boundary** (`targetBar`/`startBar` — `buildClimbPlan` is handed `barFill`-derived `fromFill`/`toFill`), so every bar value inside `climbplan.js` is a DRAWN width and `useRankClimb` hands out `climb.bar`, already anchored. Round 1 converted at the two call sites instead and was wrong in exactly one place, which is the whole reason this is written down: the plan builds the closing sweep as `arrive: barFrom 0 → barTo`, and with raw fills going in that `0` meant "the bottom of this division", which the anchoring then painted HALF FULL — "when we fill up the meter on the final beat of the animation, it STARTS AT 50% visually, which is wrong. It should START AT 0% visually, and move to the destination %… but ALWAYS END PAST 50%, and should animate through that lerp" (user, 2026-07-29). With drawn widths going in, `0` means EMPTY and `barTo` is the destination's anchored width, so the sweep is right by construction — the same shape as climbplan's own pin (`barFrom === barTo === 1` instead of a rule). Two consequences worth knowing: a sweep's DURATION now matches the distance it actually travels on screen (`barSweepMs` scales with `|barTo − barFrom|`), and the floor→next-rank seam is continuous only because every rank at full draws 1.0, floor included (`test_a_finished_division_always_draws_a_full_bar`). Verified by frame-sampling a live Capless 3 → Toad 3 climb (`uilab.trace`): resting 0.717 → pinned 1.0 through the rank ticks → sweep restarting at **0.000**, easing to **0.681**, at rest both ends. DISPLAY only: the progress track's `title` reports the honest within-division percentage, taken from the rank being LANDED ON (`graded.fill`) so it is a settled sentence rather than one ticking every frame. Two consumers, `ranks.js` (`climb.bar`) and `marelo.js` (`climb.bar` at rest; its route SWAP still calls `barFill` itself, because `routeswap.js` snapshots the raw payload, and it lerps the two DRAWN widths — only one endpoint can be the floor, and anchoring after the lerp would jump the bar on the exchange frame). **NOT applied to `LadderBar`, and that is a RULING rather than an oversight** — "the RANK PAGE bar should NOT be a lie. It should truly show your exact position in the entire ecosystem of tiers. That is deliberate" (user, 2026-07-29, asked directly). The plausible failure there is not forgetting the anchoring rule but APPLYING it: anchoring every band lights all eight tiers you have not reached to half, the exact inverse of the round-10 complaint that shipped the current treatment; anchoring only the band you stand in desynchronises the fill from the YOU marker, which lives in the SAME element and coordinate space. `tests/test_ui_rank_bar.py::test_the_rank_tab_ladder_is_never_anchored` is an INVERSE guard on both expressions, and fails just as loudly when its pattern stops matching (a rename) as when the ladder gets anchored — mutation-proved both ways. Also not applied to the Rank tab's Mastery meter, a 0-100 mean rather than a rank. Guarded by `tests/test_ui_rank_bar.py` — the law in node against caps.js, plus a scan that resolves every `width:${…}` expression through same-file bindings and fails if one reaches a raw `fill`, both mutation-proved — and a `tests/test_single_source.py` row on `FILL_ANCHOR`

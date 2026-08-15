@@ -563,6 +563,13 @@
     border: 1px solid var(--border-soft); border-radius: 7px; overflow: hidden;
     background: rgba(4,13,23,.55);
   }
+  /* Round 3 (task 0098): the card a standards-table time link landed on
+     announces itself — two gold pulses ("hey it's me, i'm the one that
+     loaded!"). Reduced motion gets a static ring for the same window; the
+     class is removed ~2s after arrival either way. */
+  .library-arrival{animation:library-hello 1.1s ease-in-out 2}
+  @keyframes library-hello{0%,100%{box-shadow:0 0 0 0 rgba(240,189,50,0)}50%{box-shadow:0 0 0 4px var(--gold)}}
+  @media (prefers-reduced-motion: reduce){.library-arrival{animation:none;outline:2px solid var(--gold)}}
   .library-example-media {
     position: relative; aspect-ratio: 16/9; background: #0a1119;
   }
@@ -940,46 +947,35 @@
   .timefield-sep{color:var(--text-dim,#8b98a6);padding:0 1px}
   .stdcell{display:inline-flex;align-items:center;gap:4px}
   .vidbtn{border:none;background:transparent;color:#6cb6ff;cursor:pointer;font-size:11px;padding:0 2px;line-height:1}
-  /* The standards-ladder deep link (Task 7, spec 2026-08-07-library-page) --
-     `color: inherit` deliberately, not the blue every other in-table link
-     uses: this cell's own background is the tier's rank colour (`capGradient`/
-     `rankColor`, set inline above) against dark `#111` text for contrast, and
-     that pairing is what stays legible across all eight tiers -- a fixed blue
-     would fight several of them. The gap before it is margin, not a text-node
-     space: htm collapses whitespace between a text node and a tag (this
-     file's own JS rule, `.claude/rules/ui-core.md`), so a literal " " before
-     the button would silently vanish. */
-  .std-tier-link{border:none;background:transparent;color:inherit;cursor:pointer;padding:0;margin-left:4px;line-height:1;vertical-align:middle;opacity:.7}
-  .std-tier-link:hover{opacity:1}
-  /* The tier label expands its subdivision rows (task 0098). Round 2 shape,
-     his words: the caps must be "aligned with each other" and the chevron
-     "larger and on the far right of the box" -- so the cell is one
-     left-anchored flex row: [cap][name] stretch across, the Library glyph
-     next, and the chevron LAST as its own button pinned to the right edge.
-     Every cap starts at the same x because the row starts at the cell's own
-     left padding and the icon slot is first. Ink stays the dark #111 the
-     gradient cells always used -- it moved from the td's inline style to
-     this class when the cell grew children that must inherit it. */
+  /* Round 3 shape, his words: "everything clearly feels like one cohesive
+     card" -- the cell is ONE full-size button, so hover is one soft lift
+     across the whole cell instead of per-control rectangles. The label block
+     ([cap][name]) has a FIXED width and centres as a group: identical width
+     per row is what keeps every cap on one vertical line while the pair sits
+     mid-cell. The chevron pins to the cell's right edge, sized up per round
+     2. The :hover rule exists to BEAT the design system's global
+     `button:hover` background, whose specificity outranks a bare class --
+     the same global-default leak as the justify-content trap, caught in his
+     round-3 report as "each button visually has its own background". Ink
+     stays the dark #111 the gradient cells always used. */
   .std-tier-cell{color:#111;font-weight:700}
-  .std-tier-row{display:flex;align-items:center;gap:4px;width:100%}
-  /* justify-content is NAMED, not defaulted: a bare display:flex on a
-     <button> centres its children in Chromium (the .library-result lesson),
-     which is exactly the per-name-length cap drift round 2 reported. */
-  .std-tier-btn{flex:1;min-width:0;display:flex;align-items:center;justify-content:flex-start;gap:6px;border:none;background:transparent;color:inherit;font:inherit;font-weight:700;cursor:pointer;padding:0;text-align:left}
-  .std-tier-expand{flex:0 0 auto;display:inline-flex;justify-content:center;align-items:center;border:none;background:transparent;color:inherit;cursor:pointer;padding:0;line-height:1}
-  .std-tier-chevron{opacity:.55;transition:transform .2s ease}
-  .std-tier-expand[aria-expanded="true"] .std-tier-chevron{transform:rotate(180deg)}
+  .std-tier-btn{position:relative;display:flex;width:100%;align-items:center;justify-content:center;border:none;background:transparent;color:inherit;font:inherit;font-weight:700;cursor:pointer;padding:0 22px;text-align:left}
+  .std-tier-btn:hover{background:rgba(255,255,255,.14)}
+  .std-tier-label{display:inline-flex;align-items:center;justify-content:flex-start;gap:6px;width:7.6em}
+  .std-tier-chevron{position:absolute;right:5px;top:50%;transform:translateY(-50%);opacity:.55;transition:transform .2s ease}
+  .std-tier-btn[aria-expanded="true"] .std-tier-chevron{transform:translateY(-50%) rotate(180deg)}
   /* Subdivision rows: cell padding lives INSIDE the animated clip, so a
      closing row really reaches 0px tall instead of leaving a padded sliver
      that snaps away when the row unmounts (standards.js::StdSubRows). */
   .stdtable .std-sub td{padding:0}
   .std-sub-clip{overflow:hidden}
   .std-sub-pad{padding:3px 7px}
-  /* display:flex (block-level), not inline-flex: the cell's own
-     text-align:center would centre an inline box, and round 2's alignment
-     rule wants every cap on one left edge — the child indented one level
-     under its parent's own icon. */
-  .std-sub-name{display:flex;align-items:center;justify-content:flex-start;gap:4px;padding-left:16px;font-size:10px;white-space:nowrap}
+  /* The subdivision label reuses the parent's fixed-width centred column
+     (`.std-tier-label`), indented one level INSIDE the box (border-box, so
+     the column width is identical and every cap — parent and child — sits on
+     the same two vertical lines, one per depth). Round 3's alignment rule. */
+  .std-sub-name{display:flex;align-items:center;justify-content:center;font-size:10px;white-space:nowrap}
+  .std-sub-indent{padding-left:14px;box-sizing:border-box}
   @media (prefers-reduced-motion: reduce){.std-tier-chevron{transition:none}}
   .stdtable td a{color:#6cb6ff;text-decoration:none}
   .stdtable td a:hover{text-decoration:underline}
