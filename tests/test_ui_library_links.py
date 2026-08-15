@@ -162,16 +162,17 @@ def test_a_card_with_no_library_caller_renders_no_book_mark(practice_page):
     assert present >= 1, "the real app must render the book mark on real cards"
 
 
-# ---- the standards-ladder tier-row deep link -------------------------------
+# ---- the standards-ladder time-link deep link ------------------------------
+# Round 3 of task 0098 retired the tier-row library GLYPH: the time links
+# themselves are the door now, each landing on its exact entry card. These
+# tests keep the original claims through the new control.
 
-def test_a_tier_row_link_lands_on_that_bands_scrolled_into_view(practice_page):
-    """Step 2's second half: "click a Silver row in the practice standards
-    table -> Library lands with the Silver band scrolled into view
-    (`window.scrollY > 0` and the anchor's `getBoundingClientRect().top`
-    within the viewport)." Uses the active card (`.log-card-active`, the
-    star:2:4 / "Fall onto the Caged Island" / "TJ Owlless" card) -- its
-    ladder carries a real "Silver" tier (confirmed against the bundled
-    snapshot before writing this file)."""
+def test_a_time_link_lands_scrolled_to_the_entrys_band(practice_page):
+    """Click a deep-linkable time on the active card -> the Library lands
+    with the entry's own subdivision open and its band scrolled into view
+    (`window.scrollY > 0`, the band's rect within the viewport). The band is
+    the LIBRARY-resolved one (the approach's own displayed ladder), so the
+    probe reads the open division rather than assuming the table's tier."""
     opened = practice_page.evaluate("""
       (() => {
         const card = document.querySelector('.log-card.log-card-active');
@@ -187,13 +188,16 @@ def test_a_tier_row_link_lands_on_that_bands_scrolled_into_view(practice_page):
         ".log-card.log-card-active .stdtable", timeout_ms=10000)
 
     clicked = practice_page.evaluate("""
-      (() => {
-        const cells = Array.from(document.querySelectorAll(
-          '.log-card.log-card-active .stdtable td[title]'));
-        const cell = cells.find((td) => (td.title || '').includes('\\u00b7 Silver on xcams'));
-        if (!cell) return 'no Silver tier row found';
-        const link = cell.querySelector('.std-tier-link');
-        if (!link) return 'Silver row has no library link (no active strategy?)';
+      (async () => {
+        const card = document.querySelector('.log-card.log-card-active');
+        const entity = card.getAttribute('data-feed-key');
+        const res = await fetch('/api/ranks/standards?entity='
+          + encodeURIComponent(entity));
+        const data = await res.json();
+        const lib = new Set(data.library_urls || []);
+        const link = Array.from(card.querySelectorAll(
+          '.stdtable tbody td a[href]')).find((a) => lib.has(a.getAttribute('href')));
+        if (!link) return 'no deep-linkable time on the active card';
         link.click();
         return 'clicked';
       })()
@@ -206,94 +210,40 @@ def test_a_tier_row_link_lands_on_that_bands_scrolled_into_view(practice_page):
         "(document.querySelector('.library-target-heading h3') || {}).textContent")
     assert heading == "Fall onto the Caged Island", heading
 
-    # POLL, never a fixed sleep. Two things have to finish here: the 80ms
-    # settle timer (librarytarget.js's own comment -- it beats a race against
-    # Disclose mounting the section body a tick after `open` flips) and then a
-    # SMOOTH scrollIntoView animation, whose duration the browser chooses. A
-    # fixed margin has to be long enough for the slowest machine and is still
-    # a guess; this one was 0.6s and it went red in a full-suite run on
-    # 2026-08-07 while passing alone every time, because a smooth scroll under
-    # load outlasts the margin someone measured on an idle box. Polling costs
-    # nothing when the scroll lands fast and cannot be tuned wrong.
-    def _band_in_viewport(timeout_s=8):
+    # POLL, never a fixed sleep. Two things have to finish here: the settle
+    # timers (librarytarget.js's own comments) and then a SMOOTH
+    # scrollIntoView animation, whose duration the browser chooses. A fixed
+    # margin went red in a full-suite run on 2026-08-07 while passing alone
+    # every time; polling costs nothing and cannot be tuned wrong.
+    def _open_division_band_in_viewport(timeout_s=8):
         deadline = time.time() + timeout_s
         last = {"found": False}
         while time.time() < deadline:
             last = practice_page.evaluate("""
               (() => {
-                const band = document.querySelector(
-                  '.library-section.open .library-band[data-tier="Silver"]');
-                if (!band) return {found: false};
-                const rect = band.getBoundingClientRect();
+                const division = document.querySelector(
+                  '.library-section.open .library-division.open');
+                if (!division) return {found: false};
+                const band = division.closest('.library-band');
+                const rect = (band || division).getBoundingClientRect();
                 return {found: true, scrollY: window.scrollY,
-                        top: rect.top, viewportHeight: window.innerHeight};
+                        top: rect.top, bottom: rect.bottom,
+                        viewportHeight: window.innerHeight};
               })()
             """)
             if (last["found"] and last["scrollY"] > 0
-                    and 0 <= last["top"] <= last["viewportHeight"]):
+                    and last["top"] <= last["viewportHeight"]
+                    and last["bottom"] >= 0):
                 return last
             time.sleep(0.05)
         return last
 
-    result = _band_in_viewport()
-    assert result["found"], "no Silver band anchor on the open section"
+    result = _open_division_band_in_viewport()
+    assert result["found"], "no auto-opened division on the landed section"
     assert result["scrollY"] > 0, (
         f"expected the page to have scrolled toward the band: {result}")
-    assert 0 <= result["top"] <= result["viewportHeight"], (
-        f"the Silver band should be within the viewport after landing: {result}")
-
-
-def test_no_active_strategy_renders_no_tier_row_link():
-    """The deep-link effect (librarytarget.js) requires a truthy
-    `focusStrat` to resolve a section at all -- a link built with no active
-    strategy to carry would open the Library and land nowhere, which reads as
-    broken rather than as "did less than it promised" (acceptance.md's rule).
-    Uses a fresh, un-seeded fixture (`seed=False` reads as `attempts=False`
-    in `seed_practice`'s own call inside `serve_ui`, so nothing ever sets an
-    active strategy) rather than hunting for an unranked card in the default
-    one, which carries none."""
-    import tempfile
-    with tempfile.TemporaryDirectory() as scratch:
-        with serve_ui(Path(scratch) / "no_strat.db", stage=(2, 24),
-                      target=(2, 4)) as base:
-            with driver.get_driver().launch(headless=True) as page:
-                page.goto(f"{base}/ui/index.html")
-                page.wait_for(".log-list-card", timeout_ms=20000)
-                # Zero attempts anywhere in this fixture means nothing wins
-                # the auto-open slot (practicelog.js's own `autoOpenKey` --
-                # "a card only auto-opens once it has recorded something"),
-                # so the card starts CLOSED and `Disclose` never mounts its
-                # body (collapsible.js: `mounted` starts at `open`). Open it
-                # by hand before reaching for the standards toggle inside.
-                fold = page.evaluate("""
-                  (() => {
-                    const btn = document.querySelector(
-                      '.log-card:not(.is-unassigned) .log-card-fold');
-                    if (!btn) return 'no entity card rendered';
-                    btn.click();
-                    return 'clicked';
-                  })()
-                """)
-                assert fold == "clicked", fold
-                page.wait_for(".log-card-body .standards-toggle", timeout_ms=10000)
-                opened = page.evaluate("""
-                  (() => {
-                    const toggle = document.querySelector('.standards-toggle');
-                    if (!toggle) return 'no standards toggle at all';
-                    toggle.click();
-                    return 'clicked';
-                  })()
-                """)
-                assert opened == "clicked", opened
-                page.wait_for(".stdtable", timeout_ms=10000)
-                links = page.evaluate(
-                    "document.querySelectorAll('.stdtable .std-tier-link').length")
-                rows = page.evaluate(
-                    "document.querySelectorAll('.stdtable tbody tr').length")
-                assert rows > 0, "fixture rendered no standards rows to check"
-                assert links == 0, (
-                    f"expected no tier-row library links with no active "
-                    f"strategy set, found {links} across {rows} rows")
+    assert result["top"] <= result["viewportHeight"] and result["bottom"] >= 0, (
+        f"the entry's band should intersect the viewport after landing: {result}")
 
 
 # ---- fix round: the deep link is consumed ONCE, not re-applied on every
@@ -386,10 +336,9 @@ def test_the_book_mark_and_the_tier_link_open_the_same_paired_entity():
         pipe = next(s for s in segments
                    if (s.get("seed_key") or "") == "seg:reds->pipe:bitdw")
         _target_segment(base, pipe["id"])
-        # A strategy, so the standards panel's `activeStrat` is non-null and
-        # the tier-row link actually renders -- test_no_active_strategy_
-        # renders_no_tier_row_link (above) pins that it does not without one,
-        # deliberately, not a gap to route around here.
+        # A strategy, so the panel grades and the marker column resolves --
+        # the time links themselves no longer depend on an active strategy
+        # (round 3: each link carries its own column's strategy).
         _post(base, "/api/strat", {"kind": "segment",
                                     "segment_id": pipe["id"],
                                     "strat_tag": "Standard"})
@@ -418,7 +367,7 @@ def test_the_book_mark_and_the_tier_link_open_the_same_paired_entity():
                               timeout_ms=10000)
                 page.evaluate("document.querySelector("
                               "'.log-card.log-card-active .standards-toggle').click()")
-                page.wait_for(".log-card.log-card-active .std-tier-link",
+                page.wait_for(".log-card.log-card-active .stdtable",
                               timeout_ms=10000)
 
             def read_landed_library():
@@ -452,8 +401,25 @@ def test_the_book_mark_and_the_tier_link_open_the_same_paired_entity():
             page.evaluate(CLICK_PRACTICE_TAB)
             page.wait_for(".log-list-card", timeout_ms=15000)
             open_card_and_standards()
-            page.evaluate("document.querySelector("
-                          "'.log-card.log-card-active .std-tier-link').click()")
+            # Round 3: the second door is a deep-linkable TIME. The panel
+            # grades against standardsIdentity — the STAR's entity, never the
+            # paired segment's own — so its library_urls are the star's; the
+            # click must land on the SAME page the book mark opened.
+            clicked = page.evaluate(f"""
+              (async () => {{
+                const res = await fetch('/api/ranks/standards?entity='
+                  + encodeURIComponent('star:{BOWSER_COURSE}:0'));
+                const data = await res.json();
+                const lib = new Set(data.library_urls || []);
+                const link = Array.from(document.querySelectorAll(
+                  '.log-card.log-card-active .stdtable tbody td a[href]'))
+                  .find((a) => lib.has(a.getAttribute('href')));
+                if (!link) return 'no deep-linkable time on the paired card';
+                link.click();
+                return 'clicked';
+              }})()
+            """)
+            assert clicked == "clicked", clicked
             tier_link_heading, tier_link_approaches = read_landed_library()
 
     assert book_mark_approaches > 0, (
