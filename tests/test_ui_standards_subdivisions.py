@@ -208,6 +208,34 @@ def page_state():
                 page.evaluate(f"({EXPAND})({other!r})")
                 page.evaluate(BEAT)
                 collapsed = page.evaluate(f"({READ_SUBROWS})({target['col']})")
+                # The Capless row's cells equal its own Capless 1 row's —
+                # round 4's exception: the floor's best subdivision edge
+                # stands in for the cutoff it does not have.
+                page.evaluate("""
+                  (() => Array.from(document.querySelectorAll(
+                    '.log-card .stdtable .std-tier-btn'))[0].click())()
+                """)
+                page.evaluate(BEAT)
+                capless = page.evaluate("""
+                  (() => {
+                    const card = Array.from(document.querySelectorAll('.log-card'))
+                      .find((c) => c.querySelector('.stdtable'));
+                    const cells = (row) => Array.from(row.querySelectorAll('td'))
+                      .slice(1).map((td) => td.textContent.trim());
+                    const tierRow = Array.from(card.querySelectorAll('tbody tr'))
+                      .find((r) => (r.querySelector('.std-tier-name') || {})
+                        .textContent === 'Capless');
+                    const oneRow = Array.from(card.querySelectorAll('tr.std-sub'))
+                      .find((r) => r.querySelector('.std-sub-name')
+                        .textContent.includes('Capless 1'));
+                    return {row: cells(tierRow), one: oneRow ? cells(oneRow) : null};
+                  })()
+                """)
+                page.evaluate("""
+                  (() => Array.from(document.querySelectorAll(
+                    '.log-card .stdtable .std-tier-btn'))[0].click())()
+                """)
+                page.evaluate(BEAT)
                 # LAST, because it navigates to the Library tab: a time link
                 # deep-links to the exact entry card and blinks it (round 3).
                 clicked = page.evaluate(f"({DEEP_LINK})({target['col']})")
@@ -218,8 +246,8 @@ def page_state():
                         f"({READ_ARRIVAL})({clicked['clicked']!r})")
                 return {"target": target, "icons": icons, "first": first,
                         "expanded": expanded, "switched": switched,
-                        "collapsed": collapsed, "clicked": clicked,
-                        "arrival": arrival}
+                        "collapsed": collapsed, "capless": capless,
+                        "clicked": clicked, "arrival": arrival}
 
 
 def test_every_tier_label_wears_the_numbered_winged_division_one_cap(page_state):
@@ -270,6 +298,17 @@ def test_expanding_a_tier_shows_its_five_subdivision_rows(page_state):
     digits = [label[-1] for label in expanded["labels"]]
     assert digits == ["5", "4", "3", "2", "1"], expanded["labels"]
     assert expanded["timesShown"] >= 5, expanded
+
+
+def test_the_capless_row_shows_its_capless_one_time(page_state):
+    """Round 4, his named exception: "instead of the -- -- -- for the overall
+    'Capless' row, we show the Capless 1 time." The collapsed row must equal
+    its own Capless 1 subdivision row cell for cell, and show at least one
+    real time (the scoring tail defines the edge for every laddered strat)."""
+    capless = page_state["capless"]
+    assert capless["one"] is not None, capless
+    assert capless["row"] == capless["one"], capless
+    assert any(cell != "—" for cell in capless["row"]), capless
 
 
 def test_a_deep_link_lands_on_the_exact_entry_and_blinks(page_state):

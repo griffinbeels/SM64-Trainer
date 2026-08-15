@@ -512,12 +512,29 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
             const cellClass = bandClass(strat,
               strat === activeStrat ? "col-active" : "",
               isBracket ? "std-marker-bracket" : (beaten ? "std-beaten" : ""));
-            // The Capless row carries no threshold and no editor — the floor
-            // has no cutoff to set (`set_threshold` rejects Iron server-side)
-            // and the resolver never assigns it an example; the row exists
-            // for the progression and for its expandable subdivisions.
+            // The Capless row carries no threshold of its own and no editor —
+            // the floor has no cutoff to set (`set_threshold` rejects Iron
+            // server-side). Round 4, his named EXCEPTION: the collapsed row
+            // shows the CAPLESS 1 time — the floor's best subdivision edge
+            // stands in for the cutoff it does not have, behaving exactly
+            // like its own Capless 1 cell (same value, same example link), so
+            // collapsing never changes what the number means.
             if (rank === "Iron") {
-              return html`<td class=${cellClass} style=${bandStyle(strat)}>—</td>`;
+              const band = subBandFor(strat, "Iron");
+              const one = band
+                ? band.divisions[DIVISION_NUMERALS.indexOf("I")] : null;
+              const capOneCs = one && !one.empty && one.slowCs != null
+                ? one.slowCs : null;
+              const capOneLabel = capOneCs != null
+                ? fmtSeconds(capOneCs / 100) : "—";
+              const example = one && one.entries.length
+                ? one.entries[one.entries.length - 1] : null;
+              return html`<td class=${cellClass} style=${bandStyle(strat)}>
+                ${example && capOneCs != null
+                  ? html`<a href=${example.video} target="_blank" rel="noopener"
+                      onclick=${exampleLink(strat, "Iron", "I", example)}
+                      title=${`example ${capName("Iron")} 1 run`}>${capOneLabel}</a>`
+                  : capOneLabel}</td>`;
             }
             return html`<td class=${cellClass} style=${bandStyle(strat)}>
               ${editing
