@@ -42,10 +42,18 @@ from sm64_events.detectors.spawn import SpawnDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
 from sm64_events.memory.addresses import (
-    CURR_AREA, KEY_GRAB_LEVELS, LEVEL_NAMES, PARTICLE_DUST,
-    SPAWN_ACTIONS, WARP_ENTRY_ACTIONS,
+    KEY_GRAB_LEVELS, LEVEL_NAMES, PARTICLE_DUST, SPAWN_ACTIONS,
+    WARP_ENTRY_ACTIONS,
 )
+from sm64_events.memory.layout import layout_for, version_from_argv
 from sm64_events.memory.pj64 import Pj64Memory
+
+# Which ROM's addresses to verify: `--version jp` (default us). The gate-driven
+# successor is tools/sync_version.py; this harness stays as the original
+# US live gate and still runs unchanged on the US layout.
+VERSION = version_from_argv()
+LAYOUT = layout_for(VERSION)
+CURR_AREA = LAYOUT.curr_area or 0x0
 
 
 def check(label: str, ok: bool, detail: str) -> bool:
@@ -61,7 +69,7 @@ def main() -> None:
         time.sleep(2)
     print("Attached.\n\nPhase 1: automatic checks (game must be unpaused)")
 
-    reader = SnapshotReader(mem)
+    reader = SnapshotReader(mem, LAYOUT, VERSION)
     s1 = reader.read()
     time.sleep(1.0)
     s2 = reader.read()

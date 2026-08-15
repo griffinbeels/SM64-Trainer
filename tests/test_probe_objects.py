@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from sm64_events.memory import addresses as A            # noqa: E402
+from sm64_events.memory.layout import US       # noqa: E402
 from sm64_events.memory.buffer import BufferMemory       # noqa: E402
 from probe_objects import (analyse, behaviour_of,        # noqa: E402
                            corroborating_offsets, entities, home_of,
@@ -172,6 +173,6 @@ def test_read_block_returns_n64_byte_order():
     # PJ64 stores each 32-bit word little-endian; a struct dump has to come
     # back the way the game wrote it or every offset in the report is wrong.
     mem = BufferMemory()
-    mem.write_u32(A.OBJECT_POOL, 0x11223344)
-    mem.write_u32(A.OBJECT_POOL + 4, 0xAABBCCDD)
-    assert mem.read_block(A.OBJECT_POOL, 8) == bytes.fromhex("11223344AABBCCDD")
+    mem.write_u32(US.object_pool, 0x11223344)
+    mem.write_u32(US.object_pool + 4, 0xAABBCCDD)
+    assert mem.read_block(US.object_pool, 8) == bytes.fromhex("11223344AABBCCDD")

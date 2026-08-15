@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 
 from sm64_events.memory import addresses as A
 from sm64_events.memory.base import N64Memory
-from sm64_events.memory.objects import pool_slot, slot_address
+from sm64_events.memory.behaviours import pointer_of, symbol_of
+from sm64_events.memory.layout import Layout, layout_for
+from sm64_events.memory.objects import ObjectPool
 
 # The window of one object slot that spans ALL THREE identity fields —
 # current position, spawn point, behaviour — so naming what Mario touched
@@ -16,8 +18,15 @@ from sm64_events.memory.objects import pool_slot, slot_address
 _LANDMARK_BLOCK = A.OBJECT_BEHAVIOR + 4 - A.OBJECT_POS
 _BEHAVIOUR_IN_BLOCK = A.OBJECT_BEHAVIOR - A.OBJECT_POS
 _HOME_IN_BLOCK = A.OBJECT_HOME_POS - A.OBJECT_POS
-_POINTERS_AT = min(A.MARIO_OBJECT_POINTERS)
-_POINTERS_SIZE = max(A.MARIO_OBJECT_POINTERS) + 4 - _POINTERS_AT
+_POINTERS_AT_OFF = min(A.MARIO_OBJECT_POINTER_OFFS)
+_POINTERS_SIZE = max(A.MARIO_OBJECT_POINTER_OFFS) + 4 - _POINTERS_AT_OFF
+# Every field the reader dereferences. behaviour_base is deliberately absent:
+# without it a symbol degrades to `ptr_xxxxxxxx` (memory/behaviours.py) and
+# nothing else is lost, so a JP layout can be read before its base is known.
+_REQUIRED_FIELDS = ("global_timer", "mario_struct", "curr_level", "curr_area",
+                    "last_completed_course", "last_completed_star",
+                    "pending_warp_op", "delayed_warp_timer", "warp_dest",
+                    "object_pool", "usamune_overall", "usamune_star_result")
 
 
 @dataclass(frozen=True)
@@ -34,7 +43,8 @@ class CausedState:
     """
 
     slot: int
-    behaviour: int
+    behaviour: int       # the RAM pointer this ROM gives the behaviour (evidence)
+    symbol: str          # the decomp symbol — THE identity (memory/behaviours.py)
     action: int          # s32 oAction — THE legible field (addresses.py)
     health: int          # s32 oHealth — hitbox arming/proximity, NOT defeats
     home: tuple[float, float, float]
@@ -85,7 +95,8 @@ class GameSnapshot:
     # landmark is settled from the poll AFTER its action edge (round 9 item 4:
     # the edge poll can still read the PREVIOUS engagement, and his first WF
     # tree grab named Mario's own spawn marker that way).
-    landmark_behaviour: int = 0   # 0 = nothing engaged this frame
+    landmark_behaviour: int = 0   # 0 = nothing engaged this frame (the pointer, evidence)
+    landmark_symbol: str = ""     # "" = nothing engaged; else "bhvDoor" / "ptr_xxxxxxxx"
     landmark_home: tuple[float, float, float] = (0.0, 0.0, 0.0)
     landmark_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
     # Watched-object states for the caused-moment detector — a switch is
@@ -96,8 +107,55 @@ class GameSnapshot:
 
 
 class SnapshotReader:
-    def __init__(self, mem: N64Memory):
+    """One coherent read of the game, over ONE version's layout.
+
+    `layout` defaults to `layout_for(version)` and `version` to "us", so every
+    caller that never cared which ROM is running (`SnapshotReader(mem)`) still
+    reads exactly what it did before 2026-08-15. A layout missing any field
+    the reader dereferences is refused HERE, naming the field, so a JP server
+    can never silently read address 0.
+    """
+
+    def __init__(self, mem: N64Memory, layout: Layout | None = None,
+                 version: str = "us"):
         self._mem = mem
+        self.version = version
+        self.layout = layout if layout is not None else layout_for(version)
+        self.layout.require(*_REQUIRED_FIELDS)
+        self._pool = ObjectPool(self.layout)
+        L = self.layout
+        self._at = {
+            "global_timer": L.global_timer,
+            "mario_action": L.mario_struct + A.MARIO_ACTION_OFF,
+            "mario_action_timer": L.mario_struct + A.MARIO_ACTION_TIMER_OFF,
+            "mario_action_state": L.mario_struct + A.MARIO_ACTION_STATE_OFF,
+            "num_stars": L.mario_struct + A.MARIO_NUM_STARS_OFF,
+            "particle_flags": L.mario_struct + A.MARIO_PARTICLE_FLAGS_OFF,
+            "pointers_block": L.mario_struct + _POINTERS_AT_OFF,
+            "last_completed_course": L.last_completed_course,
+            "last_completed_star": L.last_completed_star,
+            "igt_overall": L.usamune_overall,
+            "igt_result": L.usamune_star_result,
+            "curr_level": L.curr_level,
+            "curr_area": L.curr_area,
+            "pending_warp_op": L.pending_warp_op,
+            "delayed_warp_timer": L.delayed_warp_timer,
+            "warp_dest_type": L.warp_dest + A.WARP_DEST_TYPE_OFF,
+            "warp_dest_level": L.warp_dest + A.WARP_DEST_LEVEL_OFF,
+            "warp_dest_area": L.warp_dest + A.WARP_DEST_AREA_OFF,
+            "warp_dest_node": L.warp_dest + A.WARP_DEST_NODE_OFF,
+        }
+        # The watched behaviours, as THIS ROM's pointers -> their symbols. A
+        # symbol this ROM lacks, or a base not yet known, simply watches
+        # nothing for that row rather than failing.
+        self._caused_by_pointer: dict[int, str] = {}
+        for symbol in A.CAUSED_BEHAVIOURS:
+            pointer = pointer_of(version, symbol, base=L.behaviour_base)
+            if pointer is not None:
+                self._caused_by_pointer[pointer] = symbol
+
+    def _symbol(self, pointer: int) -> str:
+        return symbol_of(self.version, pointer, base=self.layout.behaviour_base)
 
     def _engaged_object(self):
         """(behaviour, spawn point, current position) of the object Mario is
@@ -108,15 +166,15 @@ class SnapshotReader:
         pointers these are, kept here so a torn read cannot name a landmark out
         of the middle of some other object.
         """
-        block = self._mem.read_block(_POINTERS_AT, _POINTERS_SIZE)
-        for address in A.MARIO_OBJECT_POINTERS:
-            at = address - _POINTERS_AT
+        block = self._mem.read_block(self._at["pointers_block"], _POINTERS_SIZE)
+        for offset in A.MARIO_OBJECT_POINTER_OFFS:
+            at = offset - _POINTERS_AT_OFF
             pointer = int.from_bytes(block[at:at + 4], "big")
-            located = pool_slot(pointer)
+            located = self._pool.pool_slot(pointer)
             if located is None or located[1] != 0:
                 continue
             found = self._mem.read_block(
-                slot_address(located[0], A.OBJECT_POS), _LANDMARK_BLOCK)
+                self._pool.slot_address(located[0], A.OBJECT_POS), _LANDMARK_BLOCK)
             behaviour = int.from_bytes(
                 found[_BEHAVIOUR_IN_BLOCK:_BEHAVIOUR_IN_BLOCK + 4], "big")
             return (behaviour,
@@ -132,7 +190,7 @@ class SnapshotReader:
         beside his sessions — 240 separate reads would cost more than the
         poll interval, one block read costs ~a tenth of a millisecond.
         """
-        pool = self._mem.read_block(A.OBJECT_POOL,
+        pool = self._mem.read_block(self._pool.base,
                                     A.OBJECT_COUNT * A.OBJECT_SIZE)
         found = []
         for slot in range(A.OBJECT_COUNT):
@@ -140,10 +198,11 @@ class SnapshotReader:
             behaviour = int.from_bytes(
                 pool[base + A.OBJECT_BEHAVIOR:base + A.OBJECT_BEHAVIOR + 4],
                 "big")
-            if behaviour not in A.CAUSED_POINTERS:
+            symbol = self._caused_by_pointer.get(behaviour)
+            if symbol is None:
                 continue
             found.append(CausedState(
-                slot=slot, behaviour=behaviour,
+                slot=slot, behaviour=behaviour, symbol=symbol,
                 action=int.from_bytes(
                     pool[base + A.OBJECT_ACTION:base + A.OBJECT_ACTION + 4],
                     "big", signed=True),
@@ -156,29 +215,31 @@ class SnapshotReader:
         return tuple(found)
 
     def read(self) -> GameSnapshot:
-        m = self._mem
+        m, at = self._mem, self._at
         landmark_behaviour, landmark_home, landmark_pos = self._engaged_object()
         return GameSnapshot(
             wall_time_utc=datetime.now(timezone.utc),
-            global_timer=m.read_u32(A.GLOBAL_TIMER),
-            mario_action=m.read_u32(A.MARIO_ACTION),
-            mario_action_timer=m.read_u16(A.MARIO_ACTION_TIMER),
-            mario_action_state=m.read_u16(A.MARIO_ACTION_STATE),
-            num_stars=m.read_s16(A.MARIO_NUM_STARS),
-            last_completed_course=m.read_s8(A.LAST_COMPLETED_COURSE),
-            last_completed_star=m.read_s8(A.LAST_COMPLETED_STAR),
-            igt_overall=m.read_u16(A.USAMUNE_OVERALL),
-            igt_result=m.read_u16(A.USAMUNE_STAR_RESULT),
-            curr_level=m.read_s16(A.CURR_LEVEL),
-            particle_flags=m.read_u32(A.MARIO_PARTICLE_FLAGS),
-            curr_area=m.read_s16(A.CURR_AREA),
-            pending_warp_op=m.read_u16(A.PENDING_WARP_OP),
-            delayed_warp_timer=m.read_s16(A.DELAYED_WARP_TIMER),
-            warp_dest_type=m.read_u8(A.WARP_DEST_TYPE),
-            warp_dest_level=m.read_u8(A.WARP_DEST_LEVEL),
-            warp_dest_area=m.read_u8(A.WARP_DEST_AREA),
-            warp_dest_node=m.read_u8(A.WARP_DEST_NODE),
+            global_timer=m.read_u32(at["global_timer"]),
+            mario_action=m.read_u32(at["mario_action"]),
+            mario_action_timer=m.read_u16(at["mario_action_timer"]),
+            mario_action_state=m.read_u16(at["mario_action_state"]),
+            num_stars=m.read_s16(at["num_stars"]),
+            last_completed_course=m.read_s8(at["last_completed_course"]),
+            last_completed_star=m.read_s8(at["last_completed_star"]),
+            igt_overall=m.read_u16(at["igt_overall"]),
+            igt_result=m.read_u16(at["igt_result"]),
+            curr_level=m.read_s16(at["curr_level"]),
+            particle_flags=m.read_u32(at["particle_flags"]),
+            curr_area=m.read_s16(at["curr_area"]),
+            pending_warp_op=m.read_u16(at["pending_warp_op"]),
+            delayed_warp_timer=m.read_s16(at["delayed_warp_timer"]),
+            warp_dest_type=m.read_u8(at["warp_dest_type"]),
+            warp_dest_level=m.read_u8(at["warp_dest_level"]),
+            warp_dest_area=m.read_u8(at["warp_dest_area"]),
+            warp_dest_node=m.read_u8(at["warp_dest_node"]),
             landmark_behaviour=landmark_behaviour,
+            landmark_symbol=(self._symbol(landmark_behaviour)
+                             if landmark_behaviour else ""),
             landmark_home=landmark_home,
             landmark_pos=landmark_pos,
             caused=self._caused_states(),

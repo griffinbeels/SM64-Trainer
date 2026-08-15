@@ -47,9 +47,11 @@ from collections import defaultdict
 from pathlib import Path
 
 from sm64_events.memory import addresses as A
+from sm64_events.memory.layout import layout_for
 from sm64_events.memory.objects import pool_slot, slot_address
 from sm64_events.memory.pj64 import Pj64Memory
 
+LAYOUT = layout_for("us")   # which ROM's addresses; --version arrives with the sync work
 CAPTURE_PATH = Path("data/object_probe.jsonl")
 
 # How much of gMarioState to scan for object pointers. Wide on purpose: a
@@ -192,7 +194,7 @@ def is_object_pointer(value: int) -> bool:
 
 
 def sample_mario(mem) -> tuple[bytes, dict[int, int]]:
-    blob = mem.read_block(A.MARIO_STRUCT, MARIO_SCAN_BYTES)
+    blob = mem.read_block(LAYOUT.mario_struct, MARIO_SCAN_BYTES)
     pointers = {}
     for offset in range(0, MARIO_SCAN_BYTES, 4):
         value = int.from_bytes(blob[offset:offset + 4], "big")
@@ -208,8 +210,8 @@ def capture_record(mem, blob, offset, pointer, frame, epoch) -> dict:
     return {
         "frame": frame,
         "epoch": epoch,
-        "level": mem.read_s16(A.CURR_LEVEL),
-        "area": mem.read_s16(A.CURR_AREA),
+        "level": mem.read_s16(LAYOUT.curr_area and LAYOUT.curr_level),
+        "area": mem.read_s16(LAYOUT.curr_area),
         "action": action,
         "action_name": ACTION_NAMES.get(action, f"{action:#010x}"),
         "field": offset,
@@ -241,11 +243,11 @@ def watch(out_path: Path) -> int:
 
     while True:
         time.sleep(1 / 120)
-        frame = mem.read_u32(A.GLOBAL_TIMER)
+        frame = mem.read_u32(LAYOUT.global_timer)
         if frame == previous_frame:
             continue
         blob, pointers = sample_mario(mem)
-        place = (mem.read_s16(A.CURR_LEVEL), mem.read_s16(A.CURR_AREA))
+        place = (mem.read_s16(LAYOUT.curr_level), mem.read_s16(LAYOUT.curr_area))
         if frame < previous_frame or (previous_place and place != previous_place):
             epoch += 1
             previous_pointers = {}
@@ -389,7 +391,7 @@ def pool_watch(out_path: Path) -> int:
 
     while True:
         time.sleep(1 / 120)
-        frame = mem.read_u32(A.GLOBAL_TIMER)
+        frame = mem.read_u32(LAYOUT.global_timer)
         if frame == previous_frame:
             continue
         backward = frame < previous_frame
@@ -397,11 +399,11 @@ def pool_watch(out_path: Path) -> int:
         if backward:
             previous.clear()          # reload: the pool is a different pool
             continue
-        level = mem.read_s16(A.CURR_LEVEL)
-        area = mem.read_s16(A.CURR_AREA)
+        level = mem.read_s16(LAYOUT.curr_level)
+        area = mem.read_s16(LAYOUT.curr_area)
         # ONE read of the whole pool, then decode locally: 240 slots x 4
         # separate reads would cost more than the poll interval.
-        pool = mem.read_block(A.OBJECT_POOL, A.OBJECT_COUNT * A.OBJECT_SIZE)
+        pool = mem.read_block(LAYOUT.object_pool, A.OBJECT_COUNT * A.OBJECT_SIZE)
         for slot in range(A.OBJECT_COUNT):
             base = slot * A.OBJECT_SIZE
             behaviour = int.from_bytes(
@@ -422,7 +424,7 @@ def pool_watch(out_path: Path) -> int:
                     "frame": frame, "level": level, "area": area, "slot": slot,
                     "behaviour": behaviour, "field": name,
                     "was": was, "now": value,
-                    "mario_action": mem.read_u32(A.MARIO_ACTION),
+                    "mario_action": mem.read_u32(LAYOUT.mario_struct + A.MARIO_ACTION_OFF),
                     "interact_type": int.from_bytes(
                         pool[base + A.OBJECT_INTERACT_TYPE:
                              base + A.OBJECT_INTERACT_TYPE + 4], "big"),

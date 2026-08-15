@@ -92,10 +92,12 @@ def _explode(before, now) -> bool:
 
 _RULES = {"press": _press, "attacked": _attacked, "explode": _explode}
 
-# behaviour pointer -> (kind, rule fn); a registry row naming an unknown rule
-# fails HERE, at import, not silently at the first press.
-_WATCHED = {pointer: (kind, _RULES[rule])
-            for pointer, kind, rule in A.CAUSED_BEHAVIOURS.values()}
+# behaviour SYMBOL -> (kind, rule fn); a registry row naming an unknown rule
+# fails HERE, at import, not silently at the first press. The snapshot reader
+# resolves this ROM's pointers to symbols (memory/behaviours.py), so nothing
+# here knows which version is running.
+_WATCHED = {symbol: (kind, _RULES[rule])
+            for symbol, (kind, rule) in A.CAUSED_BEHAVIOURS.items()}
 
 
 class CausedMomentDetector:
@@ -141,9 +143,9 @@ class CausedMomentDetector:
         fired = []
         for state in curr.caused:
             before = before_by_slot.get(state.slot)
-            if before is None or before.behaviour != state.behaviour:
+            if before is None or before.symbol != state.symbol:
                 continue    # first sight, or slot reuse — not a transition
-            kind, rule = _WATCHED[state.behaviour]
+            kind, rule = _WATCHED[state.symbol]
             if rule(before, state):
                 fired.append((kind, before, state))
         if len(fired) >= self.BURST_MIN:
@@ -161,7 +163,7 @@ class CausedMomentDetector:
         igt_frames = reading + display_lag_for(kind)
         found = Landmark(
             level=curr.curr_level, area=curr.curr_area,
-            behaviour=state.behaviour,
+            symbol=state.symbol, behaviour=state.behaviour,
             home=tuple(int(round(axis)) for axis in state.home),
             pos=tuple(int(round(axis)) for axis in before.pos))
         return Event(type="moment_reached", frame=curr.global_timer,

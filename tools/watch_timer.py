@@ -13,10 +13,12 @@ import sys
 import time
 
 from sm64_events.detectors.star_grab import format_igt
-from sm64_events.memory import addresses as A
+from sm64_events.memory.layout import layout_for, version_from_argv
 from sm64_events.memory.pj64 import Pj64Memory
 
-DEFAULT_WATCH = [(A.USAMUNE_OVERALL, "u16"), (A.USAMUNE_STAR_RESULT, "u16")]
+LAYOUT = layout_for(version_from_argv())      # --version jp reads the JP layout
+
+DEFAULT_WATCH = [(LAYOUT.usamune_overall, "u16"), (LAYOUT.usamune_star_result, "u16")]
 
 
 def parse_spec(spec: str) -> tuple[int, str]:
@@ -35,7 +37,7 @@ def main() -> None:
     headers = ["level"] + [f"{addr:#010x}/{kind}" for addr, kind in watch]
     print("  ".join(h.rjust(18) for h in headers))
     while True:
-        cells = [str(mem.read_s16(A.CURR_LEVEL))]
+        cells = [str(mem.read_s16(LAYOUT.curr_level))]
         for addr, kind in watch:
             v = mem.read_u32(addr) if kind == "u32" else mem.read_u16(addr)
             cells.append(f"{format_igt(v)} {v}")

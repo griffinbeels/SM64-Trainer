@@ -73,13 +73,14 @@ import time
 from sm64_events.memory.addresses import (ACT_READING_AUTOMATIC_DIALOG,
                                            ACT_READING_NPC_DIALOG,
                                            ACT_WAITING_FOR_DIALOG,
-                                           BOX_OPENS_AT_STATE, CURR_AREA,
-                                           CURR_LEVEL, DIALOG_ACTIONS,
-                                           GLOBAL_TIMER, MARIO_ACTION,
-                                           MARIO_ACTION_STATE,
-                                           MARIO_ACTION_TIMER,
-                                           USAMUNE_OVERALL)
+                                           BOX_OPENS_AT_STATE, DIALOG_ACTIONS,
+                                           MARIO_ACTION_OFF,
+                                           MARIO_ACTION_STATE_OFF,
+                                           MARIO_ACTION_TIMER_OFF)
+from sm64_events.memory.layout import layout_for, version_from_argv
 from sm64_events.memory.pj64 import Pj64Memory
+
+LAYOUT = layout_for(version_from_argv())      # --version jp reads the JP layout
 
 READING_ACTIONS = frozenset(
     {ACT_READING_AUTOMATIC_DIALOG, ACT_READING_NPC_DIALOG})
@@ -101,13 +102,13 @@ TRACE_FRAMES = 300
 
 def sample(mem) -> dict:
     return {
-        "timer": mem.read_u32(GLOBAL_TIMER),
-        "action": mem.read_u32(MARIO_ACTION),
-        "action_state": mem.read_u16(MARIO_ACTION_STATE),
-        "action_timer": mem.read_u16(MARIO_ACTION_TIMER),
-        "level": mem.read_s16(CURR_LEVEL),
-        "area": mem.read_s16(CURR_AREA),
-        "counter": mem.read_u16(USAMUNE_OVERALL),
+        "timer": mem.read_u32(LAYOUT.global_timer),
+        "action": mem.read_u32(LAYOUT.mario_struct + MARIO_ACTION_OFF),
+        "action_state": mem.read_u16(LAYOUT.mario_struct + MARIO_ACTION_STATE_OFF),
+        "action_timer": mem.read_u16(LAYOUT.mario_struct + MARIO_ACTION_TIMER_OFF),
+        "level": mem.read_s16(LAYOUT.curr_level),
+        "area": mem.read_s16(LAYOUT.curr_area),
+        "counter": mem.read_u16(LAYOUT.usamune_overall),
     }
 
 

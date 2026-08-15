@@ -145,3 +145,20 @@ _LAYOUTS = {"us": US, "jp": JP}
 def layout_for(version: str) -> Layout:
     """The only door. Raises KeyError for a version this tracker does not know."""
     return _LAYOUTS[version]
+
+
+def version_from_argv(argv: list[str] | None = None, default: str = "us") -> str:
+    """`--version jp` (or `--version=jp`) out of a tool's argv, else
+    `SM64_VERSION` from the environment, else `default`. Every memory-reading
+    tool under tools/ takes its layout through this so they all spell the
+    flag the same way; a tool that also uses argparse declares the same
+    option there for --help and ignores its value."""
+    import os
+    import sys
+    args = sys.argv[1:] if argv is None else argv
+    for index, arg in enumerate(args):
+        if arg == "--version" and index + 1 < len(args):
+            return args[index + 1]
+        if arg.startswith("--version="):
+            return arg.split("=", 1)[1]
+    return os.environ.get("SM64_VERSION", default)
