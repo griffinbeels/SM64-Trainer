@@ -165,8 +165,8 @@ export function markerPosition(ladderSeconds, timeCs) {
 
 const fmtScore = (score) => (score == null ? "—" : score.toFixed(1));
 
-// Deliberate mirror of ranks/classify.py::display_cs (keep the two in
-// lockstep, same as fmtIgt mirrors core/timefmt.py in format.js): frames ->
+// Deliberate mirror of ranks/classify.py::display_cs (pinned by
+// tests/test_cross_language_parity.py, same as fmtIgt mirrors format.js): frames ->
 // DISPLAYED centiseconds (30fps quantized), so the marker's position never
 // disagrees with the time fmtIgt shows for the same frame count (project
 // rule 7 / Usamune IGT clock). This is pure quantization arithmetic, not a

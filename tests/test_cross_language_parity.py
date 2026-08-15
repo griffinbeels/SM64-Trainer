@@ -492,6 +492,47 @@ def test_library_subdivisions_agree_with_the_scoring_curve():
         f"division edges. First few: {edge_disagreements[:5]}")
 
 
+# --- 10. the displayed-centisecond quantisation ------------------------------
+
+STANDARDS_JS = UI / "components" / "standards.js"
+
+
+def function_declaration(path: Path, name: str) -> str:
+    """The source text of one top-level `function NAME(...) {...}` declaration
+    — `declaration()`'s sibling for a mirror written as a plain function.
+    Comment-stripped for the same reason."""
+    code = strip_comments(path.read_text(encoding="utf-8"))
+    match = re.search(rf"^(?:export\s+)?function {name}\([^)]*\) \{{.*?^\}}$",
+                      code, re.M | re.S)
+    assert match, f"{path.name}: no top-level `function {name}(...)` found"
+    return match.group(0)
+
+
+def test_display_centiseconds_agree():
+    """standards.js::displayCs mirrors ranks/classify.py::display_cs — the
+    frames -> displayed-centiseconds quantisation RANKS ARE GRADED ON
+    (classify compares displayed centiseconds so a rank can never disagree
+    with the shown time). The mirror exists so the standards table's
+    you-are-here marker needs no round trip; until 2026-08-14 it was held
+    together by the same "keep the two in lockstep" comment every other row
+    here replaced, which is the exact state this file exists to end."""
+    from sm64_events.ranks.classify import display_cs
+
+    js = run_node(
+        f"{function_declaration(STANDARDS_JS, 'displayCs')}\n"
+        f"const frames = {json.dumps(IGT_FRAMES)};\n"
+        "console.log(JSON.stringify(frames.map(displayCs)));")
+    python = [display_cs(frames) for frames in IGT_FRAMES]
+    disagreements = [(frames, py, node)
+                     for frames, py, node in zip(IGT_FRAMES, python, js)
+                     if py != node]
+    assert not disagreements, (
+        "ranks/classify.py::display_cs and standards.js::displayCs disagree "
+        f"at (frames, python, js): {disagreements}. The standards table's "
+        "you-are-here marker and its bracket times would place a run at a "
+        "different rank than the server grades it.")
+
+
 # --- the guards themselves --------------------------------------------------
 
 def test_the_guards_can_still_fail():
@@ -500,6 +541,7 @@ def test_the_guards_can_still_fail():
     assert "RANK_MODE_OPTIONS" in declaration(RANKS_JS, "RANK_MODE_OPTIONS")
     assert "keyOf" in declaration(STATMENU_JS, "keyOf")
     assert "unattributed" in declaration(MARKS_JS, "CAVEATS")
+    assert "Math.floor" in function_declaration(STANDARDS_JS, "displayCs")
 
     commented = UI / "sample.js"          # never read; suffix drives the strip
     text = ("// const keyOf = (s) => s.key + ':OLD';\n"

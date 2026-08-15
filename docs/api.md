@@ -311,6 +311,7 @@ PJ64 must run windowed (exclusive fullscreen cannot be captured).
 - `GET  /api/replay/settings` — `{retention_s, max_buffer_bytes, pre_pad_s, post_pad_s, save_root, saved_bytes}`
 - `PUT  /api/replay/settings` — body `{retention_s|null, max_buffer_bytes, pre_pad_s?, post_pad_s?}` (null retention = whole session; omitted pads = unchanged); persists + applies immediately (shrinking evicts oldest footage now); 409 outside 60 s–24 h / 1 GiB–1 TiB / pads 0–10 s
 - `POST /api/attempts/{id}/replay` — cut (or reuse) the attempt's clip → `{clip_url, duration_s, truncated, fps, game_fps, source, saved_path}` (fps = encoded rate; game_fps = 30 fps SM64 logic, the frame-step unit; `source` is `buffer` or `saved`; `saved_path` non-null whenever a saved file exists). Falls back to the saved file when the buffer can't produce the clip; clips saved before 2026-06-12 lack a metadata sidecar → `duration_s` null, `truncated` false
+- `GET  /api/replay/available` — `{available: [attempt_id, …]}`: every attempt whose clip is still cuttable (in the ring buffer) or already saved; the Compare tab reads it to badge which runs can load a video
 - `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly)
 - `GET  /api/replay/saved/{attempt_id}` — a SAVED attempt's MP4 (same Range support); 404 when that attempt has no saved file
 - `POST /api/attempts/{id}/replay/save` — copy to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` plus a `.json` metadata sidecar → `{path, truncated}`. Idempotent: an already-saved attempt returns its existing file (delete it in Explorer first to re-save with new padding)
@@ -406,6 +407,7 @@ example video for the active strategy (auto-selected, offered as a one-click
 | `GET` | `/api/compare/view` | `?entity=<key>&strat=<tag>` | Saved comparisons for one (entity, strat) with servable `clip_url`s, the resolved auto-pick, and a rank-standard suggestion when nothing is saved yet |
 | `POST` | `/api/compare/import` | `{entity_key, strat, name, source_kind: "youtube"\|"file", source_ref}` | Start a background import job (download/copy → ffmpeg-normalize → content-addressed cache) → `{job_id}` |
 | `GET` | `/api/compare/import/{job_id}` | — | Poll job status: `{state: "running"\|"done"\|"error", progress, message, comparison?}` |
+| `POST` | `/api/compare/adopt` | `{source_id, strat}` | Copy another strategy's saved comparison into `strat` for the same entity (no re-download — the cache is content-addressed) and return the row with its `clip_url`. Dedup'd: adopting one already present under that strat just returns it |
 | `POST` | `/api/compare/upload` | `?entity_key=&strat=&name=&filename=`, raw video bytes as the request body | Start an import job from a browser-uploaded file → `{job_id}` |
 | `PUT` | `/api/compare/videos/{id}` | `{name?, in_frame?, out_frame?, touch?}` | Edit a saved comparison (rename, set sync in/out frames, or bump `last_used_utc`). Broadcasts `comparisons_changed`. |
 | `DELETE` | `/api/compare/videos/{id}` | — | Delete a saved comparison; evicts its cached file once no other comparison shares it. Broadcasts `comparisons_changed`. |
