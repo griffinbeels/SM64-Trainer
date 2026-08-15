@@ -284,7 +284,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
       setJpOpen((prev) => new Set(prev).add(strat));
       return;
     }
-    if ((data.jp_strategies || []).includes(strat)) {
+    if ((data.clearable_jp_strategies || []).includes(strat)) {
       if (!window.confirm("Clear this strategy's JP times? US times stay.")) {
         // The native checkbox already flipped itself unchecked before this
         // handler ran; a fresh Set (same contents) forces a re-render so
@@ -352,14 +352,16 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   const jpFlagged = data
     ? new Set([...(data.jp_strategies || []), ...jpOpen])
     : new Set();
-  // A sheet-fitted JP ladder (Ultimate-Sheet-derived, never the user's own
-  // file) cannot be cleared through this editor — clear_jp is a no-op for
-  // it server-side. Disabled rather than hidden, so it stays visible and
-  // its title says why.
-  const sheetFittedJp = data
-    ? new Set((data.fitted_strategies || [])
-        .filter((strat) => (data.jp_strategies || []).includes(strat)))
-    : new Set();
+  // Whose JP overlay is HIS to clear: the server's own list (a strategy
+  // whose JP times sit in his file -- the vetted seed's annotations and every
+  // typed JP time both do). A sheet-fitted JP ladder is not in it, so its
+  // checkbox is disabled with the reason where the click lands, rather than
+  // offering a clear that would no-op. Read from the payload, not derived
+  // here from `fitted_strategies` (which is about the BASE ladder and gave a
+  // false "cannot be cleared" the moment a JP time was typed onto a fitted
+  // strategy -- whole-branch review, 2026-08-15).
+  const clearableJp = data ? new Set(data.clearable_jp_strategies || []) : new Set();
+  const lockedJp = (strat) => jpFlagged.has(strat) && !clearableJp.has(strat) && !jpOpen.has(strat);
 
   // Columns = store strategies (community order first) + every other strat
   // this section knows (registered / used on attempts — sec.strategies from
@@ -519,15 +521,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
     </div></div>` : null}
     ${data ? html`<div class="stdbody">
       <div class="stdtools">
-        <button class=${editing ? "is-selected" : ""} onclick=${() => {
-            // The editor writes explicit US and JP columns (below), so
-            // entering it forces the SHOWN version to US — honest and
-            // unambiguous: the "US" sub-column then always reads
-            // data.strategies straight, never a version-resolved guess.
-            const next = !editing;
-            setEditing(next);
-            if (next) setShownVersion("us");
-          }}>
+        <button class=${editing ? "is-selected" : ""} onclick=${() => setEditing(!editing)}>
           <${Icon} name=${editing ? "check" : "edit"} size=${15} /> ${editing ? "Done editing" : "Edit"}
         </button>
         ${editing ? html`<button onclick=${() => setShowAdd(true)}>
@@ -537,7 +531,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
           <${Icon} name="restart" size=${15} /> Community defaults
         </button>
         <${VersionSwitch} value=${version}
-            onChange=${(next) => { if (!editing) setShownVersion(next); }}
+            onChange=${setShownVersion}
             note=${data.version !== data.grading_version
               ? `Viewing ${data.version.toUpperCase()} standards · you are graded on ${data.grading_version.toUpperCase()}`
               : null} />
@@ -556,15 +550,17 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
           style=${bandStyle(strat)}>${headVid(strat)
           ? html`<a href=${headVid(strat)} target="_blank" rel="noopener" title="fastest-time video">${colHead(strat)}</a>`
           : colHead(strat)}${editing ? html` <button class="candx" title=${isSeeded(strat) ? "clear this strategy's standards" : "delete this strategy"} onclick=${() => delStrat(strat)}>×</button>
-          <label class="std-jp-toggle" title=${sheetFittedJp.has(strat)
+          <label class="std-jp-toggle" title=${lockedJp(strat)
               ? "this strategy's JP ladder comes from the Ultimate Sheet and cannot be cleared here"
               : "US and JP timed differently for this strategy"}>
             <input type="checkbox" checked=${jpFlagged.has(strat)}
-                disabled=${sheetFittedJp.has(strat)}
+                disabled=${lockedJp(strat)}
                 onchange=${(e) => toggleJp(strat, e.target.checked)} /> JP differs
           </label>` : ""}
           ${marker && strat === activeStrat ? html`<span class="std-you-badge"
-              title="your current time and score on this ladder">◀ you · ${fmtIgtShort(basisFrames)}${entityScore != null ? ` · ${fmtScore(entityScore)}` : ""}</span>` : ""}</th>`)}</tr></thead>
+              title=${data.version !== data.grading_version
+                ? `your current time, placed on the ${data.version.toUpperCase()} ladder shown here · the score is your graded (${data.grading_version.toUpperCase()}) one`
+                : "your current time and score on this ladder"}>◀ you · ${fmtIgtShort(basisFrames)}${entityScore != null ? ` · ${fmtScore(entityScore)}` : ""}</span>` : ""}</th>`)}</tr></thead>
         <tbody>
         ${ROW_ORDER.map((rank) => html`<tr key=${rank}>
           <!-- Large flat surface -> the tier's own gradient where it has
@@ -645,19 +641,23 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
                   : capOneLabel}</td>`;
             }
             // Only a JP-FLAGGED strategy grows the second sub-column — every
-            // other strategy keeps the single field it always had. `v` is
-            // already the US-resolved time (editing forces shownVersion to
-            // "us", above), so it is correct read straight rather than
-            // re-derived from a `version` check here.
+            // other strategy keeps the single field it always had. The
+            // editor reads the payload's EXPLICIT per-version ladders
+            // (`strategies_us` / `strategies_jp`), never the version-resolved
+            // `strategies`, so the switch stays live while editing and the
+            // US field can never quietly show a JP-resolved time (whole-
+            // branch review, 2026-08-15). An unflagged strategy is one
+            // ladder for both versions, so its single field reads US.
+            const usSeconds = ((data.strategies_us || {})[strat] || {})[rank];
             const jpSeconds = jpFlagged.has(strat)
-              ? (data.strategies_jp[strat] || {})[rank] : null;
+              ? ((data.strategies_jp || {})[strat] || {})[rank] : null;
             return html`<td class=${cellClass} style=${bandStyle(strat)}>
               ${editing
                 ? html`<span class=${`stdcell${jpFlagged.has(strat) ? " stdcell-versions" : ""}`}>
                     ${jpFlagged.has(strat)
                       ? html`<span class="stdcell-version">
                           <span class="stdcell-version-label">US</span>
-                          <${TimeFields} seconds=${v} compact
+                          <${TimeFields} seconds=${usSeconds} compact
                               label=${`${capName(rank)} ${strat} US`}
                               onCommit=${(next) => { if (next != null) put(strat, rank, next); }} />
                         </span>
@@ -667,7 +667,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
                               label=${`${capName(rank)} ${strat} JP`}
                               onCommit=${(next) => { if (next != null) put(strat, rank, next, "jp"); }} />
                         </span>`
-                      : html`<${TimeFields} seconds=${v} compact
+                      : html`<${TimeFields} seconds=${usSeconds} compact
                           label=${`${capName(rank)} ${strat}`}
                           onCommit=${(next) => { if (next != null) put(strat, rank, next); }} />`}
                     <button class="vidbtn" title=${`${userVid(strat, rank) ? "edit" : "add"} ${capName(rank)} example video`}

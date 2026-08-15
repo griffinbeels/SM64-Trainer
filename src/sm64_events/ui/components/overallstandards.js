@@ -68,7 +68,7 @@ const FLOOR_NUMERAL = DIVISION_NUMERALS[0];
  *          every other ◀ you pin on this page uses, rather than a second
  *          grader that could put this table and those in different tiers.
  */
-export function OverallStandards({ entity, label, pbCs = null }) {
+export function OverallStandards({ entity, label, pbCs = null, version = null }) {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState(null);
   const [failed, setFailed] = useState(false);
@@ -82,11 +82,15 @@ export function OverallStandards({ entity, label, pbCs = null }) {
     if (!entity) { setData(null); setFailed(false); return undefined; }
     let cancelled = false;
     setFailed(false);
-    getJSON(`/api/ranks/standards?entity=${enc(entity)}`)
+    // `version` is the Library page's own JP/US switch (2026-08-15): the
+    // one ladder for the whole star must re-file with the sections below it,
+    // or the page shows two versions at once with nothing saying why.
+    const versionQuery = version ? `&version=${enc(version)}` : "";
+    getJSON(`/api/ranks/standards?entity=${enc(entity)}${versionQuery}`)
       .then((result) => { if (!cancelled) setData(result); })
       .catch(() => { if (!cancelled) { setData(null); setFailed(true); } });
     return () => { cancelled = true; };
-  }, [entity]);
+  }, [entity, version]);
 
   const overall = (data && data.overall) || {};
   const owners = (data && data.overall_owners) || {};

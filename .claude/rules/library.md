@@ -99,8 +99,15 @@ in the hero** (`ui/components/versionswitch.js`, mounted by `library.js`,
 threaded to every `Section` as a prop; the per-section `library-jp-toggle`
 chip was retired 2026-08-15 — "just have a single page switch"). It defaults
 to the effective version off the session view and grades nothing: every
-section's ladder, entry filter, bands and standing read the page's version.
-Do not build mode detection in this zone.
+section's ladder, entry filter, bands and standing read the page's version,
+the Overall Rank Standards block refetches `?version=`, and the hero switch
+carries "Viewing JP standards · you are graded on US" when they differ. A
+MATCHED strategy's standing is the SERVED one at the graded version and is
+re-walked against the section's displayed ladder only when the page shows
+the other (`librarymodel.js::matchedStanding`, node-proved) — the sheet's
+fitted ladder differs from the grading ladder for every matched approach, so
+an unconditional re-walk contradicted the practice card's medal (review
+2026-08-15). Do not build mode detection in this zone.
 
 ## Owed on the Overall Rank Standards section, both measured 2026-08-10
 

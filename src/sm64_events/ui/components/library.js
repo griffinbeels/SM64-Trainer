@@ -488,7 +488,10 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
         </div>
       </div>
       <div class="workshop-hero-actions">
-        <${VersionSwitch} value=${version} onChange=${setPickedVersion} />
+        <${VersionSwitch} value=${version} onChange=${setPickedVersion}
+            note=${version !== effectiveVersion
+              ? `Viewing ${version.toUpperCase()} standards · you are graded on ${effectiveVersion.toUpperCase()}`
+              : null} />
         <button type="button" class="primary-button" onclick=${refresh}
             disabled=${refreshState === "loading"}>
           <${Icon} name="restart" size=${15} />
@@ -515,7 +518,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
             <${Icon} name="chevron" size=${15} /> Back
           </button>
           <${LibraryTarget} t=${t} targets=${entry ? entry.rows : []}
-              version=${version}
+              version=${version} gradingVersion=${effectiveVersion}
               onAdd=${addToTray} trayKeys=${trayKeys}
               focusStrat=${entry ? entry.focusStrat : null}
               focusTier=${entry ? entry.focusTier : null}

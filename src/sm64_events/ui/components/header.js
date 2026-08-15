@@ -167,8 +167,8 @@ export function Header({ t, settingsOpen, closeSettings }) {
   // interpolation across a line break fuses words together (ui-core.md), and
   // this sentence has to wrap in the drawer's narrow column.
   const gameVersionNote = gameMode
-    ? `Graded on ${gameMode.effective.toUpperCase()} standards. `
-      + "Auto-detect is US on the emulator."
+    ? `Graded on ${gameMode.effective.toUpperCase()} standards.`
+      + (gameMode.version === "auto" ? " Auto-detect is US on the emulator." : "")
     : null;
 
   return html`<header class="context-shell">
@@ -201,7 +201,7 @@ export function Header({ t, settingsOpen, closeSettings }) {
              hook, so the two can never disagree about whose turn it is. */""}
         <${RouteRankCard} marelo=${mareloTurn.marelo} routes=${t.routes}
             activeRouteId=${t.activeRouteId} onPickRoute=${pickRouteOrWarn}
-            identity=${`${mareloTurn.marelo ? mareloTurn.marelo.label : ""}|${v ? v.rank_mode : ""}`} />
+            identity=${`${mareloTurn.marelo ? mareloTurn.marelo.label : ""}|${v ? v.rank_mode : ""}|${v && v.game_version ? v.game_version.effective : ""}`} />
       </div>
 
       ${/* The Clock card left the bar 2026-08-08 (user): the default is

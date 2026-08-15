@@ -177,11 +177,11 @@ def test_choosing_a_version_applies_live_and_ends_back_on_auto(
     _pick_version(page, "us")
     state = _wait_for_game_state(
         page, "state.value === 'us' "
-              "&& !state.notes.some((n) => n.includes('verified JP addresses'))")
+              "&& !state.notes.some((n) => n.includes('verified JP addresses'))"
+              "&& !state.notes.some((n) => n.includes('Auto-detect is US'))")
     assert state["value"] == "us", state
-    assert state["notes"] == [
-        "Graded on US standards. Auto-detect is US on the emulator.",
-    ], state["notes"]
+    # An explicit choice earns no Auto-detect explainer (review nit, 2026-08-15).
+    assert state["notes"] == ["Graded on US standards."], state["notes"]
     server_state = _get_mode(game_version_server)
     assert server_state["version"] == "us", server_state
     assert server_state["unsupported"] is False, server_state
@@ -189,9 +189,11 @@ def test_choosing_a_version_applies_live_and_ends_back_on_auto(
     # auto -> US again (the only ROM the emulator path supports), and the
     # server agrees -- leaves the fixture on auto for whatever runs next.
     _pick_version(page, "auto")
+    # Wait for the NOTE, not just the select: the native select shows the
+    # pick synchronously while the note follows the PUT's response.
     state = _wait_for_game_state(
         page, "state.value === 'auto' "
-              "&& !state.notes.some((n) => n.includes('verified JP addresses'))")
+              "&& state.notes.some((n) => n.includes('Auto-detect is US'))")
     assert state["value"] == "auto", state
     assert state["notes"] == [
         "Graded on US standards. Auto-detect is US on the emulator.",

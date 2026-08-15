@@ -212,6 +212,56 @@ def test_default_follows_the_effective_version_setting(library_server):
         assert restored["effective"] == "us", restored
 
 
+def test_showing_the_other_version_says_so_and_refiles_the_overall_block(
+        library_page, library_server):
+    """Whole-branch review 2026-08-15, findings 5 + 6: the hero switch carries
+    the same "Viewing JP standards · you are graded on US" note the standards
+    panel does (explain, never dim), and the Overall Rank Standards block above
+    the sections re-fetches on the page's version rather than sitting on the
+    grading ladder while every section below it re-files under JP."""
+    library_page.wait_for(".version-switch", timeout_ms=10000)
+    assert library_page.evaluate(
+        "document.querySelector('.workshop-hero .version-switch-note')") is None
+    library_page.evaluate(CLICK_JP)
+    library_page.wait_ms(400)
+    note = library_page.evaluate(
+        "(document.querySelector('.workshop-hero .version-switch-note') || {}).textContent")
+    assert note == "Viewing JP standards · you are graded on US", note
+    # The overall block's OWN request named the version -- read it off the
+    # page's resource timeline rather than inferring it from a rendered value
+    # (the fixture star's overall ladder need not differ between versions).
+    requests = library_page.evaluate("""
+      performance.getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .filter((name) => name.includes('/api/ranks/standards?'))
+    """)
+    assert any("version=jp" in name for name in requests), requests
+    library_page.evaluate(CLICK_US)
+    library_page.wait_ms(400)
+    assert library_page.evaluate(
+        "document.querySelector('.workshop-hero .version-switch-note')") is None
+
+
+def test_a_matched_strategys_standing_is_the_served_one_at_the_graded_version(
+        library_page):
+    """Finding 4: at the graded version the section keeps the SERVED standing
+    (graded on the standards ladder, in the active rank mode) rather than
+    re-walking the PB against the sheet's own ladder -- the two ladders differ
+    for every matched approach in the shipped snapshot, so a re-walk here
+    would contradict the practice card's medal. Round-tripping the switch
+    must therefore land back on the identical badge."""
+    library_page.wait_for(".version-switch", timeout_ms=10000)
+    read = ("Array.from(document.querySelectorAll('.library-section .library-your-standing'))"
+            ".map((el) => el.textContent.trim())")
+    before = library_page.evaluate(read)
+    assert before, "no standing badges rendered on the target page"
+    library_page.evaluate(CLICK_JP)
+    library_page.wait_ms(400)
+    library_page.evaluate(CLICK_US)
+    library_page.wait_ms(400)
+    assert library_page.evaluate(read) == before
+
+
 def test_hero_does_not_overflow_at_the_minimum_supported_width(library_page):
     """The supported minimum width (CLAUDE.md, 2026-07-29): the version
     switch now lives in the hero beside Refresh (`.workshop-hero-actions`),

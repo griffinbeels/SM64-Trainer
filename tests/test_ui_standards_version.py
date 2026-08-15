@@ -309,7 +309,7 @@ def test_an_open_panel_follows_a_live_setting_change(fixture_data):
 
 # ---- edit mode: a per-strategy JP toggle, and the editor writes JP times
 
-def test_every_strategy_column_has_a_jp_toggle_in_edit_mode(opened_page, fixture_data):
+def test_every_strategy_column_has_a_jp_toggle_in_edit_mode(opened_page, fixture_data, server):
     n_toggles = opened_page.evaluate("""
       Array.from(document.querySelectorAll('.stdtable thead tr:last-child th'))
         .filter((th) => th.querySelector('.std-jp-toggle')).length
@@ -340,11 +340,43 @@ def test_every_strategy_column_has_a_jp_toggle_in_edit_mode(opened_page, fixture
         f"expected one .std-jp-toggle per strategy column: "
         f"{n_toggles_editing} toggles for {n_strats} strategies")
 
-    # Entering edit mode forces the shown version to US (the editor writes
-    # explicit US and JP columns, never a version-resolved guess).
+    # The editor reads explicit per-version ladders, so entering it neither
+    # forces nor freezes the switch: flip to JP mid-edit and a JP-flagged
+    # strategy's US field still shows its US time (whole-branch review
+    # 2026-08-15 -- an inert switch was a dead control with no explanation).
+    jp_strat = fixture_data["jp_strat"]
+    us_time = _get_standards(server)["strategies"][jp_strat]["Mario"]
+    opened_page.evaluate(_click_segment_js("JP"))
+    opened_page.wait_for(".stdpanel .version-switch-note", timeout_ms=10000)
+    opened_page.evaluate(SETTLE)
     state = opened_page.evaluate(_read_switch_js())
     pressed = [seg["text"] for seg in state["segs"] if seg["pressed"] == "true"]
-    assert pressed == ["US"], f"editing should force the shown version to US: {state}"
+    assert pressed == ["JP"], f"the switch must stay live while editing: {state}"
+    us_field = opened_page.evaluate(f"""
+      (() => {{
+        const th = Array.from(document.querySelectorAll('.stdtable thead tr:last-child th'))
+          .findIndex((h) => (h.textContent || '').trim().startsWith({jp_strat!r}));
+        const rows = Array.from(document.querySelectorAll('.stdtable tbody tr'));
+        const row = rows.find((r) => r.querySelector('.std-tier-name')
+          && r.querySelector('.std-tier-name').textContent.trim() === 'Mario');
+        const cell = row.children[th];
+        const us = cell.querySelector('.stdcell-version .stdcell-version-label');
+        const fields = Array.from(cell.querySelectorAll('.stdcell-version'))[0]
+          .querySelectorAll('input');
+        return {{ label: us && us.textContent.trim(),
+                  digits: Array.from(fields).map((f) => f.value).join(':') }};
+      }})()
+    """)
+    assert us_field["label"] == "US", us_field
+    seconds = float(us_time)
+    mins, rem = divmod(seconds, 60)
+    secs = int(rem)
+    cs = int(round((rem - secs) * 100))
+    shown_minutes, shown_seconds, shown_cs = us_field["digits"].split(":")
+    assert (int(shown_minutes or 0), int(shown_seconds), int(shown_cs)) == (
+        int(mins), secs, cs), (us_field, us_time)
+    opened_page.evaluate(_click_segment_js("US"))
+    opened_page.evaluate(SETTLE)
 
 
 def test_ticking_jp_differs_opens_a_second_field_and_commits_through_the_jp_endpoint(

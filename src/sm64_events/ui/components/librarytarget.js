@@ -25,7 +25,7 @@ import { OverallStandards } from "./overallstandards.js";
 import { SegmentTimeline } from "./segmenttimeline.js";
 import {
   sectionOrder, autoExpandName, bandsOf, bandRangeLabel, divisionRangeLabel,
-  matchesRunner, videoSource, linkable, standingOn, bandFor, divisionWithin,
+  matchesRunner, videoSource, linkable, standingOn, matchedStanding, bandFor, divisionWithin,
   ladderCsOf,
 } from "./librarymodel.js";
 
@@ -617,14 +617,14 @@ function TargetLinkControl({ rows, approaches, linkCtx }) {
  * (a strategy's linking is target-level, round 7).
  */
 function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
-                      onAdd, linkCtx, version }) {
+                      onAdd, linkCtx, version, gradingVersion }) {
   if (!pieces.length) return null;
   return html`<div class="library-pieces">
     <h4 class="library-pieces-head">Pieces of this run</h4>
     ${pieces.map((piece) => html`<${Section} key=${approachIdentity(piece)}
         approach=${piece} open=${expanded === approachIdentity(piece)}
         onOpen=${() => onOpen(approachIdentity(piece))}
-        query=${query} stratInfo=${null} version=${version}
+        query=${query} stratInfo=${null} version=${version} gradingVersion=${gradingVersion}
         trayKeys=${trayKeys}
         entityKey=${piece.entity_key || entityKey} onAdd=${onAdd}
         linkCtx=${linkCtx}
@@ -645,7 +645,8 @@ function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
  * on the page reads, "for fun exploration of the differences."
  */
 function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey, onAdd,
-                   linkCtx, door = null, focusMark = null, version = "us" }) {
+                   linkCtx, door = null, focusMark = null, version = "us",
+                   gradingVersion = "us" }) {
   // ROUND 1 (2026-08-07), superseding the round-2 version-badge ruling: the
   // JP/US control is a MODE, and a mode FILTERS -- "We should have 2 modes:
   // JP (shows only JP entries), US (shows only US entries)." An entry tagged
@@ -688,23 +689,11 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
     ? { ...standingOn(ladder, assoc.pbCs),
         pb_display: assoc.pbDisplay, noTimes: assoc.pbCs == null }
     : null;
-  // A matched strategy's `stratInfo` is served graded on the GRADING version
-  // (ranks/standards.py's `grading_version`) -- correct while this section
-  // could only ever show that same ladder, and now the page-level switch can
-  // show a DIFFERENT one. `pb_cs` is the walkable ingredient the endpoint
-  // already carries for exactly this reason (views.py::build_entity_
-  // strategies: "the saved PB as a display-clock number ... a formatted
-  // string cannot be walked"), so when it is present, re-derive rank/
-  // division against THIS section's displayed `ladder` the same way
-  // `assocInfo` above does -- both kinds of standing then follow the page's
-  // version switch consistently. A `stratInfo` with no walkable PB (nothing
-  // saved on this strategy yet) keeps the served answer verbatim; there is
-  // nothing to re-walk.
-  const stratStanding = stratInfo && stratInfo.pb_cs != null
-    ? { ...standingOn(ladder, stratInfo.pb_cs),
-        pb_display: stratInfo.pb_display, noTimes: false }
-    : stratInfo;
-  const standing = stratStanding || assocInfo;
+  // A matched strategy's served standing is kept verbatim at the graded
+  // version and re-walked against THIS section's displayed ladder only when
+  // the page shows the other one -- the rule lives in librarymodel.js
+  // (`matchedStanding`) where node can prove it, with the why.
+  const standing = matchedStanding(stratInfo, ladder, version, gradingVersion) || assocInfo;
 
   return html`<div class=${`library-section ${open ? "open" : ""}`
         + (approach._piece ? " library-piece-section" : "")}
@@ -830,7 +819,8 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
  * point 4) to this same full shape before mounting this component, so it
  * never has to branch on which door it came through.
  */
-export function LibraryTarget({ t, targets, version = "us", onAdd, trayKeys, focusStrat, focusTier,
+export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us",
+                               onAdd, trayKeys, focusStrat, focusTier,
                                focusDivision = null, focusEntryUrl = null,
                                focusRow = null,
                                fallbackLabel = null, onRelink = () => {},
@@ -1209,7 +1199,7 @@ export function LibraryTarget({ t, targets, version = "us", onAdd, trayKeys, foc
          null and the section says so rather than not rendering — a page that
          looks identical after a change reads as the change not working. */""}
     <${OverallStandards} entity=${gradingEntity} label=${gradingLabel}
-        pbCs=${gradingPbCs} />
+        pbCs=${gradingPbCs} version=${version} />
     ${approaches.length === 0
       ? html`<p class="library-target-empty">
           ${missReason === "castle_movement" ? "Browse only — no segment adopts this movement yet."
@@ -1229,13 +1219,13 @@ export function LibraryTarget({ t, targets, version = "us", onAdd, trayKeys, foc
             ? focusMark : null}
           stratInfo=${approach.matched_strategy ? stratByName[approach.matched_strategy] : null}
           trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
-          linkCtx=${linkCtx} version=${version} />`)}
+          linkCtx=${linkCtx} version=${version} gradingVersion=${gradingVersion} />`)}
     <${PiecesList} pieces=${pieces} query=${query}
         expanded=${expanded}
         onOpen=${(identity) => setExpanded((prev) =>
           prev === identity ? null : identity)}
         trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
-        linkCtx=${linkCtx} version=${version} />
+        linkCtx=${linkCtx} version=${version} gradingVersion=${gradingVersion} />
     ${/* Task 0096: the record door's recorder — the IDENTICAL surface the
          Segments tab opens (one implementation, his own requirement), seeded
          with the row's name and its target's entity. The save's own

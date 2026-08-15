@@ -91,6 +91,7 @@ def save_mode_config(cfg: ModeConfig, path: Path | None = None) -> None:
     path.write_text(json.dumps(
         {"mode": cfg.mode.value, "version": cfg.version.value}, indent=2))
 
+
 def effective_version(cfg: ModeConfig, detected: str | None = None) -> str:
     """The version grading and the visual switches DEFAULT to: an explicit
     JP/US setting wins outright; AUTO takes `detected` (what a live front-end
