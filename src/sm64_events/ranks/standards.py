@@ -90,6 +90,13 @@ class RankStandards:
         self._data = {"version": 1, "entities": {}}
         self._sheet = {}
         self._sheet_jp = {}
+        # The GRADING VERSION: what every ladder read that names no version
+        # resolves on. "us" or "jp". main.py sets it from the game version
+        # setting at boot and tracking/service.py::set_game_version on every
+        # change, so grading follows the setting live and no caller has to
+        # thread a version through -- an explicit `version=` (the visual
+        # switches) always overrides it.
+        self.grading_version = "us"
 
     # ---- load / save ----
     def _read_valid(self, p):
@@ -154,17 +161,31 @@ class RankStandards:
         """The user's own dict, for the paths that MUTATE it."""
         return self._entity(ek).get("strategies", {})
 
-    def ladders(self, ek) -> dict:
-        """Every ladder for this entity, vetted merged over sheet-derived.
+    def ladders(self, ek, version=None) -> dict:
+        """Every ladder for this entity, vetted merged over sheet-derived,
+        RESOLVED on `version` -- "us", "jp", or None for the grading version.
+        On "jp" each strategy's annotated JP values overlay its base ladder
+        rank by rank (`jp_deltas`); a strategy with no annotation is the same
+        ladder in both versions (user's rule, 2026-08-07: combined unless a
+        difference is written down).
 
         A new dict each call, deliberately: a caller that mutated the result
         would be editing a merge rather than the store, so the mutating paths
         take `_stored_ladders` instead."""
         vetted = self._stored_ladders(ek)
         fitted = self._sheet.get(ek)
-        if not fitted:
-            return dict(vetted)
-        return {**fitted, **vetted}
+        base = dict(vetted) if not fitted else {**fitted, **vetted}
+        if self._resolve(version) != "jp":
+            return base
+        return {strat: {**ladder, **self.jp_deltas(ek, strat)}
+                for strat, ladder in base.items()}
+
+    def _resolve(self, version) -> str:
+        if version is None:
+            return self.grading_version
+        if version not in ("us", "jp"):
+            raise ValueError(f"unknown game version {version!r}")
+        return version
 
     def apply_sheet_ladders(self, mapping: dict) -> None:
         """Merge user-assigned library ladders into the sheet-derived layer.
@@ -190,35 +211,33 @@ class RankStandards:
         return [s for s in self._sheet.get(ek, {}) if s not in self._stored_ladders(ek)]
 
     def jp_deltas(self, ek, strat) -> dict:
-        """{rank: JP seconds} where the JP time is ANNOTATED as different --
-        the vetted seed's sparse `jp_strategies` overlay, or the sheet layer's
-        fitted JP ladder. Empty means no annotated difference, and the base
-        ladder applies to BOTH modes (user's rule, 2026-08-07: combined unless
-        a difference is written down)."""
-        vetted = self._entity(ek).get("jp_strategies", {}).get(strat)
-        if vetted:
-            return dict(vetted)
-        return dict(self._sheet_jp.get(ek, {}).get(strat, {}))
+        """{rank: JP seconds} where the JP time is ANNOTATED as different.
+        Two annotation sources, merged RANK BY RANK: the sheet layer's fitted
+        JP ladder underneath, the user's own file on top -- the vetted seed's
+        sparse `jp_strategies` and every JP time typed into the standards
+        editor both live there. Per rank rather than whole-ladder, so one
+        edited JP rank on a sheet-fitted strategy keeps the other fitted JP
+        ranks instead of hiding them. Empty means no annotated difference,
+        and the base ladder applies to BOTH versions (user's rule,
+        2026-08-07: combined unless a difference is written down)."""
+        return {**self._sheet_jp.get(ek, {}).get(strat, {}),
+                **self._entity(ek).get("jp_strategies", {}).get(strat, {})}
 
     def has_jp_ladder(self, ek, strat) -> bool:
         return bool(self.jp_deltas(ek, strat))
 
+    def jp_strategies(self, ek) -> list:
+        """The strategies whose JP ladder differs from their US one -- what
+        the standards editor opens a JP column for."""
+        return [strat for strat in self.ladders(ek, "us") if self.jp_deltas(ek, strat)]
+
     def ladder_cs(self, ek, strat, version=None) -> dict:
-        """The ladder a time on `version` grades against, in centiseconds.
-
-        `version="jp"` OVERLAYS the annotated JP values onto the base ladder,
-        rank by rank -- sparse overlays (the vetted seed annotates only the
-        ranks whose JP time differs) and full JP ladders (the sheet layer)
-        resolve through the same rule. Any other version, and any (ek, strat)
-        with no annotation at all, gets the base ladder unchanged.
-
-        WHICH version a given attempt should grade on is deliberately not
-        decided here: that is the console-support branch's N64-mode spec, and
-        this parameter is the door it resolves through."""
-        base = self.ladders(ek).get(strat, {})
-        if version == "jp":
-            base = {**base, **self.jp_deltas(ek, strat)}
-        return {r: int(round(v * 100)) for r, v in base.items()}
+        """The ladder a time on `version` grades against, in centiseconds --
+        `ladders(ek, version)[strat]`, so the two can never disagree. None
+        means the grading version (`self.grading_version`), which is how every
+        rank surface follows the game version setting without naming it."""
+        return {r: int(round(v * 100))
+                for r, v in self.ladders(ek, version).get(strat, {}).items()}
 
     def clock_for(self, ek) -> str:
         return self._entity(ek).get("clock", _default_clock(ek))
@@ -335,7 +354,7 @@ class RankStandards:
             return []
         return list(seed["entities"].get(ek, {}).get("strategies", {}).keys())
 
-    def cutoff_videos(self, ek, extra_clips=None, dead_urls=None) -> dict:
+    def cutoff_videos(self, ek, extra_clips=None, dead_urls=None, version=None) -> dict:
         """{strat: {rank: url}} — auto band videos (from clips) merged with the
         user's hand-attached overrides, resolved against each strat's ladder. THE
         per-cutoff video map the standards table links each time cell to.
@@ -360,7 +379,7 @@ class RankStandards:
                       in list(clips.get(strat, [])) + list(extra.get(strat, []))
                       if clip[1] not in dead]
             resolved = resolve_cutoff_videos(
-                self.ladder_cs(ek, strat), merged, overrides.get(strat))
+                self.ladder_cs(ek, strat, version), merged, overrides.get(strat))
             if resolved:
                 out[strat] = resolved
         return out
@@ -370,10 +389,23 @@ class RankStandards:
         return self._data["entities"].setdefault(
             ek, {"clock": _default_clock(ek), "strategies": {}})
 
-    def set_threshold(self, ek, strat, rank, seconds) -> None:
+    def set_threshold(self, ek, strat, rank, seconds, version="us") -> None:
+        """`version="jp"` writes the strategy's JP OVERLAY (the same
+        `jp_strategies` shape the vetted seed ships), never its base ladder;
+        "us" writes the base ladder, which is what both versions grade on
+        wherever no JP time is annotated."""
         if rank not in RANK_NAMES or rank == "Iron":
             raise ValueError(f"unknown rank {rank!r}")
-        self._ensure(ek)["strategies"].setdefault(strat, {})[rank] = float(seconds)
+        layer = "jp_strategies" if self._resolve(version) == "jp" else "strategies"
+        self._ensure(ek).setdefault(layer, {}).setdefault(strat, {})[rank] = float(seconds)
+        self.save()
+
+    def clear_jp(self, ek, strat) -> None:
+        """Drop the user's JP overlay for `strat` -- the editor's "JP timed
+        differently" toggle turned off. The base ladder then applies to both
+        versions again. A sheet-fitted JP ladder is not the user's to clear
+        and stays (it lives in its own read-only layer)."""
+        self._entity(ek).get("jp_strategies", {}).pop(strat, None)
         self.save()
 
     def create_strategy(self, ek, strat, exit_star=None) -> str:

@@ -114,8 +114,79 @@ def test_fitted_jp_cutoffs_are_times_usamune_can_show(sheet_seed):
     assert bad == [], bad[:5]
 
 
-def test_an_unknown_version_gets_the_combined_ladder(store):
+def test_us_and_none_both_read_the_grading_ladder_by_default(store):
     ek = store.graded_entities()[0]
     strat = store.strategies(ek)[0]
     assert store.ladder_cs(ek, strat, version="us") == store.ladder_cs(ek, strat)
     assert store.ladder_cs(ek, strat, version=None) == store.ladder_cs(ek, strat)
+
+
+def test_a_junk_version_is_refused_rather_than_silently_us(store):
+    ek = store.graded_entities()[0]
+    strat = store.strategies(ek)[0]
+    with pytest.raises(ValueError):
+        store.ladder_cs(ek, strat, version="pal")
+
+
+# ---- the grading version (game version setting -> what every rank reads) ----
+
+def _annotated(store, vetted_seed):
+    for ek, entity in vetted_seed["entities"].items():
+        for strat, deltas in entity.get("jp_strategies", {}).items():
+            if deltas and strat in entity.get("strategies", {}) \
+                    and "Mario" in deltas:
+                return ek, strat
+    pytest.fail("no annotated strategy with a Mario delta")
+
+
+def test_grading_version_is_what_unversioned_reads_inherit(store, vetted_seed):
+    """`grading_version` is the ONE knob every rank surface follows: with it on
+    "jp", a read that names no version IS the JP read."""
+    ek, strat = _annotated(store, vetted_seed)
+    us = store.ladder_cs(ek, strat)
+    store.grading_version = "jp"
+    assert store.ladder_cs(ek, strat) == store.ladder_cs(ek, strat, "jp") != us
+    assert store.ladders(ek)[strat]["Mario"] == store.jp_deltas(ek, strat)["Mario"]
+
+
+def test_an_explicit_version_beats_the_grading_version(store, vetted_seed):
+    """The visual switches ask for a version by name and must never be
+    dragged along by the setting."""
+    ek, strat = _annotated(store, vetted_seed)
+    us_before = store.ladder_cs(ek, strat, "us")
+    store.grading_version = "jp"
+    assert store.ladder_cs(ek, strat, "us") == us_before
+    assert store.ladders(ek, "us")[strat] == store._entity(ek)["strategies"][strat]
+
+
+def test_a_jp_threshold_writes_the_overlay_and_clear_removes_it(tmp_path):
+    s = RankStandards(tmp_path / "rs.json")
+    s.load()
+    s.set_threshold("star:9:1", "Mine", "Mario", 30.0)
+    s.set_threshold("star:9:1", "Mine", "Mario", 29.0, version="jp")
+    assert s.jp_deltas("star:9:1", "Mine") == {"Mario": 29.0}
+    assert s.ladders("star:9:1", "jp")["Mine"]["Mario"] == 29.0
+    assert s.ladders("star:9:1", "us")["Mine"]["Mario"] == 30.0
+    assert s.jp_strategies("star:9:1") == ["Mine"]
+    written = json.loads((tmp_path / "rs.json").read_text())
+    assert written["entities"]["star:9:1"]["jp_strategies"] == {"Mine": {"Mario": 29.0}}
+    s.clear_jp("star:9:1", "Mine")
+    assert s.jp_deltas("star:9:1", "Mine") == {}
+    assert s.jp_strategies("star:9:1") == []
+    assert s.ladders("star:9:1", "jp")["Mine"]["Mario"] == 30.0
+
+
+def test_a_user_jp_edit_overlays_a_fitted_jp_ladder_per_rank(store):
+    """One typed JP rank on a sheet-fitted strategy must not hide the rest of
+    the fitted JP ladder (the old vetted-wins-whole rule would have)."""
+    ek, strat = next((ek, strat) for ek, layers in store._sheet_jp.items()
+                     for strat in layers)
+    before = store.jp_deltas(ek, strat)
+    assert len(before) > 1
+    store.set_threshold(ek, strat, "Mario", 1.0, version="jp")
+    after = store.jp_deltas(ek, strat)
+    assert after["Mario"] == 1.0
+    assert {r: v for r, v in after.items() if r != "Mario"} == \
+        {r: v for r, v in before.items() if r != "Mario"}
+    store.clear_jp(ek, strat)
+    assert store.jp_deltas(ek, strat) == before   # the fitted layer is not his to clear
