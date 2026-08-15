@@ -28,6 +28,7 @@ after:
 | Zone | Dirs (under `src/sm64_events/` unless noted) | Read |
 |---|---|---|
 | Memory reads, detectors, event recipes | `memory/`, `detectors/`, `core/snapshot.py`, `core/events.py`, `tools/find_timer.py`, `tools/hunt_value.py` | `.claude/rules/memory-detectors.md` |
+| Version sync — the per-ROM memory layout, behaviour symbols, gates, the sync runner + report, the dashboard | `memory/layout.py`, `memory/behaviours.py`, `memory/version_probe.py`, `sync/`, `server/sync_api.py`, `ui/sync.*`, `tools/sync_version.py` | `.claude/rules/sync.md` |
 | Tracking, storage, stats, routes/runs/segments, defaults corpus | `tracking/`, `storage/`, `stats/`, `data/`, `tools/corpus_*.py`, `tools/build_defaults_seed.py` | `.claude/rules/tracking-storage.md` |
 | The world-graph rules a movement is judged against (topological cancels, resurrection) | `tracking/topology.py`, `tracking/segments.py`, `tools/measure_topology_cancels.py`, `tools/why_cancelled.py`, `tools/topology_map.py` | `.claude/rules/segment-topology.md` |
 | When a segment's clock STARTS, and what number it records when it stops | `tracking/segments.py`, `detectors/igt_clock.py`, `detectors/counter_epoch.py` | `.claude/rules/segment-clock.md` |
