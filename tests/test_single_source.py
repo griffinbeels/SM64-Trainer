@@ -105,6 +105,23 @@ def strategy_name_zone() -> tuple[Path, ...]:
 
 INVARIANTS = (
     SingleSource(
+        concept="a RAM address",
+        owners=frozenset({"layout.py"}),
+        # The 16-bit prefixes every global the tracker reads sits under --
+        # US 0x8032/0x8033/0x8036, the behaviour segment 0x800E, Usamune's
+        # expansion RAM 0x8041. Uppercase, as layout.py spells them (a token
+        # must appear in its owner -- see test_every_ingredient_can_actually_
+        # match_code); when JP rows land, add their prefixes here (0x8035 for
+        # gMarioObject) so the guard grows with the layout.
+        tokens=("0x8032", "0x8033", "0x8036", "0x8041", "0x800E"),
+        files=python_sources(),
+        why="memory/layout.py holds every RAM address per ROM version "
+            "(2026-08-15); a literal anywhere else is a US address baked "
+            "into a reader that will silently misread JP. The seven probe "
+            "tools and the snapshot reader all go through layout_for(); a "
+            "hunt tool's search band derives from the layout's own values.",
+    ),
+    SingleSource(
         concept="a link into Ukikipedia",
         owners=frozenset({"links.py"}),
         tokens=("ukikipedia.net/wiki",),

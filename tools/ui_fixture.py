@@ -34,6 +34,7 @@ import uvicorn
 from sm64_events.compare.importer import VideoImporter
 from sm64_events.compare.service import CompareService
 from sm64_events.core.events import Event
+from sm64_events.memory.behaviours import pointer_of
 from sm64_events.core.timefmt import format_igt
 from sm64_events.core.paths import (bundled_defaults_seed, bundled_rank_standards, bundled_sheet_ladders,
                                     rank_standards_path)
@@ -506,7 +507,7 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
                          "igt_frames": 200, "igt_source": "counter",
                          "igt": format_igt(200),
                          "landmark": {"key": key, "kind_key": "kind:bhvDoor",
-                                      "behaviour": 0x800EBC8C, "home": home,
+                                      "behaviour": pointer_of("us", "bhvDoor"), "home": home,
                                       "placed": True}}))
         # A THIRD moment whose object has NEITHER coordinate -- no spawn point
         # and standing at the origin. Every such object shares that one key, so
@@ -520,7 +521,7 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
                      "igt_source": "counter", "igt": format_igt(260),
                      "landmark": {"key": "6:3:bhvMario:0,0,0",
                                   "kind_key": "kind:bhvMario",
-                                  "behaviour": 0x800EE040, "home": [0, 0, 0],
+                                  "behaviour": pointer_of("us", "bhvMario"), "home": [0, 0, 0],
                                   "pos": [0, 0, 0],
                                   "placed": False, "nameable": False}}))
         # A FOURTH: a POLE. Scriptless (`placed` false, no spawn point) and
@@ -535,7 +536,7 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
                      "igt_source": "counter", "igt": format_igt(300),
                      "landmark": {"key": "6:3:bhvTree:2560,256,4608",
                                   "kind_key": "kind:bhvTree",
-                                  "behaviour": 0x800EDC24, "home": [0, 0, 0],
+                                  "behaviour": pointer_of("us", "bhvTree"), "home": [0, 0, 0],
                                   "pos": [2560, 256, 4608],
                                   "placed": False, "nameable": True}}))
         # Name the FIRST door and leave the second alone, so one page carries

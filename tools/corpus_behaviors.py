@@ -20,9 +20,10 @@ and closes on the first US baseline run.
 from sm64_events.memory.behaviours import (NAME_OVERRIDES, WORD_FORMS,  # noqa: F401
                                            display_name, kind_names, offsets,
                                            pointer_of)
+from sm64_events.memory.layout import US as _US
 
 # US, for callers that still speak pointers (tests, one-off scripts).
-BEHAVIOR_SEGMENT_BASE_US = 0x800EB180
+BEHAVIOR_SEGMENT_BASE_US = _US.behaviour_base
 
 
 def kind_names_us_pointers():
