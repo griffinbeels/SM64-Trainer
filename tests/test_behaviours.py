@@ -25,8 +25,8 @@ def test_us_pointer_roundtrip_through_the_shipped_base():
 
 
 def test_unknown_pointer_keys_as_ptr_and_jp_without_a_base_too():
-    assert B.symbol_of("us", 0x12345678) == "ptr:12345678"
-    assert B.symbol_of("jp", 0x80000000) == "ptr:80000000"
+    assert B.symbol_of("us", 0x12345678) == "ptr_12345678"
+    assert B.symbol_of("jp", 0x80000000) == "ptr_80000000"
     assert B.pointer_of("jp", "bhvBobomb") is None
     assert B.pointer_of("jp", "bhvBobomb", base=0x800EB000) == 0x800EB000 + 0x3154
     assert B.pointer_of("us", "bhvNotAThing") is None

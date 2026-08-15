@@ -32,6 +32,17 @@ its authored placement. Measured from the 2026-08-05 probe captures: the WF
 tree, 6 grabs across TWO area reloads, position (2560, 256, 4608) byte-
 identical every time — clean power-of-2 designer coordinates.
 
+THE KIND IS THE DECOMP SYMBOL, not the behaviour pointer, since 2026-08-15:
+`bhvDoor`, `bhvPoleGrabbing`, `bhvBobomb`. A pointer is fixed for ONE ROM and
+JP moves every one of them (STROOP's maps: bob-omb 0x13003174 on US,
+0x13003154 on JP, plus a different segment base), so a key built on it would
+make every named door a stranger on the other version. `memory/behaviours.py`
+is the one door from a pointer to its symbol; the snapshot reader resolves it
+and this module never sees a version. The raw pointer still rides in the
+payload as evidence. Every key stored before that date was rewritten once at
+boot (`storage/rekey.py`) — same rooms, same coordinates, symbol in place of
+pointer — so nothing he named was lost.
+
 There is deliberately NO static-kind allowlist, because the measurement says
 one would be a list that rots for nothing. Of every unplaced object those
 captures caught through Mario's three engagement pointers, only an EXPLOSION
@@ -49,10 +60,11 @@ class Landmark:
 
     level: int
     area: int
-    behaviour: int              # which KIND — a door, a pole, a bob-omb
+    symbol: str                 # which KIND — "bhvDoor", "bhvPoleGrabbing"
     home: tuple[int, int, int]  # spawn x/y/z, rounded; the game writes exact
                                 # values here and no jitter was observed
     pos: tuple[int, int, int] = (0, 0, 0)   # where it stands right now
+    behaviour: int = 0          # this ROM's pointer for the symbol — evidence
 
     @property
     def where(self) -> tuple[int, int, int]:
@@ -63,19 +75,19 @@ class Landmark:
     @property
     def key(self) -> str:
         """The stable name this landmark answers to, in every store and payload."""
-        return (f"{self.level}:{self.area}:{self.behaviour:08x}"
+        return (f"{self.level}:{self.area}:{self.symbol}"
                 f":{self.where[0]},{self.where[1]},{self.where[2]}")
 
     @property
     def kind_key(self) -> str:
         """The name the whole FAMILY answers to, game-wide.
 
-        A behaviour pointer is fixed for the ROM, so naming "Pole" once names
-        every pole in Super Mario 64. That is what makes the catalogue tractable
-        by hand: kinds are a couple of dozen rows, and only the instances he
-        actually routes on need a name of their own.
+        A behaviour symbol names the same kind on every ROM, so naming "Pole"
+        once names every pole in Super Mario 64. That is what makes the
+        catalogue tractable by hand: kinds are a couple of dozen rows, and only
+        the instances he actually routes on need a name of their own.
         """
-        return f"kind:{self.behaviour:08x}"
+        return f"kind:{self.symbol}"
 
     @property
     def placed(self) -> bool:
@@ -99,18 +111,19 @@ class Landmark:
 
     def payload(self) -> dict:
         return {"key": self.key, "kind_key": self.kind_key,
-                "behaviour": self.behaviour,
+                "symbol": self.symbol, "behaviour": self.behaviour,
                 "home": list(self.home), "pos": list(self.pos),
                 "placed": self.placed, "nameable": self.nameable}
 
 
 def landmark_at(snapshot) -> Landmark | None:
     """The landmark Mario is engaged with on this frame, or None."""
-    if not snapshot.landmark_behaviour:
+    if not snapshot.landmark_symbol:
         return None
     return Landmark(
         level=snapshot.curr_level,
         area=snapshot.curr_area,
+        symbol=snapshot.landmark_symbol,
         behaviour=snapshot.landmark_behaviour,
         home=tuple(int(round(axis)) for axis in snapshot.landmark_home),
         pos=tuple(int(round(axis)) for axis in snapshot.landmark_pos),
@@ -146,7 +159,7 @@ class EngagementWatch:
     are the ones with an object of their own: Bowser's pre-fight dialogue in
     both arenas, and the castle-grounds sign.
 
-    Identity is (behaviour, where) -- the coordinate the landmark is keyed by,
+    Identity is (symbol, where) -- the coordinate the landmark is keyed by,
     never the live position, which moves every frame on a carried bob-omb and
     would read as perpetually fresh.
 
@@ -166,7 +179,7 @@ class EngagementWatch:
 
     def observe(self, snapshot) -> None:
         found = landmark_at(snapshot)
-        identity = None if found is None else (found.behaviour, found.where)
+        identity = None if found is None else (found.symbol, found.where)
         if self._identity is _UNSEEN:
             self._identity = identity
             return
@@ -219,8 +232,8 @@ def group_scope(key: str | None) -> tuple | None:
     parts = str(key).split(":")
     if len(parts) != 4 or not parts[0].isdigit():
         return None
-    level, _area, behaviour, _where = parts
-    return (level, behaviour)
+    level, _area, symbol, _where = parts
+    return (level, symbol)
 
 
 def same_landmark(pinned: str | None, key: str | None,

@@ -34,39 +34,42 @@ def _seed_kind_names() -> dict:
             if row["key"].startswith("kind:")}
 
 
-# (pointer, seeded name) — each row is a thing he touched on 2026-08-07 and
-# named or described himself; the symbols they resolve to are in the module
-# docstring of corpus_behaviors.py.
+# (symbol, seeded name) — each row is a thing he touched on 2026-08-07 and
+# named or described himself. Symbols since 2026-08-15 (the pointer is per
+# ROM; memory/behaviours.py); the US pointers he actually recorded stand
+# beside them so the door itself is checked, not only the names.
 GROUND_TRUTH = (
-    (0x800EE2F4, "bob-omb"),        # the BoB bob-omb he picked up, x5
-    (0x800EC9D0, "Bowser"),         # Bowser's tail in the Bowser 2 arena
-    (0x800EDD38, "Whomp King"),     # the dialogue he named "Whomp Text"
-    (0x800EB2C4, "pole"),           # a WF pole
-    (0x800EDC24, "tree"),           # the WF "pole" the engine calls a tree
-    (0x800EB180, "star door"),      # castle star doors — offset 0, the base
-    (0x800EBC7C, "warp door"),      # castle warp doors (his 2026-08-05 kind)
-    (0x800EBC8C, "door"),           # the kind of his "HMC Door"
+    ("bhvBobomb", 0x800EE2F4, "bob-omb"),        # the BoB bob-omb he picked up, x5
+    ("bhvBowser", 0x800EC9D0, "Bowser"),         # Bowser's tail in the Bowser 2 arena
+    ("bhvWhompKingBoss", 0x800EDD38, "Whomp King"),  # the dialogue he named "Whomp Text"
+    ("bhvPoleGrabbing", 0x800EB2C4, "pole"),     # a WF pole
+    ("bhvTree", 0x800EDC24, "tree"),             # the WF "pole" the engine calls a tree
+    ("bhvStarDoor", 0x800EB180, "star door"),    # castle star doors — offset 0, the base
+    ("bhvDoorWarp", 0x800EBC7C, "warp door"),    # castle warp doors (his 2026-08-05 kind)
+    ("bhvDoor", 0x800EBC8C, "door"),             # the kind of his "HMC Door"
 )
 
 
 def test_every_pointer_he_touched_resolves_to_the_thing_he_touched():
+    from sm64_events.memory.behaviours import symbol_of
     names = _seed_kind_names()
     assert len(names) >= 500, (
         "the kind catalogue is missing from the seed — the landmarks section "
         f"holds {len(names)} kind rows")
-    for pointer, expected in GROUND_TRUTH:
-        key = f"kind:{pointer:08x}"
+    for symbol, pointer, expected in GROUND_TRUTH:
+        assert symbol_of("us", pointer) == symbol, (
+            f"{pointer:#010x} should resolve to {symbol} — wrong at the base "
+            "constant or the ROM version, so the whole table is suspect")
+        key = f"kind:{symbol}"
         assert names.get(key) == expected, (
-            f"{key} should name {expected!r}, got {names.get(key)!r} — "
-            "wrong at the base constant or the ROM version, so the whole "
-            "table is suspect, not just this row")
+            f"{key} should name {expected!r}, got {names.get(key)!r}")
 
 
-def _moment(kind: str, level: int, pointer: int, ordinal: int = 1) -> EventRow:
+def _moment(kind: str, level: int, symbol: str, ordinal: int = 1) -> EventRow:
     return EventRow(1, 1, 1, "moment_reached", 100, "2026-08-07T00:00:00Z",
                     {"kind": kind, "level": level, "ordinal": ordinal,
-                     "landmark": {"key": f"{level}:1:{pointer:08x}:1,2,3",
-                                  "kind_key": f"kind:{pointer:08x}"}})
+                     "landmark": {"key": f"{level}:1:{symbol}:1,2,3",
+                                  "kind_key": f"kind:{symbol}"}})
 
 
 def test_the_sentences_his_report_was_about():
@@ -75,13 +78,13 @@ def test_the_sentences_his_report_was_about():
     grammar and the ordinal retirement, in the exact strings the recorder
     will draw."""
     names = _seed_kind_names()
-    assert label_event(_moment("pickup", 9, 0x800EE2F4, ordinal=5), names) \
+    assert label_event(_moment("pickup", 9, "bhvBobomb", ordinal=5), names) \
         == "Pick up a bob-omb in Bob-omb Battlefield"
-    assert label_event(_moment("pickup", 33, 0x800EC9D0), names) \
+    assert label_event(_moment("pickup", 33, "bhvBowser"), names) \
         == "Pick up Bowser in Bowser 2 Arena"
-    assert label_event(_moment("textbox", 24, 0x800EDD38), names) \
+    assert label_event(_moment("textbox", 24, "bhvWhompKingBoss"), names) \
         == "Trigger Whomp King in Whomp's Fortress"
-    assert label_event(_moment("pole_grab", 24, 0x800EDC24), names) \
+    assert label_event(_moment("pole_grab", 24, "bhvTree"), names) \
         == "Grab a tree in Whomp's Fortress"
 
 
@@ -90,9 +93,9 @@ def test_the_caused_kinds_speak_through_the_same_grammar():
     so the switch he ruled on and the defeats he asked for read as sentences
     with no new code path — the exact strings his recorder will draw."""
     names = _seed_kind_names()
-    assert label_event(_moment("switch_press", 24, 0x800ED6E8), names) \
+    assert label_event(_moment("switch_press", 24, "bhvBlueCoinSwitch"), names) \
         == "Press a blue coin switch in Whomp's Fortress"
-    assert label_event(_moment("enemy_defeated", 9, 0x800EF8AC), names) \
+    assert label_event(_moment("enemy_defeated", 9, "bhvGoomba"), names) \
         == "Defeat a goomba in Bob-omb Battlefield"
-    assert label_event(_moment("enemy_defeated", 9, 0x800EE2F4), names) \
+    assert label_event(_moment("enemy_defeated", 9, "bhvBobomb"), names) \
         == "Defeat a bob-omb in Bob-omb Battlefield"

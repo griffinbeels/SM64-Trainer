@@ -68,18 +68,18 @@ def test_a_seeded_kind_name_refreshes_but_his_rename_wins(tmp_path):
     `WHERE seed_dirty = 0` doing the same job)."""
     db = Database(tmp_path / "t.db")
     seed1 = {"seed_version": 1, "segments": [], "routes": [],
-             "landmarks": [{"seed_key": "landmark:kind:800ee2f4",
-                            "key": "kind:800ee2f4", "name": "bobomb"}]}
+             "landmarks": [{"seed_key": "landmark:kind:bhvBobomb",
+                            "key": "kind:bhvBobomb", "name": "bobomb"}]}
     reconcile_defaults(db, seed1)
-    assert db.landmark_names()["kind:800ee2f4"] == "bobomb"
+    assert db.landmark_names()["kind:bhvBobomb"] == "bobomb"
     seed2 = json.loads(json.dumps(seed1)); seed2["seed_version"] = 2
     seed2["landmarks"][0]["name"] = "bob-omb"
     reconcile_defaults(db, seed2)
-    assert db.landmark_names()["kind:800ee2f4"] == "bob-omb", \
+    assert db.landmark_names()["kind:bhvBobomb"] == "bob-omb", \
         "an untouched seeded name refreshes with the seed"
-    db.name_landmark("kind:800ee2f4", "bomb guy")
+    db.name_landmark("kind:bhvBobomb", "bomb guy")
     reconcile_defaults(db, seed2)
-    assert db.landmark_names()["kind:800ee2f4"] == "bomb guy", \
+    assert db.landmark_names()["kind:bhvBobomb"] == "bomb guy", \
         "his own name must win over the seeded one, forever"
 
 

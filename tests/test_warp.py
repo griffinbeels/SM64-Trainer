@@ -4,6 +4,7 @@ from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.core.timefmt import format_igt
 from sm64_events.detectors.igt_clock import IgtClock
 from sm64_events.detectors.warp import WarpDetector
+from sm64_events.memory.behaviours import symbol_of
 from sm64_events.memory.addresses import (ACT_BBH_ENTER_JUMP,
                                           ACT_BBH_ENTER_SPIN,
                                           ACT_DISAPPEARED,
@@ -19,6 +20,10 @@ def snap(**overrides) -> GameSnapshot:
         num_stars=8, last_completed_course=1, last_completed_star=1,
         curr_level=17, curr_area=1)
     defaults.update(overrides)
+    if defaults.get("landmark_behaviour") and not defaults.get("landmark_symbol"):
+        # The reader resolves the pointer to its symbol; a hand-built
+        # snapshot resolves it the same way, through the US layout.
+        defaults["landmark_symbol"] = symbol_of("us", defaults["landmark_behaviour"])
     return GameSnapshot(**defaults)
 
 
@@ -621,7 +626,7 @@ def test_the_touch_carries_WHICH_warp_it_was():
                     landmark_home=(120.0, 0.0, -30.0))
     assert detector.process(snap(curr_level=9), touching) == []
     [event] = land(detector, touching)
-    assert event.payload["landmark"]["key"] == "9:1:aabbccdd:120,0,-30"
+    assert event.payload["landmark"]["key"] == "9:1:ptr_aabbccdd:120,0,-30"
     assert event.payload["landmark"]["placed"] is True
 
 
@@ -675,4 +680,4 @@ def test_a_pipes_engagement_lands_one_poll_after_the_touch_and_is_adopted():
                    landmark_home=(100.0, 0.0, 200.0))
     assert detector.process(touching, settled) == []
     [event] = land(detector, settled)
-    assert event.payload["landmark"]["key"] == "9:1:800eb900:100,0,200"
+    assert event.payload["landmark"]["key"] == "9:1:bhvWarp:100,0,200"

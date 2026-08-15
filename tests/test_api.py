@@ -2562,7 +2562,7 @@ def test_an_entrance_rows_rename_identity_is_the_entrance_itself(tmp_path):
     entrance alone."""
     client, service, db = make_client(tmp_path)
     with client:
-        door_key = "6:1:800ebc8c:-2303,0,-1074"
+        door_key = "6:1:bhvDoor:-2303,0,-1074"
 
         async def go():
             await service.publish(Event(
@@ -2609,9 +2609,9 @@ def test_renaming_one_half_of_a_named_pair_moves_the_whole_door(tmp_path):
     both. A same-named key in another level never moves."""
     client, service, db = make_client(tmp_path)
     with client:
-        half_a = "6:2:800eb180:-281,3174,3772"   # his real 70-star-door keys
-        half_b = "6:2:800eb180:-127,3174,3772"
-        elsewhere = "7:1:800eb180:-281,3174,3772"
+        half_a = "6:2:bhvStarDoor:-281,3174,3772"   # his real 70-star-door keys
+        half_b = "6:2:bhvStarDoor:-127,3174,3772"
+        elsewhere = "7:1:bhvStarDoor:-281,3174,3772"
         client.post("/api/landmark", json={"key": half_a, "name": "70 Star Door"})
         client.post("/api/landmark", json={"key": elsewhere, "name": "70 Star Door"})
         # The merge gesture: the second half takes the same name.

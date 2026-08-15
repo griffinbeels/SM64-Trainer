@@ -16,18 +16,21 @@ from sm64_events.core.snapshot import CausedState, GameSnapshot, SnapshotReader
 from sm64_events.detectors.caused import CausedMomentDetector
 from sm64_events.detectors.moment import MOMENTS, MomentDetector
 from sm64_events.memory import addresses as A
+from sm64_events.memory.layout import US
 from sm64_events.memory.buffer import BufferMemory
 
-SWITCH = A.CAUSED_BEHAVIOURS["bhvBlueCoinSwitch"][0]
-GOOMBA = A.CAUSED_BEHAVIOURS["bhvGoomba"][0]
-BOBOMB = A.CAUSED_BEHAVIOURS["bhvBobomb"][0]
+# The US pointers his 2026-08-07 capture recorded (memory/behaviours.py
+# resolves them from the symbol + the US base; the identity is the symbol).
+SWITCH, GOOMBA, BOBOMB = "bhvBlueCoinSwitch", "bhvGoomba", "bhvBobomb"
+POINTER = {SWITCH: 0x800ED6E8, GOOMBA: 0x800EF8AC, BOBOMB: 0x800EE2F4}
 
 SWITCH_POS = (-2500.0, 384.0, -250.0)   # his WF switch, 3 presses, byte-identical
 
 
-def obj(slot, behaviour, action=0, health=0, home=(0.0, 0.0, 0.0),
+def obj(slot, symbol, action=0, health=0, home=(0.0, 0.0, 0.0),
         pos=(0.0, 0.0, 0.0)) -> CausedState:
-    return CausedState(slot=slot, behaviour=behaviour, action=action,
+    return CausedState(slot=slot, behaviour=POINTER.get(symbol, 0),
+                       symbol=symbol, action=action,
                        health=health, home=home, pos=pos)
 
 
@@ -232,7 +235,7 @@ def test_every_caused_kind_is_a_MOMENTS_row():
     and the timeline all read MOMENTS, so a caused kind missing there ships a
     kind no surface can say."""
     kinds = {m.kind for m in MOMENTS}
-    for _, kind, _ in A.CAUSED_BEHAVIOURS.values():
+    for kind, _ in A.CAUSED_BEHAVIOURS.values():
         assert kind in kinds, kind
 
 
@@ -240,34 +243,26 @@ def test_the_caused_rows_never_collide_with_mario_action_rows():
     """A MOMENTS row with actions is Mario's; a row without is supplied by
     caused.py. A kind claiming both would double-journal one gesture."""
     for moment in MOMENTS:
-        caused_kinds = {kind for _, kind, _ in A.CAUSED_BEHAVIOURS.values()}
+        caused_kinds = {kind for kind, _ in A.CAUSED_BEHAVIOURS.values()}
         if moment.kind in caused_kinds:
             assert moment.actions == frozenset(), moment.kind
 
 
-def test_the_pointer_table_matches_the_shipped_catalogue():
-    """src cannot import tools/ (the frozen exe does not carry it), so the
-    pointers are stated twice and COMPARED — the same pattern
-    test_cross_language_parity.py holds the JS copies to."""
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-    import corpus_behaviors
-    segmented = {sym: seg for seg, sym in corpus_behaviors.BEHAVIORS}
-    for symbol, (pointer, _, _) in A.CAUSED_BEHAVIOURS.items():
-        assert symbol in segmented, f"{symbol} is not in the catalogue"
-        derived = (corpus_behaviors.BEHAVIOR_SEGMENT_BASE_US
-                   + (segmented[symbol] - 0x13000000))
-        assert pointer == derived, (
-            f"{symbol}: table says {pointer:#010x}, catalogue derives "
-            f"{derived:#010x}")
+def test_the_symbol_rows_resolve_to_the_pointers_his_capture_recorded():
+    """The registry is keyed by SYMBOL and memory/behaviours.py is the one
+    door to a pointer; the three pointers his 2026-08-07 pool capture wrote
+    (data/object_pool_probe.jsonl) are what the US door must answer."""
+    from sm64_events.memory.behaviours import pointer_of, symbols
+    for symbol in A.CAUSED_BEHAVIOURS:
+        assert symbol in symbols("us"), f"{symbol} is not in the US catalogue"
+        assert pointer_of("us", symbol) == POINTER[symbol], symbol
 
 
 # -- the reader ---------------------------------------------------------------
 
 def _write_object(mem, slot, behaviour, action=0, health=0,
                   home=(0.0, 0.0, 0.0), pos=(0.0, 0.0, 0.0)):
-    base = A.OBJECT_POOL + slot * A.OBJECT_SIZE
+    base = US.object_pool + slot * A.OBJECT_SIZE
     mem.write_u32(base + A.OBJECT_BEHAVIOR, behaviour)
     mem.write_u32(base + A.OBJECT_ACTION, action & 0xFFFFFFFF)
     mem.write_u32(base + A.OBJECT_HEALTH, health & 0xFFFFFFFF)
@@ -282,12 +277,13 @@ def test_the_reader_reads_a_watched_slot_end_to_end():
     is asserted, not just its parts (memory lesson: verifying parts passes
     while the chain is broken)."""
     mem = BufferMemory()
-    _write_object(mem, 9, SWITCH, action=1, home=(0.0, 0.0, 0.0),
+    _write_object(mem, 9, POINTER[SWITCH], action=1, home=(0.0, 0.0, 0.0),
                   pos=SWITCH_POS)
     _write_object(mem, 10, 0x80221234)   # unwatched behaviour: invisible
     caught = SnapshotReader(mem).read().caused
     assert len(caught) == 1
     state = caught[0]
-    assert state.slot == 9 and state.behaviour == SWITCH
+    assert state.slot == 9 and state.behaviour == POINTER[SWITCH]
+    assert state.symbol == SWITCH
     assert state.action == 1
     assert state.pos == SWITCH_POS

@@ -149,7 +149,7 @@ def test_every_trigger_template_resolves_cleanly():
                     # a landmark is a catalogue KEY; with no names in hand
                     # the renderer must fall back to the kind's own wording
                     # rather than printing this string at a human.
-                    "landmark": "6:1:800ebc8c:-2303,0,-1074"}
+                    "landmark": "6:1:bhvDoor:-2303,0,-1074"}
     for spec in TRIGGERS.values():
         card_named = set(re.findall(r"\{(\w+)\}", spec.card_template or spec.template))
         assert card_named <= set(spec.params), \
@@ -195,7 +195,7 @@ def test_every_card_fallback_param_resolves_cleanly_when_unset():
                     # a landmark is a catalogue KEY; with no names in hand
                     # the renderer must fall back to the kind's own wording
                     # rather than printing this string at a human.
-                    "landmark": "6:1:800ebc8c:-2303,0,-1074"}
+                    "landmark": "6:1:bhvDoor:-2303,0,-1074"}
     fallback_specs = [s for s in TRIGGERS.values() if s.card_fallbacks]
     assert fallback_specs, "no TriggerType declares card_fallbacks -- update this probe"
     for spec in fallback_specs:

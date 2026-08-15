@@ -6,6 +6,7 @@ rebuildable cache of tracking.projection.project(events). Sync sqlite3
 behind a lock: writes are one tiny row per game event, far below any
 contention threshold."""
 import json
+import logging
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -533,7 +534,7 @@ MIGRATIONS = [
     """,
     # THE LANDMARK CATALOGUE. One row names one thing he interacts with, and the
     # SAME table holds both levels of naming because `key` distinguishes them:
-    # `kind:800ebc8c` names a whole family game-wide (every pole in the game at
+    # `kind:bhvDoor` names a whole family game-wide (every pole in the game at
     # once), `6:3:800ebc8c:1126,-1074,-2661` names one specific door. His ask,
     # 2026-08-05: "if we already know that a specific door is the door to HMC,
     # we don't ever need to redefine that" -- so these ship in
@@ -608,6 +609,82 @@ class Database:
         self._lock = threading.Lock()
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._migrate()
+        self._repair_landmark_keys()
+
+    def _repair_landmark_keys(self) -> None:
+        """Pointer-form landmark keys -> symbol keys (storage/rekey.py), once
+        per db in practice: after the first open every key is symbol-shaped
+        and the scan finds nothing. Runs at OPEN so every reader -- the
+        projector, reconcile, the recorder, the corpus tools -- sees one key
+        shape, and BEFORE reconcile so a symbol-keyed seed row lands on the
+        rekeyed row he had already named rather than beside it."""
+        from sm64_events.storage.rekey import us_symbol_of_pointer
+        counts = self.rekey_landmark_keys(us_symbol_of_pointer)
+        if any(counts.values()):
+            logging.getLogger("sm64.storage").info(
+                "landmark keys lifted to symbols: %s", counts)
+
+    def rekey_landmark_keys(self, rewrite) -> dict[str, int]:
+        """Rewrite every pointer-form landmark key through
+        storage/rekey.py::rekey_text bound to `rewrite` (a pointer -> symbol
+        resolver). Touches only rows whose text actually changes; returns
+        rows changed per table. Idempotent."""
+        from sm64_events.storage.rekey import rekey_text
+        counts = {"events": 0, "landmark_names": 0, "segment_defs": 0}
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, payload FROM events"
+                " WHERE payload LIKE '%landmark%' OR payload LIKE '%kind:8%'"
+            ).fetchall()
+            for row in rows:
+                fresh = rekey_text(row["payload"], rewrite)
+                if fresh != row["payload"]:
+                    self._conn.execute("UPDATE events SET payload=? WHERE id=?",
+                                       (fresh, row["id"]))
+                    counts["events"] += 1
+            rows = self._conn.execute(
+                "SELECT key, seed_key, seed_dirty FROM landmark_names").fetchall()
+            for row in rows:
+                new_key = rekey_text(row["key"], rewrite)
+                new_seed = (rekey_text(row["seed_key"], rewrite)
+                            if row["seed_key"] else row["seed_key"])
+                if new_key == row["key"] and new_seed == row["seed_key"]:
+                    continue
+                clash = None
+                if new_key != row["key"]:
+                    clash = self._conn.execute(
+                        "SELECT seed_dirty FROM landmark_names WHERE key=?",
+                        (new_key,)).fetchone()
+                if clash is not None:
+                    # Two rows converge on one key: the one he edited wins.
+                    if row["seed_dirty"] and not clash["seed_dirty"]:
+                        self._conn.execute(
+                            "DELETE FROM landmark_names WHERE key=?", (new_key,))
+                    else:
+                        self._conn.execute(
+                            "DELETE FROM landmark_names WHERE key=?", (row["key"],))
+                        counts["landmark_names"] += 1
+                        continue
+                self._conn.execute(
+                    "UPDATE landmark_names SET key=?, seed_key=? WHERE key=?",
+                    (new_key, new_seed, row["key"]))
+                counts["landmark_names"] += 1
+            rows = self._conn.execute(
+                "SELECT id, start_triggers, end_triggers, waypoints"
+                " FROM segment_defs").fetchall()
+            for row in rows:
+                fresh = {col: (rekey_text(row[col], rewrite) if row[col] else row[col])
+                         for col in ("start_triggers", "end_triggers", "waypoints")}
+                if all(fresh[col] == row[col] for col in fresh):
+                    continue
+                self._conn.execute(
+                    "UPDATE segment_defs SET start_triggers=?, end_triggers=?,"
+                    " waypoints=? WHERE id=?",
+                    (fresh["start_triggers"], fresh["end_triggers"],
+                     fresh["waypoints"], row["id"]))
+                counts["segment_defs"] += 1
+            self._conn.commit()
+        return counts
 
     def _migrate(self) -> None:
         with self._lock:

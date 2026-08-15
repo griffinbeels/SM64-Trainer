@@ -498,14 +498,14 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
         # this rig's own documented failure mode.
         for frame, home in ((5100, [1126, -1074, -2661]),
                             (5200, [717, -1177, -869])):
-            key = "6:3:800ebc8c:{},{},{}".format(*home)
+            key = "6:3:bhvDoor:{},{},{}".format(*home)
             await service.publish(Event(
                 type="moment_reached", frame=frame, timestamp_utc=now,
                 payload={"kind": "door_open", "ordinal": 1, "level": 6,
                          "area": 3, "action": 0x00001321,
                          "igt_frames": 200, "igt_source": "counter",
                          "igt": format_igt(200),
-                         "landmark": {"key": key, "kind_key": "kind:800ebc8c",
+                         "landmark": {"key": key, "kind_key": "kind:bhvDoor",
                                       "behaviour": 0x800EBC8C, "home": home,
                                       "placed": True}}))
         # A THIRD moment whose object has NEITHER coordinate -- no spawn point
@@ -518,8 +518,8 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
             payload={"kind": "textbox", "ordinal": 1, "level": 6, "area": 3,
                      "action": 0x20001305, "igt_frames": 260,
                      "igt_source": "counter", "igt": format_igt(260),
-                     "landmark": {"key": "6:3:800ee040:0,0,0",
-                                  "kind_key": "kind:800ee040",
+                     "landmark": {"key": "6:3:bhvMario:0,0,0",
+                                  "kind_key": "kind:bhvMario",
                                   "behaviour": 0x800EE040, "home": [0, 0, 0],
                                   "pos": [0, 0, 0],
                                   "placed": False, "nameable": False}}))
@@ -533,8 +533,8 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
             payload={"kind": "pole_grab", "ordinal": 1, "level": 6, "area": 3,
                      "action": 0x00000841, "igt_frames": 300,
                      "igt_source": "counter", "igt": format_igt(300),
-                     "landmark": {"key": "6:3:800edc24:2560,256,4608",
-                                  "kind_key": "kind:800edc24",
+                     "landmark": {"key": "6:3:bhvTree:2560,256,4608",
+                                  "kind_key": "kind:bhvTree",
                                   "behaviour": 0x800EDC24, "home": [0, 0, 0],
                                   "pos": [2560, 256, 4608],
                                   "placed": False, "nameable": True}}))
@@ -545,9 +545,9 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
         # Lowercase, per the catalogue's case convention (corpus_behaviors.py):
         # a common noun's case IS its grammar, and "Door" would render bare as
         # a proper noun ("Open Door in...").
-        service.db.seed_landmark_name("kind:800ebc8c", "door", "landmark:kind")
+        service.db.seed_landmark_name("kind:bhvDoor", "door", "landmark:kind")
         service.db.seed_landmark_name(
-            "6:3:800ebc8c:1126,-1074,-2661", "HMC Door", "landmark:hmc")
+            "6:3:bhvDoor:1126,-1074,-2661", "HMC Door", "landmark:hmc")
 
     async def rearm() -> None:
         await service.publish(Event(type="level_changed", frame=6000,

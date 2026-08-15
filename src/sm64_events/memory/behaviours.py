@@ -136,15 +136,17 @@ def pointer_of(version: str, symbol: str, base: int | None = None) -> int | None
 
 
 def symbol_of(version: str, pointer: int, base: int | None = None) -> str:
-    """`bhvDoor` for a pointer this version's map names; `ptr:800ebc8c` for
-    one it does not (nothing is dropped, and a `ptr:` key is a finding the
-    sync dashboard shows)."""
+    """`bhvDoor` for a pointer this version's map names; `ptr_800ebc8c` for
+    one it does not (nothing is dropped, and a `ptr_` symbol is a finding
+    the sync dashboard shows). An underscore, not a colon: the symbol sits
+    inside a landmark key that `core/landmark.py::group_scope` splits on
+    colons."""
     resolved_base = _base(version, base)
     if resolved_base is not None:
         found = _by_offset(version).get(pointer - resolved_base + SEGMENT)
         if found is not None:
             return found
-    return f"ptr:{pointer:08x}"
+    return f"ptr_{pointer:08x}"
 
 
 def base_from_mario(version: str, mario_behaviour_pointer: int) -> int:
