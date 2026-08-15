@@ -990,7 +990,12 @@ class TrackerService:
         if seed_path is None:
             return {"segments": [], "routes": []}
         try:
-            return json.loads(seed_path.read_text())
+            # encoding is load-bearing: read_text()'s Windows default is
+            # cp1252, which restored mojibake names on every reset ("—" came
+            # back as three bytes of garbage) while main.py's reconcile read
+            # the same file as UTF-8. Caught by tests/test_ui_route_reset.py,
+            # whose seeded route carries an em-dash.
+            return json.loads(seed_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {"segments": [], "routes": []}
 

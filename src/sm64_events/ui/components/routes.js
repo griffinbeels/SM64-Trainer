@@ -299,6 +299,7 @@ export function Routes({ t }) {
   const [view, setView] = useState(null);
   const [startCond, setStartCond] = useState(null);   // local start-condition edit buffer
   const [err, setErr] = useState(null);
+  const [resetting, setResetting] = useState(false);  // seeded-route restore in flight
   // Segment defs + vocab come from the STORE, not a third private copy: only
   // the store's refetches on segments_changed/origins_changed, so a local copy
   // went stale the moment a definition was edited in another tab (review M8).
@@ -392,6 +393,14 @@ export function Routes({ t }) {
     try { await send("DELETE", `/api/routes/${selId}`); setSelId(null); await loadRoutes(); }
     catch (e) { setErr(String(e)); }
   }
+  // The segment editor's own undo, applied to routes: the reset endpoint
+  // existed with no UI calling it, the exact gap segments closed once already.
+  async function resetRoute() {
+    setResetting(true);
+    try { setErr(null); await send("POST", `/api/routes/${selId}/reset`); await loadRoutes(); }
+    catch (e) { setErr(String(e)); }
+    finally { setResetting(false); }
+  }
   function clauseComplete(c) {
     const spec = vocab && vocab.triggers.find((tt) => tt.key === c.type);
     if (!spec) return false;
@@ -484,6 +493,19 @@ export function Routes({ t }) {
               <${ClauseRow} clause=${startCond || view.start_condition || { type: "reset_game" }}
                 types=${vocab.triggers} vocab=${vocab}
                 onChange=${(c) => saveStartCondition(c)} />
+            </div>` : null}
+            ${selected.seed_key ? html`<div
+                class="builder-seeded ${selected.seed_dirty ? "is-dirty" : ""}">
+              <span class="field-label"><${Icon} name="shield" size=${15} />${" "}
+                ${selected.seed_dirty ? "Edited copy of a shipped route"
+                  : "Shipped with the app"}</span>
+              <p class="meta">${selected.seed_dirty
+                ? "This one is yours now — it stops updating when a new version of the app ships a better version of this route. Reset puts it back."
+                : "Editing this route stops it updating when a new version of the app ships a better version of it. Reset puts it back."}</p>
+              <button onclick=${resetRoute} disabled=${resetting}>
+                <${Icon} name="restart" size=${15} />${" "}${resetting
+                  ? "Resetting…" : "Reset to the shipped version"}
+              </button>
             </div>` : null}
           </section>
 
