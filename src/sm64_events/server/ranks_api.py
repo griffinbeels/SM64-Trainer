@@ -359,6 +359,12 @@ def create_ranks_router(service, library=None, adoptions=None,
                 "clips": {strat: (alive(service.ranks.clips(entity).get(strat, []))
                                   + extra_clips.get(strat, []))
                           for strat in ladders},
+                # Which of those URLs are LIBRARY entries (round 3): a time
+                # link deep-links into the Library only when there is an entry
+                # card to land on — a vetted-only xcams URL keeps the plain
+                # external behaviour, since arriving nowhere reads as broken.
+                "library_urls": sorted({url for clips in extra_clips.values()
+                                        for _cs, url in clips}),
                 "user_videos": service.ranks.user_videos(entity),
                 "seeded": service.ranks.seeded_strategies(entity),
                 # Grouping is resolved HERE, not in the browser: a 100-coin

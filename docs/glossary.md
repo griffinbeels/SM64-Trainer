@@ -791,10 +791,12 @@ you pick looks like what you get.
 
 ### Standards ladder
 
-The table of every [[standard]] for one [[target]], each row wearing the
-[[rank icon]] of its top [[division]] and linking to the fastest watchable
-video inside that [[rank]]'s own band. A row expands into the five
-[[division]] thresholds inside its [[rank]], each linked the same way.
+The table of every [[standard]] for one [[target]], read slowest-first like
+the Library, each row wearing the [[rank icon]] of its top [[division]]. A
+row expands into the five [[division]] thresholds inside its [[rank]], and
+every time links to the fastest watchable [[sheet entry]] inside its band —
+the click lands on that exact [[sheet entry]]'s card in the Library, which
+blinks on arrival.
 
 - **Lives** — the standards panel
   (`src/sm64_events/ui/components/standards.js`)
