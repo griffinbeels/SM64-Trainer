@@ -44,7 +44,9 @@ only the first manual download does.)
   is installed; it's preinstalled on 11.
 - **Project64 1.6** — other versions are not supported, the memory addresses
   are 1.6-specific.
-- **Usamune v1.93u (US)**. The **JP** version is untested and unsupported.
+- **Usamune v1.93u (US)**. The **JP** version is untested and unsupported for
+  detection; the rank standards already know both, and **Settings → Game →
+  Game version** (Auto-detect / JP / US) picks which one grades you, live.
 - **Windowed**, not exclusive fullscreen, or replay capture can't see the game.
 - Your data lives in `%LOCALAPPDATA%\SM64Trainer\` and survives every update.
 
@@ -96,8 +98,10 @@ never ends up in a clip you upload.
 **Library.** Browse the whole community spreadsheet without leaving the app —
 every star and segment's proven ways to do it, laid out beginner to expert
 with real recorded times filed by the rank and subdivision they'd earn
-against your own standards, down to "Wario 3", with a JP/US mode that shows
-only that version's runs. Opens straight on whatever you last practiced, and
+against your own standards, down to "Wario 3", with a JP/US switch at the top
+that re-files everything under the other version's standards (the same switch
+sits on every Rank standards panel — a way to look, not a change to how you
+are graded). Opens straight on whatever you last practiced, and
 a search box finds any star or movement as you type — by its own name or by
 the name of a way of doing it, so "LBLJ" lands on the one that documents it.
 Runs with video play in place — YouTube, Twitch, X, Bluesky, Streamable,
