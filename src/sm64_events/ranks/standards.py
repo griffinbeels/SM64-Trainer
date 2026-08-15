@@ -446,6 +446,11 @@ class RankStandards:
         # silently no-op and the strategy would still be there next load.
         self._stored_ladders(ek).pop(strat, None)
         self.user_videos(ek).pop(strat, None)
+        # Its JP overlay goes with it -- found 2026-08-15 by the modal's own
+        # test cleanup: without this a deleted JP-carrying strategy left an
+        # orphan in jp_strategies forever, and re-creating the name would
+        # have inherited JP times its author never typed.
+        self._entity(ek).get("jp_strategies", {}).pop(strat, None)
         self.save()
 
     def set_video(self, ek, strat, rank, url) -> None:

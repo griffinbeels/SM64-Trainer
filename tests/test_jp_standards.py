@@ -190,3 +190,13 @@ def test_a_user_jp_edit_overlays_a_fitted_jp_ladder_per_rank(store):
         {r: v for r, v in before.items() if r != "Mario"}
     store.clear_jp(ek, strat)
     assert store.jp_deltas(ek, strat) == before   # the fitted layer is not his to clear
+
+
+def test_deleting_a_strategy_takes_its_jp_overlay_with_it(tmp_path):
+    s = RankStandards(tmp_path / "rs.json")
+    s.load()
+    s.set_threshold("star:9:1", "Mine", "Mario", 30.0)
+    s.set_threshold("star:9:1", "Mine", "Mario", 29.0, version="jp")
+    s.delete_strategy("star:9:1", "Mine")
+    assert s.jp_deltas("star:9:1", "Mine") == {}
+    assert "Mine" not in json.loads((tmp_path / "rs.json").read_text())["entities"]["star:9:1"].get("jp_strategies", {})
