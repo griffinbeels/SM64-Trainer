@@ -44,7 +44,11 @@ only the first manual download does.)
   is installed; it's preinstalled on 11.
 - **Project64 1.6** — other versions are not supported, the memory addresses
   are 1.6-specific.
-- **Usamune v1.93u (US)**. The **JP** version is untested and unsupported.
+- **Usamune v1.93u (US)**. The **JP** version is not supported yet: every
+  memory address the trainer reads is kept per ROM version, and JP's are
+  discovered by playing through `tools/sync_version.py --version jp` with the
+  JP ROM loaded while `/ui/sync.html` shows US beside JP filling in live.
+  Until that run has been done and its report promoted, JP reads nothing.
 - **Windowed**, not exclusive fullscreen, or replay capture can't see the game.
 - Your data lives in `%LOCALAPPDATA%\SM64Trainer\` and survives every update.
 
