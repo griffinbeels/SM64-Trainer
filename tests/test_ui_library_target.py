@@ -205,8 +205,10 @@ def test_jp_toggle_switches_the_ladder_and_the_band_cutoffs(library_page):
     """"Owl strat w/o speed preservation" is the one approach on this star
     carrying `ladder_jp` (US Mario 15.83s, JP 16.00s -- genuinely different
     values, not a toggle that redraws the same numbers). Opening it, reading
-    the TOC's Mario row, toggling, and reading again proves the toggle
-    recomputes `bandsOf` against a DIFFERENT ladder rather than merely
+    the TOC's Mario row, switching the PAGE-level JP/US control (his
+    2026-08-15 ruling retired the old per-section `.library-jp-toggle` chip in
+    favour of one switch every section reads), and reading again proves the
+    switch recomputes `bandsOf` against a DIFFERENT ladder rather than merely
     flipping a label."""
     opened = library_page.evaluate("""
       (() => {
@@ -220,7 +222,10 @@ def test_jp_toggle_switches_the_ladder_and_the_band_cutoffs(library_page):
       })()
     """)
     assert opened, "could not find the Owl strat section to open"
-    library_page.wait_for(".library-section.open .library-jp-toggle", timeout_ms=10000)
+    library_page.wait_for(".version-switch", timeout_ms=10000)
+    assert library_page.evaluate(
+        "!document.querySelector('.library-jp-toggle')"), (
+        "the retired per-section chip is still rendering")
 
     def mario_cutoff():
         return library_page.evaluate("""
@@ -239,11 +244,13 @@ def test_jp_toggle_switches_the_ladder_and_the_band_cutoffs(library_page):
 
     before = mario_cutoff()
     assert before, "no Mario TOC row found on the JP-carrying section"
-    library_page.evaluate(
-        "document.querySelector('.library-section.open .library-jp-toggle').click()")
+    library_page.evaluate("""
+      Array.from(document.querySelectorAll('.version-switch-seg'))
+        .find((seg) => seg.textContent.trim() === 'JP').click()
+    """)
     after = mario_cutoff()
     assert after and after != before, (
-        f"JP toggle did not change the Mario cutoff: {before!r} -> {after!r}")
+        f"page-level version switch did not change the Mario cutoff: {before!r} -> {after!r}")
 
 
 def test_band_anchors_are_unique_and_every_toc_row_resolves_one(library_page):

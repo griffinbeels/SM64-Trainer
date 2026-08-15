@@ -617,14 +617,14 @@ function TargetLinkControl({ rows, approaches, linkCtx }) {
  * (a strategy's linking is target-level, round 7).
  */
 function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
-                      onAdd, linkCtx }) {
+                      onAdd, linkCtx, version }) {
   if (!pieces.length) return null;
   return html`<div class="library-pieces">
     <h4 class="library-pieces-head">Pieces of this run</h4>
     ${pieces.map((piece) => html`<${Section} key=${approachIdentity(piece)}
         approach=${piece} open=${expanded === approachIdentity(piece)}
         onOpen=${() => onOpen(approachIdentity(piece))}
-        query=${query} stratInfo=${null}
+        query=${query} stratInfo=${null} version=${version}
         trayKeys=${trayKeys}
         entityKey=${piece.entity_key || entityKey} onAdd=${onAdd}
         linkCtx=${linkCtx}
@@ -636,23 +636,25 @@ function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
 
 /**
  * One strategy's section: header (identity, community best, fill rate, your
- * standing), an optional JP/US toggle, the TOC, and the banded example
- * cards. `open` is owned by the PARENT (single-open accordion, so "exactly
- * one section open" is a property of the parent's own state rather than
- * something every section has to negotiate).
+ * standing), the TOC, and the banded example cards. `open` is owned by the
+ * PARENT (single-open accordion, so "exactly one section open" is a property
+ * of the parent's own state rather than something every section has to
+ * negotiate). `version` is owned by the PAGE, not this section -- his
+ * 2026-08-15 ruling retired the per-section `library-jp-toggle` chip in
+ * favour of one switch in the Library hero (`library.js`) that every section
+ * on the page reads, "for fun exploration of the differences."
  */
 function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey, onAdd,
-                   linkCtx, door = null, focusMark = null }) {
+                   linkCtx, door = null, focusMark = null, version = "us" }) {
   // ROUND 1 (2026-08-07), superseding the round-2 version-badge ruling: the
-  // JP/US control is a MODE now, and a mode FILTERS -- "We should have 2
-  // modes: JP (shows only JP entries), US (shows only US entries)." An entry
-  // tagged with the other version disappears; an entry never annotated with a
+  // JP/US control is a MODE, and a mode FILTERS -- "We should have 2 modes:
+  // JP (shows only JP entries), US (shows only US entries)." An entry tagged
+  // with the other version disappears; an entry never annotated with a
   // version shows in both modes (the combined-unless-annotated rule, applied
   // to display). With every visible run being the mode's own version, the
   // per-entry version pill that used to badge mixed sections had nothing
   // left to say and is deleted. Bands and counts are computed AFTER the
   // filter, so every number on screen describes what is actually shown.
-  const [version, setVersion] = useState("us");
   const hasJp = !!approach.ladder_jp;
   const mixedVersions = useMemo(() => new Set(
     (approach.entries || []).map((entry) => entry.version).filter(Boolean),
@@ -686,7 +688,23 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
     ? { ...standingOn(ladder, assoc.pbCs),
         pb_display: assoc.pbDisplay, noTimes: assoc.pbCs == null }
     : null;
-  const standing = stratInfo || assocInfo;
+  // A matched strategy's `stratInfo` is served graded on the GRADING version
+  // (ranks/standards.py's `grading_version`) -- correct while this section
+  // could only ever show that same ladder, and now the page-level switch can
+  // show a DIFFERENT one. `pb_cs` is the walkable ingredient the endpoint
+  // already carries for exactly this reason (views.py::build_entity_
+  // strategies: "the saved PB as a display-clock number ... a formatted
+  // string cannot be walked"), so when it is present, re-derive rank/
+  // division against THIS section's displayed `ladder` the same way
+  // `assocInfo` above does -- both kinds of standing then follow the page's
+  // version switch consistently. A `stratInfo` with no walkable PB (nothing
+  // saved on this strategy yet) keeps the served answer verbatim; there is
+  // nothing to re-walk.
+  const stratStanding = stratInfo && stratInfo.pb_cs != null
+    ? { ...standingOn(ladder, stratInfo.pb_cs),
+        pb_display: stratInfo.pb_display, noTimes: false }
+    : stratInfo;
+  const standing = stratStanding || assocInfo;
 
   return html`<div class=${`library-section ${open ? "open" : ""}`
         + (approach._piece ? " library-piece-section" : "")}
@@ -742,14 +760,6 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
         ${/* Round 7: approaches carry NO row-level door -- the whole-target
              control beside the page's name owns linking now ("moved near
              the top ... as an 'overarching' thing"). Pieces keep theirs. */""}
-        ${versioned ? html`<button type="button" class="chip chip-button library-jp-toggle"
-            aria-pressed=${version === "jp"}
-            title=${hasJp
-              ? `Showing only ${version === "jp" ? "JP" : "US"} entries, banded against the ${version === "jp" ? "JP" : "US"} ladder.`
-              : `Showing only ${version === "jp" ? "JP" : "US"} entries. This approach has one ladder for both versions.`}
-            onclick=${() => setVersion((prev) => (prev === "jp" ? "us" : "jp"))}>
-            ${version === "jp" ? "JP" : "US"} mode · switch
-          </button>` : ""}
         ${/* FINAL REVIEW FIX (medium: ladder_version read nowhere). A row
              with too few of the OTHER version's times to fit a second ladder
              still gets ONE, fitted entirely from whichever population it has
@@ -820,7 +830,7 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
  * point 4) to this same full shape before mounting this component, so it
  * never has to branch on which door it came through.
  */
-export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTier,
+export function LibraryTarget({ t, targets, version = "us", onAdd, trayKeys, focusStrat, focusTier,
                                focusDivision = null, focusEntryUrl = null,
                                focusRow = null,
                                fallbackLabel = null, onRelink = () => {},
@@ -1219,13 +1229,13 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
             ? focusMark : null}
           stratInfo=${approach.matched_strategy ? stratByName[approach.matched_strategy] : null}
           trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
-          linkCtx=${linkCtx} />`)}
+          linkCtx=${linkCtx} version=${version} />`)}
     <${PiecesList} pieces=${pieces} query=${query}
         expanded=${expanded}
         onOpen=${(identity) => setExpanded((prev) =>
           prev === identity ? null : identity)}
         trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
-        linkCtx=${linkCtx} />
+        linkCtx=${linkCtx} version=${version} />
     ${/* Task 0096: the record door's recorder — the IDENTICAL surface the
          Segments tab opens (one implementation, his own requirement), seeded
          with the row's name and its target's entity. The save's own
