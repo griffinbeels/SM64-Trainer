@@ -12,7 +12,7 @@ verified and the sync report (`data/version_sync/jp.json`) says so —
 `tests/test_layout_us.py` pins every US value so JP work cannot move one.
 
 Every ROW carries its DERIVATION: the decomp symbol STROOP's linker map names
-(so a candidate for a new version is read off `memory/data/symbols_<v>.tsv`
+(so a candidate for a new version is read off `data/symbols_<v>.tsv`
 with no gameplay), or the hunt that finds it (Usamune's own globals are in no
 map). Fetched 2026-08-15 from STROOP MappingUS.map / MappingJP.map: the JP
 shift is NOT one offset — −0xF40 for the 0x8032 block, −0x1370 for the 0x8033
@@ -134,7 +134,7 @@ US = Layout(
     behaviour_base=0x800EB180,      # anchored on his bob-omb pointer, 8/8 confirmed 2026-08-07
 )
 
-# JP — nothing verified yet. Candidates come from memory/data/symbols_jp.tsv
+# JP — nothing verified yet. Candidates come from data/symbols_jp.tsv
 # through the sync runner; a value is written here only after its gate passes.
 JP = Layout(version="jp")
 
