@@ -250,24 +250,33 @@ def _warp_snaps(delay_frames: int, dest_before=(0, 0, 0, 0), dest_after=(2, 17, 
     return snaps
 
 
-def test_cal_warp_pipe_dest_delay_verifies_inside_the_ride_window():
-    window = resolve_backs(
-        "sm64_events.detectors.warp.WarpDetector.RIDE_WINDOW_FRAMES")
-    ctx = FakeContext(_warp_snaps(window - 6))   # comfortably inside
-    verdict = CG._check_warp_delay(
-        ctx, threshold_name="sm64_events.detectors.warp.WarpDetector.RIDE_WINDOW_FRAMES",
-        compare=lambda delay, w: delay < w)
+PIPE_CONSTANT = "sm64_events.detectors.warp.WarpDetector.PIPE_TOUCH_TO_DEST_FRAMES"
+
+
+def _pipe_gate():
+    [gate] = [g for g in GATES if g.id == "cal.warp.pipe_dest_delay"]
+    return gate
+
+
+def test_cal_warp_pipe_dest_delay_verifies_at_exactly_the_us_countdown():
+    """The gate measures the touch-to-write delay against the NAMED US
+    constant (20, probe_warp_block twice) -- equality, not a window, so a JP
+    countdown of 24 shows as a failed measurement instead of hiding inside
+    RIDE_WINDOW_FRAMES."""
+    expected = resolve_backs(PIPE_CONSTANT)
+    ctx = FakeContext(_warp_snaps(expected))
+    verdict = _pipe_gate().check(ctx)
     assert verdict.status == "verified"
+    assert verdict.measured["delay_frames"] == expected
 
 
-def test_cal_warp_pipe_dest_delay_fails_outside_the_ride_window():
-    window = resolve_backs(
-        "sm64_events.detectors.warp.WarpDetector.RIDE_WINDOW_FRAMES")
-    ctx = FakeContext(_warp_snaps(window + 5))
-    verdict = CG._check_warp_delay(
-        ctx, threshold_name="sm64_events.detectors.warp.WarpDetector.RIDE_WINDOW_FRAMES",
-        compare=lambda delay, w: delay < w)
+def test_cal_warp_pipe_dest_delay_fails_when_the_countdown_differs():
+    expected = resolve_backs(PIPE_CONSTANT)
+    ctx = FakeContext(_warp_snaps(expected + 4))
+    verdict = _pipe_gate().check(ctx)
     assert verdict.status == "failed"
+    assert verdict.measured == {"delay_frames": expected + 4, "window": expected}
+    assert _pipe_gate().backs == PIPE_CONSTANT
 
 
 def test_cal_warp_painting_at_touch_verifies_when_written_at_the_touch():

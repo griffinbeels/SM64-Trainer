@@ -257,15 +257,15 @@ def _check_warp_delay(ctx, *, threshold_name: str, compare) -> Verdict:
 register(Gate(
     id="cal.warp.pipe_dest_delay", feature="warps & entrances", kind="calibration",
     needs=SNAPSHOT_REQUIRED_GATES,
-    backs="sm64_events.detectors.warp.WarpDetector.RIDE_WINDOW_FRAMES",
+    backs="sm64_events.detectors.warp.WarpDetector.PIPE_TOUCH_TO_DEST_FRAMES",
     timeout_s=WARP_TRACE_SECONDS + 10,
     instruction="Jump into the BitDW pipe.",
-    proves="the real touch-to-destination delay stays inside "
-           "RIDE_WINDOW_FRAMES, the ceiling warp.py's own pause detection "
-           "depends on.",
+    proves="a pipe writes its destination exactly PIPE_TOUCH_TO_DEST_FRAMES "
+           "(20 on US, measured twice) after the touch; a ROM whose countdown "
+           "differs shows here as a failed measurement, not inside a window.",
     check=lambda ctx: _check_warp_delay(
-        ctx, threshold_name="sm64_events.detectors.warp.WarpDetector.RIDE_WINDOW_FRAMES",
-        compare=lambda delay, window: delay < window),
+        ctx, threshold_name="sm64_events.detectors.warp.WarpDetector.PIPE_TOUCH_TO_DEST_FRAMES",
+        compare=lambda delay, expected: delay == expected),
 ))
 register(Gate(
     id="cal.warp.painting_at_touch", feature="warps & entrances", kind="calibration",
