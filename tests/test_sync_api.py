@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from sm64_events.server.app import create_app
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
+from sm64_events.sync import registry as _registry  # noqa: F401  -- load the REAL registry before any fixture clears it
 from sm64_events.sync import gates as G
 from sm64_events.sync.report import report_path
 

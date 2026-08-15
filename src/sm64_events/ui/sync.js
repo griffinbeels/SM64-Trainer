@@ -30,14 +30,12 @@ function idTail(id) {
   return dot === -1 ? id : id.slice(dot + 1);
 }
 
-// "what we read": a calibration gate names the constant it BACKS explicitly
-// (two numbers being compared, not one address); every other kind's id tail
-// already names the field or event it reads (address.global_timer -> the
-// global_timer field; feature.star_grab.ground -> the star_grab event) so
-// there is nothing a second derivation would add.
+// "what we read" comes from the server (`sync/gates.py::reads_label`): the
+// layout row's decomp symbol for an address, the constant a calibration
+// backs, the event type a feature waits for -- ONE derivation, so this page
+// cannot disagree with the runner about what a gate reads.
 function whatWeRead(gate) {
-  if (gate.kind === "calibration") return gate.backs || "(no backs)";
-  return idTail(gate.id);
+  return gate.reads || idTail(gate.id);
 }
 
 function verdictFor(reports, version, gateId) {

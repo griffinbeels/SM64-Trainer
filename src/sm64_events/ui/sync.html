@@ -64,11 +64,16 @@
   .sync-table td { padding: 6px 8px; border-bottom: 1px solid var(--border-soft);
     vertical-align: top; }
   .sync-table tr:last-child td { border-bottom: none; }
-  .sync-gate-id { font-family: Consolas, monospace; font-size: 11.5px; }
+  .sync-gate-id { font-family: Consolas, monospace; font-size: 11.5px;
+    overflow-wrap: anywhere; }
   .sync-kind-chip { font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
     padding: 2px 6px; border-radius: 4px; background: var(--bg-deep);
     border: 1px solid var(--border-soft); color: var(--muted); white-space: nowrap; }
-  .sync-reads { font-family: Consolas, monospace; font-size: 11px; color: var(--muted); }
+  /* Long dotted names must WRAP, never push the JP column out of the card:
+     at the 850px floor a calibration's constant name is wider than the
+     table's share of the width. */
+  .sync-reads { font-family: Consolas, monospace; font-size: 11px; color: var(--muted);
+    overflow-wrap: anywhere; }
 
   .sync-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px;
     padding: 2px 7px; border-radius: 999px; border: 1px solid transparent;

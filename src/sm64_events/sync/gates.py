@@ -77,7 +77,26 @@ class Gate:
         return {"id": self.id, "feature": self.feature, "kind": self.kind,
                 "instruction": self.instruction, "proves": self.proves,
                 "needs": list(self.needs), "backs": self.backs,
-                "auto": self.auto}
+                "auto": self.auto, "reads": reads_label(self)}
+
+
+def reads_label(gate: "Gate") -> str:
+    """WHAT the gate reads, in the words the dashboard's READS column shows:
+    an address gate names its layout row's decomp symbol (or the hunt), a
+    calibration gate the constant it backs (class.CONST, module dropped), a
+    feature gate the event type, a behaviour gate the symbol it resolves."""
+    from sm64_events.memory.layout import LAYOUT_ROWS
+    if gate.kind == "calibration":
+        return ".".join((gate.backs or "").split(".")[-2:]) or "(no backs)"
+    if gate.kind == "feature":
+        return gate.id.split(".")[1] if "." in gate.id else gate.id
+    if gate.kind == "behaviour":
+        return "bhvMario → base" if gate.id == "behaviour.base" else "a touched object's symbol"
+    field = gate.id.split(".", 1)[1] if gate.id.startswith("address.") else gate.id
+    for row in LAYOUT_ROWS:
+        if row.field == field.removesuffix(".confirm"):
+            return row.symbol if row.symbol else f"hunt: {row.hunt}"
+    return "the ROM header" if gate.id == "version.rom" else field
 
 
 GATES: list[Gate] = []

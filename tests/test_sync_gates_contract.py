@@ -56,3 +56,17 @@ def test_verdict_roundtrips_json_and_rejects_unknown_status():
     assert G.Verdict.from_json(verdict.as_json()) == verdict
     with pytest.raises(ValueError):
         G.Verdict("meh")
+
+
+def test_reads_label_names_what_each_kind_reads():
+    """The dashboard's READS column: one derivation, server-side."""
+    assert G.reads_label(G.Gate("address.global_timer", "version", "address", "i", "p", _ok)) == "gGlobalTimer"
+    assert G.reads_label(G.Gate("address.usamune_overall", "version", "address", "i", "p", _ok)) == "hunt: usamune_time"
+    assert G.reads_label(G.Gate("address.object_pool.confirm", "version", "address", "i", "p", _ok)) == "gObjectPool"
+    assert G.reads_label(G.Gate("version.rom", "version", "address", "i", "p", _ok)) == "the ROM header"
+    assert G.reads_label(G.Gate("cal.x", "star grab", "calibration", "i", "p", _ok,
+                                backs="sm64_events.detectors.igt_clock.IgtClock.DISPLAY_TICK")) == "IgtClock.DISPLAY_TICK"
+    assert G.reads_label(G.Gate("feature.star_collected.ground", "star grab", "feature", "i", "p", _ok)) == "star_collected"
+    assert G.reads_label(G.Gate("behaviour.base", "version", "behaviour", "i", "p", _ok)) == "bhvMario → base"
+    gate = G.Gate("address.curr_level", "castle areas", "address", "i", "p", _ok)
+    assert gate.as_json()["reads"] == "gCurrLevelNum"

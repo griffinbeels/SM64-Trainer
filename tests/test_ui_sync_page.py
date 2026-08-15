@@ -37,6 +37,7 @@ if _MISSING:
 from ui_fixture import serve_ui  # noqa: E402
 from uilab import driver  # noqa: E402
 
+from sm64_events.sync import registry as _registry  # noqa: F401  -- load the REAL registry before any fixture clears it
 from sm64_events.sync import gates as G  # noqa: E402
 
 GLOBAL_TIMER_GATE = "address.global_timer"
