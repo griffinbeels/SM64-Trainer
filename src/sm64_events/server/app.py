@@ -368,6 +368,11 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     # source checkout, and it refuses itself when frozen.
     from sm64_events.server.tuning_api import create_tuning_router
     app.include_router(create_tuning_router())
+    # The version-sync dashboard (/ui/sync.html). Mounted unconditionally like
+    # the tuning router -- it needs only the broadcaster, so a second (broadcast-
+    # only) instance can still show and record coverage.
+    from sm64_events.server.sync_api import create_sync_router
+    app.include_router(create_sync_router(broadcaster))
     # The Ultimate Sheet library. Mounted unconditionally and independent of
     # the tracker service: it is community reference data, so it is worth
     # having even in a broadcast-only second instance with no store of its own.
