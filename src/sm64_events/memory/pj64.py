@@ -89,6 +89,30 @@ class Pj64Memory(RdramReader):
         self._close()  # process found, ROM not loaded yet
         return False
 
+    def rom_header(self) -> bytes | None:
+        """The first 0x40 bytes of the ROM image PJ64 holds, in whatever byte
+        order it stores them (memory/version_probe.py normalises), or None.
+
+        The ROM is not in RDRAM: it is a separate committed region of the
+        emulator's process, at least 8 MB for SM64, that BEGINS with the
+        cartridge magic. Scanned only when asked -- attach() does not need
+        it -- and read-only like everything else here.
+        """
+        if self._pm is None:
+            return None
+        from sm64_events.memory.version_probe import (HEADER_SIZE,
+                                                      normalise_header)
+        try:
+            for base, size in iter_committed_regions(self._pm.process_handle):
+                if size < 8 * 1024 * 1024:
+                    continue
+                head = self._pm.read_bytes(base, HEADER_SIZE)
+                if normalise_header(head) is not None:
+                    return head
+        except pymem.exception.PymemError:
+            return None
+        return None
+
     def detach(self) -> None:
         self._close()
 
