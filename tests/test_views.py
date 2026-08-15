@@ -684,6 +684,20 @@ def test_segment_target_section_always_present_and_target_kind_aware(tmp_path):
     assert view["stars"] == []
 
 
+def test_segment_sections_carry_a_wiki_link_when_the_wiki_has_the_page(tmp_path):
+    # Rule 11: the drawer's "RTA Guide" link is not star-only. LBLJ and Lakitu
+    # Skip have their own pages; a movement the wiki never wrote up ships
+    # null, and the drawer draws nothing for null rather than a 404.
+    db, svc = make(tmp_path)
+    lblj_success(svc, rta=85)
+    asyncio.run(svc.set_target_segment(3))
+    view = build_session_view(db, svc, clock="igt")
+    assert seg_section(view, 1)["links"]["ukikipedia"] == (
+        "https://ukikipedia.net/wiki/RTA_Guide/Lobby_Backwards_Long_Jump")
+    assert seg_section(view, 3)["links"]["ukikipedia"] == (
+        "https://ukikipedia.net/wiki/RTA_Guide/Lakitu_Skip")
+
+
 def test_segment_pb_keying_isolates_segments_and_stars(tmp_path):
     db, svc = make(tmp_path)
     lblj_success(svc, rta=85)

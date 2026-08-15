@@ -105,6 +105,19 @@ def strategy_name_zone() -> tuple[Path, ...]:
 
 INVARIANTS = (
     SingleSource(
+        concept="a link into Ukikipedia",
+        owners=frozenset({"links.py"}),
+        tokens=("ukikipedia.net/wiki",),
+        files=(*python_sources(), *ui_js()),
+        why="links.py::ukikipedia_url resolves a target against the wiki's "
+            "own page list (ukikipedia_titles.py) and answers None where no "
+            "page exists, which is what lets the Library's wiki mark and the "
+            "drawer's RTA Guide link be promises the click keeps. A file "
+            "assembling its own https://ukikipedia.net/wiki/... is back to "
+            "the pre-2026-08-15 guess that 404'd on every title the wiki "
+            "spells differently and on all nine secret-course stars.",
+    ),
+    SingleSource(
         concept="a clickable row in the Library's search results",
         owners=frozenset({"librarynav.js"}),
         tokens=("library-result-name", "library-result-sub", "library-result-icon"),

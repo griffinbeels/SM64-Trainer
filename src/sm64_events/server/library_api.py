@@ -10,6 +10,7 @@ from fastapi.concurrency import run_in_threadpool
 from sm64_events.library import adoptions as adoptions_store
 from sm64_events.library.audit import row_key
 from sm64_events.library.source import fetch
+from sm64_events.links import ukikipedia_url
 
 
 def create_library_router(store, overrides=None, adoptions=None,
@@ -63,7 +64,13 @@ def create_library_router(store, overrides=None, adoptions=None,
                 "approaches": rows(target["approaches"]),
                 "subsections": rows(target["subsections"]),
                 "adoptable": adoptions is not None,
-                "matched_segment": matched}
+                "matched_segment": matched,
+                # The wiki mark's href: the Ukikipedia RTA Guide page this
+                # target's identity (else its sheet label) resolves to, or
+                # None -- resolved server-side against the wiki's own page
+                # list so the browser never guesses a title (links.py).
+                "ukikipedia": ukikipedia_url(target.get("entity_key"),
+                                             target.get("label"))}
 
     @router.get("/target/{index}")
     def library_target(index: int):

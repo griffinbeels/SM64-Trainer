@@ -845,6 +845,10 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
   // uses) -- carried only for the empty case; a real sheet label always wins.
   const label = (rows[0] && rows[0].label) || fallbackLabel || "";
   const missReason = rows.length === 1 ? rows[0].miss_reason : null;
+  // Server-resolved (library_api.py's `ukikipedia`), never derived here. An
+  // entity page can hold several targets (CCM's four "+ 100c" rows) that all
+  // resolve to one page; the first that has one names it.
+  const wikiUrl = (rows.find((row) => row.ukikipedia) || {}).ukikipedia || null;
   // The PAGE's own identity, for the auto-expand one-shot below -- never
   // `entityKey`. `rows[].index` is stable within one loaded payload (the
   // same numeric door the picker's own numeric branch already addresses a
@@ -1171,6 +1175,17 @@ export function LibraryTarget({ t, targets, onAdd, trayKeys, focusStrat, focusTi
       <div class="library-target-heading">
         <div class="library-target-titleline">
           <h3>${label}</h3>
+          ${/* The WIKI MARK: Ukikipedia's own Ukiki face, linking to this
+               target's RTA Guide page. Drawn only when the server resolved
+               one (`ukikipedia` is null for a target the wiki has no page
+               for -- most castle door-to-door movements), so the mark is a
+               promise the click keeps. His ask, 2026-08-15: "a small
+               Ukikipedia icon to the right of the name of the star". */""}
+          ${wikiUrl && html`<a class="wiki-mark" href=${wikiUrl}
+              target="_blank" rel="noopener"
+              title="Ukikipedia RTA Guide" aria-label="Ukikipedia RTA Guide">
+              <img src="/ui/assets/ukikipedia.png" alt="" draggable="false" />
+            </a>`}
           <${TargetLinkControl} rows=${rows} approaches=${approaches}
               linkCtx=${linkCtx} />
         </div>

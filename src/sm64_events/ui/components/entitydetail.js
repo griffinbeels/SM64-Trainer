@@ -229,8 +229,15 @@ export function EntityDrawer({ sec, t }) {
   return html`<details class="practice-card detail-drawer" open>
     <summary>Stats, standards, and practice options</summary>
     <div class="detail-tools">
-      ${!seg && html`<a href=${sec.links.ukikipedia} target="_blank">RTA Guide ↗</a>`}
-      ${!seg && sec.links.example && html`<a href=${sec.links.example} target="_blank">Example ↗</a>`}
+      ${/* Both kinds carry `links` (rule 11); the RTA Guide link draws only
+           when the wiki HAS the page -- links.py resolves against the wiki's
+           own page list and ships null otherwise, so a segment with no page
+           and a star the wiki spells differently both draw nothing rather
+           than a 404. */""}
+      ${sec.links?.ukikipedia && html`<a href=${sec.links.ukikipedia} target="_blank"
+          rel="noopener">RTA Guide ↗</a>`}
+      ${sec.links?.example && html`<a href=${sec.links.example} target="_blank"
+          rel="noopener">Example ↗</a>`}
       ${!sec.broken && html`<${TimeFilterChip} sec=${sec} t=${t} />`}
       <button class="danger-text" onclick=${() => wipeSection(sec, t)}
         title=${t.scope === "lifetime"

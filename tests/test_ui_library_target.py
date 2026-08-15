@@ -760,3 +760,64 @@ def test_a_star_with_no_saved_time_still_marks_the_floor_it_stands_on(library_se
     # beat is the one under it.
     assert state["youIndex"] == 0, state
     assert state["nextIndex"] == 1, state
+
+
+# ---- the wiki mark (2026-08-15) ------------------------------------------
+
+def test_the_wiki_mark_sits_beside_the_name_and_its_art_loads(library_page):
+    """"a small Ukikipedia icon to the right of the name of the star" -- an
+    <a> wearing the Ukiki face, on the title line, whose href is the page the
+    server resolved (never a title the browser guessed). The image must
+    actually paint: a 404'd asset renders as a broken-image glyph the DOM
+    query cannot tell from art, so naturalWidth is the assertion, and the
+    mark's own box must sit on the h3's row, not wrap under it."""
+    library_page.wait_for(".library-target-titleline .wiki-mark img", timeout_ms=10000)
+    facts = library_page.evaluate("""
+      (() => {
+        const mark = document.querySelector('.library-target-titleline .wiki-mark');
+        const img = mark.querySelector('img');
+        const h3 = document.querySelector('.library-target-titleline h3');
+        const a = mark.getBoundingClientRect(), b = h3.getBoundingClientRect();
+        return { href: mark.href, loaded: img.complete && img.naturalWidth > 0,
+                 rightOfName: a.left >= b.right,
+                 sameRow: Math.abs((a.top + a.height / 2) - (b.top + b.height / 2)) < 12,
+                 opensNewTab: mark.target === '_blank',
+                 titled: !!mark.getAttribute('title') };
+      })()
+    """)
+    # the fixture lands on star:2:4, Fall onto the Caged Island
+    assert facts["href"] == (
+        "https://ukikipedia.net/wiki/RTA_Guide/Fall_onto_the_Caged_Island"), facts
+    assert facts["loaded"], "the Ukiki face did not paint"
+    assert facts["rightOfName"] and facts["sameRow"], facts
+    assert facts["opensNewTab"] and facts["titled"], facts
+
+
+def test_a_movement_with_no_wiki_page_draws_no_mark(library_server):
+    """A door-to-door lobby movement has no Ukikipedia page (the wiki's own
+    "Castle Movement" redirects to Lakitu Skip), so the mark is absent, not
+    dead: a control that opens a 404 is the exact shape acceptance.md
+    rejects. Same navigation as the ungraded-movement test above."""
+    with driver.get_driver().launch(headless=True) as page:
+        page.goto(f"{library_server}/ui/index.html")
+        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.evaluate(CLICK_LIBRARY_TAB)
+        page.wait_for(".library-target", timeout_ms=15000)
+        page.evaluate("document.querySelector('.library-page .entity-back').click()")
+        page.wait_for(".library-courses", timeout_ms=15000)
+        opened = page.evaluate(
+            "(() => { const hit = Array.from(document.querySelectorAll("
+            "'.library-page .library-courses button')).find(el => "
+            "el.textContent.includes('Lobby')); if (!hit) return false; "
+            "hit.click(); return true; })()")
+        assert opened, "no Castle Movements (Lobby) group cell"
+        page.wait_for(".library-group .entity-grid", timeout_ms=10000)
+        picked = page.evaluate(
+            "(() => { const hit = Array.from(document.querySelectorAll("
+            "'.library-page .library-group .entity-grid button')).find(el => "
+            "el.textContent.includes('Lobby door (L) - CCM wooden door')); "
+            "if (!hit) return false; hit.click(); return true; })()")
+        assert picked, "no lobby door target cell"
+        page.wait_for(".library-target .library-target-titleline h3", timeout_ms=10000)
+        assert page.evaluate(
+            "document.querySelectorAll('.library-target .wiki-mark').length") == 0

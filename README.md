@@ -108,7 +108,10 @@ frame-accurate transport driving them all in lockstep. The pieces of a run
 (the sheet's own subsections) get the same full rank-and-video cards, and any
 row you have no segment for yet offers **Record a segment** right there — the
 recorder opens pre-named, you pick the moments you just played, and the save
-links itself to the row so it grades immediately.
+links itself to the row so it grades immediately. Every star, Bowser course
+and named movement (LBLJ, Lakitu Skip, MIPS…) wears a small Ukiki face beside
+its name — Ukikipedia's own icon — that opens its RTA Guide page; it appears
+only where the wiki actually has a page, so it never leads to a 404.
 
 **Debug report.** Something behaving oddly? **Settings → Debug report** writes
 a single file capturing what the trainer was doing (logs, recent events,

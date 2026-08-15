@@ -42,6 +42,23 @@ def test_one_target_carries_its_approaches_entries_and_ladders(client):
     assert "ladder" in approach
 
 
+def test_a_target_carries_its_wiki_page_or_null(client):
+    # The wiki mark on the Library page: resolved HERE against the wiki's own
+    # page list (links.py), so the browser draws a link only where a page
+    # exists. Both full-target doors serve it.
+    body = client.get("/api/library/entity/star:2:2").json()     # Wild Blue
+    assert body["targets"][0]["ukikipedia"] == (
+        "https://ukikipedia.net/wiki/RTA_Guide/Shoot_into_the_Wild_Blue")
+    index = client.get("/api/library").json()
+    lobby = next(t for g in index["groups"] for t in g["targets"]
+                 if t["label"] == "Lobby door (L) - CCM wooden door")
+    assert client.get(f"/api/library/target/{lobby['index']}").json()["ukikipedia"] is None
+    lblj = next(t for g in index["groups"] for t in g["targets"]
+                if t["label"].endswith("Enter WF (LBLJ)"))
+    assert client.get(f"/api/library/target/{lblj['index']}").json()["ukikipedia"] == (
+        "https://ukikipedia.net/wiki/RTA_Guide/Lobby_Backwards_Long_Jump")
+
+
 def test_an_index_off_the_end_is_a_404(client):
     assert client.get("/api/library/target/999999").status_code == 404
 
