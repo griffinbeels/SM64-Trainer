@@ -318,6 +318,10 @@ export function Header({ t, settingsOpen, closeSettings }) {
               feed and disclosure tuning page</a> — push a card into the log to
             tune the arrival and the shove it gives the cards below, open one to
             tune every dropdown in the app, and save it into the code.
+            <br />
+            <a href="/ui/sync.html" target="_blank" rel="noopener">Open the
+              version sync dashboard</a> — every US/JP address, behaviour and
+            calibration gate, and how much of each is verified.
           </p>
           <label class="settings-field">
             <span>Dust-trick counts</span>
