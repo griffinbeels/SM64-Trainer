@@ -195,13 +195,6 @@ def test_stats_registry_and_statmenu(tmp_path):
             {"key": "best", "params": {}}]
 
 
-def test_links_endpoint(tmp_path):
-    client, service, db = make_client(tmp_path)
-    with client:
-        r = client.get("/api/links/2/2")
-        assert r.json()["ukikipedia"].endswith("Shoot_into_the_Wild_Blue")
-
-
 def test_health_reports_db_and_session(tmp_path):
     client, service, db = make_client(tmp_path)
     with client:

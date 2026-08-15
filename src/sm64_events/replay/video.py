@@ -1,6 +1,6 @@
 """Video capture sources -> recorder VideoSource protocol.
 
-Three sources, in pecking order for THIS app (PJ64 1.6 / Jabo D3D8 — a
+Two sources, in pecking order for THIS app (PJ64 1.6 / Jabo D3D8 — a
 legacy BITBLT-model presenter whose pixels live in the window's
 redirection surface):
 
@@ -12,11 +12,11 @@ redirection surface):
    holds the window lock ~110-170 ms once a second (internal 1 Hz work;
    survives hiding the FPS display — user-tested) -> a visible stall
    every second. The WGC/DDA-vs-bitblt story is in its class docstring.
-3. WgcVideoSource (kept for normal flip-model apps) — WINDOW capture of
-   PJ64 delivers frozen content (~1-6 unique frames/s: the composition
-   path barely updates for this app class), so this adapter captures the
-   MONITOR cropped to the window. Records occluders; WGC API traps live
-   in its class docstring.
+
+(A third source, WgcVideoSource — monitor capture cropped to the window,
+for normal flip-model apps — was removed 2026-08-14: never wired, unusable
+for PJ64 by its own measurement, and the sole consumer of the
+windows-capture dependency.)
 
 DPI: PJ64 is DPI-unaware, so its client/surface size is LOGICAL pixels
 (e.g. 1600x1224 at 150 % scaling) while DWM extended-frame bounds are
@@ -43,8 +43,6 @@ log = logging.getLogger("sm64.replay")
 # to ~0.125 s so a 0-pre-pad clip's opening frame stays crisp.
 _IDLE_GRAB_FPS = 8.0
 
-_DWMWA_EXTENDED_FRAME_BOUNDS = 9
-
 
 def grab_period(active_fps_eff: float, idle: bool,
                 idle_fps: float = _IDLE_GRAB_FPS) -> float:
@@ -55,89 +53,6 @@ def grab_period(active_fps_eff: float, idle: bool,
     slows down."""
     fps = idle_fps if idle else active_fps_eff
     return 1.0 / fps if fps > 0 else 1.0
-_MONITOR_DEFAULTTONEAREST = 2
-_DPI_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
-
-
-def _ensure_dpi_aware() -> None:
-    """DWM extended-frame bounds are PHYSICAL pixels regardless of process
-    DPI awareness, but GetMonitorInfo is virtualized for unaware processes —
-    on a scaled display the two disagree (seen live: monitor 2560x1440
-    virtualized vs a 2403x1907-physical window). Making the process
-    per-monitor aware puts every coordinate in physical pixels, matching the
-    WGC frame. Best-effort: fails harmlessly if awareness was already set."""
-    try:
-        ctypes.windll.user32.SetProcessDpiAwarenessContext(
-            _DPI_PER_MONITOR_AWARE_V2)
-    except Exception:
-        pass
-
-
-class _MONITORINFO(ctypes.Structure):
-    _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT),
-                ("rcWork", wt.RECT), ("dwFlags", wt.DWORD)]
-
-
-def window_rect(hwnd: int) -> tuple[int, int, int, int] | None:
-    """Visible window bounds in virtual-screen coords (DWM extended frame
-    bounds — excludes the drop shadow; falls back to GetWindowRect).
-    None when the window is minimized/gone (rect would be meaningless)."""
-    user32 = ctypes.windll.user32
-    if not user32.IsWindow(wt.HWND(hwnd)) or user32.IsIconic(wt.HWND(hwnd)):
-        return None
-    rect = wt.RECT()
-    res = ctypes.windll.dwmapi.DwmGetWindowAttribute(
-        wt.HWND(hwnd), _DWMWA_EXTENDED_FRAME_BOUNDS,
-        ctypes.byref(rect), ctypes.sizeof(rect))
-    if res != 0:
-        if not user32.GetWindowRect(wt.HWND(hwnd), ctypes.byref(rect)):
-            return None
-    return rect.left, rect.top, rect.right, rect.bottom
-
-
-def monitor_geometry(hwnd: int) -> tuple[int, tuple[int, int, int, int]]:
-    """(1-based monitor index in EnumDisplayMonitors order, monitor rect).
-
-    windows-capture enumerates monitors in the same EnumDisplayMonitors
-    order, 1-based — so the position of this window's HMONITOR in that
-    enumeration IS the crate's monitor_index."""
-    user32 = ctypes.windll.user32
-    target = user32.MonitorFromWindow(wt.HWND(hwnd), _MONITOR_DEFAULTTONEAREST)
-    monitors: list[int] = []
-
-    @ctypes.WINFUNCTYPE(wt.BOOL, wt.HMONITOR, wt.HDC, ctypes.POINTER(wt.RECT),
-                        wt.LPARAM)
-    def cb(hmon, _hdc, _rect, _lparam):
-        monitors.append(hmon)
-        return True
-
-    user32.EnumDisplayMonitors(None, None, cb, 0)
-    info = _MONITORINFO()
-    info.cbSize = ctypes.sizeof(info)
-    user32.GetMonitorInfoW(wt.HMONITOR(target), ctypes.byref(info))
-    rc = info.rcMonitor
-    try:
-        index = monitors.index(target) + 1
-    except ValueError:
-        index = 1
-    return index, (rc.left, rc.top, rc.right, rc.bottom)
-
-
-def crop_bounds(frame_w: int, frame_h: int,
-                win_rect: tuple[int, int, int, int],
-                mon_rect: tuple[int, int, int, int],
-                ) -> tuple[int, int, int, int] | None:
-    """Window rect (virtual-screen coords) -> frame-pixel slice bounds,
-    clamped to the frame; None when the visible intersection is degenerate.
-    Pure — unit-tested."""
-    mx, my = mon_rect[0], mon_rect[1]
-    x0 = max(0, min(frame_w, win_rect[0] - mx))
-    y0 = max(0, min(frame_h, win_rect[1] - my))
-    x1 = max(0, min(frame_w, win_rect[2] - mx))
-    y1 = max(0, min(frame_h, win_rect[3] - my))
-    if x1 - x0 < 16 or y1 - y0 < 16:
-        return None
-    return x0, y0, x1, y1
 
 
 class DwmSurfaceVideoSource:
@@ -646,70 +561,3 @@ class _BMIH(ctypes.Structure):
                 ("biCompression", wt.DWORD), ("biSizeImage", wt.DWORD),
                 ("biXPelsPerMeter", wt.LONG), ("biYPelsPerMeter", wt.LONG),
                 ("biClrUsed", wt.DWORD), ("biClrImportant", wt.DWORD)]
-
-
-class WgcVideoSource:
-    """Monitor capture + per-frame crop to the target window (WGC).
-
-    NOTE: NOT usable for PJ64 1.6 (frozen content — see GdiBitBltVideoSource
-    docstring); kept for capturing normal flip-model apps.
-
-    windows-capture API traps (verified live 2026-06-11):
-    - frames expose .frame_buffer/.timespan (no to_numpy); timespan is WGC
-      SystemRelativeTime = QPC 100 ns ticks (CaptureClock's timebase).
-    - @capture.event dispatches on the handler's __name__ — the decorated
-      callbacks MUST be named on_frame_arrived / on_closed exactly.
-    - monitor_index is 1-BASED in EnumDisplayMonitors order (0 raises).
-    - The crop slice must be COPIED: the library may reuse the underlying
-      buffer between callbacks, and the recorder holds the last frame for
-      CFR gap fill.
-    - The process must be per-monitor DPI aware BEFORE session start
-      (_ensure_dpi_aware) or window (physical px) and monitor (virtualized
-      px) coordinates disagree on scaled displays."""
-
-    def __init__(self, win: WindowInfo):
-        self._win = win
-        self._control = None
-
-    def start(self, on_frame, on_stopped) -> None:
-        if self._control is not None:
-            return  # already capturing; a second start would orphan the first
-        from windows_capture import WindowsCapture
-
-        _ensure_dpi_aware()
-        hwnd = self._win.hwnd
-        mon_index, mon_rect = monitor_geometry(hwnd)
-        log.info("monitor capture: index=%d rect=%s (window hwnd=%s)",
-                 mon_index, mon_rect, hwnd)
-
-        capture = WindowsCapture(
-            cursor_capture=False,
-            draw_border=False,
-            monitor_index=mon_index,
-        )
-
-        @capture.event
-        def on_frame_arrived(frame, capture_control):
-            rect = window_rect(hwnd)
-            if rect is None:
-                return  # minimized/destroyed: deliver nothing (coverage hole)
-            bounds = crop_bounds(frame.width, frame.height, rect, mon_rect)
-            if bounds is None:
-                return
-            x0, y0, x1, y1 = bounds
-            on_frame(frame.frame_buffer[y0:y1, x0:x1].copy(), frame.timespan)
-
-        @capture.event
-        def on_closed():
-            log.info("monitor capture session closed")
-            on_stopped()
-
-        self._control = capture.start_free_threaded()
-
-    def stop(self) -> None:
-        if self._control is not None:
-            try:
-                self._control.stop()
-            except Exception:
-                log.exception("WGC stop failed")
-            self._control = None

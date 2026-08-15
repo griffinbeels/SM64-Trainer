@@ -48,9 +48,6 @@ const TIER = "tier";
 const TIER_SKIP = "tierskip";
 const ANTICIPATE = "anticipate";
 
-/** The step kinds that move the bar rather than the rank. */
-export const SWEEP_KINDS = ["approach", "arrive", "fill"];
-
 /** The step kinds that cost a shared ladder budget (see climbcurve.js). */
 export const LADDER_KINDS = [DIVISION, TIER_SKIP];
 

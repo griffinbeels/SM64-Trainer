@@ -16,7 +16,6 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from sm64_events.core.paths import user_icons_dir
-from sm64_events.links import star_links
 from sm64_events.memory.addresses import node_label
 from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (registry_meta, selection_id,
@@ -1569,9 +1568,5 @@ def create_api_router(service) -> APIRouter:
             key=lambda m: m["frames"])
         service.db.set_state("timeline_markers", state)
         return {"ok": True}
-
-    @router.get("/links/{course_id}/{star_id}")
-    def links(course_id: int, star_id: int):
-        return star_links(course_id, star_id)
 
     return router

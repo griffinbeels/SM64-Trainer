@@ -75,7 +75,6 @@ VOLATILITY_GAP_FRAMES = 2
 ACTION_NAMES = {value: name for name, value in vars(A).items()
                 if name.startswith("ACT_") and isinstance(value, int)}
 
-WORD_COUNT = A.OBJECT_SIZE // 4
 SHOWN = 10  # how many captures / candidates one report line carries
 
 
@@ -183,20 +182,6 @@ def analyse(captures: list[dict]) -> dict:
         "pointer_fields": sorted({capture["field"] for capture in captures}),
         "groups": groups,
     }
-
-
-def annotate(value: int) -> str:
-    """What a 32-bit word might BE, for reading the report by eye."""
-    notes = []
-    located = pool_slot(value)
-    if located is not None:
-        notes.append(f"obj slot {located[0]}+{located[1]:#x}")
-    elif 0x80000000 <= value < 0x80800000:
-        notes.append("ram ptr")
-    as_float = struct.unpack(">f", value.to_bytes(4, "big"))[0]
-    if as_float == as_float and 0.5 < abs(as_float) < 1e6:
-        notes.append(f"f32 {as_float:.1f}")
-    return "  ".join(notes)
 
 
 # ------------------------------------------------------------------ capture

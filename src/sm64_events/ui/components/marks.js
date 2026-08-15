@@ -81,18 +81,6 @@ export const CAVEATS = {
   },
 };
 
-// Severity, worst first. A row can legitimately carry more than one — a
-// grab-timed star whose PB is also untagged — and one 16px slot can draw
-// exactly one thing. The order is by what the mark CHANGES: a wrong quantity
-// outranks an ungradeable one, because the reader can still act on a number
-// that is merely unranked and cannot act on one that measures the wrong span.
-export const CAVEAT_ORDER = ["grab_timed", "old_clock", "unattributed"];
-
-export function worstCaveat(keys) {
-  if (!keys || !keys.length) return null;
-  return CAVEAT_ORDER.find((key) => keys.includes(key)) || null;
-}
-
 export function caveatOf(key) {
   return key ? CAVEATS[key] || null : null;
 }

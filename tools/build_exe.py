@@ -30,7 +30,7 @@ SEP = ";" if os.name == "nt" else ":"
 # WASAPI process-loopback code is a .pyd inside the package, so static
 # analysis finds neither — without collecting it the shipped exe silently
 # falls back to device-wide loopback (i.e. records the whole desktop).
-COLLECT = ["av", "windows_capture", "proctap", "pyaudiowpatch", "pycaw",
+COLLECT = ["av", "proctap", "pyaudiowpatch", "pycaw",
            "comtypes", "pymem", "webview", "pystray", "numpy", "yt_dlp"]
 
 

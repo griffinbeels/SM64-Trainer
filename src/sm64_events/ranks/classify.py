@@ -68,39 +68,6 @@ def resolve_cutoff_videos(ladder_cs: dict, clips, overrides=None) -> dict:
     return out
 
 
-def band(ladder_cs: dict, time_cs: int) -> dict:
-    """Banner data: current rank, next tier, remaining gap (cs), bar fill
-    (0..1). fill/next are None at the top tier.
-
-    Every tier but Iron measures its bar between its OWN threshold and the next
-    one. Iron is the unbounded floor with no threshold to start from, so it
-    fills ASYMPTOTICALLY toward the easiest defined tier — `easiest / your_time`,
-    which is 1.0 at that cutoff and decays without ever reaching 0.
-
-    That shape is deliberate and shared: it is the same curve
-    `ranks/scoring.score_for` uses for its Iron tail, so the banner bar and the
-    MARELO score never tell a player two different stories about the same run.
-    A flat 0% is reserved for "never attempted" (user decision 2026-07-25) —
-    never for "slow", so however far off the pace a run is, improving it always
-    moves the bar. Iron previously reported 0% for every Iron time, which made
-    a PB 0.10s off Bronze look exactly as far away as one ten times slower
-    (live report 2026-07-25)."""
-    rank = rank_for(ladder_cs, time_cs)
-    if rank is None:
-        return {"rank": None, "next": None, "gap_cs": None, "fill": None}
-    nxt = next_tier(ladder_cs, rank)
-    if nxt is None:                          # top tier -> no bar
-        return {"rank": rank, "next": None, "gap_cs": None, "fill": None}
-    gap = time_cs - ladder_cs[nxt]
-    if rank == "Iron":
-        fill = ladder_cs[nxt] / time_cs if time_cs > 0 else 0.0
-    else:
-        span = ladder_cs[rank] - ladder_cs[nxt]
-        fill = (ladder_cs[rank] - time_cs) / span if span > 0 else 1.0
-    return {"rank": rank, "next": nxt, "gap_cs": gap,
-            "fill": max(0.0, min(1.0, fill))}
-
-
 # Rank-mode registry (average rank mode spec): HOW an entity-level rank
 # display picks the time it grades. order None = the saved per-strategy PB
 # row (no averaging); "recent" = the last `window` valid runs; "top" = the

@@ -1,4 +1,4 @@
-"""Locate the PJ64 top-level window: hwnd for WGC capture, pid for proc-tap.
+"""Locate the PJ64 top-level window: hwnd for capture, pid for proc-tap.
 
 pick_window() is pure (tested); enum_windows()/find_window() are the ctypes
 boundary (live-verified). Title matching is substring + case-insensitive —
