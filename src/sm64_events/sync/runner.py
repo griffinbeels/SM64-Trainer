@@ -53,7 +53,7 @@ from sm64_events.memory.behaviours import globals_map
 from sm64_events.memory.layout import LAYOUT_ROWS, Layout, layout_for
 from sm64_events.memory.version_probe import detect_version
 from sm64_events.sync import registry
-from sm64_events.sync.gates import Gate, Verdict
+from sm64_events.sync.gates import Gate, Verdict, gate_id_for_field
 from sm64_events.sync.report import Report, report_path
 
 SNAPSHOT_HZ = 30.0
@@ -73,7 +73,7 @@ def working_layout(version: str, report: Report) -> Layout:
     for row in LAYOUT_ROWS:
         if getattr(base, row.field) is not None:
             continue
-        verdict = report.verdicts.get(f"address.{row.field}")
+        verdict = report.verdicts.get(gate_id_for_field(row.field))
         if (verdict is not None and verdict.status == "verified"
                 and verdict.value is not None):
             updates[row.field] = verdict.value
@@ -101,7 +101,7 @@ class GateContext:
         """A verified value beats a shipped one beats the STROOP map's own
         guess -- the order an address gate's hunt walks its own candidates
         in (sync/address_gates.py)."""
-        verdict = self.report.verdicts.get(f"address.{field}")
+        verdict = self.report.verdicts.get(gate_id_for_field(field))
         if (verdict is not None and verdict.status == "verified"
                 and verdict.value is not None):
             return verdict.value
@@ -247,11 +247,11 @@ def summary(report: Report) -> str:
                  "memory/layout.py:")
     shipped = layout_for(version)
     promoted = [
-        (row.field, report.verdicts[f"address.{row.field}"].value)
+        (row.field, report.verdicts[gate_id_for_field(row.field)].value)
         for row in LAYOUT_ROWS
         if shipped.value(row.field) is None
-        and report.status(f"address.{row.field}") == "verified"
-        and report.verdicts[f"address.{row.field}"].value is not None
+        and report.status(gate_id_for_field(row.field)) == "verified"
+        and report.verdicts[gate_id_for_field(row.field)].value is not None
     ]
     if promoted:
         lines.extend(f"  {field} = {value:#010x}" for field, value in promoted)

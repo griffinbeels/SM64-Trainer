@@ -10,6 +10,7 @@ does not mention is left alone.
 import pytest
 
 from sm64_events.memory.layout import LAYOUT_ROWS, VERSIONS, layout_for
+from sm64_events.sync.gates import gate_id_for_field
 from sm64_events.sync.report import Report, report_path
 
 
@@ -28,7 +29,7 @@ def test_every_verified_address_is_shipped_and_no_shipped_address_is_refuted(ver
     layout = layout_for(version)
     unshipped, refuted = [], []
     for row in LAYOUT_ROWS:
-        verdict = report.verdicts.get(f"address.{row.field}")
+        verdict = report.verdicts.get(gate_id_for_field(row.field))
         if verdict is None:
             continue
         shipped = layout.value(row.field)

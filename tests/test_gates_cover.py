@@ -16,13 +16,13 @@ MUTATION PROOF (do it, do not trust it): comment out one `register(...)` in
 `sync/address_gates.py`, run this file, watch (1) go red, restore. Delete a
 `feature.death` gate, watch (2). Misspell a `backs`, watch (3).
 """
-import importlib
 import re
 from pathlib import Path
 
 from sm64_events.memory.layout import LAYOUT_ROWS
 from sm64_events.sync import registry
-from sm64_events.sync.gates import FEATURES, KINDS
+from sm64_events.sync.checks import resolve_backs
+from sm64_events.sync.gates import FEATURES, KINDS, gate_id_for_field
 
 REPO = Path(__file__).resolve().parents[1]
 DETECTORS = REPO / "src" / "sm64_events" / "detectors"
@@ -43,9 +43,9 @@ def test_the_registry_is_not_empty_and_orders():
 def test_every_layout_row_has_an_address_gate():
     ids = _gate_ids()
     missing = [row.field for row in LAYOUT_ROWS
-               if f"address.{row.field}" not in ids]
+               if gate_id_for_field(row.field) not in ids]
     assert not missing, (
-        f"layout rows with no address gate: {missing} -- a JP run could never "
+        f"layout rows with no gate: {missing} -- a JP run could never "
         "verify them, so add a gate in sync/address_gates.py")
 
 
@@ -69,6 +69,8 @@ def test_every_detector_event_type_has_a_feature_gate():
 
 
 def test_every_calibration_gate_backs_a_constant_that_exists():
+    """Through the SAME resolver the gates use (sync/checks.py::resolve_backs),
+    so a `backs` this test accepts is one the check itself can read."""
     broken = []
     for gate in registry.GATES:
         if gate.kind != "calibration":
@@ -76,24 +78,10 @@ def test_every_calibration_gate_backs_a_constant_that_exists():
         if not gate.backs:
             broken.append(f"{gate.id}: no backs")
             continue
-        module_name, _, attr_path = gate.backs.rpartition(".")
-        # `backs` may name a CLASS attribute: module.Class.CONST
-        target = None
-        for split_at in range(gate.backs.count("."), 0, -1):
-            parts = gate.backs.split(".")
-            module_name = ".".join(parts[:split_at])
-            try:
-                target = importlib.import_module(module_name)
-            except ImportError:
-                continue
-            for attr in parts[split_at:]:
-                target = getattr(target, attr, None)
-                if target is None:
-                    break
-            if target is not None:
-                break
-        if target is None:
-            broken.append(f"{gate.id}: {gate.backs} does not resolve")
+        try:
+            resolve_backs(gate.backs)
+        except (ImportError, AttributeError) as error:
+            broken.append(f"{gate.id}: {gate.backs} does not resolve ({error})")
     assert not broken, broken
 
 

@@ -83,6 +83,15 @@ class Gate:
 GATES: list[Gate] = []
 
 
+def gate_id_for_field(field: str) -> str:
+    """The gate that verifies a `memory/layout.py` row. Every address row is
+    `address.<field>`; the behaviour segment base is a BEHAVIOUR gate
+    (`behaviour.base` -- derived from Mario's own object, not a global with a
+    symbol), so the runner, the report<->layout guard and the coverage test
+    all ask here rather than each spelling the exception."""
+    return "behaviour.base" if field == "behaviour_base" else f"address.{field}"
+
+
 def register(*gates: Gate) -> None:
     """Add gates to the registry. Loud on a bad feature, a bad kind, an empty
     instruction/proves, or a duplicate id — the tests that walk the registry
