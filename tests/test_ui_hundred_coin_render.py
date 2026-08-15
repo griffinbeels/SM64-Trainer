@@ -308,6 +308,15 @@ def test_editing_a_cutoff_offers_three_boxes_and_saves_what_was_typed(hundred_co
     assert shape["boxes"] == 3, shape
     assert shape["seps"] == ["'", '"'], shape
 
+    # WHICH row holds the first editor: since round 3 the table runs
+    # slowest-first with a Capless row on top that renders no editor at all,
+    # so "the first .timefields" is no longer "tbody tr[0]" — the read-back
+    # below finds the row by its own tier name instead of by position.
+    edited_tier = hundred_coin_page.evaluate("""
+      document.querySelectorAll(".stdtable .timefields")[0]
+        .closest("tr").querySelector(".std-tier-name").textContent.trim()
+    """)
+
     # The boxes open holding the cell's own value, split the same way the
     # display splits it — no re-derivation, and nothing to re-type.
     assert hundred_coin_page.evaluate("""
@@ -343,9 +352,13 @@ def test_editing_a_cutoff_offers_three_boxes_and_saves_what_was_typed(hundred_co
                if (b) b.click(); })()
     """)
     hundred_coin_page.wait_for(".stdtable tbody td", timeout_ms=10000)
-    printed = hundred_coin_page.evaluate("""
-      document.querySelectorAll(".stdtable tbody tr")[0]
-        .querySelectorAll("td")[1].textContent.trim()
+    printed = hundred_coin_page.evaluate(f"""
+      (() => {{
+        const row = Array.from(document.querySelectorAll(".stdtable tbody tr"))
+          .find((r) => (r.querySelector(".std-tier-name") || {{}})
+            .textContent?.trim() === {edited_tier!r});
+        return row.querySelectorAll("td")[1].textContent.trim();
+      }})()
     """)
     assert printed == "1'21\"32", printed
 
@@ -390,9 +403,11 @@ def test_the_mario_row_runs_slowest_to_fastest(hundred_coin_page):
         const bands = Array.from(
           document.querySelectorAll(".stdtable .std-variant"))
           .map((th) => Number(th.getAttribute("colspan")));
-        const mario = Array.from(
-          document.querySelectorAll(".stdtable tbody tr")[0]
-            .querySelectorAll("td")).slice(1)
+        const marioRow = Array.from(
+          document.querySelectorAll(".stdtable tbody tr"))
+          .find((r) => (r.querySelector(".std-tier-name") || {})
+            .textContent?.trim() === "Mario");
+        const mario = Array.from(marioRow.querySelectorAll("td")).slice(1)
           .map((td) => td.textContent.trim());
         return {bands, mario};
       })()
