@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 
 from sm64_events.core.events import Event
 from sm64_events.core.landmark import landmark_group
+from sm64_events.core.modes import ModeConfig, effective_version
 from sm64_events.core.paths import bundled_defaults_seed
 from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, node_label, star_name
@@ -109,6 +110,12 @@ class TrackerService:
         self.db = db
         self.broadcaster = broadcaster
         self.ranks = ranks            # RankStandards | None
+        # The game version SETTING (core/modes.py) as last applied through
+        # `set_game_version` -- main.py applies the persisted one at boot.
+        # What it RESOLVES to lives on the standards store as
+        # `ranks.grading_version`; this is only kept so the session view can
+        # say "Auto-detect" versus an explicit choice.
+        self.mode_config = ModeConfig()
         self.session_id: int | None = None
         self._segment_defs = self._load_segment_defs()
         # The landmark catalogue, cached for the projector's same-name
@@ -1309,9 +1316,37 @@ class TrackerService:
         return classify(self.ranks.strategies(ek), self.ranks.exit_variants(ek),
                         current, exit_star)
 
-    async def set_rank_threshold(self, ek, strat, rank, seconds) -> None:
-        self._require_ranks().set_threshold(ek, strat, rank, seconds)
+    async def set_rank_threshold(self, ek, strat, rank, seconds, version="us") -> None:
+        self._require_ranks().set_threshold(ek, strat, rank, seconds, version=version)
         await self._rank_standards_changed()
+
+    async def clear_rank_jp(self, ek, strat) -> None:
+        """The editor's "JP timed differently" toggle turned off: the
+        strategy's JP overlay goes, both versions grade on its base ladder."""
+        self._require_ranks().clear_jp(ek, strat)
+        await self._rank_standards_changed()
+
+    # -- game version --------------------------------------------------------
+    def game_version(self) -> dict:
+        """{setting, effective}: the persisted choice ("auto"/"jp"/"us") and
+        what grading resolves it to ("jp"/"us") -- the session view's
+        `game_version` field, and what the two visual switches default to."""
+        effective = self.ranks.grading_version if self.ranks is not None else "us"
+        return {"setting": self.mode_config.version.value, "effective": effective}
+
+    async def set_game_version(self, cfg: ModeConfig) -> dict:
+        """Apply a game version setting LIVE: the standards store's grading
+        version flips to the effective version, and `game_version_changed`
+        tells every open client to refetch -- the practice cards, MARELO and
+        the rank banners re-grade on the next view. Config, never journaled
+        (same rule as the rank standards). Returns `game_version()`."""
+        self.mode_config = cfg
+        if self.ranks is not None:
+            self.ranks.grading_version = effective_version(cfg)
+        out = self.game_version()
+        await self.broadcaster.publish(Event(type="game_version_changed", frame=0,
+                                             timestamp_utc=_now(), payload=out))
+        return out
 
     async def create_rank_strategy(self, ek, strat, exit_star=None) -> str:
         """Returns the name the strategy was STORED under — the caller's own
