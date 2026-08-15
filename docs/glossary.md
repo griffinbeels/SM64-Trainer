@@ -705,7 +705,9 @@ the grid finds a [[star]] or [[segment]] by name as you type, matching its
 [[approach]]es' names and the [[runner]]s who hold a time on it as well, and
 its results stand in place of the grid until you clear it. A [[sheet entry]] with a
 video draws a playable card; one without draws a compact [[runner]]-and-time
-row. The [[tray]] collects [[sheet entry]] rows to compare side by side.
+row. The [[tray]] collects [[sheet entry]] rows to compare side by side. A
+[[target]]'s page wears the [[wiki mark]] beside its name when Ukikipedia has
+a page for it.
 
 - **Lives** — the tab (`src/sm64_events/ui/components/library.js`,
   `src/sm64_events/ui/components/librarynav.js`,
@@ -856,6 +858,21 @@ doorway behind it.
 
 - **Lives** — the doorway (`src/sm64_events/ui/components/practicelog.js`)
   → the [[Library tab]]
+
+### Wiki mark
+
+The small Ukiki face beside a [[target]]'s name on the [[Library tab]] — Ukikipedia's own icon — that opens that
+[[target]]'s RTA Guide page in the browser. It draws only where the wiki has
+the page: the link registry resolves a [[star]]'s or [[segment]]'s identity,
+else the sheet label's own name (LBLJ, Lakitu Skip, MIPS, a Toad detour),
+against a copy of the wiki's page list, and a [[target]] the wiki never
+wrote up gets no mark rather than a dead one. The detail drawer's "RTA Guide"
+link reads the same registry.
+
+- **Lives** — the link registry (`src/sm64_events/links.py`) → the mark on
+  the [[Library tab]] (`src/sm64_events/ui/components/librarytarget.js`)
+- **Not** — the [[book mark]]. The [[book mark]] leads INTO the Library from a
+  practice card; the wiki mark leads OUT of it, to Ukikipedia.
 
 ### Progress graph
 

@@ -45,7 +45,7 @@ Contract (the UI builds against ALL of this):
   arm from service.active_route() — the projector's journal-derived
   active_route_id(), never a service-only field (see select_route)."""
 from sm64_events.core.timefmt import format_igt
-from sm64_events.links import star_links
+from sm64_events.links import star_links, ukikipedia_url
 from sm64_events.memory.addresses import (COURSE_BY_LEVEL, COURSE_NAMES,
                                           course_name, star_count, star_name)
 from sm64_events.ranks import classify
@@ -1602,6 +1602,12 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "last_activity": last_id.get(("segment", seg_id), -1),
             "name": d.name if d else f"segment {seg_id} (deleted)",
             "broken": d is None,
+            # Rule 11: a segment's drawer offers the same RTA Guide link a
+            # star's does, when the wiki has a page for it (the Bowser courses
+            # and fights, a movement named LBLJ / Lakitu Skip / MIPS). None
+            # for everything else, and the drawer draws nothing for None.
+            "links": {"ukikipedia": ukikipedia_url(f"segment:{seg_id}",
+                                                   d.name if d else None)},
             # The course this segment is practiced IN, or None for the castle
             # interior, the hubs and the arenas -- the same key a star section
             # has always carried (rule 11), and the one the practice page

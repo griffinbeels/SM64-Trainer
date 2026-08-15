@@ -466,6 +466,17 @@
     display: flex; align-items: center; flex-wrap: wrap; gap: .7rem;
   }
   .library-target-titleline h3 { margin: 0; }
+  /* The wiki mark: Ukikipedia's Ukiki face beside the target's name, sized
+     to the heading's cap height so it reads as part of the title line
+     rather than a button. Transparent art on the page's own ground -- the
+     mock he drew had a white square behind it and said "without the white
+     background", so no plate. */
+  .wiki-mark {
+    display: inline-flex; align-items: center; flex: 0 0 auto;
+    line-height: 0; opacity: .85; transition: opacity .18s ease, transform .18s ease;
+  }
+  .wiki-mark img { width: 22px; height: 22px; object-fit: contain; }
+  .wiki-mark:hover, .wiki-mark:focus-visible { opacity: 1; transform: scale(1.08); }
   .library-link-state.is-linked { color: var(--gold-soft); }
   .library-link-state.is-linked b { font-weight: 700; }
   .library-link-button, .library-record-button, .library-unlink {
