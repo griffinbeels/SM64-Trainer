@@ -687,6 +687,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
         activeStrat=${sec.last_strat} strategies=${sec.strategies}
         sectionRank=${sec.rank} sectionPb=${sec.pb}
         family=${standards.family} openLibrary=${openLibrary}
+        gradingVersion=${t.view && t.view.game_version ? t.view.game_version.effective : null}
         onChanged=${t.refresh} defaultOpen=${false} />
       ${/* THE PIECES OF THIS ENTITY, inside its own card and indented one
            level (round 22). They sit INSIDE the `Disclose` body deliberately,

@@ -274,6 +274,39 @@ def test_default_follows_the_grading_version():
             _put_mode(base, "us")
 
 
+def test_an_open_panel_follows_a_live_setting_change(fixture_data):
+    """Flip the Game version SETTING while the panel is already open and
+    untouched: the view refetches (game_version_changed), the card passes
+    the new grading version down, and the panel refetches on its own -- the
+    pressed segment moves to JP and a JP-differing cell repaints. No reload,
+    no click on the switch."""
+    with serve_ui(Path(tempfile.mkdtemp()) / "std_version_live.db") as base:
+        strat = fixture_data["jp_strat"]
+        us_ladder = _get_standards(base)["strategies"][strat]
+        jp_ladder = _get_standards(base, "jp")["strategies"][strat]
+        rank = next(r for r in us_ladder if jp_ladder.get(r) != us_ladder[r])
+        try:
+            with driver.get_driver().launch(headless=True,
+                                            viewport=(1500, 1100)) as page:
+                page.goto(base)
+                page.wait_for(".log-card", timeout_ms=20000)
+                assert page.evaluate(OPEN_IT)
+                page.wait_for(".stdpanel .stdtable", timeout_ms=15000)
+                page.evaluate(SETTLE)
+                before = page.evaluate(_cell_text_js(strat, rank))
+                _put_mode(base, "jp")
+                page.wait_for(
+                    ".stdpanel .stdtools .version-switch-seg:first-child[aria-pressed='true']",
+                    timeout_ms=15000)
+                page.evaluate(SETTLE)
+                after = page.evaluate(_cell_text_js(strat, rank))
+                assert after != before, (strat, rank, before, after)
+                state = page.evaluate(_read_switch_js())
+                assert state["noteText"] is None, state   # shown == graded again
+        finally:
+            _put_mode(base, "us")
+
+
 # ---- edit mode: a per-strategy JP toggle, and the editor writes JP times
 
 def test_every_strategy_column_has_a_jp_toggle_in_edit_mode(opened_page, fixture_data):

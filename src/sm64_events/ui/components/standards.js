@@ -198,7 +198,7 @@ function inFamily(name, family) {
 
 export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
     defaultOpen = false, sectionRank = null, sectionPb = null, family = null,
-    openLibrary = null }) {
+    openLibrary = null, gradingVersion = null }) {
   const [open, setOpen] = useState(defaultOpen);
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -248,6 +248,11 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // ACTUAL entity change resets the subdivision/JP-toggle state; re-running
   // it for a version flip would collapse a tier the user has open just to
   // look at its JP times.
+  // `gradingVersion` (the session view's `game_version.effective`, passed
+  // by the card) is a THIRD trigger: flipping the Game version setting
+  // re-grades every card through the view refetch, and an already-fetched
+  // panel whose switch is untouched (shownVersion null) would otherwise keep
+  // showing the old version's ladder under a rank that has moved.
   const prevEntityRef = useRef(entity);
   useEffect(() => {
     if (prevEntityRef.current !== entity) {
@@ -256,7 +261,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
       setJpOpen(new Set());
     }
     load();
-  }, [entity, shownVersion]);
+  }, [entity, shownVersion, gradingVersion]);
   // Reload on EVERY open, not just the first: a strat created from the
   // practice dropdown or header picker while this panel sat cached would
   // otherwise show empty cells forever (its data is fetched out-of-band,

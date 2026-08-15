@@ -978,6 +978,17 @@
   .timefield{-moz-appearance:textfield;appearance:textfield}
   .timefield-sep{color:var(--text-dim,#8b98a6);padding:0 1px}
   .stdcell{display:inline-flex;align-items:center;gap:4px}
+  /* A JP-flagged strategy's edit cell (task 0056): the US and JP fields
+     stack, each with its two-letter label, and the video button rides the
+     right edge spanning both rows -- one cell, not three rows. */
+  .stdcell-versions{display:inline-grid;grid-template-columns:auto auto;align-items:center;column-gap:4px;row-gap:2px}
+  .stdcell-versions .vidbtn{grid-column:2;grid-row:1 / span 2}
+  .stdcell-version{display:flex;align-items:center;gap:3px;grid-column:1}
+  .stdcell-version-label{flex:0 0 auto;width:1.1rem;font-size:.62rem;font-weight:700;color:var(--muted)}
+  /* The per-strategy "JP differs" toggle in the editor's column head. */
+  .std-jp-toggle{display:flex;align-items:center;justify-content:center;gap:.3rem;margin-top:.25rem;font-size:.66rem;font-weight:500;color:var(--muted);cursor:pointer;text-transform:none;letter-spacing:0}
+  .std-jp-toggle input[type="checkbox"]{margin:0;cursor:pointer}
+  .std-jp-toggle:has(input:disabled){cursor:not-allowed;opacity:.55}
   .vidbtn{border:none;background:transparent;color:#6cb6ff;cursor:pointer;font-size:11px;padding:0 2px;line-height:1}
   /* Round 3 shape, his words: "everything clearly feels like one cohesive
      card" -- the cell is ONE full-size button, so hover is one soft lift
