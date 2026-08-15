@@ -4472,6 +4472,12 @@
     font-size: .63rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
   }
   .strategy-rank-row { border-top: 1px solid var(--border-soft); }
+  /* has-jp: "US and JP timed differently" (task 0056) adds a JP time column
+     between the US time and the video link -- four tracks instead of three. */
+  .strategy-ladder.has-jp .strategy-ladder-labels,
+  .strategy-ladder.has-jp .strategy-rank-row {
+    grid-template-columns: minmax(110px,.6fr) minmax(90px,.5fr) minmax(90px,.5fr) minmax(160px,1.3fr);
+  }
   .strategy-rank-row label, .strategy-rank-row input { width: 100%; min-width: 0; }
   .strategy-rank-name {
     min-height: 30px; display: inline-flex; align-items: center;
@@ -5163,6 +5169,10 @@
     .strategy-rank-row {
       grid-template-columns: minmax(100px,.8fr) minmax(100px,1fr);
       gap: .4rem; padding: .5rem;
+    }
+    .strategy-ladder.has-jp .strategy-rank-row {
+      grid-template-columns: minmax(90px,.8fr) minmax(80px,1fr) minmax(80px,1fr);
+      gap: .35rem;
     }
     .strategy-rank-row label:last-child { grid-column: 1 / -1; }
     .stdtools a.meta { width: 100%; margin-left: 0; }
