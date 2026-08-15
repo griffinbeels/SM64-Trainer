@@ -130,3 +130,57 @@ def pool_contains(pool_base: int, pointer: int, slot_size: int = 0x260,
     if not (pool_base <= pointer < pool_base + slots * slot_size):
         return False
     return (pointer - pool_base) % slot_size == 0
+
+
+# --- textbox open-state (lifted from tools/probe_textbox.py::box_opens) ----
+
+def box_open_index(snaps: list, reading_index: int,
+                   thresholds: dict[int, int | None]) -> int | None:
+    """Index of the first sample, at or after `reading_index`, whose
+    `mario_action_state` reaches the box-open threshold for the action AT
+    `reading_index` — the frame the game itself creates the dialog box,
+    per `addresses.BOX_OPENS_AT_STATE`. None when that action carries no
+    known threshold (an explicit None entry, or no entry at all) or the
+    window ends before the state gets there. `probe_textbox.py::box_opens`
+    runs the identical rule over its own sample dicts; this is the same
+    algorithm over `GameSnapshot`s so a calibration gate can drive it from
+    `ctx.snapshots()`."""
+    action = snaps[reading_index].mario_action
+    threshold = thresholds.get(action)
+    if threshold is None:
+        return None
+    for index in range(reading_index, len(snaps)):
+        if (snaps[index].mario_action == action
+                and snaps[index].mario_action_state >= threshold):
+            return index
+    return None
+
+
+# --- resolving a calibration gate's `backs` -- WHAT it measures against ----
+
+def resolve_backs(dotted: str):
+    """The live value of the constant a calibration gate's `backs` names —
+    `"pkg.module.Class.ATTR"` or `"pkg.module.ATTR"`. Imports the LONGEST
+    importable prefix, then walks `getattr` for the rest, so a class
+    attribute and a bare module constant resolve the same way. Raises
+    (ImportError/AttributeError) on a name that does not resolve — that
+    failure IS `tests/test_gates_cover.py`'s enforcement that every `backs`
+    points at something real, and it is why no calibration check may ever
+    restate the number this returns as a literal."""
+    import importlib
+
+    parts = dotted.split(".")
+    module = None
+    split_at = len(parts)
+    while split_at > 0:
+        try:
+            module = importlib.import_module(".".join(parts[:split_at]))
+            break
+        except ImportError:
+            split_at -= 1
+    if module is None:
+        raise ImportError(f"no importable module prefix in {dotted!r}")
+    value = module
+    for attr in parts[split_at:]:
+        value = getattr(value, attr)
+    return value
