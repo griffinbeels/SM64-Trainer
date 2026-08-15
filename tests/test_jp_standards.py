@@ -201,3 +201,9 @@ def test_deleting_a_strategy_takes_its_jp_overlay_with_it(tmp_path):
     s.delete_strategy("star:9:1", "Mine")
     assert s.jp_deltas("star:9:1", "Mine") == {}
     assert "Mine" not in json.loads((tmp_path / "rs.json").read_text())["entities"]["star:9:1"].get("jp_strategies", {})
+
+
+def test_the_grading_version_knob_refuses_junk(store):
+    with pytest.raises(ValueError):
+        store.grading_version = "pal"
+    assert store.grading_version == "us"

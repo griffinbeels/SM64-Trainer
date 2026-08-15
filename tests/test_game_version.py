@@ -38,17 +38,20 @@ class _SpyBroadcaster(Broadcaster):
 
     async def publish(self, event):
         self.published.append(event)
-        await super().publish(event)
+        return await super().publish(event)      # the seq the journal stamps
 
 
-def make(tmp_path):
+def make(tmp_path, start=True):
+    """`start=False` for the API path: the app's lifespan starts the service
+    itself, and a second start resets the journal's seq counter."""
     db = Database(tmp_path / "t.db")
     ranks = RankStandards(tmp_path / "rs.json", bundled_rank_standards(),
                           bundled_sheet_ladders())
     ranks.load()
     broadcaster = _SpyBroadcaster()
     svc = TrackerService(db, broadcaster, ranks=ranks)
-    asyncio.run(svc.start())
+    if start:
+        asyncio.run(svc.start())
     return db, svc, broadcaster
 
 
@@ -97,7 +100,7 @@ def test_the_view_carries_the_game_version(tmp_path):
 # ---- /api/mode ----------------------------------------------------------------
 
 def make_client(tmp_path):
-    db, svc, broadcaster = make(tmp_path)
+    db, svc, broadcaster = make(tmp_path, start=False)
     app = create_app(Poller(OfflineMemory(), [], svc), broadcaster, service=svc,
                      mode_path=tmp_path / "tracker_mode.json")
     return TestClient(app), svc
@@ -159,3 +162,87 @@ def test_jp_threshold_round_trip_through_the_api(tmp_path):
         assert after["jp_strategies"] == [] and after["strategies_jp"]["Mine"]["Mario"] == 30
         assert client.put("/api/ranks/standards/star:9:1/Mine/Mario",
                           params={"version": "pal"}, json={"seconds": 1}).status_code == 400
+        assert us["strategies_us"]["Mine"]["Mario"] == 30
+        assert us["clearable_jp_strategies"] == ["Mine"]
+
+
+def test_clearable_jp_is_the_users_overlay_only(tmp_path):
+    """A sheet-fitted JP ladder is not his to clear; a typed JP time on that
+    same strategy IS -- and the flag follows the overlay, not the base."""
+    client, svc = make_client(tmp_path)
+    ek, strat = next((ek, strat) for ek, layers in svc.ranks._sheet_jp.items()
+                     for strat in layers)
+    with client:
+        before = client.get("/api/ranks/standards", params={"entity": ek}).json()
+        assert strat in before["jp_strategies"]
+        assert strat not in before["clearable_jp_strategies"]
+        client.put(f"/api/ranks/standards/{ek}/{strat}/Mario",
+                   params={"version": "jp"}, json={"seconds": 1})
+        after = client.get("/api/ranks/standards", params={"entity": ek}).json()
+        assert strat in after["clearable_jp_strategies"]
+        client.delete(f"/api/ranks/standards/{ek}/{strat}/jp")
+        cleared = client.get("/api/ranks/standards", params={"entity": ek}).json()
+        assert strat not in cleared["clearable_jp_strategies"]
+        assert strat in cleared["jp_strategies"]        # the fitted layer stays
+
+
+# ---- a version flip is not a rank-up ----------------------------------------
+
+def _ev(type_, frame, payload=None):
+    from datetime import datetime, timezone
+    from sm64_events.core.events import Event
+    return Event(type=type_, frame=frame, timestamp_utc=datetime.now(timezone.utc),
+                 payload=payload or {})
+
+
+def _saved_pb_on_a_versioned_ladder(client, svc):
+    """star:8:2 / Mine: US Silver 30 / Gold 20 / Mario 10, JP more lenient
+    (Silver 40 / Gold 30 / Mario 20); a saved 25 s PB is Silver on US and
+    Gold on JP, so a flip to JP RAISES the rank without a run."""
+    asyncio.run(svc.publish(_ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(_ev("star_collected", 1750,
+                                {"course_id": 8, "star_id": 2, "igt_frames": 750})))
+    for rank, us, jp in (("Mario", 10, 20), ("Gold", 20, 30), ("Silver", 30, 40)):
+        client.put(f"/api/ranks/standards/star:8:2/Mine/{rank}", json={"seconds": us})
+        client.put(f"/api/ranks/standards/star:8:2/Mine/{rank}",
+                   params={"version": "jp"}, json={"seconds": jp})
+    asyncio.run(svc.set_strat(8, 2, "Mine"))
+    svc.db._conn.execute("UPDATE attempts SET strat_tag='Mine' WHERE course_id=8")
+    svc.db._conn.commit()
+    aid = next(a.id for a in svc.db.attempts() if a.course_id == 8)
+    asyncio.run(svc.save_pb(aid, "igt"))
+
+
+def test_flipping_the_version_absorbs_the_new_rank_instead_of_celebrating(tmp_path, monkeypatch):
+    """Whole-branch review, 2026-08-15: a PUT /api/mode that re-graded a
+    scope UP fired the full-screen MARELO takeover for a rank he never ran
+    for, and again on every flip. The flip is his gesture; the claim "you
+    ranked up" is not true. Arriving absorbs -- the same rule as a scope
+    switch -- applied to every watermarked scope at the moment of the flip."""
+    # test_ranks_api's tiny seed (one other entity), so ONE saved PB moves
+    # the overall tier -- under the full bundled seed coverage dilutes every
+    # scope to Iron V in both versions and the flip proves nothing.
+    from test_ranks_api import make_client as make_small_client
+    from sm64_events.core import modes
+    monkeypatch.setattr(modes, "mode_settings_path", lambda: tmp_path / "tracker_mode.json")
+    client, svc = make_small_client(tmp_path)
+    with client:
+        _saved_pb_on_a_versioned_ladder(client, svc)
+        us = client.get("/api/marelo").json()            # arrive on US; seeds the watermark
+        assert us["celebration"] is None
+        client.put("/api/mode", json={"version": "jp"})
+        jp = client.get("/api/marelo").json()
+        assert (jp["tier"], jp["division"]) != (us["tier"], us["division"]), (us, jp)
+        assert jp["celebration"] is None, jp["celebration"]
+        from sm64_events.ranks import scoring
+        assert svc.marelo_watermarks()["overall"] == scoring.progression_key(
+            jp["tier"], jp["division"])
+        # ...and back: the watermark follows the drop, so a REAL later rise
+        # still celebrates from the right floor.
+        client.put("/api/mode", json={"version": "us"})
+        back = client.get("/api/marelo").json()
+        assert back["celebration"] is None
+        assert svc.marelo_watermarks()["overall"] == scoring.progression_key(
+            back["tier"], back["division"])
+        svc.db.set_state("marelo_watermarks", {"overall": svc.marelo_watermarks()["overall"] - 1})
+        assert client.get("/api/marelo").json()["celebration"] is not None

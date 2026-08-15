@@ -1331,8 +1331,8 @@ class TrackerService:
         """{setting, effective}: the persisted choice ("auto"/"jp"/"us") and
         what grading resolves it to ("jp"/"us") -- the session view's
         `game_version` field, and what the two visual switches default to."""
-        effective = self.ranks.grading_version if self.ranks is not None else "us"
-        return {"setting": self.mode_config.version.value, "effective": effective}
+        return {"setting": self.mode_config.version.value,
+                "effective": effective_version(self.mode_config)}
 
     async def set_game_version(self, cfg: ModeConfig) -> dict:
         """Apply a game version setting LIVE: the standards store's grading

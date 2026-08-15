@@ -193,6 +193,35 @@ def _score_scope(service, scope_id: str) -> dict:
     return out
 
 
+def absorb_after_regrade(service) -> None:
+    """Every rank on every scope just moved for a reason that is not a run --
+    the game version setting flipped, so every ladder changed under him. Move
+    every watermark to the scope's NEW key without celebrating: the same
+    "arriving absorbs" rule `_build_marelo` applies to a scope switch, applied
+    to every watermarked scope at once. Without this the next /api/marelo
+    fetch (the store refetches on game_version_changed) reads a Silver->Gold
+    crossing as earned and fires the full-screen MARELO takeover for a rank
+    he did not run for (found in the whole-branch review, 2026-08-15,
+    reproduced end to end); and since sync_watermark follows the drop back,
+    every flip up would fire it again. Both directions: a scope re-graded
+    LOWER has its watermark lowered too (what sync_watermark would do on the
+    next build anyway), so a later real climb still celebrates from the
+    right floor."""
+    if service.db is None or service.ranks is None:
+        return
+    watermarks = service.marelo_watermarks()
+    for scope_id in list(watermarks):
+        try:
+            scored = _score_scope(service, scope_id)
+        except (LookupError, ValueError):
+            continue                        # a scope that no longer resolves
+        if not scored["tier"]:
+            continue
+        watermarks[scope_id] = int(scoring.progression_key(scored["tier"],
+                                                           scored["division"]))
+    service.db.set_state("marelo_watermarks", watermarks)
+
+
 def _build_marelo(service, scope_id: str) -> dict:
     out = _score_scope(service, scope_id)
     out["celebration"] = None
@@ -332,8 +361,13 @@ def create_ranks_router(service, library=None, adoptions=None,
                 # names that actually differ between the two: the editor draws
                 # a US and a JP field side by side from one fetch, and opens
                 # the JP field only where a JP time is annotated.
+                "strategies_us": service.ranks.ladders(entity, "us"),
                 "strategies_jp": service.ranks.ladders(entity, "jp"),
                 "jp_strategies": service.ranks.jp_strategies(entity),
+                # Which of those the user can CLEAR (their overlay is in his
+                # file); a sheet-fitted JP ladder is not, and the editor's
+                # checkbox says so instead of offering a click that no-ops.
+                "clearable_jp_strategies": service.ranks.clearable_jp_strategies(entity),
                 # THE entity's own ladder -- the pointwise best across every
                 # strategy, which is what `views.entity_rank` grades against
                 # and therefore what "rank up OVERALL" actually costs. It has

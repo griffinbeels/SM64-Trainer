@@ -28,7 +28,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from sm64_events.core.modes import (GameVersion, ModeConfig, TrackerMode,
-                                    load_mode_config, save_mode_config)
+                                    effective_version, load_mode_config,
+                                    save_mode_config)
+from sm64_events.server.ranks_api import absorb_after_regrade
 
 
 class ModeBody(BaseModel):
@@ -37,9 +39,8 @@ class ModeBody(BaseModel):
 
 
 def mode_json(cfg: ModeConfig, service) -> dict:
-    game = service.game_version()
     return {"mode": cfg.mode.value, "version": cfg.version.value,
-            "effective": game["effective"],
+            "effective": effective_version(cfg),
             "unsupported": cfg.mode is TrackerMode.EMU
             and cfg.version is GameVersion.JP}
 
@@ -66,6 +67,16 @@ def create_mode_router(service, mode_path: Path | None = None) -> APIRouter:
                 "detail": f"unknown mode/version in {body.model_dump()!r}"})
         cfg = ModeConfig(mode=mode, version=version)
         save_mode_config(cfg, mode_path)
+        # Re-grade FIRST, then move every MARELO watermark to where the
+        # scopes now sit -- a rank that changed because the ladders changed
+        # is not a rank-up (server/ranks_api.py::absorb_after_regrade). The
+        # broadcast inside set_game_version is what makes clients refetch,
+        # and their /api/marelo fetch races this handler, so the absorb runs
+        # BEFORE the broadcast rather than after it.
+        service.mode_config = cfg
+        if service.ranks is not None:
+            service.ranks.grading_version = effective_version(cfg)
+        absorb_after_regrade(service)
         await service.set_game_version(cfg)
         return mode_json(cfg, service)
 
@@ -77,7 +88,6 @@ def apply_persisted_mode(service, mode_path: Path | None = None) -> ModeConfig:
     BEFORE the app serves. Synchronous on purpose (no broadcast -- nobody is
     connected yet); `service.mode_config` and the grading version end up
     exactly as a PUT would leave them."""
-    from sm64_events.core.modes import effective_version
     cfg = load_mode_config(mode_path)
     service.mode_config = cfg
     if service.ranks is not None:

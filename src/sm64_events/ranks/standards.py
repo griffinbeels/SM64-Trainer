@@ -47,7 +47,10 @@ def _reconcile(stored: dict, seed: dict) -> dict:
     """Bring an older stored seed up to a newer bundled one. The bundled seed
     wins for community data (strategies/times, videos, jp_strategies, clock, new
     entities/strats); user-CREATED entities/strats (absent from the seed) are
-    preserved. Returns a new dict (does not mutate inputs).
+    preserved -- their base ladder AND their JP overlay (`jp_strategies` is
+    also where the standards editor writes a typed JP time, 2026-08-15). A JP
+    time typed onto a SEEDED strategy loses to the seed exactly as a typed US
+    time on it does. Returns a new dict (does not mutate inputs).
 
     KNOWN GAP (found 2026-07-23, not yet fixed): this does not clear the
     `deleted_strats` tombstone KV (storage-side, see tracking/service.py
@@ -66,6 +69,10 @@ def _reconcile(stored: dict, seed: dict) -> dict:
         for strat, ladder in se.get("strategies", {}).items():
             if strat not in seed_strats:
                 seed_strats[strat] = json.loads(json.dumps(ladder))  # user-created strat
+                user_jp = se.get("jp_strategies", {}).get(strat)
+                if user_jp:
+                    oent[ek].setdefault("jp_strategies", {})[strat] = \
+                        json.loads(json.dumps(user_jp))
         # A user-MINTED exit-star variant (one xcams has no times for) is
         # user-created data exactly as the strategies filed under it are, and
         # dropping it here would strand those strategies with no group — they
@@ -95,8 +102,9 @@ class RankStandards:
         # setting at boot and tracking/service.py::set_game_version on every
         # change, so grading follows the setting live and no caller has to
         # thread a version through -- an explicit `version=` (the visual
-        # switches) always overrides it.
-        self.grading_version = "us"
+        # switches) always overrides it. A property so a junk value raises
+        # at the write, never reads silently as US.
+        self._grading_version = "us"
 
     # ---- load / save ----
     def _read_valid(self, p):
@@ -180,9 +188,19 @@ class RankStandards:
         return {strat: {**ladder, **self.jp_deltas(ek, strat)}
                 for strat, ladder in base.items()}
 
+    @property
+    def grading_version(self) -> str:
+        return self._grading_version
+
+    @grading_version.setter
+    def grading_version(self, version: str) -> None:
+        if version not in ("us", "jp"):
+            raise ValueError(f"unknown game version {version!r}")
+        self._grading_version = version
+
     def _resolve(self, version) -> str:
         if version is None:
-            return self.grading_version
+            return self._grading_version
         if version not in ("us", "jp"):
             raise ValueError(f"unknown game version {version!r}")
         return version
@@ -230,6 +248,17 @@ class RankStandards:
         """The strategies whose JP ladder differs from their US one -- what
         the standards editor opens a JP column for."""
         return [strat for strat in self.ladders(ek, "us") if self.jp_deltas(ek, strat)]
+
+    def clearable_jp_strategies(self, ek) -> list:
+        """The strategies whose JP overlay lives in the USER's file (the vetted
+        seed's annotations and every typed JP time both do) -- the ones
+        `clear_jp` can actually drop. A sheet-fitted JP ladder is not among
+        them; the editor's "JP differs" checkbox reads THIS to know whether
+        unticking would do anything, rather than intersecting two lists that
+        answer different questions (whole-branch review, 2026-08-15)."""
+        return [strat for strat, overlay
+                in self._entity(ek).get("jp_strategies", {}).items()
+                if overlay and strat in self.ladders(ek, "us")]
 
     def ladder_cs(self, ek, strat, version=None) -> dict:
         """The ladder a time on `version` grades against, in centiseconds --

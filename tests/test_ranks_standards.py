@@ -175,6 +175,27 @@ def test_load_preserves_user_created_strat_on_reconcile(tmp_path):
     assert s.ladder_cs("star:8:2", "Nuts Pless")["Mario"] == 4546   # refreshed
     assert s.ladder_cs("star:8:2", "MyCustom")["Mario"] == 990      # user strat kept
 
+def test_load_preserves_a_user_created_strats_jp_overlay_on_reconcile(tmp_path):
+    """A typed JP time (the editor writes jp_strategies) on a USER-CREATED
+    strategy survives a seed bump exactly as its US ladder does; on a SEEDED
+    strategy it loses to the seed exactly as a typed US time does (whole-
+    branch review, 2026-08-15: before this the JP half of a user strategy
+    vanished on the next seed while its US half stayed)."""
+    stored = {"version": 1, "entities": {
+        "star:8:2": {"clock": "igt",
+                     "strategies": {"Nuts Pless": {"Mario": 44.23}, "MyCustom": {"Mario": 9.9}},
+                     "jp_strategies": {"Nuts Pless": {"Mario": 40.0},      # typed onto a seeded strat
+                                       "MyCustom": {"Mario": 8.8}}}}}      # typed onto his own
+    seed = {"version": 2, "entities": {
+        "star:8:2": {"clock": "igt", "strategies": {"Nuts Pless": {"Mario": 45.46}},
+                     "jp_strategies": {"Nuts Pless": {"Mario": 44.23}}}}}
+    data = tmp_path / "rs.json"; seedf = tmp_path / "seed.json"
+    _write(data, stored); _write(seedf, seed)
+    s = RankStandards(data, seed_path=seedf); s.load()
+    assert s.jp_deltas("star:8:2", "MyCustom") == {"Mario": 8.8}       # his overlay kept
+    assert s.jp_deltas("star:8:2", "Nuts Pless") == {"Mario": 44.23}   # the seed's wins
+    assert s.ladder_cs("star:8:2", "MyCustom", "jp")["Mario"] == 880
+
 def test_load_no_reconcile_when_version_not_older(tmp_path):
     stored = {"version": 2, "entities": {"star:8:2": {"clock": "igt",
               "strategies": {"Nuts Pless": {"Mario": 12.0}}}}}
