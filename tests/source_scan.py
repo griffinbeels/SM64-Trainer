@@ -30,7 +30,14 @@ import re
 import tokenize
 from pathlib import Path
 
-_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+# The lookbehind is load-bearing: `/*` directly after a word or quote char is
+# part of a VALUE, not a comment opener — `accept="video/*"` (compare.js's
+# file input) opened a phantom block comment that silently swallowed 14k
+# characters, so every scan over that file was reading a fraction of it
+# (found 2026-08-14 when a new guard could not find code that was plainly
+# there). A real block comment is preceded by whitespace, a newline, start of
+# file, or punctuation, all of which still match.
+_BLOCK_COMMENT = re.compile(r"(?<![\w\"'])/\*.*?\*/", re.S)
 _LINE_COMMENT = re.compile(r"^\s*//.*$", re.MULTILINE)
 
 

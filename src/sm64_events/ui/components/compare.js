@@ -146,7 +146,7 @@ function displayTitle(comp) {
 // No header ABOVE the video, so the comparison video top-aligns with My Run.
 // Title (italic subheader) sits under the video; strategy moved to the section
 // header; the remove (×) button rides the work-area button row (after set end).
-function ComparisonStage({ comp, controller, onEdit, onDelete }) {
+function ComparisonStage({ comp, controller, onEdit, onDelete, deletes }) {
   const [videoEl, setVideoEl] = useState(null);
   const [name, setName] = useState(comp.name || "");
   useEffect(() => { setName(comp.name || ""); }, [comp.name]);   // follow title backfill
@@ -157,6 +157,11 @@ function ComparisonStage({ comp, controller, onEdit, onDelete }) {
     ? html`<a href=${comp.source_ref} target="_blank" rel="noopener"
         title=${comp.source_ref}>${label}</a>${stratSuffix}`
     : html`${label}${stratSuffix}`;
+  // The × means two different things (see closeComp) — say which where the
+  // click lands, since a danger-styled control that only hides reads as a
+  // deletion that never happened, and vice versa.
+  const removeTitle = deletes ? "Delete this comparison"
+    : "Hide the rank-standard example (re-open it from the saved list)";
   return html`<div class="compare-cmp">
     <${VideoStage} id=${`cmp:${comp.id}`} src=${comp.clip_url}
       inFrame=${comp.in_frame || 0} controller=${controller} onEl=${setVideoEl}
@@ -164,7 +169,7 @@ function ComparisonStage({ comp, controller, onEdit, onDelete }) {
     <${WorkArea} videoEl=${videoEl} inFrame=${comp.in_frame} outFrame=${comp.out_frame}
       controller=${controller} onCommit=${(i, o) => onEdit(comp.id, { in_frame: i, out_frame: o })}
       extra=${html`<button class="icon-button danger-icon" onclick=${() => onDelete(comp.id)}
-        title="Close this comparison" aria-label="Close this comparison">
+        title=${removeTitle} aria-label=${removeTitle}>
         <${Icon} name="close" size=${15} />
       </button>`} />
     <div class="cmp-save">
@@ -405,8 +410,12 @@ export function Compare({ t, intent, clearIntent, active }) {
   useEffect(() => { if (active) reloadCmp(); }, [active, entity, strat]);
 
   // The OPEN SET (which saved comparisons are shown) is remembered per combo in
-  // localStorage: opening a run reloads the last set you had open; closing (×)
-  // keeps the comparison saved so you can re-open it from "load existing".
+  // localStorage: opening a run reloads the last set you had open. The × forks
+  // on WHO added the video (his call, 2026-08-14): the rank-standard example is
+  // system-provided, so × only hides it (and remembers the opt-out — it stays
+  // saved for "load existing"); a user-added comparison is DELETED outright.
+  // Before the fork, × hid everything while wearing danger styling — the
+  // audit's "button that promises a deletion it never performs".
   const comboKey = entity ? `${entity}|${strat || ""}` : null;
   const openKey = comboKey ? `sm64.compareOpen.${comboKey}` : null;
   useEffect(() => {
@@ -424,11 +433,18 @@ export function Compare({ t, intent, clearIntent, active }) {
   };
   const openComp = (id) => { if (id == null) return;
     setOpenSet((prev) => { const n = new Set(prev); n.add(id); persistOpen(n); return n; }); };
-  const closeComp = (id) => {
-    setOpenSet((prev) => { const n = new Set(prev); n.delete(id); persistOpen(n); return n; });
-    // closing the rank-standard video = opting OUT of the default for this combo
+  const rankLinked = (c) => !!(c && cmp.rank_source && c.source_ref === cmp.rank_source);
+  const closeComp = async (id) => {
     const c = cmp.saved.find((x) => x.id === id);
-    if (c && cmp.rank_source && c.source_ref === cmp.rank_source && comboKey) dismissRank(comboKey);
+    setOpenSet((prev) => { const n = new Set(prev); n.delete(id); persistOpen(n); return n; });
+    if (rankLinked(c)) {
+      // closing the rank-standard video = opting OUT of the default for this combo
+      if (comboKey) dismissRank(comboKey);
+      return;
+    }
+    try { await send("DELETE", `/api/compare/videos/${id}`); }
+    catch (e) { setCmpError(`couldn't delete ${c ? displayTitle(c) : "comparison"}: ${e.message || e}`); }
+    reloadCmp();
   };
 
   // Flushes `pendingOpenRef` (Study in Compare's own imports) the moment
@@ -555,7 +571,8 @@ export function Compare({ t, intent, clearIntent, active }) {
         </div>
         ${cmpError && html`<div class="badx">${cmpError}</div>`}
         ${shown.map((c) => html`<${ComparisonStage} key=${c.id} comp=${c}
-          controller=${controller} onEdit=${editCmp} onDelete=${closeComp} />`)}
+          controller=${controller} onEdit=${editCmp} onDelete=${closeComp}
+          deletes=${!rankLinked(c)} />`)}
         <${AddComparison} entity=${entity} strat=${strat} strategies=${entityStrategies}
           suggestion=${suggestion} hasVideos=${shown.length > 0}
           onAdded=${(id) => { if (id != null) openComp(id); reloadCmp(); }}
