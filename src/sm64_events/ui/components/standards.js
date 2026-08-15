@@ -27,6 +27,7 @@ import { feedTuning } from "../feedtuning.js";
 import { StratModal } from "./stratmodal.js";
 import { Modal } from "./modal.js";
 import { Icon } from "./icons.js";
+import { VersionSwitch } from "./versionswitch.js";
 const html = htm.bind(h);
 const enc = encodeURIComponent;
 
@@ -206,7 +207,20 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // Which tier's subdivision rows are showing — single-open, like the Library
   // target page's accordion; null = all collapsed (the default).
   const [expandedTier, setExpandedTier] = useState(null);
-  async function load() { setData(await getJSON(`/api/ranks/standards?entity=${enc(entity)}`)); }
+  // The version switch's own state — VISUAL only. null means "don't ask",
+  // which is also what the switch opens on: the server then resolves the
+  // GRADING version itself, so a fresh panel always agrees with what the
+  // player is actually rated on. Flipping this never touches grading_version
+  // (spec 2026-08-15-game-version-design).
+  const [shownVersion, setShownVersion] = useState(null);
+  // Strategies ticked "JP differs" THIS session that have no JP time on the
+  // server yet — local only, never sent anywhere by itself. The write
+  // happens the moment a JP TimeFields actually commits.
+  const [jpOpen, setJpOpen] = useState(() => new Set());
+  async function load() {
+    const qs = shownVersion ? `&version=${enc(shownVersion)}` : "";
+    setData(await getJSON(`/api/ranks/standards?entity=${enc(entity)}${qs}`));
+  }
   // When opened by default (or when the card remounts for a new entity while
   // open), fetch on mount — toggle() only loads on a user click, so an
   // open-by-default panel would otherwise sit on "Loading standards…" forever.
@@ -228,15 +242,57 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // `load()` is idempotent and this component is only mounted for cards the
   // log is actually rendering, so the traffic is one request per visible card
   // per entity change, not per card in the corpus.
-  useEffect(() => { load(); setExpandedTier(null); }, [entity]);
+  // Refetches on the entity changing (unchanged) AND on the shown version
+  // changing (the switch) — one effect, one `load()` call site, so the two
+  // triggers can never race each other into two in-flight requests. Only an
+  // ACTUAL entity change resets the subdivision/JP-toggle state; re-running
+  // it for a version flip would collapse a tier the user has open just to
+  // look at its JP times.
+  const prevEntityRef = useRef(entity);
+  useEffect(() => {
+    if (prevEntityRef.current !== entity) {
+      prevEntityRef.current = entity;
+      setExpandedTier(null);
+      setJpOpen(new Set());
+    }
+    load();
+  }, [entity, shownVersion]);
   // Reload on EVERY open, not just the first: a strat created from the
   // practice dropdown or header picker while this panel sat cached would
   // otherwise show empty cells forever (its data is fetched out-of-band,
   // not via the session view). Old data stays visible until replaced.
   function toggle() { const n = !open; setOpen(n); if (n) load(); }
-  async function put(strat, rank, seconds) {
-    await send("PUT", `/api/ranks/standards/${enc(entity)}/${enc(strat)}/${enc(rank)}`, { seconds });
+  async function put(strat, rank, seconds, version = "us") {
+    const qs = version === "jp" ? "?version=jp" : "";
+    await send("PUT", `/api/ranks/standards/${enc(entity)}/${enc(strat)}/${enc(rank)}${qs}`, { seconds });
     await load(); onChanged && onChanged();
+  }
+  // Ticking "JP differs" only opens the local JP sub-column (jpOpen) — no
+  // write happens until a JP time actually commits through the second
+  // TimeFields. Unticking a strategy that already HAS server-side JP times
+  // is destructive, so it confirms first; unticking one that never got a JP
+  // time typed just closes the column back up with no request at all.
+  // Disabled entirely for a sheet-fitted JP ladder (checked, per the header
+  // below) since the DELETE below is a no-op for those server-side.
+  async function toggleJp(strat, checked) {
+    if (checked) {
+      setJpOpen((prev) => new Set(prev).add(strat));
+      return;
+    }
+    if ((data.jp_strategies || []).includes(strat)) {
+      if (!window.confirm("Clear this strategy's JP times? US times stay.")) {
+        // The native checkbox already flipped itself unchecked before this
+        // handler ran; a fresh Set (same contents) forces a re-render so
+        // Preact reconciles the controlled `checked` prop back to true.
+        setJpOpen((prev) => new Set(prev));
+        return;
+      }
+      await send("DELETE", `/api/ranks/standards/${enc(entity)}/${enc(strat)}/jp`);
+      setJpOpen((prev) => { const next = new Set(prev); next.delete(strat); return next; });
+      await load(); onChanged && onChanged();
+      return;
+    }
+    setJpOpen((prev) => { const next = new Set(prev); next.delete(strat); return next; });
   }
   async function delStrat(s) {
     // Dual-meaning x (user-picked): seeded strats are community data —
@@ -279,6 +335,26 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
     (data.user_videos && data.user_videos[s] && data.user_videos[s][rank]) || null;
   const headVid = (s) => cutoffVid(s, "Mario") || (data.videos && data.videos[s]) || null;
   const isSeeded = (s) => (data.seeded || []).includes(s);
+  // What the last fetch actually resolved on — echoes shownVersion once it
+  // has landed, and the grading version on a fresh panel that never asked
+  // (shownVersion still null). The version switch reads THIS, not
+  // shownVersion directly, so it never shows a version the table has not
+  // actually drawn yet.
+  const version = data ? data.version : "us";
+  // A strategy's JP column is showing when the SERVER already carries a JP
+  // ladder for it, or the user ticked "JP differs" this session and has not
+  // typed a time yet (jpOpen).
+  const jpFlagged = data
+    ? new Set([...(data.jp_strategies || []), ...jpOpen])
+    : new Set();
+  // A sheet-fitted JP ladder (Ultimate-Sheet-derived, never the user's own
+  // file) cannot be cleared through this editor — clear_jp is a no-op for
+  // it server-side. Disabled rather than hidden, so it stays visible and
+  // its title says why.
+  const sheetFittedJp = data
+    ? new Set((data.fitted_strategies || [])
+        .filter((strat) => (data.jp_strategies || []).includes(strat)))
+    : new Set();
 
   // Columns = store strategies (community order first) + every other strat
   // this section knows (registered / used on attempts — sec.strategies from
@@ -404,6 +480,13 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // strategy's own ladder (the column actually on screen) rather than the
   // entity's best-possible ladder, so the marker's bracketed cutoffs can
   // never disagree with the rows it sits between.
+  //
+  // `data.strategies` is now VERSION-RESOLVED (the switch above), so the
+  // marker moves to sit between whichever cutoffs the shown version drew —
+  // that is intended, not a bug: it is answering "where do I sit against
+  // THESE rows". `entityScore` below stays the server-GRADED score
+  // regardless of what is shown, on purpose — flipping the switch changes
+  // what you are looking at, never what you are rated on.
   const activeLadder = data && activeStrat ? (data.strategies[activeStrat] || {}) : {};
   const basisFrames = data && sectionRank && sectionRank.basis
     ? sectionRank.basis.frames
@@ -431,7 +514,15 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
     </div></div>` : null}
     ${data ? html`<div class="stdbody">
       <div class="stdtools">
-        <button class=${editing ? "is-selected" : ""} onclick=${() => setEditing(!editing)}>
+        <button class=${editing ? "is-selected" : ""} onclick=${() => {
+            // The editor writes explicit US and JP columns (below), so
+            // entering it forces the SHOWN version to US — honest and
+            // unambiguous: the "US" sub-column then always reads
+            // data.strategies straight, never a version-resolved guess.
+            const next = !editing;
+            setEditing(next);
+            if (next) setShownVersion("us");
+          }}>
           <${Icon} name=${editing ? "check" : "edit"} size=${15} /> ${editing ? "Done editing" : "Edit"}
         </button>
         ${editing ? html`<button onclick=${() => setShowAdd(true)}>
@@ -440,6 +531,11 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
         <button class="quiet-button" onclick=${reset}>
           <${Icon} name="restart" size=${15} /> Community defaults
         </button>
+        <${VersionSwitch} value=${version}
+            onChange=${(next) => { if (!editing) setShownVersion(next); }}
+            note=${data.version !== data.grading_version
+              ? `Viewing ${data.version.toUpperCase()} standards · you are graded on ${data.grading_version.toUpperCase()}`
+              : null} />
         ${data.xcams_url ? html`<a class="meta" href=${data.xcams_url} target="_blank" rel="noopener"
             title="browse every example run for this star on the xcams Daily Star page">Examples on xcams ↗</a>` : null}
       </div>
@@ -454,7 +550,14 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
             strat === activeStrat ? "col-active" : "")}
           style=${bandStyle(strat)}>${headVid(strat)
           ? html`<a href=${headVid(strat)} target="_blank" rel="noopener" title="fastest-time video">${colHead(strat)}</a>`
-          : colHead(strat)}${editing ? html` <button class="candx" title=${isSeeded(strat) ? "clear this strategy's standards" : "delete this strategy"} onclick=${() => delStrat(strat)}>×</button>` : ""}
+          : colHead(strat)}${editing ? html` <button class="candx" title=${isSeeded(strat) ? "clear this strategy's standards" : "delete this strategy"} onclick=${() => delStrat(strat)}>×</button>
+          <label class="std-jp-toggle" title=${sheetFittedJp.has(strat)
+              ? "this strategy's JP ladder comes from the Ultimate Sheet and cannot be cleared here"
+              : "US and JP timed differently for this strategy"}>
+            <input type="checkbox" checked=${jpFlagged.has(strat)}
+                disabled=${sheetFittedJp.has(strat)}
+                onchange=${(e) => toggleJp(strat, e.target.checked)} /> JP differs
+          </label>` : ""}
           ${marker && strat === activeStrat ? html`<span class="std-you-badge"
               title="your current time and score on this ladder">◀ you · ${fmtIgtShort(basisFrames)}${entityScore != null ? ` · ${fmtScore(entityScore)}` : ""}</span>` : ""}</th>`)}</tr></thead>
         <tbody>
@@ -536,11 +639,32 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
                       title=${`example ${capName("Iron")} 1 run`}>${capOneLabel}</a>`
                   : capOneLabel}</td>`;
             }
+            // Only a JP-FLAGGED strategy grows the second sub-column — every
+            // other strategy keeps the single field it always had. `v` is
+            // already the US-resolved time (editing forces shownVersion to
+            // "us", above), so it is correct read straight rather than
+            // re-derived from a `version` check here.
+            const jpSeconds = jpFlagged.has(strat)
+              ? (data.strategies_jp[strat] || {})[rank] : null;
             return html`<td class=${cellClass} style=${bandStyle(strat)}>
               ${editing
-                ? html`<span class="stdcell"><${TimeFields} seconds=${v} compact
-                      label=${`${capName(rank)} ${strat}`}
-                      onCommit=${(next) => { if (next != null) put(strat, rank, next); }} />
+                ? html`<span class=${`stdcell${jpFlagged.has(strat) ? " stdcell-versions" : ""}`}>
+                    ${jpFlagged.has(strat)
+                      ? html`<span class="stdcell-version">
+                          <span class="stdcell-version-label">US</span>
+                          <${TimeFields} seconds=${v} compact
+                              label=${`${capName(rank)} ${strat} US`}
+                              onCommit=${(next) => { if (next != null) put(strat, rank, next); }} />
+                        </span>
+                        <span class="stdcell-version">
+                          <span class="stdcell-version-label">JP</span>
+                          <${TimeFields} seconds=${jpSeconds} compact
+                              label=${`${capName(rank)} ${strat} JP`}
+                              onCommit=${(next) => { if (next != null) put(strat, rank, next, "jp"); }} />
+                        </span>`
+                      : html`<${TimeFields} seconds=${v} compact
+                          label=${`${capName(rank)} ${strat}`}
+                          onCommit=${(next) => { if (next != null) put(strat, rank, next); }} />`}
                     <button class="vidbtn" title=${`${userVid(strat, rank) ? "edit" : "add"} ${capName(rank)} example video`}
                       onclick=${() => editVideo(strat, rank)}>${userVid(strat, rank) ? "▶✎" : "▶＋"}</button></span>`
                 : (vid
