@@ -407,7 +407,39 @@
   .library-section-body {
     padding: 0 .8rem .8rem; display: grid; gap: .6rem;
   }
-  .library-jp-toggle { width: fit-content; }
+
+  /* The page-level JP/US switch (versionswitch.js, round 2026-08-15) --
+     retires the old per-section `.library-jp-toggle` chip in favour of ONE
+     switch in the Library hero every section reads. A segmented pill, not
+     two independent chips: the two `.version-switch-seg` buttons share one
+     border down the middle (the first drops its own right border so the
+     second's left border is the only line between them), and the pressed
+     segment fills with the SAME accent `.primary-button`/`.is-selected`
+     already use elsewhere on this page (var(--gold) fill, dark text) rather
+     than inventing a second "selected" language. The unpressed segment stays
+     quiet -- `--surface-2` + `--muted`, the same idle tone `.scope-chip`
+     and `.chip-button` use before their own hover/selected states apply. */
+  .version-switch {
+    display: inline-flex; align-items: center; gap: .5rem;
+  }
+  .version-switch-seg {
+    appearance: none; border: 1px solid var(--border-soft);
+    background: var(--surface-2); color: var(--muted);
+    font: inherit; font-weight: 700; letter-spacing: .02em;
+    padding: .32rem .85rem; line-height: 1.1; cursor: pointer;
+  }
+  .version-switch-seg:first-child {
+    border-radius: 999px 0 0 999px; border-right: none;
+  }
+  .version-switch-seg:last-child { border-radius: 0 999px 999px 0; }
+  .version-switch-seg:hover { color: var(--text); }
+  .version-switch-seg[aria-pressed="true"] {
+    background: var(--gold); border-color: var(--gold-soft); color: #1b1607;
+  }
+  .version-switch-seg:focus-visible {
+    outline: 2px solid var(--gold); outline-offset: 2px;
+  }
+  .version-switch-note { color: var(--muted); font-size: .78rem; }
 
   /* Round 5 -- the link door: assigning a movement / subsection row to a
      segment the user built. One strip per linkable row; the menu replaces
@@ -3345,6 +3377,15 @@
   .workshop-title h2 { margin: .08rem 0 .16rem; }
   .workshop-title p {
     margin: 0; color: var(--muted); font-size: .79rem; line-height: 1.35;
+  }
+  /* Groups the hero's trailing controls (the Library's page-level version
+     switch, round 2026-08-15, plus its Refresh button) so they wrap onto a
+     narrow hero TOGETHER rather than the switch and the button drifting
+     apart on their own -- `.workshop-hero`'s own flex-wrap wraps each child
+     independently, and a lone version switch stranded on its own line reads
+     as an unrelated control rather than "the rest of this row". */
+  .workshop-hero-actions {
+    display: flex; align-items: center; flex-wrap: wrap; gap: .6rem;
   }
   .workshop-card { min-width: 0; margin: 0; }
   .workshop-card-heading {
