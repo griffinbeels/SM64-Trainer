@@ -78,6 +78,19 @@ export function Header({ t, settingsOpen, closeSettings }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [settingsOpen, closeSettings]);
 
+  // The Game version setting (GET|PUT /api/mode, docs/api.md "Game version").
+  // Loads the same way everything else in this drawer does: fetch on open,
+  // never on every render. Applies LIVE -- `PUT /api/mode` flips the
+  // standards store's grading version and broadcasts `game_version_changed`
+  // itself, so no restart copy belongs here (his ruling 2026-08-15: freely
+  // swap between ROMs).
+  const [gameMode, setGameMode] = useState(null);
+  const loadGameMode = () => send("GET", "/api/mode").then(setGameMode).catch(() => setGameMode(null));
+  useEffect(() => { if (settingsOpen) loadGameMode(); }, [settingsOpen]);
+  async function putGameVersion(version) {
+    setGameMode(await send("PUT", "/api/mode", { version }));
+  }
+
   async function restartServer() {
     if (restarting) return;
     setRestarting(true);
@@ -149,6 +162,14 @@ export function Header({ t, settingsOpen, closeSettings }) {
     (s) => [String(s.id),
             `Session ${s.id}${s.id === active ? " ●" : ""} · ${s.attempts}`],
   )] : [];
+
+  // Built as plain JS, not inline htm interpolation: a text run meeting an
+  // interpolation across a line break fuses words together (ui-core.md), and
+  // this sentence has to wrap in the drawer's narrow column.
+  const gameVersionNote = gameMode
+    ? `Graded on ${gameMode.effective.toUpperCase()} standards. `
+      + "Auto-detect is US on the emulator."
+    : null;
 
   return html`<header class="context-shell">
     <div class="context-bar" aria-label="Practice context">
@@ -238,6 +259,28 @@ export function Header({ t, settingsOpen, closeSettings }) {
           </div>
           ${t.updateMsg && html`<p class="settings-note">${t.updateMsg}</p>`}
           ${reportMsg && html`<p class="settings-note">${reportMsg}</p>`}
+        </section>
+
+        ${/* This is the same record feature/console-support edits from its
+             own "Console" section (Tracking mode + N64 setup) -- the option
+             text is "JP", never "Japan" (his correction). When that branch
+             merges main it drops its own Game version dropdown here and
+             keeps only Tracking mode + N64 setup, so the field lives in
+             exactly one place. Dated 2026-08-15. */""}
+        <section class="settings-section">
+          <h3>Game</h3>
+          <label class="settings-field">
+            <span>Game version</span>
+            <select value=${gameMode ? gameMode.version : "auto"}
+                disabled=${!gameMode}
+                onchange=${(e) => putGameVersion(e.target.value)}>
+              <option value="auto">Auto-detect</option>
+              <option value="jp">JP</option>
+              <option value="us">US</option>
+            </select>
+          </label>
+          ${gameVersionNote && html`<p class="settings-note">${gameVersionNote}</p>`}
+          ${gameMode && gameMode.unsupported && html`<p class="settings-note">Emulator tracking has no verified JP addresses yet — detection stays US while grading uses JP standards.</p>`}
         </section>
 
         <section class="settings-section">
