@@ -50,7 +50,8 @@ only the first manual download does.)
   address the trainer reads is kept per ROM version, and JP's are discovered
   by playing through `tools/sync_version.py --version jp` with the JP ROM
   loaded while `/ui/sync.html` shows US beside JP filling in live. Until that
-  run has been done and its report promoted, JP reads nothing.
+  run has been done and its report promoted, JP reads nothing. The runbook:
+  [`docs/version-sync.md`](docs/version-sync.md).
 - **Windowed**, not exclusive fullscreen, or replay capture can't see the game.
 - Your data lives in `%LOCALAPPDATA%\SM64Trainer\` and survives every update.
 

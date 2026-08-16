@@ -11,6 +11,9 @@ paths:
 
 # Version sync — JP parity as one probe run, where to change what
 
+The human-facing runbook (the two runs, what he is asked, what to hand back):
+`docs/version-sync.md`. This file is the change map.
+
 The loop (2026-08-15, his design): develop every feature on US; the LAST
 step is `uv run python tools/sync_version.py --version jp` with the JP ROM
 loaded — it walks every **gate** in dependency order, tells him what to do,
