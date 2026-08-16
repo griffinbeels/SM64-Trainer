@@ -242,7 +242,8 @@ game creates with no spawn position of its own — a pole, a tree — takes the 
 it STANDS in instead, which never moves either, so one specific pole can carry
 a name. Every
 landmark also belongs to a KIND — the game's own script for what the thing
-is — and we ship a name for every kind in the game, derived from the
+is, named by its [[behaviour symbol]] so the same door keys the same on
+every ROM — and we ship a name for every kind in the game, derived from the
 decompilation's symbol table, so a row says "a bob-omb" without anyone
 naming anything. He names one specific landmark in the [[recorder]] and
 every row it ever appeared in takes that name; a name he types always beats
@@ -255,7 +256,7 @@ one name ARE one landmark, a rename or an erase moves all of them, and a
 pinned [[segment]] fires on whichever half he pushes.
 
 - **Lives** — `src/sm64_events/core/landmark.py` (the key),
-  `tools/corpus_behaviors.py` (every kind, named),
+  `src/sm64_events/memory/behaviours.py` (every kind, named),
   `src/sm64_events/data/defaults.seed.json` (the names we ship)
 - **Not** — the count in a [[moment]]'s name. "The 5th door you opened" counts
   doors; a landmark IS the door, and the count is something it has.
@@ -1076,3 +1077,82 @@ so a user can attach evidence to a bug report instead of a description of it.
 
 - **Lives** — the report builder (`src/sm64_events/core/diagnostics.py`) → the
   settings drawer (`src/sm64_events/ui/components/header.js`)
+
+### Memory layout
+
+WHERE one build of the ROM keeps each global the trainer reads — one row per
+address, US and JP side by side. The US column is what every [[detector]] has
+read since the first live check; the JP column starts empty and fills only
+after its [[gate]] passes and the [[sync report]] says so. A reader takes the
+memory layout for the running version and adds the struct offsets that are the
+same on every ROM. Nothing outside the memory layout may spell a RAM address.
+
+- **Lives** — the memory layout (`src/sm64_events/memory/layout.py`) → the
+  [[snapshot]] reader and every memory-reading tool under `tools/`
+
+### Behaviour symbol
+
+The decompilation's own name for what a thing IS — `bhvDoor`, `bhvBobomb` —
+used as the identity behind every [[landmark]] and every caused [[moment]],
+because the pointer the game keeps for that script differs between the US
+and JP ROMs and the symbol does not. Both versions' symbol tables ship with
+the app; the trainer resolves a pointer to its symbol on the very read that finds it.
+
+- **Lives** — the symbol tables (`src/sm64_events/memory/behaviours.py`) →
+  the [[landmark]] key (`src/sm64_events/core/landmark.py`)
+
+### Gate
+
+One check that a version-dependent thing works on the ROM the emulator holds:
+the instruction to the player, the read over live memory, and what a pass
+proves. Four kinds — an address's contract, the behaviour table's base, a
+calibration measured beside the constant it backs, and a whole feature driven
+through the real [[detector]] chain. Every [[memory layout]] row, every kind
+of [[event]] a [[detector]] emits and every measured constant must have one,
+or the test suite fails; that is what keeps a feature built on US from
+landing without its JP step.
+
+- **Lives** — the registry (`src/sm64_events/sync/gates.py`) and the gate
+  modules beside it → the [[sync runner]] and the [[sync dashboard]]
+
+### Sync runner
+
+The one script that walks every [[gate]] in dependency order against the
+loaded ROM, tells the player what to do, and writes each verdict into the
+[[sync report]] as it lands — while a live server relays it to the
+[[sync dashboard]]. On US it proves nothing regressed; on JP it is how the
+player finds and confirms JP support.
+
+- **Lives** — the sync runner (`src/sm64_events/sync/runner.py`) and its
+  command (`tools/sync_version.py`)
+
+### Sync report
+
+Every [[gate]]'s latest verdict for one ROM version, on disk and committed
+as evidence: verified, failed, candidate, missing or skipped, with the value
+or the measurement and one line of proof. A verified address in the report
+that the [[memory layout]] does not yet carry fails the test suite, and so
+does a shipped address the report refutes.
+
+- **Lives** — the sync report (`src/sm64_events/sync/report.py`) → one
+  JSON per version under the data folder's version_sync directory
+
+### Sync dashboard
+
+The page that shows US beside JP for every [[gate]], grouped by feature with
+a coverage bar per feature, moving live as the [[sync runner]] posts each
+verdict through the server. On the first day every JP cell reads missing;
+it fills as the player plays through the [[sync runner]]'s checklist.
+
+- **Lives** — the page (`src/sm64_events/ui/sync.html`,
+  `src/sm64_events/ui/sync.js`) → the sync API
+  (`src/sm64_events/server/sync_api.py`)
+
+### Version probe
+
+The read that names which ROM the emulator has loaded — the cartridge
+header's country byte — so the [[sync runner]] refuses to check JP against a
+US ROM and the game-version setting's automatic mode has something to detect
+from.
+
+- **Lives** — the version probe (`src/sm64_events/memory/version_probe.py`)

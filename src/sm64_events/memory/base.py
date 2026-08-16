@@ -47,6 +47,24 @@ class RdramReader:
         v = self.read_u16(addr)
         return v - 0x10000 if v >= 0x8000 else v
 
+    def read_image(self) -> bytes:
+        """The whole RDRAM image as PJ64 stores it (host order, LE words) —
+        the input `sync/checks.py`'s scans take. Sized by libultra's own
+        osMemSize word (4 MB without the expansion pak, 8 MB with), probed
+        with one read at the top so a lying header falls back to 4 MB
+        rather than raising mid-scan (tools/hunt_value.py::rdram_size)."""
+        from sm64_events.memory.addresses import (OS_MEM_SIZE, RDRAM_FULL_SIZE,
+                                                  RDRAM_MIN_SIZE)
+        size = self.read_u32(OS_MEM_SIZE)
+        if size not in (RDRAM_MIN_SIZE, RDRAM_FULL_SIZE):
+            size = RDRAM_FULL_SIZE      # header unreadable: probe the top
+        try:
+            if len(self._read_raw(size - 4, 4)) != 4:
+                raise MemoryReadError("short read at the top of RDRAM")
+        except Exception:
+            size = RDRAM_MIN_SIZE
+        return self._read_raw(0, size)
+
     def read_block(self, addr: int, size: int) -> bytes:
         """`size` bytes from `addr`, in N64 (big-endian) order — ONE host read.
 

@@ -27,6 +27,8 @@ from sm64_events.detectors.spawn import SpawnDetector
 from sm64_events.detectors.stage import StageChangeDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
+from sm64_events.core.snapshot import SnapshotReader
+from sm64_events.memory.layout import LAYOUT_ROWS, layout_for
 from sm64_events.memory.pj64 import Pj64Memory
 from sm64_events.replay.audio import ProcessAudioSource, SystemAudioSource
 from sm64_events.replay.config import ReplayConfig, apply_settings_file
@@ -60,7 +62,7 @@ def _bootstrap_cleanup_arg(argv=None) -> "str | None":
     return None
 
 
-def build_detectors(target_active=None) -> list:
+def build_detectors(target_active=None, version: str = "us") -> list:
     """THE detector chain, in THE order. Extracted from build() 2026-07-31 so
     a test can drive the real one end to end (tests/test_segment_igt.py plays
     snapshots through this list and projects what comes out) — a test that
@@ -147,7 +149,15 @@ def build_detectors(target_active=None) -> list:
     The parameter stays as an INJECTION SEAM rather than being deleted: a
     future rule that wants to narrow WHEN a moment records has somewhere to go
     that is not a new branch inside the detector.
+
+    `version` ("us"/"jp") is the same kind of seam, added 2026-08-15 with the
+    version-sync work: no shipped detector branches on it — every
+    version-dependent read is resolved by the snapshot reader through the
+    layout and the behaviour symbol tables — but a JP-only variant has a place
+    to hang without a second chain. `sync/stack.py` builds the chain through
+    this door for the gates, so a detector left out here is left out there.
     """
+    del version   # no detector reads it yet; see the docstring
     moments = (MomentDetector() if target_active is None
                else MomentDetector(target_active=target_active))
     # CausedMomentDetector emits the same event on the frame it happened —
@@ -162,6 +172,29 @@ def build_detectors(target_active=None) -> list:
     return detectors
 
 
+def _game_version() -> str:
+    """Which ROM's layout the poller reads: the persisted game-version
+    setting's EFFECTIVE value once feature/game-version lands its
+    `core/modes.py` (an explicit JP/US wins, AUTO resolves to what the
+    emulator has loaded), else "us" — the only ROM the tracker read before
+    2026-08-15. The two branches meet in this one function on purpose."""
+    try:
+        from sm64_events.core.modes import effective_version, load_mode_config
+    except ImportError:
+        return "us"
+    detected = None
+    probe = Pj64Memory()
+    try:
+        from sm64_events.memory.version_probe import detect_version
+        if probe.attach():
+            detected = detect_version(probe)
+    except Exception:            # no emulator yet is the normal boot case
+        detected = None
+    finally:
+        probe.detach()
+    return effective_version(load_mode_config(), detected=detected)
+
+
 def build():
     global _instance_lock
     configure_logging()
@@ -170,6 +203,11 @@ def build():
     # default 5 ms switch interval adds whole-frame latency spikes at 60 fps.
     sys.setswitchinterval(0.002)
     memory = Pj64Memory()
+    version = _game_version()
+    layout = layout_for(version)
+    logging.getLogger("sm64.tracker").info(
+        "game version %s: %d/%d addresses in the layout", version,
+        len(LAYOUT_ROWS) - len(layout.missing()), len(LAYOUT_ROWS))
     broadcaster = Broadcaster()
     db_file = db_path()
     db_file.parent.mkdir(parents=True, exist_ok=True)
@@ -318,7 +356,7 @@ def build():
     # NO target gate. This passed `target_active=lambda: service.target is not
     # None` (task 0087) until 2026-08-06, which made the recorder blind exactly
     # when it is used — see `build_detectors`' docstring and moment.py's.
-    detectors = build_detectors()
+    detectors = build_detectors(version=version)
     # An ordinal means "the Nth since this attempt opened", so the counter
     # restarts when one does. The service sees every event and the detectors
     # see only snapshots, so this is the one place that can join them. BOTH
@@ -342,7 +380,8 @@ def build():
     # service IS the event sink; on_frame is its deferred-judgement heartbeat,
     # so a topological cancel reaches the screen on the next game frame rather
     # than whenever the next event happens to be journaled.
-    poller = Poller(memory, detectors, service, on_frame=service.settle_frame)
+    poller = Poller(memory, detectors, service, on_frame=service.settle_frame,
+                    reader=SnapshotReader(memory, layout, version))
     updater = UpdateService(current_version=__version__)
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     return create_app(poller, broadcaster, service=service, replay=replay,

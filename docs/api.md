@@ -119,6 +119,7 @@ Other event types, same envelope:
 | `attempts_pruned` | `attempt_ids` | The startup prune deleted attempts a previous session left UNLABELLED — no star and no segment at all, or one but no strategy — because there is no way to look at such a row later and know what it was. Journaled once per server start, right after `session_started`, and applied retroactively on replay like `data_wiped` (`attempts_invalidated` follows). Carries explicit ids, never a rule to re-evaluate. An attempt with a saved PB or a saved replay clip is never listed |
 | `session_started` | `session_id, label?` | New session opened (server start or `/api/session/new`) |
 | `attempts_invalidated` | _(none)_ | Full re-projection ran — consumers must refetch `/api/session`. **Broadcast-only — never journaled** (since 2026-08-02), along with `attempt_completed` and `target_changed`: each restates something already stored, so a journal row was pure noise. Dropping all three replays byte-identical over the real journal and takes it from 23,063 rows to 19,179 |
+| `sync_verdict` | `version, gate_id, verdict, at` | A version-sync gate's verdict was just recorded (`PUT /api/sync/verdict`, see **Version sync** below) — `verdict` is the full `{status, value?, measured?, evidence?, frames?}` object. **Broadcast-only — never journaled**: it carries no game frame and states a fact about the tracker's own address book, not about play. `/ui/sync.html` is the only consumer, updating that gate's chip for that version in place. |
 | `emulator_connected` | _(none)_ | Attached to PJ64 process |
 | `emulator_disconnected` | _(none)_ | Lost PJ64 process |
 | `stage_changed` | `course_id, level, area, mode` | **Broadcast-only — never journaled.** The quick-select context the player is standing in; `mode` selects the banner: `"stars"` (a main course 1–15, `course_id` set), `"bowser_course"` (BitDW/BitFS/BitS = levels 17/19/21 → course 16/17/18, `course_id` set; banner offers the reds star + the level's no-reds pipe-entry segment), `"arena"` (a Bowser 1/2/3 fight arena = levels 30/33/34, `course_id: null`; banner offers + auto-selects the single fight segment), `"castle"` (Castle Inside / level 6, `course_id: null`; `area` 1 lobby / 2 upstairs / 3 basement selects which subarea's segments the banner offers), or `null` (secret-star areas, caps, hubs — no banner). |
@@ -500,6 +501,22 @@ any higher one, and generates a control for every row in `ui/climbtuning.js`.
 The settings string the page exports carries EVERY tunable, not just the ones
 that differ from the defaults, so it still means the same thing after a default
 is codified.
+
+## Version sync — US vs JP coverage (source checkouts and installs alike)
+
+`/ui/sync.html` shows, per version-dependent thing the tracker relies on (a
+RAM address, a behaviour-segment base, a calibration constant, a real detector
+event), whether US and JP each have a verified reading. The gate registry
+(`sync/gates.py`) and the report each ROM version's readings land in
+(`sync/report.py`, `data/version_sync/<version>.json`) are the source of
+truth; this API is a thin read/write surface over both. Mounted unconditionally
+(`server/sync_api.py`) — no service required, so a broadcast-only second
+instance still shows and records coverage.
+
+| Route | Purpose |
+|---|---|
+| `GET /api/sync` | `{features, gates, reports}` — `features` is the dashboard's group order (`sync.gates.FEATURES`); `gates` is every registered gate (`id, feature, kind, instruction, proves, needs, backs, auto, reads` — `reads` is the dashboard's READS column, derived once server-side by `sync/gates.py::reads_label`: the layout row's decomp symbol or hunt for an address, the constant a calibration backs, the event type a feature waits for), read through `sync.registry` so a gate module another track has not filled in yet still appears the moment it registers; `reports` is `{"us": {...}, "jp": {...}}`, each keyed by gate id to `{status, value, measured, evidence, frames, at}` — an id absent from a report has never been checked on that version. |
+| `PUT /api/sync/verdict` `{version: "us"\|"jp", gate_id, verdict: {status, value?, measured?, evidence?, frames?}, at, persist?}` | Record one gate's verdict for one ROM version — how `tools/sync_version.py` (and a person's own manual confirmation) reports what was just checked. **Never journaled**: a sync verdict carries no game frame and the projector has no business replaying it, so it writes straight into `data/version_sync/<version>.json` (`sync/report.py::Report.record`, atomic rewrite) — unless `persist` is `false`, which `tools/sync_version.py` sends because it already wrote its own report and a server in another checkout must not write a second copy — and broadcasts `sync_verdict` directly — the same shape `/api/uilog` and `/api/segments/origin` use for a fact that changes on-screen state without belonging in the journal. 400 for an unknown version or an unknown verdict `status` (must be one of `sync.gates.STATUSES`); 404 for a `gate_id` the registry does not know. Returns `{ok: true}`. |
 
 ## Landmarks — which door, which pole, which bob-omb
 

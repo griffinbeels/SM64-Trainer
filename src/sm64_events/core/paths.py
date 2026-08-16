@@ -215,6 +215,18 @@ def bundled_video_checks() -> Path | None:
     return cand if cand.exists() else None
 
 
+def bundled_symbol_map(name: str) -> Path:
+    """One of the STROOP symbol-map TSVs memory/behaviours.py reads
+    (`behaviours_us.tsv`, `symbols_jp.tsv`, ...), shipped beside a frozen exe
+    (PyInstaller _MEIPASS), else the in-repo file when running from source.
+    Mirrors bundled_rank_standards() exactly, but returns the path unchecked:
+    a missing map is a packaging bug the first read should name loudly, not a
+    None that quietly empties the catalogue."""
+    if is_frozen():
+        return Path(getattr(sys, "_MEIPASS", "")) / name
+    return Path(__file__).resolve().parent.parent / "data" / name
+
+
 def bundled_library_overrides() -> Path | None:
     """The human's audit corrections to our READING of the sheet
     (tools/audit_library.py), shipped beside a frozen exe (PyInstaller

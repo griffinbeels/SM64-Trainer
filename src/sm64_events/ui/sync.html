@@ -1,0 +1,101 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>SM64 Trainer — version sync</title>
+<link rel="icon" type="image/png" href="/ui/favicon.png">
+<script type="importmap">
+{"imports": {
+  "preact": "/ui/vendor/preact.module.js",
+  "preact/hooks": "/ui/vendor/hooks.module.js",
+  "htm": "/ui/vendor/htm.module.js"
+}}
+</script>
+<!--
+  Same reasoning as /ui/tune.html: the design system is one <style> block
+  inside index.html, so this page FETCHES that block and injects it rather
+  than keeping a copy that could drift from the app it is judging colours
+  against.
+-->
+<script>
+(async () => {
+  const source = await (await fetch("/ui/index.html")).text();
+  const block = source.slice(source.indexOf("<style>") + 7, source.indexOf("</style>"));
+  const style = document.createElement("style");
+  style.textContent = block;
+  document.head.insertBefore(style, document.getElementById("sync-style"));
+  document.documentElement.dataset.styled = "1";
+})();
+</script>
+<style id="sync-style">
+  /* Everything here is the RIG's own chrome -- page layout, the coverage
+     bars, the status chips -- never a class the app owns. Colours below are
+     all var(--token) reads against the injected design-system block; no hex
+     literal appears in this block. */
+  html:not([data-styled]) body { visibility: hidden; }
+  body { margin: 0; background: var(--bg); color: var(--text); }
+  .sync-page { container-type: inline-size; max-width: 1100px; margin: 0 auto;
+    padding: 24px 20px 60px; }
+  .sync-head { margin-bottom: 18px; }
+  .sync-head h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: .02em; }
+  .sync-head p { margin: 0; color: var(--muted); font-size: 13px; }
+  .sync-overall { display: flex; gap: 18px; margin-top: 10px; font-size: 13px; }
+  .sync-overall b { color: var(--text); }
+  .sync-empty-registry { margin-top: 24px; padding: 14px 16px; border-radius: var(--radius);
+    background: var(--surface); border: 1px solid var(--border-soft); color: var(--muted); }
+
+  .sync-card { background: var(--surface); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 14px 16px 16px; margin-bottom: 14px; }
+  .sync-card-head { display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
+  .sync-card-head h2 { font-size: 14.5px; margin: 0; text-transform: capitalize; }
+  .sync-bars { display: flex; gap: 14px; }
+  .sync-bar-wrap { display: flex; align-items: center; gap: 6px; font-size: 11px;
+    color: var(--muted); }
+  .sync-bar-label { width: 18px; text-align: right; font-weight: 600; }
+  .sync-bar-track { width: 84px; height: 6px; border-radius: 4px; background: var(--border-soft);
+    overflow: hidden; }
+  .sync-bar { height: 100%; background: var(--green); border-radius: 4px;
+    transition: width 260ms ease; }
+  .sync-bar-count { width: 34px; }
+
+  .sync-table-wrap { overflow-x: auto; }
+  table.sync-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .sync-table th { text-align: left; font-weight: 600; color: var(--muted);
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
+    padding: 4px 8px; border-bottom: 1px solid var(--border-soft); white-space: nowrap; }
+  .sync-table td { padding: 6px 8px; border-bottom: 1px solid var(--border-soft);
+    vertical-align: top; }
+  .sync-table tr:last-child td { border-bottom: none; }
+  .sync-gate-id { font-family: Consolas, monospace; font-size: 11.5px;
+    overflow-wrap: anywhere; }
+  .sync-kind-chip { font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+    padding: 2px 6px; border-radius: 4px; background: var(--bg-deep);
+    border: 1px solid var(--border-soft); color: var(--muted); white-space: nowrap; }
+  /* Long dotted names must WRAP, never push the JP column out of the card:
+     at the 850px floor a calibration's constant name is wider than the
+     table's share of the width. */
+  .sync-reads { font-family: Consolas, monospace; font-size: 11px; color: var(--muted);
+    overflow-wrap: anywhere; }
+
+  .sync-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px;
+    padding: 2px 7px; border-radius: 999px; border: 1px solid transparent;
+    font-family: Consolas, monospace; white-space: nowrap; }
+  .sync-chip[data-status="verified"] { background: color-mix(in srgb, var(--green) 18%, transparent);
+    border-color: color-mix(in srgb, var(--green) 45%, transparent); color: var(--green); }
+  .sync-chip[data-status="failed"] { background: color-mix(in srgb, var(--coral) 18%, transparent);
+    border-color: color-mix(in srgb, var(--coral) 45%, transparent); color: var(--coral); }
+  .sync-chip[data-status="candidate"] { background: color-mix(in srgb, var(--gold-soft) 18%, transparent);
+    border-color: color-mix(in srgb, var(--gold-soft) 45%, transparent); color: var(--gold-soft); }
+  .sync-chip[data-status="missing"] { background: transparent; border-color: var(--border-soft);
+    color: var(--muted); }
+  .sync-chip[data-status="skipped"] { background: color-mix(in srgb, var(--violet) 16%, transparent);
+    border-color: color-mix(in srgb, var(--violet) 40%, transparent); color: var(--violet); }
+  .sync-measured { display: block; font-family: Consolas, monospace; font-size: 10px;
+    color: var(--muted); margin-top: 2px; }
+
+  @container (max-width: 620px) {
+    .sync-bars { flex-direction: column; gap: 6px; }
+  }
+</style>
+</head><body>
+<div id="root"></div>
+<script type="module" src="/ui/sync.js"></script>
+</body></html>

@@ -342,14 +342,15 @@ def landmark_row_source(key: str, name: str) -> str:
     path for a name he typed in the recorder, and until 2026-08-07 it only
     handled segment definitions — the doc was ahead of the code, so every
     name he typed stayed on his machine. A landmark key is
-    `level:area:behaviour:x,y,z`, or `kind:behaviour` for a whole family.
+    `level:area:symbol:x,y,z`, or `kind:symbol` for a whole family — the
+    behaviour SYMBOL since 2026-08-15 (`memory/behaviours.py`), never a
+    pointer.
     """
     if key.startswith("kind:"):
-        return f'    kind(0x{key.split(":", 1)[1].upper()}, {name!r}),'
-    level, area, behaviour, coords = key.split(":", 3)
+        return f'    kind({key.split(":", 1)[1]!r}, {name!r}),'
+    level, area, symbol, coords = key.split(":", 3)
     home = ", ".join(coords.split(","))
-    return (f"    at({level}, {area}, 0x{behaviour.upper()}, "
-            f"({home}), {name!r}),")
+    return f"    at({level}, {area}, {symbol!r}, ({home}), {name!r}),"
 
 
 def _load_landmark_names(db_path: Path) -> list[tuple[str, str]]:

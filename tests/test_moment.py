@@ -5,6 +5,7 @@ import pytest
 
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.detectors.moment import MOMENTS, MomentDetector
+from sm64_events.memory.behaviours import symbol_of
 from sm64_events.memory.addresses import (ACT_IN_CANNON, ACT_PULLING_DOOR,
                                           ACT_PUSHING_DOOR,
                                           ACT_READING_AUTOMATIC_DIALOG,
@@ -24,6 +25,10 @@ def snap(action, timer, level=24, **overrides) -> GameSnapshot:
         num_stars=5, last_completed_course=1, last_completed_star=3,
         igt_overall=300, curr_level=level, curr_area=1)
     defaults.update(overrides)
+    if defaults.get("landmark_behaviour") and not defaults.get("landmark_symbol"):
+        # The reader resolves the pointer to its symbol; a hand-built
+        # snapshot resolves it the same way, through the US layout.
+        defaults["landmark_symbol"] = symbol_of("us", defaults["landmark_behaviour"])
     return GameSnapshot(**defaults)
 
 

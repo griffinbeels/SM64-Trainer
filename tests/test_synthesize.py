@@ -409,12 +409,12 @@ def test_a_named_landmark_beats_the_ordinal():
     ordinals, applied to synthesis)."""
     door = jev(1, "moment_reached", 0, {
         "kind": "door_open", "level": 6, "ordinal": 1,
-        "landmark": {"key": "6:1:800ebc8c:-2303,0,-1074",
-                     "kind_key": "kind:800ebc8c", "placed": True,
+        "landmark": {"key": "6:1:bhvDoor:-2303,0,-1074",
+                     "kind_key": "kind:bhvDoor", "placed": True,
                      "nameable": True}})
     assert clause_for(door, "start") == {
         "type": "moment_reached", "kind": "door_open", "level": 6,
-        "landmark": "6:1:800ebc8c:-2303,0,-1074"}
+        "landmark": "6:1:bhvDoor:-2303,0,-1074"}
 
 
 def test_an_unnameable_landmark_keeps_the_ordinal():
@@ -422,7 +422,7 @@ def test_an_unnameable_landmark_keeps_the_ordinal():
     # would be meaningless; the ordinal is still the only discriminator.
     textbox = jev(1, "moment_reached", 0, {
         "kind": "textbox", "level": 4, "ordinal": 2,
-        "landmark": {"key": "4:1:800eb1c8:0,0,0", "kind_key": "kind:800eb1c8",
+        "landmark": {"key": "4:1:ptr_800eb1c8:0,0,0", "kind_key": "kind:ptr_800eb1c8",
                      "placed": False, "nameable": False}})
     assert clause_for(textbox, "start") == {
         "type": "moment_reached", "kind": "textbox", "level": 4, "ordinal": 2}
@@ -443,7 +443,7 @@ def test_the_round_14_name_is_his_exact_example():
     that name; a stage reads in route notation; and the two ENDS are the
     whole name regardless of how many steps sit between (suggest_name's
     signature takes only the two ends — that is the proof of item 3)."""
-    door_key = "6:1:800ebc8c:-2303,0,-1074"
+    door_key = "6:1:bhvDoor:-2303,0,-1074"
     start = {"type": "moment_reached", "kind": "door_open", "level": 6,
              "landmark": door_key}
     end = {"type": "entrance_touched", "to": 5}

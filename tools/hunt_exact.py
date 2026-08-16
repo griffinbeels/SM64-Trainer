@@ -19,6 +19,7 @@ import array
 import time
 
 from sm64_events.memory import addresses as A
+from sm64_events.memory.layout import layout_for, version_from_argv
 from sm64_events.memory.objects import describe
 from sm64_events.memory.pj64 import Pj64Memory
 
@@ -93,7 +94,14 @@ def main() -> None:
     # The engine's named globals (gCurrLevelNum etc.) live in the data/bss
     # band; level-geometry heap survivors below it are area-DERIVED data and
     # legitimately match the signature, but the canonical index is up here.
-    GLOBALS_LO, GLOBALS_HI = 0x80320000, 0x80340000
+    # Bounded by the 64 KB pages THIS ROM's own known globals sit in
+    # (memory/layout.py) -- US: 0x80320000-0x8033FFFF, the band the literal
+    # used to spell.
+    layout = layout_for(version_from_argv())
+    known = [layout.global_timer, layout.curr_level, layout.curr_area,
+             layout.mario_struct, layout.object_pool]
+    GLOBALS_LO = min(known) & ~0xFFFF
+    GLOBALS_HI = (max(known) | 0xFFFF) + 1
     hot = [r for a, r in rows if GLOBALS_LO <= a < GLOBALS_HI]
     print(f"\n{len(survivors)} candidates; {len(hot)} in the globals band "
           f"({GLOBALS_LO:#x}-{GLOBALS_HI:#x}) — most likely first:")

@@ -195,10 +195,15 @@ class WarpDetector:
     # same reason). Stale degrades to NO landmark, never a foreign name.
     ENGAGE_FRESH_FRAMES = 4
     ENGAGE_ADOPT_FRAMES = 6
-    # A delayed warp's countdown is 20 frames (probe_warp_block, both pipes),
-    # so a ride resolves itself by +20 (the write) or +23 (the level edge).
+    # A delayed warp's countdown is 20 frames (probe_warp_block, both pipes,
+    # 2026-08-05 + 2026-08-11), so a ride resolves itself by +20 (the write)
+    # or +23 (the level edge). Named so the JP calibration gate
+    # (sync/calibration_gates.py::cal.warp.pipe_dest_delay) measures the
+    # touch-to-write delay against THIS number and reports a ROM that
+    # differs, rather than any window built on top of it.
+    PIPE_TOUCH_TO_DEST_FRAMES = 20
     # An op still ARMED past this floor is a countdown that stopped.
-    RIDE_WINDOW_FRAMES = 26   # 20 + FRESH_WINDOW_FRAMES poller slack + margin
+    RIDE_WINDOW_FRAMES = PIPE_TOUCH_TO_DEST_FRAMES + FRESH_WINDOW_FRAMES + 2  # 26: poller slack + margin
     # Usamune's counter ticks every frame game logic runs; the 12-call
     # snapshot's read skew is ±1 at each window end (verify_death_clock), so a
     # 6-frame silence cannot be a torn read -- it is a pause.

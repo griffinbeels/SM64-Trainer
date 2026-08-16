@@ -279,7 +279,7 @@ def _moment_reached(payload: dict, names: dict) -> str | None:
     ordinal survives only on a row naming nothing at all, where it is still
     the only thing distinguishing the fifth from the fourth.
 
-    A KIND name (`kind:800ebc8c` -> "door") replaces the moment's generic
+    A KIND name (`kind:bhvDoor` -> "door") replaces the moment's generic
     word for every instance in the game at once; grammar comes from the
     name's own case (`_kind_phrase`).
     """

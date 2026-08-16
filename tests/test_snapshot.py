@@ -3,21 +3,22 @@ from datetime import datetime, timezone
 
 from sm64_events.core.snapshot import GameSnapshot, SnapshotReader
 from sm64_events.memory import addresses as A
+from sm64_events.memory.layout import US
 from sm64_events.memory.buffer import BufferMemory
 
 
 def test_reader_populates_all_fields():
     mem = BufferMemory()
-    mem.write_u32(A.GLOBAL_TIMER, 81234)
-    mem.write_u32(A.MARIO_ACTION, A.ACT_STAR_DANCE_EXIT)
-    mem.write_u16(A.MARIO_ACTION_TIMER, 2)
-    mem.write_u16(A.MARIO_NUM_STARS, 57)
-    mem.write_u8(A.LAST_COMPLETED_COURSE, 1)
-    mem.write_u8(A.LAST_COMPLETED_STAR, 3)
-    mem.write_u16(A.USAMUNE_OVERALL, 600)
-    mem.write_u16(A.USAMUNE_STAR_RESULT, 595)
-    mem.write_u16(A.CURR_LEVEL, 24)
-    mem.write_u16(A.CURR_AREA, 3)
+    mem.write_u32(US.global_timer, 81234)
+    mem.write_u32(US.mario_struct + A.MARIO_ACTION_OFF, A.ACT_STAR_DANCE_EXIT)
+    mem.write_u16(US.mario_struct + A.MARIO_ACTION_TIMER_OFF, 2)
+    mem.write_u16(US.mario_struct + A.MARIO_NUM_STARS_OFF, 57)
+    mem.write_u8(US.last_completed_course, 1)
+    mem.write_u8(US.last_completed_star, 3)
+    mem.write_u16(US.usamune_overall, 600)
+    mem.write_u16(US.usamune_star_result, 595)
+    mem.write_u16(US.curr_level, 24)
+    mem.write_u16(US.curr_area, 3)
 
     snap = SnapshotReader(mem).read()
 

@@ -21,7 +21,9 @@ FastAPI + uvicorn, pymem, pytest.
 uv sync
 uv run pytest -q                                     # MUST pass before any merge
 uv run python -m sm64_events.main                    # run from repo root (data/ is cwd-relative); canonical — binds the CTRL+C shutdown deadline
-uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM)
+uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM); --version jp reads the JP layout
+uv run python tools/sync_version.py --version us     # THE version-sync loop: walks every gate (address/behaviour/calibration/feature) against the loaded ROM, writes data/version_sync/<v>.json as it goes, posts to a running server so /ui/sync.html fills live. On US = the regression proof (every gate verified); on JP = how JP support is discovered (--only <gate|feature> reruns one; read-only, safe beside a live session)
+uv run python tools/import_stroop_maps.py <MappingUS.map> <MappingJP.map>   # regenerate src/sm64_events/data/{behaviours,symbols}_{us,jp}.tsv from STROOP's linker maps (held verbatim)
 uv run python tools/verify_death_clock.py            # live gate, ANSWERED 2026-08-01 (raw counter); re-run only to re-check
 uv run python tools/probe_warp_block.py              # live gate, ANSWERED 2026-08-05 + re-run 2026-08-11: a painting writes sWarpDest AT the touch, a pipe 20 frames later and that 20 is the FLOOR (sSourceWarpNodeId REFUTED as a destination key -- one value for every entrance, so no warp-node lookup can key on it); a reset zeroes the op AND the countdown together while a completion reaches 0 first, which is how warp.py tells a cancel from a ride (read-only, safe beside a live session)
 uv run python tools/probe_warp_block.py --entries    # live gate, ANSWERED 2026-08-07: the BBH cage's own ACT_BBH_ENTER_JUMP is the commit moment (+74 to the level byte) and ships in WARP_ENTRY_ACTIONS; re-run only for a future entrance that fires no touch
@@ -92,6 +94,7 @@ automatically when you touch matching files. Zones:
 | Zone | Dirs | Rule file |
 |---|---|---|
 | Memory reads + detectors + recipes (new event, dust trick, memory hunting) | `memory/`, `detectors/`, `core/snapshot.py`, `core/events.py` | `.claude/rules/memory-detectors.md` |
+| **Version sync** — the per-ROM layout, behaviour symbols, gates, the sync runner + report, the dashboard | `memory/layout.py`, `memory/behaviours.py`, `memory/version_probe.py`, `sync/`, `server/sync_api.py`, `ui/sync.*`, `tools/sync_version.py`, `data/version_sync/` | `.claude/rules/sync.md` |
 | Tracking, storage, stats, routes/runs/segments, defaults corpus | `tracking/`, `storage/`, `stats/`, `data/`, `tools/corpus_*` | `.claude/rules/tracking-storage.md` |
 | The world-graph rules a movement is judged against (topological cancels, the resurrection memory) | `tracking/topology.py`, `tracking/segments.py`, `tools/measure_topology_cancels.py`, `tools/why_cancelled.py`, `tools/topology_map.py` | `.claude/rules/segment-topology.md` |
 | When a segment's clock STARTS, and what number it records when it stops | `tracking/segments.py`, `detectors/igt_clock.py`, `detectors/counter_epoch.py` | `.claude/rules/segment-clock.md` |
@@ -118,14 +121,20 @@ Safe to work concurrently (one branch/worktree each): **detectors/**,
 **replay/**, **docs/** — each with its tests. The `storage/+stats/+tracking/`
 zone shares the `Attempt` contract internally; keep it in one branch.
 **Shared contracts — never edit in two branches at once:** `core/events.py`,
-`core/snapshot.py`, `memory/addresses.py`, `tracking/projection.py`, `main.py`.
+`core/snapshot.py`, `memory/addresses.py`, `memory/layout.py`,
+`tracking/projection.py`, `main.py`.
 Contract changes land on main first, then dependent work fans out. Merge with
 `--no-ff`; run the full suite on the merged result; delete the branch.
 
 ## Domain rules
 
-1. New memory address → `addresses.py` only, with source comment, marked
-   `VERIFY` until it passes the live gate with the human.
+1. New memory address → ONE row in `memory/layout.py` (US value + its
+   evidence; JP `None` until the sync loop verifies it) **and** its
+   `address.<field>` gate in `sync/address_gates.py` — `tests/test_gates_cover.py`
+   is red until both exist. Struct offsets and every version-independent fact
+   stay in `addresses.py`. No absolute address literal outside `layout.py`
+   (`tests/test_single_source.py`). Marked `VERIFY` until it passes the live
+   gate with the human.
 2. Star grabs MUST fire on re-collection: action-EDGE detection, never
    save-flag diffing.
 3. IGT comes from the Usamune expansion-RAM globals via `detectors/igt_clock.py`

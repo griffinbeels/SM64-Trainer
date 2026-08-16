@@ -59,6 +59,17 @@ def app_args(ffmpeg: "str | None") -> list[str]:
         # imported, so it must be collected preserving the package path.
         "--add-data",
         f"{REPO / 'src' / 'sm64_events' / 'ui'}{SEP}sm64_events/ui",
+        # The STROOP symbol maps (memory/behaviours.py via
+        # core/paths.py::bundled_symbol_map): a JP door is named by symbol
+        # only if the frozen exe carries both versions' TSVs.
+        "--add-data",
+        f"{REPO / 'src' / 'sm64_events' / 'data' / 'behaviours_us.tsv'}{SEP}.",
+        "--add-data",
+        f"{REPO / 'src' / 'sm64_events' / 'data' / 'behaviours_jp.tsv'}{SEP}.",
+        "--add-data",
+        f"{REPO / 'src' / 'sm64_events' / 'data' / 'symbols_us.tsv'}{SEP}.",
+        "--add-data",
+        f"{REPO / 'src' / 'sm64_events' / 'data' / 'symbols_jp.tsv'}{SEP}.",
         # The desktop tray + pywebview window load assets/ukiki.ico at RUNTIME
         # via _asset_path (-> sys._MEIPASS/ukiki.ico when frozen). --icon only
         # embeds it in the PE header (Explorer/taskbar); without bundling it as

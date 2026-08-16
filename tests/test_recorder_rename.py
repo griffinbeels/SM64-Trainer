@@ -150,7 +150,7 @@ def test_naming_a_door_relabels_it_and_lands_in_the_catalogue():
         # It OUTLIVES the row: the catalogue is what the next session reads.
         names = page.evaluate(
             "(async () => (await (await fetch('/api/landmarks')).json()).names)()")
-        assert names["6:3:800ebc8c:717,-1177,-869"] == "Moat Door"
+        assert names["6:3:bhvDoor:717,-1177,-869"] == "Moat Door"
 
 
 _START_TYPING = """

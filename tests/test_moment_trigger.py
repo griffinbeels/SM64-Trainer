@@ -195,12 +195,12 @@ def test_a_course_subarea_clause_places_for_the_topological_cancel():
 
 # -- the landmark pin (round 12 item 3) ----------------------------------------
 
-DOOR_KEY = "6:1:800ebc8c:-2303,0,-1074"
+DOOR_KEY = "6:1:bhvDoor:-2303,0,-1074"
 
 
 def door_payload(key=DOOR_KEY, ordinal=1):
     return {"kind": "door_open", "ordinal": ordinal, "level": 6, "area": 1,
-            "landmark": {"key": key, "kind_key": "kind:800ebc8c",
+            "landmark": {"key": key, "kind_key": "kind:bhvDoor",
                          "placed": True, "nameable": True}}
 
 
@@ -210,7 +210,7 @@ def test_a_landmark_pin_matches_that_thing_and_nothing_else():
     nor the ordinal he saw (his screenshot, round 12 item 3)."""
     clause = moment_clause(level=6, landmark=DOOR_KEY)
     assert match(clause, door_payload()) is True
-    assert match(clause, door_payload(key="6:1:800ebc8c:256,0,-1074")) is False
+    assert match(clause, door_payload(key="6:1:bhvDoor:256,0,-1074")) is False
     assert match(clause, {"kind": "door_open", "ordinal": 1, "level": 6,
                           "landmark": None}) is False
 
@@ -241,8 +241,8 @@ def test_a_pin_fires_on_the_other_half_once_both_wear_his_name():
     fired when he pushed the other. Same name = same landmark, through the
     catalogue the MatchContext now carries; no names in hand = key equality,
     the pre-collapse behaviour every bare test context still gets."""
-    half_a = "6:1:800eb180:-2598,512,-1517"
-    half_b = "6:1:800eb180:-2706,512,-1409"
+    half_a = "6:1:bhvStarDoor:-2598,512,-1517"
+    half_b = "6:1:bhvStarDoor:-2706,512,-1409"
     clause = moment_clause(level=6, landmark=half_a)
     payload = {"kind": "door_open", "level": 6,
                "landmark": {"key": half_b, "placed": True, "nameable": True}}

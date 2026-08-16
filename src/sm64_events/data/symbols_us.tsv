@@ -1,0 +1,14 @@
+# STROOP MappingUS.map @ dev, fetched 2026-08-15
+0x8032d5d4	gGlobalTimer
+0x8032dd80	gLastCompletedCourseNum
+0x8032dd84	gLastCompletedStarNum
+0x8032ddf8	gCurrLevelNum
+0x8033b170	gMarioStates
+0x8033b248	sWarpDest
+0x8033b252	sDelayedWarpOp
+0x8033b254	sDelayedWarpTimer
+0x8033b25e	sTimerRunning
+0x8033b260	gHudDisplay
+0x8033baca	gCurrAreaIndex
+0x8033d488	gObjectPool
+0x80361158	gMarioObject

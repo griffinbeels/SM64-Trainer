@@ -1,15 +1,19 @@
 # src/sm64_events/memory/addresses.py
-"""Single authoritative registry of SM64 memory locations and ID->name tables.
-
-ROM: SM64 US / Usamune v1.93u (Usamune is built on the US ROM).
-All addresses are N64 KSEG0 virtual addresses (0x80000000-based).
+"""Single authoritative registry of what is TRUE OF THE GAME whatever ROM runs:
+action ids, level/course/star ids and names, struct OFFSETS, traps, world
+topology. The RAM ADDRESSES of the globals live in `memory/layout.py`, one
+row per version (US pinned, JP filled by `tools/sync_version.py`) — since
+2026-08-15, when JP support made "where does this global sit" a per-ROM
+question. A reader takes `layout_for(version)` and adds the offsets here.
 
 Every entry below is live-verified against Usamune v1.93u in PJ64 1.6
-(2026-06-10) via tools/verify_addresses.py. Mark new entries VERIFY until
-they pass that harness. Cross-check sources on mismatch:
-  - https://ukikipedia.net/wiki/RAM (US column)
-  - SM64 decomp US symbol map (sm64.us.map build artifact)
-  - STROOP mapping tables (github.com/SM64-TAS-ABC/STROOP)
+(2026-06-10) via tools/verify_addresses.py unless marked VERIFY. Every
+version-DEPENDENT fact carries a gate in `sync/` (see
+tests/test_gates_cover.py); a JP run confirms the version-independent claims
+here rather than assuming them. Cross-check sources on mismatch:
+  - SM64 decomp symbol maps (US and JP; STROOP's copies ship as
+    src/sm64_events/data/*.tsv)
+  - https://ukikipedia.net/wiki/Version_Differences
 """
 from functools import lru_cache
 
@@ -22,15 +26,15 @@ OS_TV_TYPE = 0x80000300   # u32: 0 PAL, 1 NTSC, 2 MPAL
 OS_ROM_BASE = 0x80000308  # u32: 0xB0000000 for cartridge boot
 OS_MEM_SIZE = 0x80000318  # u32: 0x400000 or 0x800000
 
-# Mario state (gMarioStates[0]) — source: decomp struct MarioState + STROOP US.
-MARIO_STRUCT = 0x8033B170
-MARIO_PARTICLE_FLAGS = MARIO_STRUCT + 0x08  # u32 particleFlags, re-zeroed every
-                                            # frame; live-verified 2026-06-12
-                                            # ([DUST] annotations consistent
-                                            # across the gate sessions)
-MARIO_ACTION = MARIO_STRUCT + 0x0C        # u32; live-verified 2026-06-10
-MARIO_ACTION_TIMER = MARIO_STRUCT + 0x1A  # u16, resets to 0 on action change
-MARIO_NUM_STARS = MARIO_STRUCT + 0xAA     # s16, total star count; live-verified 2026-06-10
+# Mario state (gMarioStates[0]) — OFFSETS into the struct, from decomp struct
+# MarioState; the struct's own address is `layout.mario_struct`. Same layout
+# on every ROM: version differences are in code, not in this struct.
+MARIO_PARTICLE_FLAGS_OFF = 0x08  # u32 particleFlags, re-zeroed every frame;
+                                 # live-verified 2026-06-12 ([DUST]
+                                 # annotations consistent across the gates)
+MARIO_ACTION_OFF = 0x0C          # u32; live-verified 2026-06-10
+MARIO_ACTION_TIMER_OFF = 0x1A    # u16, resets to 0 on action change
+MARIO_NUM_STARS_OFF = 0xAA       # s16, total star count; live-verified 2026-06-10
 # The pointers that say WHICH object Mario is engaged with. Live-verified
 # 2026-08-05 and DISCOVERED rather than asserted: tools/probe_objects.py
 # scanned every word of the struct's first 0xC0 bytes for a value landing on an
@@ -38,12 +42,13 @@ MARIO_NUM_STARS = MARIO_STRUCT + 0xAA     # s16, total star count; live-verified
 # marioObj (+0x88, Mario's own object, deliberately absent here) ever did.
 # Names are decomp's. riddenObj (+0x84) is NOT listed: nothing in that session
 # rode anything, so it stays unverified.
-MARIO_INTERACT_OBJ = MARIO_STRUCT + 0x78  # what he touched (stomp, painting)
-MARIO_HELD_OBJ = MARIO_STRUCT + 0x7C      # what he picked up (bob-omb, shell)
-MARIO_USED_OBJ = MARIO_STRUCT + 0x80      # what he operated (door, pole, tree)
+MARIO_INTERACT_OBJ_OFF = 0x78  # what he touched (stomp, painting)
+MARIO_HELD_OBJ_OFF = 0x7C      # what he picked up (bob-omb, shell)
+MARIO_USED_OBJ_OFF = 0x80      # what he operated (door, pole, tree)
 # Priority when several are set at once: what he HOLDS beats what he USES beats
 # what he merely touched, because the more deliberate act is the one he means.
-MARIO_OBJECT_POINTERS = (MARIO_HELD_OBJ, MARIO_USED_OBJ, MARIO_INTERACT_OBJ)
+MARIO_OBJECT_POINTER_OFFS = (MARIO_HELD_OBJ_OFF, MARIO_USED_OBJ_OFF,
+                             MARIO_INTERACT_OBJ_OFF)
 
 # Bit in particleFlags (the visible dust puffs) — corroborates the dust-
 # trick detector's action-edge signal. Decomp (fetched 2026-06-11): slide
@@ -54,45 +59,37 @@ MARIO_OBJECT_POINTERS = (MARIO_HELD_OBJ, MARIO_USED_OBJ, MARIO_INTERACT_OBJ)
 # Source: decomp include/sm64.h PARTICLE_DUST. VERIFY (live gate pending).
 PARTICLE_DUST = 1 << 0
 
-GLOBAL_TIMER = 0x8032D5D4            # u32, +1 per game frame (30 Hz); live-verified 2026-06-10
+# gGlobalTimer (u32, +1 per game frame at 30 Hz): `layout.global_timer`.
 # gLastCompleted* are adjacent s8 globals but sit 4 bytes apart (IDO aligns
-# each initialized .data global to 4 bytes). Source: STROOP MiscData.xml
-# (offsetUS) + decomp symbol maps; both agree.
-LAST_COMPLETED_COURSE = 0x8032DD80   # s8, 1-based, 0 = castle/none; live-verified 2026-06-10
-LAST_COMPLETED_STAR = 0x8032DD84     # s8, 1-based; live-verified 2026-06-10
-# Trap, do not reuse: 0x8032DDF8 is gCurrLevelNum (s16, LEVEL ids like
-# WF=24, SSL=8) — NOT a course number. We misread it as last-completed
-# once; the harness caught it (course stuck at 0, star tracking level ids).
-CURR_LEVEL = 0x8032DDF8              # s16 gCurrLevelNum
+# each initialized .data global to 4 bytes): `layout.last_completed_course`
+# / `.last_completed_star`. Trap, do not reuse: gCurrLevelNum
+# (`layout.curr_level`) is an s16 of LEVEL ids like WF=24, SSL=8 — NOT a
+# course number. We misread it as last-completed once; the harness caught it
+# (course stuck at 0, star tracking level ids).
 
 # Usamune practice-timer globals — STATIC addresses in expansion RAM
-# (slot-independent, unlike the object-pool counters below). Located
-# empirically via tools/hunt_value.py + a watch session on 2026-06-10.
-USAMUNE_OVERALL = 0x80417C72      # u16, running OVERALL star time: keeps
-                                  # counting across area warps (SSL pyramid
-                                  # etc.); resets with Usamune level resets.
-USAMUNE_STAR_RESULT = 0x80417C74  # u16, written at the star grab with the
-                                  # EXACT final time Usamune displays;
-                                  # persists after the grab. 0 until then.
-# Observed neighbors: 0x80417C70 constant 256; 0x80417C76 written at grab.
-
-# Usamune SECTION (per-area) counter — object-pool behavior field (slot 0
-# +0x154 when observed; mirrors elsewhere). Slot-dependent AND resets on
-# area warps inside a level, so it must NOT be the event IGT source (it
-# under-reported multi-area stars like "Inside the Ancient Pyramid").
-# Kept for diagnostics only.
-USAMUNE_TIMER = 0x8033D5DC           # u32, 30 fps frames; section/area time
+# (slot-independent, unlike the object-pool counters below), in no symbol
+# map, so a new version HUNTS them (`sync/address_gates.py`, the exact-value
+# scan of the displayed time): `layout.usamune_overall` (u16, running OVERALL
+# star time: keeps counting across area warps, resets with Usamune level
+# resets), `layout.usamune_star_result` (u16, written at the grab with the
+# EXACT final time Usamune displays; persists after the grab, 0 until then).
+# US neighbours observed 2026-06-10: +0x-2 constant 256; +0x2 written at grab.
+# `layout.usamune_timer` is the SECTION (per-area) counter — slot-dependent
+# AND resets on area warps inside a level, so it must NOT be the event IGT
+# source (it under-reported multi-area stars like "Inside the Ancient
+# Pyramid"). Kept for diagnostics only.
 
 # Trap, do not reuse for IGT: the vanilla HUD race timer (gHudDisplay.timer,
-# 0x8033B26C u16) and sTimerRunning (0x8033B25E s8) stay 0 under Usamune's
-# practice timers — verified live. Vanilla races (KtQ etc.) still use them.
-HUD_TIMER = 0x8033B26C               # u16, frames (vanilla races only)
-HUD_TIMER_RUNNING = 0x8033B25E       # s8 sTimerRunning (vanilla races only)
+# `layout.hud_display` + HUD_TIMER_OFF, u16) and sTimerRunning (`layout.hud_timer_running`,
+# s8) stay 0 under Usamune's practice timers — verified live. Vanilla races
+# (KtQ etc.) still use them.
+HUD_TIMER_OFF = 0xC          # gHudDisplay + 0xC is the u16 timer
 
 # SM64 object pool (used by diagnostic tools and timer location).
-# 240 slots of 0x260 bytes; Usamune's practice timers live in object
-# rawData fields, so their addresses depend on slot assignment per level.
-OBJECT_POOL = 0x8033D488     # first slot (STROOP US ObjectStartAddress)
+# 240 slots of 0x260 bytes at `layout.object_pool`; Usamune's practice
+# timers live in object rawData fields, so their addresses depend on slot
+# assignment per level. `memory/objects.py::ObjectPool` binds a layout.
 OBJECT_SIZE = 0x260
 OBJECT_COUNT = 240
 OBJECT_BEHAVIOR = 0x20C      # u32 behavior-script pointer within a slot
@@ -157,26 +154,27 @@ OBJECT_HEALTH = 0x184          # s32 oHealth: hitbox arming, NOT defeats
 # and measured once, and only the measurement was right (round 10). Next
 # candidates (cap/purple switches, bosses) each want one `--pool` capture.
 #
-# The POINTERS restate `tools/corpus_behaviors.py`'s derivation (segment base
-# + STROOP offset). src cannot import tools/ — the frozen exe does not carry
-# it — so the copy is COMPARED instead of shared:
-# tests/test_caused.py::test_the_pointer_table_matches_the_shipped_catalogue.
-#   symbol -> (US RAM behaviour pointer, moment kind, legibility rule)
+# The pointers used to be restated here and COMPARED against the tools/
+# catalogue; since 2026-08-15 `memory/behaviours.py` is the one door and
+# tests/test_caused.py checks the three symbols resolve to the pointers his
+# capture recorded.
+#   symbol -> (moment kind, legibility rule). Keyed by the decomp SYMBOL since
+#   2026-08-15: the pointer is per ROM (memory/behaviours.py resolves it
+#   through the version's layout), the symbol is not.
 CAUSED_BEHAVIOURS = {
     # BLUE_COIN_SWITCH_ACT: IDLE 0 -> RECEDING 1 on the press (-> TICKING 2
     # as it stays down). 3 presses in his capture, all 0 -> 1 at one stable
     # coordinate — his ruling: "We need to support blue coin switch presses
     # for sure".
-    "bhvBlueCoinSwitch": (0x800ED6E8, "switch_press", "press"),
+    "bhvBlueCoinSwitch": ("switch_press", "press"),
     # Dies into the engine's SHARED attacked actions (100/101/102); its own
     # walk/aggro/jump cycle is 0/1/2. 4 squishes (-> 102) in his capture.
-    "bhvGoomba": (0x800EF8AC, "enemy_defeated", "attacked"),
+    "bhvGoomba": ("enemy_defeated", "attacked"),
     # Dies into ITS OWN explode state (BOBOMB_ACT_EXPLODE): chase -> 3 and
     # thrown -> 3 both measured. The fuse detonation counts too — a bob-omb
     # only fuses while chasing, which the player caused by aggroing it.
-    "bhvBobomb": (0x800EE2F4, "enemy_defeated", "explode"),
+    "bhvBobomb": ("enemy_defeated", "explode"),
 }
-CAUSED_POINTERS = frozenset(row[0] for row in CAUSED_BEHAVIOURS.values())
 
 # Generic object death actions — decomp include/object_constants.h, fetched
 # 2026-08-07. NOTE the deliberate collision in the decomp itself:
@@ -306,7 +304,7 @@ DEATH_ACTIONS = {
 #   of, which no wrong address does. What stays pending is the DEATH path
 #   named above — 0x13 on an HMC pit, and whether a warp-floor level
 #   mislabels — because nothing in that run went near it.
-PENDING_WARP_OP = 0x8033B252  # s16 sDelayedWarpOp; 0 = no warp pending
+# sDelayedWarpOp (s16; 0 = no warp pending): `layout.pending_warp_op`.
 # Op values (decomp level_update.h): 0x12 WARP_OP_DEATH is the NORMAL death
 # warp, pended ~48 frames AFTER the death action already fired our event —
 # deliberately not consumed (would double-count every death). Levels that
@@ -332,8 +330,8 @@ WARP_OP_WARP_FLOOR = 0x13  # void-out: resolves to the death node (or game
 #     on the clock (12, 10, 13 and 4 remaining across four of his resets);
 #   * the Usamune menu FREEZES it mid-count without clearing the op — one
 #     touch held at 11 for 106 frames and then completed normally.
-DELAYED_WARP_TIMER = 0x8033B254  # s16 sDelayedWarpTimer; frames until the
-                                 # delayed warp fires, 0 when none is running
+# sDelayedWarpTimer (s16; frames until the delayed warp fires, 0 when none
+# is running): `layout.delayed_warp_timer`.
 
 # The WARP DESTINATION (level_update.c `struct WarpDest sWarpDest`), same
 # FORCE_BSS block as PENDING_WARP_OP and pinned by the same walk:
@@ -355,10 +353,11 @@ DELAYED_WARP_TIMER = 0x8033B254  # s16 sDelayedWarpTimer; frames until the
 # WHETHER THE STRUCT WAS JUST WRITTEN, which detectors/warp.py tests by watching
 # all four bytes change; the two pipe touches are exactly the negative cases
 # that prove it, both reading a stale castle destination at the touch frame.
-WARP_DEST_TYPE = 0x8033B248   # u8 WARP_TYPE_*; 0 = NOT_WARPING
-WARP_DEST_LEVEL = 0x8033B249  # u8 destination LEVEL id (not a course id)
-WARP_DEST_AREA = 0x8033B24A   # u8 destination area
-WARP_DEST_NODE = 0x8033B24B   # u8 destination warp node (0x0A = main entry)
+# The struct's address is `layout.warp_dest`; these are its byte offsets.
+WARP_DEST_TYPE_OFF = 0   # u8 WARP_TYPE_*; 0 = NOT_WARPING
+WARP_DEST_LEVEL_OFF = 1  # u8 destination LEVEL id (not a course id)
+WARP_DEST_AREA_OFF = 2   # u8 destination area
+WARP_DEST_NODE_OFF = 3   # u8 destination warp node (0x0A = main entry)
 
 # Level-EXIT cutscene actions — Mario is FLUNG out of a level and has no
 # control (decomp include/sm64.h, the contiguous 0x1926-0x192D block). These
@@ -612,7 +611,7 @@ DIALOG_ACTIONS = frozenset({ACT_READING_AUTOMATIC_DIALOG,
 # dialogue (King Whomp) -- the automatic-dialog "opens at 9" claim above is
 # decomp-only and BOX_OPENS_AT_STATE below deliberately does not gate on it;
 # see that constant's own comment.
-MARIO_ACTION_STATE = MARIO_STRUCT + 0x18  # u16
+MARIO_ACTION_STATE_OFF = 0x18  # u16
 
 # The frame each reading action's OWN handler actually creates the dialog
 # box -- keyed off MARIO_ACTION_STATE, not off entering the action. THE FIX
@@ -716,7 +715,7 @@ CANNON_ACTIONS = frozenset({ACT_IN_CANNON})
 # reads 1 in the lobby, 2 upstairs, 3 in the basement, stable across repeated
 # visits (the repeat-label pass proves it is state, not a counter). Sits in
 # the area.c globals cluster two halfwords above gCurrCourseNum (0x8033BAC6).
-CURR_AREA = 0x8033BACA               # s16 gCurrAreaIndex
+# gCurrAreaIndex (s16): `layout.curr_area`.
 CASTLE_AREA_NAMES = {1: "Lobby", 2: "Upstairs", 3: "Basement"}  # live-verified 2026-06-12 (same hunt)
 
 # COURSE subarea names, keyed (level, gCurrAreaIndex) — what a "Spawned into

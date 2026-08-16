@@ -7,9 +7,10 @@ whatever scenarios they want to build from there."* So a name lands here once
 and every install gets it; nobody re-records what somebody already identified.
 
 TWO LEVELS, and the first is the multiplier. A KIND row names a behaviour
-pointer, which is fixed for the ROM, so one row names every pole in the game.
-An INSTANCE row names one specific thing, keyed by
-`level:area:behaviour:x,y,z` — where the game SPAWNED it, because the pool slot
+SYMBOL (`bhvPoleGrabbing` — the decomp's name, the same on every ROM;
+`memory/behaviours.py`), so one row names every pole in the game. An INSTANCE
+row names one specific thing, keyed by
+`level:area:symbol:x,y,z` — where the game SPAWNED it, because the pool slot
 it happens to occupy changes every time the area reloads
 (`memory/addresses.py::OBJECT_HOME_POS` carries that measurement).
 
@@ -37,8 +38,8 @@ The keys are LONG and that is on purpose — a key you can read is a key you can
 check against `tools/probe_objects.py --report` without decoding anything.
 
 THE KIND LEVEL IS GENERATED, since round 8 item 2 (2026-08-07): every behavior
-script in the US ROM ships named, derived from STROOP's symbol map through
-`corpus_behaviors.py` — the base anchoring, the 8-of-8 validation against his
+script in the ROM ships named, derived from STROOP's symbol maps through
+`memory/behaviours.py` — the base anchoring, the 8-of-8 validation against his
 own play, and the name-case grammar all live there. Nobody hand-names two
 dozen kinds any more; what stays hand-written here is the INSTANCE rows, his
 own labels from the sessions that found them.
@@ -48,37 +49,43 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import corpus_behaviors  # noqa: E402
+from sm64_events.memory.behaviours import kind_names  # noqa: E402
 
 
-def kind(behaviour: int, name: str) -> dict:
+def kind(symbol: str, name: str) -> dict:
     """Name a whole family, game-wide."""
-    return {"seed_key": f"landmark:kind:{behaviour:08x}",
-            "key": f"kind:{behaviour:08x}", "name": name}
+    return {"seed_key": f"landmark:kind:{symbol}",
+            "key": f"kind:{symbol}", "name": name}
 
 
-def at(level: int, area: int, behaviour: int, home: tuple, name: str) -> dict:
+def at(level: int, area: int, symbol: str, home: tuple, name: str) -> dict:
     """Name one specific thing, by where the game spawned it."""
-    key = f"{level}:{area}:{behaviour:08x}:{home[0]},{home[1]},{home[2]}"
+    key = f"{level}:{area}:{symbol}:{home[0]},{home[1]},{home[2]}"
     return {"seed_key": f"landmark:{key}", "key": key, "name": name}
 
 
-# Behaviour pointers observed in his 2026-08-05 session, BEFORE the symbol
-# table arrived. Named then from what Mario was DOING when he touched them —
-# the first family always fired ACT_PULLING_DOOR / ACT_PUSHING_DOOR and left
-# him in the same area, the second always ended in ACT_WARP_DOOR_SPAWN
-# somewhere else — and the decomp agrees: bhvDoor and bhvDoorWarp exactly.
-# That agreement is part of the base constant's evidence (corpus_behaviors).
-DOOR = 0x800EBC8C
-WARP_DOOR = 0x800EBC7C
+# The two door kinds his 2026-08-05 session named BEFORE the symbol table
+# arrived, from what Mario was DOING when he touched them — the first family
+# always fired ACT_PULLING_DOOR / ACT_PUSHING_DOOR and left him in the same
+# area, the second always ended in ACT_WARP_DOOR_SPAWN somewhere else — and
+# the decomp agreed: bhvDoor (US 0x800EBC8C) and bhvDoorWarp (0x800EBC7C)
+# exactly. Since 2026-08-15 the SYMBOL is the key (memory/behaviours.py), so
+# these rows name the same doors on a JP ROM too.
+DOOR = "bhvDoor"
+WARP_DOOR = "bhvDoorWarp"
 
 CASTLE_INSIDE, BASEMENT, LOBBY = 6, 3, 1
 
 # Every behavior script, named — bhvDoor -> "door", bhvBobomb -> "bob-omb",
 # bhvBowser -> "Bowser" — so "Pick up an object" can never appear for a thing
 # the ROM has a name for.
-_KIND_ROWS = tuple(kind(pointer, name)
-                   for pointer, name in corpus_behaviors.kind_names())
+# Every behaviour either ROM ships -- US order, then any symbol only JP
+# carries (none today: JP is a 532-of-536 subset), so a version that adds a
+# behaviour still ships its name.
+_US_KINDS = tuple(kind_names("us"))
+_JP_ONLY_KINDS = tuple((symbol, name) for symbol, name in kind_names("jp")
+                       if symbol not in {us_symbol for us_symbol, _ in _US_KINDS})
+_KIND_ROWS = tuple(kind(symbol, name) for symbol, name in _US_KINDS + _JP_ONLY_KINDS)
 
 LANDMARKS: tuple[dict, ...] = _KIND_ROWS + (
     # HIS OWN LABELS, verbatim from the session that found the key: "21/22 are

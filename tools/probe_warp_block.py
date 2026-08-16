@@ -39,26 +39,30 @@ import argparse
 import sys
 import time
 
-from sm64_events.memory.addresses import (
-    CURR_AREA, CURR_LEVEL, GLOBAL_TIMER, MARIO_ACTION, WARP_ENTRY_ACTIONS,
-)
+from sm64_events.memory.addresses import MARIO_ACTION_OFF, WARP_ENTRY_ACTIONS
+from sm64_events.memory.layout import layout_for, version_from_argv
 from sm64_events.memory.pj64 import Pj64Memory
 
-WARP_DEST = 0x8033B248          # struct WarpDest: type, levelNum, areaIdx, nodeId, s32 arg
-DELAYED_WARP_OP = 0x8033B252
-DELAYED_WARP_TIMER = 0x8033B254
-SOURCE_WARP_NODE_ID = 0x8033B256  # DERIVED -- this probe is its live gate
-DELAYED_WARP_ARG = 0x8033B258
+LAYOUT = layout_for(version_from_argv())      # --version jp reads the JP layout
+LAYOUT.require('global_timer', 'mario_struct', 'curr_level', 'curr_area', 'warp_dest', 'pending_warp_op', 'delayed_warp_timer')   # LayoutIncomplete names what JP still lacks
+WARP_DEST = LAYOUT.warp_dest    # struct WarpDest: type, levelNum, areaIdx, nodeId, s32 arg
+DELAYED_WARP_OP = LAYOUT.pending_warp_op
+DELAYED_WARP_TIMER = LAYOUT.delayed_warp_timer
+# The two below sit inside the same FORCE_BSS block, right after the timer, on
+# every ROM (level_update.c declares them together); DERIVED, not in the
+# layout because nothing shipped reads them -- this probe is their live gate.
+SOURCE_WARP_NODE_ID = DELAYED_WARP_TIMER + 2
+DELAYED_WARP_ARG = DELAYED_WARP_TIMER + 4
 
 TRACE_FRAMES = 200
 
 
 def sample(mem) -> dict:
     return {
-        "timer": mem.read_u32(GLOBAL_TIMER),
-        "action": mem.read_u32(MARIO_ACTION),
-        "level": mem.read_s16(CURR_LEVEL),
-        "area": mem.read_s16(CURR_AREA),
+        "timer": mem.read_u32(LAYOUT.global_timer),
+        "action": mem.read_u32(LAYOUT.mario_struct + MARIO_ACTION_OFF),
+        "level": mem.read_s16(LAYOUT.curr_level),
+        "area": mem.read_s16(LAYOUT.curr_area),
         "dest_type": mem.read_u8(WARP_DEST),
         "dest_level": mem.read_u8(WARP_DEST + 1),
         "dest_area": mem.read_u8(WARP_DEST + 2),

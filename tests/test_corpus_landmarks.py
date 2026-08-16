@@ -24,17 +24,17 @@ from corpus_from_db import landmark_row_source  # noqa: E402
 # key -> the name he typed. A castle door's identity is its spawn point, so
 # these keys are also the check that the coordinate space never shifts.
 HIS_DOORS = {
-    "6:1:800ebc8c:256,0,-1074": "WF Door",
-    "6:1:800ebc8c:-1775,0,-824": "Left Basement Door",
-    "6:1:800ebc8c:-271,0,-824": "Right Basement Door",
-    "6:1:800ebc7c:-1023,-101,-5170": "Courtyard Door",
-    "6:3:800ebc7c:7885,-1586,-511": "Moat to Castle Grounds Door",
-    "16:1:800ebc7c:3292,-511,-2931": "Castle Grounds to Moat Door",
-    "7:1:800ebc8c:3817,205,870": "Maze Door",
+    "6:1:bhvDoor:256,0,-1074": "WF Door",
+    "6:1:bhvDoor:-1775,0,-824": "Left Basement Door",
+    "6:1:bhvDoor:-271,0,-824": "Right Basement Door",
+    "6:1:bhvDoorWarp:-1023,-101,-5170": "Courtyard Door",
+    "6:3:bhvDoorWarp:7885,-1586,-511": "Moat to Castle Grounds Door",
+    "16:1:bhvDoorWarp:3292,-511,-2931": "Castle Grounds to Moat Door",
+    "7:1:bhvDoor:3817,205,870": "Maze Door",
     # The three from his 2026-08-05 session, still shipping.
-    "6:3:800ebc8c:1126,-1074,-2661": "HMC Door",
-    "6:3:800ebc8c:717,-1177,-869": "Moat Door",
-    "6:3:800ebc8c:-3097,-1279,1434": "DDD Door",
+    "6:3:bhvDoor:1126,-1074,-2661": "HMC Door",
+    "6:3:bhvDoor:717,-1177,-869": "Moat Door",
+    "6:3:bhvDoor:-3097,-1279,1434": "DDD Door",
 }
 
 
@@ -55,15 +55,15 @@ def test_a_seeded_instance_name_beats_its_kind_name():
     """Both levels ship for the same object and the specific one has to win,
     or naming a door would be invisible under "a door"."""
     seeded = _seeded_names()
-    assert seeded["kind:800ebc8c"] == "door"
-    assert seeded["6:1:800ebc8c:256,0,-1074"] == "WF Door"
+    assert seeded["kind:bhvDoor"] == "door"
+    assert seeded["6:1:bhvDoor:256,0,-1074"] == "WF Door"
 
 
 def test_the_promotion_tool_inverts_a_key_back_into_a_corpus_row():
     """`corpus_landmarks.py`'s docstring named this tool as the promotion path
     for over a day while the tool only handled segment definitions — so every
     name he typed stayed on his machine. This is the inversion, both shapes."""
-    assert landmark_row_source("6:1:800ebc8c:256,0,-1074", "WF Door") == (
-        "    at(6, 1, 0x800EBC8C, (256, 0, -1074), 'WF Door'),")
-    assert landmark_row_source("kind:800edc24", "tree") == (
-        "    kind(0x800EDC24, 'tree'),")
+    assert landmark_row_source("6:1:bhvDoor:256,0,-1074", "WF Door") == (
+        "    at(6, 1, 'bhvDoor', (256, 0, -1074), 'WF Door'),")
+    assert landmark_row_source("kind:bhvTree", "tree") == (
+        "    kind('bhvTree', 'tree'),")

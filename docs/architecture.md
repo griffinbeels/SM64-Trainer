@@ -169,9 +169,13 @@ lockstep.
 
 ## Where the deep facts live (authoritative homes)
 
-- **Addresses, provenance, traps** (gCurrLevelNum trap, vanilla-HUD-timer
-  trap, object-pool slot fragility): inline comments in
-  `memory/addresses.py`. Cross-check sources are listed in its docstring.
+- **Addresses, per ROM version**: `memory/layout.py` — one row per RAM
+  global, US pinned by `tests/test_layout_us.py`, JP filled through the sync
+  loop (this file → "Two ROM versions"). **Meaning, provenance, traps**
+  (gCurrLevelNum trap, vanilla-HUD-timer trap, object-pool slot fragility,
+  struct offsets): inline comments in `memory/addresses.py`. **Behaviour
+  identity** (why the decomp SYMBOL and not the pointer keys a landmark; both
+  STROOP maps as data): `memory/behaviours.py`.
 - **Endian decode rules** (PJ64 LE-word storage, XOR offsets):
   `memory/base.py` docstring.
 - **RDRAM discovery** (osBootConfig signature scan, 8 MB expansion RAM):
@@ -223,6 +227,75 @@ Two consequences that are not local to one detector:
   2026-08-01 holds the grab quantity and cannot be back-derived: the journal
   keeps no post-grab frames, so the fix is forward-only and old rows can be
   marked, never repaired.
+
+## Two ROM versions (2026-08-15) — what is per-ROM, what is not, and how JP is discovered
+
+**The registry split.** `memory/addresses.py` keeps what is true of the GAME
+whatever ROM runs — action ids, level/course/star ids, names, struct offsets,
+the world graph. `memory/layout.py` keeps what is true of ONE BUILD: the RAM
+address of each global, one row per field with its derivation (a decomp
+symbol, or "hunt"), US and JP side by side. Readers take
+`layout_for(version)` and add the offsets. Behaviour identity is the decomp
+SYMBOL (`memory/behaviours.py`, both STROOP maps shipped as
+`data/behaviours_{us,jp}.tsv`); every landmark key stored before this date was
+lifted from `level:area:<pointer>:x,y,z` to `level:area:bhvSymbol:x,y,z` once
+at db open (`storage/rekey.py` — 807 payloads, 527 names, 5 definitions,
+projection identical, `tests/test_rekey.py`).
+
+**Primary sources read 2026-08-15** (STROOP `MappingUS.map`/`MappingJP.map`
+@ dev; n64decomp `src/game/{level_update,mario_actions_cutscene,interaction,
+ingame_menu,hud,area}.c`; ukikipedia `Version_Differences`):
+
+- Every vanilla symbol the tracker reads has a JP address in the JP map:
+  gGlobalTimer 8032D5D4→8032C694, gMarioStates 8033B170→80339E00,
+  gCurrLevelNum 8032DDF8→8032CE98, gCurrAreaIndex 8033BACA→8033A75A,
+  gLastCompletedCourseNum 8032DD80→8032CE20 (+4 the star), sWarpDest
+  8033B248→80339ED8, sDelayedWarpOp 8033B252→80339EE2, sDelayedWarpTimer
+  8033B254→80339EE4, gObjectPool 8033D488→8033C118, gHudDisplay
+  8033B260→80339EF0, sTimerRunning 8033B25E→80339EEE, gMarioObject
+  80361158→8035FDE8. **The shift is not one offset** — −0xF40 for the 0x8032
+  block, −0x1370 for the 0x8033 block — so `data/symbols_<v>.tsv` gives each
+  version its own candidate and nothing is derived by subtraction. Every one
+  of these is a CANDIDATE until the sync runner's gate verifies it live.
+- Behaviour segment offsets differ too (bhvBobomb 0x13003174 US / 0x13003154
+  JP; bhvGoomba 0x1300472C / 0x1300470C; bhvMario 0x13002EC0 / 0x13002EA0), so
+  neither the RAM pointer nor the segmented address is version-independent —
+  the symbol is. JP has 532 behaviour symbols to US's 536 (JP lacks
+  `bhvPlaysMusicTrackWhenTouched`, the "Music Touch" object, and three unused
+  stubs). The JP segment base is found with no human step:
+  `mario_object->behaviour − bhvMario's offset` (`behaviour.base` gate).
+- Usamune's own three globals (overall 80417C72, star result 80417C74, section
+  timer 8033D5DC on US) are in no map. JP hunts them: the exact-value scan of
+  the displayed time (`sync/checks.py::scan_u16`, lifted from hunt_value.py).
+- **Star grab: `update_mario_sound_and_camera(m)` at the grab is US-only**
+  (`interact_star_or_key`, `#ifndef VERSION_JP`). Our star time is the x-cam
+  moment, so `cal.star.*` are the calibrations most likely to move. A
+  hypothesis to MEASURE; the gate reports the number.
+- Keys: on JP the B1/B2 key cutscene shows a STAR model and the celebration
+  object scales 1/10 per frame instead of the US key/grand split; action ids
+  unchanged. `feature.key_grabbed.b1` asserts no `star_collected` leaks.
+  Bowser 3: on JP Bowser's hitbox stays interactable after the Grand Star.
+- Warps: NO logic differences in level_update.c beyond sounds/credits — the
+  delayed-warp op/timer/destination behave identically (20-frame pipe floor,
+  painting-at-touch expected to carry over; each still gated).
+- Star dance / exit actions: sound-only ifdefs. Textboxes: the box state
+  machine is identical (JP lacks the `lowerBound` render clip); JP differs in
+  CONTENT (fewer pages) and signs open with B only within 0x38E3 (80°) instead
+  of 0x4000. Ukikipedia's ingame_menu.c section is 38 EMPTY rows — a documented
+  gap; these claims rest on the decomp source alone.
+- Gameplay-only (no detection impact): dab, timestop, spawning displacement
+  patched on US; MIPS 40 vs 45.
+
+**The loop.** `tools/sync_version.py --version jp` walks every gate
+(`sync/gates.py` registry: address, behaviour, calibration, feature) in
+dependency order, refuses if the loaded ROM disagrees, writes each verdict to
+`data/version_sync/jp.json` as it lands, and posts it to a running server so
+`/ui/sync.html` fills in beside US. `tests/test_gates_cover.py` makes every
+layout row, every detector event type and every calibration constant owe a
+gate; `tests/test_layout_matches_report.py` makes a verified-but-unshipped or
+shipped-but-refuted address a red build. Run on US it is the regression proof:
+every gate verified except the three marked optional (screenshot-scored
+display lag, the Bowser 3 grand star, the diagnostics-only section counter).
 
 ## Memory hunting playbook
 
