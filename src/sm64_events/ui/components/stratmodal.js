@@ -5,11 +5,22 @@
 // (spec 2026-08-03-hundred-coin-exit-variants) — which is why `save` uses the
 // name the POST RETURNS for every follow-up write instead of the one it sent.
 // Picking an ending the community has no times for MINTS a variant, so this
-// modal is the whole "define your own 100-coin route" path. Writes ride the EXISTING ranks endpoints in order
-// (create → PUT each filled threshold → PUT each filled video), so a partial
-// failure leaves a valid strat and re-Save is idempotent (create no-ops,
-// PUTs overwrite). Callers own what happens after save (set active / reload)
-// via onSaved; Cancel/Esc/backdrop write nothing.
+// modal is the whole "define your own 100-coin route" path.
+//
+// "US and JP timed differently?" (task 0056, confirmed 2026-08-15): most
+// stars run the same on both versions, some don't, so the JP column is a
+// TOGGLE rather than always-on — his words: "by default, we assume the times
+// are the same, and the user can select if JP is different, which then
+// enables the column entry." The JP write rides the SAME per-rank PUT the US
+// column already uses, with `?version=jp` appended (the server ships that
+// door already) — no new endpoint, no new shape.
+//
+// Writes ride the EXISTING ranks endpoints in order (create → PUT each filled
+// US threshold → PUT each filled JP threshold, only when the toggle is on →
+// PUT each filled video, always last), so a partial failure leaves a valid
+// strat and re-Save is idempotent (create no-ops, PUTs overwrite). Callers
+// own what happens after save (set active / reload) via onSaved; Cancel/Esc/
+// backdrop write nothing.
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
@@ -31,6 +42,12 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
   const [videos, setVideos] = useState({});   // rank -> raw input string
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
+  // "US and JP timed differently?" (task 0056). Off by default — one time
+  // for both versions — so `jpTimes` only reaches the server when the user
+  // actually ticks the box; turning it back off keeps whatever was typed in
+  // state (nothing is lost by a stray click) but nothing under it saves.
+  const [jpDiffers, setJpDiffers] = useState(false);
+  const [jpTimes, setJpTimes] = useState({}); // rank -> raw input string
   // "Include in ranking" (live request 2026-07-25 round 7): the same
   // exclusion the Rank tab's breakdown toggles, offered where standards are
   // CREATED, because that is the moment you know whether this is something
@@ -130,6 +147,25 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
               { seconds });
           }
         }
+      }
+      // JP overlay, only when the toggle is on — same per-rank PUT, `?version=jp`
+      // appended. Runs after every US threshold and before any video, so a
+      // partial failure here still leaves the US ladder (the more common case)
+      // fully written.
+      if (jpDiffers) {
+        for (const rank of LADDER_RANKS) {
+          const rawJp = (jpTimes[rank] || "").trim();
+          if (rawJp !== "") {
+            const seconds = parseFloat(rawJp);
+            if (!isNaN(seconds)) {
+              await send("PUT",
+                `/api/ranks/standards/${enc(entity)}/${enc(stored)}/${enc(rank)}?version=jp`,
+                { seconds });
+            }
+          }
+        }
+      }
+      for (const rank of LADDER_RANKS) {
         const url = (videos[rank] || "").trim();
         if (url) {
           await send("PUT",
@@ -197,6 +233,15 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
           once it has them.</span>
       </span>
     </label>
+    <label class="strategy-include-field">
+      <input type="checkbox" checked=${jpDiffers}
+          onchange=${(changeEvent) => setJpDiffers(changeEvent.target.checked)} />
+      <span>
+        <b>US and JP timed differently</b>
+        <span class="meta">Off: one time for both versions. On: enter a US
+          time and a JP time per rank.</span>
+      </span>
+    </label>
     <div class="strategy-ladder-heading">
       <div>
         <span class="eyebrow">Optional</span>
@@ -204,18 +249,25 @@ export function StratModal({ entity, existing, onSaved, onClose }) {
       </div>
       <span>Blank ranks can be filled in later.</span>
     </div>
-    <div class="strategy-ladder">
+    <div class=${`strategy-ladder${jpDiffers ? " has-jp" : ""}`}>
       <div class="strategy-ladder-labels">
-        <span>Rank</span><span>Time</span><span>Example video</span>
+        <span>Rank</span><span>${jpDiffers ? "US · Time (seconds)" : "Time"}</span>
+        ${jpDiffers ? html`<span>JP · Time (seconds)</span>` : null}
+        <span>Example video</span>
       </div>
       ${LADDER_RANKS.map((rank) => html`<div class="strategy-rank-row">
         <span class="strategy-rank-name" title=${`${capName(rank)} · ${rank} on xcams`}
             style=${`--rank-color:${rankColor(rank)}`}>${capName(rank)}</span>
         <${TimeFields} seconds=${times[rank] === "" || times[rank] == null
               ? null : Number(times[rank])}
-            label=${capName(rank)}
+            label=${jpDiffers ? `${capName(rank)} US` : capName(rank)}
             onCommit=${(next) =>
               setTimes({ ...times, [rank]: next == null ? "" : String(next) })} />
+        ${jpDiffers ? html`<${TimeFields} seconds=${jpTimes[rank] === "" || jpTimes[rank] == null
+                ? null : Number(jpTimes[rank])}
+              label=${`${capName(rank)} JP`}
+              onCommit=${(next) =>
+                setJpTimes({ ...jpTimes, [rank]: next == null ? "" : String(next) })} />` : null}
         <label>
           <span class="sr-only">${capName(rank)} example video URL</span>
           <input type="url" placeholder="https://…" value=${videos[rank] || ""}

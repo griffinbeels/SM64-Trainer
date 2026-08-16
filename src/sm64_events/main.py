@@ -228,6 +228,11 @@ def build():
             logging.getLogger("sm64.tracker").warning(
                 "defaults seed unavailable", exc_info=True)
     service = TrackerService(db, broadcaster, ranks=ranks)
+    # The persisted game version grades from the first view: the standards
+    # store's grading version is set here, before anything serves, exactly as
+    # a later PUT /api/mode would leave it (server/mode_api.py).
+    from sm64_events.server.mode_api import apply_persisted_mode
+    apply_persisted_mode(service)
     # User-set storage limits (UI panel) overlay the code defaults.
     replay_cfg = apply_settings_file(ReplayConfig())
     # A saved clip's attempt survives the startup prune (tracking/prune.py).

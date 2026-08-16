@@ -407,7 +407,39 @@
   .library-section-body {
     padding: 0 .8rem .8rem; display: grid; gap: .6rem;
   }
-  .library-jp-toggle { width: fit-content; }
+
+  /* The page-level JP/US switch (versionswitch.js, round 2026-08-15) --
+     retires the old per-section `.library-jp-toggle` chip in favour of ONE
+     switch in the Library hero every section reads. A segmented pill, not
+     two independent chips: the two `.version-switch-seg` buttons share one
+     border down the middle (the first drops its own right border so the
+     second's left border is the only line between them), and the pressed
+     segment fills with the SAME accent `.primary-button`/`.is-selected`
+     already use elsewhere on this page (var(--gold) fill, dark text) rather
+     than inventing a second "selected" language. The unpressed segment stays
+     quiet -- `--surface-2` + `--muted`, the same idle tone `.scope-chip`
+     and `.chip-button` use before their own hover/selected states apply. */
+  .version-switch {
+    display: inline-flex; align-items: center; flex-wrap: wrap; gap: .5rem;
+  }
+  .version-switch-seg {
+    appearance: none; border: 1px solid var(--border-soft);
+    background: var(--surface-2); color: var(--muted);
+    font: inherit; font-weight: 700; letter-spacing: .02em;
+    padding: .32rem .85rem; line-height: 1.1; cursor: pointer;
+  }
+  .version-switch-seg:first-child {
+    border-radius: 999px 0 0 999px; border-right: none;
+  }
+  .version-switch-seg:last-child { border-radius: 0 999px 999px 0; }
+  .version-switch-seg:hover { color: var(--text); }
+  .version-switch-seg[aria-pressed="true"] {
+    background: var(--gold); border-color: var(--gold-soft); color: #1b1607;
+  }
+  .version-switch-seg:focus-visible {
+    outline: 2px solid var(--gold); outline-offset: 2px;
+  }
+  .version-switch-note { color: var(--muted); font-size: .78rem; }
 
   /* Round 5 -- the link door: assigning a movement / subsection row to a
      segment the user built. One strip per linkable row; the menu replaces
@@ -957,6 +989,17 @@
   .timefield{-moz-appearance:textfield;appearance:textfield}
   .timefield-sep{color:var(--text-dim,#8b98a6);padding:0 1px}
   .stdcell{display:inline-flex;align-items:center;gap:4px}
+  /* A JP-flagged strategy's edit cell (task 0056): the US and JP fields
+     stack, each with its two-letter label, and the video button rides the
+     right edge spanning both rows -- one cell, not three rows. */
+  .stdcell-versions{display:inline-grid;grid-template-columns:auto auto;align-items:center;column-gap:4px;row-gap:2px}
+  .stdcell-versions .vidbtn{grid-column:2;grid-row:1 / span 2;white-space:nowrap}
+  .stdcell-version{display:flex;align-items:center;gap:3px;grid-column:1}
+  .stdcell-version-label{flex:0 0 auto;width:1.1rem;font-size:.62rem;font-weight:700;color:var(--muted)}
+  /* The per-strategy "JP differs" toggle in the editor's column head. */
+  .std-jp-toggle{display:flex;align-items:center;justify-content:center;gap:.3rem;margin-top:.25rem;font-size:.66rem;font-weight:500;color:var(--muted);cursor:pointer;text-transform:none;letter-spacing:0}
+  .std-jp-toggle input[type="checkbox"]{margin:0;cursor:pointer}
+  .std-jp-toggle:has(input:disabled){cursor:not-allowed;opacity:.55}
   .vidbtn{border:none;background:transparent;color:#6cb6ff;cursor:pointer;font-size:11px;padding:0 2px;line-height:1}
   /* Round 3 shape, his words: "everything clearly feels like one cohesive
      card" -- the cell is ONE full-size button, so hover is one soft lift
@@ -3357,6 +3400,15 @@
   .workshop-title p {
     margin: 0; color: var(--muted); font-size: .79rem; line-height: 1.35;
   }
+  /* Groups the hero's trailing controls (the Library's page-level version
+     switch, round 2026-08-15, plus its Refresh button) so they wrap onto a
+     narrow hero TOGETHER rather than the switch and the button drifting
+     apart on their own -- `.workshop-hero`'s own flex-wrap wraps each child
+     independently, and a lone version switch stranded on its own line reads
+     as an unrelated control rather than "the rest of this row". */
+  .workshop-hero-actions {
+    display: flex; align-items: center; flex-wrap: wrap; gap: .6rem;
+  }
   .workshop-card { min-width: 0; margin: 0; }
   .workshop-card-heading {
     min-height: 50px; display: flex; align-items: center;
@@ -4442,6 +4494,12 @@
     font-size: .63rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
   }
   .strategy-rank-row { border-top: 1px solid var(--border-soft); }
+  /* has-jp: "US and JP timed differently" (task 0056) adds a JP time column
+     between the US time and the video link -- four tracks instead of three. */
+  .strategy-ladder.has-jp .strategy-ladder-labels,
+  .strategy-ladder.has-jp .strategy-rank-row {
+    grid-template-columns: minmax(110px,.6fr) minmax(90px,.5fr) minmax(90px,.5fr) minmax(160px,1.3fr);
+  }
   .strategy-rank-row label, .strategy-rank-row input { width: 100%; min-width: 0; }
   .strategy-rank-name {
     min-height: 30px; display: inline-flex; align-items: center;
@@ -5133,6 +5191,10 @@
     .strategy-rank-row {
       grid-template-columns: minmax(100px,.8fr) minmax(100px,1fr);
       gap: .4rem; padding: .5rem;
+    }
+    .strategy-ladder.has-jp .strategy-rank-row {
+      grid-template-columns: minmax(90px,.8fr) minmax(80px,1fr) minmax(80px,1fr);
+      gap: .35rem;
     }
     .strategy-rank-row label:last-child { grid-column: 1 / -1; }
     .stdtools a.meta { width: 100%; margin-left: 0; }

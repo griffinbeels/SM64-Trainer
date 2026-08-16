@@ -1215,9 +1215,13 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     # `adoptions_path` into scratch: without it the link door's adopt/unadopt
     # writes land in the REAL dev data dir (`data/library_adoptions.json`,
     # cwd-relative from source) and leak state between test runs.
+    # `mode_path` into scratch for the same reason: a render test that flips
+    # the Game version setting must not write the REAL data dir's
+    # tracker_mode.json and leave the next dev server grading on JP.
     app = create_app(poller, broadcaster, service=service, compare=compare,
                      adoptions_path=Path(compare_cache_scratch.name)
-                     / "library_adoptions.json")
+                     / "library_adoptions.json",
+                     mode_path=Path(compare_cache_scratch.name) / "tracker_mode.json")
 
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(

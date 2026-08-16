@@ -131,6 +131,12 @@ def replay_settings_path() -> Path:
     return data_root() / "data" / "replay_settings.json"
 
 
+def mode_settings_path() -> Path:
+    # EMU/N64 tracker mode + game version (core/modes.py) — a JSON overlay
+    # like replay_settings.json, so switching modes needs no db migration.
+    return data_root() / "data" / "tracker_mode.json"
+
+
 def update_state_path() -> Path:
     # Skipped-update version lives here (a JSON overlay like replay_settings.json,
     # keeps the updater DB-free).

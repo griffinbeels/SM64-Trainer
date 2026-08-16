@@ -207,6 +207,8 @@ export const COMPONENTS = [
       ["family?", "unknown", "Related entities the panel offers to switch between."],
       ["openLibrary?", "(intent: unknown) => void",
         "Opens the Library at a tier's community examples for the entity's active strategy."],
+      ["gradingVersion?", "'jp' | 'us' | null",
+        "The game version the player is graded on (the session view's effective version); a change refetches the panel so an untouched JP/US switch follows the setting."],
     ],
   },
   {
@@ -310,6 +312,16 @@ export const COMPONENTS = [
       ["onCommit", "(seconds: number) => void", "Called once the three boxes settle."],
       ["compact?", "boolean", "Tighter layout for a table row."],
       ["label?", "string", "Accessible label."],
+    ],
+  },
+  {
+    name: "VersionSwitch", module: "./components/versionswitch.js", group: "Input",
+    doc: "The JP / US game-version switch -- JP left, US right -- that shows the other version's standards without changing what the player is graded on. One control, mounted by the Library hero and the standards panel toolbar.",
+    props: [
+      ["value", "'jp' | 'us'", "The pressed segment."],
+      ["onChange", "(next: 'jp' | 'us') => void", "Called only when the other segment is clicked."],
+      ["note?", "string | null", "Trailing text, e.g. 'Viewing JP standards · you are graded on US'."],
+      ["label?", "string", "The group's accessible name."],
     ],
   },
 ];

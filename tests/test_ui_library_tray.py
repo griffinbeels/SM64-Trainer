@@ -408,10 +408,14 @@ def test_two_different_recordings_of_the_same_run_do_not_collide_in_the_tray(lib
     assert library_page.evaluate(
         "document.querySelectorAll('.library-tray-chip').length") == 1
 
-    # Switch the section to JP mode and re-expand (a rebuilt band list mounts
-    # its subdivisions collapsed again).
-    library_page.evaluate(
-        "document.querySelector('.library-section.open .library-jp-toggle').click()")
+    # Switch the PAGE-level version switch to JP and re-expand (a rebuilt
+    # band list mounts its subdivisions collapsed again). His 2026-08-15
+    # ruling retired the old per-section `.library-jp-toggle` chip in favour
+    # of one switch every section reads (versionswitch.js).
+    library_page.evaluate("""
+      Array.from(document.querySelectorAll('.version-switch-seg'))
+        .find((seg) => seg.textContent.trim() === 'JP').click()
+    """)
     _expand_divisions(library_page)
 
     # The causal check: adding the first recording must not disable the

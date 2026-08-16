@@ -37,6 +37,7 @@ uv run python tools/what_happened.py                 # READ BACK what the human 
 uv run python tools/what_happened.py --list          # which journal is live: repo / each worktree / installed exe
 uv run pytest tests/test_responsive.py -q            # render every breakpoint; report layout defects (no PJ64 needed)
 uv run python tools/check_glossary.py                # docs/glossary.md's own gate: closure, active voice, live Lives paths
+uv run python tools/check_jp_coverage.py             # every annotated JP difference (vetted seed + sheet layer) resolves to a JP ladder in the standards store; a JP time that resolves to US is a lost distinction
 uv run python tools/scrape_sheet.py                  # rebuild the Ultimate Sheet library snapshot -- READ the "unknown:" list, it IS the deliverable
 uv run python tools/audit_library.py                 # AUDIT that snapshot by eye: every target, its verdict, the ratio behind each row; corrections save into the repo
 uv run python tools/scrape_ukikipedia.py             # snapshot Ukikipedia's RTA Guide page list -> src/sm64_events/ukikipedia_titles.py, and READ the "no page:" list: the wiki mark links only to a page that exists (a STAR in that list = the wiki renamed a page)

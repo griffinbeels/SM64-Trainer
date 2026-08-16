@@ -378,7 +378,11 @@ export function showsEntityBanner(sec) {
 // the banner SNAPS to the new rank instead of climbing to it.
 export function rankIdentity(entityKey, which, sec, t) {
   const mode = (t.view && t.view.rank_mode) || "";
-  return `${entityKey}|${which}|${sec.last_strat || ""}|${mode}`;
+  // The game version is part of the identity for the same reason the rank
+  // mode is: flipping it re-grades on a different ladder, and a higher rank
+  // nobody ran for must SNAP into place, never climb (2026-08-15).
+  const version = (t.view && t.view.game_version && t.view.game_version.effective) || "";
+  return `${entityKey}|${which}|${sec.last_strat || ""}|${mode}|${version}`;
 }
 
 // The rank wash moved onto each `.rank-banner` itself (index.html,

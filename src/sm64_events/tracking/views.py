@@ -1826,6 +1826,12 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                 row, attempt_by_id.get(row["attempt_id"]),
                 igt_seen_in(attempts_by_star.get((c, s), []))))},
         "rank_mode": rank_mode,
+        # {setting, effective}: the game version SETTING (auto/jp/us) and the
+        # version grading resolves it to. Every rank on this page was graded
+        # on `effective`; the Library's and the standards panel's JP/US
+        # switches default to it, and refetch when it changes
+        # (`game_version_changed` is in the store's REFRESH_ON set).
+        "game_version": service.game_version(),
         # Entity keys that HAVE a ladder, whether or not this player has a time
         # on them. `rank_by_star`/`segment_targets[].rank` are None in both the
         # "no standards exist" and "standards exist, no time of mine" cases, and

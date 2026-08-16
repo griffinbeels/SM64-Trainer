@@ -354,6 +354,23 @@ export function standingOn(ladder, pbCs) {
   return { rank: tier, division: divisionWithin(ladderCsOf(ladder || {}), tier, pbCs) };
 }
 
+// A MATCHED strategy's standing under the page's version switch (2026-08-15).
+// `served` is the endpoint's own graded answer for that strategy -- graded on
+// the STANDARDS ladder (vetted merged over fitted), in the active rank mode,
+// on the grading version. While the page SHOWS that same version it is kept
+// verbatim: this section's `ladder` is the sheet's fitted one and differs
+// from the grading ladder for every matched approach in the shipped snapshot
+// (206/206, whole-branch review), so re-walking here would contradict the
+// practice card's medal for the same PB. Only when the page shows the OTHER
+// version is there no served answer to keep -- then the saved PB (`pb_cs`,
+// the walkable ingredient views.py::build_entity_strategies carries for
+// exactly this) is re-walked against the displayed ladder, the same walk an
+// associated row uses. No walkable PB -> the served answer either way.
+export function matchedStanding(served, ladder, version, gradingVersion) {
+  if (!served || served.pb_cs == null || version === gradingVersion) return served;
+  return { ...standingOn(ladder, served.pb_cs), pb_display: served.pb_display, noTimes: false };
+}
+
 // Which rows offer the link-to-segment button (round 5). A star's approaches
 // auto-adopt at scrape time, so only approaches on an ENTITY-LESS target
 // (castle movements, stage routes) are linkable; subsections never auto-adopt

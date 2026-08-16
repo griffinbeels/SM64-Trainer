@@ -265,25 +265,29 @@ def test_each_mode_shows_only_its_own_versions_entries(payload, fresh_page):
 
     _navigate_to_section(fresh_page, candidate["group"], candidate["target_label"],
                          candidate["approach_name"])
-    fresh_page.wait_for(".library-section.open .library-jp-toggle", timeout_ms=10000)
+    fresh_page.wait_for(".version-switch", timeout_ms=10000)
     fresh_page.evaluate(EXPAND_DIVISIONS)
+    assert fresh_page.evaluate("!document.querySelector('.library-jp-toggle')"), (
+        "the retired per-section chip is still rendering")
 
-    label = fresh_page.evaluate(
-        "document.querySelector('.library-section.open .library-jp-toggle')"
-        ".textContent.trim()")
-    assert label.startswith("US mode"), label
+    # Default is US -- the SECOND `.version-switch-seg` (versionswitch.js's
+    # own JP-left/US-right contract).
+    us_pressed = fresh_page.evaluate(
+        "document.querySelectorAll('.version-switch-seg')[1].getAttribute('aria-pressed')")
+    assert us_pressed == "true", us_pressed
     us_shown = fresh_page.evaluate(COUNT_VISIBLE)
     assert us_shown == candidate["us"], (
         f"US mode shows {us_shown} entries; the snapshot says "
         f"{candidate['us']} are US-or-untagged on {candidate['approach_name']!r}")
 
-    fresh_page.evaluate(
-        "document.querySelector('.library-section.open .library-jp-toggle').click()")
+    fresh_page.evaluate("""
+      Array.from(document.querySelectorAll('.version-switch-seg'))
+        .find((seg) => seg.textContent.trim() === 'JP').click()
+    """)
     fresh_page.evaluate(EXPAND_DIVISIONS)  # a fresh band list mounts collapsed again
-    label_after = fresh_page.evaluate(
-        "document.querySelector('.library-section.open .library-jp-toggle')"
-        ".textContent.trim()")
-    assert label_after.startswith("JP mode"), label_after
+    jp_pressed = fresh_page.evaluate(
+        "document.querySelectorAll('.version-switch-seg')[0].getAttribute('aria-pressed')")
+    assert jp_pressed == "true", jp_pressed
     jp_shown = fresh_page.evaluate(COUNT_VISIBLE)
     assert jp_shown == candidate["jp"], (
         f"JP mode shows {jp_shown} entries; the snapshot says "
@@ -294,7 +298,7 @@ def test_each_mode_shows_only_its_own_versions_entries(payload, fresh_page):
         "document.querySelectorAll('.library-example-version').length") == 0
 
 
-def test_a_jp_only_ladder_wears_its_chip_beside_the_mode_toggle(payload, fresh_page):
+def test_a_jp_only_ladder_wears_its_chip_beside_the_version_switch(payload, fresh_page):
     candidate = _pick_jp_only_chip_approach(payload)
     assert candidate, "no single-version-fitted (no ladder_jp) approach in the snapshot"
 
@@ -308,8 +312,11 @@ def test_a_jp_only_ladder_wears_its_chip_beside_the_mode_toggle(payload, fresh_p
     expected_chip = ("JP" if candidate["ladder_version"] == "jp" else "US") + " ladder only"
     assert chip == expected_chip, chip
 
-    # Round 1's coexistence rule: mixed entries earn the mode toggle even
-    # with no second ladder to switch to, and the chip stays beside it.
-    toggle = fresh_page.evaluate(
-        "!!document.querySelector('.library-section.open .library-jp-toggle')")
-    assert toggle == candidate["mixes"], (toggle, candidate)
+    # Round 1's coexistence rule ("mixed entries earn the mode toggle even
+    # with no second ladder to switch to") is now structural rather than
+    # conditional: his 2026-08-15 ruling made the switch PAGE-level and
+    # unconditional, so what this guards is that it still coexists with the
+    # ladder-version chip rather than one hiding the other -- never that it
+    # appears only when this one approach mixes versions.
+    assert fresh_page.evaluate("!!document.querySelector('.version-switch')"), (
+        "the page-level version switch is missing beside the ladder-version chip")

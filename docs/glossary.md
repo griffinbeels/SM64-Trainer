@@ -803,6 +803,53 @@ blinks on arrival.
 - **Lives** — the standards panel
   (`src/sm64_events/ui/components/standards.js`)
 
+### Game version
+
+Which regional release of Super Mario 64 you tell the trainer you are playing
+— JP or US — or Auto-detect, which lets the trainer decide. Every
+[[standard]] with a JP time annotated differs by version, so the game version
+picks which [[ladder]] the trainer grades you on. Changing it applies at
+once, no restart.
+
+- **Lives** — the mode config (`src/sm64_events/core/modes.py`); its API
+  door (`src/sm64_events/server/mode_api.py`); the Settings drawer's Game
+  section (`src/sm64_events/ui/components/header.js`)
+
+### Effective version
+
+What the [[game version]] resolves to — always JP or US, never Auto-detect.
+An explicit choice wins; Auto-detect resolves to US on the emulator, the only
+release it reads, and takes a detected release from a front-end that can read
+one off the screen.
+
+- **Lives** — the mode config's resolver (`src/sm64_events/core/modes.py`)
+  → the session view (`src/sm64_events/tracking/views.py`)
+
+### Grading version
+
+The [[effective version]] as the [[standard]]s file holds it: every
+[[ladder]] read that names no version resolves on it, which is how every
+[[rank]] on every surface follows the [[game version]] without any surface
+knowing about it. A [[version switch]] names a version explicitly and so
+never moves it.
+
+- **Lives** — the standards file (`src/sm64_events/ranks/standards.py`)
+
+### Version switch
+
+The JP / US toggle — JP on the left, US on the right — that shows the other
+version's [[ladder]]s without changing which one the trainer grades you on.
+One on the [[library tab]]'s hero re-files every [[approach]] under that
+version's [[ladder]]; one on the [[standards ladder]]'s toolbar re-fetches
+that [[target]]'s [[ladder]]s under it. Both default to the
+[[effective version]], and the toolbar one names the graded version
+whenever it shows the other.
+
+- **Lives** — the shared control
+  (`src/sm64_events/ui/components/versionswitch.js`); mounted by the Library
+  page (`src/sm64_events/ui/components/library.js`) and the standards panel
+  (`src/sm64_events/ui/components/standards.js`)
+
 ### Rank icon
 
 How one [[rank]] draws itself — as a cap or as a medal, whichever you chose.

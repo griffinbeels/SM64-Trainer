@@ -25,6 +25,7 @@ import { LibraryNav } from "./librarynav.js";
 import { LibraryTarget } from "./librarytarget.js";
 import { LibraryTray, LibraryGrid } from "./librarytray.js";
 import { Icon } from "./icons.js";
+import { VersionSwitch } from "./versionswitch.js";
 
 const html = htm.bind(h);
 
@@ -197,6 +198,19 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
   // import into Compare).
   const [tray, setTray] = useState([]);
   const [showGrid, setShowGrid] = useState(false);
+  // The page-level JP/US switch (his 2026-08-15 ruling, retiring the old
+  // per-section `library-jp-toggle` chip): ONE switch, and every section
+  // reads it. `pickedVersion` is null until he touches the switch, so an
+  // UNTOUCHED page keeps following the session's effective version even as
+  // it changes underneath it (a mode flip, a detection landing) -- the same
+  // "stays live unless he overrides it" shape `version` already names in the
+  // spec. Once he clicks a segment, `pickedVersion` wins for the rest of
+  // this mount; the Library stays mounted behind `display:none` when he
+  // leaves the tab, so that choice survives a tab switch too.
+  const [pickedVersion, setPickedVersion] = useState(null);
+  const effectiveVersion = (t && t.view && t.view.game_version
+    && t.view.game_version.effective) || "us";
+  const version = pickedVersion || effectiveVersion;
   const trayKeys = new Set(tray.map((item) => item.key));
   const addToTray = (item) => setTray((prev) =>
     prev.some((existing) => existing.key === item.key) ? prev : [...prev, item]);
@@ -473,11 +487,17 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
           <p>${statusLine(status, statusError)}</p>
         </div>
       </div>
-      <button type="button" class="primary-button" onclick=${refresh}
-          disabled=${refreshState === "loading"}>
-        <${Icon} name="restart" size=${15} />
-        ${refreshState === "loading" ? "Refreshing…" : "Refresh"}
-      </button>
+      <div class="workshop-hero-actions">
+        <${VersionSwitch} value=${version} onChange=${setPickedVersion}
+            note=${version !== effectiveVersion
+              ? `Viewing ${version.toUpperCase()} standards · you are graded on ${effectiveVersion.toUpperCase()}`
+              : null} />
+        <button type="button" class="primary-button" onclick=${refresh}
+            disabled=${refreshState === "loading"}>
+          <${Icon} name="restart" size=${15} />
+          ${refreshState === "loading" ? "Refreshing…" : "Refresh"}
+        </button>
+      </div>
     </div>
     <${RefreshMessage} state=${refreshState} />
     ${/* FINAL REVIEW FIX (medium: two fetches fail into a permanent
@@ -498,6 +518,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
             <${Icon} name="chevron" size=${15} /> Back
           </button>
           <${LibraryTarget} t=${t} targets=${entry ? entry.rows : []}
+              version=${version} gradingVersion=${effectiveVersion}
               onAdd=${addToTray} trayKeys=${trayKeys}
               focusStrat=${entry ? entry.focusStrat : null}
               focusTier=${entry ? entry.focusTier : null}

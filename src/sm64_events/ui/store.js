@@ -14,7 +14,8 @@ import { getRankIconStyle, setRankIconStyle } from "./components/rankicon.js";
 const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   "pb_saved", "pb_undone", "session_started", "target_changed",
   "star_collected", "strat_set", "rank_standards_changed",
-  "rank_mode_changed", "icons_changed", "marelo_changed", "route_selected",
+  "rank_mode_changed", "game_version_changed", "icons_changed", "marelo_changed",
+  "route_selected",
   "segment_progress",
   // `spawned` joined in round 26 for ONE derived field: `stage`'s
   // `on_the_star_select`, which opens on a grab and closes on the next spawn

@@ -386,3 +386,23 @@ def test_a_zero_width_subdivision_says_so_rather_than_printing_it_backwards():
     # An `empty` shell owns no whole centisecond -- real on tight vetted
     # ladders -- and a span printed slow-to-fast there would read backwards.
     assert run_js('m.divisionRangeLabel({empty: true, slowCs: 1200, fastCs: 1201})') == "—"
+
+
+def test_a_matched_standing_is_served_at_the_graded_version_and_rewalked_elsewhere():
+    """Whole-branch review 2026-08-15, finding 4: the served standing (graded
+    on the standards ladder, in the active rank mode) is kept VERBATIM while
+    the page shows the graded version -- a re-walk against the sheet's own
+    ladder contradicted the practice card's medal for 206/206 matched
+    approaches -- and only the OTHER version re-walks the saved PB."""
+    served = {"rank": "Gold", "division": "II", "pb_cs": 1500, "pb_display": "15s"}
+    # A displayed ladder on which 15.00 s is Silver, not Gold: the re-walk
+    # would visibly change the medal, so keeping it is what the test proves.
+    ladder = {"Mario": 10.0, "Gold": 14.0, "Silver": 16.0}
+    same = run_js(f"m.matchedStanding({json.dumps(served)}, {json.dumps(ladder)}, 'us', 'us')")
+    assert same == served
+    other = run_js(f"m.matchedStanding({json.dumps(served)}, {json.dumps(ladder)}, 'jp', 'us')")
+    assert other["rank"] == "Silver" and other["pb_display"] == served["pb_display"]
+    # no walkable PB: the served answer either way
+    unranked = {"rank": None, "division": None, "pb_cs": None, "pb_display": None}
+    assert run_js(f"m.matchedStanding({json.dumps(unranked)}, {json.dumps(ladder)}, 'jp', 'us')") == unranked
+    assert run_js("m.matchedStanding(null, {}, 'jp', 'us')") is None
