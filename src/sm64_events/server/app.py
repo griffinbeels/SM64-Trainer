@@ -523,6 +523,9 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         return {
             "status": "ok",
             "emulator_attached": poller.memory.attached,
+            # A version whose layout is unverified holds the poller: nothing
+            # is read until the sync run fills it (core/snapshot.py).
+            "held": getattr(poller, "hold_reason", None),
             "clients": broadcaster.client_count,
             "last_frame": latest.global_timer if latest else None,
             "db": ("absent" if service is None
