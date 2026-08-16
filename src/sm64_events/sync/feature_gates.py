@@ -332,7 +332,7 @@ FEATURE_GATES: tuple[Gate, ...] = (
         "decline).",
         "key_grabbed which=grand fires with no star_collected leaking in "
         "behind it, when you choose to run it.",
-        _check_key_grand, needs=_LAYOUT_NEEDS),
+        _check_key_grand, needs=_LAYOUT_NEEDS, optional=True),
 
     Gate("feature.death", "death", "feature",
         "Die in any course.",

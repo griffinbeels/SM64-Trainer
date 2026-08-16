@@ -18,8 +18,10 @@ layout it requires is already complete.
 WHY A `Verdict` NEVER RAISES: a human is on the other end of every non-auto
 gate, and "he did something else first" or "the emulator lagged" are facts
 about THIS run, not bugs — `Verdict("failed", evidence=...)` reports them
-the same way a wrong candidate does, so `sync/runner.py` (Task 12) never
-needs a try/except around a check.
+the same way a wrong candidate does. `sync/runner.py` still wraps every
+check in a try/except -- that guards a check's own BUG, which is a different
+thing from a game-state miss and is reported as `failed` with the traceback's
+last line.
 
 WHY EVERY POLLING LOOP HAS A NAMED TIMEOUT CONSTANT: a gate that never sees
 its live cue (he grabbed the wrong star, the ROM never entered the level)
@@ -31,9 +33,9 @@ for what it is waiting on, and a loop that exhausts its budget returns
 from sm64_events.memory import addresses as A
 from sm64_events.memory.behaviours import base_from_mario, pointer_of, symbol_of
 from sm64_events.memory.version_probe import detect_version
-from sm64_events.sync.checks import (check_ticks, parse_frames, pool_contains,
-                                     scan_u16, scan_u32, survivors,
-                                     ticks_per_second)
+from sm64_events.sync.checks import (check_ticks, near, parse_frames,
+                                     pool_contains, scan_ticking_u16, scan_u16,
+                                     survivors, ticks_per_second)
 from sm64_events.sync.gates import Gate, Verdict, register
 
 # How often a polling loop re-reads memory. Faster than the 30 Hz the game
@@ -54,10 +56,23 @@ HUNT_SURVIVOR_CEILING = 3
 USAMUNE_CONTRACT_SAMPLE_SECONDS = 2.0
 USAMUNE_RESULT_SETTLE_SECONDS = 3.0
 USAMUNE_TIMER_TIMEOUT_S = 60.0
-# A section counter read right after an area load should be a small number
-# of frames old — generous enough that poll jitter can't miss the reset,
-# tight enough that it still excludes most of the image's unrelated zeros.
-USAMUNE_TIMER_RESET_CEILING = 10
+# The two-image differential for the section counter (diagnostics only): a
+# u32 that was at least this many frames old before the area load and at
+# most RESET_CEILING frames old just after it. RDRAM is overwhelmingly zeros,
+# so a one-image "near zero" scan finds hundreds of thousands (review,
+# 2026-08-15) -- only the BEFORE image can narrow it.
+USAMUNE_TIMER_MIN_BEFORE = 300
+USAMUNE_TIMER_RESET_CEILING = 30
+# The running overall timer: how long the two-image tick scan spans, and how
+# far the value he typed may have moved on by the time the scan runs. The
+# runner sees only when Enter arrived, never when he READ the screen, so the
+# window allows TYPING_ALLOWANCE_S of typing (forward only -- the counter
+# runs) plus the measured post-Enter delay, plus a little slack either way.
+# The tick constraint does the selecting: a handful of u16s in 8 MB advance
+# at 30/s, so a 20-second window is still one address.
+TICK_SCAN_SECONDS = 1.0
+TYPING_ALLOWANCE_S = 20.0
+TYPED_VALUE_SLACK_FRAMES = 60
 
 # `addresses.LEVEL_NAMES[24] == "Whomp's Fortress"` — no named level constant
 # exists for it (only the Bowser/BitX/HMC/DDD ids get one), so this names it
@@ -592,14 +607,17 @@ register(Gate(
 ))
 
 
-# --- hud_timer / hud_timer_running --------------------------------------------
+# --- hud_display / hud_timer_running -----------------------------------------
 
-def _check_hud_timer(ctx) -> Verdict:
-    candidate = ctx.candidate("hud_timer")
+def _check_hud_display(ctx) -> Verdict:
+    """The layout row is gHudDisplay's OWN address; the race timer sits
+    HUD_TIMER_OFF into it (review 2026-08-15: storing base+0xC under the
+    symbol's name would have promoted a JP address 12 bytes off)."""
+    candidate = ctx.candidate("hud_display")
     missing = _value_or_missing(candidate)
     if missing is not None:
         return missing
-    value = ctx.raw().read_u16(candidate)
+    value = ctx.raw().read_u16(candidate + A.HUD_TIMER_OFF)
     if value == 0:
         return Verdict("verified", value=candidate,
                        evidence="0 under Usamune, as on US")
@@ -621,11 +639,11 @@ def _check_hud_timer_running(ctx) -> Verdict:
 
 
 register(Gate(
-    id="address.hud_timer", feature="IGT clock", kind="address", auto=True,
+    id="address.hud_display", feature="IGT clock", kind="address", auto=True,
     needs=("version.rom",),
     instruction="No action needed — reads the candidate once.",
     proves="gHudDisplay's candidate stays 0 under Usamune, as on US.",
-    check=_check_hud_timer,
+    check=_check_hud_display,
 ))
 register(Gate(
     id="address.hud_timer_running", feature="IGT clock", kind="address", auto=True,
@@ -638,14 +656,15 @@ register(Gate(
 
 # --- usamune_overall / usamune_star_result / usamune_timer -------------------
 
-def _hunt_u16(ctx, prompt_text: str) -> tuple[list[int], int | None]:
-    """Cheat-Engine-style narrowing (`tools/hunt_value.py`'s technique,
-    ported onto `ctx`): prompt for the displayed value, scan a FRESH image
-    for it, intersect with the previous round's survivors. Stops once the
-    survivor count is small enough for a contract to finish the job, or
-    after HUNT_MAX_ROUNDS. Returns the survivors AND the last frame count
-    typed, since a caller may need both (usamune_star_result's contract
-    compares against the exact number he last typed)."""
+def _hunt_frozen_u16(ctx, prompt_text: str) -> tuple[list[int], int | None]:
+    """Cheat-Engine-style narrowing (`tools/hunt_value.py`'s technique, ported
+    onto `ctx`) for a value that is FROZEN on screen: prompt for the displayed
+    value, scan a fresh image for it, intersect with the previous round's
+    survivors. Stops once the survivor count is small enough for a contract to
+    finish the job, or after HUNT_MAX_ROUNDS. Returns the survivors AND the
+    last frame count typed (usamune_star_result's contract compares against
+    it). A RUNNING value must go through `_hunt_ticking_u16` instead: the
+    typed number has moved on before this scan runs."""
     found: list[int] | None = None
     last_frames: int | None = None
     for _ in range(HUNT_MAX_ROUNDS):
@@ -654,7 +673,7 @@ def _hunt_u16(ctx, prompt_text: str) -> tuple[list[int], int | None]:
         if frames is None:
             continue
         last_frames = frames
-        image = ctx.raw()._read_raw(0, A.RDRAM_FULL_SIZE)
+        image = ctx.raw().read_image()
         this_round = scan_u16(image, frames)
         found = this_round if found is None else survivors([found, this_round])
         if len(found) <= HUNT_SURVIVOR_CEILING:
@@ -662,11 +681,54 @@ def _hunt_u16(ctx, prompt_text: str) -> tuple[list[int], int | None]:
     return (found or []), last_frames
 
 
+def _hunt_ticking_u16(ctx, prompt_text: str) -> tuple[list[int], int | None]:
+    """The hunt for a RUNNING counter (Usamune's overall timer). Two images
+    TICK_SCAN_SECONDS apart name every u16 that advances at game rate -- a
+    handful in 8 MB -- and the value he typed only has to be NEAR one of
+    them: within 30 frames per second that passed since he answered, plus
+    TYPED_VALUE_SLACK_FRAMES. Repeats up to HUNT_MAX_ROUNDS intersecting the
+    tickers, so a second reading kills any counter that merely happened to
+    tick during the first."""
+    found: list[int] | None = None
+    last_frames: int | None = None
+    for _ in range(HUNT_MAX_ROUNDS):
+        answer = ctx.prompt(prompt_text)
+        typed_at = ctx.now()
+        frames = parse_frames(answer)
+        if frames is None:
+            continue
+        last_frames = frames
+        mem = ctx.raw()
+        before = mem.read_image()
+        ctx.sleep(TICK_SCAN_SECONDS)
+        after = mem.read_image()
+        scan_at = ctx.now()
+        tickers = scan_ticking_u16(before, after, TICK_SCAN_SECONDS)
+        # `before` was taken (scan_at - TICK_SCAN_SECONDS - typed_at) seconds
+        # after he answered; the value there is the typed one plus that much
+        # game time, give or take the slack.
+        moved = max(0, int(round((scan_at - TICK_SCAN_SECONDS - typed_at) * 30)))
+        # The counter only runs FORWARD from what he read: [typed - slack,
+        # typed + typing allowance + post-Enter delay + slack].
+        forward = int(TYPING_ALLOWANCE_S * 30) + moved
+        centre = frames + forward // 2
+        this_round = [address for address in tickers
+                      if near(before, address, centre,
+                              forward // 2 + TYPED_VALUE_SLACK_FRAMES)]
+        found = this_round if found is None else survivors([found, this_round])
+        if len(found) <= HUNT_SURVIVOR_CEILING:
+            break
+    return (found or []), last_frames
+
+
 def _check_usamune_overall(ctx) -> Verdict:
-    found, _ = _hunt_u16(ctx, "Stand in any course with the Usamune overall "
-                              "timer visible; type what it shows.")
+    found, _ = _hunt_ticking_u16(
+        ctx, "Stand in any course with the Usamune overall timer RUNNING and "
+             "visible; type what it reads right now (e.g. 0'20\"20) and press "
+             "Enter -- it keeps running, that is fine.")
     if not found:
-        return Verdict("failed", evidence="no candidate survived the hunt")
+        return Verdict("failed", evidence="no u16 counter ticked at game rate "
+                                          "near the value typed")
     mem = ctx.raw()
     passing = []
     for address in found:
@@ -679,17 +741,18 @@ def _check_usamune_overall(ctx) -> Verdict:
             passing.append(address)
     if len(passing) == 1:
         return Verdict("verified", value=passing[0],
-                       evidence=f"ticks ~30/s at {passing[0]:#x}")
+                       evidence=f"ticks ~30/s at {passing[0]:#x}, near the typed value")
     if passing:
         return Verdict("candidate", measured={"candidates": passing},
-                       evidence=f"{len(passing)} candidates all tick ~30/s -- ambiguous")
+                       evidence=f"{len(passing)} candidates all tick ~30/s -- ambiguous; "
+                                "type a second reading next run")
     return Verdict("failed", measured={"candidates": found},
                    evidence="no surviving candidate ticks like a running counter")
 
 
 def _check_usamune_star_result(ctx) -> Verdict:
-    found, last_frames = _hunt_u16(ctx, "Grab a star; once the result freezes "
-                                        "on screen, type it.")
+    found, last_frames = _hunt_frozen_u16(
+        ctx, "Grab a star; once the result FREEZES on screen, type it.")
     if not found or last_frames is None:
         return Verdict("failed", evidence="no candidate survived the hunt")
     mem = ctx.raw()
@@ -719,40 +782,54 @@ def _check_usamune_star_result(ctx) -> Verdict:
 
 
 def _check_usamune_timer(ctx) -> Verdict:
+    """DIAGNOSTICS ONLY, and its terminal state is `candidate`: the section
+    counter is slot-dependent and no shipped read depends on it. Two images
+    -- before and after an area load -- keep every u32 that read like a
+    running counter before (>= MIN_BEFORE) and freshly reset after (<=
+    RESET_CEILING); a one-image near-zero scan cannot narrow an 8 MB image
+    that is mostly zeros."""
     area_addr = ctx.candidate("curr_area")
     if area_addr is None:
         return Verdict("missing", evidence="curr_area not verified yet")
     mem = ctx.raw()
+    ctx.say("Walk into a subarea (a door inside a course, the pyramid, the "
+            "volcano) when you are ready; watching for the area load.")
     previous_area = mem.read_s16(area_addr)
-    start = ctx.now()
-    area = previous_area
+    before = mem.read_image()
+    refreshed_at = start = ctx.now()
     while ctx.now() - start < USAMUNE_TIMER_TIMEOUT_S:
-        area = mem.read_s16(area_addr)
-        if area != previous_area:
+        if mem.read_s16(area_addr) != previous_area:
             break
+        if ctx.now() - refreshed_at >= 1.0:   # keep BEFORE under a second old
+            before = mem.read_image()
+            refreshed_at = ctx.now()
         ctx.sleep(POLL_INTERVAL_S)
     else:
         return Verdict("failed", evidence="curr_area never changed in "
                                           f"{USAMUNE_TIMER_TIMEOUT_S:.0f}s")
-    image = mem._read_raw(0, A.RDRAM_FULL_SIZE)
-    found = scan_u32(image, 0, tolerance=USAMUNE_TIMER_RESET_CEILING)
+    ctx.sleep(0.5)                       # let the load's own writes settle
+    after = mem.read_image()
+    words_before = memoryview(before).cast("I")
+    words_after = memoryview(after).cast("I")
+    found = [A.KSEG0_BASE + index * 4
+             for index in range(min(len(words_before), len(words_after)))
+             if words_before[index] >= USAMUNE_TIMER_MIN_BEFORE
+             and words_after[index] <= USAMUNE_TIMER_RESET_CEILING]
     if not found:
-        return Verdict("failed", evidence="no u32 address reset near 0 after "
-                                          "the area load")
-    if len(found) == 1:
-        return Verdict("verified", value=found[0],
-                       evidence="one u32 address reset to ~0 on the area load")
+        return Verdict("failed", evidence="no u32 counter reset across the area load")
     return Verdict("candidate", measured={"candidates": found[:20], "count": len(found)},
-                   evidence=f"{len(found)} u32 addresses reset near 0 -- "
-                            "diagnostics only, needs manual narrowing")
+                   evidence=f"{len(found)} u32 counter(s) reset across the area load "
+                            "-- diagnostics only; the section counter is never a "
+                            "shipped read")
 
 
 register(Gate(
     id="address.usamune_overall", feature="IGT clock", kind="address",
     needs=("version.rom",), timeout_s=180.0,
-    instruction="Stand in any course with the Usamune overall timer visible; "
-               "type what it shows when asked.",
-    proves="the RAM address holding Usamune's running overall star time.",
+    instruction="Stand in any course with the Usamune overall timer RUNNING "
+               "and visible; when asked, type what it reads right now.",
+    proves="the RAM address holding Usamune's running overall star time "
+           "(a u16 that ticks at game rate and reads near what he typed).",
     check=_check_usamune_overall,
 ))
 register(Gate(
@@ -764,11 +841,11 @@ register(Gate(
     check=_check_usamune_star_result,
 ))
 register(Gate(
-    id="address.usamune_timer", feature="IGT clock", kind="address", auto=True,
-    needs=("address.usamune_overall", "address.curr_area"),
+    id="address.usamune_timer", feature="IGT clock", kind="address",
+    optional=True, needs=("address.usamune_overall", "address.curr_area"),
     timeout_s=USAMUNE_TIMER_TIMEOUT_S + 10,
-    instruction="No action needed — watches for the next area load.",
-    proves="a candidate for Usamune's per-section counter (diagnostics "
-           "only -- several may survive).",
+    instruction="Walk into a subarea (an area load inside a course) when told.",
+    proves="candidates for Usamune's per-section counter -- DIAGNOSTICS ONLY, "
+           "its terminal state is `candidate`; no shipped read depends on it.",
     check=_check_usamune_timer,
 ))

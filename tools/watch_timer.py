@@ -17,6 +17,7 @@ from sm64_events.memory.layout import layout_for, version_from_argv
 from sm64_events.memory.pj64 import Pj64Memory
 
 LAYOUT = layout_for(version_from_argv())      # --version jp reads the JP layout
+LAYOUT.require('usamune_overall', 'usamune_star_result', 'curr_level')   # LayoutIncomplete names what JP still lacks
 
 DEFAULT_WATCH = [(LAYOUT.usamune_overall, "u16"), (LAYOUT.usamune_star_result, "u16")]
 

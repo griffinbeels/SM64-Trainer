@@ -163,12 +163,16 @@ def _select(all_gates: list[Gate], only: str | None) -> list[Gate]:
 def _post(server: str | None, version: str, gate_id: str,
          verdict: Verdict) -> None:
     """Best-effort PUT to the live dashboard -- the report on disk is the
-    source of truth; this is just so /ui/sync.html moves while he watches."""
+    source of truth; this is just so /ui/sync.html moves while he watches.
+    `persist: false` tells the server to BROADCAST only: the runner already
+    wrote the file, and a server in another checkout (8066 is whatever
+    run-test-server.bat launched) must not write a second copy of the report
+    beside its own data dir."""
     if not server:
         return
     body = json.dumps({
         "version": version, "gate_id": gate_id, "verdict": verdict.as_json(),
-        "at": datetime.now(timezone.utc).isoformat(),
+        "at": datetime.now(timezone.utc).isoformat(), "persist": False,
     }).encode("utf-8")
     request = urllib.request.Request(
         f"{server}/api/sync/verdict", data=body, method="PUT",
@@ -189,11 +193,17 @@ def run(version: str, mem, *, only: str | None = None,
     so killing the process mid-walk loses nothing already decided."""
     report = Report(report_path(version, report_root)).load()
     detected = detect_version(mem)
-    if detected != version and only != "version.rom":
+    if detected is not None and detected != version and only != "version.rom":
         raise ValueError(
             f"attached ROM reads as {detected!r}, not {version!r} -- run "
             "with --only version.rom to see that gate's own verdict, or "
             "attach the ROM you meant to walk")
+    if detected is None:
+        # Not a disagreement: the header probe found nothing (which byte
+        # order PJ64 stores the ROM in is itself a live-gate item), so the
+        # walk proceeds on the version he named and version.rom records why.
+        say(f"warning: could not read the ROM header; trusting --version {version}")
+    report.walked_this_run = []
     all_gates = registry.ordered()
     selected = _select(all_gates, only)
     say(f"walking {len(selected)}/{len(all_gates)} gates for {version}")
@@ -218,8 +228,18 @@ def run(version: str, mem, *, only: str | None = None,
             say(f"  {verdict.status} ({time.perf_counter() - started:.1f}s): "
                f"{verdict.evidence}")
         report.record(gate.id, verdict, at=datetime.now(timezone.utc).isoformat())
+        report.walked_this_run.append(gate.id)
         _post(server, version, gate.id, verdict)
     return report
+
+
+def failed_this_run(report: Report) -> list[str]:
+    """Gate ids that came back `failed` in THIS walk -- the exit code's
+    input. A stale failure loaded from last week's report must not fail
+    today's `--only address.curr_level`."""
+    walked = getattr(report, "walked_this_run", None)
+    ids = walked if walked is not None else list(report.verdicts)
+    return [gate_id for gate_id in ids if report.status(gate_id) == "failed"]
 
 
 def summary(report: Report) -> str:
@@ -231,16 +251,26 @@ def summary(report: Report) -> str:
 
     version = report.path.stem
     lines = [f"=== sync summary: {version} ==="]
+    optional_open: list[str] = []
     for feature, gates in registry.by_feature().items():
         if not gates:
             continue
-        counts = Counter(report.status(gate.id) for gate in gates)
-        line = f"{feature}: verified {counts['verified']}/{len(gates)}"
+        required = [gate for gate in gates if not gate.optional]
+        counts = Counter(report.status(gate.id) for gate in required)
+        line = f"{feature}: verified {counts['verified']}/{len(required)}"
         if counts["failed"]:
             line += f", failed {counts['failed']}"
         if counts["skipped"]:
             line += f", skipped {counts['skipped']}"
+        if counts["missing"]:
+            line += f", not yet run {counts['missing']}"
         lines.append(line)
+        optional_open += [f"{gate.id} ({report.status(gate.id)})"
+                          for gate in gates
+                          if gate.optional and report.status(gate.id) != "verified"]
+    if optional_open:
+        lines.append("optional gates not verified (fine on a healthy run): "
+                     + ", ".join(optional_open))
 
     lines.append("")
     lines.append("promotion list -- verified this run, not yet in "

@@ -9,7 +9,9 @@ and human-in-the-loop: Claude reads `jp.json` and writes the JP row into
 fails when a verified value is not shipped or a shipped value contradicts the
 report — the two cannot drift.
 
-The report is committed. It is evidence, like `data/object_pool_probe.jsonl`.
+The report is committed (`.gitignore` un-ignores `data/version_sync/`): it is
+the evidence a JP address was verified, and the layout<->report guard reads it
+on every clone.
 """
 import json
 import os

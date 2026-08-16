@@ -18,7 +18,10 @@ writes each verdict into the **sync report** (`data/version_sync/jp.json`)
 as it lands, and the **sync dashboard** (`/ui/sync.html`) fills in live
 beside the US column. Then Claude reads the report and promotes verified
 addresses into `memory/layout.py` with their evidence. Run on US it is the
-non-regression proof: every gate must read `verified`.
+non-regression proof: every gate must read `verified` — except the few
+marked `optional=True` (a screenshot-scored constant, the Bowser 3 grand star,
+the diagnostics-only section counter), which the summary lists by name and
+the exit code ignores.
 
 | To change... | Edit |
 |---|---|

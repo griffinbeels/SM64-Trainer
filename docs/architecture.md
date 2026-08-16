@@ -293,7 +293,9 @@ dependency order, refuses if the loaded ROM disagrees, writes each verdict to
 `/ui/sync.html` fills in beside US. `tests/test_gates_cover.py` makes every
 layout row, every detector event type and every calibration constant owe a
 gate; `tests/test_layout_matches_report.py` makes a verified-but-unshipped or
-shipped-but-refuted address a red build. Run on US it is the regression proof.
+shipped-but-refuted address a red build. Run on US it is the regression proof:
+every gate verified except the three marked optional (screenshot-scored
+display lag, the Bowser 3 grand star, the diagnostics-only section counter).
 
 ## Memory hunting playbook
 

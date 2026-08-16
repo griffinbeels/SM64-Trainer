@@ -94,21 +94,34 @@ class Pj64Memory(RdramReader):
         order it stores them (memory/version_probe.py normalises), or None.
 
         The ROM is not in RDRAM: it is a separate committed region of the
-        emulator's process, at least 8 MB for SM64, that BEGINS with the
-        cartridge magic. Scanned only when asked -- attach() does not need
-        it -- and read-only like everything else here.
+        emulator's process, at least 8 MB for SM64. Where in that region the
+        image starts is NOT assumed (review 2026-08-15): each large region is
+        searched for the cartridge magic in either byte order, in chunks, so a
+        ROM placed at an offset inside its allocation is still found. Scanned
+        only when asked -- attach() does not need it -- and read-only like
+        everything else here.
         """
         if self._pm is None:
             return None
         from sm64_events.memory.version_probe import (HEADER_SIZE,
+                                                      ROM_MAGIC_BE,
+                                                      ROM_MAGIC_WORD_SWAPPED,
                                                       normalise_header)
+        chunk = 4 * 1024 * 1024
         try:
             for base, size in iter_committed_regions(self._pm.process_handle):
-                if size < 8 * 1024 * 1024:
+                if size < A.RDRAM_FULL_SIZE:      # an SM64 ROM is 8 MB
                     continue
-                head = self._pm.read_bytes(base, HEADER_SIZE)
-                if normalise_header(head) is not None:
-                    return head
+                for offset in range(0, size, chunk):
+                    block = self._pm.read_bytes(base + offset,
+                                                min(chunk + HEADER_SIZE, size - offset))
+                    for magic in (ROM_MAGIC_BE, ROM_MAGIC_WORD_SWAPPED):
+                        at = block.find(magic)
+                        while at != -1:
+                            head = block[at:at + HEADER_SIZE]
+                            if len(head) == HEADER_SIZE and normalise_header(head) is not None:
+                                return head
+                            at = block.find(magic, at + 1)
         except pymem.exception.PymemError:
             return None
         return None

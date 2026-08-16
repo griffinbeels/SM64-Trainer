@@ -79,7 +79,13 @@ CASTLE_INSIDE, BASEMENT, LOBBY = 6, 3, 1
 # Every behavior script, named — bhvDoor -> "door", bhvBobomb -> "bob-omb",
 # bhvBowser -> "Bowser" — so "Pick up an object" can never appear for a thing
 # the ROM has a name for.
-_KIND_ROWS = tuple(kind(symbol, name) for symbol, name in kind_names("us"))
+# Every behaviour either ROM ships -- US order, then any symbol only JP
+# carries (none today: JP is a 532-of-536 subset), so a version that adds a
+# behaviour still ships its name.
+_US_KINDS = tuple(kind_names("us"))
+_JP_ONLY_KINDS = tuple((symbol, name) for symbol, name in kind_names("jp")
+                       if symbol not in {us_symbol for us_symbol, _ in _US_KINDS})
+_KIND_ROWS = tuple(kind(symbol, name) for symbol, name in _US_KINDS + _JP_ONLY_KINDS)
 
 LANDMARKS: tuple[dict, ...] = _KIND_ROWS + (
     # HIS OWN LABELS, verbatim from the session that found the key: "21/22 are

@@ -53,7 +53,7 @@ from sm64_events.memory.pj64 import Pj64Memory
 # US live gate and still runs unchanged on the US layout.
 VERSION = version_from_argv()
 LAYOUT = layout_for(VERSION)
-CURR_AREA = LAYOUT.curr_area or 0x0
+CURR_AREA = LAYOUT.curr_area          # None on a layout that has not verified it
 
 
 def check(label: str, ok: bool, detail: str) -> bool:
@@ -91,8 +91,8 @@ def main() -> None:
 
     # CURR_AREA: placeholder until live-gate hunt. When 0x0, print a clear
     # TODO — the FIRST step at the live gate is to locate it with hunt_value.py.
-    if CURR_AREA == 0x0:
-        print("  [SKIP] CURR_AREA: address is 0x0 PLACEHOLDER — hunt it first:")
+    if CURR_AREA is None:
+        print("  [SKIP] CURR_AREA: not in this version's layout yet — hunt it first:")
         print("         uv run python tools/hunt_value.py  (value 1 in lobby,")
         print("         then re-filter with 2 upstairs, 3 basement)")
         print("         Then replace CURR_AREA = 0x0 in addresses.py and rerun.")
@@ -141,7 +141,7 @@ def main() -> None:
 
     print("\nPhase 1:", "ALL PASS" if ok else "FAILURES — fix addresses.py first")
     print("\nSegment live-gate TODO list (Phase 2 walk-in checklist):")
-    if CURR_AREA == 0x0:
+    if CURR_AREA is None:
         print("  [ ] 1. Hunt CURR_AREA with hunt_value.py; pin address; confirm 1/2/3.")
     else:
         print("  [done] 1. CURR_AREA pinned at", hex(CURR_AREA))
@@ -229,7 +229,7 @@ def main() -> None:
                   f"  [LIVE-GATE: confirm kind for file-select spawn on grounds]")
         if s.mario_action != prev_action:
             dust = "  [DUST]" if s.particle_flags & PARTICLE_DUST else ""
-            area_str = f"  area {s.curr_area}" if CURR_AREA != 0x0 else ""
+            area_str = f"  area {s.curr_area}" if CURR_AREA is not None else ""
             print(f"frame {s.global_timer:>8}  action {s.mario_action:#010x}  "
                   f"stars {s.num_stars:>3}  igt {s.igt_overall:>6} "
                   f"result {s.igt_result:>6}"

@@ -36,7 +36,7 @@ def _empty_registry():
     G.register(
         G.Gate("address.global_timer", "version", "address",
               "watch the counter tick", "the address is right", _ok),
-        G.Gate("calibration.igt_clock.DISPLAY_TICK", "IGT clock", "calibration",
+        G.Gate("cal.igt_clock.DISPLAY_TICK", "IGT clock", "calibration",
               "grab a star and compare", "the JP tick matches US", _ok,
               backs="detectors.igt_clock.DISPLAY_TICK"))
     yield
@@ -63,7 +63,7 @@ def test_get_returns_every_registered_gate_and_both_empty_reports(tmp_path, monk
         body = client.get("/api/sync").json()
     assert body["features"] == list(G.FEATURES)
     ids = {g["id"] for g in body["gates"]}
-    assert ids == {"address.global_timer", "calibration.igt_clock.DISPLAY_TICK"}
+    assert ids == {"address.global_timer", "cal.igt_clock.DISPLAY_TICK"}
     assert body["reports"]["us"] == {}
     assert body["reports"]["jp"] == {}
 
@@ -120,7 +120,7 @@ def test_the_put_broadcasts_sync_verdict_over_the_websocket(tmp_path, monkeypatc
     with client:
         with client.websocket_connect("/ws/events") as ws:
             resp = client.put("/api/sync/verdict", json={
-                "version": "us", "gate_id": "calibration.igt_clock.DISPLAY_TICK",
+                "version": "us", "gate_id": "cal.igt_clock.DISPLAY_TICK",
                 "verdict": {"status": "failed", "measured": {"jp": 4, "us": 3}},
                 "at": "2026-08-15T00:00:00Z",
             })
@@ -128,5 +128,5 @@ def test_the_put_broadcasts_sync_verdict_over_the_websocket(tmp_path, monkeypatc
             msg = ws.receive_json()
             assert msg["type"] == "sync_verdict"
             assert msg["payload"]["version"] == "us"
-            assert msg["payload"]["gate_id"] == "calibration.igt_clock.DISPLAY_TICK"
+            assert msg["payload"]["gate_id"] == "cal.igt_clock.DISPLAY_TICK"
             assert msg["payload"]["verdict"]["status"] == "failed"

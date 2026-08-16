@@ -18,16 +18,10 @@ comparison reads it live via `sync.checks.resolve_backs` (or a plain
 also what makes `tests/test_gates_cover.py`'s "every `backs` resolves by
 import" enforcement meaningful.
 
-`cal.warp.pipe_dest_delay`'s comparison is a documented DEVIATION from Task
-10's literal "verified iff == 20": 20 is a floor mentioned only in a
-`WarpDetector` comment (`probe_warp_block`'s own finding), never an
-importable name, and restating it here as a bare literal is exactly what
-this module's own rule (previous paragraph) forbids. `RIDE_WINDOW_FRAMES`
-(26) is the actual constant `warp.py` depends on — the CEILING a real touch
-must land inside so the detector's own pause-detection logic stays correct
-— so the check verifies the measured delay stays under THAT window instead.
-Flagged in the Track D report for a human call on which reading the
-dashboard should show.
+`cal.warp.pipe_dest_delay` measures the pipe's touch-to-write delay against
+`WarpDetector.PIPE_TOUCH_TO_DEST_FRAMES` (20, named on 2026-08-15 for exactly
+this gate) with EQUALITY: a ROM whose countdown differs is a failed
+measurement carrying both numbers, never a value hidden inside a window.
 """
 from sm64_events.memory import addresses as A
 from sm64_events.sync.checks import (await_event, box_open_index, first_edge,
@@ -62,6 +56,9 @@ def _is_ground_grab(payload: dict) -> bool:
     return payload.get("frame") == payload.get("grab_frame")
 
 
+STAR_IGT_BACKS = "sm64_events.detectors.star_grab.StarGrabDetector.AGREEMENT_FRAMES"
+
+
 def _check_star_igt(ctx, *, want_ground: bool) -> Verdict:
     run = DetectorRun(ctx.version)
     result_addr = ctx.candidate("usamune_star_result")
@@ -84,15 +81,22 @@ def _check_star_igt(ctx, *, want_ground: bool) -> Verdict:
                                           "kind this gate asked for")
     ctx.sleep(RESULT_SETTLE_WAIT_FRAMES / 30.0)
     settled = ctx.raw().read_u16(result_addr)
-    measured = {"published_minus_result": payload["igt_frames"] - settled,
-               "published_after": payload["published_after"]}
-    if payload["igt_frames"] == settled:
+    # The star detector calls our derivation and Usamune's write "agreed"
+    # inside AGREEMENT_FRAMES (1: exact, since the counter path runs 1-2
+    # frames under Usamune and a wider tolerance would match the grab-time
+    # write). That constant IS what this gate measures against.
+    agreement = resolve_backs(STAR_IGT_BACKS)
+    difference = payload["igt_frames"] - settled
+    measured = {"published_minus_result": difference,
+               "published_after": payload["published_after"],
+               "agreement_frames": agreement}
+    if abs(difference) < agreement:
         return Verdict("verified", measured=measured,
-                       evidence=f"published igt {payload['igt_frames']} equals "
-                                "the settled result")
+                       evidence=f"published igt {payload['igt_frames']} agrees "
+                                f"with the settled result (within {agreement})")
     return Verdict("failed", measured=measured,
-                   evidence=f"published igt {payload['igt_frames']} != settled "
-                            f"result {settled}")
+                   evidence=f"published igt {payload['igt_frames']} vs settled "
+                            f"result {settled}: off by {difference}")
 
 
 def _check_star_result_write_delay(ctx) -> Verdict:
@@ -141,7 +145,7 @@ def _check_star_result_write_delay(ctx) -> Verdict:
 register(Gate(
     id="cal.star.ground_igt", feature="star grab", kind="calibration",
     needs=SNAPSHOT_REQUIRED_GATES,
-    backs="sm64_events.detectors.igt_clock.IgtClock.DISPLAY_TICK",
+    backs=STAR_IGT_BACKS,
     timeout_s=STAR_GRAB_TRACE_SECONDS + 10,
     instruction="Grab a star while standing on the ground.",
     proves="a ground grab's published igt_frames equals Usamune's own "
@@ -151,7 +155,7 @@ register(Gate(
 register(Gate(
     id="cal.star.midair_igt", feature="star grab", kind="calibration",
     needs=SNAPSHOT_REQUIRED_GATES,
-    backs="sm64_events.detectors.igt_clock.IgtClock.DISPLAY_TICK",
+    backs=STAR_IGT_BACKS,
     timeout_s=STAR_GRAB_TRACE_SECONDS + 10,
     instruction="Grab a star while in the air (jump into it).",
     proves="a midair grab's published igt_frames equals Usamune's own "
@@ -221,7 +225,11 @@ def _warp_touch_measurement(snaps) -> dict | None:
     edge_index = first_edge(snaps, A.WARP_ENTRY_ACTIONS)
     if edge_index is None:
         return None
-    dest_before = _dest_tuple(snaps[edge_index])
+    # The baseline is the sample BEFORE the touch: a painting writes
+    # sWarpDest AT the touch frame (probe_warp_block 2026-08-05), so the
+    # edge sample itself may already hold the new destination. `first_edge`
+    # never returns 0, so a predecessor always exists.
+    dest_before = _dest_tuple(snaps[edge_index - 1])
     dest_changed_index = None
     for index in range(edge_index, len(snaps)):
         if _dest_tuple(snaps[index]) != dest_before:
@@ -283,6 +291,7 @@ register(Gate(
 
 register(Gate(
     id="cal.moment.display_lag", feature="landmarks", kind="calibration", auto=True,
+    optional=True,
     backs="sm64_events.detectors.moment.MomentDetector.DISPLAY_LAG_FRAMES",
     instruction="Run tools/score_moment_clock.py with a screenshot of "
                "Usamune's timer — this gate cannot be answered live.",

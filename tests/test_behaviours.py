@@ -55,9 +55,8 @@ def test_the_us_globals_map_agrees_with_the_us_layout():
     from sm64_events.memory.layout import LAYOUT_ROWS, US
     have = B.globals_map("us")
     for row in LAYOUT_ROWS:
-        if row.symbol and row.field != "hud_timer":      # +0xC into gHudDisplay
+        if row.symbol:
             assert US.value(row.field) == have[row.symbol], row.field
-    assert US.hud_timer == have["gHudDisplay"] + 0xC
 
 
 def test_kind_names_ship_the_same_shape_the_catalogue_did():

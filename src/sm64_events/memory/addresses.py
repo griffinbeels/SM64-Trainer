@@ -81,7 +81,7 @@ PARTICLE_DUST = 1 << 0
 # Pyramid"). Kept for diagnostics only.
 
 # Trap, do not reuse for IGT: the vanilla HUD race timer (gHudDisplay.timer,
-# `layout.hud_timer`, u16) and sTimerRunning (`layout.hud_timer_running`,
+# `layout.hud_display` + HUD_TIMER_OFF, u16) and sTimerRunning (`layout.hud_timer_running`,
 # s8) stay 0 under Usamune's practice timers — verified live. Vanilla races
 # (KtQ etc.) still use them.
 HUD_TIMER_OFF = 0xC          # gHudDisplay + 0xC is the u16 timer

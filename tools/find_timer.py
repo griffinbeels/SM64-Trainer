@@ -24,6 +24,7 @@ from sm64_events.memory.objects import describe
 from sm64_events.memory.pj64 import Pj64Memory
 
 LAYOUT = layout_for(version_from_argv())      # --version jp reads the JP layout
+LAYOUT.require('global_timer')   # LayoutIncomplete names what JP still lacks
 
 KNOWN_FRAME_COUNTERS = {LAYOUT.global_timer}  # exclude; we already track these
 RATE_LO, RATE_HI = 25.0, 65.0  # accepted ticks/second band

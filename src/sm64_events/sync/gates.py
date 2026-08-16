@@ -28,7 +28,7 @@ Gates REGISTER themselves by importing their module (`sync/address_gates.py`,
 of them so a caller gets the full list from one import.
 """
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 
 FEATURES = ("version", "star grab", "IGT clock", "warps & entrances",
             "castle areas", "textboxes", "caused moments", "keys & Bowser",
@@ -72,12 +72,18 @@ class Gate:
     backs: str | None = None  # calibration: dotted name of the constant
     auto: bool = False        # no human step — the runner does not prompt
     timeout_s: float = 90.0
+    # An OPTIONAL gate may end `skipped` or `candidate` on a healthy run --
+    # it needs a screenshot, a Bowser 3 win, or is diagnostics-only -- and
+    # the runner's exit code, the summary and the dashboard treat that as
+    # fine. "Every gate verified" means every NON-optional gate.
+    optional: bool = False
 
     def as_json(self) -> dict:
         return {"id": self.id, "feature": self.feature, "kind": self.kind,
                 "instruction": self.instruction, "proves": self.proves,
                 "needs": list(self.needs), "backs": self.backs,
-                "auto": self.auto, "reads": reads_label(self)}
+                "auto": self.auto, "optional": self.optional,
+                "reads": reads_label(self)}
 
 
 def reads_label(gate: "Gate") -> str:

@@ -47,11 +47,12 @@ from collections import defaultdict
 from pathlib import Path
 
 from sm64_events.memory import addresses as A
-from sm64_events.memory.layout import layout_for
+from sm64_events.memory.layout import layout_for, version_from_argv
 from sm64_events.memory.objects import pool_slot, slot_address
 from sm64_events.memory.pj64 import Pj64Memory
 
-LAYOUT = layout_for("us")   # which ROM's addresses; --version arrives with the sync work
+LAYOUT = layout_for(version_from_argv())      # --version jp reads the JP layout
+LAYOUT.require('global_timer', 'mario_struct', 'curr_level', 'curr_area', 'object_pool')   # LayoutIncomplete names what JP still lacks
 CAPTURE_PATH = Path("data/object_probe.jsonl")
 
 # How much of gMarioState to scan for object pointers. Wide on purpose: a
@@ -210,7 +211,7 @@ def capture_record(mem, blob, offset, pointer, frame, epoch) -> dict:
     return {
         "frame": frame,
         "epoch": epoch,
-        "level": mem.read_s16(LAYOUT.curr_area and LAYOUT.curr_level),
+        "level": mem.read_s16(LAYOUT.curr_level),
         "area": mem.read_s16(LAYOUT.curr_area),
         "action": action,
         "action_name": ACTION_NAMES.get(action, f"{action:#010x}"),

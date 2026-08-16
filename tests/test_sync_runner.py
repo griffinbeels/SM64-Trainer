@@ -216,3 +216,48 @@ def test_summary_lists_promotions_and_failures(tmp_path, isolated_gates):
 def test_default_server_returns_a_url_or_none():
     result = default_server()
     assert result is None or result.startswith("http://127.0.0.1:")
+
+
+class _NoRomMem(BufferMemory):
+    def rom_header(self):
+        return None
+
+
+def test_an_unreadable_rom_header_warns_and_walks_the_named_version(tmp_path, isolated_gates):
+    """`detected is None` is not a disagreement: which byte order PJ64 stores
+    the ROM in is itself a live-gate item, so an unreadable header must not
+    refuse the whole walk (review 2026-08-15)."""
+    G.register(_stub_gate("address.global_timer"))
+    said = []
+    report = run("us", _NoRomMem(), prompt=_quiet, say=said.append, report_root=tmp_path)
+    assert report.status("address.global_timer") == "verified"
+    assert any("could not read the ROM header" in line for line in said)
+
+
+def test_the_exit_code_counts_only_this_runs_failures(tmp_path, isolated_gates):
+    """A stale failure loaded from a previous report must not fail today's
+    `--only` of an unrelated gate."""
+    from sm64_events.sync.runner import failed_this_run
+    from sm64_events.sync.report import Report, report_path
+    stale = Report(report_path("us", tmp_path))
+    stale.record("address.curr_area", G.Verdict("failed", evidence="last week"),
+                 "2026-08-01T00:00:00Z")
+    G.register(_stub_gate("address.global_timer"), _stub_gate("address.curr_area"))
+    report = run("us", _RomMem("us"), only="address.global_timer", prompt=_quiet,
+                say=_quiet, report_root=tmp_path)
+    assert report.status("address.curr_area") == "failed"      # still on disk
+    assert failed_this_run(report) == []                         # not this run's
+
+
+def test_the_summary_names_optional_gates_and_counts_required_ones(tmp_path, isolated_gates):
+    from sm64_events.sync.runner import summary
+    G.register(_stub_gate("address.global_timer"),
+               G.Gate("cal.moment.display_lag", "landmarks", "calibration", "screenshot",
+                      "needs a screenshot", lambda ctx: G.Verdict("skipped", evidence="screenshot"),
+                      backs="sm64_events.detectors.moment.MomentDetector.DISPLAY_LAG_FRAMES",
+                      auto=True, optional=True))
+    report = run("us", _RomMem("us"), prompt=_quiet, say=_quiet, report_root=tmp_path)
+    text = summary(report)
+    assert "version: verified 1/1" in text
+    assert "landmarks: verified 0/0" in text
+    assert "optional gates not verified" in text and "cal.moment.display_lag (skipped)" in text

@@ -9,7 +9,7 @@ US_2026_08_15 = {
     "last_completed_course": 0x8032DD80, "last_completed_star": 0x8032DD84,
     "pending_warp_op": 0x8033B252, "delayed_warp_timer": 0x8033B254,
     "warp_dest": 0x8033B248, "object_pool": 0x8033D488,
-    "hud_timer": 0x8033B26C, "hud_timer_running": 0x8033B25E,
+    "hud_display": 0x8033B260, "hud_timer_running": 0x8033B25E,
     "mario_object": 0x80361158, "usamune_overall": 0x80417C72,
     "usamune_star_result": 0x80417C74, "usamune_timer": 0x8033D5DC,
     "behaviour_base": 0x800EB180,

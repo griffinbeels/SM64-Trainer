@@ -16,11 +16,14 @@ without waiting on you at all. It prints verified / failed / skipped as it
 goes, with the evidence for each.
 
     uv run python tools/sync_version.py --version jp
-    uv run python tools/sync_version.py --version jp --only "star grab"
+    uv run python tools/sync_version.py --version jp --only "star grab"   # its gates still need the addresses verified first
     uv run python tools/sync_version.py --version jp --only address.curr_level
     uv run python tools/sync_version.py --version us
         # the non-regression run: every gate should verify against TODAY'S
         # US layout, since nothing about US changed by adding this script.
+        # The exceptions are the gates marked optional (the summary names
+        # them): a screenshot-scored constant, the Bowser 3 grand star, the
+        # diagnostics-only section counter.
 
 WHERE THE REPORT LANDS: data/version_sync/<version>.json (data/ is
 cwd-relative like every other tool here -- run this from the repo root, or
@@ -46,7 +49,7 @@ from pathlib import Path
 
 from sm64_events.memory.pj64 import Pj64Memory
 from sm64_events.memory.version_probe import detect_version
-from sm64_events.sync.runner import default_server, run, summary
+from sm64_events.sync.runner import default_server, failed_this_run, run, summary
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -102,8 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     print()
     print(summary(report))
-    return 1 if any(verdict.status == "failed"
-                    for verdict in report.verdicts.values()) else 0
+    return 1 if failed_this_run(report) else 0
 
 
 if __name__ == "__main__":

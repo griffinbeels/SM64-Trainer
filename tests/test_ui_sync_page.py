@@ -38,10 +38,15 @@ from ui_fixture import serve_ui  # noqa: E402
 from uilab import driver  # noqa: E402
 
 from sm64_events.sync import registry as _registry  # noqa: F401  -- load the REAL registry before any fixture clears it
+
+# The real registry, captured before the module fixture below clears it:
+# the 850px guard renders THIS, because the overflow it guards against came
+# from the real gates' longest labels.
+REAL_GATES = list(_registry.GATES)
 from sm64_events.sync import gates as G  # noqa: E402
 
 GLOBAL_TIMER_GATE = "address.global_timer"
-DISPLAY_TICK_GATE = "calibration.igt_clock.DISPLAY_TICK"
+DISPLAY_TICK_GATE = "cal.igt_clock.DISPLAY_TICK"
 
 
 def _ok(ctx):
@@ -155,3 +160,35 @@ def test_the_dashboard_is_reachable_from_the_settings_drawer():
     import re
     assert not re.search(r'href="https?://[^"]*sync\.html', header), \
         "the sync.html link must be origin-relative, never a hardcoded host/port"
+
+
+def test_at_the_850_floor_the_jp_column_stays_inside_its_card(report_file):
+    """The defect the first contact sheet found (2026-08-15): a calibration's
+    dotted constant name pushed the JP column out of the card at the 850px
+    floor. Read the REAL registry's longest names at that width and assert
+    every JP chip's right edge sits inside its card."""
+    stubs = list(G.GATES)
+    G.GATES.clear()
+    G.GATES.extend(REAL_GATES)
+    try:
+        _assert_no_jp_overflow_at_850()
+    finally:
+        G.GATES.clear()
+        G.GATES.extend(stubs)
+
+
+def _assert_no_jp_overflow_at_850():
+    assert len(G.GATES) > 10, "the real registry did not load"
+    with serve_ui(seed=False) as base, \
+            driver.get_driver().launch(headless=True, viewport=(850, 1200)) as page:
+        page.goto(f"{base}/ui/sync.html")
+        page.wait_for(".sync-card", timeout_ms=20000)
+        overflow = page.evaluate(
+            "return Array.from(document.querySelectorAll('.sync-card')).flatMap((card) => {"
+            "  const right = card.getBoundingClientRect().right;"
+            "  return Array.from(card.querySelectorAll('.sync-table tbody tr td:nth-child(5) .sync-chip'))"
+            "    .filter((chip) => chip.getBoundingClientRect().right > right + 0.5)"
+            "    .map((chip) => chip.closest('tr').querySelector('.sync-gate-id').textContent);"
+            "});")
+        assert overflow == [], f"JP chips outside their card at 850px: {overflow}"
+        assert page.problems() == []

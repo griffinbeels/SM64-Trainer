@@ -44,6 +44,7 @@ from sm64_events.memory.layout import layout_for, version_from_argv
 from sm64_events.memory.pj64 import Pj64Memory
 
 LAYOUT = layout_for(version_from_argv())      # --version jp reads the JP layout
+LAYOUT.require('global_timer', 'mario_struct', 'curr_level', 'curr_area', 'warp_dest', 'pending_warp_op', 'delayed_warp_timer')   # LayoutIncomplete names what JP still lacks
 WARP_DEST = LAYOUT.warp_dest    # struct WarpDest: type, levelNum, areaIdx, nodeId, s32 arg
 DELAYED_WARP_OP = LAYOUT.pending_warp_op
 DELAYED_WARP_TIMER = LAYOUT.delayed_warp_timer

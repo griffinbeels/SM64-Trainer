@@ -34,3 +34,11 @@ def test_require_names_the_missing_field():
     with pytest.raises(L.LayoutIncomplete, match="global_timer"):
         L.JP.require("global_timer", "curr_level")
     L.US.require("global_timer")            # no raise
+
+
+def test_version_from_argv_reads_the_flag_and_refuses_an_unknown_version():
+    assert L.version_from_argv(["--version", "jp"]) == "jp"
+    assert L.version_from_argv(["--version=jp"]) == "jp"
+    assert L.version_from_argv([]) == "us"
+    with pytest.raises(SystemExit):
+        L.version_from_argv(["--version", "usa"])

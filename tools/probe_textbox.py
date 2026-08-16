@@ -81,6 +81,7 @@ from sm64_events.memory.layout import layout_for, version_from_argv
 from sm64_events.memory.pj64 import Pj64Memory
 
 LAYOUT = layout_for(version_from_argv())      # --version jp reads the JP layout
+LAYOUT.require('global_timer', 'mario_struct', 'curr_level', 'curr_area', 'usamune_overall')   # LayoutIncomplete names what JP still lacks
 
 READING_ACTIONS = frozenset(
     {ACT_READING_AUTOMATIC_DIALOG, ACT_READING_NPC_DIALOG})

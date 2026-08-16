@@ -2,9 +2,9 @@
 
     uv run python tools/import_stroop_maps.py <MappingUS.map> <MappingJP.map>
 
-Held VERBATIM: each TSV row is the map's row byte for byte (address, symbol),
-so a disagreement with the source is checkable by diffing, never by
-re-deriving. Two files per version:
+Held ROW FOR ROW: each TSV row is the map's (address, symbol) pair -- the
+address re-emitted as 0x%08x, the symbol untouched -- so a disagreement with
+the source is checkable by diffing, never by re-deriving. Two files per version:
 
   behaviours_<v>.tsv  every symbol the linker placed in segment 0x13 -- the
                       behaviour scripts; the SYMBOL is the identity the

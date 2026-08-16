@@ -183,14 +183,15 @@ def _game_version() -> str:
     except ImportError:
         return "us"
     detected = None
+    probe = Pj64Memory()
     try:
         from sm64_events.memory.version_probe import detect_version
-        probe = Pj64Memory()
         if probe.attach():
             detected = detect_version(probe)
-        probe.detach()
     except Exception:            # no emulator yet is the normal boot case
         detected = None
+    finally:
+        probe.detach()
     return effective_version(load_mode_config(), detected=detected)
 
 

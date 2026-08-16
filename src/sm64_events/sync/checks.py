@@ -88,6 +88,33 @@ def scan_u32(image: bytes, value: int, tolerance: int = 0) -> list[int]:
             for index, found in enumerate(words) if lo <= found <= hi]
 
 
+def scan_ticking_u16(image_before: bytes, image_after: bytes, seconds: float,
+                     lo: float = 25.0, hi: float = 35.0) -> list[int]:
+    """N64 addresses of every aligned u16 that ADVANCED like a 30 fps counter
+    between two images taken `seconds` apart (u16 wrap allowed). This is how
+    a RUNNING Usamune timer is hunted: the value he types has moved on by the
+    time he finishes typing, so an exact-value scan of a fresh image never
+    holds it (review finding, 2026-08-15) — but the address that ticks at
+    game rate is a handful, and the typed value then only has to be NEAR."""
+    before = array.array("H", image_before)
+    after = array.array("H", image_after)
+    lo_delta, hi_delta = lo * seconds, hi * seconds
+    hits = []
+    for index, (was, now) in enumerate(zip(before, after)):
+        delta = (now - was) & 0xFFFF
+        if lo_delta <= delta <= hi_delta:
+            hits.append(KSEG0_BASE + ((index * 2) ^ 2))
+    return hits
+
+
+def near(image: bytes, address: int, value: int, tolerance: int) -> bool:
+    """Whether the aligned u16 at `address` in `image` is within `tolerance`
+    of `value` (host order as PJ64 stores it)."""
+    host = (address - KSEG0_BASE) ^ 2
+    found = int.from_bytes(image[host:host + 2], "little")
+    return abs(found - value) <= tolerance
+
+
 def survivors(candidate_sets: Iterable[Iterable[int]]) -> list[int]:
     """Addresses present in EVERY scan — the hunt's intersection step."""
     result: set[int] | None = None

@@ -83,6 +83,21 @@ class ScriptedMemory(BufferMemory):
     def read_s8(self, addr):
         return self._scripted("s8", addr, lambda: super(ScriptedMemory, self).read_s8(addr))
 
+    def read_image(self):
+        """The whole image WITH every scripted u16/u32 materialised at the
+        clock's current time, so a two-image scan sees a scripted counter
+        move exactly as a per-address read would."""
+        image = bytearray(super().read_image())
+        for (kind, addr), fn in self._scripts.items():
+            value = fn(self._clock.current)
+            if kind == "u16":
+                offset = (addr - 0x80000000) ^ 2
+                image[offset:offset + 2] = (value & 0xFFFF).to_bytes(2, "little")
+            elif kind == "u32":
+                offset = addr - 0x80000000
+                image[offset:offset + 4] = (value & 0xFFFFFFFF).to_bytes(4, "little")
+        return bytes(image)
+
 
 def _rom_header(country: bytes) -> bytes:
     header = bytearray(0x40)
@@ -460,19 +475,19 @@ def test_warp_dest_fails_when_it_never_changes():
     assert AG._check_warp_dest(ctx).status == "failed"
 
 
-# --- hud_timer / hud_timer_running -------------------------------------------
+# --- hud_display / hud_timer_running -----------------------------------------
 
-def test_hud_timer_verifies_at_zero():
+def test_hud_display_verifies_at_zero():
     mem = ScriptedMemory(ScriptedClock())
-    ctx = _ctx(mem, {"hud_timer": US.hud_timer})   # buffer defaults to 0
-    assert AG._check_hud_timer(ctx).status == "verified"
+    ctx = _ctx(mem, {"hud_display": US.hud_display})   # buffer defaults to 0
+    assert AG._check_hud_display(ctx).status == "verified"
 
 
-def test_hud_timer_fails_when_nonzero():
+def test_hud_display_fails_when_the_race_timer_is_nonzero():
     mem = ScriptedMemory(ScriptedClock())
-    mem.write_u16(US.hud_timer, 500)
-    ctx = _ctx(mem, {"hud_timer": US.hud_timer})
-    assert AG._check_hud_timer(ctx).status == "failed"
+    mem.write_u16(US.hud_display + A.HUD_TIMER_OFF, 500)
+    ctx = _ctx(mem, {"hud_display": US.hud_display})
+    assert AG._check_hud_display(ctx).status == "failed"
 
 
 def test_hud_timer_running_verifies_at_zero():
@@ -484,21 +499,37 @@ def test_hud_timer_running_verifies_at_zero():
 # --- usamune_overall / usamune_star_result / usamune_timer hunts ------------
 
 def test_usamune_overall_hunt_finds_the_ticking_address():
+    """The overall timer RUNS while he types, so the hunt is a two-image
+    tick scan near the typed value -- not an exact-value scan (which the
+    review of 2026-08-15 showed could never contain a moving counter)."""
     clock = ScriptedClock()
     mem = ScriptedMemory(clock)
-    # A live counter at 30/s, at an address chosen well away from anything
-    # else the buffer might coincidentally hold.
     target = US.usamune_overall
-    mem.script("u16", target, lambda t: int(t * 30) & 0xFFFF)
-    # parse_frames("0'20\"20") == 606 -- write that value into the RAW buffer
-    # (not the script) so the ONE-SHOT hunt scan sees it; the script above
-    # only governs later per-address polling, and the hunt itself reads
-    # `_read_raw` which the script layer does not intercept.
-    mem.write_u16(target, 606)
+    # 606 frames (0'20"20) at t=0, ticking 30/s from there.
+    mem.script("u16", target, lambda t: (606 + int(t * 30)) & 0xFFFF)
+    # A decoy that also ticks at 30/s but sits far from the typed value.
+    mem.script("u16", 0x80300100, lambda t: (9000 + int(t * 30)) & 0xFFFF)
     ctx = _ctx(mem, {}, clock=clock, prompts=["0'20\"20"])
     verdict = AG._check_usamune_overall(ctx)
-    assert verdict.status == "verified"
+    assert verdict.status == "verified", verdict
     assert verdict.value == target
+
+
+def test_usamune_overall_hunt_tolerates_a_slow_typist():
+    """Ten seconds between the reading and the Enter: the value has moved
+    300 frames, and the tolerance grows with the delay."""
+    clock = ScriptedClock()
+    mem = ScriptedMemory(clock)
+    target = US.usamune_overall
+    mem.script("u16", target, lambda t: (606 + int(t * 30)) & 0xFFFF)
+    ctx = _ctx(mem, {}, clock=clock, prompts=[])
+
+    def slow_prompt(text):
+        clock.current += 10.0
+        return "0'20\"20"
+    ctx.prompt = slow_prompt
+    verdict = AG._check_usamune_overall(ctx)
+    assert verdict.status == "verified", verdict
 
 
 def test_usamune_star_result_hunt_finds_the_held_address():
@@ -518,17 +549,22 @@ def test_usamune_star_result_hunt_fails_when_nothing_holds_it():
     assert verdict.status == "failed"
 
 
-def test_usamune_timer_reports_candidate_when_several_survive():
+def test_usamune_timer_reports_candidates_that_reset_across_the_load():
+    """Diagnostics only: keep u32s that were a running counter BEFORE the
+    area load and near zero AFTER it. A near-zero one-image scan of an
+    8 MB image is mostly zeros and could never narrow anything."""
     clock = ScriptedClock()
     mem = ScriptedMemory(clock)
-    mem.script("s16", US.curr_area,
-              lambda t: 1 if t < 0.1 else 2)   # an area load, any values differing
-    # The all-zero buffer already holds thousands of u32 addresses reading 0,
-    # which is exactly the "several survive" diagnostics-only case.
+    mem.script("s16", US.curr_area, lambda t: 1 if t < 0.1 else 2)
+    # A section counter: 900 frames old before the load, reset after.
+    mem.script("u32", US.usamune_timer, lambda t: 900 if t < 0.1 else 3)
+    # An unrelated big value that does not reset -- must not survive.
+    mem.script("u32", 0x80300200, lambda t: 5000)
     ctx = _ctx(mem, {"curr_area": US.curr_area}, clock=clock)
     verdict = AG._check_usamune_timer(ctx)
     assert verdict.status == "candidate"
-    assert verdict.measured["count"] > 1
+    assert US.usamune_timer in verdict.measured["candidates"]
+    assert 0x80300200 not in verdict.measured["candidates"]
 
 
 def test_usamune_timer_missing_without_curr_area():
@@ -546,7 +582,7 @@ def test_every_task_9_gate_id_is_registered():
         "address.curr_level", "address.curr_area",
         "address.last_completed_course", "address.last_completed_star",
         "address.pending_warp_op", "address.delayed_warp_timer",
-        "address.warp_dest", "address.hud_timer", "address.hud_timer_running",
+        "address.warp_dest", "address.hud_display", "address.hud_timer_running",
         "address.usamune_overall", "address.usamune_star_result",
         "address.usamune_timer",
     }

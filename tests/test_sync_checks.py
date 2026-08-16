@@ -75,3 +75,21 @@ def test_pool_contains_wants_a_slot_boundary():
     assert C.pool_contains(US.object_pool, US.object_pool + 5 * 0x260)
     assert not C.pool_contains(US.object_pool, US.object_pool + 5 * 0x260 + 4)
     assert not C.pool_contains(US.object_pool, US.object_pool - 4)
+
+
+def test_the_ticking_scan_names_only_counters_that_advanced_at_game_rate():
+    mem = BufferMemory()
+    mem.write_u16(US.usamune_overall, 600)
+    mem.write_u16(0x80300010, 100)          # a value that does not move
+    before = mem.read_image()
+    mem.write_u16(US.usamune_overall, 630)  # +30 in one second
+    mem.write_u16(0x80300020, 5)            # appeared, but not by ~30
+    after = mem.read_image()
+    assert C.scan_ticking_u16(before, after, 1.0) == [US.usamune_overall]
+    assert C.near(before, US.usamune_overall, 606, 10)
+    assert not C.near(before, US.usamune_overall, 700, 10)
+
+
+def test_read_image_covers_the_expansion_ram_of_a_full_buffer():
+    mem = BufferMemory()
+    assert len(mem.read_image()) == len(mem._buf) == 0x800000

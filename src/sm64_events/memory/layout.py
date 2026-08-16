@@ -57,8 +57,9 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
               "struct WarpDest {u8 type, levelNum, areaIdx, nodeId; s32 arg}"),
     LayoutRow("object_pool", "gObjectPool", None,
               "240 slots x 0x260 bytes (addresses.OBJECT_*)"),
-    LayoutRow("hud_timer", "gHudDisplay", None,
-              "+0xC u16 vanilla race timer; stays 0 under Usamune"),
+    LayoutRow("hud_display", "gHudDisplay", None,
+              "the vanilla HUD struct; +HUD_TIMER_OFF is the u16 race timer, "
+              "which stays 0 under Usamune"),
     LayoutRow("hud_timer_running", "sTimerRunning", None,
               "s8; vanilla races only"),
     LayoutRow("mario_object", "gMarioObject", None,
@@ -88,7 +89,7 @@ class Layout:
     delayed_warp_timer: int | None = None
     warp_dest: int | None = None
     object_pool: int | None = None
-    hud_timer: int | None = None
+    hud_display: int | None = None
     hud_timer_running: int | None = None
     mario_object: int | None = None
     usamune_overall: int | None = None
@@ -125,7 +126,7 @@ US = Layout(
     delayed_warp_timer=0x8033B254,  # live-verified 2026-08-11, same probe
     warp_dest=0x8033B248,           # live-verified 2026-08-05, 15 castle entries
     object_pool=0x8033D488,         # STROOP US ObjectStartAddress
-    hud_timer=0x8033B26C,           # gHudDisplay+0xC; reads 0 under Usamune (trap)
+    hud_display=0x8033B260,         # +HUD_TIMER_OFF is the race timer; 0 under Usamune (trap)
     hud_timer_running=0x8033B25E,
     mario_object=0x80361158,        # STROOP MappingUS.map gMarioObject
     usamune_overall=0x80417C72,     # tools/hunt_value.py + watch session 2026-06-10
@@ -156,9 +157,12 @@ def version_from_argv(argv: list[str] | None = None, default: str = "us") -> str
     import os
     import sys
     args = sys.argv[1:] if argv is None else argv
+    chosen = os.environ.get("SM64_VERSION", default)
     for index, arg in enumerate(args):
         if arg == "--version" and index + 1 < len(args):
-            return args[index + 1]
-        if arg.startswith("--version="):
-            return arg.split("=", 1)[1]
-    return os.environ.get("SM64_VERSION", default)
+            chosen = args[index + 1]
+        elif arg.startswith("--version="):
+            chosen = arg.split("=", 1)[1]
+    if chosen not in VERSIONS:
+        raise SystemExit(f"--version must be one of {', '.join(VERSIONS)}, not {chosen!r}")
+    return chosen

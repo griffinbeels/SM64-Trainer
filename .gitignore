@@ -4,8 +4,13 @@ __pycache__/
 .pytest_cache/
 logs/
 .superpowers/
-data/
+# `data/*` rather than `data/`: git cannot re-include a child of an EXCLUDED
+# directory, and data/version_sync/ (below) must be tracked.
+data/*
 replays/
+# The version-sync reports ARE committed: they are the evidence a JP
+# address was verified, and tests/test_layout_matches_report.py reads them.
+!data/version_sync/
 data/replay_buffer/
 .claude/worktrees/
 _dbg/

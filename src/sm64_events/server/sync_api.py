@@ -47,6 +47,11 @@ class SyncVerdictBody(BaseModel):
     gate_id: str
     verdict: VerdictBody
     at: str
+    # False from tools/sync_version.py, which already wrote its own report
+    # file: the server then only BROADCASTS, so a server in another checkout
+    # (8066 is whatever run-test-server.bat launched) never writes a second
+    # copy beside its own data dir. True (the default) for a manual PUT.
+    persist: bool = True
 
 
 def create_sync_router(broadcaster: Broadcaster, reports_root=None) -> APIRouter:
@@ -80,8 +85,9 @@ def create_sync_router(broadcaster: Broadcaster, reports_root=None) -> APIRouter
         except ValueError as error:
             raise HTTPException(400, str(error)) from error
 
-        report = Report(report_path(body.version, reports_root))
-        report.load().record(body.gate_id, verdict, body.at)
+        if body.persist:
+            report = Report(report_path(body.version, reports_root))
+            report.load().record(body.gate_id, verdict, body.at)
 
         await broadcaster.publish(Event(
             type="sync_verdict", frame=0,
