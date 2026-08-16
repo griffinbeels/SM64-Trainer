@@ -27,7 +27,7 @@ from sm64_events.detectors.spawn import SpawnDetector
 from sm64_events.detectors.stage import StageChangeDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
-from sm64_events.core.snapshot import SnapshotReader
+from sm64_events.core.snapshot import UnreadyReader, reader_for
 from sm64_events.memory.layout import LAYOUT_ROWS, layout_for
 from sm64_events.memory.pj64 import Pj64Memory
 from sm64_events.replay.audio import ProcessAudioSource, SystemAudioSource
@@ -205,9 +205,14 @@ def build():
     memory = Pj64Memory()
     version = _game_version()
     layout = layout_for(version)
-    logging.getLogger("sm64.tracker").info(
-        "game version %s: %d/%d addresses in the layout", version,
-        len(LAYOUT_ROWS) - len(layout.missing()), len(LAYOUT_ROWS))
+    reader = reader_for(memory, version)
+    if isinstance(reader, UnreadyReader):
+        logging.getLogger("sm64.tracker").error(
+            "game version %s: %s", version, reader.reason)
+    else:
+        logging.getLogger("sm64.tracker").info(
+            "game version %s: %d/%d addresses in the layout", version,
+            len(LAYOUT_ROWS) - len(layout.missing()), len(LAYOUT_ROWS))
     broadcaster = Broadcaster()
     db_file = db_path()
     db_file.parent.mkdir(parents=True, exist_ok=True)
@@ -381,7 +386,7 @@ def build():
     # so a topological cancel reaches the screen on the next game frame rather
     # than whenever the next event happens to be journaled.
     poller = Poller(memory, detectors, service, on_frame=service.settle_frame,
-                    reader=SnapshotReader(memory, layout, version))
+                    reader=reader)
     updater = UpdateService(current_version=__version__)
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     return create_app(poller, broadcaster, service=service, replay=replay,

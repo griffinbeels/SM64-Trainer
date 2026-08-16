@@ -45,6 +45,10 @@ class Poller:
         self.on_frame = on_frame
         self.interval = 1.0 / hz
         self.reader = reader or SnapshotReader(memory)
+        # Set when the reader can never read (core/snapshot.py::UnreadyReader
+        # -- a version whose layout is not verified yet). The attach probe
+        # then keeps the poller detached; /health carries the reason.
+        self.hold_reason: str | None = getattr(self.reader, "reason", None)
         self.latest: GameSnapshot | None = None
         self._prev: GameSnapshot | None = None
         # last good global_timer, kept ACROSS a detach (unlike _prev) so a

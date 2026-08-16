@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sm64_events.memory import addresses as A
-from sm64_events.memory.base import N64Memory
+from sm64_events.memory.base import MemoryReadError, N64Memory
 from sm64_events.memory.behaviours import pointer_of, symbol_of
-from sm64_events.memory.layout import Layout, layout_for
+from sm64_events.memory.layout import Layout, LayoutIncomplete, layout_for
 from sm64_events.memory.objects import ObjectPool
 
 # The window of one object slot that spans ALL THREE identity fields —
@@ -244,3 +244,42 @@ class SnapshotReader:
             landmark_pos=landmark_pos,
             caused=self._caused_states(),
         )
+
+
+class UnreadyReader:
+    """The reader the poller gets when the chosen version's layout is not
+    verified yet -- JP before its sync run. It reads NOTHING: every `read()`
+    raises MemoryReadError, so the poller's own attach probe holds it in the
+    detached state (no snapshots, no events, no journal rows) instead of
+    crashing the server or, worse, reading US addresses off a JP ROM. The
+    reason names the missing fields and the command that fills them, and
+    /health carries it (server/app.py) so the state is visible on the surface
+    he looks at rather than only in a log."""
+
+    def __init__(self, version: str, missing: tuple[str, ...]):
+        self.version = version
+        self.missing = missing
+        self.layout = layout_for(version)
+        self.reason = (
+            f"the {version} memory layout is not verified yet -- {len(missing)} "
+            f"address(es) missing ({', '.join(missing[:4])}"
+            f"{', ...' if len(missing) > 4 else ''}). Nothing is read until "
+            f"`uv run python tools/sync_version.py --version {version}` "
+            "verifies them and the values are promoted into memory/layout.py; "
+            "/ui/sync.html shows what is missing.")
+
+    def read(self) -> GameSnapshot:
+        raise MemoryReadError(self.reason)
+
+
+def reader_for(mem: N64Memory, version: str):
+    """The poller's reader for `version`: the real SnapshotReader over a
+    complete layout, or an UnreadyReader naming what is missing. The one door
+    main.py uses, so choosing a version whose layout is empty (JP today) can
+    never crash the boot -- the two branches that met here on 2026-08-15
+    (the Game version setting and the version-keyed layout) each did the
+    right thing alone and would have taken the server down together."""
+    try:
+        return SnapshotReader(mem, layout_for(version), version)
+    except LayoutIncomplete:
+        return UnreadyReader(version, layout_for(version).missing())
