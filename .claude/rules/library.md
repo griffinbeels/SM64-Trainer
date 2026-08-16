@@ -72,7 +72,7 @@ here.** That work is theirs, is further along, and touches
 `server/api.py` and `main.py` — all of which this branch also touches, so
 whichever lands second reconciles.
 
-## JP standards: registered, resolved by one rule, mode-resolution NOT ours
+## JP standards: registered, resolved by one rule, the game version setting decides which
 
 User's rule, 2026-08-07: **a JP time gets its own standard only where a
 difference is ANNOTATED; everywhere else the base ladder is COMBINED and
