@@ -5,6 +5,8 @@ Test double for N64Memory; also used by snapshot/detector tests so the real
 endian decode path is always exercised. Defaults to the full 8 MB image
 because Usamune's timer globals live in expansion-pak RAM (above 4 MB).
 """
+import struct
+
 from sm64_events.memory.addresses import KSEG0_BASE, RDRAM_FULL_SIZE
 from sm64_events.memory.base import RdramReader
 
@@ -36,3 +38,8 @@ class BufferMemory(RdramReader):
         off = (addr - KSEG0_BASE) ^ 3
         self._check(off, 1)
         self._buf[off] = value
+
+    def write_f32(self, addr: int, value: float) -> None:
+        """A float32 field. Same word placement as write_u32 — floats only
+        ever appear word-aligned in the object pool and Mario's struct."""
+        self.write_u32(addr, struct.unpack("<I", struct.pack("<f", value))[0])

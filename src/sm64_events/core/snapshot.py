@@ -187,31 +187,41 @@ class SnapshotReader:
 
         One `ReadProcessMemory` of the whole pool then a local behaviour scan,
         the same shape `tools/probe_objects.py --pool` runs live at 120 Hz
-        beside his sessions — 240 separate reads would cost more than the
-        poll interval, one block read costs ~a tenth of a millisecond.
+        beside his sessions — 240 separate reads would cost more than the poll
+        interval.
+
+        `read_words`, not `read_block`: normalising the pool to big-endian
+        first swaps 146 KB of bytes in Python to use twelve of them per
+        object, and that swap WAS 94% of the whole snapshot's cost — 2,995 us
+        against 9.4 us for the memory read itself, so ~20% of a CPU core at
+        60 Hz. Decoding word-aligned fields straight out of PJ64's own storage
+        gives identical values for 42 us (measured live 2026-08-20, verified
+        field-by-field in tests/test_snapshot_pool_decode.py). Every field
+        below is word-aligned, which is what makes that legal.
         """
-        pool = self._mem.read_block(self._pool.base,
+        pool = self._mem.read_words(self._pool.base,
                                     A.OBJECT_COUNT * A.OBJECT_SIZE)
+        watched = self._caused_by_pointer
         found = []
         for slot in range(A.OBJECT_COUNT):
             base = slot * A.OBJECT_SIZE
             behaviour = int.from_bytes(
                 pool[base + A.OBJECT_BEHAVIOR:base + A.OBJECT_BEHAVIOR + 4],
-                "big")
-            symbol = self._caused_by_pointer.get(behaviour)
+                "little")
+            symbol = watched.get(behaviour)
             if symbol is None:
                 continue
             found.append(CausedState(
                 slot=slot, behaviour=behaviour, symbol=symbol,
                 action=int.from_bytes(
                     pool[base + A.OBJECT_ACTION:base + A.OBJECT_ACTION + 4],
-                    "big", signed=True),
+                    "little", signed=True),
                 health=int.from_bytes(
                     pool[base + A.OBJECT_HEALTH:base + A.OBJECT_HEALTH + 4],
-                    "big", signed=True),
-                home=struct.unpack_from(">fff", pool,
+                    "little", signed=True),
+                home=struct.unpack_from("<fff", pool,
                                         base + A.OBJECT_HOME_POS),
-                pos=struct.unpack_from(">fff", pool, base + A.OBJECT_POS)))
+                pos=struct.unpack_from("<fff", pool, base + A.OBJECT_POS)))
         return tuple(found)
 
     def read(self) -> GameSnapshot:

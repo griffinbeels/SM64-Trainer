@@ -71,8 +71,33 @@ class RdramReader:
         For dumping a whole struct whose layout is not yet known: decode any
         field out of the result with byte order "big". Word-aligned only,
         because the swap that undoes PJ64's storage is per 32-bit word.
+
+        The swap is a Python loop over every word, so it costs ~300x the read
+        itself on a large block: measured 2,995 us against 9.4 us for 146 KB
+        (2026-08-20). Use it to dump a struct you are still learning; use
+        `read_words` for a hot path that decodes a few known fields out of
+        something big.
         """
         if addr % 4 or size % 4:
             raise ValueError(f"read_block needs word alignment: {addr:#x}+{size:#x}")
         raw = self._read_raw(addr - KSEG0_BASE, size)
         return b"".join(raw[at:at + 4][::-1] for at in range(0, size, 4))
+
+    def read_words(self, addr: int, size: int) -> bytes:
+        """`size` bytes from `addr` exactly as PJ64 stores them — ONE host
+        read, NO swap.
+
+        PJ64 keeps each N64 32-bit word little-endian at its own offset, so a
+        WORD-ALIGNED 32-bit field decodes straight out of this with byte order
+        "little" (`int.from_bytes(block[o:o+4], "little")`) and a float with
+        `struct.unpack_from("<f", block, o)`. That makes reading a handful of
+        fields out of a large block ~70x cheaper than normalising the whole
+        thing first (2026-08-20: the object pool's decode, 2,955 us -> 42 us).
+
+        WORD-ALIGNED 32-BIT FIELDS ONLY. A halfword or byte sits at `o ^ 2` /
+        `o ^ 3` inside a word and needs `read_u16`/`read_u8`, which know that;
+        reading one out of this block directly gives the wrong byte silently.
+        """
+        if addr % 4 or size % 4:
+            raise ValueError(f"read_words needs word alignment: {addr:#x}+{size:#x}")
+        return self._read_raw(addr - KSEG0_BASE, size)
