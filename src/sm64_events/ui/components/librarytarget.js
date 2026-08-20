@@ -9,7 +9,7 @@
 // unproven (no-ladder) strategy belongs, and the reasoning for keeping them
 // as two doors rather than unifying them lives on `sectionOrder`'s own
 // docstring, where the next person choosing between them will look first.
-import { h } from "preact";
+import { h, Fragment } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
@@ -844,7 +844,7 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
         </div>
         ${mode === "leaderboard" ? html`<${LeaderboardList}
             leaderboard=${leaderboard} approach=${approach} query=${query}
-            entityKey=${entityKey} trayKeys=${trayKeys} onAdd=${onAdd} />` : html`<div class="library-ladder-view">
+            entityKey=${entityKey} trayKeys=${trayKeys} onAdd=${onAdd} />` : html`<${Fragment}>
         <table class="library-toc"><tbody>
           ${shownBands.map((band) => html`<${TocRow} key=${bandAnchorId(approach, band.tier || "unranked")} band=${band}
               count=${band.entries.filter((entry) => matchesRunner(entry, query)).length}
@@ -888,7 +888,7 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
                 </div>
               </div>`}
         </div>`)}
-        </div>`}
+        <//>`}
       </div>
     <//>
   </div>`;

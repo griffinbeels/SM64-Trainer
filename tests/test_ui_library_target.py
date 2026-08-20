@@ -823,6 +823,55 @@ def test_ladder_is_the_default_mode_and_its_markup_is_untouched(library_page):
         "document.querySelectorAll('.library-section.open .library-leaderboard').length") == 0
 
 
+def test_ladder_mode_bands_are_direct_grid_children_with_the_bodys_own_gap(library_page):
+    """Fix round 1: the ternary that switches between Ladder and Leaderboard
+    markup originally wrapped the TOC table and every `.library-band` in a
+    plain `<div class="library-ladder-view">` so each branch was one node.
+    `.library-section-body` is `display: grid; gap: .6rem`, and that wrapper
+    collapsed the table and every band into ONE grid item -- the gap the
+    grid provides between them was silently gone (measured against the
+    pre-task baseline: TOC-to-first-band 15.98px -> 6.39px, every inter-band
+    gap 9.59px -> 5.59px). Fixed with a Preact `Fragment` (no DOM node)
+    instead of a div, so this asserts the MECHANISM directly -- no wrapper
+    between the body and its bands -- and the geometry it buys, against the
+    body's own computed row-gap rather than a hardcoded pixel value (which
+    would go stale the day `.6rem` changes for an unrelated reason)."""
+    result = library_page.evaluate("""
+      (() => {
+        const body = document.querySelector('.library-section.open .library-section-body');
+        const toc = body.querySelector('.library-toc');
+        const bands = Array.from(body.querySelectorAll('.library-band'));
+        const rowGap = parseFloat(getComputedStyle(body).rowGap);
+        const gapBetween = (a, b) => b.getBoundingClientRect().top
+          - a.getBoundingClientRect().bottom;
+        const interBandGaps = [];
+        for (let i = 1; i < bands.length; i += 1) {
+          interBandGaps.push(gapBetween(bands[i - 1], bands[i]));
+        }
+        return {
+          tocIsDirectChild: toc.parentElement === body,
+          bandsAreDirectChildren: bands.every((band) => band.parentElement === body),
+          tocToFirstBand: gapBetween(toc, bands[0]),
+          rowGap, interBandGaps,
+        };
+      })()
+    """)
+    assert result["tocIsDirectChild"], result
+    assert result["bandsAreDirectChildren"], result
+    assert len(result["interBandGaps"]) > 1, result
+    # Every band-to-band gap matches the grid's OWN row-gap within a pixel of
+    # subpixel rounding -- the CSS grid gap applies uniformly between direct
+    # siblings, so this is the assertion with no magic number in it.
+    for gap in result["interBandGaps"]:
+        assert abs(gap - result["rowGap"]) < 1, result
+    # The TOC-to-first-band gap carries a fixed extra offset from the table's
+    # own box even at baseline (measured 15.98px against a 9.6px row-gap --
+    # NOT a wrapper artifact, since it was identical before this task). The
+    # wrapper bug collapsed it to 6.39px; this floor sits clearly between the
+    # broken and healthy values without hardcoding the healthy one exactly.
+    assert result["tocToFirstBand"] > 12, result
+
+
 def test_leaderboard_mode_numbers_every_entry_fastest_first(library_page):
     library_page.evaluate("""
       Array.from(document.querySelectorAll('.library-section.open .library-mode-seg'))
