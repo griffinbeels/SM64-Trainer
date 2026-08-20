@@ -5,9 +5,11 @@ already served it before this feature and `tests/test_library_api.py` owns it.
 Reusing it is the point — the picker fills from the bundled snapshot with no
 network wait, while the import itself reads a fresh fetch.
 """
+import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 import sm64_events
@@ -112,12 +114,23 @@ def test_the_sheet_door_lands_a_runners_column_from_the_snapshot(tmp_path):
                    for row in db.pbs())
 
 
-def test_an_unreachable_sheet_says_so_rather_than_reporting_an_empty_column(
-        tmp_path, monkeypatch):
-    """"Could not reach the sheet" and "this runner has no times" look
-    identical from the outside, and only one of them is worth retrying."""
+@pytest.mark.parametrize("failure", [
+    # The network never answered.
+    OSError("no route to host"),
+    # It ANSWERED and the answer is not readable. Found by driving the real
+    # drawer, 2026-08-20: the panel sat on "Downloading the current sheet…"
+    # forever because the route caught only OSError and this 500'd instead.
+    LookupError("no sheet named 'Log' in the workbook"),
+    zipfile.BadZipFile("File is not a zip file"),
+])
+def test_a_sheet_that_cannot_be_read_says_so_rather_than_hanging(
+        tmp_path, monkeypatch, failure):
+    """"Could not read the sheet" and "this runner has no times" look
+    identical from the outside, and only one of them is worth retrying. Every
+    way a remote document nobody here controls can fail must reach the person
+    waiting as an answer."""
     def boom(*_args, **_kwargs):
-        raise OSError("no route to host")
+        raise failure
 
     monkeypatch.setattr("sm64_events.server.import_api.fetch", boom)
     with make_client(tmp_path) as (client, _db, _svc):

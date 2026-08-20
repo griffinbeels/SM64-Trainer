@@ -15,7 +15,9 @@ The runner LIST is not here: `GET /api/library/runners` already serves it from
 the bundled snapshot, which is what lets the picker fill with no network wait
 while the import itself reads a fresh fetch.
 """
-from fastapi import APIRouter, Body, HTTPException
+import logging
+
+from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
@@ -23,6 +25,8 @@ from sm64_events.library.import_runner import candidates_for
 from sm64_events.library.source import fetch
 from sm64_events.server.ranks_api import absorb_after_regrade
 from sm64_events.tracking.importing import ImportCandidate
+
+_log = logging.getLogger("sm64.import")
 
 MANUAL_SOURCE = "manual"
 
@@ -92,12 +96,21 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
                     # poller shares this process and a blocked loop is a
                     # dropped star grab (`server/library_api.py` says the same).
                     await run_in_threadpool(library.refresh, fetch, overrides)
-                except OSError as err:
-                    # "Could not reach the sheet" and "this runner has no
-                    # times" look identical from the outside, and only one of
-                    # them is worth retrying.
+                except Exception as err:
+                    # BROADER than OSError on purpose, and this was found by
+                    # driving the real drawer: a download that SUCCEEDS and
+                    # cannot be read raises LookupError ("no sheet named
+                    # 'Log'"), and a captive portal or an error page raises
+                    # BadZipFile. Neither is an OSError, so the request 500'd
+                    # and the panel sat on "Downloading the current sheet…"
+                    # with no way out. The sheet is a remote document nobody
+                    # here controls, so every way it can fail to be READ is
+                    # the same answer to the person waiting — and it must be
+                    # an answer, because "could not reach the sheet" and "this
+                    # runner has no times" look identical from the outside.
+                    _log.warning("sheet refresh failed: %r", err)
                     raise HTTPException(
-                        503, f"could not fetch the sheet: {err}") from err
+                        503, f"could not read the sheet: {err}") from err
             candidates, rejected = candidates_for(library.payload, body.runner)
             summary = await land(f"sheet:{body.runner}", candidates)
             return {**summary, "rejected": rejected,
