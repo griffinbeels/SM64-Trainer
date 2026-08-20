@@ -483,7 +483,12 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // "You are here": the grading basis under the ACTIVE strategy. Avg rank
   // modes carry it on sectionRank.basis; pb mode carries none (the same
   // split _section_banner already encodes server-side), so it falls back to
-  // the saved PB row for this entity's clock. Interpolated against THIS
+  // the saved PB row for this entity's clock ON THAT STRATEGY. That last
+  // clause is the 2026-08-15 fix: the fallback used to read the
+  // strategy-BLIND PB, so a time run on 3x LJ planted a "you are here" badge
+  // in the Standard column and his own progress looked misattributed. A
+  // strategy he has never run now simply has no marker, which is the honest
+  // state. Interpolated against THIS
   // strategy's own ladder (the column actually on screen) rather than the
   // entity's best-possible ladder, so the marker's bracketed cutoffs can
   // never disagree with the rows it sits between.
@@ -494,6 +499,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // THESE rows". `entityScore` below stays the server-GRADED score
   // regardless of what is shown, on purpose — flipping the switch changes
   // what you are looking at, never what you are rated on.
+  const sheetBest = (data && data.sheet_best) || null;
   const activeLadder = data && activeStrat ? (data.strategies[activeStrat] || {}) : {};
   const basisFrames = data && sectionRank && sectionRank.basis
     ? sectionRank.basis.frames
@@ -688,6 +694,39 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
                 strat === activeStrat ? "col-active" : "")}
               cellStyle=${bandStyle}
               labelStyle=${`background:color-mix(in srgb, ${rankColor(rank)} 18%, transparent)`} />`)}
+        ${/* SHEET BEST -- the last row, always, and the only one that is not a
+             rank. The top of a ladder is not the top of the sport: he
+             expanded Mario into its divisions, read Mario 1 and said "there
+             actually ARE faster times than this" (2026-08-15). One cell per
+             strategy column carrying the fastest time on the Ultimate Sheet
+             for that strategy, its runner, and a link where the run was
+             filmed. No cap icon, by his instruction -- it grades nothing, so
+             wearing a rank's art would say it does. A strategy with no sheet
+             row gets an empty cell rather than a guess, and the row never
+             takes a "you are here" bracket: markerPosition walks the LADDER,
+             which this is not part of. */""}
+        ${sheetBest && strats.some((strat) => sheetBest[strat])
+          ? html`<tr class="std-sheet-best">
+              <td class="std-tier">
+                <span class="std-tier-label"><span
+                  class="std-sheet-best-name">Sheet Best</span></span>
+              </td>
+              ${strats.map((strat) => {
+                const best = sheetBest[strat];
+                if (!best) return html`<td class="std-sheet-best-cell">—</td>`;
+                const label = fmtSeconds(best.time_cs / 100);
+                const runner = best.runner || "";
+                return html`<td class="std-sheet-best-cell">
+                  ${best.video
+                    ? html`<a href=${best.video} target="_blank" rel="noopener"
+                        title=${`${runner || "the fastest run"} on the Ultimate Sheet`}
+                        >${label}</a>`
+                    : html`<span>${label}</span>`}
+                  ${runner ? html`<span class="std-sheet-best-runner"
+                    >${runner}</span>` : null}</td>`;
+              })}
+            </tr>`
+          : null}
         </tbody></table>
     </div>` : null}
     <//>

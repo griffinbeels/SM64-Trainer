@@ -21,7 +21,7 @@ import { RankIcon } from "./rankicon.js";
 import { StratPicker } from "./stratpicker.js";
 import { Icon } from "./icons.js";
 import { EmptyState } from "./emptystate.js";
-import { caveatOf, cardBadge } from "./marks.js";
+import { caveatOf, cardBadge, pbGateOf } from "./marks.js";
 
 const html = htm.bind(h);
 
@@ -147,7 +147,15 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // already know how to draw. Never re-derived here: save_pb refuses on the
   // same predicate, and a button that offers what the server rejects is the
   // drift this shares one door to prevent.
-  const blockedPb = caveatOf(a.pb_blocked_by);
+  // The server's own resolved answer for this row's action column: "save" |
+  // "undo" | null, and when null, why. Never re-derived here -- save_pb and
+  // undo_pb refuse on the SAME resolver (tracking/caveats.py::pb_action), and
+  // a button that offers what the server rejects is the drift one door
+  // prevents. Two shapes of "why": a caveat key (the TIME is not a legal
+  // quantity), drawn as the disabled button it always was, and a STRATEGY
+  // gate, drawn as a chip that says which strategy would accept it.
+  const blockedPb = caveatOf(a.pb_blocked && a.pb_blocked.reason);
+  const pbGate = pbGateOf(a.pb_blocked);
   // The mark on the TIME, not on the save button: this row's number is not
   // the quantity it looks like ("if you've been practicing all wrong, you
   // should know", 2026-08-02). Same key vocabulary, same badge, one door —
@@ -189,29 +197,43 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
       <button class="icon-button" onclick=${() => setShowReplay(!showReplay)}
           title="View replay" aria-label="View replay">
         <${Icon} name=${showReplay ? "chevron" : "play"} size=${16} /></button>
-      ${a.outcome === "success" && !a.cleared
-        ? (a.is_current_pb
-          ? html` <button onclick=${undoPb}
-              title="delete this save — the previous PB becomes current again">Undo PB</button>`
-          : blockedPb
-            // Not a slow PB — a different quantity, which no leaderboard
-            // accepts (2026-08-02: "these fake PBs just shouldn't be
-            // allowed"). Shown rather than hidden, and carrying the SAME
-            // badge a PB already saved with this problem wears, so the row
-            // explains itself instead of leaving a button that silently
-            // stopped working. The server refuses it too — this is the
-            // affordance, not the rule (tracking/caveats.py::pb_blocked_by).
-            ? html` <button class="pb-blocked" disabled
-                title=${`Cannot be saved as a PB — ${blockedPb.sentence}`}
-                aria-label=${`Cannot be saved as a PB — ${blockedPb.sentence}`}>
-                <${Icon} name="bookmark" size=${14} />
-                <span class="save-pb-wide">Save as PB</span>
-                <span class="save-pb-narrow">Save PB</span>
-                ${cardBadge(blockedPb)}</button>`
-            : html` <button class=${pbBeat ? "pb-glow" : ""} onclick=${savePb}>
-                <${Icon} name="bookmark" size=${14} />
-                <span class="save-pb-wide">Save as PB</span>
-                <span class="save-pb-narrow">Save PB</span></button>`)
+      ${/* THE action column, a straight cascade over the server's own
+           resolved answer (tracking/caveats.py::pb_action). Four states and
+           no client-side precedence: undo, save, "the time is not a legal
+           quantity", "the row is not this strategy's". A failure, a cleared
+           row and an attempt with no entity resolve to nothing at all, which
+           is the empty last arm. */""}
+      ${a.pb_action === "undo"
+        ? html` <button onclick=${undoPb}
+            title="delete this save — the previous PB on this strategy becomes current again">Undo PB</button>`
+        : a.pb_action === "save"
+        ? html` <button class=${pbBeat ? "pb-glow" : ""} onclick=${savePb}>
+            <${Icon} name="bookmark" size=${14} />
+            <span class="save-pb-wide">Save as PB</span>
+            <span class="save-pb-narrow">Save PB</span></button>`
+        : blockedPb
+          // Not a slow PB — a different quantity, which no leaderboard
+          // accepts (2026-08-02: "these fake PBs just shouldn't be allowed").
+          // Shown rather than hidden, and carrying the SAME badge a PB
+          // already saved with this problem wears, so the row explains itself
+          // instead of leaving a button that silently stopped working.
+        ? html` <button class="pb-blocked" disabled
+            title=${`Cannot be saved as a PB — ${blockedPb.sentence}`}
+            aria-label=${`Cannot be saved as a PB — ${blockedPb.sentence}`}>
+            <${Icon} name="bookmark" size=${14} />
+            <span class="save-pb-wide">Save as PB</span>
+            <span class="save-pb-narrow">Save PB</span>
+            ${cardBadge(blockedPb)}</button>`
+        : pbGate
+          // The row is fine and belongs to another strategy. The reason is
+          // PRINTED, never left on a hover: an explanation that only arrives
+          // on hover never arrives (his rule, 2026-08-02, about a disabled
+          // control whose own tooltip nobody reaches). Retagging the row with
+          // the picker one cell to the left re-enables it.
+        ? html` <span class="pb-gate" title=${pbGate.sentence}
+            aria-label=${pbGate.sentence}>${pbGate.name
+              ? html`<span class="pb-gate-strat">${pbGate.name}</span>` : null
+            }${pbGate.tail}</span>`
         : ""}
       ${a.cleared
         ? html` <button onclick=${restore}>undo</button>`
@@ -315,8 +337,26 @@ export function useGraphPick(rows, visible, setVisible) {
 // own answer to "does this saved time mean what the rank beside it implies".
 // Derived in tracking/views.py from `timed_by`/`closed_by`/`timed_at`, so this
 // surface and the quick-select cell can never word the same fact two ways.
-export function PbTag({ pb, mode, rows, pick, t, showCaveat = true }) {
-  if (!pb) return html`<span class="pbtag">no PB yet</span>`;
+export function PbTag({ pb, mode, rows, pick, t, strat = null,
+    showCaveat = true }) {
+  // The tag names the ACTIVE STRATEGY's PB, which is what a personal best has
+  // always meant (the glossary; tracking/views.py::current_pbs_by_strat) and
+  // what this tag never showed -- it quoted the entity's best time whatever
+  // strategy was selected, so switching to 3x LJ kept a Standard number under
+  // a 3x LJ heading and read as the app losing track of his progress
+  // (2026-08-15). The empty states say WHICH answer is missing rather than a
+  // bare "no PB yet": no strategy chosen is a different situation from a
+  // strategy you have not banked a time on, and the fix is different too.
+  // Both empty states clamp the STRATEGY NAME rather than the whole tag: the
+  // tag sits in a grid track whose floor is a tuned number (`--log-pb-width`,
+  // tuned against "no PB yet"), and a tag wider than its track overflows LEFT
+  // into the strategy picker beside it -- which is what
+  // tests/test_log_card_caveat_layout.py caught the first version of this
+  // doing, at every width. The lead-in stays whole so the sentence survives
+  // a name long enough to ellipsise.
+  if (!strat) return html`<span class="pbtag">no strategy</span>`;
+  if (!pb) return html`<span class="pbtag">no PB · <span
+    class="pbtag-strat">${strat}</span></span>`;
   function jump() {
     if (!pick) return;
     if (!rows.some((a) => a.id === pb.attempt_id) && t.scope !== "lifetime")

@@ -194,3 +194,69 @@ def pb_blocked_by(attempt) -> str | None:
     Segments are never blocked: `timed_at` is None for every non-star closure
     (projection.py), and a segment has no x-cam to be legal about."""
     return "grab_timed" if _proven_grab_timed(attempt) else None
+
+
+# Why the PB action is unavailable for a reason that is about the STRATEGY
+# rather than about the time. Not caveat keys and deliberately not in
+# CAVEAT_SEVERITY: a caveat says a saved time does not mean what the rank
+# beside it implies, while these say the row is fine and simply is not what
+# you are practising right now. `ui/components/marks.js::PB_GATES` draws them
+# and `tests/test_cross_language_parity.py` pins the two sets equal, for the
+# same reason it does for caveats -- a key one side cannot draw renders
+# silently as nothing.
+PB_GATE_REASONS = ("no_active_strat", "foreign_strat")
+
+
+def pb_strat_gate(attempt, active_strat: str | None) -> str | None:
+    """Whether this row's PB action belongs to the strategy being practised.
+
+    A personal best has always been per (target, strategy) -- the glossary
+    says so and `views.current_pbs_by_strat` stores it that way -- but the
+    practice card offered Save on every row regardless of which strategy the
+    run was tagged with, so a Standard time could be banked while 3x LJ was
+    active and then grade nothing the player was looking at. His report
+    (2026-08-15): "I cannot save a PB for a different strategy to the one I'm
+    working on".
+
+    An UNTAGGED row is foreign too, not a special case: it belongs to no
+    strategy at all, so it cannot be the one on screen. Retagging it through
+    the row's own strategy picker is the way back in, which is exactly the
+    flow he asked for ("The user should be able to reclassify the entry, and
+    then the button is re-enabled").
+    """
+    if not active_strat:
+        return "no_active_strat"
+    return None if attempt.strat_tag == active_strat else "foreign_strat"
+
+
+def pb_action(attempt, active_strat: str | None,
+              owns_strat_pb: bool) -> tuple[str | None, dict | None]:
+    """THE resolver behind the practice log's action column: `("save"|"undo"|
+    None, blocked-or-None)`.
+
+    One answer rather than two fields, because the browser combining
+    `pb_blocked_by` with the strategy gate itself would be a second copy of
+    this precedence -- and drift there is a button offering what `save_pb`
+    refuses. `service.save_pb`/`undo_pb` call this too, so the door and the
+    decoration cannot disagree.
+
+    Precedence: an illegal QUANTITY outranks the strategy gate, because
+    retagging a grab-timed row does not make its number legal.
+
+    `(None, None)` -- no action and nothing to explain -- covers the rows that
+    have never carried a button: failures, cleared rows, and an attempt with
+    no entity at all (the unassigned list, `course_id is None` and no
+    segment). There is nothing for such a row's PB to be a PB OF, and the
+    save path would previously have written one keyed on nothing.
+    """
+    if attempt.outcome != "success" or attempt.cleared:
+        return None, None
+    if attempt.course_id is None and attempt.segment_id is None:
+        return None, None
+    blocked = pb_blocked_by(attempt)
+    if blocked is not None:
+        return None, {"reason": blocked, "strat": None}
+    gate = pb_strat_gate(attempt, active_strat)
+    if gate is not None:
+        return None, {"reason": gate, "strat": active_strat}
+    return ("undo" if owns_strat_pb else "save"), None

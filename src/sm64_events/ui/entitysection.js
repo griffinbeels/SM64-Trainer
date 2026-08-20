@@ -43,7 +43,16 @@ export function entityIdentity(sec) {
 // view's clock applies to stars alone.
 export const sectionClock = (sec, clock) => (isSegment(sec) ? "rta" : clock);
 
+// The entity's best time on ANY strategy -- what the trend graph and the
+// progress dots measure against.
 export const sectionPb = (sec, clock) => sec.pb[sectionClock(sec, clock)];
+
+// The PB on the strategy being practised, which is the one the card's tag
+// shows and the one the standards table marks "you are here" with. A separate
+// accessor rather than a replacement: the two answer different questions and
+// both have callers (2026-08-15).
+export const sectionPbByStrat = (sec, clock) =>
+  (sec.pb_by_strat || {})[sectionClock(sec, clock)] || null;
 
 // A Bowser course's 8-Red-Coins star practices as two things worth timing,
 // and the surface that SELECTS each half already spells out which. Both

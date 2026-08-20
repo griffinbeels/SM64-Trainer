@@ -115,3 +115,58 @@ export function cardBadge(caveat) {
       aria-label=${caveat.sentence}>${caveat.glyph}<span
       class="caveat-chip-word">${caveat.short}</span></span>`;
 }
+
+// ---------------------------------------------------------------------------
+// Why the PB button is not there — a STRATEGY reason, which is a different
+// kind of thing from a caveat and deliberately not in CAVEATS. A caveat says a
+// saved time does not mean what the rank beside it implies; these say the row
+// is perfectly fine and simply is not what you are practising right now.
+//
+// Keys mirror `tracking/caveats.py::PB_GATE_REASONS` and are pinned equal by
+// tests/test_cross_language_parity.py, for the same reason the caveat sets are:
+// a key the server can send and this file cannot draw renders as nothing.
+//
+// The wording lives HERE and not on the server for the same reason the caveat
+// sentences do — the server ships a key, the browser owns the words — and it
+// is a function rather than a string because one of the two names a strategy.
+export const PB_GATES = {
+  foreign_strat: {
+    // Reads as a fact about the button rather than an accusation: the run was
+    // fine, it just belongs to another ladder. Retagging the row with its own
+    // strategy picker is the way back in, which is the affordance already
+    // sitting one cell to the left.
+    //
+    // `name`/`tail` are split so the chip can clamp the NAME and always keep
+    // the word that carries the meaning. Strategy names run long -- a 100-coin
+    // star's are variant-qualified ("100c + Slide - Standard") -- and a single
+    // string clamped to the column's width ellipsised away the "only",
+    // leaving a chip that just repeated a name (contact sheet, 2026-08-20).
+    name: (strat) => strat,
+    tail: () => "only",
+    text: (strat) => `${strat} only`,
+    sentence: (strat) =>
+      `This run was not tagged ${strat}, and a PB is saved under the strategy `
+      + `it was run with. Change the strategy on this row to save it.`,
+  },
+  no_active_strat: {
+    name: () => null,               // no strategy to name -- that IS the state
+    tail: () => "Pick a strategy",
+    text: () => "Pick a strategy",
+    sentence: () =>
+      "A PB is saved under one strategy, so pick the one you are practising "
+      + "before saving.",
+  },
+};
+
+// The chip that replaces the Save/Undo button, drawn from the server's own
+// resolved `pb_blocked` ({reason, strat}). Returns null for a caveat-shaped
+// reason, which the caller draws as a disabled button with its badge instead —
+// that one is about the TIME and keeps wearing the caveat vocabulary.
+export function pbGateOf(blocked) {
+  if (!blocked) return null;
+  const gate = PB_GATES[blocked.reason];
+  if (!gate) return null;
+  return { name: gate.name(blocked.strat), tail: gate.tail(blocked.strat),
+           text: gate.text(blocked.strat),
+           sentence: gate.sentence(blocked.strat) };
+}

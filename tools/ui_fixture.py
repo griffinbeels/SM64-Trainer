@@ -137,6 +137,12 @@ FIXTURE_COURSE = 2
 FIXTURE_LEVEL = 24
 FIXTURE_STAR = 4
 FIXTURE_STRAT = "TJ Owlless"
+# A SECOND strategy for the same star, so one seeded attempt can be foreign to
+# the active one and the practice log's PB gate chip has something to draw
+# (2026-08-20). Must also exist in the bundled standards for this star, for
+# FIXTURE_STRAT's own reason -- otherwise the standards table gains a column
+# with no ladder and the sweep measures a different table.
+FIXTURE_FOREIGN_STRAT = "Sideflip"
 
 # Castle Inside, the level every castle subarea (lobby / upstairs / basement)
 # belongs to -- `_publish_castle_stage` and `_seed_castle_pieces` both name it.
@@ -347,6 +353,30 @@ def _seed_target(base: str, course_id: int = FIXTURE_COURSE,
             for a in star.get("attempts", []) if a.get("outcome") == "success"]
     if rows:
         post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "igt"})
+    # A SECOND strategy on one of the rows, so the practice log renders the
+    # MIXED action column the 2026-08-20 gate produces: some rows offering
+    # Save/Undo, at least one printing "TJ Owlless only" where its button
+    # would be. Without it every seeded row carries the active strategy and
+    # the chip is unreachable -- the "a wrong fixture state reports a clean
+    # page nobody is looking at" failure this file has now paid for five
+    # times. Retagged rather than run under a second strategy because the
+    # attempt's tag is stamped at CLOSE time from the then-active strategy,
+    # so a retag is the only way to make an EXISTING row foreign.
+    # NOT the PB row and NOT a caveated one: an illegal QUANTITY outranks the
+    # strategy gate (caveats.pb_action), so retagging the fixture's deliberate
+    # grab-timed row would draw the grab-timed button and leave the chip
+    # unrendered again -- which is exactly what the first version of this did,
+    # and the contact sheet is what caught it.
+    foreign = next((row for row in rows[1:] if not row.get("caveat")), None)
+    if foreign:
+        post(f"/api/attempts/{foreign['id']}/strat",
+             {"strat_tag": FIXTURE_FOREIGN_STRAT})
+        # ... and put the original strategy back: retagging the NEWEST row
+        # moves the entity's active strategy (service.set_attempt_strat's
+        # documented exception), which would make every OTHER row foreign
+        # instead and render the opposite half of the same screen.
+        post("/api/strat", {"course_id": course_id, "star_id": star_id,
+                            "strat_tag": FIXTURE_STRAT})
 
 
 # Padding for the practice LOG's own pagination (practicelog.js's

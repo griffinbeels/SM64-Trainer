@@ -28,6 +28,34 @@ def star(frame, course=2, star_id=2, igt=343):
                "igt_timed_at": "xcam"})
 
 
+def save_pb(svc, db, attempt_id, mode):
+    """Save a PB the way the app does since 2026-08-20: under the strategy the
+    run was tagged with, which must also be the one being practised
+    (caveats.pb_action). One expression of the rule, so a test that only needs
+    A saved pb does not have to restate it -- the tests that are ABOUT the
+    gate call svc.save_pb directly."""
+    attempt = next(a for a in db.attempts() if a.id == attempt_id)
+    tag = attempt.strat_tag or "Standard"
+    if attempt.segment_id is not None:
+        asyncio.run(svc.set_strat_segment(attempt.segment_id, tag))
+    else:
+        asyncio.run(svc.set_strat(attempt.course_id, attempt.star_id, tag))
+    if not attempt.strat_tag:
+        asyncio.run(svc.set_attempt_strat(attempt_id, tag))
+    return asyncio.run(svc.save_pb(attempt_id, mode))
+
+
+def undo_pb(svc, db, attempt_id, mode):
+    """Undo the way the app does: only the active strategy's own PB."""
+    attempt = next(a for a in db.attempts() if a.id == attempt_id)
+    if attempt.segment_id is not None:
+        asyncio.run(svc.set_strat_segment(attempt.segment_id, attempt.strat_tag))
+    else:
+        asyncio.run(svc.set_strat(attempt.course_id, attempt.star_id,
+                                  attempt.strat_tag))
+    return asyncio.run(svc.undo_pb(attempt_id, mode))
+
+
 def make(tmp_path):
     db = Database(tmp_path / "t.db")
     svc = TrackerService(db, Broadcaster())
@@ -152,7 +180,7 @@ def test_save_pb_inserts_row_and_journals(tmp_path):
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(1350)))
     aid = db.attempts()[0].id
-    pb = asyncio.run(svc.save_pb(aid, "igt"))
+    pb = save_pb(svc, db, aid, "igt")
     assert pb["frames"] == 343 and db.pbs()[0]["course_id"] == 2
     assert "pb_saved" in [e.type for e in db.events()]
 
@@ -160,7 +188,7 @@ def test_save_pb_inserts_row_and_journals(tmp_path):
 def test_save_pb_rejects_missing_attempt(tmp_path):
     db, svc = make(tmp_path)
     with pytest.raises(LookupError):
-        asyncio.run(svc.save_pb(999, "igt"))
+        asyncio.run(svc.save_pb(999, "igt"))   # the real command: no such row
 
 
 def two_successes(db, svc):
@@ -177,9 +205,9 @@ def two_successes(db, svc):
 def test_undo_pb_restores_previous_pb(tmp_path):
     db, svc = make(tmp_path)
     first, second = two_successes(db, svc)
-    asyncio.run(svc.save_pb(first, "igt"))
-    asyncio.run(svc.save_pb(second, "igt"))      # supersedes first
-    out = asyncio.run(svc.undo_pb(second, "igt"))
+    save_pb(svc, db, first, "igt")
+    save_pb(svc, db, second, "igt")      # supersedes first
+    out = undo_pb(svc, db, second, "igt")
     assert out["frames"] == 350
     assert out["restored_frames"] == 343 and out["restored_attempt_id"] == first
     [row] = db.pbs()
@@ -190,8 +218,8 @@ def test_undo_pb_restores_previous_pb(tmp_path):
 def test_undo_pb_with_single_save_leaves_no_pb(tmp_path):
     db, svc = make(tmp_path)
     first, _ = two_successes(db, svc)
-    asyncio.run(svc.save_pb(first, "igt"))
-    out = asyncio.run(svc.undo_pb(first, "igt"))
+    save_pb(svc, db, first, "igt")
+    out = undo_pb(svc, db, first, "igt")
     assert out["restored_frames"] is None and out["restored_attempt_id"] is None
     assert db.pbs() == []
 
@@ -201,19 +229,19 @@ def test_undo_pb_rejects_attempt_that_is_not_current(tmp_path):
     # anything (its row is no longer what "current PB" points at)
     db, svc = make(tmp_path)
     first, second = two_successes(db, svc)
-    asyncio.run(svc.save_pb(first, "igt"))
-    asyncio.run(svc.save_pb(second, "igt"))
+    save_pb(svc, db, first, "igt")
+    save_pb(svc, db, second, "igt")
     with pytest.raises(ValueError):
-        asyncio.run(svc.undo_pb(first, "igt"))
+        undo_pb(svc, db, first, "igt")
     assert len(db.pbs()) == 2                    # nothing deleted
 
 
 def test_undo_pb_is_per_timer_mode(tmp_path):
     db, svc = make(tmp_path)
     first, _ = two_successes(db, svc)
-    asyncio.run(svc.save_pb(first, "igt"))
+    save_pb(svc, db, first, "igt")
     with pytest.raises(ValueError):              # no rta save to undo
-        asyncio.run(svc.undo_pb(first, "rta"))
+        undo_pb(svc, db, first, "rta")
     assert len(db.pbs()) == 1
 
 
@@ -222,7 +250,7 @@ def test_undo_pb_rejects_missing_attempt_and_bad_mode(tmp_path):
     with pytest.raises(LookupError):
         asyncio.run(svc.undo_pb(999, "igt"))
     with pytest.raises(ValueError):
-        asyncio.run(svc.undo_pb(999, "lap"))     # mode checked first, like save_pb
+        asyncio.run(svc.undo_pb(999, "lap"))  # mode checked first, like save_pb
 
 
 def test_undo_pb_segment_is_kind_aware(tmp_path):
@@ -233,14 +261,14 @@ def test_undo_pb_segment_is_kind_aware(tmp_path):
     asyncio.run(svc.publish(ev("practice_reset", 500, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(900)))
     star_aid = next(a.id for a in db.attempts() if a.segment_id is None)
-    asyncio.run(svc.save_pb(star_aid, "rta"))
+    save_pb(svc, db, star_aid, "rta")
     asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
     asyncio.run(svc.publish(ev("warp_entered", 1085,
                                {"level": 6, "area": 1, "to": 17})))
     asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
     seg_aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
-    asyncio.run(svc.save_pb(seg_aid, "rta"))
-    out = asyncio.run(svc.undo_pb(seg_aid, "rta"))
+    save_pb(svc, db, seg_aid, "rta")
+    out = undo_pb(svc, db, seg_aid, "rta")
     assert out["segment_id"] == lblj and out["restored_frames"] is None
     [row] = db.pbs()
     assert row["attempt_id"] == star_aid         # the star PB survived
@@ -277,8 +305,8 @@ def test_wipe_star_lifetime_wipes_history_and_pbs(tmp_path):
     success(svc, 6000, course=8, star_id=1, igt=500)
     a22 = next(a.id for a in db.attempts() if (a.course_id, a.star_id) == (2, 2))
     a81 = next(a.id for a in db.attempts() if (a.course_id, a.star_id) == (8, 1))
-    asyncio.run(svc.save_pb(a22, "igt"))
-    asyncio.run(svc.save_pb(a81, "igt"))
+    save_pb(svc, db, a22, "igt")
+    save_pb(svc, db, a81, "igt")
     asyncio.run(svc.wipe_data("star", course_id=2, star_id=2, scope="lifetime"))
     assert all((a.course_id, a.star_id) != (2, 2) for a in db.attempts())
     [pb] = db.pbs()                               # only the (8,1) pb remains
@@ -289,11 +317,11 @@ def test_wipe_star_session_scope_pb_falls_back_to_prior_session(tmp_path):
     db, svc = make(tmp_path)
     success(svc, 1000)                            # s1: igt 343
     a1 = db.attempts()[0].id
-    asyncio.run(svc.save_pb(a1, "igt"))
+    save_pb(svc, db, a1, "igt")
     asyncio.run(svc.new_session())
     success(svc, 5000, igt=330)                   # s2: faster
     a2 = next(a.id for a in db.attempts() if a.igt_frames == 330)
-    asyncio.run(svc.save_pb(a2, "igt"))
+    save_pb(svc, db, a2, "igt")
     asyncio.run(svc.wipe_data("star", course_id=2, star_id=2, scope="session"))
     [pb] = db.pbs()                               # s2's save vanished with its attempt
     assert pb["attempt_id"] == a1                 # s1's PB is current again
@@ -308,7 +336,7 @@ def test_wipe_segment_lifetime_spares_star_data(tmp_path):
                                {"level": 6, "area": 1, "to": 17})))
     asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
     seg_aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
-    asyncio.run(svc.save_pb(seg_aid, "rta"))
+    save_pb(svc, db, seg_aid, "rta")
     asyncio.run(svc.wipe_data("segment", segment_id=lblj, scope="lifetime"))
     assert all(a.segment_id != lblj for a in db.attempts())
     assert any(a.segment_id is None for a in db.attempts())   # star attempt kept
@@ -351,7 +379,7 @@ def test_wipe_all_session_scope(tmp_path):
                                {"igt_frames_before": 470, "mario_acted": True})))
     success(svc, 6000, igt=350)
     a2 = next(a.id for a in db.attempts() if a.igt_frames == 350)
-    asyncio.run(svc.save_pb(a2, "igt"))
+    save_pb(svc, db, a2, "igt")
     asyncio.run(svc.wipe_data("all", scope="session"))
     assert [a.session_id for a in db.attempts()] == [1]      # s2 wiped clean
     assert db.pbs() == []                                    # s2's pb gone
@@ -364,7 +392,7 @@ def test_wipe_all_lifetime_factory_resets_history(tmp_path):
     db, svc = make(tmp_path)
     success(svc, 1000)
     a1 = db.attempts()[0].id
-    asyncio.run(svc.save_pb(a1, "igt"))
+    save_pb(svc, db, a1, "igt")
     asyncio.run(svc.new_session())
     success(svc, 5000, igt=350)
     defs_before = len(db.segment_defs())
@@ -1176,8 +1204,8 @@ def test_save_pb_segment_requires_rta_and_inserts_segment_row(tmp_path):
     asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
     aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
     with pytest.raises(ValueError):
-        asyncio.run(svc.save_pb(aid, "igt"))    # segments are RTA-only
-    pb = asyncio.run(svc.save_pb(aid, "rta"))
+        save_pb(svc, db, aid, "igt")    # segments are RTA-only
+    pb = save_pb(svc, db, aid, "rta")
     assert pb["frames"] == 85 and pb["segment_id"] == lblj
     row = db.pbs()[-1]
     assert row["segment_id"] == lblj
@@ -1919,7 +1947,7 @@ def test_set_attempt_strat_moves_the_saved_pb(tmp_path):
                                {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(1350)))
     aid = db.attempts()[0].id
-    asyncio.run(svc.save_pb(aid, "igt"))
+    save_pb(svc, db, aid, "igt")
     asyncio.run(svc.set_attempt_strat(aid, "Slide Kick"))
     assert db.current_pb(2, 2, "igt", strat_tag="Slide Kick")["frames"] == 343
     assert db.current_pb(2, 2, "igt", strat_tag="Cannonless") is None
@@ -2073,7 +2101,7 @@ def test_deleting_a_session_takes_its_PBs_with_it(tmp_path):
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(1300)))
     fast = db.attempts()[-1]
-    asyncio.run(svc.save_pb(fast.id, "igt"))
+    save_pb(svc, db, fast.id, "igt")
     assert [row["attempt_id"] for row in db.pbs()] == [fast.id]
 
     # Session 2 (active), so session 1 is deletable.
@@ -2098,7 +2126,7 @@ def test_deleting_a_session_leaves_another_sessions_PB_alone(tmp_path):
     asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(5400)))
     kept = db.attempts()[-1]
-    asyncio.run(svc.save_pb(kept.id, "igt"))
+    save_pb(svc, db, kept.id, "igt")
 
     asyncio.run(svc.new_session())          # session 3, so session 1 is deletable
     asyncio.run(svc.delete_session(1))
@@ -2116,7 +2144,7 @@ def test_orphaned_PBs_are_collected_on_reprojection(tmp_path):
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(1300)))
     attempt = db.attempts()[-1]
-    asyncio.run(svc.save_pb(attempt.id, "igt"))
+    save_pb(svc, db, attempt.id, "igt")
     assert db.pbs()
 
     # Simulate the damage: the attempt's journal slice is gone but its pb row
@@ -2135,7 +2163,7 @@ def test_a_live_PB_survives_the_orphan_sweep(tmp_path):
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(1300)))
     attempt = db.attempts()[-1]
-    asyncio.run(svc.save_pb(attempt.id, "igt"))
+    save_pb(svc, db, attempt.id, "igt")
     asyncio.run(svc._reproject())
     assert [row["attempt_id"] for row in db.pbs()] == [attempt.id]
 
@@ -2160,7 +2188,7 @@ def test_a_grab_timed_star_is_refused_as_a_pb(tmp_path):
     asyncio.run(svc.publish(grab_timed_star()))
     aid = db.attempts()[0].id
     with pytest.raises(ValueError, match="grab_timed"):
-        asyncio.run(svc.save_pb(aid, "igt"))
+        save_pb(svc, db, aid, "igt")
     assert db.pbs() == []
 
 
@@ -2173,7 +2201,7 @@ def test_the_other_clock_is_refused_too(tmp_path):
     asyncio.run(svc.publish(grab_timed_star()))
     aid = db.attempts()[0].id
     with pytest.raises(ValueError, match="grab_timed"):
-        asyncio.run(svc.save_pb(aid, "rta"))
+        save_pb(svc, db, aid, "rta")
 
 
 def test_an_xcam_timed_star_still_saves(tmp_path):
@@ -2184,7 +2212,7 @@ def test_an_xcam_timed_star_still_saves(tmp_path):
                                {"course_id": 2, "star_id": 2,
                                 "igt_frames": 343, "igt_timed_at": "xcam"})))
     aid = db.attempts()[0].id
-    assert asyncio.run(svc.save_pb(aid, "igt"))["frames"] == 343
+    assert save_pb(svc, db, aid, "igt")["frames"] == 343
 
 
 def test_the_view_and_the_server_agree_about_what_is_saveable(tmp_path):
@@ -2196,7 +2224,16 @@ def test_the_view_and_the_server_agree_about_what_is_saveable(tmp_path):
     asyncio.run(svc.publish(grab_timed_star()))
     view = build_session_view(db, svc, clock="igt")
     rows = [r for sec in view["stars"] for r in sec["attempts"]]
-    assert [r["pb_blocked_by"] for r in rows] == ["grab_timed"]
+    assert [r["pb_action"] for r in rows] == [None]
+    assert [r["pb_blocked"] for r in rows] == [
+        {"reason": "grab_timed", "strat": None}]
+    # ... and the QUANTITY outranks the strategy gate: putting the strategy
+    # in play does not make a grab-timed row saveable.
+    asyncio.run(svc.set_strat(2, 2, "Standard"))
+    asyncio.run(svc.set_attempt_strat(rows[0]["id"], "Standard"))
+    again = [r for sec in build_session_view(db, svc, clock="igt")["stars"]
+             for r in sec["attempts"]]
+    assert [r["pb_blocked"]["reason"] for r in again] == ["grab_timed"]
 
 
 def test_the_practice_log_row_carries_its_own_mark(tmp_path):
@@ -2240,7 +2277,7 @@ def test_a_legacy_star_is_marked_but_still_saveable(tmp_path):
                                 "igt_frames": 343, "igt_source": "result"})))
     attempt = db.attempts()[0]
     assert attempt.timed_at is None                    # unknown, not "grab"
-    assert asyncio.run(svc.save_pb(attempt.id, "igt"))["frames"] == 343
+    assert save_pb(svc, db, attempt.id, "igt")["frames"] == 343
     assert "grab_timed" in caveats_for({"strat_tag": "Owlless"}, attempt)
 
 
@@ -2382,3 +2419,67 @@ def test_deleting_a_USER_segment_leaves_no_tombstone_behind(tmp_path):
                                 "2026-08-10T00:00:00Z")
     asyncio.run(svc.delete_segment(uid))
     assert deleted_seed_keys(db, "segments") == set()
+
+
+# --- the PB door and the PB decoration are one predicate -------------------
+
+def _two_strats(db, svc):
+    """343f tagged Standard, 350f tagged 3x LJ, each saved as its own
+    strategy's PB — the shape behind his 2026-08-15 report."""
+    asyncio.run(svc.set_strat(2, 2, "Standard"))
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, igt=343)))
+    asyncio.run(svc.set_strat(2, 2, "3x LJ"))
+    asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1760, igt=350)))
+    fast = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    slow = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    save_pb(svc, db, fast, "igt")
+    save_pb(svc, db, slow, "igt")
+    return fast, slow
+
+
+def test_the_server_refuses_a_save_for_a_strategy_that_is_not_active(tmp_path):
+    """The API is a door, not a decoration: a PB is reachable without the
+    button, and a mis-filed one keeps GRADING once it is in the pbs table."""
+    db, svc = make(tmp_path)
+    fast, _slow = _two_strats(db, svc)
+    asyncio.run(svc.set_strat(2, 2, "3x LJ"))
+    with pytest.raises(ValueError, match="foreign_strat"):
+        asyncio.run(svc.save_pb(fast, "igt"))
+    with pytest.raises(ValueError, match="foreign_strat"):
+        asyncio.run(svc.undo_pb(fast, "igt"))
+
+
+def test_the_view_and_the_server_agree_about_the_strategy_gate(tmp_path):
+    """Driven from BOTH sides of the one resolver: every row the view marks
+    blocked is a row the command refuses, and every row it offers is one the
+    command accepts. A button that offers what save_pb rejects is the whole
+    reason this is one function."""
+    from sm64_events.tracking.views import build_session_view
+    db, svc = make(tmp_path)
+    _two_strats(db, svc)
+    asyncio.run(svc.set_strat(2, 2, "3x LJ"))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    for row in sec["attempts"]:
+        if row["outcome"] != "success":
+            continue
+        if row["pb_blocked"]:
+            with pytest.raises(ValueError):
+                asyncio.run(svc.save_pb(row["id"], "igt"))
+        else:
+            # "undo" here: each row already owns its own strategy's PB.
+            assert row["pb_action"] == "undo"
+            asyncio.run(svc.undo_pb(row["id"], "igt"))
+
+
+def test_undo_reaches_a_pb_a_later_strategys_save_used_to_bury(tmp_path):
+    """Latest-row-wins is the pbs contract and used to be applied blind, so
+    saving a 3x LJ PB made the Standard row's own save permanently un-undoable
+    ("attempt N is not the current igt PB"). The lookup is per strategy now."""
+    db, svc = make(tmp_path)
+    fast, _slow = _two_strats(db, svc)          # 3x LJ saved LAST
+    asyncio.run(svc.set_strat(2, 2, "Standard"))
+    asyncio.run(svc.undo_pb(fast, "igt"))
+    remaining = [(r["strat_tag"], r["frames"]) for r in db.pbs()]
+    assert remaining == [("3x LJ", 350)]        # the other strategy is intact

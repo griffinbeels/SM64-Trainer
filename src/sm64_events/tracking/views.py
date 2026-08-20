@@ -57,8 +57,7 @@ from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
 from sm64_events.tracking.projection import DEFAULT_MIN_FRAMES, journal_id
 from sm64_events.tracking.routes import route_stats
 from sm64_events.tracking.caveats import (attempt_caveat, caveat_for,
-                                           igt_seen_in,
-                                          pb_blocked_by)
+                                          igt_seen_in, pb_action)
 from sm64_events.tracking.segments import (arm_level, arms_ambiently,
                                             card_step_labels,
                                             card_waiting_for_sentence,
@@ -155,9 +154,84 @@ def current_pbs_by_strat(pb_rows: list[dict]) -> dict:
     return out
 
 
-def _attempt_json(a, pbs, clock, ranks=None, rank_clock=None, rank_ek=None):
-    pb = pbs.get(("segment", a.segment_id, clock) if a.segment_id is not None
-                 else (a.course_id, a.star_id, clock))
+def masked_strat(strat, deleted_names, reject_suffix=None):
+    """The ACTIVE strategy as every surface must read it, or None.
+
+    A tombstoned (fully deleted) strat must never surface as an active/last
+    strat -- the dropdowns no longer offer it.
+
+    `reject_suffix` additionally drops a name from the OTHER Bowser
+    reds/pipe family (e.g. a star's own active strat ending " (Pipe)") --
+    both suffixes share one rank-standards entity (the star's), so nothing
+    stopped a pre-2026-07-30 pick from landing on the wrong side before that
+    toggle existed to keep them apart. Self-heals on the next pick from the
+    now family-filtered dropdown; no data migration.
+
+    Module-level (it was a closure inside build_session_view until
+    2026-08-20) because `tracking/service.py::save_pb` has to gate on the
+    SAME active strategy the practice card draws its chip from. A second
+    reading of "which strategy is active" is how the API starts accepting
+    what the button refuses.
+    """
+    if strat and strat in deleted_names:
+        return None
+    if reject_suffix and strat and strat.endswith(reject_suffix):
+        return None
+    return strat
+
+
+def active_strat_for(db, strat_by_star, strat_by_segment, attempt) -> str | None:
+    """The strategy one attempt's ENTITY is being practised with, masked
+    exactly as the practice card masks it.
+
+    `service.save_pb`/`undo_pb` gate on this, and the card draws its chip from
+    the same answer through `build_session_view`'s own `masked` -- both go
+    through `masked_strat` and both apply the same Bowser reds/pipe family
+    reject, so the API cannot accept a save the button refuses. Reads the
+    two live strategy maps rather than the db so a pick made this event is
+    already in force.
+
+    None for an attempt with no entity (the unassigned list), which
+    `caveats.pb_action` refuses before it ever asks about a strategy.
+    """
+    if attempt.segment_id is not None:
+        seg_ek = entity_key(None, None, attempt.segment_id)
+        deleted = db.get_state("deleted_strats", {}).get(seg_ek, [])
+        _, pipe_grading_ek = _reds_pipe_segments(db.segment_defs())
+        return masked_strat(
+            strat_by_segment.get(attempt.segment_id), deleted,
+            STAR_FAMILY_SUFFIX if pipe_grading_ek.get(attempt.segment_id)
+            else None)
+    if attempt.course_id is None:
+        return None
+    star_ek = entity_key(attempt.course_id, attempt.star_id)
+    deleted = db.get_state("deleted_strats", {}).get(star_ek, [])
+    reds_pipe_by_course, _ = _reds_pipe_segments(db.segment_defs())
+    reject = (PIPE_FAMILY_SUFFIX
+              if attempt.star_id == 0
+              and attempt.course_id in reds_pipe_by_course else None)
+    return masked_strat(
+        strat_by_star.get((attempt.course_id, attempt.star_id)), deleted,
+        reject)
+
+
+def _attempt_json(a, pbs, clock, ranks=None, rank_clock=None, rank_ek=None,
+                  pbs_by_strat=None, active_strat=None):
+    # The PB this row is MEASURED against is its own strategy's, never the
+    # entity-wide one and never the active strategy's (2026-08-15: "we
+    # maintain different PBs per strategy, and they should all be maintained
+    # separately"). Two consequences, both wanted: the delta column does not
+    # move when the header dropdown changes, and a Standard row is never
+    # measured against a 3x LJ best. A row with no strat_tag belongs to no
+    # ladder, so it has no PB to be compared with and shows no delta.
+    # `pbs` (strategy-blind) is still read by nothing here; it stays a
+    # parameter because unassigned rows have no strategy map at all.
+    pb = None
+    if pbs_by_strat is not None and a.strat_tag:
+        pb = pbs_by_strat.get(
+            ("segment", a.segment_id, clock, a.strat_tag)
+            if a.segment_id is not None
+            else (a.course_id, a.star_id, clock, a.strat_tag))
     frames = a.igt_frames if clock == "igt" else a.rta_frames
     race_row = clock == "rta" and frames == 0  # same-tick reset-race: rta is junk (see projection.py docstring)
     delta = (frames - pb["frames"]
@@ -175,6 +249,8 @@ def _attempt_json(a, pbs, clock, ranks=None, rank_clock=None, rank_ek=None):
     # clock, a display choice.
     rank_clock = clock if rank_clock is None else rank_clock
     rank_frames = a.igt_frames if rank_clock == "igt" else a.rta_frames
+    is_current_pb = bool(pb) and pb["attempt_id"] == a.id
+    pb_action_key, pb_blocked = pb_action(a, active_strat, is_current_pb)
     return {"id": a.id,
             # Recency-comparable across BOTH id namespaces (spec 2026-07-28-
             # multi-step-segments, live report): a reattributed 100-coin
@@ -194,16 +270,19 @@ def _attempt_json(a, pbs, clock, ranks=None, rank_clock=None, rank_ek=None):
             "rta_frames": a.rta_frames,
             "rta": format_igt(a.rta_frames) if a.rta_frames is not None else None,
             "pb_delta_frames": delta, "cleared": a.cleared,
-            # this attempt owns the CURRENT pb row on this clock — drives
-            # the Save-as-PB / Undo-PB button swap (undo deletes that row)
-            "is_current_pb": bool(pb) and pb["attempt_id"] == a.id,
-            # Why this row may NOT be saved as a PB (a caveats.py KEY, or
-            # None) — the same predicate save_pb refuses on, so the button
-            # cannot offer what the server would reject. A key rather than a
-            # sentence: the browser already owns the wording for each one
-            # (ui/components/marks.js), and shipping prose here would be a
-            # second vocabulary for the same fact.
-            "pb_blocked_by": pb_blocked_by(a),
+            # this attempt owns the current pb row FOR ITS OWN STRATEGY on
+            # this clock — what makes the Undo button undo the right save
+            # once several strategies each hold a PB
+            "is_current_pb": is_current_pb,
+            # THE action column, resolved server-side: "save" | "undo" | null,
+            # and when it is null, why. Two predicates (is this TIME legal,
+            # does this row belong to what I am practising) with a precedence
+            # between them, combined in ONE place — the browser drawing its
+            # own conclusion from two fields is how a button starts offering
+            # what save_pb refuses. caveats.py::pb_action owns it and
+            # save_pb/undo_pb call the same function.
+            "pb_action": pb_action_key,
+            "pb_blocked": pb_blocked,
             # "the number printed on this row is not the quantity you think
             # you were practising", as a caveats.py KEY or None — the mark the
             # practice log draws beside the time itself. Separate from
@@ -1209,20 +1288,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     deleted_strats = db.get_state("deleted_strats", {})
 
     def masked(strat, ek, reject_suffix=None):
-        """A tombstoned (fully deleted) strat must never surface as an
-        active/last strat — the dropdowns no longer offer it.
-
-        `reject_suffix` additionally drops a name from the OTHER Bowser
-        reds/pipe family (e.g. a star's own active strat ending " (Pipe)")
-        -- both suffixes share one rank-standards entity (the star's), so
-        nothing stopped a pre-2026-07-30 pick from landing on the wrong side
-        before this toggle existed to keep them apart. Self-heals on the next
-        pick from the now family-filtered dropdown; no data migration."""
-        if strat and strat in deleted_strats.get(ek, []):
-            return None
-        if reject_suffix and strat and strat.endswith(reject_suffix):
-            return None
-        return strat
+        return masked_strat(strat, deleted_strats.get(ek, []), reject_suffix)
 
     sections, unassigned = [], []
     seen: dict[tuple[int, int], None] = {}
@@ -1413,23 +1479,21 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         ek = entity_key(course_id, star_id)
         history = attempts_by_star.get((course_id, star_id), [])
         in_section = [a for a in history if a in scoped_set]
-        pb_json = {}
-        for mode in ("igt", "rta"):
-            row = pbs.get((course_id, star_id, mode))
-            # attempt_id lets the UI turn the PB tag into a "jump to this row"
-            # link — the same pickFromGraph path a gold progress-graph dot uses.
-            pb_json[mode] = ({"frames": row["frames"],
-                              "display": format_igt(row["frames"]),
-                              "attempt_id": row["attempt_id"],
-                              # "this time does not mean what the rank beside
-                              # it implies", or None. ONE derivation
-                              # (tracking/caveats.py) shared with the
-                              # quick-select cell, so the two surfaces cannot
-                              # word the same fact differently.
-                              "caveat": caveat_for(
-                                  row, attempt_by_id.get(row["attempt_id"]),
-                                  igt_seen_in(history))}
-                             if row else None)
+        # attempt_id lets the UI turn the PB tag into a "jump to this row"
+        # link — the same pickFromGraph path a gold progress-graph dot uses.
+        # "caveat" is "this time does not mean what the rank beside it
+        # implies", or None: ONE derivation (tracking/caveats.py) shared with
+        # the quick-select cell, so the two surfaces cannot word the same
+        # fact differently.
+        star_igt_seen = igt_seen_in(history)
+        pb_row_json = lambda row: ({
+            "frames": row["frames"],
+            "display": format_igt(row["frames"]),
+            "attempt_id": row["attempt_id"],
+            "caveat": caveat_for(row, attempt_by_id.get(row["attempt_id"]),
+                                 star_igt_seen)} if row else None)
+        pb_json = {mode: pb_row_json(pbs.get((course_id, star_id, mode)))
+                   for mode in ("igt", "rta")}
         # Basis computed ONCE per section and shared by both rank numbers
         # below: the strat rank grades it against the ACTIVE strategy's
         # ladder, the entity rank against the entity's best-possible one.
@@ -1465,6 +1529,19 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         # here with no strat_tag can never be found by current_pbs_by_strat
         # regardless of the active strat, which is the untagged-PB bug
         # (live report 2026-07-31): see _section_banner's pb_untagged param.
+        # THE tag the practice card shows: this entity's PB ON THE ACTIVE
+        # STRATEGY, which is what a personal best has always MEANT (the
+        # glossary, and current_pbs_by_strat's own contract) and what the
+        # card never showed. Null when the active strategy holds none of its
+        # own, so the card can say "No PB on 3x LJ" instead of quoting a
+        # Standard time under a 3x LJ heading (2026-08-15). `pb` above stays
+        # the strategy-blind number for anything that wants the entity's
+        # best-ever regardless of how it was run.
+        pb_by_strat_json = {
+            mode: (pb_row_json(pbs_by_strat.get(
+                (course_id, star_id, mode, star_strat))) if star_strat
+                   else None)
+            for mode in ("igt", "rta")}
         star_pb_current = pbs.get((course_id, star_id, rank_clock))
         star_pb_untagged = (star_pb_current is not None
                             and star_pb_current["strat_tag"] is None)
@@ -1483,7 +1560,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "star_name": star_name(course_id, star_id),
             "links": star_links(course_id, star_id),
             "pb": pb_json,
-            "attempts": [_attempt_json(a, pbs, clock, service.ranks, rank_clock)
+            "pb_by_strat": pb_by_strat_json,
+            "attempts": [_attempt_json(a, pbs, clock, service.ranks, rank_clock,
+                                       pbs_by_strat=pbs_by_strat,
+                                       active_strat=star_strat)
                         for a in in_section],
             "stats": _stats_for(history, stat_menu, clock),
             "strategies": star_strategies,
@@ -1564,6 +1644,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         history = attempts_by_seg.get(seg_id, [])
         in_section = [a for a in history if a in scoped_set]
         pb_row = pbs.get(("segment", seg_id, "rta"))
+        _seg_pb_json = lambda row: ({"frames": row["frames"],
+                                     "display": format_igt(row["frames"]),
+                                     "attempt_id": row["attempt_id"]}
+                                    if row else None)
         # Basis computed ONCE per section, same reasoning as the star loop
         # above: shared by the strat rank and the entity rank. Routed
         # through clock_for like the star section rather than hardcoding
@@ -1687,13 +1771,19 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "enabled": bool(meta.get("enabled", True)),
             # igt present-as-None: same shape-stability rule as the target
             # payload — UI code reading sec.pb.igt gets null, not undefined.
-            "pb": {"igt": None,
-                   "rta": ({"frames": pb_row["frames"],
-                            "display": format_igt(pb_row["frames"]),
-                            "attempt_id": pb_row["attempt_id"]}
-                           if pb_row else None)},
+            "pb": {"igt": None, "rta": _seg_pb_json(pb_row)},
+            # Rule 11 parity with the star section above, and the same
+            # meaning: the PB on the ACTIVE strategy, which is the number
+            # the card's tag shows.
+            "pb_by_strat": {
+                "igt": None,
+                "rta": _seg_pb_json(pbs_by_strat.get(
+                    ("segment", seg_id, "rta", seg_strat)) if seg_strat
+                    else None)},
             "attempts": [_attempt_json(a, pbs, "rta", service.ranks, seg_rank_clock,
-                                       rank_ek=grading_ek)
+                                       rank_ek=grading_ek,
+                                       pbs_by_strat=pbs_by_strat,
+                                       active_strat=seg_strat)
                         for a in in_section],
             "stats": _stats_for(history, stat_menu, "rta"),
             # registered ∪ observed-on-attempts ∪ rank-standard strategies --

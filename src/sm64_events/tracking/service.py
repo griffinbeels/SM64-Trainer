@@ -30,7 +30,7 @@ from sm64_events.ranks.classify import RANK_MODES
 from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking import practicable
-from sm64_events.tracking.caveats import pb_blocked_by
+from sm64_events.tracking.caveats import pb_action
 from sm64_events.tracking.defaults import remember_deletion, resolve_steps
 from sm64_events.tracking.hundred_coin import classify
 from sm64_events.tracking.prune import PRUNE_EVENT, prunable_ids
@@ -41,6 +41,12 @@ from sm64_events.tracking.segments import (SegmentDef, hundred_coin_entity,
                                            segment_origin, split_definition,
                                            stage_origin, star_origin,
                                            validate_definition)
+# The read layer, for ONE thing: `active_strat_for` is how the PB gate reads
+# the active strategy exactly as the practice card draws it. A second reading
+# of "which strategy is active" is how the API starts accepting what the
+# button refuses. views.py imports nothing from here, so this is a one-way
+# edge rather than a cycle.
+from sm64_events.tracking.views import active_strat_for
 from sm64_events.tracking import routes as route_logic
 
 log = logging.getLogger("sm64.tracker")
@@ -1860,6 +1866,13 @@ class TrackerService:
                                      timestamp_utc=_now(),
                                      payload=self.target_payload()))
 
+    def active_strat(self, attempt) -> str | None:
+        """The strategy this attempt's entity is being practised with, as the
+        practice card reads it -- `views.active_strat_for`, so the PB gate and
+        the chip beside the button can never disagree."""
+        return active_strat_for(self._require_db(), self.strat_by_star,
+                                self.strat_by_segment, attempt)
+
     async def save_pb(self, attempt_id: int, timer_mode: str) -> dict:
         db = self._require_db()
         if timer_mode not in ("igt", "rta"):
@@ -1871,14 +1884,21 @@ class TrackerService:
             raise ValueError(f"attempt {attempt_id} is not a saveable success")
         if attempt.segment_id is not None and timer_mode != "rta":
             raise ValueError("segments are RTA-only")
-        blocked = pb_blocked_by(attempt)
+        action, blocked = pb_action(attempt, self.active_strat(attempt),
+                                    owns_strat_pb=False)
         if blocked is not None:
-            # The door, not the decoration: the button is drawn disabled from
-            # the same predicate, but a PB is reachable by API and a fake one
-            # keeps GRADING once it is in the pbs table (that is what made a
-            # cleared attempt's leftover PB read MARIO 1 for a week).
+            # The door, not the decoration: the button is drawn from the same
+            # resolver, but a PB is reachable by API and a fake one keeps
+            # GRADING once it is in the pbs table (that is what made a
+            # cleared attempt's leftover PB read MARIO 1 for a week). Since
+            # 2026-08-20 that covers the STRATEGY too: a time may only be
+            # banked under the strategy it was run with, and only while that
+            # strategy is the one being practised.
             raise ValueError(
-                f"attempt {attempt_id} cannot be saved as a PB ({blocked})")
+                f"attempt {attempt_id} cannot be saved as a PB "
+                f"({blocked['reason']})")
+        if action is None:
+            raise ValueError(f"attempt {attempt_id} has no PB action")
         frames = attempt.igt_frames if timer_mode == "igt" else attempt.rta_frames
         if frames is None:
             raise ValueError(f"attempt {attempt_id} has no {timer_mode} clock")
@@ -1908,14 +1928,26 @@ class TrackerService:
         attempt = next((a for a in db.attempts() if a.id == attempt_id), None)
         if attempt is None:
             raise LookupError(f"no attempt {attempt_id}")
+        # PER STRATEGY since 2026-08-20, both halves. The row to undo is this
+        # attempt's own strategy's current PB -- a Standard save is no longer
+        # un-undoable because a 3x LJ save landed after it -- and the action is
+        # refused entirely while a DIFFERENT strategy is active, the same rule
+        # save_pb applies through the same resolver.
         row = db.current_pb(attempt.course_id, attempt.star_id, timer_mode,
-                            segment_id=attempt.segment_id)
-        if row is None or row["attempt_id"] != attempt_id:
+                            segment_id=attempt.segment_id,
+                            strat_tag=attempt.strat_tag)
+        owns = row is not None and row["attempt_id"] == attempt_id
+        action, blocked = pb_action(attempt, self.active_strat(attempt), owns)
+        if blocked is not None:
+            raise ValueError(
+                f"attempt {attempt_id} cannot undo a PB ({blocked['reason']})")
+        if action != "undo":
             raise ValueError(
                 f"attempt {attempt_id} is not the current {timer_mode} PB")
         db.delete_pb(row["id"])
         restored = db.current_pb(attempt.course_id, attempt.star_id,
-                                 timer_mode, segment_id=attempt.segment_id)
+                                 timer_mode, segment_id=attempt.segment_id,
+                                 strat_tag=attempt.strat_tag)
         payload = {"course_id": attempt.course_id, "star_id": attempt.star_id,
                    "segment_id": attempt.segment_id,
                    "strat_tag": row["strat_tag"], "timer_mode": timer_mode,

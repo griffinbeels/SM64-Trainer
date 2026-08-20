@@ -322,6 +322,14 @@ def create_ranks_router(service, library=None, adoptions=None,
         return example_clips(library.payload, rows, entity,
                              service.ranks.has_jp_ladder)
 
+    def _sheet_best(entity: str) -> dict:
+        if library is None or service.ranks is None:
+            return {}
+        from sm64_events.library.examples import sheet_best
+        rows = adoptions.rows() if adoptions is not None else {}
+        return sheet_best(library.payload, rows, entity,
+                          service.ranks.has_jp_ladder)
+
     # Videos the liveness sweep (tools/check_videos.py) marked gone — round 2
     # of task 0098: a dead video must never be THE example a standard links
     # to. Loaded once per process, like every other bundled seed; an absent
@@ -418,6 +426,24 @@ def create_ranks_router(service, library=None, adoptions=None,
                 # external behaviour, since arriving nowhere reads as broken.
                 "library_urls": sorted({url for clips in extra_clips.values()
                                         for _cs, url in clips}),
+                # The bottom row of the standards table: the fastest time
+                # anybody has recorded on the Ultimate Sheet for each
+                # strategy, with its runner and (where one exists) its video.
+                # The top of a ladder is not the top of the sport -- he read
+                # Mario 1 and said "there actually ARE faster times than
+                # this" (2026-08-15).
+                #
+                # A dead video costs the LINK, never the row: this row asserts
+                # a TIME, so dropping the fastest run because its clip rotted
+                # would make the number wrong in order to protect a link. That
+                # is the opposite trade from `cutoff_videos` above, where the
+                # link IS the payload -- same verdict set, different
+                # consequence, stated here so the difference reads as a
+                # decision rather than an oversight.
+                "sheet_best": {
+                    strat: ({**best, "video": None}
+                            if best["video"] in dead_videos else best)
+                    for strat, best in _sheet_best(entity).items()},
                 "user_videos": service.ranks.user_videos(entity),
                 "seeded": service.ranks.seeded_strategies(entity),
                 # Grouping is resolved HERE, not in the browser: a 100-coin

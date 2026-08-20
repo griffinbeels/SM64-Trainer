@@ -305,7 +305,9 @@ rather than a finish.
 
 Your fastest finished [[attempt]] at one [[target]] on one [[strategy]]. The
 trainer keeps personal bests separately from the [[journal]], so clearing
-history never erases one.
+history never erases one, and it saves one only under the [[strategy]] you are
+practicing — so every [[strategy]] holds its own, and the [[practice log]]
+shows whichever [[strategy]] you have selected.
 
 - **Lives** — the store (`src/sm64_events/storage/db.py`)
   → the PB tag on the [[practice log]]
@@ -803,6 +805,21 @@ blinks on arrival.
 
 - **Lives** — the standards panel
   (`src/sm64_events/ui/components/standards.js`)
+
+### Sheet best
+
+The fastest [[sheet entry]] anybody holds for one [[strategy]] — the last row
+of the [[standards ladder]], under every [[rank]] rather than in it. The
+trainer names it for what it is: the top of a [[ladder]] is not the top of the
+sport, and the [[Ultimate Sheet]] proves only that nobody there has gone
+faster.
+
+- **Not** — a [[standard]]. A [[standard]] is a time the trainer grades you
+  against; a sheet best grades nothing and wears no [[rank icon]].
+
+- **Lives** — the library examples
+  (`src/sm64_events/library/examples.py`)
+  → the last row of the [[standards ladder]]
 
 ### Game version
 

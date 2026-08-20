@@ -19,7 +19,8 @@ import { h } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { displayName, entityIdentity, entityKey, isSegment,
-         sectionClock, sectionPb, standardsIdentity } from "../entitysection.js";
+         sectionClock, sectionPb, sectionPbByStrat,
+         standardsIdentity } from "../entitysection.js";
 import { entityIconSrc, fallbackToGenericStar, fallbackSlotForEntityKey }
   from "./entityicons.js";
 import { practicedHere } from "../stagecontext.js";
@@ -372,7 +373,21 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   const standards = standardsIdentity(sec);
   const clock = sectionClock(sec, t.clock);
   const pb = sectionPb(sec, t.clock);
-  const pbCaveat = caveatOf(pb && pb.caveat);
+  const stratPb = sectionPbByStrat(sec, t.clock);
+  // The badge describes the PB the TAG is showing, which is the active
+  // strategy's since 2026-08-20 -- a caveat about a number no longer on
+  // screen is worse than none.
+  //
+  // ONE fallback, and it is the case that would otherwise go silent: with no
+  // PB on this strategy but an UNTAGGED one on the entity, the tag reads "No
+  // PB on Standard" while a real saved time sits in the row list, and
+  // `unattributed` is the only thing that explains why. Other caveat keys are
+  // deliberately NOT carried over -- they describe a time run on some other
+  // strategy, and a mark about a number this card is not showing is the thing
+  // this whole change is fixing.
+  const pbCaveat = caveatOf(
+    stratPb ? stratPb.caveat
+      : (pb && pb.caveat === "unattributed" ? "unattributed" : null));
   const named = displayName(sec, (t.view.catalog || {}).courses || []);
   const base = showHidden ? sec.attempts
     : sec.attempts.filter((a) => !a.cleared && a.outcome !== "abandoned");
@@ -589,7 +604,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            (above) and the page-turn effect (above) already exist for a
            trend-graph dot; a PB link needs no second implementation of
            "open + turn to the right page + scroll + flash". */""}
-      <${PbTag} pb=${pb} mode=${clock} rows=${rows}
+      <${PbTag} pb=${stratPb} strat=${sec.last_strat} mode=${clock} rows=${rows}
         pick=${pbPick} t=${t} showCaveat=${false} />
       ${/* The book mark -- a doorway OUT to the community sheet for whatever
            this card is showing: it opens the Library at this card's target
@@ -683,9 +698,13 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            is not the card's own identity for a Bowser reds pair. Closed also
            means it fetches nothing until asked: the panel loads on open, so
            N cards cost N requests only if he opens N of them. */""}
+      ${/* `sectionPb` here is the ACTIVE strategy's PB, never the entity-wide
+           one: the marker positions from it in pb mode, and positioning a
+           3x LJ time against the Standard column is what planted a "you are
+           here" badge on a ladder he had never run (2026-08-15). */""}
       <${StandardsPanel} entity=${standards.entity}
         activeStrat=${sec.last_strat} strategies=${sec.strategies}
-        sectionRank=${sec.rank} sectionPb=${sec.pb}
+        sectionRank=${sec.rank} sectionPb=${sec.pb_by_strat}
         family=${standards.family} openLibrary=${openLibrary}
         gradingVersion=${t.view && t.view.game_version ? t.view.game_version.effective : null}
         onChanged=${t.refresh} defaultOpen=${false} />
