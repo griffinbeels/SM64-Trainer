@@ -431,6 +431,12 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
             service, library=library, adoptions=adoptions))
         from sm64_events.server.mode_api import create_mode_router
         app.include_router(create_mode_router(service, mode_path=mode_path))
+        # Importing a time needs BOTH halves -- the service to land it and the
+        # sheet to read a runner's column -- which is why it is its own router
+        # beside the ranks one rather than another block in the general API.
+        from sm64_events.server.import_api import create_import_router
+        app.include_router(create_import_router(
+            service, library=library, overrides=library_overrides))
     if replay is not None:
         from sm64_events.server.replay_api import create_replay_router
         app.include_router(create_replay_router(replay))
