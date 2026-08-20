@@ -85,6 +85,19 @@ def shipped_python() -> tuple[Path, ...]:
     return tuple(sorted(SRC.rglob("*.py")))
 
 
+def library_zone() -> tuple[Path, ...]:
+    """The library module tree and the API that serves it -- everywhere a
+    sheet entry's time could plausibly be graded. Narrower than
+    `python_sources()` on purpose: `scoring.best_ladder` is legitimately
+    called from `tracking/marelo.py`, `ranks/scopes.py`, `tracking/views.py`
+    and `server/ranks_api.py` to grade a USER's own attempts, which has
+    nothing to do with a sheet entry and would be permanent false positives
+    at repo scope. Nothing in this zone calls either ingredient today, so the
+    row starts with zero existing owners to add."""
+    return tuple(sorted([*(SRC / "library").rglob("*.py"),
+                         SRC / "server" / "library_api.py"]))
+
+
 def strategy_name_zone() -> tuple[Path, ...]:
     """The modules that could plausibly COMPOSE a strategy name — the ranks
     store, the tracking layer that stamps one onto an attempt, the API that
@@ -410,6 +423,24 @@ INVARIANTS = (
             "(2026-08-01): a fourth dance action added to the registry would "
             "have reached the detector and not the probe that validates it, "
             "and the probe would have gone on reporting GATE PASSED.",
+    ),
+    SingleSource(
+        concept="a sheet entry's time graded against a standards ladder",
+        owners=frozenset({"ratings.py"}),
+        tokens=("best_ladder", "progress_for_time"),
+        files=library_zone(),
+        why="library/ratings.py -- the runner-rating twin of "
+            "tracking/marelo.py::entity_scores -- grades a community "
+            "runner's sheet time on `scoring.best_ladder(ranks_store."
+            "ladders(...))` fed to `scoring.progress_for_time`, never the "
+            "library's own fitted `item['ladder']` (task-2 brief, "
+            "2026-08-20): the fitted and vetted-standards ladders differ on "
+            "every matched approach in the shipped snapshot, so grading on "
+            "the sheet's own curve produces a number that LOOKS like MARELO "
+            "and cannot be compared to the user's. A second library file "
+            "calling either function directly is building a competing "
+            "grading path beside ratings.py -- 'is runner_scores() called' "
+            "would pass while that second path sat right beside it.",
     ),
 )
 

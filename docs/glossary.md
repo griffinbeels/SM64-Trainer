@@ -674,6 +674,19 @@ name, the assignment still lands and the vetted [[ladder]] keeps grading.
 - **Lives** — the assignments (`src/sm64_events/library/adoptions.py`)
   → the link strip on the [[Library tab]]'s target page
 
+### Runner rating
+
+The [[MARELO]] this project derives for a [[runner]] from their [[sheet
+entry]] times, on the exact same 0-100 curve your own [[MARELO]] grades on —
+what turns the [[Ultimate Sheet]] into a board you can climb against a
+[[runner]]'s best time on each [[target]], not just your own. A [[runner]]
+with no time on a [[target]] never grades as zero there; that [[target]] is
+simply absent from their rating, the same rule your own [[MARELO]] follows.
+
+- **Lives** — the ratings bridge (`src/sm64_events/library/ratings.py`)
+- **Not** — your own [[MARELO]], which only ever grades your practice
+  history, never a [[runner]]'s.
+
 ---
 
 ## What is on screen
