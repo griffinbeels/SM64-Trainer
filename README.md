@@ -73,6 +73,12 @@ you can click to jump straight to an attempt — or open its replay.
 a pipe entry, a Bowser fight, a castle movement) and it becomes a first-class
 practice target with the same history, PBs, ranks and replays a star gets.
 
+**Bring your times with you.** Practised for years before finding this? Type a
+time straight onto any star's card and it becomes your PB — or, if you have a
+column on the Ultimate Sheet, pick your name in Settings and take the whole
+thing in one click. A time only lands when it beats the best you already hold
+for that star and strategy, so importing twice costs nothing.
+
 **Ranks.** Every attempt, banner and route step wears a rank badge, graded
 against community standards — **per strategy**, so a fast time on one strat
 never flatters another. A header picker switches what the badges grade: your
