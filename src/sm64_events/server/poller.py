@@ -3,6 +3,14 @@
 
 Polling at ~60 Hz against 30 Hz game logic means every game frame is
 observed; the star dance lasts ~60-90 frames so edges cannot be missed.
+
+The 60 is the REQUESTED rate, not the achieved one: each tick works and THEN
+sleeps a full interval, so the real rate is 30/(1+30*tick_seconds) Hz. Measured
+live 2026-08-20 — 45.9 Hz before this commit removed the snapshot's 3.4 ms
+byte swap, 58.5 Hz after. No game frame was missed at either rate over 450
+frames, but 45.9 Hz leaves 1.5 samples per game frame where the docstring
+assumes 2. `_record_tick_ms` reports the compute half; the read half now
+dominates nothing.
 """
 import asyncio
 import logging
