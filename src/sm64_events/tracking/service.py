@@ -1953,6 +1953,18 @@ class TrackerService:
         import `server/`.
         """
         db = self._require_db()
+        for candidate in candidates:
+            # A star is the only thing this door can land, and saying so here
+            # is what keeps the split below honest. A SEGMENT id is local to
+            # this database — the sheet's six segment-mapped targets resolved
+            # against the seeding order of whichever machine scraped them — and
+            # segments are RTA-only besides, while every candidate here is an
+            # IGT star time.
+            if not candidate.entity_key.startswith("star:"):
+                raise ValueError(
+                    f"{candidate.entity_key!r} cannot be imported: only stars "
+                    "can be, and a segment id means nothing outside the "
+                    "database that assigned it")
 
         def current_frames(entity_key, strat_tag, timer_mode):
             _, course_s, star_s = entity_key.split(":")

@@ -87,3 +87,13 @@ def test_removing_an_import_restores_what_it_superseded(tmp_path):
     assert db.current_pb(1, 0, "igt", strat_tag="Standard")["frames"] == 266
     svc.remove_imported("manual")
     assert db.current_pb(1, 0, "igt", strat_tag="Standard")["frames"] == 400
+
+
+def test_a_segment_key_is_refused_rather_than_split(tmp_path):
+    """A segment id is local to this database, and segments are RTA-only. The
+    sheet mapper already drops these; the door says so too, because the API
+    accepts an entity key from anyone."""
+    _, svc = make(tmp_path)
+    import pytest
+    with pytest.raises(ValueError, match="only stars"):
+        asyncio.run(svc.import_times("manual", [candidate(key="segment:6")]))
