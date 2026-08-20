@@ -994,7 +994,9 @@
      Wraps rather than scrolls: the row carries five things at 850px and a
      control the user has to hunt through is redesigned, never scrolled. */
   .addtime{display:block;margin-top:6px}
-  .addtime-open{display:inline-flex;align-items:center;gap:5px}
+  /* justify-content is stated, never left to Chromium's silent centering —
+     both these rows anchor LEFT under the attempt list. */
+  .addtime-open{display:inline-flex;align-items:center;justify-content:flex-start;gap:5px}
   .addtime-body{display:flex;flex-wrap:wrap;align-items:center;gap:8px;
     padding:8px 2px 2px}
   .addtime-strat{color:var(--text-dim,#8b98a6);font-size:12px}
@@ -1014,7 +1016,7 @@
   .importsheet-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;
     margin-top:6px}
   .importsheet-row .search-select{flex:1 1 200px;min-width:0}
-  .importsheet-undo{display:inline-flex;align-items:center;gap:5px;margin-top:2px}
+  .importsheet-undo{display:inline-flex;align-items:center;justify-content:flex-start;gap:5px;margin-top:2px}
   .settings-note.is-ok{color:var(--good,#5bc97a)}
   .settings-note.is-bad{color:var(--bad,#e2686b)}
   .stdcell{display:inline-flex;align-items:center;gap:4px}

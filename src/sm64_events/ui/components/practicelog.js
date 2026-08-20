@@ -661,14 +661,20 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            movements, where every save comes back 422. A dead control whose
            reason lives somewhere the click does not is the exact shape he
            reports as a bug. A star section carries no `kind` key at all,
-           which is why every check here reads the segment side. */""}
-      ${/* No game version is sent. Every time stored before imports existed
+           which is why every check here reads the segment side.
+
+           BELOW the standards panel, not above it. It sat between the last
+           attempt and that panel for one round and pushed them 47px apart --
+           reopening exactly the gap `tests/test_card_footer_takes_no_room_
+           when_empty.py` exists to keep shut. That placement is also wrong on
+           its own terms: this is a rare setup gesture and the attempt list's
+           relationship to its ladder is the thing the card is FOR.
+
+           No game version is sent. Every time stored before imports existed
            carries none and grades on whichever ROM is running, and a typed
            time gets the same treatment -- stamping the RUNNING version onto a
            time he set years ago would be asserting something he never told
            us. The sheet door sends one because the sheet actually says. */""}
-      ${!isSegment(sec) && html`<${AddTime}
-          entityKey=${ek} strategy=${sec.last_strat} onDone=${t.refresh} />`}
       <div class="attempt-footer">
         ${/* Real pagination (amendment A8), replacing "Show 10 more": "we
              should replace the show more with the number of pages we have
@@ -713,6 +719,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
         family=${standards.family} openLibrary=${openLibrary}
         gradingVersion=${t.view && t.view.game_version ? t.view.game_version.effective : null}
         onChanged=${t.refresh} defaultOpen=${false} />
+      ${!isSegment(sec) && html`<${AddTime}
+          entityKey=${ek} strategy=${sec.last_strat} onDone=${t.refresh} />`}
       ${/* THE PIECES OF THIS ENTITY, inside its own card and indented one
            level (round 22). They sit INSIDE the `Disclose` body deliberately,
            which is what buys "These should follow the visibility of the
