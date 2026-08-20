@@ -564,3 +564,32 @@ def test_the_guards_can_still_fail():
                           for (ladder, time), py, node in
                           zip(fake_cases, fake_python, fake_js) if py != node]
     assert fake_disagreements == [({"Bronze": 100}, 50, "Silver", "Bronze")]
+
+
+# --- 5. the attainable-centisecond rule -------------------------------------
+# Only 30 of every 100 centisecond values are displayable, and a HAND-TYPED
+# time has a 70% chance of naming one that is not. The server rounds up on
+# save; the field has to show the same answer before saving, or it hands back a
+# different number than the one entered. Two implementations, one rule.
+
+def test_attainable_centiseconds_agree():
+    from sm64_events.core.timefmt import attainable_cs
+
+    # Every centisecond value through the first two seconds (where the 30-of-100
+    # pattern repeats in full), plus real times across the range.
+    values = list(range(0, 200)) + [
+        886, 1000, 1501, 1503, 2613, 4450, 6300, 6600, 9996, 12345]
+    js = run_node(
+        f"import {{ attainableCs }} from {FORMAT_JS.as_uri()!r};\n"
+        f"const values = {json.dumps(values)};\n"
+        "console.log(JSON.stringify(values.map(attainableCs)));")
+    python = [attainable_cs(cs) for cs in values]
+    disagreements = [(cs, py, node)
+                     for cs, py, node in zip(values, python, js)
+                     if py != node]
+    assert not disagreements, (
+        "core/timefmt.py::attainable_cs and ui/format.js::attainableCs "
+        f"disagree at (cs, python, js): {disagreements}. A hand-entry field "
+        "that snaps differently from the server hands the user back a time "
+        "they did not type — and JS `/` is float division where Python `//` "
+        "is not, which is exactly the drift these two are one edit away from.")

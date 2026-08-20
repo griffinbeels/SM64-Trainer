@@ -13,6 +13,34 @@ export function fmtIgt(frames) {
   return `${m}'${String(s).padStart(2, "0")}"${String(c).padStart(2, "0")}`;
 }
 
+// Only 30 of every 100 centisecond values can ever appear on the timer — it is
+// a frame counter, and fmtIgt above is how it prints. Ask for 15.01 and nobody
+// can ever hit it; the honest answer is 15.03.
+//
+// This is the JS half of core/timefmt.py's frame_at_or_after / cs_of_frame /
+// attainable_cs, pinned to them by tests/test_cross_language_parity.py. The
+// second copy is a real decision, not an oversight: a time TYPED by hand has a
+// 70% chance of naming a value the timer cannot show, and a field that only
+// learns that after saving hands back a different number than the one entered
+// — which reads as the app losing your input.
+//
+// Rounds UP, never down, for the same reason the Python half does: rounding
+// down would credit a time that was never displayable.
+export function frameAtOrAfter(centiseconds) {
+  if (centiseconds <= 0) return 0;
+  const whole = Math.floor(centiseconds / 100), cents = centiseconds % 100;
+  return whole * 30 + Math.ceil((cents * 30) / 100);
+}
+
+export function csOfFrame(frames) {
+  const whole = Math.max(0, Math.floor(frames));
+  return Math.floor(whole / 30) * 100 + Math.floor(((whole % 30) * 100) / 30);
+}
+
+export function attainableCs(centiseconds) {
+  return csOfFrame(frameAtOrAfter(centiseconds));
+}
+
 // A time under a minute drops its empty minutes field: 23 seconds reads
 // `23"00`, not `0'23"00` (user, 2026-08-03). ONE rule, expressed as a
 // transformation OF fmtIgt rather than as a second formatter, so the two can
