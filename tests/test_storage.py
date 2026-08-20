@@ -1231,3 +1231,30 @@ def test_migration_v26_backfills_a_scalar_parent_into_the_list(tmp_path):
     cols = [c[1] for c in db._conn.execute(
         "PRAGMA table_info(segment_defs)").fetchall()]
     assert "parent" not in cols and "parents" in cols
+
+
+def test_insert_pb_records_source_and_version(tmp_path):
+    """An imported time is a personal best with no attempt behind it, and it
+    remembers where it came from and which ROM set it."""
+    db = make_db(tmp_path)
+    pb_id = db.insert_pb(course_id=1, star_id=0, strat_tag="Standard",
+                         timer_mode="igt", frames=266, attempt_id=None,
+                         saved_utc="2026-08-20T00:00:00Z",
+                         imported_from="sheet:DentoriousRed",
+                         game_version="jp")
+    row = next(r for r in db.pbs() if r["id"] == pb_id)
+    assert row["imported_from"] == "sheet:DentoriousRed"
+    assert row["game_version"] == "jp"
+    assert row["attempt_id"] is None
+
+
+def test_played_pb_leaves_provenance_null(tmp_path):
+    """Every existing row is implicitly 'whatever was running'. NULL keeps
+    that exactly, so nothing about a played best changes."""
+    db = make_db(tmp_path)
+    pb_id = db.insert_pb(course_id=1, star_id=0, strat_tag="Standard",
+                         timer_mode="igt", frames=266, attempt_id=7,
+                         saved_utc="2026-08-20T00:00:00Z")
+    row = next(r for r in db.pbs() if r["id"] == pb_id)
+    assert row["imported_from"] is None
+    assert row["game_version"] is None

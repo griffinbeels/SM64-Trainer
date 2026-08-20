@@ -575,6 +575,24 @@ MIGRATIONS = [
      WHERE parent IS NOT NULL;
     ALTER TABLE segment_defs DROP COLUMN parent;
     """,
+
+    # v27 -- an IMPORTED TIME: a personal best the trainer recorded without an
+    # attempt behind it. `imported_from` is NULL for a played best and names
+    # the source otherwise ("manual", "sheet:<runner>"), so one control can
+    # remove a whole import and a later view can separate what he played from
+    # what he brought. Provenance is STORED, never drawn -- his ruling,
+    # 2026-08-20: "The user DID beat it. We shouldn't assume they're lying."
+    #
+    # `game_version` is the ROM the time was SET on, which nothing has ever
+    # stored: every existing row is implicitly "whatever was running", and
+    # `StandardsStore.ladders` already resolves a ladder on a version passed
+    # per call. NULL keeps today's behaviour exactly. Existing rows are
+    # deliberately NOT backfilled -- we do not know what set them, and a guess
+    # would put an unmeasured fact in his store.
+    """
+    ALTER TABLE pbs ADD COLUMN imported_from TEXT;
+    ALTER TABLE pbs ADD COLUMN game_version TEXT;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -1211,14 +1229,21 @@ class Database:
     def insert_pb(self, course_id: int | None, star_id: int | None,
                   strat_tag: str | None, timer_mode: str, frames: int,
                   attempt_id: int | None, saved_utc: str,
-                  segment_id: int | None = None) -> int:
+                  segment_id: int | None = None,
+                  imported_from: str | None = None,
+                  game_version: str | None = None) -> int:
+        """`attempt_id=None` with an `imported_from` is an IMPORTED TIME — a
+        personal best he brought rather than set here (see migration v27).
+        `game_version` is the ROM that set it; None means "grade on the running
+        version", which is what every row written before v27 does."""
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO pbs (course_id, star_id, segment_id, strat_tag,"
-                " timer_mode, frames, attempt_id, saved_utc)"
-                " VALUES (?,?,?,?,?,?,?,?)",
+                " timer_mode, frames, attempt_id, saved_utc, imported_from,"
+                " game_version)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (course_id, star_id, segment_id, strat_tag, timer_mode,
-                 frames, attempt_id, saved_utc))
+                 frames, attempt_id, saved_utc, imported_from, game_version))
             self._conn.commit()
             return cur.lastrowid
 
