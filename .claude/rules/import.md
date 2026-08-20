@@ -30,7 +30,23 @@ of will build the sixth one differently.
 | A time's ROM version, and why grading needed no new machinery | `StandardsStore.ladders(ek, version)` / `ladder_cs(ek, strat, version)` always resolved per call — the gap was that nothing STORED a time's version. `views.grading_basis` carries the graded row's own `game_version` and four sites pass it: `_strat_rank`, `_best_strategy_graded` (which computes its basis BEFORE its ladder now, since the ladder depends on it), `_section_banner`, and `entity_rank`. That last matters most — it is the number MARELO aggregates, so a JP time on a US best-possible ladder would inflate the whole rating rather than one banner — and `marelo._pb_scores` pays for a second lookup only on a row that carries a version. An AVERAGE basis carries None on purpose: an average is over attempts, and an attempt stores no version. NULL resolves to the running version, so every played best grades byte-for-byte as before (`tests/test_import_version_grading.py` pins that no-regression case explicitly) |
 
 | The hand-entry surface | `ui/components/addtime.js`, mounted in `practicelog.js`'s card BODY (the head's grid comment names adding a fifth named area as the bug it exists to avoid). Reuses `TimeFields` — three boxes reading `{m}'{s}"{cc}`, THE way a time is typed here — and carries NO strategy picker: the card already has one, and the strategy showing there is what the time is filed under ("whatever strategy is selected is the default"). The field SNAPS to a displayable centisecond and shows the snapped value BEFORE saving, via `format.js::attainableCs`; that is not polish, see the section below. **Gated on `isSegment`, never on `course_id`** — full detail below |
-| The sheet picker | `ui/components/importsheet.js`, in the settings drawer ABOVE Display, because a first-day gesture must not sit below every tuning link. Names from `GET /api/library/runners` (bundled snapshot, so the list is there the moment the drawer opens); times from a fresh download at import time. `SearchSelect` with one flat group — 448 names, and the panel's own filter floor is what makes a list that long usable. The summary is ONE sentence and opens on what happened rather than on a bare number |
+| The sheet picker | `ui/components/importsheet.js`, in the settings drawer ABOVE Display, because a first-day gesture must not sit below every tuning link. Names from `GET /api/library/runners` (bundled snapshot, so the list is there the moment the drawer opens); times from a fresh download at import time. `SearchSelect` with one flat group — 448 names, and the panel's own filter floor is what makes a list that long usable. The summary is ONE sentence and opens on what happened rather than on a bare number. **The undo button is the only caller of `DELETE /api/import/{source}`** — a delete route with nothing calling it is a capability that does not exist, and the one moment it is wanted is right after several hundred bests land |
+
+## What the undo's gate cannot cover, and why
+
+`DELETE /api/import/{source}` is tested at the API layer, including the source
+shape that actually bites: real roster names carry a SECOND colon (`adelyn :3`,
+`bee :3`), a space (`Salt & Ginger`) and non-ASCII (`ガミル`), so
+`sheet:<name>` has to survive percent-encoding and Starlette's `:path` decode.
+No name in the roster contains a slash, which is the one character that would
+break the route.
+
+The BUTTON has no render gate. Reaching the state that draws it means
+completing a real import, and the panel always refreshes — a 7 MB download per
+run, which is not a gate, it is a network test. Driven by hand instead
+(2026-08-20): 1 star with a PB → import DentoriousRed → 13 added, 10 stars with
+PBs → undo → 13 erased, back to 1. Written down rather than left implied,
+because a missing gate that nobody names reads later as coverage.
 
 ## The kind guard, and a render test that could not fail
 

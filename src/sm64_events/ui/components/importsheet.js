@@ -19,6 +19,7 @@ import { h } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { Icon } from "./icons.js";
 import { SearchSelect } from "./searchselect.js";
 
 const html = htm.bind(h);
@@ -51,6 +52,7 @@ export function ImportSheet({ onDone }) {
   const [phase, setPhase] = useState("idle");   // idle | working | done | error
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
+  const [removed, setRemoved] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -84,6 +86,19 @@ export function ImportSheet({ onDone }) {
     }
   }
 
+  async function undo() {
+    try {
+      const body = await send("DELETE",
+                              `/api/import/sheet:${encodeURIComponent(runner)}`);
+      setRemoved(body.removed);
+      setPhase("undone");
+      if (onDone) onDone(body);
+    } catch (err) {
+      setError(err.message);
+      setPhase("error");
+    }
+  }
+
   return html`<section class="settings-section importsheet">
     <div class="settings-section-head">
       <div>
@@ -107,6 +122,21 @@ export function ImportSheet({ onDone }) {
       current sheet so your most recent times are the ones that land.</p>`}
     ${phase === "done" && result && html`<p class="settings-note is-ok">${
       sentence(result)}</p>`}
+    ${/* The undo for the gesture just made. A delete route with nothing
+         calling it is a capability that does not exist, and this is the one
+         moment it is wanted: he pressed a button, several hundred bests
+         landed, and he wants them gone. Erased outright rather than marked
+         ("just completely erase them, it's cool"), and latest-row-wins puts
+         back whatever each one superseded. Offered only while the import he
+         is undoing is still on screen. */""}
+    ${phase === "done" && result && result.imported > 0
+      && html`<button type="button" class="quiet-button importsheet-undo"
+          onclick=${undo}>
+        <${Icon} name="trash" size=${13} />${" "}Undo this import
+      </button>`}
+    ${phase === "undone" && html`<p class="settings-note">${removed}${" "}
+      imported ${removed === 1 ? "time" : "times"} erased. Anything each one
+      replaced is your best again.</p>`}
     ${phase === "error" && html`<p class="settings-note is-bad">${error}</p>`}
     <p class="settings-note">Importing again later costs nothing: a time only
       lands when it beats the best you already hold for that star and strategy.</p>

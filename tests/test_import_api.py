@@ -153,6 +153,32 @@ def test_removing_a_source_erases_only_its_own_rows(tmp_path):
         assert len(db.pbs()) == sheet_rows
 
 
+def test_a_runner_name_with_a_colon_and_a_space_round_trips_through_delete(
+        tmp_path):
+    """Real names from the roster: `adelyn :3`, `bee :3`, `Salt & Ginger`,
+    `ガミル`. The source is `sheet:<name>`, so the undo path carries a SECOND
+    colon, a space and sometimes non-ASCII — and a source that cannot be
+    deleted is an import that cannot be undone."""
+    from urllib.parse import quote
+
+    awkward = "adelyn :3"
+    with make_client(tmp_path) as (client, db, _svc):
+        client.post("/api/import/manual", json={
+            "entity_key": "star:1:0", "strat_tag": "Standard",
+            "time_cs": 886})
+        # Stand in for that runner's import without needing them on the sheet.
+        db.insert_pb(course_id=2, star_id=0, strat_tag="Standard",
+                     timer_mode="igt", frames=300, attempt_id=None,
+                     saved_utc="2026-08-20T00:00:00Z",
+                     imported_from=f"sheet:{awkward}")
+        response = client.delete(
+            f"/api/import/{quote(f'sheet:{awkward}', safe='')}")
+        assert response.status_code == 200
+        assert response.json()["removed"] == 1
+        assert db.current_pb(2, 0, "igt", strat_tag="Standard") is None
+        assert db.current_pb(1, 0, "igt", strat_tag="Standard") is not None
+
+
 def test_an_import_absorbs_the_rank_it_produced(tmp_path):
     """Nothing may appear without a gesture he made, and a full-screen MARELO
     takeover for a climb he did not run for is the exact shape he calls a bug
