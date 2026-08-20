@@ -57,9 +57,9 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
               "struct WarpDest {u8 type, levelNum, areaIdx, nodeId; s32 arg}"),
     LayoutRow("object_pool", "gObjectPool", None,
               "240 slots x 0x260 bytes (addresses.OBJECT_*)"),
-    LayoutRow("player1_controller", "gPlayer1Controller", None,
-              "struct Controller (addresses.CONTROLLER_*): raw stick, "
-              "processed stick, and every button in two u16 masks"),
+    LayoutRow("player1_controller", None, "controller_shape",
+              "gControllers[0]: struct Controller (addresses.CONTROLLER_*) — "
+              "raw stick, processed stick, and every button in two u16 masks"),
     LayoutRow("hud_display", "gHudDisplay", None,
               "the vanilla HUD struct; +HUD_TIMER_OFF is the u16 race timer, "
               "which stays 0 under Usamune"),
@@ -130,12 +130,15 @@ US = Layout(
     delayed_warp_timer=0x8033B254,  # live-verified 2026-08-11, same probe
     warp_dest=0x8033B248,           # live-verified 2026-08-05, 15 castle entries
     object_pool=0x8033D488,         # STROOP US ObjectStartAddress
-    player1_controller=0x8033AF90,  # found by POINTER SIGNATURE, not a guess
-                                    # (tools/probe_inputs.py, 2026-08-20): its
-                                    # statusData points at gControllerStatuses,
-                                    # whose [0] reads CONT_TYPE_NORMAL for a pad
-                                    # in port 1 and whose [1..3] read errno 8;
-                                    # its controllerData points at
+    player1_controller=0x8033AF90,  # HUNTED, not read off a map (2026-08-20,
+                                    # tools/probe_inputs.py --at scan): no
+                                    # symbol row names it, and the decomp's
+                                    # gPlayer1Controller is a POINTER variable
+                                    # rather than this struct. Its statusData
+                                    # points at gControllerStatuses, whose [0]
+                                    # reads CONT_TYPE_NORMAL for a pad in port
+                                    # 1 and whose [1..3] read the no-controller
+                                    # errno; its controllerData points at
                                     # gControllerPads with matching errnos; its
                                     # port is 0. VERIFY until the live gate.
     hud_display=0x8033B260,         # +HUD_TIMER_OFF is the race timer; 0 under Usamune (trap)

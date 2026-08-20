@@ -868,9 +868,17 @@ def _check_player1_controller(ctx) -> Verdict:
     consecutive live reads, and was wrong (2026-08-20).
     """
     candidate = ctx.candidate("player1_controller")
-    missing = _value_or_missing(candidate)
-    if missing is not None:
-        return missing
+    if candidate is None:
+        # A HUNT row, so a version with no shipped value has no candidate to
+        # offer -- no symbol map names this struct (the decomp's
+        # gPlayer1Controller is a pointer variable, not the struct itself).
+        # The hunt is `uv run python tools/probe_inputs.py --at scan`, which
+        # sweeps for the shape and prints what fits; its answer comes back
+        # here as the candidate.
+        return Verdict("missing",
+                       evidence="no candidate: run tools/probe_inputs.py "
+                                "--at scan against this ROM to hunt it, then "
+                                "re-run this gate")
     deflected = held = None
     start = ctx.now()
     while ctx.now() - start < CONTROLLER_HOLD_TIMEOUT_S:
