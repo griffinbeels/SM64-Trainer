@@ -575,6 +575,29 @@ MIGRATIONS = [
      WHERE parent IS NOT NULL;
     ALTER TABLE segment_defs DROP COLUMN parent;
     """,
+    # v27 -- captured controller input, in run-length chunks.
+    #
+    # Keyed by the game's frame counter AND wall clock, never by attempt id:
+    # attempts are re-derived from the journal on every reprojection, so a row
+    # keyed to one orphans itself. Wall clock is also the only TOTAL order --
+    # the frame counter restarts on a console reset, so frame numbers repeat
+    # within a session.
+    #
+    # Size: ~10 bytes per run of identical frames, and 45 s of real play
+    # compresses from 1,348 frames to 289 runs (tools/probe_inputs.py,
+    # 2026-08-20). A rounding error beside the clip ring.
+    """
+    CREATE TABLE input_chunks (
+      id           INTEGER PRIMARY KEY,
+      session_id   INTEGER NOT NULL,
+      start_frame  INTEGER NOT NULL,
+      end_frame    INTEGER NOT NULL,
+      started_utc  TEXT NOT NULL,
+      ended_utc    TEXT NOT NULL,
+      runs         BLOB NOT NULL
+    );
+    CREATE INDEX idx_input_chunks_utc ON input_chunks (started_utc, ended_utc);
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
