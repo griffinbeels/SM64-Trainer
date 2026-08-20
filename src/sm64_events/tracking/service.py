@@ -29,7 +29,7 @@ from sm64_events.memory.addresses import course_name, node_label, star_name
 from sm64_events.ranks.classify import RANK_MODES
 from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
-from sm64_events.tracking import practicable
+from sm64_events.tracking import importing, practicable
 from sm64_events.tracking.caveats import pb_blocked_by
 from sm64_events.tracking.defaults import remember_deletion, resolve_steps
 from sm64_events.tracking.hundred_coin import classify
@@ -1926,6 +1926,64 @@ class TrackerService:
         await self.publish(Event(type="pb_undone", frame=0,
                                  timestamp_utc=_now(), payload=payload))
         return payload
+
+    async def import_times(self, source: str, candidates) -> dict:
+        """Land a batch of brought-in times as personal bests.
+
+        Every import door arrives here — typed by hand, read off a runner's
+        Ultimate Sheet column, and later a paste file or LiveSplit golds. The
+        improvement rule lives in `tracking/importing.py` and is pure; this
+        owns only the parts that touch the world.
+
+        No attempt is created, deliberately. The journal records what the GAME
+        did and `tracking/projection.py` re-derives every attempt from it on
+        replay, so inventing one for a run that never happened would make the
+        projection non-idempotent. The pbs table is mutated directly, exactly
+        as `save_pb` does; the `times_imported` row is record/broadcast only,
+        the same standing `pb_saved` and `pb_undone` have.
+
+        CALLER'S OBLIGATION: a batch that lands anything moves ranks for a
+        reason that is not a run, so the caller must follow it with
+        `server/ranks_api.py::absorb_after_regrade` — the same thing the
+        game-version flip does in `server/mode_api.py`. Without it the next
+        rank fetch reads the climb as earned and fires a full-screen
+        celebration for something he did not just do, which he reads as a bug
+        (his ruling, 2026-08-01). That call lives in the route rather than
+        here because scoring a scope is server-side and `tracking/` must not
+        import `server/`.
+        """
+        db = self._require_db()
+
+        def current_frames(entity_key, strat_tag, timer_mode):
+            _, course_s, star_s = entity_key.split(":")
+            row = db.current_pb(int(course_s), int(star_s), timer_mode,
+                                strat_tag=strat_tag)
+            return row["frames"] if row else None
+
+        plan = importing.decide(candidates, current_frames)
+        saved = _iso(_now())
+        for candidate, frames in plan.landing:
+            _, course_s, star_s = candidate.entity_key.split(":")
+            db.insert_pb(course_id=int(course_s), star_id=int(star_s),
+                         strat_tag=candidate.strat_tag,
+                         timer_mode=candidate.timer_mode, frames=frames,
+                         attempt_id=None, saved_utc=saved,
+                         imported_from=source,
+                         game_version=candidate.game_version)
+        payload = {"source": source, **plan.summary}
+        if plan.landing:
+            await self.publish(Event(type="times_imported", frame=0,
+                                     timestamp_utc=_now(), payload=payload))
+        return payload
+
+    def remove_imported(self, source: str) -> int:
+        """Erase every personal best one import brought, and say how many.
+
+        Deleting the rows makes whatever each one superseded current again —
+        latest-row-wins is the pbs contract (`views.current_pbs_by_strat`), so
+        this restores exactly as `undo_pb` does, in bulk."""
+        db = self._require_db()
+        return db.delete_pbs_imported_from(source)
 
     async def wipe_data(self, kind: str, course_id: int | None = None,
                         star_id: int | None = None,

@@ -1297,6 +1297,18 @@ class Database:
             self._conn.execute("DELETE FROM pbs WHERE id=?", (pb_id,))
             self._conn.commit()
 
+    def delete_pbs_imported_from(self, source: str) -> int:
+        """Erase every pb row one import brought, returning how many went.
+
+        Speaks SQL directly rather than through `pbs()` for the same reason
+        the other delete/repair paths do: this must see EVERY row it wrote,
+        including any the grading view filters out."""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM pbs WHERE imported_from=?", (source,))
+            self._conn.commit()
+            return cur.rowcount
+
     def purge_event_types(self, types) -> int:
         """Delete every journal row of the given types and RECLAIM the file
         space, returning how many went.
