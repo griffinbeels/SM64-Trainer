@@ -303,12 +303,28 @@ rather than a finish.
 
 ### Personal best
 
-Your fastest finished [[attempt]] at one [[target]] on one [[strategy]]. The
-trainer keeps personal bests separately from the [[journal]], so clearing
-history never erases one.
+Your fastest recorded time at one [[target]] on one [[strategy]] — set by a
+finished [[attempt]] here, or brought in as an [[imported time]]. The trainer
+keeps personal bests separately from the [[journal]], so clearing history never
+erases one.
 
 - **Lives** — the store (`src/sm64_events/storage/db.py`)
   → the PB tag on the [[practice log]]
+
+### Imported time
+
+A [[personal best]] the trainer recorded with no [[attempt]] behind it, because
+you set it before this tool watched you. It remembers the source that brought
+it — you typed it, or it came from your column in the [[Ultimate Sheet]] — and
+the [[game version]] that set it, so a JP time grades on the JP [[ladder]]
+while you play US. The trainer draws neither fact: nothing marks an imported
+time on any screen.
+
+An import lands a time only when it beats the [[personal best]] you already
+hold for that [[target]] and [[strategy]], so importing twice changes nothing.
+
+- **Lives** — the import rule (`src/sm64_events/tracking/importing.py`)
+  → the store (`src/sm64_events/storage/db.py`)
 
 ### Strategy
 
