@@ -26,7 +26,7 @@ import { SegmentTimeline } from "./segmenttimeline.js";
 import {
   sectionOrder, autoExpandName, bandsOf, bandRangeLabel, divisionRangeLabel,
   matchesRunner, videoSource, linkable, standingOn, matchedStanding, bandFor, divisionWithin,
-  ladderCsOf,
+  ladderCsOf, leaderboardOf,
 } from "./librarymodel.js";
 
 const html = htm.bind(h);
@@ -440,6 +440,51 @@ function TocRow({ band, count, you, onJump }) {
   </tr>`;
 }
 
+// LEADERBOARD MODE (task 1, spec 2026-08-20-ranked-leaderboard): one row of
+// `leaderboardOf`'s flat list. Reuses the SAME two entry-row components a
+// tier band already renders through -- ExampleCard for a videoed entry,
+// PlainEntry for one with none -- rather than a third component, so a video
+// mark or a tier badge can never draw differently in the two modes. The
+// synthetic "you" row Section inserts (`_isYou`) carries no video by
+// construction, so it always falls to the PlainEntry branch; the ◀ you
+// marker beside it is the SAME class/text TocRow and DivisionGroup already
+// wear for the identical fact, not a new indicator.
+function LeaderboardRow({ row, approach, entityKey, trayKeys, onAdd }) {
+  const { position, entry, tier, division } = row;
+  const isYou = !!entry._isYou;
+  const trayKey = entry.video ? entryTrayKey(approach, entry) : null;
+  return html`<div class="library-leaderboard-row ${isYou ? "is-you" : ""}">
+    <span class="library-leaderboard-position">#${position}</span>
+    <div class="library-leaderboard-entry">
+      ${entry.video
+        ? html`<${ExampleCard} entry=${entry} tier=${tier} division=${division}
+              trayKey=${trayKey} entityKey=${entityKey}
+              inTray=${trayKeys.has(trayKey)} onAdd=${onAdd} />`
+        : html`<${PlainEntry} entry=${entry} tier=${tier} division=${division} />`}
+      ${isYou ? html`<span class="library-toc-you"
+            title="your current standing on this strategy"> ◀ you</span>` : ""}
+    </div>
+  </div>`;
+}
+
+// The flat list itself -- `query` applies here exactly as it does to the
+// bands (round 4's rule, extended rather than re-derived): a live search
+// hides every non-matching row, "you" included when your own runner text
+// ("You") does not contain it, same as any other row would.
+function LeaderboardList({ leaderboard, approach, query, entityKey, trayKeys, onAdd }) {
+  const shown = query
+    ? leaderboard.filter((row) => matchesRunner(row.entry, query)) : leaderboard;
+  if (!shown.length) {
+    return html`<p class="meta library-leaderboard-empty">No community times recorded here yet.</p>`;
+  }
+  return html`<div class="library-leaderboard">
+    ${shown.map((row) => html`<${LeaderboardRow}
+        key=${`${row.position}-${row.entry.runner}-${row.entry.time_cs}-${row.entry.video || ""}`}
+        row=${row} approach=${approach} entityKey=${entityKey}
+        trayKeys=${trayKeys} onAdd=${onAdd} />`)}
+  </div>`;
+}
+
 /**
  * ROUND 5 -- the link door. `library/adoptions.py` and its adopt/unadopt
  * routes shipped with the backend and had NO UI caller (the audit tool was
@@ -695,6 +740,28 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
   // (`matchedStanding`) where node can prove it, with the why.
   const standing = matchedStanding(stratInfo, ladder, version, gradingVersion) || assocInfo;
 
+  // LEADERBOARD MODE (task 1, spec 2026-08-20-ranked-leaderboard): a second
+  // reading of the SAME entries, per-SECTION state that forgets itself the
+  // moment you leave -- his ruling adds a reading, it never touches the one
+  // above that already works, so `bands`/`shownBands`/`standing` stay
+  // exactly as they were. `standingPbCs` is the raw centisecond PB already
+  // BEHIND `standing` -- `stratInfo.pb_cs` for a matched strategy (the same
+  // number regardless of which version's ladder is displayed, since a
+  // personal best does not change with the ladder graded against; only its
+  // rank does) or the associated row's own `assoc.pbCs` -- read, never
+  // recomputed, so this can place YOUR row at the position it actually
+  // earns among the community's without a second fetch.
+  const [mode, setMode] = useState("ladder");
+  const standingPbCs = stratInfo ? (stratInfo.pb_cs ?? null)
+    : (assoc ? assoc.pbCs : null);
+  const leaderboardEntries = useMemo(() => (standingPbCs == null
+    ? visibleEntries
+    : [...visibleEntries,
+       { runner: "You", time_cs: standingPbCs, video: null, _isYou: true }]),
+    [visibleEntries, standingPbCs]);
+  const leaderboard = useMemo(() => leaderboardOf(ladder, leaderboardEntries),
+    [ladder, leaderboardEntries]);
+
   return html`<div class=${`library-section ${open ? "open" : ""}`
         + (approach._piece ? " library-piece-section" : "")}
       data-mario=${marioKey}
@@ -763,6 +830,21 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
               ${approach.ladder_version === "jp" ? "JP" : "US"} ladder only
             </span>`
           : ""}
+        ${/* LEADERBOARD MODE (task 1): a second reading of the same entries
+             -- his ruling, add a reading, never touch the one that already
+             works. Per-SECTION state (not page state, never persisted);
+             Ladder stays the default and its own markup below is entirely
+             unchanged from before this task. */""}
+        <div class="library-mode-switch" role="group" aria-label="Section reading">
+          <button type="button" class="library-mode-seg"
+              aria-pressed=${mode === "ladder"} onclick=${() => setMode("ladder")}>Ladder</button>
+          <button type="button" class="library-mode-seg"
+              aria-pressed=${mode === "leaderboard"}
+              onclick=${() => setMode("leaderboard")}>Leaderboard</button>
+        </div>
+        ${mode === "leaderboard" ? html`<${LeaderboardList}
+            leaderboard=${leaderboard} approach=${approach} query=${query}
+            entityKey=${entityKey} trayKeys=${trayKeys} onAdd=${onAdd} />` : html`<div class="library-ladder-view">
         <table class="library-toc"><tbody>
           ${shownBands.map((band) => html`<${TocRow} key=${bandAnchorId(approach, band.tier || "unranked")} band=${band}
               count=${band.entries.filter((entry) => matchesRunner(entry, query)).length}
@@ -806,6 +888,7 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
                 </div>
               </div>`}
         </div>`)}
+        </div>`}
       </div>
     <//>
   </div>`;

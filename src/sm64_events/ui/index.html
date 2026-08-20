@@ -593,6 +593,67 @@
   }
   .library-plain-time { font-variant-numeric: tabular-nums; color: var(--muted); }
 
+  /* LEADERBOARD MODE (task 1, spec 2026-08-20-ranked-leaderboard): a second,
+     per-SECTION reading of the same entries -- every runner numbered,
+     fastest first, instead of banded by rank. The segmented switch borrows
+     `.version-switch`'s own visual recipe (same pill, same pressed-segment
+     fill) but is its OWN control -- per-section state that forgets your
+     pick the moment you leave, never the page-level JP/US switch. */
+  .library-mode-switch { display: inline-flex; align-items: center; gap: 0; }
+  .library-mode-seg {
+    appearance: none; border: 1px solid var(--border-soft);
+    background: var(--surface-2); color: var(--muted);
+    font: inherit; font-weight: 700; letter-spacing: .02em;
+    padding: .32rem .85rem; line-height: 1.1; cursor: pointer;
+  }
+  .library-mode-seg:first-child { border-radius: 999px 0 0 999px; border-right: none; }
+  .library-mode-seg:last-child { border-radius: 0 999px 999px 0; }
+  .library-mode-seg:hover { color: var(--text); }
+  .library-mode-seg[aria-pressed="true"] {
+    background: var(--gold); border-color: var(--gold-soft); color: #1b1607;
+  }
+  .library-mode-seg:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+  /* One flat row per runner: a fixed position column, then whichever entry
+     row component the entry already draws through (ExampleCard for a
+     videoed entry, PlainEntry for none -- never a new one, so a video mark
+     or a tier badge can never disagree between the two modes). The position
+     column is the one piece that must NEVER shrink or wrap into the runner
+     name at 850px, so it alone gets a fixed width; the runner name is what
+     gives, via the SAME ellipsis rule ExampleCard's own runner cell already
+     applies -- extended to PlainEntry's, which was never asked to sit at
+     full row width before this task. */
+  .library-leaderboard { display: grid; gap: .4rem; margin-top: .3rem; }
+  .library-leaderboard-row { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+  .library-leaderboard-position {
+    flex: 0 0 auto; width: 2.6rem; text-align: right;
+    font-variant-numeric: tabular-nums; font-weight: 700; color: var(--muted);
+  }
+  .library-leaderboard-entry {
+    flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: .4rem;
+  }
+  /* Capped, not left to `flex: 1` alone -- an uncapped video card in a
+     single-column list stretches to the FULL row width at 1200/1500px,
+     which grows its 16/9 media box tall enough to push its own runner/time
+     line out of a normal screenful (measured with a contact sheet: visible
+     at 900/850px, cropped away above them). The band grid never hits this
+     because several cards share one row there; a flat list only ever has
+     one, so it needs its own ceiling. */
+  .library-leaderboard-row .library-example { flex: 1 1 auto; min-width: 0; max-width: 420px; }
+  .library-leaderboard-row .library-plain-entry {
+    flex: 1 1 auto; min-width: 0; display: flex; align-items: center; width: 100%;
+  }
+  .library-leaderboard-row .library-plain-runner {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Your own synthetic PB row -- the SAME gold "you" language TocRow and
+     DivisionGroup already wear for the identical fact (`.library-toc-you`),
+     applied to its own pill so it reads as the standout row in the list. */
+  .library-leaderboard-row.is-you .library-plain-entry {
+    border-color: var(--gold); background: rgba(240,189,50,.12);
+  }
+  .library-leaderboard-empty { margin: .3rem 0 0; }
+
   /* Video cards are sized to be WATCHED (round 1: "each grid element should
      be much bigger"; round 2 bounced 300px -- "still VERY hard to click on a
      video ... even bigger". A third bounce earns the tuning-page inspector,

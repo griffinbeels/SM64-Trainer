@@ -800,6 +800,112 @@ def test_the_wiki_mark_sits_beside_the_name_and_its_art_loads(library_page):
     assert facts["opensNewTab"] and facts["titled"], facts
 
 
+# ---- Leaderboard mode (task 1, spec 2026-08-20-ranked-leaderboard) -------
+
+def _leaderboard_rows(page):
+    return page.evaluate("""
+      Array.from(document.querySelectorAll(
+        '.library-section.open .library-leaderboard-row')).map((row) => ({
+          position: row.querySelector('.library-leaderboard-position').textContent.trim(),
+          isYou: row.classList.contains('is-you'),
+        }))
+    """)
+
+
+def test_ladder_is_the_default_mode_and_its_markup_is_untouched(library_page):
+    pressed = library_page.evaluate(
+        "document.querySelector('.library-section.open .library-mode-seg"
+        "[aria-pressed=\"true\"]').textContent.trim()")
+    assert pressed == "Ladder", pressed
+    assert library_page.evaluate(
+        "document.querySelectorAll('.library-section.open .library-toc-row').length") > 0
+    assert library_page.evaluate(
+        "document.querySelectorAll('.library-section.open .library-leaderboard').length") == 0
+
+
+def test_leaderboard_mode_numbers_every_entry_fastest_first(library_page):
+    library_page.evaluate("""
+      Array.from(document.querySelectorAll('.library-section.open .library-mode-seg'))
+        .find((seg) => seg.textContent.trim() === 'Leaderboard').click()
+    """)
+    library_page.wait_for(".library-section.open .library-leaderboard-row", timeout_ms=10000)
+    # switching mode fully replaces the section body -- the ladder's own
+    # markup (bandsOf, the TOC, the band anchors) unmounts rather than
+    # merely hiding, exactly as Ladder mode's own markup is untouched above.
+    assert library_page.evaluate(
+        "document.querySelectorAll('.library-section.open .library-toc-row').length") == 0
+    rows = _leaderboard_rows(library_page)
+    assert len(rows) > 1, rows
+    assert rows[0]["position"] == "#1", rows
+    # competition ranking: positions never run backwards, and start at 1 --
+    # the arithmetic itself (ties, the skip past a tie) is node-proved in
+    # test_library_model_js.py; this proves the page actually renders what
+    # leaderboardOf returns, in the order it returns it.
+    positions = [int(r["position"].lstrip("#")) for r in rows]
+    assert positions == sorted(positions), rows
+    assert positions[0] == 1, rows
+
+
+def test_leaderboard_mode_inserts_and_marks_the_readers_own_pb_row(library_page):
+    library_page.evaluate("""
+      Array.from(document.querySelectorAll('.library-section.open .library-mode-seg'))
+        .find((seg) => seg.textContent.trim() === 'Leaderboard').click()
+    """)
+    library_page.wait_for(".library-section.open .library-leaderboard-row", timeout_ms=10000)
+    rows = _leaderboard_rows(library_page)
+    you_rows = [r for r in rows if r["isYou"]]
+    # the fixture's active strategy on this section carries a saved PB
+    # (ui_fixture.py's `with_pb=True` default) -- exactly one synthetic
+    # row is inserted, never zero and never more than one.
+    assert len(you_rows) == 1, rows
+    marker = library_page.evaluate(
+        "document.querySelector('.library-section.open "
+        ".library-leaderboard-row.is-you .library-toc-you').textContent")
+    assert "you" in marker.lower(), marker
+
+
+def test_leaderboard_mode_filters_by_the_pages_own_version_switch(library_page):
+    """Team-lead ruling on this task: `leaderboardOf` itself does NO version
+    filtering (node-proved in test_library_model_js.py) -- the CALLER
+    filters, and this is where a caller exists to prove it. Same section the
+    JP-toggle ladder test above already uses, because it is the one section
+    on this target carrying real per-version times (`ladder_jp`)."""
+    opened = library_page.evaluate("""
+      (() => {
+        const heads = Array.from(document.querySelectorAll('.library-section-head'));
+        const head = heads.find((b) =>
+          b.querySelector('.library-section-name').textContent
+            === 'Owl strat w/o speed preservation');
+        if (!head) return false;
+        if (!head.closest('.library-section').classList.contains('open')) head.click();
+        return true;
+      })()
+    """)
+    assert opened, "could not find the Owl strat section to open"
+    library_page.evaluate("""
+      Array.from(document.querySelectorAll('.library-section.open .library-mode-seg'))
+        .find((seg) => seg.textContent.trim() === 'Leaderboard').click()
+    """)
+    library_page.wait_for(".library-section.open .library-leaderboard-row", timeout_ms=10000)
+
+    def row_count():
+        return library_page.evaluate(
+            "document.querySelectorAll("
+            "'.library-section.open .library-leaderboard-row').length")
+
+    before = row_count()
+    assert before > 0, "no leaderboard rows on the JP-carrying section"
+    library_page.wait_for(".version-switch", timeout_ms=10000)
+    library_page.evaluate("""
+      Array.from(document.querySelectorAll('.version-switch-seg'))
+        .find((seg) => seg.textContent.trim() === 'JP').click()
+    """)
+    library_page.wait_for(".library-section.open .library-leaderboard-row", timeout_ms=10000)
+    after = row_count()
+    assert after > 0 and after != before, (
+        f"leaderboard mode did not follow the page's version switch: {before} -> {after}")
+
+
 def test_a_movement_with_no_wiki_page_draws_no_mark(library_server):
     """A door-to-door lobby movement has no Ukikipedia page (the wiki's own
     "Castle Movement" redirects to Lakitu Skip), so the mark is absent, not

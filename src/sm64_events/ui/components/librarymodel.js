@@ -340,6 +340,46 @@ export function bandsOf(ladder, entries) {
   return bands.filter((band) => band.entries.length || band.cutoffCs != null);
 }
 
+// LEADERBOARD MODE (task 1, spec 2026-08-20-ranked-leaderboard): a SECOND
+// reading of the same entries bandsOf already bands -- his own words,
+// verbatim: "I want to add new functionality that allows us to see a
+// leaderboard version of the same content, specifically showing EACH
+// INDIVIDUAL PLAYER as a ranked number from top to bottom." Fastest first,
+// the OPPOSITE of bandsOf's slowest-first order -- deliberately, which is
+// why this is a second function rather than a flag on the first: bandsOf's
+// order is a rank-standards TOC read top-to-bottom as a climb, this is
+// every runner in ONE flat list read top-to-bottom as a leaderboard.
+//
+// `entries` must already be the CALLER's version-filtered list -- this
+// function filters nothing itself, the same split of labour Section already
+// applies before bandsOf (its own contract test lives in the rendered
+// test file, where a caller actually exists to observe it).
+//
+// `position` is COMPETITION ranking: two runners tied at #4 are both #4 and
+// the next distinct time is #6, never #5 -- ties are common in this data,
+// not an edge case. tier/division walk the SAME bandFor/divisionWithin
+// bandsOf uses, never a second derivation of where a time falls, and an
+// unladdered approach reports `tier: null` on every row -- the same honest
+// "Unranked" bandsOf returns rather than a fabricated Capless (`ladderBands`
+// answering `[]` is the same "is there a ladder at all" question bandsOf's
+// own no-ladder branch asks).
+export function leaderboardOf(ladder, entries) {
+  const hasLadder = ladderBands(ladder).length > 0;
+  const ladderCs = ladderCsOf(ladder);
+  const sorted = [...(entries || [])].sort((a, b) => a.time_cs - b.time_cs);
+  let position = 0;
+  let previousTimeCs = null;
+  return sorted.map((entry, index) => {
+    if (previousTimeCs == null || entry.time_cs !== previousTimeCs) {
+      position = index + 1;
+      previousTimeCs = entry.time_cs;
+    }
+    const tier = hasLadder ? bandFor(ladder, entry.time_cs) : null;
+    const division = hasLadder ? divisionWithin(ladderCs, tier, entry.time_cs) : null;
+    return { position, entry, tier, division };
+  });
+}
+
 // Your standing on an associated row (round 6): the reader's segment PB
 // graded by the ROW's own displayed ladder -- the SAME walk that files every
 // sheet entry (bandFor + divisionWithin), so the ◀ you pin and the rank chip

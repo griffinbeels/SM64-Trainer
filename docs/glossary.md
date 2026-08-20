@@ -922,6 +922,21 @@ link reads the same registry.
 - **Not** — the [[book mark]]. The [[book mark]] leads INTO the Library from a
   practice card; the wiki mark leads OUT of it, to Ukikipedia.
 
+### Leaderboard mode
+
+A second reading of an [[approach]]'s [[sheet entry]] list on its [[Library
+tab]] section — every entry ranked fastest first and numbered, instead of the
+default reading's bands split by [[tier]] and [[division]]. Two entries tied
+on time share a number and the next distinct time skips ahead by the tie's
+size. Your own [[personal best]] inserts itself at the position it actually
+earns among the community's, read off the [[rank]] the section already
+grades you at rather than fetched again. A per-section switch swaps between
+the two readings; the default reading never changes, and closing the section
+forgets your pick rather than saving it.
+
+- **Lives** — the mode switch and the flat list
+  (`src/sm64_events/ui/components/librarytarget.js`)
+
 ### Progress graph
 
 The plot of your [[attempt]]s over one [[session]] or over your whole history,

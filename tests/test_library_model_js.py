@@ -406,3 +406,55 @@ def test_a_matched_standing_is_served_at_the_graded_version_and_rewalked_elsewhe
     unranked = {"rank": None, "division": None, "pb_cs": None, "pb_display": None}
     assert run_js(f"m.matchedStanding({json.dumps(unranked)}, {json.dumps(ladder)}, 'jp', 'us')") == unranked
     assert run_js("m.matchedStanding(null, {}, 'jp', 'us')") is None
+
+
+# ---- leaderboardOf (task 1, spec 2026-08-20-ranked-leaderboard) ----------
+# The Library target page's second reading of the same entries -- fastest
+# first, one flat list, numbered -- beside bandsOf's slowest-first bands.
+
+def test_leaderboard_orders_fastest_first_with_competition_ranking_and_agrees_with_bandsof():
+    ladder = {"Bronze": 14.0, "Mario": 12.0}
+    entries = [{"runner": "a", "time_cs": 1500}, {"runner": "b", "time_cs": 1390},
+               {"runner": "c", "time_cs": 1180}, {"runner": "d", "time_cs": 1390},
+               {"runner": "e", "time_cs": 1180}]
+    rows = run_js(f"m.leaderboardOf({json.dumps(ladder)}, {json.dumps(entries)})")
+    # fastest first
+    assert [r["entry"]["runner"] for r in rows] == ["c", "e", "b", "d", "a"]
+    # competition ranking: c/e tie for #1, b/d tie for #3 (not #2), a is #5
+    # (not #4) -- the position the tied pair's own count skips ahead to.
+    assert [r["position"] for r in rows] == [1, 1, 3, 3, 5]
+    # tier/division come from the SAME bandFor + divisionWithin walk bandsOf
+    # uses -- never a second derivation of where a time falls.
+    bands = run_js(f"m.bandsOf({json.dumps(ladder)}, {json.dumps(entries)})")
+    tier_by_runner, division_by_runner = {}, {}
+    for band in bands:
+        for division in band["divisions"] or []:
+            for entry in division["entries"]:
+                tier_by_runner[entry["runner"]] = band["tier"]
+                division_by_runner[entry["runner"]] = division["numeral"]
+    for row in rows:
+        runner = row["entry"]["runner"]
+        assert row["tier"] == tier_by_runner[runner], row
+        assert row["division"] == division_by_runner[runner], row
+
+
+def test_leaderboard_does_no_version_filtering_of_its_own():
+    # Contract: `entries` is the caller's ALREADY version-filtered list --
+    # this function filters nothing. A mixed-version list comes back with
+    # every entry ranked, tag and all; the ruling on this task (the caller
+    # filters, not this function) is proved where a caller actually exists
+    # to observe it -- the RENDERED test in test_ui_library_target.py.
+    ladder = {"Mario": 12.0}
+    entries = [{"runner": "us", "time_cs": 1100, "version": "us"},
+               {"runner": "jp", "time_cs": 1200, "version": "jp"}]
+    rows = run_js(f"m.leaderboardOf({json.dumps(ladder)}, {json.dumps(entries)})")
+    assert [r["entry"]["runner"] for r in rows] == ["us", "jp"]
+
+
+def test_leaderboard_with_no_ladder_reports_unranked_never_a_fabricated_capless():
+    entries = [{"runner": "a", "time_cs": 1500}, {"runner": "b", "time_cs": 1200}]
+    rows = run_js(f"m.leaderboardOf({{}}, {json.dumps(entries)})")
+    assert [r["entry"]["runner"] for r in rows] == ["b", "a"]   # still ranked
+    assert [r["position"] for r in rows] == [1, 2]
+    assert [r["tier"] for r in rows] == [None, None]
+    assert [r["division"] for r in rows] == [None, None]
