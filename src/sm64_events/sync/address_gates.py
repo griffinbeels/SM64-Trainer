@@ -32,6 +32,7 @@ for what it is waiting on, and a loop that exhausts its budget returns
 """
 from sm64_events.memory import addresses as A
 from sm64_events.memory.behaviours import base_from_mario, pointer_of, symbol_of
+from sm64_events.inputs.frame import button_names, fits_controller
 from sm64_events.memory.version_probe import detect_version
 from sm64_events.sync.checks import (check_ticks, near, parse_frames,
                                      pool_contains, scan_ticking_u16, scan_u16,
@@ -848,4 +849,65 @@ register(Gate(
     proves="candidates for Usamune's per-section counter -- DIAGNOSTICS ONLY, "
            "its terminal state is `candidate`; no shipped read depends on it.",
     check=_check_usamune_timer,
+))
+
+
+# --- player1_controller -----------------------------------------------------
+
+CONTROLLER_HOLD_TIMEOUT_S = 60.0
+
+
+def _check_player1_controller(ctx) -> Verdict:
+    """Prove the candidate is the LIVE pad, not a struct-shaped coincidence.
+
+    The razor is internal consistency (`inputs/frame.py::fits_controller`),
+    which is why the human has to deflect the stick AND hold a button: a run
+    of zeroes satisfies every range check anyone has ever written, and
+    satisfies this one too while nothing is moving. That is not hypothetical
+    -- the first hunt for this address returned exactly such a run, passed 200
+    consecutive live reads, and was wrong (2026-08-20).
+    """
+    candidate = ctx.candidate("player1_controller")
+    missing = _value_or_missing(candidate)
+    if missing is not None:
+        return missing
+    deflected = held = None
+    start = ctx.now()
+    while ctx.now() - start < CONTROLLER_HOLD_TIMEOUT_S:
+        fit = fits_controller(ctx.raw().read_block(candidate,
+                                                   A.CONTROLLER_SIZE))
+        if fit is None:
+            return Verdict("failed", value=candidate,
+                           evidence="the struct stopped being self-consistent:"
+                                    " its raw stick, processed stick and"
+                                    " magnitude disagreed, so this address"
+                                    " does not hold a controller")
+        if max(abs(fit.raw_x), abs(fit.raw_y)) >= A.STICK_DEAD_ZONE:
+            deflected = (fit.raw_x, fit.raw_y, fit.stick_mag)
+        if fit.buttons:
+            held = fit.buttons
+        if deflected is not None and held is not None:
+            return Verdict(
+                "verified", value=candidate,
+                measured=f"stick {deflected[0]:+d},{deflected[1]:+d}"
+                         f" (magnitude {deflected[2]:.1f})",
+                evidence=f"the stick left the dead zone and buttons"
+                         f" {button_names(held) or ('none',)} were held, with"
+                         f" the dead-zone and magnitude relation holding on"
+                         f" every read")
+        ctx.sleep(POLL_INTERVAL_S)
+    return Verdict("failed", value=candidate,
+                   evidence="never saw the stick leave the dead zone AND a "
+                            "button held within the timeout")
+
+
+register(Gate(
+    id="address.player1_controller", feature="controller input", kind="address",
+    needs=("version.rom",), timeout_s=CONTROLLER_HOLD_TIMEOUT_S + 10,
+    instruction="Push the stick all the way to one edge and hold A at the "
+                "same time.",
+    proves="gPlayer1Controller's candidate address holds the live pad: its "
+           "processed stick is its raw stick through the game's own dead "
+           "zone, on every read.",
+    check=_check_player1_controller,
 ))

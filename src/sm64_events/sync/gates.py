@@ -32,7 +32,7 @@ from dataclasses import asdict, dataclass
 
 FEATURES = ("version", "star grab", "IGT clock", "warps & entrances",
             "castle areas", "textboxes", "caused moments", "keys & Bowser",
-            "death", "spawn & reset", "landmarks")
+            "death", "spawn & reset", "landmarks", "controller input")
 KINDS = ("address", "behaviour", "calibration", "feature")
 STATUSES = ("verified", "failed", "candidate", "missing", "skipped")
 

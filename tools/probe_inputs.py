@@ -5,13 +5,15 @@ Read-only; safe to run beside a live practice session.
 
 ANSWERED 2026-08-20, over four live sessions of his ordinary play:
 
-- gPlayer1Controller (US) is at 0x8033AF90. Found by its POINTER signature,
-  and the whole neighbourhood corroborates: statusData -> gControllerStatuses
-  at 0x8033AFE8, whose [0] reads type 0x0005 (a standard pad in port 1) and
-  whose [1..3] read errno 0x08 (nothing plugged in); controllerData ->
-  gControllerPads at 0x8033AFF8, whose four 6-byte entries carry the matching
-  errnos; port = 0. One struct carries the raw stick, the processed stick and
-  its magnitude, and all 14 buttons in two 16-bit masks.
+- gPlayer1Controller was FOUND, by its pointer signature rather than a guess,
+  and the address itself now lives in `memory/layout.py` beside its evidence
+  (this file may not restate it: a US address baked into a tool is a tool that
+  silently misreads JP). The corroboration that pinned it: its statusData
+  points at gControllerStatuses, whose [0] reads CONT_TYPE_NORMAL for a pad in
+  port 1 while [1..3] read the no-controller errno; its controllerData points
+  at gControllerPads, whose four 6-byte entries carry the matching errnos; its
+  port reads 0. One struct carries the raw stick, the processed stick and its
+  magnitude, and all 14 buttons in two 16-bit masks.
 - 30 Hz is the TRUE input rate. The frame counter ticks exactly 30/s and the
   game rewrites that struct exactly once per tick, so one stored state per
   game frame loses nothing.
@@ -66,37 +68,37 @@ import time
 from collections import Counter
 
 from sm64_events.memory import addresses as A
-from sm64_events.memory.layout import layout_for
+from sm64_events.memory.layout import LAYOUT_ROWS, layout_for
 from sm64_events.memory.pj64 import Pj64Memory
 
-# --- N64 controller facts (version-independent; these are the console's) ----
-BUTTON_BITS = [
-    (0x8000, "A"), (0x4000, "B"), (0x2000, "Z"), (0x1000, "Start"),
-    (0x0800, "D^"), (0x0400, "Dv"), (0x0200, "D<"), (0x0100, "D>"),
-    (0x0020, "L"), (0x0010, "R"),
-    (0x0008, "C^"), (0x0004, "Cv"), (0x0002, "C<"), (0x0001, "C>"),
-]
-VALID_MASK = 0xFF3F          # 0x0080 (reset) and 0x0040 (unused) never set
-BUTTON_DOWN_OFF = 0x10       # from the struct base
-STRUCT_SIZE = 0x20
+# Every controller fact lives in addresses.py (version-independent) and the
+# candidate ADDRESS in layout.py (per ROM). Nothing here restates either: a
+# probe that bakes in a US address is a probe that silently misreads JP, which
+# is what `tests/test_single_source.py`'s "a RAM address" row exists to stop.
+BUTTON_BITS = A.BUTTON_BITS
+VALID_MASK = A.BUTTON_VALID_MASK
+BUTTON_DOWN_OFF = A.CONTROLLER_BUTTON_DOWN_OFF
+STRUCT_SIZE = A.CONTROLLER_SIZE
+SETTLE_PHASE = A.CONTROLLER_SETTLE_PHASE
 
-# gControllers[0] — what decomp calls gPlayer1Controller. Found 2026-08-20 by
-# its POINTER signature rather than by a guessed address, and the whole
-# neighbourhood decodes: statusData -> 0x8033AFE8 where gControllerStatuses[0]
-# reads type 0x0005 (CONT_TYPE_NORMAL, a plugged-in standard pad) and [1..3]
-# read errno 0x08 (nothing plugged in); controllerData -> 0x8033AFF8 where
-# gControllerPads' four 6-byte entries carry the matching errnos; port = 0.
-PLAYER1_CONTROLLER_US = 0x8033AF90
+_MEGABYTE = 0x100000
 
-# How far through a frame the game rewrites that struct, as a fraction of the
-# frame. Measured at 250 and 500 Hz across several sessions: 0.61-0.65. A
-# sampler whose LAST look at the pad lands before this reads the PREVIOUS
-# frame's input while believing it read this one.
-SETTLE_PHASE = 0.62
 
-# The scan window: SM64's .data/.bss plus Usamune's expansion RAM, so a copy
-# Usamune keeps for its own input display would be found too.
-SCAN_LO, SCAN_HI = 0x80300000, 0x80420000
+def scan_band(layout) -> tuple[int, int]:
+    """The RDRAM window the address hunt sweeps, DERIVED from the layout.
+
+    From the lowest global this ROM's layout names to the highest, each
+    rounded outward to a megabyte. Everything the tracker reads lives in that
+    band by construction, and so does anything sitting beside it — including
+    a copy Usamune might keep for its own input display.
+    """
+    known = [value for value in
+             (layout.value(row.field) for row in LAYOUT_ROWS)
+             if value is not None]
+    if not known:
+        raise SystemExit(f"the {layout.version} layout names no address yet")
+    return (min(known) & ~(_MEGABYTE - 1),
+            (max(known) + _MEGABYTE) & ~(_MEGABYTE - 1))
 
 
 def button_names(mask: int) -> str:
@@ -104,7 +106,7 @@ def button_names(mask: int) -> str:
     return "+".join(hit) if hit else "-"
 
 
-def halfwords(image: bytes) -> array.array:
+def halfwords(image: bytes, band: tuple[int, int]) -> array.array:
     """The scan region of a whole-RDRAM image, as PJ64 stores it.
 
     PJ64 keeps big-endian RDRAM as little-endian 32-bit words, so the N64
@@ -113,19 +115,22 @@ def halfwords(image: bytes) -> array.array:
     would do in Python.
     """
     arr = array.array("H")
-    arr.frombytes(image[SCAN_LO - A.KSEG0_BASE:SCAN_HI - A.KSEG0_BASE])
+    low, high = band
+    arr.frombytes(image[low - A.KSEG0_BASE:high - A.KSEG0_BASE])
     return arr
 
 
-def take_dumps(mem, count: int, gap_s: float) -> list[array.array]:
+def take_dumps(mem, count: int, gap_s: float,
+               band: tuple[int, int]) -> list[array.array]:
     dumps = []
     for _ in range(count):
-        dumps.append(halfwords(mem.read_image()))
+        dumps.append(halfwords(mem.read_image(), band))
         time.sleep(gap_s)
     return dumps
 
 
-def scan_for_controller(views: list[array.array]) -> list[int]:
+def scan_for_controller(views: list[array.array],
+                        band: tuple[int, int]) -> list[int]:
     """Halfword addresses that behave like `Controller.buttonDown`."""
     first = views[0]
     limit = len(first) - 2
@@ -146,7 +151,7 @@ def scan_for_controller(views: list[array.array]) -> list[int]:
     seen_values = {i: {view[i ^ 1] for view in views} for i in survivors}
     survivors = [i for i in survivors
                  if len(seen_values[i]) > 1 and any(seen_values[i])]
-    return [SCAN_LO + 2 * i for i in survivors]
+    return [band[0] + 2 * i for i in survivors]
 
 
 def deadzone(raw: int) -> float:
@@ -385,8 +390,9 @@ def sample_run(mem, base: int, frame_addr: int, hz: float, seconds: float,
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--at", default=hex(PLAYER1_CONTROLLER_US),
-                        help="struct base; --at scan re-runs the address hunt")
+    parser.add_argument("--at", default="layout",
+                        help="struct base; 'layout' reads memory/layout.py, "
+                             "'scan' re-runs the address hunt")
     parser.add_argument("--seconds", type=float, default=30.0,
                         help="how long the 500 Hz trace capture runs")
     parser.add_argument("--sweep", type=float, default=8.0,
@@ -404,16 +410,24 @@ def main() -> int:
     if not mem.attach():
         print("Project64 not attached (is the ROM loaded?)")
         return 1
-    frame_addr = layout_for("us").global_timer
+    layout = layout_for("us")
+    band = scan_band(layout)
+    frame_addr = layout.global_timer
     print(f"attached; frame counter at {frame_addr:#010x}\n")
 
-    if args.at != "scan":
+    if args.at == "layout":
+        if layout.player1_controller is None:
+            print(f"the {layout.version} layout has no controller address yet;"
+                  " re-run with --at scan")
+            return 1
+        bases = [layout.player1_controller]
+    elif args.at != "scan":
         bases = [int(args.at, 0)]
     else:
-        print(f"scanning {SCAN_HI - SCAN_LO:,} bytes x {args.dumps} dumps "
+        print(f"scanning {band[1] - band[0]:,} bytes x {args.dumps} dumps "
               f"-- PLAY NORMALLY, press a variety of buttons...")
-        dumps = take_dumps(mem, args.dumps, args.gap)
-        found = scan_for_controller(dumps)
+        dumps = take_dumps(mem, args.dumps, args.gap, band)
+        found = scan_for_controller(dumps, band)
         print(f"  {len(found)} halfword(s) behave like buttonDown; "
               f"watching each one live...", flush=True)
         bases = watch_candidates(mem, [a - BUTTON_DOWN_OFF for a in found],

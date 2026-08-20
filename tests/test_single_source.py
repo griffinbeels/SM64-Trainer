@@ -411,6 +411,23 @@ INVARIANTS = (
             "have reached the detector and not the probe that validates it, "
             "and the probe would have gone on reporting GATE PASSED.",
     ),
+    SingleSource(
+        concept="what the N64 pad's own bits mean",
+        owners=frozenset({"addresses.py"}),
+        tokens=("0xFF3F", "0.62"),
+        files=python_sources(),
+        why="Two facts about the controller that a second file would restate "
+            "rather than import. 0xFF3F is the mask of bits a pad can "
+            "actually set -- 0x0080 is the console reset line and 0x0040 is "
+            "unused -- and it is what makes a halfword identifiable as a "
+            "button word at all, which is how gPlayer1Controller's address "
+            "was found (2026-08-20). 0.62 is CONTROLLER_SETTLE_PHASE: how far "
+            "through a frame the game rewrites the pad, MEASURED over four "
+            "live sessions. The poll loop derives its own rate from it, and a "
+            "second copy going stale would put every captured input one frame "
+            "late while looking perfectly healthy -- which is exactly what a "
+            "60 Hz loop was measured doing, on 100% of frames.",
+    ),
 )
 
 

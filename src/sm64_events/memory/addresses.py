@@ -1314,3 +1314,53 @@ def node_short_label(key: str) -> str:
     if course in COURSE_ABBREV:
         return COURSE_ABBREV[course]
     return _SHORT_LEVEL_NAMES.get(level, node_label(key))
+
+
+# --- the controller ---------------------------------------------------------
+# decomp's `struct Controller`, one per entry of gControllers. These offsets
+# are version-independent; the ARRAY's address is not (memory/layout.py).
+CONTROLLER_SIZE = 0x20
+CONTROLLER_RAW_STICK_X_OFF = 0x00     # s16, the pad's own value (|x| up to ~84)
+CONTROLLER_RAW_STICK_Y_OFF = 0x02     # s16
+CONTROLLER_STICK_X_OFF = 0x04         # f32, dead-zoned and clamped to 64
+CONTROLLER_STICK_Y_OFF = 0x08         # f32
+CONTROLLER_STICK_MAG_OFF = 0x0C       # f32, hypotenuse of the two above
+CONTROLLER_BUTTON_DOWN_OFF = 0x10     # u16, everything held THIS frame
+CONTROLLER_BUTTON_PRESSED_OFF = 0x12  # u16, everything NEWLY down this frame
+CONTROLLER_STATUS_PTR_OFF = 0x14      # -> gControllerStatuses
+CONTROLLER_DATA_PTR_OFF = 0x18        # -> gControllerPads
+CONTROLLER_PORT_OFF = 0x1C            # s32, 0 for player one
+
+# The dead zone the game puts the raw stick through, and the cap it clamps
+# the result to (decomp's adjust_analog_stick). Both are what make a
+# controller struct checkable AGAINST ITSELF, which is how its address was
+# found at all -- see inputs/frame.py::fits_controller.
+STICK_DEAD_ZONE = 8
+STICK_DEAD_ZONE_SHIFT = 6
+STICK_MAX = 64
+
+# CONT_TYPE_NORMAL: what gControllerStatuses[0].type reads for a standard pad
+# plugged into port 1, and errno for a port with nothing in it. Together they
+# are the corroboration that pinned gPlayer1Controller's address.
+CONT_TYPE_NORMAL = 0x0005
+CONT_ERRNO_NO_CONTROLLER = 0x08
+
+# The N64 pad's button word, high bit first so a rendered lane list reads
+# A, B, Z, Start, D-pad, L, R, C-buttons.
+BUTTON_BITS = (
+    (0x8000, "A"), (0x4000, "B"), (0x2000, "Z"), (0x1000, "Start"),
+    (0x0800, "Dup"), (0x0400, "Ddown"), (0x0200, "Dleft"), (0x0100, "Dright"),
+    (0x0020, "L"), (0x0010, "R"),
+    (0x0008, "Cup"), (0x0004, "Cdown"), (0x0002, "Cleft"), (0x0001, "Cright"),
+)
+# 0x0080 is the console RESET line and 0x0040 is unused; a controller never
+# sets either, so a word with one of them set is not a button word.
+BUTTON_VALID_MASK = 0xFF3F
+
+# How far through a frame the game rewrites the controller struct, as a
+# fraction of the frame. MEASURED by tools/probe_inputs.py over four live
+# sessions 2026-08-20: 0.61-0.65 at 250 and 500 Hz. This is the whole reason
+# the poll loop samples faster than 60 Hz -- at 60 Hz the last look of each
+# frame lands at 50% and reads the PREVIOUS frame's input on 100% of frames,
+# one frame late, invisibly. Do not "simplify" this to 0.5.
+CONTROLLER_SETTLE_PHASE = 0.62
