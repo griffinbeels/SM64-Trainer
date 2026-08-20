@@ -200,16 +200,25 @@ def test_real_snapshot_shape_matches_the_measured_expectations(tmp_path):
     overall = {runner: scopes.aggregate(by_entity, groups)
               for runner, by_entity in scores.items()}
 
-    # "the top runner scores above 80"
+    # "the top runner scores above 80" -- a sanity bound on the whole
+    # pipeline's output, not a regression guard on any one rule.
     assert max(result["marelo"] for result in overall.values()) > 80
 
-    # "the single-entry runner scores below 2.0" -- the guard that matters
-    # most: it is the two ends of the absent-vs-zero rule. If a regression
-    # ever zeroed absent entities, this runner would jump from under 1 into
-    # the 90s while the top of the board barely moved.
+    # The absent-vs-zero guard that matters most, aimed at the field the
+    # rule actually moves. `scopes.aggregate` folds a missing entity and an
+    # explicit 0.0 into `marelo` IDENTICALLY (`total += score or 0.0`), so a
+    # `marelo` bound alone cannot tell "omitted" from "scored zero" apart --
+    # it would pass unchanged even if `runner_scores` wrote 0.0 for every
+    # entity a runner never touched. `practiced` is the field the rule
+    # actually gates (`if score is not None: practiced += 1`), and it is
+    # what the leaderboard PRINTS on every row as coverage (practiced/n) --
+    # a zeroing regression would read "117/117" beside a runner who has one
+    # real time. So the guard is: the single-entry runner's own AGGREGATED
+    # coverage names exactly the one entity they ran, not the whole board.
     times = runner_times(payload, {}, version="us")
     single_entry_runners = [runner for runner, by_entity in times.items()
                             if len(by_entity) == 1]
     assert single_entry_runners, "no single-entry runner in the bundled seed"
     for runner in single_entry_runners:
+        assert overall[runner]["practiced"] == 1
         assert overall[runner]["marelo"] < 2.0
