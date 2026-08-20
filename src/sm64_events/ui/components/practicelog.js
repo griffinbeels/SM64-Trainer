@@ -40,6 +40,7 @@ import { nestSubsections } from "../subsections.js";
 import { effectiveRankDisplayMode, readRankDisplayMode,
          writeRankDisplayMode } from "../rankdisplaymode.js";
 import { caveatOf, cardBadge } from "./marks.js";
+import { AddTime } from "./addtime.js";
 
 const html = htm.bind(h);
 
@@ -645,6 +646,29 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
             focus=${selected ? focus : null} clearFocus=${clearFocus}
             freshIds=${freshIds} openCompare=${openCompare} sec=${sec} />`
         : html`<${AttemptLogEmpty} hasAttempts=${sec.attempts.length > 0} />`}
+      ${/* Recording a time you already earned, for the card you are looking
+           at. STARS only: a segment id means nothing outside the database
+           that assigned it, and segments are RTA-only while an imported time
+           is an IGT star time (server/import_api.py refuses one outright, so
+           this is the button agreeing with the door rather than a second
+           rule). It uses the strategy the card is already showing -- "whatever
+           strategy is selected is the default" -- rather than growing a second
+           picker beside the card's own.
+
+           The kind test is `isSegment`, NOT `course_id != null`: a segment
+           originating in a course carries a course_id too (views.py stamps
+           `origin_course`), so that guard drew this control on the ~30 course
+           movements, where every save comes back 422. A dead control whose
+           reason lives somewhere the click does not is the exact shape he
+           reports as a bug. A star section carries no `kind` key at all,
+           which is why every check here reads the segment side. */""}
+      ${/* No game version is sent. Every time stored before imports existed
+           carries none and grades on whichever ROM is running, and a typed
+           time gets the same treatment -- stamping the RUNNING version onto a
+           time he set years ago would be asserting something he never told
+           us. The sheet door sends one because the sheet actually says. */""}
+      ${!isSegment(sec) && html`<${AddTime}
+          entityKey=${ek} strategy=${sec.last_strat} onDone=${t.refresh} />`}
       <div class="attempt-footer">
         ${/* Real pagination (amendment A8), replacing "Show 10 more": "we
              should replace the show more with the number of pages we have

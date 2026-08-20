@@ -10,6 +10,7 @@ import { Modal } from "./modal.js";
 import { RUN_ACTIVE } from "../store.js";
 import { ICON_STYLES } from "./rankicon.js";
 import { useMareloTurn } from "../mareloturn.js";
+import { ImportSheet } from "./importsheet.js";
 import { celebrationsEnabled, setCelebrationsEnabled,
          CLIMB_SKIP_STYLES, climbSkipStyle, setClimbSkipStyle } from "./celebrate.js";
 
@@ -282,6 +283,14 @@ export function Header({ t, settingsOpen, closeSettings }) {
           ${gameVersionNote && html`<p class="settings-note">${gameVersionNote}</p>`}
           ${gameMode && gameMode.unsupported && html`<p class="settings-note">Emulator tracking has no verified JP addresses yet — detection stays US while grading uses JP standards.</p>`}
         </section>
+
+        ${/* Bringing in times you set before this tool watched you. It sits
+             in Settings rather than on the Practice tab because it is a
+             one-off setup gesture and needs no target, which every Practice
+             surface does -- and ABOVE Display, because a new arrival does
+             this once on their first day and should not have to scroll past
+             every tuning link to find it. */""}
+        <${ImportSheet} onDone=${t.refresh} />
 
         <section class="settings-section">
           <h3>Display</h3>

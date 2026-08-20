@@ -988,6 +988,34 @@
   .timefield::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
   .timefield{-moz-appearance:textfield;appearance:textfield}
   .timefield-sep{color:var(--text-dim,#8b98a6);padding:0 1px}
+  /* Recording a time you already earned. It sits UNDER the attempt list
+     rather than in the card head, whose grid comment already names adding a
+     fifth named area as the bug it exists to avoid.
+     Wraps rather than scrolls: the row carries five things at 850px and a
+     control the user has to hunt through is redesigned, never scrolled. */
+  .addtime{display:block;margin-top:6px}
+  .addtime-open{display:inline-flex;align-items:center;gap:5px}
+  .addtime-body{display:flex;flex-wrap:wrap;align-items:center;gap:8px;
+    padding:8px 2px 2px}
+  .addtime-strat{color:var(--text-dim,#8b98a6);font-size:12px}
+  .addtime-needs-strat{color:var(--warn,#e0a33e)}
+  .addtime-save{padding:3px 12px}
+  /* The snap line and the outcome line are explanations, not decorations:
+     the timer counts frames, so most typed hundredths cannot be shown, and a
+     number that changed itself with no reason given reads as a bug. */
+  .addtime-snap,.addtime-status{flex-basis:100%;font-size:12px;line-height:1.35}
+  .addtime-snap{color:var(--text-dim,#8b98a6)}
+  .addtime-status.is-ok{color:var(--good,#5bc97a)}
+  .addtime-status.is-held{color:var(--text-dim,#8b98a6)}
+  .addtime-status.is-bad{color:var(--bad,#e2686b)}
+  /* Taking your Ultimate Sheet column with you. The picker and its button
+     share one row and WRAP at a narrow drawer -- the name search is 448 rows
+     long, so it must never be the thing that gets squeezed. */
+  .importsheet-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;
+    margin-top:6px}
+  .importsheet-row .search-select{flex:1 1 200px;min-width:0}
+  .settings-note.is-ok{color:var(--good,#5bc97a)}
+  .settings-note.is-bad{color:var(--bad,#e2686b)}
   .stdcell{display:inline-flex;align-items:center;gap:4px}
   /* A JP-flagged strategy's edit cell (task 0056): the US and JP fields
      stack, each with its two-letter label, and the video button rides the
