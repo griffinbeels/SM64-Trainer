@@ -89,11 +89,23 @@ class RunnerScoreCache:
         practiced entities only, UNRANKED (`leaderboard()` adds the user's
         row and ranks the two together, which is why this stops short of a
         `position`), plus a COUNT of the runners left out because they have
-        never practiced anything in this scope. The count exists because the
+        never practiced anything in THIS SCOPE. The count exists because the
         omission itself must never be silent: a board that drops most of the
         sheet without saying so reads as "this is everyone" when it is not
         (his ruling on this exact question -- keep dropping them, but never
-        silently)."""
+        silently).
+
+        `omitted` counts a NARROWER population than "every roster name":
+        `scores` (from `ratings.runner_scores`) already excludes a runner
+        with no time on ANY entity anywhere -- that runner is never a key
+        here at all, so this loop never sees them and `omitted` never counts
+        them either. What it counts is a runner who IS rated somewhere in
+        the whole corpus but has nothing for the entities THIS scope covers
+        -- rated elsewhere, not rated at all are different facts, and only
+        the first is this field's job. On `overall` specifically this count
+        is always 0: every rankable entity is its own single-candidate group
+        there, so anyone `scores` holds at all necessarily has SOME entity
+        it covers."""
         if scope_id not in self._board_rows:
             rows, omitted = [], 0
             for runner, by_entity in scores.items():
@@ -150,7 +162,11 @@ def leaderboard(cache: RunnerScoreCache, library, adoptions_rows: dict,
     `omitted` is how many were left off, and it is NOT optional to surface:
     a board that silently drops most of the sheet reads as "this is
     everyone" when it is not -- the caller must show this count, not just
-    the rows."""
+    the rows. It counts runners rated SOMEWHERE in the whole corpus but
+    nowhere in THIS scope -- see `RunnerScoreCache.board_rows` for exactly
+    which population that is (narrower than "every roster name": a runner
+    with no time anywhere is never in `omitted` either, since they never
+    reach this count's loop at all)."""
     scores, _times = cache.refresh(library, adoptions_rows, ranks_store,
                                    version=version)
     runner_rows, omitted = cache.board_rows(scope_id, groups, scores)
@@ -208,6 +224,11 @@ def runner_breakdown(cache: RunnerScoreCache, library, adoptions_rows: dict,
     entities = []
     for entity in agg["entities"]:
         key = entity["key"]
+        # The `{}` default never actually fires: every candidate in `groups`
+        # (the caller's `_groups(..., excluded=set())`) already cleared
+        # `rankable_entities`'s bar of a non-empty ladder, so every key
+        # reaching this loop has one in `ladders`. See the matching comment
+        # in `ranks_api.py::_score_scope` for the full invariant.
         ladder = ladders.get(key, {})
         graded = marelo_bridge.classify_entity(ladder, entity["score"], agg["n"])
         you_graded = marelo_bridge.classify_entity(

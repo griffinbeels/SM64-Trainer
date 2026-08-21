@@ -451,7 +451,14 @@ def test_leaderboard_shape(client):
     assert body["scope_id"] == "overall" and body["basis"] == "pb"
     assert set(body) >= {"scope_id", "label", "n", "basis", "rank_mode",
                          "sheet_revision", "omitted", "rows"}
-    assert isinstance(body["omitted"], int) and body["omitted"] >= 0
+    assert isinstance(body["omitted"], int)
+    # `overall` is structurally the one scope where `omitted` can never move:
+    # every rankable entity is its own single-candidate group there, so
+    # anyone `ratings.runner_scores` holds a score for AT ALL is scored on
+    # overall too. A nonzero value here would mean the wrong POPULATION is
+    # feeding the count (e.g. counting the sheet's roster instead of the
+    # already-rated corpus) -- `>= 0` alone would pass under that bug.
+    assert body["omitted"] == 0
     you_rows = [row for row in body["rows"] if row["you"]]
     assert len(you_rows) == 1 and you_rows[0]["runner"] is None
     for row in body["rows"]:
@@ -511,13 +518,29 @@ def test_leaderboard_omitted_counts_a_runner_scored_elsewhere_but_not_here(clien
     scope; giving star:8:2 a ladder brings in the sheet's own REAL,
     unadopted coverage of it (a real star, plenty of community times) as
     the "elsewhere" population -- runners scored there and nowhere in
-    course 9, which is exactly the shape `omitted` exists to count."""
+    course 9, which is exactly the shape `omitted` exists to count.
+
+    Checked against the EXACT count, computed independently over
+    `ratings.runner_scores`'s own output rather than through
+    `scopes.aggregate` -- reusing that would just be board.py's own
+    aggregation checking itself, and `>= 1` alone would pass under an
+    off-by-one or a wrong-population bug just as easily as a correct one
+    (the re-reviewer measured `omitted=251` against `rows=46` on this exact
+    scenario, and `>= 1` cannot tell 251 from 1)."""
+    from sm64_events.library import ratings
     client.put("/api/ranks/standards/star:8:2/Standard/Mario", json={"seconds": 10.0})
     in_scope = _adopt_row_onto(client, "star:9:2")
+    library = client.app.state.library
+    adoptions = client.app.state.library_adoptions
+    scores = ratings.runner_scores(library.payload, adoptions.standards,
+                                   adoptions.rows(), version="us")
+    expected_omitted = sum(1 for by_entity in scores.values()
+                           if "star:9:2" not in by_entity)
+    assert expected_omitted >= 1, "scenario didn't produce anyone to omit"
     body = client.get("/api/leaderboard?scope=course:9").json()
     runners = [row["runner"] for row in body["rows"]]
     assert in_scope in runners
-    assert body["omitted"] >= 1
+    assert body["omitted"] == expected_omitted
 
 
 def test_leaderboard_never_moves_marelo_watermarks(tmp_path):

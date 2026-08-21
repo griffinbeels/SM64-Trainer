@@ -171,6 +171,16 @@ def _score_scope(service, scope_id: str) -> dict:
         # aggregate's numerator/denominator. The excluded rows themselves
         # are appended below, outside the scored block.
         entity["excluded"] = entity["key"] in excluded
+        # The `{}` default never actually fires: every key in
+        # out["entities"] came from `groups`, which `_groups` built from
+        # `rankable_entities` -- and that function's own bar for "rankable"
+        # is `scoring.best_ladder(ladders)` being non-empty. So every entity
+        # reaching this loop already has a non-empty ladder in
+        # `ladders_by_key`, and `classify_entity`'s `score is None` branch
+        # (unpracticed) is what actually handles "nothing to grade" -- an
+        # EMPTY ladder is a different, structurally unreachable case here,
+        # and `defined_tiers({})` would silently walk the full tier table
+        # instead of this entity's own if it ever were reached.
         classified = marelo_bridge.classify_entity(
             ladders_by_key.get(entity["key"], {}), entity["score"], out["n"])
         entity["tier"] = classified["tier"]
@@ -641,9 +651,14 @@ def create_ranks_router(service, library=None, adoptions=None,
         return {"scope_id": scope_id, "label": label, "n": you_aggregate["n"],
                 "basis": "pb", "rank_mode": rank_mode,
                 "sheet_revision": library.revision, "rows": rows,
-                # How many runners have NO time in this scope and are
-                # therefore absent from `rows` -- a board that drops most of
-                # the sheet without saying so reads as "this is everyone".
+                # How many runners are rated SOMEWHERE on the sheet but have
+                # no time for anything THIS scope covers, and are therefore
+                # absent from `rows` -- a board that drops most of the sheet
+                # without saying so reads as "this is everyone". NOT the
+                # count of roster names with no time anywhere at all (those
+                # never reach `board.py`'s scores map, so they count in
+                # neither `rows` nor `omitted`); see `board.py::
+                # RunnerScoreCache.board_rows` for the exact population.
                 "omitted": omitted}
 
     @router.get("/leaderboard/runner/{name:path}/summary")
