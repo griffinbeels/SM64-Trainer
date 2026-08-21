@@ -15,6 +15,7 @@ import { UpdatePopup } from "./components/update.js";
 import { RecordingDot } from "./components/replay.js";
 import { Icon } from "./components/icons.js";
 import { RankPage } from "./components/rankpage.js";
+import { RunnerPage } from "./components/runnerpage.js";
 import { RankUpCelebration } from "./components/marelocelebrate.js";
 
 const html = htm.bind(h);
@@ -204,6 +205,14 @@ function App() {
   // tab and open that thing", never a second -- drifting apart is how the
   // deleted one earned its comment above.
   const [libraryIntent, setLibraryIntent] = useState(null);
+  // The RUNNER PAGE (task 5): which runner's page the Rank tab shows, or
+  // null for the user's own board. App-level, not RankPage-local state,
+  // because it has TWO doors -- a leaderboard row (inside RankPage itself)
+  // and a runner's name inside the Library (a DIFFERENT tab) -- and the
+  // second door has to reach across tabs the same way `libraryIntent` does.
+  // `setTab` below clears it on any navigation away from "Rank", so a stale
+  // pick can never survive into a later, ordinary visit to the Rank tab.
+  const [openRunnerName, setOpenRunnerName] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   useEffect(() => {
@@ -212,7 +221,14 @@ function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [moreOpen]);
-  const setTab = (name) => { setTabState(name); setMoreOpen(false); };
+  const setTab = (name) => {
+    if (name !== "Rank") setOpenRunnerName(null);
+    setTabState(name); setMoreOpen(false);
+  };
+  // The Library's own door onto a runner's page (task 5) -- sets the tab
+  // first, so a click while ALREADY on Rank still lands on the runner (the
+  // clear above only fires for a DIFFERENT destination).
+  const openRunner = (name) => { setTab("Rank"); setOpenRunnerName(name); };
   // The Compare PANE's own entry point -- unchanged from before Task 6
   // (task-6-caveats.md point 3: the pane never moves, this is still the one
   // thing that opens it). Renamed from `openCompare` because that name is
@@ -255,7 +271,7 @@ function App() {
         <div class="view-pane" style=${tab === "Library" ? "" : "display:none"}>
           <${Library} t=${t} intent=${libraryIntent}
             clearIntent=${() => setLibraryIntent(null)} active=${tab === "Library"}
-            enterCompare=${enterCompare} />
+            enterCompare=${enterCompare} openRunner=${openRunner} />
         </div>
         ${tab === "Practice" ? html`<div class="view-pane"><${Practice} t=${t}
             openCompare=${openCompare} openLibrary=${openLibrary} /></div>`
@@ -263,7 +279,10 @@ function App() {
               <${Segments} t=${t} /></div>`
           : tab === "Routes" ? html`<div class="view-pane"><${Routes} t=${t} /></div>`
           : tab === "Run" ? html`<div class="view-pane"><${Run} t=${t} /></div>`
-          : tab === "Rank" ? html`<div class="view-pane"><${RankPage} t=${t} /></div>`
+          : tab === "Rank" ? html`<div class="view-pane">${openRunnerName
+              ? html`<${RunnerPage} t=${t} runnerName=${openRunnerName}
+                  onClose=${() => setOpenRunnerName(null)} />`
+              : html`<${RankPage} t=${t} onOpenRunner=${setOpenRunnerName} />`}</div>`
           : tab === "Live feed" ? html`<div class="view-pane"><${Feed} t=${t} /></div>`
           : null}
       </div>

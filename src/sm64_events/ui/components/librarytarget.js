@@ -208,7 +208,7 @@ function assocFor(row, standings, resolveLabel) {
 // button. The version pill this card used to wear is GONE (round 1 item 4
 // superseded it: the section's mode now filters entries, so every visible
 // run is the mode's own version).
-function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd }) {
+function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd, onOpenRunner }) {
   const [playing, setPlaying] = useState(false);
   // Bluesky's embed host takes a DID, and most sheet links carry a handle --
   // resolved with ONE public-API fetch on the first click (videoSource's own
@@ -289,7 +289,16 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd 
       <span class="rank-icon-slot library-example-tier" style="--icon-size: 20px">
         ${tier ? html`<${RankIcon} tier=${tier} division=${division} size=${20} />` : "–"}</span>
       <span class="library-example-runner-wrap">
-        <span class="library-example-runner">${entry.runner}</span>
+        ${/* Task 5's own player-click door: a runner's name in the Library
+             opens their runnerpage.js page. "You" (the leaderboard-mode
+             sentinel row, `entry._isYou`) never gets one -- that name has
+             no runner behind it, and it is the page you are already
+             reading. */""}
+        ${onOpenRunner && !entry._isYou
+          ? html`<button type="button" class="library-example-runner library-runner-link"
+              onclick=${(clickEvent) => { clickEvent.stopPropagation(); onOpenRunner(entry.runner); }}
+              title=${`View ${entry.runner}'s ratings`}>${entry.runner}</button>`
+          : html`<span class="library-example-runner">${entry.runner}</span>`}
       </span>
       <span class="library-example-time">${fmtSeconds(entry.time_cs / 100)}</span>
       <button type="button" class="library-example-plus"
@@ -307,11 +316,15 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd 
 // A run nobody filmed: still evidence (a real runner, a real time, a real
 // subdivision), never a video card. No "+" -- the tray imports videos, and a
 // row with nothing to import must not offer the gesture.
-function PlainEntry({ entry, tier, division }) {
+function PlainEntry({ entry, tier, division, onOpenRunner }) {
   return html`<span class="library-plain-entry">
     ${tier ? html`<span class="rank-icon-slot" style="--icon-size: 15px">
       <${RankIcon} tier=${tier} division=${division} size=${15} /></span>` : ""}
-    <span class="library-plain-runner">${entry.runner}</span>
+    ${onOpenRunner && !entry._isYou
+      ? html`<button type="button" class="library-plain-runner library-runner-link"
+          onclick=${() => onOpenRunner(entry.runner)}
+          title=${`View ${entry.runner}'s ratings`}>${entry.runner}</button>`
+      : html`<span class="library-plain-runner">${entry.runner}</span>`}
     <span class="library-plain-time">${fmtSeconds(entry.time_cs / 100)}</span>
   </span>`;
 }
@@ -325,7 +338,7 @@ function PlainEntry({ entry, tier, division }) {
 // control that expands to nothing is a dead control, and the reason ("no
 // examples") sits where the click would land.
 function DivisionGroup({ approach, band, division, query, isYou, trayKeys,
-                         entityKey, onAdd, autoOpen = false }) {
+                         entityKey, onAdd, autoOpen = false, onOpenRunner }) {
   const [open, setOpen] = useState(false);
   // A standards-table deep link names THIS subdivision (round 3, task 0098):
   // open once per arrival, during render (the openedPage pattern below — an
@@ -388,13 +401,14 @@ function DivisionGroup({ approach, band, division, query, isYou, trayKeys,
                 entry=${entry} tier=${band.tier} division=${division.numeral}
                 trayKey=${trayKey} entityKey=${entityKey}
                 inTray=${trayKeys.has(trayKey)}
-                onAdd=${onAdd} />`;
+                onAdd=${onAdd} onOpenRunner=${onOpenRunner} />`;
           })}
         </div>` : ""}
         ${plain.length ? html`<div class="library-plain-rows">
           ${plain.map((entry) => html`<${PlainEntry}
               key=${`${entry.runner}:${entry.time_cs}`}
-              entry=${entry} tier=${band.tier} division=${division.numeral} />`)}
+              entry=${entry} tier=${band.tier} division=${division.numeral}
+              onOpenRunner=${onOpenRunner} />`)}
         </div>` : ""}
       </div>
     <//>
@@ -449,7 +463,7 @@ function TocRow({ band, count, you, onJump }) {
 // construction, so it always falls to the PlainEntry branch; the ◀ you
 // marker beside it is the SAME class/text TocRow and DivisionGroup already
 // wear for the identical fact, not a new indicator.
-function LeaderboardRow({ row, approach, entityKey, trayKeys, onAdd }) {
+function LeaderboardRow({ row, approach, entityKey, trayKeys, onAdd, onOpenRunner }) {
   const { position, entry, tier, division } = row;
   const isYou = !!entry._isYou;
   const trayKey = entry.video ? entryTrayKey(approach, entry) : null;
@@ -459,8 +473,9 @@ function LeaderboardRow({ row, approach, entityKey, trayKeys, onAdd }) {
       ${entry.video
         ? html`<${ExampleCard} entry=${entry} tier=${tier} division=${division}
               trayKey=${trayKey} entityKey=${entityKey}
-              inTray=${trayKeys.has(trayKey)} onAdd=${onAdd} />`
-        : html`<${PlainEntry} entry=${entry} tier=${tier} division=${division} />`}
+              inTray=${trayKeys.has(trayKey)} onAdd=${onAdd} onOpenRunner=${onOpenRunner} />`
+        : html`<${PlainEntry} entry=${entry} tier=${tier} division=${division}
+              onOpenRunner=${onOpenRunner} />`}
       ${isYou ? html`<span class="library-toc-you"
             title="your current standing on this strategy"> ◀ you</span>` : ""}
     </div>
@@ -471,7 +486,7 @@ function LeaderboardRow({ row, approach, entityKey, trayKeys, onAdd }) {
 // bands (round 4's rule, extended rather than re-derived): a live search
 // hides every non-matching row, "you" included when your own runner text
 // ("You") does not contain it, same as any other row would.
-function LeaderboardList({ leaderboard, approach, query, entityKey, trayKeys, onAdd }) {
+function LeaderboardList({ leaderboard, approach, query, entityKey, trayKeys, onAdd, onOpenRunner }) {
   const shown = query
     ? leaderboard.filter((row) => matchesRunner(row.entry, query)) : leaderboard;
   if (!shown.length) {
@@ -481,7 +496,7 @@ function LeaderboardList({ leaderboard, approach, query, entityKey, trayKeys, on
     ${shown.map((row) => html`<${LeaderboardRow}
         key=${`${row.position}-${row.entry.runner}-${row.entry.time_cs}-${row.entry.video || ""}`}
         row=${row} approach=${approach} entityKey=${entityKey}
-        trayKeys=${trayKeys} onAdd=${onAdd} />`)}
+        trayKeys=${trayKeys} onAdd=${onAdd} onOpenRunner=${onOpenRunner} />`)}
   </div>`;
 }
 
@@ -662,7 +677,7 @@ function TargetLinkControl({ rows, approaches, linkCtx }) {
  * (a strategy's linking is target-level, round 7).
  */
 function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
-                      onAdd, linkCtx, version, gradingVersion }) {
+                      onAdd, linkCtx, version, gradingVersion, onOpenRunner }) {
   if (!pieces.length) return null;
   return html`<div class="library-pieces">
     <h4 class="library-pieces-head">Pieces of this run</h4>
@@ -672,7 +687,7 @@ function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
         query=${query} stratInfo=${null} version=${version} gradingVersion=${gradingVersion}
         trayKeys=${trayKeys}
         entityKey=${piece.entity_key || entityKey} onAdd=${onAdd}
-        linkCtx=${linkCtx}
+        linkCtx=${linkCtx} onOpenRunner=${onOpenRunner}
         door=${html`<${LinkControl} row=${piece} kind="subsection"
             entityKey=${piece._entityKey} adoptable=${piece._adoptable}
             ...${linkCtx} />`} />`)}
@@ -691,7 +706,7 @@ function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
  */
 function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey, onAdd,
                    linkCtx, door = null, focusMark = null, version = "us",
-                   gradingVersion = "us" }) {
+                   gradingVersion = "us", onOpenRunner }) {
   // ROUND 1 (2026-08-07), superseding the round-2 version-badge ruling: the
   // JP/US control is a MODE, and a mode FILTERS -- "We should have 2 modes:
   // JP (shows only JP entries), US (shows only US entries)." An entry tagged
@@ -844,7 +859,8 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
         </div>
         ${mode === "leaderboard" ? html`<${LeaderboardList}
             leaderboard=${leaderboard} approach=${approach} query=${query}
-            entityKey=${entityKey} trayKeys=${trayKeys} onAdd=${onAdd} />` : html`<${Fragment}>
+            entityKey=${entityKey} trayKeys=${trayKeys} onAdd=${onAdd}
+            onOpenRunner=${onOpenRunner} />` : html`<${Fragment}>
         <table class="library-toc"><tbody>
           ${shownBands.map((band) => html`<${TocRow} key=${bandAnchorId(approach, band.tier || "unranked")} band=${band}
               count=${band.entries.filter((entry) => matchesRunner(entry, query)).length}
@@ -868,7 +884,8 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
                               && focusMark.division === division.numeral)}
                 isYou=${!!(standing && standing.rank === band.tier
                            && standing.division === division.numeral)}
-                trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd} />`)
+                trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
+                onOpenRunner=${onOpenRunner} />`)
             : html`<div class="library-division-body">
                 <div class="library-examples">
                   ${band.entries.filter((entry) => matchesRunner(entry, query) && entry.video)
@@ -877,14 +894,16 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
                       return html`<${ExampleCard} key=${trayKey}
                           entry=${entry} tier=${band.tier} division=${null}
                           trayKey=${trayKey} entityKey=${entityKey}
-                          inTray=${trayKeys.has(trayKey)} onAdd=${onAdd} />`;
+                          inTray=${trayKeys.has(trayKey)} onAdd=${onAdd}
+                          onOpenRunner=${onOpenRunner} />`;
                     })}
                 </div>
                 <div class="library-plain-rows">
                   ${band.entries.filter((entry) => matchesRunner(entry, query) && !entry.video)
                     .map((entry) => html`<${PlainEntry}
                         key=${`${entry.runner}:${entry.time_cs}`}
-                        entry=${entry} tier=${band.tier} division=${null} />`)}
+                        entry=${entry} tier=${band.tier} division=${null}
+                        onOpenRunner=${onOpenRunner} />`)}
                 </div>
               </div>`}
         </div>`)}
@@ -907,7 +926,7 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
                                focusDivision = null, focusEntryUrl = null,
                                focusRow = null,
                                fallbackLabel = null, onRelink = () => {},
-                               resolveEntityLabel = null }) {
+                               resolveEntityLabel = null, onOpenRunner = null }) {
   const [query, setQuery] = useState("");
   // The OPEN approach's `approachIdentity` — target-scoped, not just its
   // name, so two sibling targets whose approaches share a name (fix round 1)
@@ -1317,13 +1336,15 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
             ? focusMark : null}
           stratInfo=${approach.matched_strategy ? stratByName[approach.matched_strategy] : null}
           trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
-          linkCtx=${linkCtx} version=${version} gradingVersion=${gradingVersion} />`)}
+          linkCtx=${linkCtx} version=${version} gradingVersion=${gradingVersion}
+          onOpenRunner=${onOpenRunner} />`)}
     <${PiecesList} pieces=${pieces} query=${query}
         expanded=${expanded}
         onOpen=${(identity) => setExpanded((prev) =>
           prev === identity ? null : identity)}
         trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
-        linkCtx=${linkCtx} version=${version} gradingVersion=${gradingVersion} />
+        linkCtx=${linkCtx} version=${version} gradingVersion=${gradingVersion}
+        onOpenRunner=${onOpenRunner} />
     ${/* Task 0096: the record door's recorder — the IDENTICAL surface the
          Segments tab opens (one implementation, his own requirement), seeded
          with the row's name and its target's entity. The save's own

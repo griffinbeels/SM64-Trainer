@@ -1170,3 +1170,27 @@ def test_the_rank_tab_story_reaches_a_real_leaderboard(page):
         ".getAttribute('aria-current')")
     assert on_rank == "page", (
         "the rank-leaderboard story left the tab in an unexpected state")
+
+
+# --- the runner page (Task 5, spec 2026-08-20-ranked-leaderboard) ----------
+# Same lesson as the leaderboard story above, one layer deeper: a story that
+# reaches the BOARD does not thereby reach the PAGE it opens. `uilab_project`'s
+# new "runner-page" story clicks the gesture leaderboard.js itself wires
+# (Task 5) and this reuses that SAME named story on the SAME shared `page`.
+
+def test_the_runner_page_story_reaches_a_real_runner(page):
+    reach(page, "runner-page")
+    heading = page.evaluate(
+        "document.querySelector('.runner-page h2')?.textContent || ''")
+    assert heading, "the runner page rendered with no name in its heading"
+    assert page.count(".runner-page .scope-chip") > 0, (
+        "the runner page drew no scope chips")
+    headers = page.evaluate(
+        "Array.from(document.querySelectorAll('.runner-page .rank-breakdown th'))"
+        ".map(e => e.textContent.trim())")
+    assert "Their time" in headers and "Gap" in headers, headers
+    ignore_buttons = page.evaluate(
+        "document.querySelectorAll('.runner-page .rank-breakdown tbody button').length")
+    assert ignore_buttons == 0, (
+        f"found {ignore_buttons} button(s) in the runner page's breakdown -- "
+        "read-only means no Ignore/Include control")

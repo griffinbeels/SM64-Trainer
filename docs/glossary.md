@@ -694,8 +694,8 @@ ordered by [[MARELO]] and numbered the same way [[Leaderboard mode]]
 numbers its own list: a tie shares a position and the next skips ahead by
 the tie's size. The board drops a [[runner]] with nothing practiced in this
 [[scope]] and always keeps your own row, even at zero. Opening one
-[[runner]]'s row widens every entity with your own score and time on it, so
-the two read side by side.
+[[runner]]'s row lands on their [[Runner page]], which widens every entity
+with your own score and time on it, so the two read side by side.
 
 - **Lives** — the board (`src/sm64_events/library/board.py`) → served at
   /api/leaderboard → drawn on the [[Rank tab]]
@@ -724,6 +724,26 @@ pill]], the [[scope]] control, and your [[rank]]s across everything.
 
 - **Lives** — the rank page
   (`src/sm64_events/ui/components/rankpage.js`)
+
+### Runner page
+
+One community [[runner]]'s own standing, read-only, reached by clicking
+their name on a [[Rank board]] row or beside one of their times on the
+[[Library tab]] — one screen either way, never two that draw it differently.
+The same [[scope]] chips and the same coverage strip your own [[Rank tab]]
+draws, pointed at their [[runner rating]] instead of yours, and the same
+breakdown table with its last three columns widened for comparison: their
+[[rank]] on each entity, their time, your time, and the gap between the
+two. No control on it can change anything — no excluding an entity, no
+repointing an icon.
+
+- **Lives** — the page
+  (`src/sm64_events/ui/components/runnerpage.js`), reached from
+  `src/sm64_events/ui/components/leaderboard.js` and
+  `src/sm64_events/ui/components/librarytarget.js`
+- **Not** — the [[Rank tab]], the same shell around YOUR OWN [[MARELO]] —
+  it grades nobody's [[rank]] but yours, and its breakdown table carries the
+  Ignore/Include control this page never shows.
 
 ### Library tab
 

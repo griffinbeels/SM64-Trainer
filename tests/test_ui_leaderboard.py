@@ -149,10 +149,14 @@ def test_jump_to_you_scrolls_the_board_toward_your_row(page):
         f"({before} -> {after})")
 
 
-def test_a_row_click_is_a_no_op_not_a_dead_end(page):
-    """Task 5 wires this to the runner's page; until then clicking a row must
-    not throw or navigate away from the Rank tab."""
-    page.evaluate("document.querySelectorAll('.leaderboard-row')[1].click()")
+def test_your_own_row_click_is_still_a_no_op(page):
+    """Task 5 wired every OTHER row to the runner's page
+    (tests/test_ui_runner_page.py owns that door); your own row has no
+    `runner` name to open and stays inert -- clicking it must not throw or
+    navigate away from the Rank tab."""
+    page.evaluate("document.querySelector('.leaderboard-row.is-you').click()")
     page.wait_ms(100)
     assert page.count(".leaderboard-row") > 0, (
-        "the Rank tab navigated away or crashed after a row click")
+        "the Rank tab navigated away or crashed after clicking your own row")
+    assert page.count(".runner-page") == 0, (
+        "clicking your own row opened a runner page")

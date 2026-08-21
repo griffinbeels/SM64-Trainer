@@ -716,6 +716,20 @@
   .library-example-runner {
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  /* Task 5's player-click door: a runner's name becomes a <button> wherever
+     `onOpenRunner` is wired (librarytarget.js's ExampleCard/PlainEntry),
+     ADDED to the existing `.library-example-runner`/`.library-plain-runner`
+     class rather than replacing it, so the ellipsis/overflow rules those
+     already carry keep applying with no second copy of them here. Button
+     chrome reset to plain text, styled up only on hover/focus -- the same
+     "looks clickable only once it is" law the leaderboard row above follows. */
+  .library-runner-link {
+    appearance: none; background: none; border: none; padding: 0; margin: 0;
+    font: inherit; color: inherit; text-align: left; cursor: pointer;
+  }
+  .library-runner-link:hover, .library-runner-link:focus-visible {
+    color: var(--gold); text-decoration: underline;
+  }
   .library-example-time {
     font-variant-numeric: tabular-nums; color: #dfe7ef; font-weight: 600;
   }
@@ -3157,16 +3171,26 @@
     max-height: min(520px, 55vh); overflow-y: auto; margin-top: 8px;
     border: 1px solid var(--border-soft); border-radius: 8px;
   }
-  /* A plain DIV, not a <button>: the click is a deliberate no-op until Task
-     5 wires it to the runner's page (leaderboard.js's own comment), and a
-     control that LOOKS clickable while doing nothing is the dead-control
-     failure this project rejects on sight -- no pointer cursor, no hover
-     affordance, until there is a real destination behind it. */
+  /* A plain DIV, not a <button> -- Task 5 wired the click to the runner's
+     own page (leaderboard.js), so every OTHER runner's row now wears
+     `.is-clickable` and its own role/tabindex/keydown. Your own row STAYS a
+     dead control on purpose (it has no destination -- you are already
+     reading it), so it keeps the original no-pointer-cursor,
+     no-hover-affordance treatment this class carried since Task 4. */
   .leaderboard-row {
     display: flex; align-items: center; gap: 6px; padding: 6px 10px;
     border-bottom: 1px solid var(--border-soft);
+    transition: background-color .15s ease;
   }
   .leaderboard-row:last-child { border-bottom: 0; }
+  .leaderboard-row.is-clickable { cursor: pointer; }
+  .leaderboard-row.is-clickable:hover,
+  .leaderboard-row.is-clickable:focus-visible {
+    background: color-mix(in srgb, var(--gold) 8%, transparent);
+  }
+  .leaderboard-row.is-clickable:focus-visible {
+    outline: none; box-shadow: inset 0 0 0 2px var(--gold);
+  }
   .leaderboard-row.is-you { background: color-mix(in srgb, var(--gold) 14%, transparent); }
   .leaderboard-pos {
     flex: 0 0 24px; font-variant-numeric: tabular-nums; color: var(--muted); text-align: right;

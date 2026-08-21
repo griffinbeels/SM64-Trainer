@@ -8,6 +8,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { requestTarget } from "../target.js";
+import { fmtSeconds } from "../format.js";
 import { rankColor } from "./ranks.js";
 import { capGradient, capName, divisionDigit } from "./caps.js";
 import { fmtPoints, fmtScore, toPoints } from "./marelo.js";
@@ -548,7 +549,50 @@ function gainTitle(entity) {
   return `What this scope's rating would gain if you reached the next tier here.`;
 }
 
-function Breakdown({ data, routeOrder, onToggle }) {
+// A runner-variant row's own last column: how far your saved time is from
+// theirs on the SAME entity, from your own side ("gap to close"). `null`
+// whenever either side has no time to compare -- a gap is a fact about TWO
+// times, and showing one without the other would imply a comparison that was
+// never made. Positive = you are slower (the gap you'd have to close);
+// negative = you are already faster.
+function runnerGapCs(entity) {
+  if (entity.time_cs == null || !entity.you || entity.you.time_cs == null) return null;
+  return entity.you.time_cs - entity.time_cs;
+}
+
+function runnerTimeLabel(cs) {
+  return cs == null ? "–" : fmtSeconds(cs / 100);
+}
+
+function runnerGapLabel(entity) {
+  const gap = runnerGapCs(entity);
+  if (gap == null) return "–";
+  if (gap === 0) return "Tied";
+  return `${gap > 0 ? "+" : "−"}${fmtSeconds(Math.abs(gap) / 100)}`;
+}
+
+function runnerGapTitle(entity) {
+  const gap = runnerGapCs(entity);
+  if (gap == null)
+    return entity.time_cs == null
+      ? "This runner has no recorded time here."
+      : "You have no recorded time here.";
+  if (gap === 0) return "Tied.";
+  return gap > 0
+    ? `You are ${fmtSeconds(Math.abs(gap) / 100)} slower than this runner here.`
+    : `You are ${fmtSeconds(Math.abs(gap) / 100)} faster than this runner here.`;
+}
+
+// `variant`: "yours" (default, unchanged) grades the entity by YOUR score --
+// Score/Next rank/Gain, plus the Ignore/Include control every scope-shaping
+// exclusion goes through. "runner" (the runner page, runnerpage.js) grades no
+// one -- it COMPARES: Rank is the runner's own tier on this entity, then
+// their time, your time and the gap between the two. One table, one named
+// difference, never a second implementation of the shell around it (the
+// amendment to task-5-brief.md is the record of why: both variants share
+// everything except these last columns and the Ignore control).
+export function Breakdown({ data, routeOrder, onToggle, variant = "yours" }) {
+  const isRunner = variant === "runner";
   const [byGain, setByGain] = useState(!routeOrder);
   const rows = byGain
     ? [...data.entities].sort((entityA, entityB) => entityB.gain - entityA.gain)
@@ -562,10 +606,14 @@ function Breakdown({ data, routeOrder, onToggle }) {
     <table class="rank-table">
       <thead><tr>
         <th>Entity</th><th>Rank</th>
-        <th class="rank-cell-points">Score (pts)</th>
-        <th>Next rank</th>
-        <th class="rank-cell-gain">Gain (pts)</th>
-        <th></th>
+        ${isRunner
+          ? html`<th class="rank-cell-points">Their time</th>
+              <th class="rank-cell-points">Your time</th>
+              <th class="rank-cell-gain">Gap</th>`
+          : html`<th class="rank-cell-points">Score (pts)</th>
+              <th>Next rank</th>
+              <th class="rank-cell-gain">Gain (pts)</th>
+              <th></th>`}
       </tr></thead>
       <tbody>
       ${rows.map((entity) => html`<tr class=${[
@@ -575,15 +623,19 @@ function Breakdown({ data, routeOrder, onToggle }) {
         <td>${entity.tier
           ? html`<${RankIcon} tier=${entity.tier} division=${entity.division} size=${30} />`
           : "–"}</td>
-        <td class="meta rank-cell-points">${fmtPoints(entity.score)}</td>
-        <td class="meta rank-cell-next">${nextRankLabel(entity)}</td>
-        <td class="meta rank-cell-gain" title=${gainTitle(entity)}>+${toPoints(entity.gain)}</td>
-        <td><button type="button" class="chip"
-          onclick=${() => onToggle(entity.key, !entity.excluded)}
-          title=${entity.excluded
-            ? "Include this in every rating again"
-            : "Exclude this from every rating"}>
-          ${entity.excluded ? "Include" : "Ignore"}</button></td>
+        ${isRunner
+          ? html`<td class="meta rank-cell-points">${runnerTimeLabel(entity.time_cs)}</td>
+              <td class="meta rank-cell-points">${runnerTimeLabel(entity.you.time_cs)}</td>
+              <td class="meta rank-cell-gain" title=${runnerGapTitle(entity)}>${runnerGapLabel(entity)}</td>`
+          : html`<td class="meta rank-cell-points">${fmtPoints(entity.score)}</td>
+              <td class="meta rank-cell-next">${nextRankLabel(entity)}</td>
+              <td class="meta rank-cell-gain" title=${gainTitle(entity)}>+${toPoints(entity.gain)}</td>
+              <td><button type="button" class="chip"
+                onclick=${() => onToggle(entity.key, !entity.excluded)}
+                title=${entity.excluded
+                  ? "Include this in every rating again"
+                  : "Exclude this from every rating"}>
+                ${entity.excluded ? "Include" : "Ignore"}</button></td>`}
       </tr>`)}
       </tbody>
     </table>
@@ -599,14 +651,20 @@ function Breakdown({ data, routeOrder, onToggle }) {
 // tab's own staleness fix (t.mareloRev): the chips must not go stale while
 // the tab is left open during play, same reason the breakdown re-fetches
 // on every REFRESH_ON event.
-function ScopeChips({ activeScopeId, onPick, refreshKey }) {
+//
+// `source` (runnerpage.js's own addition): the endpoint to read chips FROM,
+// defaulting to the user's own `/api/marelo/summary`. The runner page passes
+// `/api/leaderboard/runner/{name}/summary` instead -- the identical chip
+// shape (board.py::runner_summary's own docstring), so this is a data-source
+// swap and nothing about the row itself changes.
+export function ScopeChips({ activeScopeId, onPick, refreshKey, source = "/api/marelo/summary" }) {
   const [chips, setChips] = useState(null);
   useEffect(() => {
     let alive = true;
-    getJSON("/api/marelo/summary").then((response) => alive && setChips(response.chips))
+    getJSON(source).then((response) => alive && setChips(response.chips))
       .catch(() => alive && setChips([]));
     return () => { alive = false; };
-  }, [refreshKey]);
+  }, [refreshKey, source]);
   if (!chips || !chips.length) return null;
   return html`<div class="scope-chip-row">
     ${chips.map((chip) => html`<button type="button" key=${chip.scope_id}
@@ -775,7 +833,15 @@ const COVERAGE_TILE_PX = 42;
 // above it. Tiles open the SAME detail panel Best-in-scope uses — on an
 // unpracticed entry that panel is just "Practice this", which is the
 // obvious next move from a dim tile.
-function CoverageStrip({ t, data, caption }) {
+// `onEdit` (runnerpage.js's own addition, brief's amendment): whether this
+// strip may offer the ✎ icon-repoint affordance at all. Optional, like
+// `EntityTile`'s own `onEdit` -- omitting it renders no ✎ anywhere in the
+// strip, the same contract one level down. RankPage passes `onEdit=${true}`
+// (its own tiles are yours to repoint); the runner page passes nothing --
+// repointing someone ELSE's icon is not a thing to offer. The icon picker
+// itself is still instantiated unconditionally (rules of hooks); when
+// `onEdit` is falsy it simply never opens.
+export function CoverageStrip({ t, data, caption, onEdit }) {
   const [openKey, setOpenKey] = useState(null);
   // ONE icon picker for the whole strip, hoisted out of the tiles for the
   // same reason the banner hoists its own: a click inside the modal must
@@ -791,16 +857,22 @@ function CoverageStrip({ t, data, caption }) {
       ${rated.map((entity) => html`<${EntityTile} key=${entity.key} t=${t}
         entity=${entity} size=${COVERAGE_TILE_PX} open=${entity.key === openKey}
         onToggle=${() => setOpenKey(entity.key === openKey ? null : entity.key)}
-        onEdit=${() => setPicking(iconIdentityForKey(entity.key))} />`)}
+        onEdit=${onEdit ? () => setPicking(iconIdentityForKey(entity.key)) : undefined} />`)}
     </div>
     <span class="meta">${caption}</span>
     ${open && html`<${EntityDetail} t=${t} entity=${open}
       onClose=${() => setOpenKey(null)} />`}
-    ${pickerModal}
+    ${onEdit && pickerModal}
   </div>`;
 }
 
-export function RankPage({ t }) {
+// `onOpenRunner` (task 5's own addition): the door from a leaderboard row to
+// runnerpage.js's page -- threaded straight to `<Leaderboard>`, unopened
+// here. `app.js` owns which of RankPage/RunnerPage is actually mounted for
+// the "Rank" nav slot (never both, and never a cycle: runnerpage.js imports
+// this file's Breakdown/CoverageStrip/ScopeChips, so this file cannot import
+// runnerpage.js back).
+export function RankPage({ t, onOpenRunner = () => {} }) {
   const [scopes, setScopes] = useState(null);
   const [scopesErr, setScopesErr] = useState(null);
   const [scopeId, setScopeId] = useState(null);
@@ -957,6 +1029,7 @@ export function RankPage({ t }) {
                   + `rank score of the ${data.practiced} `
                   + `${data.practiced === 1 ? "entry" : "entries"} you have practiced`}</span></div>
               <div class="rank-factor">Coverage <${CoverageStrip} t=${t} data=${data}
+                onEdit=${true}
                 caption=${`${data.practiced} of ${data.n} rated `
                   + `${data.n === 1 ? "entry" : "entries"} practiced — dim tiles are `
                   + "the ones you have not run yet. MARELO is mastery × coverage, so "
@@ -978,7 +1051,7 @@ export function RankPage({ t }) {
           onToggle=${toggleExcluded} />
       </div>
       <div class="practice-card">
-        <${Leaderboard} key=${scopeId} t=${t} scopeId=${scopeId} />
+        <${Leaderboard} key=${scopeId} t=${t} scopeId=${scopeId} onOpenRunner=${onOpenRunner} />
       </div>`}
   </div>`;
 }

@@ -20,11 +20,6 @@ const html = htm.bind(h);
 // six pairs, so the two can never name a mode differently.
 const MODE_LABEL = Object.fromEntries(RANK_MODE_OPTIONS);
 
-// Task 5 wires this to the runner's own page. Until then a click on a row is
-// a DELIBERATE no-op, plan-mandated (spec 2026-08-20-ranked-leaderboard) —
-// not a forgotten handler, and not a destination invented ahead of Task 5.
-function openRunner(_row) { /* no-op until Task 5 */ }
-
 // Rows carry `you: true, runner: null` for the user's own row (board.py's
 // contract) — this is the only place in the file that turns that into text,
 // so a rename of the sentinel only breaks one line, not several.
@@ -32,7 +27,7 @@ function runnerName(row) {
   return row.you ? "You" : row.runner;
 }
 
-export function Leaderboard({ t, scopeId }) {
+export function Leaderboard({ t, scopeId, onOpenRunner = () => {} }) {
   const [board, setBoard] = useState(null);
   const [error, setError] = useState(null);
   const [query, setQuery] = useState("");
@@ -103,10 +98,27 @@ export function Leaderboard({ t, scopeId }) {
         + "practiced anything in this scope yet."
       : "Every runner rated on the sheet has practiced something in this scope."}</p>
     <div class="leaderboard-body">
+      ${/* Task 5's own door: every OTHER runner's row opens their
+           runnerpage.js page. Your own row stays inert — it has no
+           `runner` name to open (board.py's `you: true, runner: null`
+           contract) and it is the page you are already reading, so it
+           gets no role/tabindex/click at all (still no pointer cursor,
+           still no hover affordance -- the CSS comment this class carried
+           since Task 4). `.leaderboard-row` is a plain DIV, so a clickable
+           row carries its own keyboard path -- the same
+           role="button"/tabindex="0"/keydown shape rankpage.js's own
+           hover ✎ already uses for a clickable non-button element. */""}
       ${rows.map((row) => html`<div key=${row.you ? "you" : row.runner}
           ref=${row.you ? youRowRef : null}
-          class="leaderboard-row ${row.you ? "is-you" : ""}"
-          onclick=${() => openRunner(row)}>
+          class="leaderboard-row ${row.you ? "is-you" : "is-clickable"}"
+          role=${row.you ? null : "button"} tabindex=${row.you ? null : "0"}
+          title=${row.you ? null : `View ${row.runner}'s ratings`}
+          onclick=${row.you ? null : () => onOpenRunner(row.runner)}
+          onkeydown=${row.you ? null : (keyEvent) => {
+            if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
+            keyEvent.preventDefault();
+            onOpenRunner(row.runner);
+          }}>
         <span class="leaderboard-pos">${row.position}</span>
         <span class="rank-icon-slot leaderboard-icon">
           ${row.tier

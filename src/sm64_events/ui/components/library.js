@@ -159,8 +159,15 @@ function pollImportJob(jobId) {
  *              (`{attemptId?, entity, strat}` — Compare's existing prop
  *              shape, unchanged by this task). Used for the "compare" intent
  *              above and by `studyInCompare` below, once its imports land.
+ * openRunner   (name) => void — app.js's own runnerpage.js door (task 5),
+ *              switching to the Rank tab on that runner's page. Threaded
+ *              straight to `LibraryTarget`'s `onOpenRunner`, which is the
+ *              player-click door: a runner's name inside a target page's
+ *              entry rows (ExampleCard/PlainEntry) or its leaderboard-mode
+ *              rows. Never opened by this file itself — this is only where
+ *              the outside door is received and handed down.
  */
-export function Library({ t, active, intent, clearIntent, enterCompare }) {
+export function Library({ t, active, intent, clearIntent, enterCompare, openRunner }) {
   const [index, setIndex] = useState(null);
   const [status, setStatus] = useState(null);
   // FINAL REVIEW FIX (medium: two fetches fail into a permanent spinner). A
@@ -519,7 +526,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
           </button>
           <${LibraryTarget} t=${t} targets=${entry ? entry.rows : []}
               version=${version} gradingVersion=${effectiveVersion}
-              onAdd=${addToTray} trayKeys=${trayKeys}
+              onAdd=${addToTray} trayKeys=${trayKeys} onOpenRunner=${openRunner}
               focusStrat=${entry ? entry.focusStrat : null}
               focusTier=${entry ? entry.focusTier : null}
               focusDivision=${entry ? entry.focusDivision : null}
