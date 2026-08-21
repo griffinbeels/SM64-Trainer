@@ -38,7 +38,10 @@ function attachSharedVolume(el) {
 }
 
 // Expanded row under an attempt: extract on mount (server caches), then play.
-export function ReplayPlayer({ attemptId, onCompare }) {
+// `onVideoEl` reports the <video> element upward so a sibling can follow
+// the SAME clock -- the input timeline does. Mirrors VideoStage's own
+// `onEl` rather than inventing a second way to hand an element out.
+export function ReplayPlayer({ attemptId, onCompare, onVideoEl }) {
   const [state, setState] = useState({ phase: "loading" });
   const [savedPath, setSavedPath] = useState(null);
   const [playing, setPlaying] = useState(false); // event-driven (onplay/onpause)
@@ -118,7 +121,9 @@ export function ReplayPlayer({ attemptId, onCompare }) {
            onplay=${() => setPlaying(true)}
            onpause=${() => setPlaying(false)}
            ref=${(el) => {
+             const changed = videoEl.current !== el;
              videoEl.current = el; // null on unmount — step()/toggle guard
+             if (changed && onVideoEl) onVideoEl(el);
              if (!el) return;
              if (!el.dataset.sharedVolume) { // ref re-fires on every render
                el.dataset.sharedVolume = "1";

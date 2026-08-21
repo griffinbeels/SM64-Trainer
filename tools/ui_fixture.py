@@ -175,6 +175,71 @@ def _place_time(payload: dict, igt_frames: int) -> dict:
             "igt": format_igt(igt_frames)}
 
 
+def seed_inputs(database, template: bool = True) -> None:
+    """Give the seeded attempts a real INPUT TRACK, and one a TEMPLATE.
+
+    Without this the attempt drawer renders its "no inputs recorded" state --
+    a clean page nobody is looking at, which ui-core.md names as the failure
+    mode that has been the root cause three times here.
+
+    The shape is taken from a real 500 Hz capture (tools/probe_inputs.py,
+    2026-08-20): a run-up, a dive (A, then A+B), a release, a HOLE where
+    capture stopped, and a ground pound. Each track starts at its attempt's
+    own `anchor_frame`, because that is what `track_for_attempt` trims on.
+
+    KNOWN FIXTURE ARTIFACT, stated rather than discovered later: every attempt
+    `seed_practice` creates carries the SAME wall-clock instant for its start
+    and its end, so a chunk cannot be scoped to one of them -- the store finds
+    chunks by UTC span, and a zero-length span overlaps every other. Tracks
+    therefore POOL, and the drawer draws a denser run than any single attempt
+    really had. That makes this a layout STRESS case rather than a faithful
+    one, which is the more useful thing for a sweep to measure; nothing about
+    the store or the trim is wrong.
+    """
+    from sm64_events.inputs.document import encode
+    from sm64_events.inputs.frame import InputFrame
+    from sm64_events.inputs.service import entity_key_of
+    from sm64_events.inputs.templates import TemplateStore
+
+    def track(base: int, shift: int = 0):
+        rows = []
+        rows += [(base + n, InputFrame(0, 0, -45, -45)) for n in range(13)]
+        rows += [(base + 13 + shift, InputFrame(0x8000, 0x8000, -45, -45))]
+        rows += [(base + 14 + shift + n, InputFrame(0xC000, 0, -45, -45))
+                 for n in range(14)]
+        rows += [(base + 28 + shift + n, InputFrame(0, 0, 60, 10))
+                 for n in range(9)]
+        # A HOLE: nothing until +50, so the timeline must draw a gap rather
+        # than interpolate across one.
+        rows += [(base + 50 + n, InputFrame(0x2000, 0x2000 if n == 0 else 0,
+                                            0, -70)) for n in range(6)]
+        rows += [(base + 56 + n, InputFrame(0x0008, 0x0008 if n == 0 else 0,
+                                            0, 0)) for n in range(3)]
+        rows += [(base + 59 + n, InputFrame(0, 0, 0, 0)) for n in range(4)]
+        return rows
+
+    attempts = database.attempts()
+    if not attempts:
+        return
+    sessions = database.sessions()
+    session = sessions[-1]["id"] if sessions else 1
+    for index, attempt in enumerate(attempts[:12]):
+        base = attempt.anchor_frame if attempt.anchor_frame else 1000
+        database.inputs.append(session, track(base, index % 3),
+                               attempt.started_utc, attempt.ended_utc)
+    if not template:
+        return
+    marked = attempts[-1]
+    kind, key = entity_key_of(marked)
+    base = marked.anchor_frame if marked.anchor_frame else 1000
+    TemplateStore(database._conn, database._lock).save(
+        kind=kind, entity_key=key, strat_tag=marked.strat_tag,
+        name="my best run", origin=f"attempt:{marked.id}",
+        document=encode(track(base, 0), target="star",
+                        strategy=marked.strat_tag, version="us",
+                        origin=f"attempt {marked.id}"))
+
+
 def seed_practice(service, course_id: int = FIXTURE_COURSE,
                   star_id: int = FIXTURE_STAR,
                   level: int = FIXTURE_LEVEL, attempts: bool = True,
@@ -1219,7 +1284,21 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     # `mode_path` into scratch for the same reason: a render test that flips
     # the Game version setting must not write the REAL data dir's
     # tracker_mode.json and leave the next dev server grading on JP.
+    # The inputs router, over the SAME db: without it the attempt drawer's
+    # timeline 404s and the sweep measures a page that says "could not read
+    # this attempt's inputs" -- a clean render of the wrong thing, which is
+    # the failure mode ui-core.md warns about.
+    from sm64_events.inputs.service import InputsService
+    from sm64_events.inputs.templates import TemplateStore
+    input_templates = TemplateStore(database._conn, database._lock)
+    inputs_bundle = {
+        "store": database.inputs, "templates": input_templates,
+        "attempts": lambda: database.attempts(),
+        "service": InputsService(database.inputs, input_templates,
+                                 lambda: database.attempts()),
+    }
     app = create_app(poller, broadcaster, service=service, compare=compare,
+                     inputs=inputs_bundle,
                      adoptions_path=Path(compare_cache_scratch.name)
                      / "library_adoptions.json",
                      mode_path=Path(compare_cache_scratch.name) / "tracker_mode.json")
@@ -1274,6 +1353,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                           moments=seed_subsections)
             _seed_target(base, *(target or (FIXTURE_COURSE, FIXTURE_STAR)),
                          with_pb=target is None)
+            seed_inputs(database)
             if target_segment is not None:
                 # AFTER _seed_target, not before: retiring the star target
                 # _seed_target just set is the whole point (see

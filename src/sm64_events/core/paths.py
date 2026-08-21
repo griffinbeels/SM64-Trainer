@@ -119,6 +119,17 @@ def compilations_dir() -> Path:
     return replays_root() / "compilations"
 
 
+def overlays_dir() -> Path:
+    # Transparent input-overlay layers (tools/export_overlay.py). UNDER
+    # replays_root() (== the ReplayService save_root) for the same reason
+    # compilations_dir() is: /api/replay/reveal only opens files inside
+    # save_root, so an export is revealable with no new endpoint -- which
+    # matters here more than usual, because these files exist to be dragged
+    # into an editor and a path in prose is a dead link the next time
+    # anything moves.
+    return replays_root() / "overlays"
+
+
 def diagnostics_dir() -> Path:
     # One-button debug reports (task 0092). UNDER replays_root() (== the
     # ReplayService save_root) for the same reason compilations_dir() is:

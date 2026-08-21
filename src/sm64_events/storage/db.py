@@ -598,6 +598,34 @@ MIGRATIONS = [
     );
     CREATE INDEX idx_input_chunks_utc ON input_chunks (started_utc, ended_utc);
     """,
+    # v28 -- template tracks: the input a run is compared against.
+    #
+    # A template is a DOCUMENT, not a flag on an attempt (his ruling
+    # 2026-08-20). That is what lets one come from an attempt he marked, a
+    # file another player sent him, or one he typed out by hand -- `origin`
+    # says which, and nothing downstream cares. Storing the document TEXT
+    # rather than a row per frame is the same decision: what he exports and
+    # what he compares against are then the same bytes, so a round trip
+    # cannot quietly change what he is comparing to.
+    #
+    # One ACTIVE template per (kind, entity, strategy). The partial unique
+    # index is what makes that a fact rather than a convention.
+    """
+    CREATE TABLE input_templates (
+      id           INTEGER PRIMARY KEY,
+      kind         TEXT NOT NULL,
+      entity_key   TEXT NOT NULL,
+      strat_tag    TEXT,
+      name         TEXT NOT NULL,
+      origin       TEXT NOT NULL,
+      document     TEXT NOT NULL,
+      active       INTEGER NOT NULL DEFAULT 0,
+      created_utc  TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX idx_input_templates_active
+      ON input_templates (kind, entity_key, IFNULL(strat_tag, ''))
+      WHERE active = 1;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",

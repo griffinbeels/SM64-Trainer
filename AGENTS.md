@@ -28,7 +28,7 @@ after:
 | Zone | Dirs (under `src/sm64_events/` unless noted) | Read |
 |---|---|---|
 | Memory reads, detectors, event recipes | `memory/`, `detectors/`, `core/snapshot.py`, `core/events.py`, `tools/find_timer.py`, `tools/hunt_value.py` | `.claude/rules/memory-detectors.md` |
-| Controller capture — the pad, the 250 Hz sampler, the chunk store, the portable document | `inputs/`, `tools/probe_inputs.py`, `tools/dump_inputs.py` | `.claude/rules/inputs.md` |
+| Controller capture — the pad, the 250 Hz sampler, the chunk store, the document, the TIMELINE and the overlay export | `inputs/`, `server/inputs_api.py`, `ui/components/{inputtimeline,controllerpanel,attemptdrawer}.js`, `ui/overlay.html`, `tools/{probe_inputs,dump_inputs,export_overlay}.py` | `.claude/rules/inputs.md` |
 | Version sync — the per-ROM memory layout, behaviour symbols, gates, the sync runner + report, the dashboard | `memory/layout.py`, `memory/behaviours.py`, `memory/version_probe.py`, `sync/`, `server/sync_api.py`, `ui/sync.*`, `tools/sync_version.py` | `.claude/rules/sync.md` |
 | Tracking, storage, stats, routes/runs/segments, defaults corpus | `tracking/`, `storage/`, `stats/`, `data/`, `tools/corpus_*.py`, `tools/build_defaults_seed.py` | `.claude/rules/tracking-storage.md` |
 | The world-graph rules a movement is judged against (topological cancels, resurrection) | `tracking/topology.py`, `tracking/segments.py`, `tools/measure_topology_cancels.py`, `tools/why_cancelled.py`, `tools/topology_map.py` | `.claude/rules/segment-topology.md` |

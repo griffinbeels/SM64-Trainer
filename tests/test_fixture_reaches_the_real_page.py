@@ -1137,3 +1137,52 @@ def test_the_library_search_story_reaches_its_own_result_rows(page):
         box.dispatchEvent(new Event('input', {bubbles: true}));
       })()
     """)
+
+
+# --- input capture (2026-08-21) ---------------------------------------------
+# Added the same day the timeline landed, for the reason the header states: the
+# FIRST render of this surface showed "No inputs recorded for this attempt",
+# which is a clean page nobody is looking at. The chunks were there; they were
+# scoped so the attempt the drawer opens saw none of them. A sweep over that
+# would have reported the whole feature healthy while measuring an empty state.
+
+def test_the_attempt_drawer_reaches_a_populated_input_timeline(page):
+    reach(page, "input-timeline")
+    assert count(page, ".input-lanes") == 1, (
+        "the attempt drawer rendered no input lanes -- the fixture is "
+        "measuring the 'no inputs recorded' state, not the timeline")
+    bars = count(page, ".input-bar:not(.is-template)")
+    assert bars >= 3, (
+        f"only {bars} input bars drawn; a track with fewer button runs than "
+        "that cannot show a lane crowding its neighbour, which is what this "
+        "surface is measured for")
+
+
+def test_the_drawer_reaches_a_TEMPLATE_drawn_behind_the_run(page):
+    """The comparison is the whole point of the feature. Without a template
+    seeded, every sweep measures the single-track layout and the two-track one
+    -- the crowded case -- is unreachable, which is exactly how the
+    one-strategy star hid a class of defects for two days."""
+    reach(page, "input-timeline")
+    assert count(page, ".input-template-note") == 1, (
+        "no template note rendered -- the fixture seeded no template, so the "
+        "compared-against layout is not being measured at all")
+    assert count(page, ".input-bar.is-template") >= 1, (
+        "the template note rendered but no template bars did")
+
+
+def test_the_inspector_reaches_a_frame_with_a_real_reading(page):
+    """The controller panel is the export's renderer too, so a fixture that
+    only ever shows it centred and empty measures neither consumer."""
+    reach(page, "input-timeline")
+    assert count(page, ".controller-panel") >= 1
+    # A BARE expression, never an arrow: the driver wraps what it is given in
+    # `() => { return (...); }`, so passing a function returns the function
+    # itself and comes back None -- measured 2026-08-21, and indistinguishable
+    # from a page with nothing on it.
+    values = page.evaluate(
+        "Array.from(document.querySelectorAll('.stick-value'))"
+        ".map((el) => el.textContent.trim())")
+    assert any(value and value != "--" for value in values), (
+        "every stick value read '--' -- the inspector is parked on a frame "
+        "with the stick centred, so the panel's populated layout is unmeasured")

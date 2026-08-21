@@ -403,7 +403,19 @@ def build():
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     if input_writer is not None:
         poller.on_stop = input_writer.close
+    inputs_bundle = None
+    if input_store is not None:
+        from sm64_events.inputs.service import InputsService
+        from sm64_events.inputs.templates import TemplateStore
+        templates = TemplateStore(db._conn, db._lock)
+        inputs_bundle = {
+            "store": input_store, "templates": templates,
+            "attempts": lambda: db.attempts(),
+            "service": InputsService(input_store, templates,
+                                     lambda: db.attempts()),
+        }
     return create_app(poller, broadcaster, service=service, replay=replay,
+                      inputs=inputs_bundle,
                       updater=updater, compare=compare, compilation=compilation,
                       db_retry=db_retry)
 

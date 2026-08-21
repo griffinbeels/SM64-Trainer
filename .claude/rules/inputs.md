@@ -1,8 +1,14 @@
 ---
 paths:
   - "src/sm64_events/inputs/**"
+  - "src/sm64_events/server/inputs_api.py"
+  - "src/sm64_events/ui/components/inputtimeline.js"
+  - "src/sm64_events/ui/components/controllerpanel.js"
+  - "src/sm64_events/ui/components/attemptdrawer.js"
+  - "src/sm64_events/ui/overlay.html"
   - "tools/probe_inputs.py"
   - "tools/dump_inputs.py"
+  - "tools/export_overlay.py"
 ---
 
 # Controller capture — where to change what
@@ -15,6 +21,10 @@ paths:
 | The portable text format — export, import, hand-authoring | `inputs/document.py`. Import REFUSES rather than guesses: a document from another frame rate is a load error naming the reason, because rescaling would move every input |
 | Resolving one attempt to its own input | `inputs/track.py` — UTC picks the chunks, the anchor frame trims inside them |
 | Reading it all back by hand | `uv run python tools/dump_inputs.py` (`--list`, `--attempt`, `--journal`, `--out`) — the end-to-end proof, memory → sampler → store → document |
+| The TIMELINE a person looks at | `ui/components/inputtimeline.js` (lanes, scrub, the template drawn behind) + `ui/components/attemptdrawer.js` (the clip and the timeline on ONE clock) + `ui/components/controllerpanel.js`. Its data comes from `inputs/service.py` through `server/inputs_api.py` |
+| The Usamune-look pad drawing | `ui/components/controllerpanel.js` — TWO consumers, one drawing: the frame inspector and the overlay export. Never add a second |
+| Template tracks — mark, import, export, activate, delete | `inputs/templates.py` (migration v28) + the `/api/inputs/templates*` routes |
+| The transparent overlay export | `inputs/overlay.py` (the plan, the concat script, the ffmpeg argv — all pure) + `ui/overlay.html` (the render target) + `tools/export_overlay.py` (drives the browser, recovers alpha, encodes) |
 | Re-checking the measurements, or hunting the address on a new ROM | `uv run python tools/probe_inputs.py` (`--at scan` re-hunts). Its docstring carries every answer it has given |
 
 ## Why 250 Hz
@@ -66,3 +76,40 @@ every reprojection, so anything keyed to one orphans itself.
 game's own `buttonPressed` says which frame a button was newly down on, so
 `InputSampler.health()["edge_mismatches"]` is non-zero exactly when we filed an
 input under the wrong frame number. Read it before believing a capture.
+
+## The export's four traps, each found by LOOKING
+
+Every one of these produced a file that passed its metadata check and was
+wrong. None was catchable by an assertion written before the fact.
+
+**A transparent container is not a transparent picture.** The first export
+probed as `pix_fmt=yuva444p12le` — an alpha channel, present and named — with
+**every pixel opaque**, because the browser painted its own background
+underneath. `tools/export_overlay.py::recover_alpha` shoots each picture twice,
+over black and over white, and solves the compositing equation for the true
+alpha; that is exact on anti-aliased edges, where keying one shot out by colour
+would fray. Its permanent home is uilab's own `screenshot(omit_background=)`,
+and it should be deleted when that lands.
+
+**An unstyled SVG circle is BLACK, not invisible.** The overlay page imports
+`ControllerPanel` and nothing else, so the first render drew the stick box as a
+filled black disc with black text. The page now lifts the design system out of
+`ui/index.html` at load and waits for it before anything is shot — the same
+"a harness must wear the real stylesheet" rule `.claude/rules/ui-core.md`
+states, in the one place where the output is a video rather than a measurement.
+
+**The concat demuxer cannot express 1/60 exactly.** A real export came out
+**3 frames long** (6,129 for 6,126) — small enough to read as rounding, large
+enough to slide an overlay off its footage. `-frames:v` makes the count a
+demand rather than an expectation.
+
+**Every layer must share ONE canvas, sized by the widest state.** Register is
+the entire reason there are layers instead of one file to crop, and a layer
+sized to its own ink does not stack. The canvas is taken once, from the
+combined layer holding every button with the stick at full deflection.
+
+**Still owed, and it is the one no test here can stand in for:** the overlay's
+alignment against real footage. The clip is captured on a wall clock and the
+inputs on the game's frame counter. Record a clip with Usamune's own input
+display ON and score our overlay against Usamune's pixels in that same
+footage — the same move `tools/derive_xcam.py` makes for star times.

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SM64 Trainer — input overlay renderer</title>
+<!--
+  The page the transparent overlay export screenshots, one distinct controller
+  state at a time. It mounts the SAME `ControllerPanel` the timeline's frame
+  inspector uses, which is the whole reason this is a page rather than a
+  drawing routine in Python: two renderers would drift, and the one people
+  would notice drifting is the one that ends up in a video.
+
+  Everything is TRANSPARENT here on purpose -- no page background, no card, no
+  border. The exporter turns off Chrome's own default white too
+  (`Emulation.setDefaultBackgroundColorOverride`), so what lands in the PNG is
+  exactly the ink and nothing else.
+
+  Not linked from the app. It is a render target, driven by
+  `tools/export_overlay.py`, and opening it by hand shows a neutral pad.
+-->
+<style>
+  html, body {
+    margin: 0; padding: 0; background: transparent;
+    font-family: "Segoe UI", system-ui, sans-serif;
+  }
+  /* The exporter shoots each picture TWICE, once over black and once over
+     white, and recovers the true alpha from the pair:
+        over black: P = C*a          over white: P = C*a + (1 - a)
+        so a = 1 - (Pwhite - Pblack), and C = Pblack / a
+     Exact, anti-aliased edges included, and it needs nothing from the
+     screenshot API -- which matters because the shared browser rig does not
+     expose a transparent capture. Keying one shot out by colour was the
+     other option and frays every soft edge in the picture. */
+  body[data-bg="black"] { background: #000; }
+  body[data-bg="white"] { background: #fff; }
+  #stage {
+    display: inline-block; padding: 12px;
+    /* The stage is the CANVAS: every layer renders at the same size with the
+       same origin, so the files stack in register in an editor with no
+       positioning at all. That is what makes cropping unnecessary. */
+  }
+  /* Bigger and heavier than the inspector's copy: this is read at video size,
+     over gameplay, often at a distance. */
+  .controller-panel { gap: .5rem; }
+  .stick-value { font-size: 2rem; letter-spacing: .02em;
+                 text-shadow: 0 2px 6px rgba(0, 0, 0, .85); }
+  .controller-button { font-size: 1.15rem; padding: .25rem .6rem;
+                       box-shadow: 0 2px 8px rgba(0, 0, 0, .6); }
+  .controller-buttons { gap: .35rem; }
+  .stick-box-frame { fill: rgba(4, 10, 18, .55); }
+  /* A layer draws its own half and nothing else -- so the two files carry no
+     overlapping ink and either can be dropped on its own. */
+  body[data-layer="stick"] .controller-buttons { display: none; }
+  body[data-layer="buttons"] .controller-panel-body { display: none; }
+  /* Usamune shows NOTHING when nothing is held, and an overlay that says
+     "no buttons" over footage is a caption nobody asked for. The inspector
+     keeps it -- there, an empty row would read as a broken render. */
+  .controller-button.is-empty { display: none; }
+</style>
+</head>
+<body data-layer="combined">
+<div id="stage"></div>
+<script type="importmap">
+{ "imports": {
+    "preact": "/ui/vendor/preact.module.js",
+    "preact/hooks": "/ui/vendor/hooks.module.js",
+    "htm": "/ui/vendor/htm.module.js"
+} }
+</script>
+<script type="module">
+import { h, render } from "preact";
+import { ControllerPanel } from "/ui/components/controllerpanel.js";
+
+let table = [];
+let stickMax = 64;
+let deadZone = 8;
+
+// The design system is ONE <style> block inside index.html, so a page that
+// imports a component and nothing else renders unstyled boxes -- and unstyled
+// is not neutral: an SVG <circle> with no fill declared is BLACK, which drew
+// the stick box as a filled disc and was invisible to every assertion
+// (2026-08-21, caught by looking at a frame). Lifting the real block in is
+// what keeps this renderer and the app's own inspector the same drawing.
+const designSystem = fetch("/ui/index.html")
+  .then((response) => response.text())
+  .then((text) => {
+    const start = text.indexOf("<style>");
+    const end = text.indexOf("</style>", start);
+    if (start < 0 || end < 0) throw new Error("no <style> block in index.html");
+    const style = document.createElement("style");
+    style.textContent = text.slice(start + "<style>".length, end);
+    // FIRST child, so this page's own overrides below still win.
+    document.head.insertBefore(style, document.head.firstChild);
+  });
+
+// Driven by the exporter over CDP. Returns the stage's own box so the
+// screenshot clips to the ink rather than to a viewport nobody chose.
+window.showState = (state, options) => {
+  const settings = options || {};
+  if (settings.buttons) table = settings.buttons;
+  if (settings.stickMax) stickMax = settings.stickMax;
+  if (settings.deadZone) deadZone = settings.deadZone;
+  if (settings.layer) document.body.dataset.layer = settings.layer;
+  if (settings.bg) document.body.dataset.bg = settings.bg;
+  const frame = state
+    ? { buttons: state[0], stickX: state[1], stickY: state[2] }
+    : null;
+  render(h(ControllerPanel, {
+    frame, buttons: table, stickMax, deadZone,
+    size: settings.size || 160, showNumbers: true, showButtons: true,
+  }), document.getElementById("stage"));
+  const box = document.getElementById("stage").getBoundingClientRect();
+  return { x: box.x, y: box.y, width: box.width, height: box.height };
+};
+
+designSystem.then(() => { window.overlayReady = true; })
+  .catch((error) => { window.overlayError = String(error); });
+</script>
+</body>
+</html>

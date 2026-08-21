@@ -4584,6 +4584,151 @@
     width: 100%; max-width: 760px; aspect-ratio: 4 / 3;
     object-fit: contain; border: 1px solid #2d465e; border-radius: 7px; background: #02070c;
   }
+  /* ---- the input timeline -------------------------------------------------
+     Lanes are HTML boxes at percentage widths, so they stretch with the drawer
+     at any width with no aspect arithmetic. The one SVG (the stick) sets
+     preserveAspectRatio in the markup, because the default is `slice` and
+     crops whatever the container's aspect does not cover.
+     Layout gates on @container, never @media: this lives inside a drawer whose
+     width is the drawer's, not the window's. */
+  .attempt-drawer { container-type: inline-size; container-name: drawer; }
+  .attempt-drawer-inputs { margin-top: .6rem; }
+  .attempt-drawer-tools {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .4rem;
+    margin-top: .5rem;
+  }
+  .attempt-drawer-tools .button-link {
+    display: inline-flex; align-items: center; gap: .3rem;
+    padding: .28rem .55rem; border: 1px solid #2d465e; border-radius: 7px;
+    color: #b8c9da; font-size: .72rem; text-decoration: none;
+  }
+  .attempt-drawer-tools .button-link:hover { border-color: var(--gold-soft); color: #e8eef5; }
+
+  .input-timeline {
+    border: 1px solid #23384c; border-radius: 9px; background: #071019;
+    padding: .55rem .65rem;
+  }
+  .input-timeline.is-loading, .input-timeline.is-error { color: #8fa3b6; font-size: .75rem; }
+  .input-timeline.is-empty {
+    display: flex; gap: .55rem; align-items: flex-start; color: #8fa3b6;
+  }
+  .input-timeline.is-empty strong { color: #cfdcea; font-size: .78rem; }
+  .input-timeline.is-empty p { margin: .2rem 0 0; font-size: .7rem; line-height: 1.35; }
+  .input-timeline .is-error { color: #e39a7c; }
+
+  .input-timeline-head {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: .5rem; flex-wrap: wrap; margin-bottom: .45rem;
+  }
+  .input-timeline-head h4 { margin: .1rem 0 0; font-size: .82rem; color: #dce7f2; }
+  .input-timeline-actions { display: flex; gap: .25rem; align-items: center; }
+  .input-timeline-actions .icon-button { font-size: .68rem; padding: .2rem .4rem; }
+
+  .input-template-note {
+    display: flex; align-items: center; gap: .3rem; flex-wrap: wrap;
+    font-size: .69rem; color: #9db1c5; margin-bottom: .4rem;
+  }
+  .input-template-note strong { color: #e3c27c; }
+
+  .input-lanes { position: relative; cursor: crosshair; touch-action: none; }
+  .input-lane {
+    display: grid; grid-template-columns: 3.4rem 1fr; align-items: center;
+    gap: .4rem; margin-bottom: .18rem;
+  }
+  .input-lane-name {
+    font-size: .64rem; color: #8fa3b6; text-align: right;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .input-lane-track {
+    position: relative; height: 14px; border-radius: 4px;
+    background: #0c1723; overflow: hidden;
+  }
+  .input-lane.is-stick .input-lane-track { height: 46px; background: #0a1420; }
+  .input-lane.is-stick svg { display: block; width: 100%; height: 100%; }
+  .input-bar {
+    position: absolute; top: 2px; bottom: 2px; min-width: 2px; padding: 0;
+    border: 0; border-radius: 3px; background: var(--gold); cursor: pointer;
+    transition: filter .12s ease;
+    /* MEASURED, not guessed (2026-08-21): the shell's own `button` rule gives
+       every button `display: inline-flex` and `min-height: 34px`, so a bar in
+       a 14px lane came out 34px tall and the sweep's clip probe reported
+       `scrollHeight 36 > clientHeight 14` at every width. `top`/`bottom` do
+       not win against a min-height. Both have to be named here, and the
+       font-size/line-height keep an empty button from earning a line box. */
+    display: block; min-height: 0; height: auto;
+    font-size: 0; line-height: 0; overflow: hidden;
+  }
+  .input-bar:hover, .input-bar:focus-visible { filter: brightness(1.25); }
+  /* The template is CONTEXT, so it is quieter than your own run -- but it
+     still carries real colour. Dimming the other half to make one read is a
+     second bug, not the price of fixing the first (his ruling 2026-07-27). */
+  /* The template sits BEHIND your own bar, taller and quieter, so the offset
+     between the two is a thing you look at rather than a thing we describe.
+     It still carries real colour: dimming the other half to make one read is
+     a second bug, not the price of fixing the first (his ruling 2026-07-27). */
+  .input-bar.is-template {
+    top: 0; bottom: 0; border-radius: 2px; background: #3d6c99;
+    cursor: default; z-index: 0;
+  }
+  .input-lane-track .input-bar:not(.is-template) { z-index: 1; }
+  .stick-axis { stroke: #1d2c3b; stroke-width: 1; }
+  .stick-line { fill: none; stroke-width: 1.6; }
+  .stick-line.is-x { stroke: #6fb1e0; }
+  .stick-line.is-y { stroke: #7fd6a2; }
+  .stick-line.is-template { stroke-width: 1.1; opacity: .6; stroke-dasharray: 3 2; }
+  .input-playhead {
+    position: absolute; top: 0; bottom: 0; width: 0;
+    border-left: 1px solid #f4f7fb; pointer-events: none; z-index: 2;
+  }
+
+  .input-inspector {
+    display: flex; align-items: center; gap: .8rem; flex-wrap: wrap;
+    margin-top: .5rem; padding-top: .5rem; border-top: 1px solid #182735;
+  }
+  .input-inspector-frame { display: flex; flex-direction: column; }
+  .input-inspector-frame strong { font-size: .95rem; color: #f0f5fa; }
+  .input-inspector-read { font-size: .72rem; color: #9db1c5; }
+
+  /* ---- the controller panel (Usamune's ONCOMB, and the export's renderer) */
+  .controller-panel { display: flex; flex-direction: column; gap: .3rem; }
+  .controller-panel-label {
+    font-size: .62rem; text-transform: uppercase; letter-spacing: .06em;
+    color: #7f93a7;
+  }
+  .controller-panel-body { display: flex; align-items: center; gap: .45rem; }
+  .stick-box { display: block; flex: none; }
+  .stick-box-frame { fill: #081420; stroke: #33506c; stroke-width: 2; }
+  .stick-box-cross { stroke: #1b2c3d; stroke-width: 1.5; }
+  .stick-box-cap { fill: none; stroke: #24405a; stroke-width: 1.5; stroke-dasharray: 3 3; }
+  .stick-box-stem { stroke: #6fb1e0; stroke-width: 2; }
+  .stick-box-dot { fill: #f0f5fa; stroke: #6fb1e0; stroke-width: 1.5; }
+  .stick-values { display: flex; flex-direction: column; gap: .1rem; }
+  .stick-value {
+    font-variant-numeric: tabular-nums; font-weight: 700; font-size: .82rem;
+    color: var(--gold); min-width: 3.1rem;
+  }
+  .stick-value.is-centred { color: #4d6076; font-weight: 500; }
+  .controller-buttons { display: flex; flex-wrap: wrap; gap: .2rem; }
+  .controller-button {
+    padding: .1rem .34rem; border-radius: 5px; font-size: .64rem; font-weight: 700;
+    background: #24405a; color: #e8eef5; border: 1px solid #35597a;
+  }
+  .controller-button.is-empty {
+    background: transparent; border-color: #1d2c3b; color: #566b80; font-weight: 500;
+  }
+  .controller-button.btn-a { background: #2f4fb0; border-color: #4f74e0; }
+  .controller-button.btn-b { background: #2f8a4d; border-color: #4fc37a; }
+  .controller-button.btn-z { background: #6b6b6b; border-color: #9a9a9a; }
+  .controller-button.btn-start { background: #b03a3a; border-color: #e06060; }
+
+  /* 850px is the supported floor, and the drawer is narrower than the window.
+     The lane label column and the inspector are what run out of room first. */
+  @container drawer (max-width: 520px) {
+    .input-lane { grid-template-columns: 2.4rem 1fr; }
+    .input-inspector { gap: .5rem; }
+    .input-inspector-read { flex-basis: 100%; }
+  }
+
   .replay-status-row { min-height: 26px; display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .35rem; }
   .replay-notice {
     display: inline-flex; align-items: center; gap: .3rem;

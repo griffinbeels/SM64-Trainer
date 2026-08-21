@@ -502,6 +502,28 @@ on one axis whatever hour of whatever day you played each of them.
 
 - **Lives** — the input store (`src/sm64_events/inputs/store.py`)
 
+### Input timeline
+
+The surface that draws an [[input track]] as one lane per button over
+[[frame]]s, with the [[template track]] behind it. It reports what each
+track was doing on a [[frame]] and names nothing as the reason — you read
+the gap yourself. It opens inside an [[attempt]]'s own row, beside that
+[[attempt]]'s clip, and follows the clip's clock rather than keeping one.
+
+- **Lives** — the timeline component
+  (`src/sm64_events/ui/components/inputtimeline.js`)
+
+### Overlay layer
+
+One transparent video file drawing part of the pad — the stick, the
+buttons, or both — for an [[attempt]], so you can lay it over that
+[[attempt]]'s footage in an editor. Every layer shares one canvas, one
+playback rate and one starting [[frame]], so they stack in register and you
+delete the one you do not want instead of cropping it.
+
+- **Lives** — the overlay planner (`src/sm64_events/inputs/overlay.py`)
+  → `tools/export_overlay.py`
+
 ### Input document
 
 An [[input track]] written out as text you can send someone, and edit by hand.

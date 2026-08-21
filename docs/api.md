@@ -440,6 +440,33 @@ Import completion is not broadcast — the initiating client polls the job
 instead, since imports are a focused single-client action; `comparisons_changed`
 fires only from edits/deletes, so other clients pick up those.
 
+## Captured controller input
+
+Every game frame's pad state is recorded while the trainer is attached, so any
+attempt can be read back frame by frame. The timeline in an attempt's own
+drawer draws it; these are the routes it uses.
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/attempts/{id}/inputs` | The attempt's track for drawing: `runs` as `[start, length, buttons, stick_x, stick_y]` zero-based on the track, plus `frames`, `fps`, `target`, `strategy`, and the active `template` in the same shape (or `null`). It also sends `buttons` — the bit-to-name table — so a browser never names a button bit and there is no second copy of it to drift |
+| `GET /api/attempts/{id}/inputs/document` | The same track as a portable text **input document**: frame-indexed, run-length compressed, and legible enough to edit by hand. 404 when the attempt has no captured input |
+| `POST /api/attempts/{id}/inputs/template` | Make this attempt the **template track** for its target and strategy, standing the previous one down. Body `{"name"?}`. 409 when the attempt captured no input |
+| `GET /api/inputs/templates` | Every template, or one entity's with `?kind=&entity_key=` |
+| `GET /api/inputs/templates/{id}/document` | That template's document, to keep or send someone |
+| `POST /api/inputs/templates` | Import a document — one another player sent, or one written by hand. Body `{kind, entity_key, strat_tag?, name, document}`. The document is validated on the way IN, so an unloadable one is a 409 naming the reason rather than a row that breaks a drawer later |
+| `POST /api/inputs/templates/{id}/activate` | Make an older template the active one again |
+| `DELETE /api/inputs/templates/{id}` | Erase it |
+
+**A track's frames are positions in the CAPTURE, not raw counter values.** The
+game's frame counter restarts on a console reset, so a track spanning one lays
+the next stretch end to end after the last; holes INSIDE a stretch stay holes,
+because a hole means capture stopped and nothing may be interpolated across it.
+
+**The comparison reports and never prescribes.** Both tracks draw on one frame
+axis and the inspector says what each was doing on the frame you are on. There
+are no generated corrections, and no attempt to match your presses to the
+template's — a wrong match is a confidently wrong number.
+
 ## Library — the Ultimate Star Spreadsheet
 
 A read-only browse over the community's Ultimate Star Spreadsheet: every

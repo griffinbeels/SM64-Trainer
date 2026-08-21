@@ -426,8 +426,35 @@ if (!document.querySelector('.library-grid')) {
 }
 """)
 
+_INPUT_DRAWER_SETUP = _script("""
+const practiceBtn = document.querySelector('button.nav-item[title="Practice"]');
+if (practiceBtn && practiceBtn.getAttribute('aria-current') !== 'page') {
+  practiceBtn.click();
+  await waitFor(() => !!document.querySelector('.log-list-card'));
+}
+document.querySelectorAll('.card-collapse[aria-expanded="false"]')
+  .forEach((b) => b.click());
+document.querySelectorAll('.log-card-fold[aria-expanded="false"]')
+  .forEach((b) => b.click());
+await waitFor(() => !!document.querySelector('.attempt-actions .icon-button'));
+// The drawer is opened by the FIRST attempt row's replay button -- there is no
+// URL that lands on it, so a plain page load can never reach this surface.
+if (!document.querySelector('.attempt-drawer')) {
+  document.querySelector('.attempt-actions .icon-button').click();
+}
+// The timeline FETCHES its track, so waiting for the drawer is not enough:
+// shooting between the two paints a spinner and reports it as the feature.
+await waitFor(() => !!document.querySelector('.input-lanes'));
+""")
+
 STORIES = [
     Story(name="page", at="", setup=_EXPAND_ALL),
+    # The attempt drawer: the clip and the input timeline on one clock. It is
+    # opened by a button, so no page load reaches it -- same reason the
+    # recorder stories exist.
+    Story(name="input-timeline", at=".attempt-drawer",
+          setup=_INPUT_DRAWER_SETUP,
+          skip_if="!document.querySelector('.attempt-actions .icon-button')"),
     # Re-pointed 2026-08-04 (amendment A8, spec practice-log-entity-cards):
     # the Active Target card is DELETED -- ".objective-card" never renders on
     # the real practice page any more, so `skip_if` here would have started
