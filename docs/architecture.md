@@ -836,6 +836,52 @@ tier matches the xcams standard for that time + strategy; run a known segment an
 verify the same. Record the outcome here once confirmed. Until this is done,
 treat badge tiers as "best-effort" against the scraper data.
 
+### A personal best belongs to one strategy (2026-08-20, task 0101)
+
+Stated here because it is cross-cutting rather than one module's business: it
+is the same fact in the store, in the glossary, in the ranker and now on the
+practice card, and three separate live reports came from the last of those
+disagreeing with the first three.
+
+**The rule.** A PB is per (target, strategy). `views.current_pbs_by_strat` has
+keyed it that way since the beginning, the glossary has defined it that way
+since the beginning, and `ranks/` has graded it that way since task 0034. The
+practice card was the one surface reading the STRATEGY-BLIND map, and it
+produced the whole of his 2026-08-15 report: the PB tag quoting a Standard time
+under a 3x LJ heading, and the standards table drawing a "you are here" marker
+from a time run on a strategy other than the column it was drawn on.
+
+**A time may only be BANKED under the strategy being practised.**
+`caveats.pb_action(attempt, active_strat, owns_strat_pb)` is the one resolver
+behind both the button and the API, with an illegal QUANTITY outranking the
+strategy gate. The consequence worth knowing is a capability removed: with no
+strategy selected nothing may be saved at all, which makes the `unattributed`
+caveat a HISTORICAL state rather than one that can still be created. Measured
+on the dev journal before shipping: 44 of 251 pb rows carried no strat_tag, 3
+of them the CURRENT pb for their entity.
+
+### The best-possible ladder is often exactly one strategy's (measured)
+
+`scoring.best_ladder` is a pointwise minimum across a target's strategies, so
+where one strategy is fastest at EVERY rank the entity's own ladder comes out
+identical to it, cutoff for cutoff — and `views.ranks_share_ladder` then reports
+one measure, so the practice card draws a single banner with no Strategy/Overall
+choice.
+
+**This is common, not a corner.** Measured against the bundled seed
+(`scoring.best_ladder_owners` over every entity carrying two or more
+strategies): **76 entities have a single strategy owning every cutoff of their
+best-possible ladder.** LLL's 8-Coin Puzzle (`star:7:2`) is one — Standard runs
+0.33s ahead of 3x LJ and 0.70s ahead of Beginner at every single rank.
+
+The consequence for a reader is that "Overall" can look punishingly strict while
+being arithmetically correct, because ranking up overall costs exactly what
+ranking up on the best strategy costs. That is what he reported ("WAYYY too
+strict"), and it needed an explanation rather than a change: the standards panel
+now says which strategy sets the whole ladder when one does. **Mastering a slow
+strategy still maxes that strategy's rank without moving the star's** — the
+design decision this whole shape comes from, recorded in `ranks/scoring.py`.
+
 ## MARELO — the overall rating (2026-07-24/25)
 
 One rating derived from practice history, on top of the per-cutoff standards
