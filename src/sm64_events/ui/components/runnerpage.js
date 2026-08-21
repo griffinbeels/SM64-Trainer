@@ -23,20 +23,21 @@ import { Breakdown, CoverageStrip, ScopeChips } from "./rankpage.js";
 const html = htm.bind(h);
 
 export function RunnerPage({ t, runnerName, onClose }) {
-  const [scopes, setScopes] = useState(null);
+  const [activeScopeKnown, setActiveScopeKnown] = useState(false);
   const [scopesErr, setScopesErr] = useState(null);
   const [scopeId, setScopeId] = useState(null);
   const [data, setData] = useState(null);
   const [dataErr, setDataErr] = useState(null);
 
-  // The scope LIST comes off the same door RankPage uses (there is only one
-  // set of scopes in this app, yours or a runner's) — only the per-scope
-  // RATING below reads from the runner's own endpoint.
+  // This door is YOURS, not the runner's -- the chip row below gets its own
+  // scope list from ScopeChips' `source`, off the runner's own summary. The
+  // only thing wanted here is `active`, to seed the page open on the scope
+  // you are yourself currently focused on rather than defaulting to Overall.
   useEffect(() => {
     let alive = true;
     getJSON("/api/marelo/scopes").then((response) => {
       if (!alive) return;
-      setScopes(response.scopes);
+      setActiveScopeKnown(true);
       setScopeId((current) => current ?? response.active);
     }).catch((error) => alive && setScopesErr(error));
     return () => { alive = false; };
@@ -57,7 +58,7 @@ export function RunnerPage({ t, runnerName, onClose }) {
     return () => { alive = false; };
   }, [scopeId, runnerName]);
 
-  if (!scopes) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
+  if (!activeScopeKnown) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
       title=${`Loading ${runnerName}'s ranks`} message=${scopesErr ? scopesErr.message : undefined} />`;
   if (!scopeId) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
       title=${`Loading ${runnerName}'s ranks`} />`;

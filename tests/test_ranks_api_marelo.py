@@ -549,6 +549,13 @@ def test_leaderboard_omitted_counts_a_runner_scored_elsewhere_but_not_here(clien
     from sm64_events.library import ratings
     client.put("/api/ranks/standards/star:8:2/Standard/Mario", json={"seconds": 10.0})
     in_scope = _adopt_row_onto(client, "star:9:2")
+    # The independence claim above rests on course:9 resolving to exactly
+    # this one rankable entity -- star:8:2 (just laddered, two lines up) is
+    # course 8 and must NOT join it. Assert that directly: if a second
+    # course-9 entity ever gains a ladder, `expected_omitted` below silently
+    # starts measuring a different scope than `body["omitted"]` does.
+    course_scope = client.get("/api/marelo?scope=course:9").json()
+    assert [entity["key"] for entity in course_scope["entities"]] == ["star:9:2"]
     library = client.app.state.library
     adoptions = client.app.state.library_adoptions
     scores = ratings.runner_scores(library.payload, adoptions.standards,
