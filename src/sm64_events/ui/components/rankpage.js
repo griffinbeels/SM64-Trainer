@@ -738,12 +738,21 @@ function EntityDetail({ t, entity, onClose }) {
       : !rows.length
         ? html`<p class="meta">No successful attempts in this scope yet.</p>`
         : html`<div class="entity-attempts"><table><tbody>
+          ${/* The mark is "this row IS the PB in the heading above", which is
+               the entity-wide one -- deliberately NOT `is_current_pb`, which
+               since 2026-08-20 means "owns its own STRATEGY's PB" and would
+               put a PB mark on two rows here, one of them slower than the
+               number in the heading. Two related values contradicting each
+               other reads as a visual error whatever the maths says (his
+               2026-07-25 ruling); the practice log is the surface that shows
+               per-strategy PBs, and this one is a summary. `pb.attempt_id` is
+               already on the payload for exactly this kind of match. */""}
           ${rows.map((attempt) => html`<tr key=${attempt.id}
-              class=${attempt.is_current_pb ? "is-pb" : ""}>
+              class=${pb && attempt.id === pb.attempt_id ? "is-pb" : ""}>
             <td>${attempt.rank ? html`<${RankIcon} tier=${attempt.rank.rank} division=${attempt.rank.division} size=${14} />` : ""}</td>
             <td><b>${attempt[clock] || "—"}</b></td>
             <td class="entity-attempt-strat">${attempt.strat_tag || "—"}</td>
-            <td>${attempt.is_current_pb ? "PB" : ""}</td>
+            <td>${pb && attempt.id === pb.attempt_id ? "PB" : ""}</td>
           </tr>`)}
         </tbody></table></div>`}
   </div>`;
