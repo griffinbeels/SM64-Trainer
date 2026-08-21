@@ -40,6 +40,8 @@ from sm64_events.replay.video import DwmSurfaceVideoSource
 from sm64_events.replay.window import find_window
 from sm64_events.server.app import create_app
 from sm64_events.server.broadcaster import Broadcaster
+from sm64_events.inputs.sampler import InputSampler
+from sm64_events.inputs.store import ChunkWriter
 from sm64_events.server.poller import Poller
 from sm64_events.storage.db import Database
 from sm64_events.storage.instance_lock import acquire_instance_lock
@@ -385,10 +387,22 @@ def build():
     # service IS the event sink; on_frame is its deferred-judgement heartbeat,
     # so a topological cancel reaches the screen on the next game frame rather
     # than whenever the next event happens to be journaled.
+    # The pad is sampled every tick and the game once per frame -- see
+    # server/poller.py's docstring for why the rate is set by the CONTROLLER
+    # rather than by the game. The writer reads the session id lazily because
+    # the tracker has not opened one yet at this point.
+    input_writer = None
+    input_sampler = None
+    input_store = getattr(db, "inputs", None)
+    if input_store is not None and layout.player1_controller is not None:
+        input_writer = ChunkWriter(input_store, lambda: service.session_id)
+        input_sampler = InputSampler(memory, layout, input_writer.add)
     poller = Poller(memory, detectors, service, on_frame=service.settle_frame,
-                    reader=reader)
+                    reader=reader, input_sampler=input_sampler)
     updater = UpdateService(current_version=__version__)
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
+    if input_writer is not None:
+        poller.on_stop = input_writer.close
     return create_app(poller, broadcaster, service=service, replay=replay,
                       updater=updater, compare=compare, compilation=compilation,
                       db_retry=db_retry)

@@ -345,6 +345,13 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+        # The poll loop is stopped, so whatever input it buffered will never
+        # be flushed by another tick. Write it now or lose the last seconds
+        # of every session.
+        on_stop = getattr(poller, "on_stop", None)
+        if on_stop is not None:
+            with suppress(Exception):
+                on_stop()
         with suppress(Exception):
             pidfile_path().unlink()
 

@@ -122,12 +122,24 @@ class ChunkWriter:
 
     FLUSH_FRAMES = 300
 
-    def __init__(self, store: InputStore, session_id: int, clock=_now):
+    def __init__(self, store: InputStore, session_id, clock=_now):
+        """`session_id` is an int or a CALLABLE returning one.
+
+        The composition root builds this before the tracker has opened a
+        session, so the id cannot be captured at build time. A callable that
+        answers None means there is no session yet, and whatever is buffered
+        belongs to nothing — it is dropped rather than filed under a session
+        that did not exist while it was played.
+        """
         self._store = store
         self._session_id = session_id
         self._clock = clock
         self._buffer: list[tuple[int, InputFrame]] = []
         self._started: str | None = None
+
+    def _session(self) -> int | None:
+        return (self._session_id() if callable(self._session_id)
+                else self._session_id)
 
     def add(self, number: int, frame: InputFrame) -> None:
         if self._buffer and number < self._buffer[-1][0]:
@@ -141,7 +153,9 @@ class ChunkWriter:
     def close(self) -> None:
         if not self._buffer:
             return
-        self._store.append(self._session_id, self._buffer,
-                           self._started, self._clock())
+        session = self._session()
+        if session is not None:
+            self._store.append(session, self._buffer,
+                               self._started, self._clock())
         self._buffer = []
         self._started = None

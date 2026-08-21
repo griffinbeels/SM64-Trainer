@@ -120,3 +120,18 @@ def test_closing_twice_writes_one_chunk(store):
     writer.close()
     writer.close()
     assert len(inputs.frames_between(AT, AT)) == 1
+
+
+def test_the_writer_reads_the_session_id_lazily(store):
+    """The composition root builds the writer before the tracker has opened a
+    session, so the id cannot be captured at build time."""
+    _db, inputs, session = store
+    current = [None]
+    writer = ChunkWriter(inputs, lambda: current[0], clock=lambda: AT)
+    writer.add(1, InputFrame(0x2000, 0, 0, 0))
+    writer.close()
+    assert inputs.frames_between(AT, AT) == []   # no session yet: dropped
+    current[0] = session
+    writer.add(2, InputFrame(0x2000, 0, 0, 0))
+    writer.close()
+    assert len(inputs.frames_between(AT, AT)) == 1

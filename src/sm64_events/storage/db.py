@@ -630,6 +630,7 @@ class Database:
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
+        self._inputs = None
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._migrate()
         self._repair_landmark_keys()
@@ -1419,6 +1420,20 @@ class Database:
             self._conn.execute("DELETE FROM sessions WHERE id<>?",
                                (keep_session_id,))
             self._conn.commit()
+
+    # -- captured input ------------------------------------------------------
+    @property
+    def inputs(self):
+        """The input-chunk store over this connection and lock.
+
+        Exposed here rather than letting callers reach for `_conn`/`_lock`:
+        the composition root would then hold two private attributes of this
+        class, and every test double would have to grow them too.
+        """
+        if self._inputs is None:
+            from sm64_events.inputs.store import InputStore
+            self._inputs = InputStore(self._conn, self._lock)
+        return self._inputs
 
     # -- ui_state ------------------------------------------------------------
     def get_state(self, key: str, default):

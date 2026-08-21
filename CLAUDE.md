@@ -35,6 +35,8 @@ uv run python tools/derive_xcam.py                   # live gate, ANSWERED + now
 uv run python tools/score_moment_clock.py            # a door writes no Usamune result, so ONE screenshot of the emulator is the ground truth: --usamune 1'06"83 names the row and the offset from the RAW COUNTER (comparable across any flip of the constant)
 uv run python tools/dev_cleanup.py                   # kill orphaned dev/harness servers (auto-runs at session start)
 uv run python tools/dedupe_journal.py data/tracker.db  # scan double-journaled events; --fix repairs (server stopped)
+uv run python tools/probe_inputs.py                  # live gate, ANSWERED 2026-08-20: gPlayer1Controller found by POINTER SIGNATURE (hunt row, no symbol map names it); NOTHING is missed at 60/120/250/500 Hz; THE FINDING is that the game rewrites the pad ~62% THROUGH a frame, so 60 Hz reads the PREVIOUS frame's input on 100% of frames -- 250 Hz is the floor. --at scan re-hunts on a new ROM (read-only, safe beside a live session)
+uv run python tools/dump_inputs.py                   # READ BACK what he just played, as an INPUT DOCUMENT -- the end-to-end proof of capture (memory -> sampler -> store -> document); --list picks an attempt, --journal reads a specific one of the three, --out writes a file
 uv run python tools/what_happened.py                 # READ BACK what the human just played -- journal events AND what the UI DREW, one timeline (--no-ui for events only)
 uv run python tools/what_happened.py --list          # which journal is live: repo / each worktree / installed exe
 uv run pytest tests/test_responsive.py -q            # render every breakpoint; report layout defects (no PJ64 needed)
@@ -94,6 +96,7 @@ automatically when you touch matching files. Zones:
 | Zone | Dirs | Rule file |
 |---|---|---|
 | Memory reads + detectors + recipes (new event, dust trick, memory hunting) | `memory/`, `detectors/`, `core/snapshot.py`, `core/events.py` | `.claude/rules/memory-detectors.md` |
+| **Controller capture** — the pad, the 250 Hz sampler, the chunk store, the portable document | `inputs/`, `tools/probe_inputs.py`, `tools/dump_inputs.py` | `.claude/rules/inputs.md` |
 | **Version sync** — the per-ROM layout, behaviour symbols, gates, the sync runner + report, the dashboard | `memory/layout.py`, `memory/behaviours.py`, `memory/version_probe.py`, `sync/`, `server/sync_api.py`, `ui/sync.*`, `tools/sync_version.py`, `data/version_sync/` | `.claude/rules/sync.md` |
 | Tracking, storage, stats, routes/runs/segments, defaults corpus | `tracking/`, `storage/`, `stats/`, `data/`, `tools/corpus_*` | `.claude/rules/tracking-storage.md` |
 | The world-graph rules a movement is judged against (topological cancels, the resurrection memory) | `tracking/topology.py`, `tracking/segments.py`, `tools/measure_topology_cancels.py`, `tools/why_cancelled.py`, `tools/topology_map.py` | `.claude/rules/segment-topology.md` |
