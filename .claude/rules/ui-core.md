@@ -545,15 +545,22 @@ inline` restored it exactly; the sibling `.library-example-plus` had carried
 ladder's own geometry test measures TOC→band gaps with divisions COLLAPSED. It
 took a whole-branch review measuring a baseline worktree to find.
 
-**The discriminator, if you write a guard for this**: a button class that
-removes background AND border AND padding is being turned into inline text and
-owes both overrides; one that keeps them (`.version-switch-seg`,
-`.library-mode-seg`) is a chip-shaped control that wants the 34px. A probe on
-that rule flags nothing today and names `.library-runner-link` the moment the
-override is removed — but it also flags **`.candx`, `.vidbtn` and
-`.std-tier-btn`**, three pre-existing rules nobody has judged. Judge those by
-rendering before adopting the guard; `.std-tier-btn` is already one of the two
-this zone's `tests/test_ui_button_flex.py` was written for.
+**It is now guarded**, by `tests/test_ui_button_flex.py::
+test_a_button_reset_to_inline_text_states_its_min_height` — beside the
+`justify-content` guard, because both enforce halves of the same global rule.
+The discriminator is the FULL text reset (background AND border AND all
+padding gone), which is what "this should flow as text" looks like in
+declarations. Deliberately narrow, and the exemptions are the point: a rule
+declaring its own `display` has taken control of its box (`.std-tier-btn`); one
+keeping background, border or padding is a chip-shaped control that wants the
+34px (`.version-switch-seg`, `.library-mode-seg`); and a PARTIAL padding reset
+leaves the element box-shaped (`.candx`, `.vidbtn`).
+
+Those last two sit just outside the guard and have **not** been judged by
+rendering — they strip background and border but keep horizontal padding, so
+they inherit the 34px and may carry the same latent bug. Widening the guard to
+cover them before judging them would trade one that fires reliably for one that
+gets switched off.
 
 ## "Unchanged" is a measurement, not a claim (2026-08-21)
 
