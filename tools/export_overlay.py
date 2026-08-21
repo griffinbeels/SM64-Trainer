@@ -41,7 +41,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from find_uilab import find_uilab                       # noqa: E402
 from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
-from sm64_events.core.paths import overlays_dir, server_port  # noqa: E402
+from sm64_events.core.paths import (candidate_server_ports,  # noqa: E402
+                                    overlays_dir)
 from sm64_events.inputs.overlay import (DEFAULT_CODEC, DEFAULT_VIDEO_FPS,
                                         CODECS, LAYERS, concat_script,
                                         encode_argv, output_name,
@@ -66,10 +67,14 @@ def ffmpeg_path() -> str:
 
 
 def running_base() -> str | None:
-    """A server already serving /ui, or None. Its port is not guessable --
-    run-test-server.bat uses 8066, the exe 8064, source 8065 -- so try the
-    ones we know and give up rather than reporting 'no server'."""
-    for port in (server_port(), 8066, 8065, 8064):
+    """A server already serving /ui, or None.
+
+    The port list comes from `core/paths.py`, which owns it -- a literal here
+    would be a second source of truth for the one fact that decides whether a
+    tool talks to the exe, a dev server, or the instance he is actually
+    playing on.
+    """
+    for port in candidate_server_ports():
         try:
             with urllib.request.urlopen(
                     f"http://127.0.0.1:{port}/health", timeout=0.6):
@@ -284,7 +289,8 @@ def main() -> int:
 
 
 def _no_server() -> int:
-    print("no trainer server answered on 8064/8065/8066.\n"
+    ports = "/".join(str(port) for port in candidate_server_ports())
+    print(f"no trainer server answered on {ports}.\n"
           "This tool reads the track over the API rather than the db so it "
           "cannot disagree with what the timeline draws — start the app (or "
           "run-test-server.bat) and try again.")

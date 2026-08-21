@@ -33,13 +33,29 @@ def button_classes(js_sources) -> set:
     return found
 
 
+def strip_css_comments(css: str) -> str:
+    """Comments out, everything else byte-for-byte.
+
+    A raw text scan cannot tell CODE from PROSE, and this guard proved it on
+    2026-08-21: a comment inside `.input-bar` explaining that *the shell's own
+    button rule* declares `display: inline-flex` made the guard read that rule
+    as declaring flex itself, and it reported a rule whose own body says
+    `display: block`. The project already carries this lesson for Python
+    (`tests/source_scan.py`); CSS needed its own.
+
+    Replacing with a space rather than nothing keeps a comment from fusing the
+    tokens on either side of it into one.
+    """
+    return re.sub(r"/\*.*?\*/", " ", css, flags=re.S)
+
+
 def undeclared_flex_button_rules(css: str, on_buttons: set) -> list:
     """Rules whose subject is a button class, declaring flex without
     justify-content. The subject is each selector's LAST compound; pseudo
     variants (:hover re-declarations) are exempt — the base rule is the one
     that owes the declaration."""
     offenders = []
-    for rule in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+    for rule in re.finditer(r"([^{}]+)\{([^{}]*)\}", strip_css_comments(css)):
         selector, body = rule.group(1).strip(), rule.group(2)
         if not re.search(r"display\s*:\s*(inline-)?flex", body):
             continue
@@ -77,3 +93,19 @@ def test_the_guard_can_still_fail():
     hover = ".probe-btn:hover{display:flex}"
     assert undeclared_flex_button_rules(bad, buttons) == [".probe-btn"]
     assert undeclared_flex_button_rules(good + hover, buttons) == []
+
+
+def test_a_comment_ABOUT_flex_does_not_count_as_declaring_it():
+    """Both directions, because this guard has been wrong in one of them.
+
+    A comment explaining that some OTHER rule declares flex is prose, and
+    reading it as code reported a rule whose own body says `display: block`
+    (2026-08-21). The second half is the calibration: a real declaration
+    sitting beside such a comment must still be caught, or the fix would have
+    bought silence instead of accuracy.
+    """
+    buttons = button_classes(['<button class="probe-btn">'])
+    prose = ".probe-btn{display:block;/* the UA rule uses display:flex */}"
+    assert undeclared_flex_button_rules(prose, buttons) == []
+    both = ".probe-btn{/* about display:flex */ display:flex; gap:4px}"
+    assert undeclared_flex_button_rules(both, buttons) == [".probe-btn"]
