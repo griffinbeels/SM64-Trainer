@@ -18,6 +18,8 @@ default becomes unwritable rather than discouraged.
 import re
 from pathlib import Path
 
+from source_scan import strip_comments
+
 UI = Path(__file__).resolve().parents[1] / "src" / "sm64_events" / "ui"
 
 
@@ -37,7 +39,14 @@ def undeclared_flex_button_rules(css: str, on_buttons: set) -> list:
     """Rules whose subject is a button class, declaring flex without
     justify-content. The subject is each selector's LAST compound; pseudo
     variants (:hover re-declarations) are exempt — the base rule is the one
-    that owes the declaration."""
+    that owes the declaration.
+
+    Comments are stripped before scanning: a rule's own explanatory comment
+    may quote the CSS it is overriding (`.library-runner-link` describes the
+    global `button` rule's `display: inline-flex` in prose right beside its
+    own `display: inline`), and a bare `display:\\s*flex` search cannot tell
+    that quote from a real declaration."""
+    css = strip_comments(css)
     offenders = []
     for rule in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
         selector, body = rule.group(1).strip(), rule.group(2)
@@ -77,3 +86,14 @@ def test_the_guard_can_still_fail():
     hover = ".probe-btn:hover{display:flex}"
     assert undeclared_flex_button_rules(bad, buttons) == [".probe-btn"]
     assert undeclared_flex_button_rules(good + hover, buttons) == []
+
+
+def test_a_comment_quoting_flex_is_not_a_declaration():
+    """Regression for the false positive this guard shipped with: a rule's
+    own comment may quote the CSS it is overriding (`display: inline-flex`)
+    right beside a real, different declaration (`display: inline`) — prose,
+    not a second rule, and must not be read as one."""
+    buttons = button_classes(['<button class="probe-btn">'])
+    prose = (".probe-btn{/* overrides the global button's "
+              "display: inline-flex */ display: inline;}")
+    assert undeclared_flex_button_rules(prose, buttons) == []
