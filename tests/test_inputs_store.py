@@ -135,3 +135,45 @@ def test_the_writer_reads_the_session_id_lazily(store):
     writer.add(2, InputFrame(0x2000, 0, 0, 0))
     writer.close()
     assert len(inputs.frames_between(AT, AT)) == 1
+
+
+def test_marios_action_and_yaw_survive_the_round_trip():
+    """Round 32's ask: what he was DOING alongside what he was pressing."""
+    original = [(0, InputFrame(0x8000, 0, 40, 40, 0x0188088A, -12000))]
+    got = decode_runs(encode_runs(original))
+    assert got[0][1].action == 0x0188088A
+    assert got[0][1].yaw == -12000
+
+
+def test_an_action_change_BREAKS_a_run_even_with_the_pad_unmoved():
+    """A dive that begins while A is already held is exactly the transition
+    the action row exists to show; collapsing it away would hide it."""
+    frames = [(0, InputFrame(0x8000, 0, 0, 0, 0x0C400201, 0)),
+              (1, InputFrame(0x8000, 0, 0, 0, 0x0188088A, 0))]
+    assert len(decode_runs(encode_runs(frames))) == 2
+    assert decode_runs(encode_runs(frames))[1][1].action == 0x0188088A
+
+
+def test_a_v1_chunk_still_decodes_as_v1():
+    """Old chunks were written before Mario's state was captured. They read
+    back with zeroes for it -- which is the honest answer -- rather than being
+    reinterpreted as v2 and returning plausible nonsense."""
+    import struct as _struct
+    blob = (_struct.pack("<II", 0, 1)
+            + _struct.pack("<IHHbb", 0, 3, 0x8000, 20, -20))
+    got = decode_runs(blob, 1)
+    assert [number for number, _f in got] == [0, 1, 2]
+    assert got[0][1].buttons == 0x8000 and got[0][1].stick_x == 20
+    assert got[0][1].action == 0 and got[0][1].yaw == 0
+
+
+def test_an_unknown_chunk_format_is_refused_rather_than_guessed():
+    with pytest.raises(ValueError, match="format"):
+        decode_runs(encode_runs([(0, InputFrame(0, 0, 0, 0))]), 99)
+
+
+def test_a_stored_chunk_records_which_format_it_used(store):
+    _db, inputs, session = store
+    inputs.append(session, [(0, InputFrame(0x8000, 0, 1, 2, 7, 9))], AT, LATER)
+    got = inputs.frames_between(AT, LATER)
+    assert got[0][1].action == 7 and got[0][1].yaw == 9

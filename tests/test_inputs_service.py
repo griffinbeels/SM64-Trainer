@@ -4,7 +4,8 @@ import pytest
 
 from sm64_events.inputs.document import encode
 from sm64_events.inputs.frame import InputFrame
-from sm64_events.inputs.service import (InputsService, entity_key_of, runs_of)
+from sm64_events.inputs.service import (InputsService, actions_of,
+                                        entity_key_of, runs_of)
 from sm64_events.inputs.templates import TemplateStore
 from sm64_events.memory import addresses as A
 from sm64_events.storage.db import Database
@@ -47,12 +48,14 @@ def rig(tmp_path):
 def test_runs_collapse_and_are_zero_based():
     got = runs_of(frames([(500, 0x8000, 1, 2), (501, 0x8000, 1, 2),
                           (502, 0, 0, 0)]))
-    assert got == [[0, 2, 0x8000, 1, 2], [2, 1, 0, 0, 0]]
+    # A run is [start, length, buttons, stick_x, stick_y, yaw] -- yaw joined in
+    # round 32, so Mario's facing turning under a held stick breaks a run.
+    assert got == [[0, 2, 0x8000, 1, 2, 0, 0.0], [2, 1, 0, 0, 0, 0, 0.0]]
 
 
 def test_a_gap_starts_a_new_run_at_its_own_offset():
     got = runs_of(frames([(0, 0x8000, 0, 0), (5, 0x8000, 0, 0)]))
-    assert got == [[0, 1, 0x8000, 0, 0], [5, 1, 0x8000, 0, 0]]
+    assert got == [[0, 1, 0x8000, 0, 0, 0, 0.0], [5, 1, 0x8000, 0, 0, 0, 0.0]]
 
 
 def test_both_kinds_of_attempt_answer_an_entity_key():
@@ -67,7 +70,7 @@ def test_the_timeline_carries_the_runs_and_the_span(rig):
     service, _templates, _attempt = rig
     payload = service.timeline(7)
     assert payload["frames"] == 28
-    assert payload["runs"][0] == [0, 13, 0, -45, -45]
+    assert payload["runs"][0] == [0, 13, 0, -45, -45, 0, 0.0]
     assert payload["target"] == "star 24 1"
     assert payload["strategy"] == "10 coin"
 
@@ -96,7 +99,7 @@ def test_an_active_template_rides_along_with_its_own_runs(rig):
                                    version="us", origin="attempt 3"))
     payload = service.timeline(7)
     assert payload["template"]["name"] == "the good one"
-    assert payload["template"]["runs"] == [[0, 1, 0x8000, 10, 10]]
+    assert payload["template"]["runs"] == [[0, 1, 0x8000, 10, 10, 0, 0.0]]
 
 
 def test_a_template_that_stopped_loading_says_so_instead_of_drawing_nothing(rig):
@@ -147,14 +150,14 @@ def test_a_counter_that_restarts_lays_the_next_stretch_END_TO_END():
     """
     got = runs_of(frames([(900, 0x8000, 0, 0), (901, 0x8000, 0, 0),
                           (12, 0x4000, 0, 0), (13, 0x4000, 0, 0)]))
-    assert got == [[0, 2, 0x8000, 0, 0], [2, 2, 0x4000, 0, 0]]
+    assert got == [[0, 2, 0x8000, 0, 0, 0, 0.0], [2, 2, 0x4000, 0, 0, 0, 0.0]]
 
 
 def test_a_hole_INSIDE_a_stretch_still_reads_as_a_hole():
     """A reset is a seam in the recording; a hole is a hole. Laying stretches
     end to end must not also close the gaps within one."""
     got = runs_of(frames([(0, 0x8000, 0, 0), (9, 0x8000, 0, 0)]))
-    assert got == [[0, 1, 0x8000, 0, 0], [9, 1, 0x8000, 0, 0]]
+    assert got == [[0, 1, 0x8000, 0, 0, 0, 0.0], [9, 1, 0x8000, 0, 0, 0, 0.0]]
 
 
 def test_the_span_is_never_negative_however_the_counter_moves(rig):
@@ -165,3 +168,53 @@ def test_the_span_is_never_negative_however_the_counter_moves(rig):
         runs = runs_of(frames(spec))
         assert runs[0][0] == 0
         assert runs[-1][0] + runs[-1][1] > 0
+
+
+# --- round 32: Mario's own state alongside the pad --------------------------
+
+def test_the_action_row_reads_spans_not_a_field_on_every_run():
+    """A run breaks whenever the pad moves and an action lasts across dozens
+    of those, so the action rides its OWN list -- otherwise one fact is
+    repeated hundreds of times and the reader still has to stitch it back."""
+    rows = [(n, InputFrame(0, 0, n, 0, 0x0C400201, 0)) for n in range(5)]
+    rows += [(5 + n, InputFrame(0, 0, n, 0, 0x0188088A, 0)) for n in range(5)]
+    spans = actions_of(rows)
+    assert [(s["start"], s["length"]) for s in spans] == [(0, 5), (5, 5)]
+
+
+def test_a_known_action_reads_by_NAME_and_an_unknown_one_by_its_GROUP():
+    """Never a bare hex id: a number nobody can read is not diagnostic
+    information, however honestly it was captured."""
+    known = actions_of([(0, InputFrame(0, 0, 0, 0, A.ACT_DIVE, 0))])[0]
+    assert known["label"] == "dive"
+    unknown = actions_of([(0, InputFrame(0, 0, 0, 0, 0x0300088C, 0))])[0]
+    assert unknown["label"] == "airborne" == unknown["group"]
+
+
+def test_the_action_spans_survive_a_counter_restart_like_the_runs_do():
+    rows = [(900, InputFrame(0, 0, 0, 0, 5, 0)),
+            (901, InputFrame(0, 0, 0, 0, 5, 0)),
+            (12, InputFrame(0, 0, 0, 0, 9, 0))]
+    spans = actions_of(rows)
+    assert [(s["start"], s["length"]) for s in spans] == [(0, 2), (2, 1)]
+
+
+def test_the_yaw_rides_on_each_run_because_it_moves_every_frame():
+    """Unlike the action, facing changes continuously -- a span list for it
+    would be one span per frame, which is the shape it already had."""
+    rows = [(0, InputFrame(0, 0, 0, 0, 0, 100)),
+            (1, InputFrame(0, 0, 0, 0, 0, 200))]
+    assert [run[5] for run in runs_of(rows)] == [100, 200]
+
+
+def test_speed_rides_on_each_run_too():
+    rows = [(0, InputFrame(0, 0, 0, 0, 0, 0, 12.5)),
+            (1, InputFrame(0, 0, 0, 0, 0, 0, 31.25))]
+    assert [run[6] for run in runs_of(rows)] == [12.5, 31.25]
+
+
+def test_the_timeline_sends_the_angle_units_so_the_browser_does_no_maths(rig):
+    service, _templates, _attempt = rig
+    payload = service.timeline(7)
+    assert payload["angle_units"] == A.ANGLE_UNITS
+    assert isinstance(payload["actions"], list)

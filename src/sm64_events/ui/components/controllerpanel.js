@@ -46,6 +46,59 @@ export function stickPhrase(stickX, stickY, deadZone = 8, stickMax = 64) {
   return `${octant} ${band}`;
 }
 
+// Which way MARIO is facing, as a compass dial. Deliberately the same shape
+// as the stick box beside it, because his own words were "the controller
+// input direction display could maybe be reused as a way to display mario's
+// actual direction (these two different things)" -- one visual language, two
+// facts: what you are PUSHING, and where he is POINTING.
+//
+// It is a DIAL rather than a box: a facing is an angle with no magnitude, so a
+// square would imply a reach that does not exist.
+export function FacingDial({ yaw, angleUnits = 0x10000, size = 108,
+                             speed = null, label = null }) {
+  const degrees = ((yaw % angleUnits) + angleUnits) % angleUnits
+    * 360 / angleUnits;
+  // Screen space: 0 units is +x (east) and the angle grows anticlockwise in
+  // the game's own convention, which is what the stick box already draws.
+  const radians = degrees * Math.PI / 180;
+  const radius = BOX / 2 - 10;
+  const tipX = BOX / 2 + Math.cos(radians) * radius;
+  const tipY = BOX / 2 - Math.sin(radians) * radius;
+  const compass = Math.round(degrees);
+
+  return html`<div class="controller-panel facing-panel"
+                   style=${`--panel-size:${size}px`}>
+    ${label && html`<span class="controller-panel-label">${label}</span>`}
+    <div class="controller-panel-body">
+      <svg class="stick-box facing-dial" viewBox=${`0 0 ${BOX} ${BOX}`}
+           width=${size} height=${size}
+           aria-label=${`Facing ${compass} degrees`}>
+        <circle cx=${BOX / 2} cy=${BOX / 2} r=${BOX / 2 - 3}
+                class="facing-ring" />
+        ${[0, 90, 180, 270].map((tick) => {
+          const at = tick * Math.PI / 180;
+          return html`<line key=${tick}
+            x1=${BOX / 2 + Math.cos(at) * (BOX / 2 - 8)}
+            y1=${BOX / 2 - Math.sin(at) * (BOX / 2 - 8)}
+            x2=${BOX / 2 + Math.cos(at) * (BOX / 2 - 3)}
+            y2=${BOX / 2 - Math.sin(at) * (BOX / 2 - 3)}
+            class="facing-tick" />`;
+        })}
+        <line x1=${BOX / 2} y1=${BOX / 2} x2=${tipX} y2=${tipY}
+              class="facing-needle" />
+        <circle cx=${tipX} cy=${tipY} r=${DOT / 2} class="facing-head" />
+        <circle cx=${BOX / 2} cy=${BOX / 2} r="2.5" class="facing-hub" />
+      </svg>
+      <div class="stick-values">
+        <span class="stick-value">${compass}°</span>
+        ${speed !== null && html`<span class="stick-value is-speed"
+            title="Mario's forward speed on this frame">
+          ${Math.round(speed * 10) / 10}${" "}spd</span>`}
+      </div>
+    </div>
+  </div>`;
+}
+
 export function ControllerPanel({
   frame, buttons: table, stickMax = 64, deadZone = 8, size = 108,
   showNumbers = true, showButtons = true, label = null,

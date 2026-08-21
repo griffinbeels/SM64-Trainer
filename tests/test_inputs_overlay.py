@@ -6,7 +6,7 @@ from sm64_events.inputs.overlay import (CODECS, GAME_FPS, LAYERS,
 
 
 def runs(spec):
-    """spec: list of (start, length, buttons, stick_x, stick_y)."""
+    """spec: list of (start, length, buttons, stick_x, stick_y[, yaw])."""
     return [list(row) for row in spec]
 
 
@@ -17,7 +17,7 @@ def test_identical_pictures_collapse_to_one_state():
     # minting a second identical picture -- so two runs, two states.
     assert len(plan.states) == 2
     assert plan.per_frame[0] == plan.per_frame[10]
-    assert plan.states[plan.per_frame[5]] == (0, 0, 0)
+    assert plan.states[plan.per_frame[5]] == (0, 0, 0, 0)
 
 
 def test_the_stick_layer_ignores_buttons():
@@ -43,7 +43,7 @@ def test_a_capture_HOLE_draws_nothing_rather_than_the_last_pad():
     """The blank is the honest picture of "we do not know", and in an edit it
     reads as a gap rather than a stuck hand."""
     plan = plan_overlay(runs([(0, 2, 0x8000, 40, 0), (6, 2, 0x8000, 40, 0)]))
-    assert plan.states[plan.per_frame[3]] == (0, 0, 0)
+    assert plan.states[plan.per_frame[3]] == (0, 0, 0, 0)
 
 
 def test_the_video_frame_count_is_the_game_count_times_the_hold():
@@ -132,3 +132,33 @@ def test_the_encode_demands_an_EXACT_frame_count():
     plan = plan_overlay(runs([(0, 300, 0x8000, 0, 0)]), video_fps=60)
     argv = encode_argv("ffmpeg", "in.txt", "out.mov", plan)
     assert argv[argv.index("-frames:v") + 1] == str(plan.video_frames) == "600"
+
+
+# --- round 32: Mario's facing is its own layer ------------------------------
+
+def test_the_facing_layer_ignores_the_pad_entirely():
+    plan = plan_overlay(runs([(0, 5, 0x8000, 40, 0, 1000),
+                              (5, 5, 0x4000, -70, 12, 1000)]), layer="facing")
+    assert plan.per_frame[0] == plan.per_frame[5]
+
+
+def test_the_facing_layer_separates_two_different_bearings():
+    plan = plan_overlay(runs([(0, 5, 0, 0, 0, 1000),
+                              (5, 5, 0, 0, 0, 40000)]), layer="facing")
+    assert plan.per_frame[0] != plan.per_frame[5]
+
+
+def test_the_other_layers_ignore_the_facing():
+    """Mario's yaw changes on nearly every moving frame, so folding it into
+    the pad layers would multiply their distinct pictures by the length of the
+    run -- a few dozen screenshots becoming a few thousand."""
+    for layer in ("stick", "buttons"):
+        plan = plan_overlay(runs([(0, 5, 0x8000, 40, 0, 1000),
+                                  (5, 5, 0x8000, 40, 0, 40000)]), layer=layer)
+        assert plan.per_frame[0] == plan.per_frame[5], layer
+
+
+def test_a_run_with_no_facing_captured_still_plans():
+    """A v1 chunk predates Mario's capture; 0 is what it honestly says."""
+    plan = plan_overlay(runs([(0, 3, 0x8000, 0, 0)]), layer="facing")
+    assert plan.states[plan.per_frame[0]] == (0, 0, 0, 0)

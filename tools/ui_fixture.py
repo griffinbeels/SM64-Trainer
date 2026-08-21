@@ -201,21 +201,41 @@ def seed_inputs(database, template: bool = True) -> None:
     from sm64_events.inputs.service import entity_key_of
     from sm64_events.inputs.templates import TemplateStore
 
+    from sm64_events.memory import addresses as _A
+
     def track(base: int, shift: int = 0):
+        # Mario's own state moves too (round 32): a run-up that accelerates,
+        # a dive that turns him, a ground pound that stops him dead. A fixture
+        # whose speed line is flat and whose action row is one span cannot
+        # show either row crowding its neighbour.
         rows = []
-        rows += [(base + n, InputFrame(0, 0, -45, -45)) for n in range(13)]
-        rows += [(base + 13 + shift, InputFrame(0x8000, 0x8000, -45, -45))]
-        rows += [(base + 14 + shift + n, InputFrame(0xC000, 0, -45, -45))
+        rows += [(base + n, InputFrame(0, 0, -45, -45, _A.ACT_WALKING
+                                       if hasattr(_A, "ACT_WALKING") else 0x00440440,
+                                       -8000 - n * 60, 4.0 + n * 2.1))
+                 for n in range(13)]
+        rows += [(base + 13 + shift, InputFrame(0x8000, 0x8000, -45, -45,
+                                                _A.ACT_JUMP if hasattr(_A, "ACT_JUMP")
+                                                else 0x03000880, -8800, 31.5))]
+        rows += [(base + 14 + shift + n, InputFrame(0xC000, 0, -45, -45,
+                                                    _A.ACT_DIVE, -8800 + n * 120,
+                                                    33.0 - n * 0.4))
                  for n in range(14)]
-        rows += [(base + 28 + shift + n, InputFrame(0, 0, 60, 10))
+        rows += [(base + 28 + shift + n, InputFrame(0, 0, 60, 10,
+                                                    _A.ACT_DIVE_SLIDE,
+                                                    -7100, 26.0 - n * 2.4))
                  for n in range(9)]
         # A HOLE: nothing until +50, so the timeline must draw a gap rather
         # than interpolate across one.
         rows += [(base + 50 + n, InputFrame(0x2000, 0x2000 if n == 0 else 0,
-                                            0, -70)) for n in range(6)]
+                                            0, -70, _A.ACT_GROUND_POUND
+                                            if hasattr(_A, "ACT_GROUND_POUND")
+                                            else 0x008008A9, -7100, 0.0))
+                 for n in range(6)]
         rows += [(base + 56 + n, InputFrame(0x0008, 0x0008 if n == 0 else 0,
-                                            0, 0)) for n in range(3)]
-        rows += [(base + 59 + n, InputFrame(0, 0, 0, 0)) for n in range(4)]
+                                            0, 0, 0x0C400201, -7100, 0.0))
+                 for n in range(3)]
+        rows += [(base + 59 + n, InputFrame(0, 0, 0, 0, 0x0C400201, -7100, 0.0))
+                 for n in range(4)]
         return rows
 
     attempts = database.attempts()

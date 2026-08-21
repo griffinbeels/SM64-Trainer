@@ -4644,7 +4644,12 @@
     background: #0c1723; overflow: hidden;
   }
   .input-lane.is-stick .input-lane-track { height: 46px; background: #0a1420; }
-  .input-lane.is-stick svg { display: block; width: 100%; height: 100%; }
+  /* EVERY lane's svg, not just the stick's. An inline <svg> sits on the text
+     baseline and earns ~3px of descender space under it, so the speed lane
+     measured 33px inside its own 30px box and the sweep's clip probe fired.
+     `display: block` is what removes the baseline; scoping the rule to one
+     lane meant the next lane to get an svg inherited the bug. */
+  .input-lane-track svg { display: block; width: 100%; height: 100%; }
   .input-bar {
     position: absolute; top: 2px; bottom: 2px; min-width: 2px; padding: 0;
     border: 0; border-radius: 3px; background: var(--gold); cursor: pointer;
@@ -4676,6 +4681,46 @@
   .stick-line.is-x { stroke: #6fb1e0; }
   .stick-line.is-y { stroke: #7fd6a2; }
   .stick-line.is-template { stroke-width: 1.1; opacity: .6; stroke-dasharray: 3 2; }
+  /* ---- Mario's own rows (round 32) ---------------------------------------
+     What he was DOING, how fast, and which way he faced -- beside what was
+     pressed, so "where are the opportunities to go faster" is a comparison
+     you make by eye rather than one we assert for you. */
+  .input-lane.is-actions .input-lane-track { height: 20px; background: #0b1a14; }
+  .input-lane.is-speed .input-lane-track { height: 30px; background: #0a1420; }
+  .action-span {
+    position: absolute; top: 2px; bottom: 2px; min-width: 3px; padding: 0 .2rem;
+    display: flex; align-items: center; min-height: 0; height: auto;
+    border: 0; border-radius: 3px; overflow: hidden; cursor: pointer;
+    font-size: .6rem; line-height: 1; color: #06110c; font-weight: 700;
+    background: #4d7f6a;
+  }
+  .action-span:hover, .action-span:focus-visible { filter: brightness(1.2); }
+  .action-span-name { white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+  /* One hue per action GROUP, because the group is the thing you read at a
+     glance -- airborne vs moving vs stationary -- and the exact name is what
+     the label and the tooltip are for. */
+  .action-span.group-stationary { background: #5a6b7d; }
+  .action-span.group-moving { background: #4d8f5f; }
+  .action-span.group-airborne { background: #6f9fd8; }
+  .action-span.group-submerged { background: #4d8f97; }
+  .action-span.group-cutscene { background: #8a7bbd; }
+  .action-span.group-automatic { background: #b58f5a; }
+  .action-span.group-object { background: #b5705a; }
+  .speed-line { fill: none; stroke: #e3c27c; stroke-width: 1.6; }
+
+  .facing-panel .facing-ring {
+    fill: #081420; stroke: #33506c; stroke-width: 2;
+  }
+  .facing-tick { stroke: #24405a; stroke-width: 2; }
+  .facing-needle { stroke: #e3c27c; stroke-width: 2.5; }
+  .facing-head { fill: #f7e6bd; stroke: #e3c27c; stroke-width: 1.5; }
+  .facing-hub { fill: #33506c; }
+  .stick-value.is-speed { color: #7fd6a2; font-size: .72rem; }
+  .input-inspector-action {
+    margin-left: .5rem; padding: .1rem .4rem; border-radius: 5px;
+    background: #14261d; color: #9fd8bb; font-size: .68rem; font-weight: 700;
+  }
+
   .input-playhead {
     position: absolute; top: 0; bottom: 0; width: 0;
     border-left: 1px solid #f4f7fb; pointer-events: none; z-index: 2;

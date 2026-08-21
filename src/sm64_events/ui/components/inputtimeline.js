@@ -19,12 +19,13 @@ import { h } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
-import { ControllerPanel, stickPhrase } from "./controllerpanel.js";
+import { ControllerPanel, FacingDial, stickPhrase } from "./controllerpanel.js";
 
 const html = htm.bind(h);
 
 const FPS = 30;
 const STICK_HEIGHT = 46;
+const SPEED_HEIGHT = 30;
 
 export function frameAt(runs, frame) {
   // Runs are [start, length, buttons, stickX, stickY], zero-based and sorted,
@@ -38,7 +39,15 @@ export function frameAt(runs, frame) {
     const [start, length, buttons, stickX, stickY] = runs[mid];
     if (frame < start) high = mid - 1;
     else if (frame >= start + length) low = mid + 1;
-    else return { buttons, stickX, stickY };
+    else return { buttons, stickX, stickY, yaw: runs[mid][5] || 0,
+                  speed: runs[mid][6] || 0 };
+  }
+  return null;
+}
+
+export function actionAt(spans, frame) {
+  for (const span of spans || []) {
+    if (frame >= span.start && frame < span.start + span.length) return span;
   }
   return null;
 }
@@ -59,6 +68,24 @@ export function lanesOf(runs, table) {
   }).filter((lane) => lane.bars.length > 0);
 }
 
+// Speed is drawn against the fastest value in THIS track, not a fixed cap:
+// what he asked for is "where there are opportunities to go faster", which is
+// a comparison within one run. A fixed ceiling would flatten a whole slow
+// segment into a line at the bottom and hide exactly that.
+function speedPath(runs, frames) {
+  if (!runs.length || !frames) return "";
+  let peak = 0;
+  for (const run of runs) peak = Math.max(peak, Math.abs(run[6] || 0));
+  if (peak <= 0) peak = 1;
+  const points = [];
+  for (const run of runs) {
+    const y = SPEED_HEIGHT - (Math.abs(run[6] || 0) / peak) * (SPEED_HEIGHT - 2);
+    points.push(`${run[0]},${y.toFixed(2)}`);
+    points.push(`${run[0] + run[1]},${y.toFixed(2)}`);
+  }
+  return points.join(" ");
+}
+
 function stickPath(runs, frames, axis, height) {
   if (!runs.length || !frames) return "";
   const points = [];
@@ -71,11 +98,22 @@ function stickPath(runs, frames, axis, height) {
   return points.join(" ");
 }
 
+// Times read as SECONDS, not as a frame count. His round-32 ask, quoting
+// k8ehops: "instead of using 30f or 35f, use xx.xx format instead, since thats
+// what most people read times as". The notation is the project's own display
+// form (`fmtIgtShort`, `ui/format.js`) rather than a fourth spelling invented
+// here -- same information, one notation across the whole app.
 function timeLabel(frame) {
-  const total = frame / FPS;
+  const total = Math.abs(frame) / FPS;
   const seconds = Math.floor(total);
   const centis = Math.round((total - seconds) * 100);
-  return `${seconds}"${String(centis).padStart(2, "0")}`;
+  return `${frame < 0 ? "-" : ""}${seconds}"${String(centis).padStart(2, "0")}`;
+}
+
+function spanLabel(start, length) {
+  return length === 1
+    ? timeLabel(start)
+    : `${timeLabel(start)}–${timeLabel(start + length - 1)}`;
 }
 
 export function InputTimeline({ attemptId, video, compact = false }) {
@@ -155,6 +193,7 @@ export function InputTimeline({ attemptId, video, compact = false }) {
   };
 
   const here = frameAt(data.runs, frame);
+  const nowDoing = actionAt(data.actions, frame);
   const there = data.template ? frameAt(data.template.runs, frame) : null;
   const percent = (value) => `${(value / total) * 100}%`;
 
@@ -174,13 +213,13 @@ export function InputTimeline({ attemptId, video, compact = false }) {
         ${(ghost ? ghost.bars : []).map((bar) => html`
           <span class="input-bar is-template" key=${`t${bar.start}`}
                 style=${`left:${percent(bar.start)};width:${percent(bar.length)}`}
-                title=${`Template — ${name} for ${bar.length} frame${bar.length === 1 ? "" : "s"} from frame ${bar.start}`} />`)}
+                title=${`Template — ${name} ${spanLabel(bar.start, bar.length)} (${bar.length}f)`} />`)}
         ${(mine ? mine.bars : []).map((bar) => html`
           <button class="input-bar" key=${bar.start}
                   style=${`left:${percent(bar.start)};width:${percent(bar.length)}`}
                   onclick=${(event) => { event.stopPropagation(); seek(bar.start); }}
-                  title=${`${name} — ${bar.length} frame${bar.length === 1 ? "" : "s"} from frame ${bar.start}`}
-                  aria-label=${`${name} held ${bar.length} frames from frame ${bar.start}`} />`)}
+                  title=${`${name} ${spanLabel(bar.start, bar.length)} (${bar.length}f)`}
+                  aria-label=${`${name} held from ${spanLabel(bar.start, bar.length)}, ${bar.length} frames`} />`)}
       </div>
     </div>`;
   };
@@ -189,7 +228,7 @@ export function InputTimeline({ attemptId, video, compact = false }) {
     <header class="input-timeline-head">
       <div>
         <span class="eyebrow">Inputs</span>
-        <h4>${timeLabel(total)} · ${total} frames · ${FPS} fps</h4>
+        <h4>${timeLabel(total)}${" "}·${" "}${total} frames${" "}·${" "}${FPS} fps</h4>
       </div>
       <div class="input-timeline-actions">
         ${video && html`<button class="icon-button" onclick=${() => setFollowing(true)}
@@ -235,6 +274,31 @@ export function InputTimeline({ attemptId, video, compact = false }) {
           </svg>
         </div>
       </div>
+      ${(data.actions || []).length > 0 && html`
+        <div class="input-lane is-actions">
+          <span class="input-lane-name">Mario</span>
+          <div class="input-lane-track">
+            ${data.actions.map((span) => html`
+              <button class=${`action-span group-${span.group}`}
+                      key=${span.start}
+                      style=${`left:${percent(span.start)};width:${percent(span.length)}`}
+                      onclick=${(event) => { event.stopPropagation(); seek(span.start); }}
+                      title=${`${span.label} — ${spanLabel(span.start, span.length)} (${span.length}f)`}
+                      aria-label=${`${span.label} from ${spanLabel(span.start, span.length)}`}>
+                <span class="action-span-name">${span.label}</span>
+              </button>`)}
+          </div>
+        </div>`}
+      <div class="input-lane is-speed">
+        <span class="input-lane-name">Speed</span>
+        <div class="input-lane-track">
+          <svg viewBox=${`0 0 ${total} ${SPEED_HEIGHT}`} height=${SPEED_HEIGHT}
+               preserveAspectRatio="none" aria-hidden="true">
+            <polyline class="speed-line" vector-effect="non-scaling-stroke"
+                      points=${speedPath(data.runs, total)} />
+          </svg>
+        </div>
+      </div>
       ${bits.map((bit) => laneRow(bit))}
     </div>
 
@@ -246,7 +310,10 @@ export function InputTimeline({ attemptId, video, compact = false }) {
       </div>
       <${ControllerPanel} frame=${here} buttons=${data.buttons}
           stickMax=${data.stick_max} deadZone=${data.dead_zone}
-          label=${data.template ? "Yours" : null} />
+          label=${data.template ? "You pressed" : "Pressing"} />
+      <${FacingDial} yaw=${here ? here.yaw : 0}
+          angleUnits=${data.angle_units} speed=${here ? here.speed : 0}
+          label="Mario faces" />
       ${data.template && !data.template.error && html`
         <${ControllerPanel} frame=${there} buttons=${data.buttons}
             stickMax=${data.stick_max} deadZone=${data.dead_zone}
@@ -256,6 +323,8 @@ export function InputTimeline({ attemptId, video, compact = false }) {
           ? html`<span>Stick ${stickPhrase(here.stickX, here.stickY,
               data.dead_zone, data.stick_max)}</span>`
           : html`<span class="is-error">No capture on this frame</span>`}
+        ${nowDoing && html`<span class="input-inspector-action">
+          ${nowDoing.label}</span>`}
       </div>
     </footer>
   </div>`;

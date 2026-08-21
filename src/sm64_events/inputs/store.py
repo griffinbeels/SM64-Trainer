@@ -26,13 +26,32 @@ from datetime import datetime, timezone
 from sm64_events.inputs.frame import InputFrame
 
 _HEADER = struct.Struct("<II")        # first frame number | run count
-# start_frame u32 | run_length u16 | buttons u16 | stick_x s8 | stick_y s8
-_RUN = struct.Struct("<IHHbb")
+# v1: start_frame u32 | run_length u16 | buttons u16 | stick_x s8 | stick_y s8
+_RUN_V1 = struct.Struct("<IHHbb")
+# v2 adds what MARIO was doing while that was held (round 32): his action id,
+# his face-angle yaw and his forward speed. All three are OFFSETS off an
+# address the layout already carries, so the capture cost is one more read
+# inside the same window.
+_RUN_V2 = struct.Struct("<IHHbbIhf")
+_RUNS = {1: _RUN_V1, 2: _RUN_V2}
+FORMAT = 2                            # what new chunks are written as
 _MAX_RUN = 0xFFFF
 
 
+def _same_run(frame: InputFrame, previous: InputFrame) -> bool:
+    """Two frames that store identically. Mario's own state counts: an action
+    change with the pad unmoved is exactly the transition the timeline's
+    action row exists to show, so it has to break the run."""
+    return (frame.buttons == previous.buttons
+            and frame.stick_x == previous.stick_x
+            and frame.stick_y == previous.stick_y
+            and frame.action == previous.action
+            and frame.yaw == previous.yaw
+            and frame.speed == previous.speed)
+
+
 def encode_runs(frames: list[tuple[int, InputFrame]]) -> bytes:
-    """Collapse consecutive frames with identical input into runs.
+    """Collapse consecutive frames with identical state into runs.
 
     A run extends only across CONSECUTIVE frame numbers. `pressed` is not
     stored: it is derivable from consecutive frames, and a second copy of one
@@ -42,32 +61,44 @@ def encode_runs(frames: list[tuple[int, InputFrame]]) -> bytes:
     for number, frame in frames:
         if runs:
             start_number, length, previous = runs[-1]
-            if (number == start_number + length
-                    and frame.buttons == previous.buttons
-                    and frame.stick_x == previous.stick_x
-                    and frame.stick_y == previous.stick_y
-                    and length < _MAX_RUN):
+            if (number == start_number + length and length < _MAX_RUN
+                    and _same_run(frame, previous)):
                 runs[-1][1] = length + 1
                 continue
         runs.append([number, 1, frame])
     out = bytearray(_HEADER.pack(runs[0][0] if runs else 0, len(runs)))
     for start_number, length, frame in runs:
-        out += _RUN.pack(start_number, length, frame.buttons,
-                         frame.stick_x, frame.stick_y)
+        out += _RUN_V2.pack(start_number, length, frame.buttons,
+                            frame.stick_x, frame.stick_y,
+                            frame.action & 0xFFFFFFFF, frame.yaw, frame.speed)
     return bytes(out)
 
 
-def decode_runs(blob: bytes) -> list[tuple[int, InputFrame]]:
+def decode_runs(blob: bytes, chunk_format: int = FORMAT
+                ) -> list[tuple[int, InputFrame]]:
+    """`chunk_format` says which run layout the blob holds.
+
+    Stored per chunk rather than guessed from the byte length: a v1 chunk and
+    a v2 chunk can be the same size at different run counts, so length is not
+    a discriminator, and treating it as one decodes one as the other and
+    returns plausible nonsense.
+    """
+    layout = _RUNS.get(chunk_format)
+    if layout is None:
+        raise ValueError(f"unknown input-chunk format {chunk_format}")
     _first, count = _HEADER.unpack_from(blob, 0)
     at = _HEADER.size
     out: list[tuple[int, InputFrame]] = []
     for _ in range(count):
-        start_number, length, buttons, stick_x, stick_y = _RUN.unpack_from(
-            blob, at)
-        at += _RUN.size
+        fields = layout.unpack_from(blob, at)
+        at += layout.size
+        start_number, length, buttons, stick_x, stick_y = fields[:5]
+        action, yaw, speed = (fields[5], fields[6], fields[7]) \
+            if chunk_format >= 2 else (0, 0, 0.0)
         for step in range(length):
             out.append((start_number + step,
-                        InputFrame(buttons, 0, stick_x, stick_y)))
+                        InputFrame(buttons, 0, stick_x, stick_y,
+                                   action, yaw, speed)))
     return out
 
 
@@ -86,9 +117,10 @@ class InputStore:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO input_chunks (session_id, start_frame, end_frame,"
-                " started_utc, ended_utc, runs) VALUES (?,?,?,?,?,?)",
+                " started_utc, ended_utc, runs, format)"
+                " VALUES (?,?,?,?,?,?,?)",
                 (session_id, frames[0][0], frames[-1][0], started_utc,
-                 ended_utc, blob))
+                 ended_utc, blob, FORMAT))
             self._conn.commit()
 
     def frames_between(self, started_utc: str,
@@ -97,13 +129,13 @@ class InputStore:
         order — by started_utc then id, never by frame number."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT runs FROM input_chunks"
+                "SELECT runs, format FROM input_chunks"
                 " WHERE started_utc <= ? AND ended_utc >= ?"
                 " ORDER BY started_utc, id", (ended_utc, started_utc)
             ).fetchall()
         out: list[tuple[int, InputFrame]] = []
         for row in rows:
-            out.extend(decode_runs(row["runs"]))
+            out.extend(decode_runs(row["runs"], row["format"]))
         return out
 
 

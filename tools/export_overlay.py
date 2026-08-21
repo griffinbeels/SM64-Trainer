@@ -111,7 +111,7 @@ def widest_canvas(page, table, settings) -> dict:
     for bit, _name in table:
         every_button |= bit
     reach = settings["stickMax"]
-    box = _show(page, (every_button, reach, reach),
+    box = _show(page, (every_button, reach, reach, 0),
                 {**settings, "layer": "combined"})
     if not box:
         raise SystemExit(
@@ -122,11 +122,13 @@ def widest_canvas(page, table, settings) -> dict:
 
 
 def render_states(base: str, plan, out_dir: Path, table, stick_max,
-                  dead_zone, size: int, canvas: dict | None = None):
+                  dead_zone, size: int, canvas: dict | None = None,
+                  angle_units: int = 0x10000):
     """One transparent PNG per distinct picture, drawn by the real component."""
     files: list[Path] = []
     settings = {"buttons": table, "stickMax": stick_max,
-                "deadZone": dead_zone, "layer": plan.layer, "size": size}
+                "deadZone": dead_zone, "layer": plan.layer, "size": size,
+                "angleUnits": angle_units}
     with get_driver().launch() as page:
         page.goto(f"{base}/ui/overlay.html")
         page.wait_for("#stage")
@@ -149,7 +151,7 @@ def render_states(base: str, plan, out_dir: Path, table, stick_max,
         for index, state in enumerate(plan.states):
             # The blank state draws nothing at all -- a hole in capture is a
             # hole in the overlay, not the last pad held on screen.
-            shown = None if state == (0, 0, 0) else state
+            shown = None if state == (0, 0, 0, 0) else state
             shots = {}
             for background in ("black", "white"):
                 _show(page, shown, {**settings, "bg": background})
@@ -260,7 +262,8 @@ def main() -> int:
             work = Path(work_name)
             files, canvas = render_states(
                 base, plan, work, data["buttons"], data["stick_max"],
-                data["dead_zone"], args.size, canvas)
+                data["dead_zone"], args.size, canvas,
+                data.get("angle_units", 0x10000))
             out_path = out_dir / output_name(stem, plan)
             encode(plan, files, out_path, work)
         written.append((out_path, plan, len(files)))

@@ -56,6 +56,7 @@
      stacking, which is the entire reason there are layers instead of one file
      to crop (caught by looking at three layers side by side, 2026-08-21).
      Hidden-but-present keeps every element exactly where it is. */
+  /* The facing dial is its own layer, drawn alone. Nothing to hide. */
   body[data-layer="stick"] .controller-buttons { visibility: hidden; }
   body[data-layer="buttons"] .controller-panel-body { visibility: hidden; }
   /* Usamune shows NOTHING when nothing is held, and an overlay captioned
@@ -76,7 +77,7 @@
 </script>
 <script type="module">
 import { h, render } from "preact";
-import { ControllerPanel } from "/ui/components/controllerpanel.js";
+import { ControllerPanel, FacingDial } from "/ui/components/controllerpanel.js";
 
 let table = [];
 let stickMax = 64;
@@ -112,10 +113,16 @@ window.showState = (state, options) => {
   const frame = state
     ? { buttons: state[0], stickX: state[1], stickY: state[2] }
     : null;
-  render(h(ControllerPanel, {
-    frame, buttons: table, stickMax, deadZone,
-    size: settings.size || 160, showNumbers: true, showButtons: true,
-  }), document.getElementById("stage"));
+  const size = settings.size || 160;
+  // The FACING layer draws Mario's own dial and nothing else; every other
+  // layer draws the pad. Same canvas either way -- the layers have to stack.
+  render(settings.layer === "facing"
+    ? h(FacingDial, { yaw: state ? state[3] : 0, size,
+                      angleUnits: settings.angleUnits || 0x10000 })
+    : h(ControllerPanel, {
+        frame, buttons: table, stickMax, deadZone, size,
+        showNumbers: true, showButtons: true,
+      }), document.getElementById("stage"));
   const box = document.getElementById("stage").getBoundingClientRect();
   return { x: box.x, y: box.y, width: box.width, height: box.height };
 };

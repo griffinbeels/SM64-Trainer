@@ -486,10 +486,13 @@ a three-centisecond disagreement means exactly one frame.
 
 ### Input frame
 
-What the controller was doing on one [[frame]] — every button held, and how
-far the stick leaned. The game rewrites it about two thirds of the way through
-each [[frame]], so the trainer reads the pad far faster than the game itself
-ticks and keeps the LAST reading of each one.
+What the controller was doing on one [[frame]], and what Mario was doing while
+you did it — every button held, how far the stick leaned, the action he was in,
+which way he faced and how fast he was going. The game rewrites the pad about
+two thirds of the way through each [[frame]], so the trainer reads it far
+faster than the game itself ticks and keeps the LAST reading of each one; his
+own state rides in that same reading, so the two can never describe different
+[[frame]]s.
 
 - **Lives** — the input decoder (`src/sm64_events/inputs/frame.py`)
 

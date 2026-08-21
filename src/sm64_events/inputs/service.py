@@ -27,8 +27,38 @@ def entity_key_of(attempt) -> tuple[str, str]:
     return "star", f"{attempt.course_id}-{attempt.star_id}"
 
 
+def actions_of(frames: list[tuple[int, InputFrame]]) -> list[dict]:
+    """What Mario was DOING, as spans a person can read.
+
+    Its own list rather than a field on every run: a run breaks whenever the
+    pad moves, and an action lasts across dozens of those, so putting the
+    action on each run would repeat one fact hundreds of times and still need
+    the reader to stitch the spans back together.
+
+    The label is the action's own NAME where `addresses.py` knows it and its
+    GROUP otherwise -- never a bare hex id, which is a number nobody can read
+    dressed up as diagnostic information.
+    """
+    spans: list[dict] = []
+    offset = -frames[0][0] if frames else 0
+    previous: int | None = None
+    for number, frame in frames:
+        if previous is not None and number < previous:
+            offset = (spans[-1]["start"] + spans[-1]["length"]) - number
+        local = number + offset
+        previous = number
+        if spans and spans[-1]["action"] == frame.action \
+                and spans[-1]["start"] + spans[-1]["length"] == local:
+            spans[-1]["length"] += 1
+            continue
+        spans.append({"start": local, "length": 1, "action": frame.action,
+                      "label": A.action_label(frame.action),
+                      "group": A.action_group(frame.action)})
+    return spans
+
+
 def runs_of(frames: list[tuple[int, InputFrame]]) -> list[list[int]]:
-    """[start, length, buttons, stick_x, stick_y], zero-based on the track.
+    """[start, length, buttons, stick_x, stick_y, yaw, speed], zero-based.
 
     The x-axis is a position in the CAPTURE, not the raw counter, and those
     are not the same thing: the game's frame counter restarts on a console
@@ -52,13 +82,15 @@ def runs_of(frames: list[tuple[int, InputFrame]]) -> list[list[int]]:
         local = number + offset
         previous = number
         if out:
-            start, length, buttons, stick_x, stick_y = out[-1]
+            start, length, buttons, stick_x, stick_y, yaw, speed = out[-1]
             if (local == start + length and buttons == frame.buttons
                     and stick_x == frame.stick_x
-                    and stick_y == frame.stick_y):
+                    and stick_y == frame.stick_y and yaw == frame.yaw
+                    and speed == frame.speed):
                 out[-1][1] = length + 1
                 continue
-        out.append([local, 1, frame.buttons, frame.stick_x, frame.stick_y])
+        out.append([local, 1, frame.buttons, frame.stick_x, frame.stick_y,
+                    frame.yaw, round(frame.speed, 3)])
     return out
 
 
@@ -93,6 +125,7 @@ class InputsService:
                     "id": template.id, "name": template.name,
                     "origin": template.origin,
                     "runs": runs_of(template.frames()),
+                    "actions": actions_of(template.frames()),
                 }
             except Exception as error:
                 # A hand-edited document that stopped loading. Say so on the
@@ -110,6 +143,8 @@ class InputsService:
             "fps": FPS,
             "frames": _span(runs),
             "runs": runs,
+            "actions": actions_of(frames),
+            "angle_units": A.ANGLE_UNITS,
             "buttons": [[bit, name] for bit, name in A.BUTTON_BITS],
             "stick_max": A.STICK_MAX,
             "dead_zone": A.STICK_DEAD_ZONE,

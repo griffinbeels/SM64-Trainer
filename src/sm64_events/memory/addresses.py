@@ -613,6 +613,91 @@ DIALOG_ACTIONS = frozenset({ACT_READING_AUTOMATIC_DIALOG,
 # see that constant's own comment.
 MARIO_ACTION_STATE_OFF = 0x18  # u16
 
+# --- what Mario was DOING, for the input timeline's diagnostic rows ---------
+# Round 32's ask (2026-08-21, from his Discord thread): "adding extra
+# diagnostic info about mario alongside the timeline" -- his orientation, and
+# his state over time as a separate row.
+#
+# Both are OFFSETS off gMarioStates[0], which memory/layout.py already carries
+# a verified address for, so neither needs a layout row or an address gate of
+# its own. decomp `struct MarioState`: faceAngle is a Vec3s at 0x2C
+# (pitch, yaw, roll), so yaw -- the one that answers "which way is he facing"
+# -- is 0x2E. Corroborated by the offsets this file already pins around it
+# (particleFlags 0x08, action 0x0C, actionState 0x18, actionTimer 0x1A all
+# match the same struct). VERIFY until read live with him.
+MARIO_FACE_ANGLE_OFF = 0x2C      # Vec3s {pitch, yaw, roll}
+MARIO_YAW_OFF = 0x2E             # s16, the yaw of that vector
+# forwardVel -- the speed a runner means by "speed", and the one every guide
+# quotes. decomp `struct MarioState`: pos (Vec3f) 0x3C, vel (Vec3f) 0x48,
+# forwardVel 0x54. His ask, 2026-08-21: "so we can exactly see how his speed
+# changes over time and where there are opportunities to go faster".
+# VERIFY until read live with him.
+MARIO_FORWARD_VEL_OFF = 0x54     # f32
+
+# An s16 angle spans the whole circle, so degrees are (value / 65536) * 360.
+# The game's own units are what every other tool shows ("the 64xxx whatever
+# the number is that we have in usamune"), and a 360-degree reading is what he
+# asked to see instead.
+ANGLE_UNITS = 0x10000
+
+
+def yaw_degrees(yaw: int) -> float:
+    """A face-angle yaw as compass degrees in [0, 360)."""
+    return (yaw % ANGLE_UNITS) * 360.0 / ANGLE_UNITS
+
+
+# SM64 encodes an action's GROUP in its own id (decomp `include/sm64.h`), so
+# every action names its family even when this file has never heard of the
+# specific one. That is what lets the timeline's action row say "airborne"
+# rather than print a hex number and call it information.
+ACT_ID_MASK = 0x000001FF
+ACT_GROUP_MASK = 0x000001C0
+ACTION_GROUPS = {
+    0 << 6: "stationary",
+    1 << 6: "moving",
+    2 << 6: "airborne",
+    3 << 6: "submerged",
+    4 << 6: "cutscene",
+    5 << 6: "automatic",
+    6 << 6: "object",
+}
+
+
+def action_group(action: int) -> str:
+    return ACTION_GROUPS.get(action & ACT_GROUP_MASK, "unknown")
+
+
+def action_label(action: int) -> str:
+    """The action's own name where this file knows it, else its GROUP.
+
+    Never a bare hex id: a number nobody can read is not diagnostic
+    information, and pretending otherwise is how a row full of `0x0188088A`
+    ends up on screen.
+    """
+    if not action:
+        return "none"
+    name = _ACTION_NAMES.get(action)
+    if name is not None:
+        return name
+    return action_group(action)
+
+
+def _build_action_names() -> dict[int, str]:
+    """Every `ACT_*` constant in this module, by value.
+
+    Derived rather than hand-listed, so a new constant is named the moment it
+    is added and a renamed one cannot leave a stale label behind.
+    """
+    out: dict[int, str] = {}
+    for key, value in list(globals().items()):
+        if not key.startswith("ACT_") or not isinstance(value, int):
+            continue
+        if key in ("ACT_ID_MASK", "ACT_GROUP_MASK"):
+            continue
+        pretty = key[len("ACT_"):].replace("_", " ").lower()
+        out.setdefault(value, pretty)
+    return out
+
 # The frame each reading action's OWN handler actually creates the dialog
 # box -- keyed off MARIO_ACTION_STATE, not off entering the action. THE FIX
 # for the 2026-08-10 live report (his two screenshots: Usamune 12"00 and
@@ -1364,3 +1449,4 @@ BUTTON_VALID_MASK = 0xFF3F
 # frame lands at 50% and reads the PREVIOUS frame's input on 100% of frames,
 # one frame late, invisibly. Do not "simplify" this to 0.5.
 CONTROLLER_SETTLE_PHASE = 0.62
+_ACTION_NAMES = _build_action_names()

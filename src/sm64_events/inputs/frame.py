@@ -29,6 +29,14 @@ class InputFrame(NamedTuple):
     pressed: int    # u16 bitmask of buttons newly down this frame
     stick_x: int    # s16 raw, roughly -84..84 depending on the pad
     stick_y: int
+    # What Mario was DOING while that was held (round 32, his own ask: "adding
+    # extra diagnostic info about mario alongside the timeline"). Defaulted so
+    # every existing caller and every stored chunk written before this stays
+    # valid -- 0 means "not captured", which is exactly what an older chunk
+    # can honestly say.
+    action: int = 0     # u32 gMarioState.action; addresses.action_label names it
+    yaw: int = 0        # s16 faceAngle[1]; addresses.yaw_degrees turns it round
+    speed: float = 0.0  # f32 forwardVel -- what a runner means by speed
 
 
 class ControllerFit(NamedTuple):
@@ -41,13 +49,20 @@ class ControllerFit(NamedTuple):
     pressed: int
 
 
-def decode(block: bytes) -> InputFrame:
-    """`block` is a `read_block` of CONTROLLER_SIZE bytes at the struct base."""
+def decode(block: bytes, action: int = 0, yaw: int = 0,
+           speed: float = 0.0) -> InputFrame:
+    """`block` is a `read_block` of CONTROLLER_SIZE bytes at the struct base.
+
+    `action` and `yaw` come from Mario's own struct, which is a different read
+    -- the sampler takes them inside the same coherent window and passes them
+    in, rather than this reaching for a second address of its own.
+    """
     raw_x, raw_y = _RAW_STICK.unpack_from(block, A.CONTROLLER_RAW_STICK_X_OFF)
     buttons, pressed = _BUTTONS.unpack_from(block,
                                             A.CONTROLLER_BUTTON_DOWN_OFF)
     return InputFrame(buttons=buttons, pressed=pressed,
-                      stick_x=raw_x, stick_y=raw_y)
+                      stick_x=raw_x, stick_y=raw_y, action=action, yaw=yaw,
+                      speed=speed)
 
 
 def dead_zone(raw: int) -> float:

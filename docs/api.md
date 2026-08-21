@@ -448,7 +448,7 @@ drawer draws it; these are the routes it uses.
 
 | Endpoint | What it does |
 |---|---|
-| `GET /api/attempts/{id}/inputs` | The attempt's track for drawing: `runs` as `[start, length, buttons, stick_x, stick_y]` zero-based on the track, plus `frames`, `fps`, `target`, `strategy`, and the active `template` in the same shape (or `null`). It also sends `buttons` — the bit-to-name table — so a browser never names a button bit and there is no second copy of it to drift |
+| `GET /api/attempts/{id}/inputs` | The attempt's track for drawing: `runs` as `[start, length, buttons, stick_x, stick_y, yaw, speed]` zero-based on the track, plus `frames`, `fps`, `target`, `strategy`, and the active `template` in the same shape (or `null`). `actions` is a separate list of `{start, length, action, label, group}` spans — Mario's own state lasts across dozens of pad changes, so putting it on every run would repeat one fact hundreds of times. It also sends `buttons` (the bit-to-name table) and `angle_units`, so a browser never names a button bit and never does angle arithmetic — no second copy of either to drift |
 | `GET /api/attempts/{id}/inputs/document` | The same track as a portable text **input document**: frame-indexed, run-length compressed, and legible enough to edit by hand. 404 when the attempt has no captured input |
 | `POST /api/attempts/{id}/inputs/template` | Make this attempt the **template track** for its target and strategy, standing the previous one down. Body `{"name"?}`. 409 when the attempt captured no input |
 | `GET /api/inputs/templates` | Every template, or one entity's with `?kind=&entity_key=` |

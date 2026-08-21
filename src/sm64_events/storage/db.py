@@ -626,6 +626,18 @@ MIGRATIONS = [
       ON input_templates (kind, entity_key, IFNULL(strat_tag, ''))
       WHERE active = 1;
     """,
+    # v29 -- the run format a chunk was written in.
+    #
+    # v2 adds what MARIO was doing on each frame (his action, his face-angle
+    # yaw), which round 32 asked for: "adding extra diagnostic info about
+    # mario alongside the timeline". Stored PER CHUNK rather than guessed from
+    # the blob's length, because a v1 chunk and a v2 chunk can be the same
+    # size at different run counts -- length is not a discriminator, and
+    # treating it as one decodes one as the other and returns plausible
+    # nonsense. Existing rows default to 1 and keep decoding as what they are.
+    """
+    ALTER TABLE input_chunks ADD COLUMN format INTEGER NOT NULL DEFAULT 1;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",

@@ -32,8 +32,24 @@ class ScriptedMemory:
         return counter + 1 if self.index in self.straddle_at else counter
 
     def read_block(self, addr, size):
+        entry = self.script[self.index]
+        if addr == US.mario_struct + A.MARIO_ACTION_OFF:
+            # Mario's own state rides in the same window as the pad (round
+            # 32). A script row may carry it or not; a short row means "not
+            # captured", which is what an older track honestly says.
+            action = entry[5] if len(entry) > 5 else 0
+            yaw = entry[6] if len(entry) > 6 else 0
+            speed = entry[7] if len(entry) > 7 else 0.0
+            span = bytearray(size)
+            struct.pack_into(">I", span, 0, action & 0xFFFFFFFF)
+            struct.pack_into(">h", span,
+                             A.MARIO_YAW_OFF - A.MARIO_ACTION_OFF, yaw)
+            struct.pack_into(">f", span,
+                             A.MARIO_FORWARD_VEL_OFF - A.MARIO_ACTION_OFF,
+                             speed)
+            return bytes(span)
         assert addr == US.player1_controller and size == A.CONTROLLER_SIZE
-        _counter, buttons, pressed, stick_x, stick_y = self.script[self.index]
+        _counter, buttons, pressed, stick_x, stick_y = entry[:5]
         block = bytearray(A.CONTROLLER_SIZE)
         struct.pack_into(">hh", block, A.CONTROLLER_RAW_STICK_X_OFF,
                          stick_x, stick_y)
@@ -146,3 +162,20 @@ def test_flush_emits_the_frame_still_in_hand():
     assert got == []          # frame 77 is not finished yet
     sampler.flush()
     assert got == [(77, InputFrame(0x1000, 0, 0, 0))]
+
+
+def test_marios_state_rides_in_the_SAME_window_as_the_pad():
+    """One coherent read, not two: pairing this frame's pad with next frame's
+    action would be the same class of error the counter sandwich exists to
+    prevent, one field over."""
+    got, _sampler = run([(10, 0x8000, 0x8000, 40, 0, A.ACT_DIVE, -12000, 31.5),
+                         (11, 0x8000, 0, 40, 0, A.ACT_DIVE, -12000, 31.5)])
+    assert got[0][1].action == A.ACT_DIVE
+    assert got[0][1].yaw == -12000
+    assert round(got[0][1].speed, 2) == 31.5
+
+
+def test_a_script_row_with_no_mario_state_reads_as_not_captured():
+    got, _sampler = run([(10, 0x8000, 0x8000, 0, 0), (11, 0, 0, 0, 0)])
+    assert got[0][1].action == 0
+    assert got[0][1].speed == 0.0

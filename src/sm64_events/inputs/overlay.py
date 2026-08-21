@@ -35,7 +35,7 @@ DEFAULT_VIDEO_FPS = 60
 
 # Which parts of the controller each file draws. The names are the layer's own
 # file suffix, so a folder of exports reads without a legend.
-LAYERS = ("stick", "buttons", "combined")
+LAYERS = ("stick", "buttons", "facing", "combined")
 
 CODECS = {
     # (encoder args) -- both carry an alpha channel; neither is DNxHR, which
@@ -58,7 +58,7 @@ class OverlayPlan:
     height: int
     video_fps: int
     game_frames: int
-    states: tuple[tuple[int, int, int], ...]   # (buttons, stick_x, stick_y)
+    states: tuple[tuple[int, int, int, int], ...]  # buttons, x, y, yaw
     per_frame: tuple[int, ...]                 # game frame -> index in states
 
     @property
@@ -86,17 +86,21 @@ def plan_overlay(runs, *, layer: str = "combined", codec: str = DEFAULT_CODEC,
             "game frame could not be held for a whole number of video frames "
             "-- which is the one thing this export exists to get right")
     span = (runs[-1][0] + runs[-1][1]) if runs else 0
-    index: dict[tuple[int, int, int], int] = {}
-    states: list[tuple[int, int, int]] = []
+    index: dict[tuple[int, int, int, int], int] = {}
+    states: list[tuple[int, int, int, int]] = []
     # A hole in capture draws NOTHING -- not the neighbouring frame's pad. The
     # blank is the honest picture of "we do not know", and it is also what the
     # editor sees as a gap rather than a stuck hand.
-    blank = (0, 0, 0)
+    blank = (0, 0, 0, 0)
     per_frame = [0] * span
     index[blank] = 0
     states.append(blank)
-    for start, length, buttons, stick_x, stick_y in runs:
-        key = _key_for(layer, buttons, stick_x, stick_y)
+    for run in runs:
+        start, length, buttons, stick_x, stick_y = run[:5]
+        # A run may predate Mario's own capture (a v1 chunk), and 0 is what
+        # such a track honestly says about a facing it never recorded.
+        yaw = run[5] if len(run) > 5 else 0
+        key = _key_for(layer, buttons, stick_x, stick_y, yaw)
         at = index.get(key)
         if at is None:
             at = len(states)
@@ -109,13 +113,21 @@ def plan_overlay(runs, *, layer: str = "combined", codec: str = DEFAULT_CODEC,
                        states=tuple(states), per_frame=tuple(per_frame))
 
 
-def _key_for(layer: str, buttons: int, stick_x: int, stick_y: int):
-    """Two frames that this layer DRAWS identically are one picture."""
+def _key_for(layer: str, buttons: int, stick_x: int, stick_y: int, yaw: int):
+    """Two frames that this layer DRAWS identically are one picture.
+
+    Which is also why `facing` is its own layer rather than a corner of the
+    combined one: Mario's yaw changes on almost every frame he is moving, so
+    folding it into the others would multiply their distinct pictures by the
+    length of the run and turn a few dozen screenshots into a few thousand.
+    """
     if layer == "stick":
-        return (0, stick_x, stick_y)
+        return (0, stick_x, stick_y, 0)
     if layer == "buttons":
-        return (buttons, 0, 0)
-    return (buttons, stick_x, stick_y)
+        return (buttons, 0, 0, 0)
+    if layer == "facing":
+        return (0, 0, 0, yaw)
+    return (buttons, stick_x, stick_y, yaw)
 
 
 def concat_script(plan: OverlayPlan, name_of) -> str:
