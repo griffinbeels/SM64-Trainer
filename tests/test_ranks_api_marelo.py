@@ -450,12 +450,17 @@ def test_leaderboard_shape(client):
     body = client.get("/api/leaderboard?scope=overall").json()
     assert body["scope_id"] == "overall" and body["basis"] == "pb"
     assert set(body) >= {"scope_id", "label", "n", "basis", "rank_mode",
-                         "sheet_revision", "rows"}
+                         "sheet_revision", "omitted", "rows"}
+    assert isinstance(body["omitted"], int) and body["omitted"] >= 0
     you_rows = [row for row in body["rows"] if row["you"]]
     assert len(you_rows) == 1 and you_rows[0]["runner"] is None
     for row in body["rows"]:
         assert set(row) >= {"position", "runner", "you", "marelo", "tier",
                             "division", "mastery", "practiced", "n"}
+        # `omitted` counts what `rows` left out; a runner already IN `rows`
+        # is never also part of that count.
+        if row["runner"] is not None:
+            assert row["practiced"] >= 1
 
 
 def test_leaderboard_defaults_to_the_active_scope(client):
@@ -496,6 +501,25 @@ def test_leaderboard_ignores_the_users_exclusions(client):
     client.post("/api/marelo/exclude", json={"entity": "star:9:2", "excluded": False})
 
 
+def test_leaderboard_omitted_counts_a_runner_scored_elsewhere_but_not_here(client):
+    """`omitted` must count a runner who has SOME score in the whole corpus
+    but none in THIS narrower scope -- not merely "everyone minus rows",
+    which "overall" over the fixture's single laddered entity (star:9:2)
+    can't distinguish: with only one entity graded anywhere, any runner
+    with a score at all necessarily has it for that one entity, so `omitted`
+    can never move there. `course:9` (star:9:2 only) stays that narrow
+    scope; giving star:8:2 a ladder brings in the sheet's own REAL,
+    unadopted coverage of it (a real star, plenty of community times) as
+    the "elsewhere" population -- runners scored there and nowhere in
+    course 9, which is exactly the shape `omitted` exists to count."""
+    client.put("/api/ranks/standards/star:8:2/Standard/Mario", json={"seconds": 10.0})
+    in_scope = _adopt_row_onto(client, "star:9:2")
+    body = client.get("/api/leaderboard?scope=course:9").json()
+    runners = [row["runner"] for row in body["rows"]]
+    assert in_scope in runners
+    assert body["omitted"] >= 1
+
+
 def test_leaderboard_never_moves_marelo_watermarks(tmp_path):
     """THE trap: `_build_marelo` seeds/syncs/lowers a celebration watermark
     as a side effect of scoring a scope -- a board read must never fire a
@@ -508,13 +532,15 @@ def test_leaderboard_never_moves_marelo_watermarks(tmp_path):
         assert service.marelo_watermarks() == before
 
 
-def _adopt_a_scored_runner(test_client) -> str:
+def _adopt_row_onto(test_client, entity_key: str, skip_runner: str | None = None
+                    ) -> str:
     """Points a real library row (one with a fitted ladder and at least one
-    runner entry) at the fixture's one ranked entity (star:9:2), and returns
-    the runner name that adoption guarantees will score. Whether the bundled
-    sheet's OWN mapping happens to reach star:9:2 on its own is not something
-    a test should depend on -- the sheet grows and a real intersection today
-    is not one tomorrow; adopting one makes the scenario deterministic.
+    runner entry, whose first runner is not `skip_runner`) at `entity_key`,
+    and returns the runner name that adoption guarantees will score.
+    Whether the bundled sheet's OWN mapping happens to reach a given entity
+    on its own is not something a test should depend on -- the sheet grows
+    and a real intersection today is not one tomorrow; adopting one makes
+    the scenario deterministic.
 
     Mutates the in-memory `Adoptions` object directly rather than calling
     `POST /api/library/adopt`: that endpoint SAVES to the real, un-overridden
@@ -526,14 +552,22 @@ def _adopt_a_scored_runner(test_client) -> str:
     library = test_client.app.state.library
     for target in library.payload["targets"]:
         for item in target["approaches"]:
-            entries = [e for e in item["entries"] if e.get("runner")]
+            entries = [e for e in item["entries"] if e.get("runner")
+                      and e["runner"] != skip_runner]
             if entries and item.get("ladder"):
                 key = row_key(target, item["name"], item["ids"])
-                adoptions._rows[key] = "star:9:2"
+                adoptions._rows[key] = entity_key
                 adoptions._sync()
                 return entries[0]["runner"]
-    pytest.fail("bundled sheet has no approach with both a ladder and a "
-               "runner entry -- nothing left to adopt onto star:9:2")
+    pytest.fail(f"bundled sheet has no approach with both a ladder and a "
+               f"runner entry (excluding {skip_runner!r}) -- nothing left "
+               f"to adopt onto {entity_key!r}")
+
+
+def _adopt_a_scored_runner(test_client) -> str:
+    """The single-entity case: adopts onto star:9:2, the fixture's one
+    seeded ladder."""
+    return _adopt_row_onto(test_client, "star:9:2")
 
 
 def test_leaderboard_runner_breakdown_shape(client):

@@ -156,12 +156,14 @@ def _score_scope(service, scope_id: str) -> dict:
     # it only sees scores, not ladders. A ragged ladder (one missing a tier)
     # still crosses that tier's score range, so a full-table lookup can name
     # a tier the ladder does not define (scoring.py's invariant, line 8).
-    # Recompute per-entity against each entity's OWN ladder here, where the
-    # ladders are actually available; the scope-level tier/division above
+    # `classify_entity` recomputes per-entity against each entity's OWN
+    # ladder instead -- the SAME door `library/board.py`'s runner breakdown
+    # calls, so the user's own numbers and a runner's can never derive this
+    # shape two different ways (`tests/test_single_source.py`'s "the entity
+    # breakdown shape" row). The scope-level tier/division above
     # (out["tier"]/out["division"]) stays full-table on purpose -- a scope
     # score has no single ladder of its own.
-    defined_by_key = {key: scoring.defined_tiers(ladder) for key, ladder in
-                      marelo_bridge.entity_ladders(service.ranks, keys).items()}
+    ladders_by_key = marelo_bridge.entity_ladders(service.ranks, keys)
     for entity in out["entities"]:
         entity["label"] = entity_label(service.db, entity["key"])
         # Always False here: `groups` above was already built from the
@@ -169,30 +171,17 @@ def _score_scope(service, scope_id: str) -> dict:
         # aggregate's numerator/denominator. The excluded rows themselves
         # are appended below, outside the scored block.
         entity["excluded"] = entity["key"] in excluded
-        defined = defined_by_key.get(entity["key"])
-        if entity["score"] is None:
-            entity["tier"] = entity["division"] = None
-            # No score to step up from -- the breakdown's "next rank" column
-            # names what a FIRST practiced attempt targets (spec task C.3),
-            # the same Gold anchor gain_for below already grades unpracticed
-            # entities against. No division: there is nothing to be a
-            # division INTO yet.
-            entity["next_tier"] = scopes.UNPRACTICED_TARGET_TIER
-            entity["next_division"] = None
-        else:
-            entity["tier"], entity["division"] = scoring.division_for(
-                entity["score"], defined)
-            # One DIVISION up, not one tier up: `next_tier_target` (used by
-            # gain_for below) answers "how much score is the next TIER
-            # worth", the whole-ladder quest; `division_progress` answers
-            # "what's the very next step", the LP-style near-goal the
-            # breakdown's next-rank column exists to show. `next_tier`/
-            # `next_division` are None exactly when maxed (hardest tier this
-            # ladder defines, division I) -- the UI reads that as "Maxed".
-            next_step = scoring.division_progress(entity["score"], defined)
-            entity["next_tier"] = next_step["next_tier"]
-            entity["next_division"] = next_step["next_division"]
-        entity["gain"] = scopes.gain_for(entity["score"], out["n"], defined)
+        classified = marelo_bridge.classify_entity(
+            ladders_by_key.get(entity["key"], {}), entity["score"], out["n"])
+        entity["tier"] = classified["tier"]
+        entity["division"] = classified["division"]
+        # One DIVISION up, not one tier up: `next_tier`/`next_division` name
+        # the LP-style near-goal the breakdown's next-rank column exists to
+        # show, None exactly when maxed (hardest tier this ladder defines,
+        # division I) -- the UI reads that as "Maxed".
+        entity["next_tier"] = classified["next_tier"]
+        entity["next_division"] = classified["next_division"]
+        entity["gain"] = classified["gain"]
     _append_excluded_rows(service, scope_id, groups, excluded, out)
     out["scope_id"] = scope_id
     out["label"] = _scope_label(service, scope_id)
@@ -622,10 +611,16 @@ def create_ranks_router(service, library=None, adoptions=None,
     async def leaderboard(scope: str | None = None):
         """Every community runner scored the same way MARELO scores the
         user, plus the user's own row, for one scope -- `library/board.py`'s
-        module docstring has the caching contract. `library=None` (a
-        broadcast-only second instance with no sheet of its own) answers
-        "the sheet is not loaded" with an empty board rather than a 503,
-        matching `/api/library/entity/{k}`'s own precedent."""
+        module docstring has the caching contract. `library` is never
+        actually `None` in the running app -- `server/app.py` constructs a
+        `LibraryStore` and calls `.load()` unconditionally before
+        `create_ranks_router` is ever wired in, same as `_library_clips`
+        above. The `library=None` branch below exists for the one caller
+        that CAN reach it: a standalone test constructing this router
+        directly with no library at all, which answers "the sheet is not
+        loaded" with an empty board rather than a 503, matching
+        `/api/library/entity/{k}`'s own precedent for an entity nobody has
+        timed."""
         if service.ranks is None or service.db is None:
             raise HTTPException(503, "rank standards unavailable")
         scope_id = scope or _active_scope(service)
@@ -635,17 +630,21 @@ def create_ranks_router(service, library=None, adoptions=None,
             groups = _groups(service, scope_id, excluded=set())  # 404s first
             return {"scope_id": scope_id, "label": label, "n": 0,
                     "basis": "pb", "rank_mode": rank_mode,
-                    "sheet_revision": None, "rows": []}
+                    "sheet_revision": None, "rows": [], "omitted": 0}
         groups = _groups(service, scope_id, excluded=set())
         keys = [key for group in groups for key in group["candidates"]]
         you_aggregate = scopes.aggregate(_you_scores(keys), groups)
-        rows = await run_in_threadpool(
+        rows, omitted = await run_in_threadpool(
             board.leaderboard, board_cache, library, _adoptions_rows(),
             service.ranks, groups, scope_id,
             version=service.ranks.grading_version, you_aggregate=you_aggregate)
         return {"scope_id": scope_id, "label": label, "n": you_aggregate["n"],
                 "basis": "pb", "rank_mode": rank_mode,
-                "sheet_revision": library.revision, "rows": rows}
+                "sheet_revision": library.revision, "rows": rows,
+                # How many runners have NO time in this scope and are
+                # therefore absent from `rows` -- a board that drops most of
+                # the sheet without saying so reads as "this is everyone".
+                "omitted": omitted}
 
     @router.get("/leaderboard/runner/{name:path}/summary")
     async def leaderboard_runner_summary(name: str):

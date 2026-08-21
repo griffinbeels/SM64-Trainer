@@ -116,6 +116,23 @@ def strategy_name_zone() -> tuple[Path, ...]:
         *(SRC / "server").rglob("*.py"), *(REPO / "tools").rglob("*.py")]))
 
 
+def entity_breakdown_zone() -> tuple[Path, ...]:
+    """The two consumers that widen a plain SCORE into a display breakdown
+    for one entity -- the user's own MARELO scope (`_score_scope`) and a
+    community runner's (`board.py`) -- plus the owner, `tracking/marelo.py`.
+
+    Narrower than `python_sources()` on purpose: `scoring.division_for` and
+    `scopes.gain_for` are legitimately called elsewhere for THEIR OWN
+    reasons that have nothing to do with grading one entity against its own
+    ladder -- `ranks/scopes.py::aggregate` calls `division_for` for the
+    SCOPE's own tier (no single ladder involved), and `gain_for` is defined
+    there. Scanning those files for the same tokens would be a permanent
+    false positive, not a guard."""
+    return tuple(sorted([
+        SRC / "server" / "ranks_api.py", SRC / "library" / "board.py",
+        SRC / "tracking" / "marelo.py"]))
+
+
 INVARIANTS = (
     SingleSource(
         concept="a RAM address",
@@ -441,6 +458,28 @@ INVARIANTS = (
             "calling either function directly is building a competing "
             "grading path beside ratings.py -- 'is runner_scores() called' "
             "would pass while that second path sat right beside it.",
+    ),
+    SingleSource(
+        concept="the entity breakdown shape (tier/division/next_tier/"
+                "next_division/gain from one score against one ladder)",
+        owners=frozenset({"marelo.py"}),
+        tokens=("division_for", "gain_for"),
+        files=entity_breakdown_zone(),
+        why="tracking/marelo.py::classify_entity -- extracted from "
+            "server/ranks_api.py::_score_scope during Task 3's review "
+            "round (2026-08-20), which caught it as a genuine second "
+            "hand-written copy of this composition sitting beside "
+            "library/board.py's own. `scopes.aggregate` only sees SCORES, "
+            "not ladders, and grades tier/division/gain against the FULL "
+            "rank table -- a ragged ladder (one missing a tier) still "
+            "crosses that tier's score range, so a full-table lookup can "
+            "name a tier the ladder does not define. Both the user's own "
+            "MARELO breakdown and a community runner's must recompute this "
+            "per-entity against the entity's OWN ladder identically, or the "
+            "two numbers can silently disagree on screen for the same "
+            "entity. 'Is classify_entity() called' would pass while a "
+            "second file quietly re-derived tier/division from "
+            "`scoring.division_for`/`scopes.gain_for` directly beside it.",
     ),
 )
 

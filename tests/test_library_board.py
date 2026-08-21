@@ -80,10 +80,11 @@ def test_leaderboard_orders_by_marelo_descending():
     ranks = FakeRanks(RANKS_DATA)
     cache = board.RunnerScoreCache()
     you = scopes.aggregate({}, GROUPS)
-    rows = board.leaderboard(cache, library, {}, ranks, GROUPS, "overall",
-                             version="us", you_aggregate=you)
+    rows, omitted = board.leaderboard(cache, library, {}, ranks, GROUPS,
+                                      "overall", version="us", you_aggregate=you)
     order = [row["runner"] for row in rows if row["runner"]]
     assert order.index("Speedy") < order.index("Plodder")
+    assert omitted == 0          # both runners practiced this scope's entity
 
 
 def test_tied_marelo_shares_a_position_and_the_next_skips():
@@ -93,8 +94,8 @@ def test_tied_marelo_shares_a_position_and_the_next_skips():
     ranks = FakeRanks(RANKS_DATA)
     cache = board.RunnerScoreCache()
     you = scopes.aggregate({}, GROUPS)          # never practiced -> 0.0, last
-    rows = board.leaderboard(cache, library, {}, ranks, GROUPS, "overall",
-                             version="us", you_aggregate=you)
+    rows, _omitted = board.leaderboard(cache, library, {}, ranks, GROUPS,
+                                       "overall", version="us", you_aggregate=you)
     by_runner = {row["runner"]: row for row in rows if row["runner"]}
     assert by_runner["Twin1"]["marelo"] == by_runner["Twin2"]["marelo"]
     assert by_runner["Twin1"]["position"] == by_runner["Twin2"]["position"]
@@ -106,7 +107,11 @@ def test_tied_marelo_shares_a_position_and_the_next_skips():
 def test_a_runner_with_nothing_practiced_in_scope_is_left_off_the_board():
     """448 sheet runners, most of whom never touch a narrow scope -- a
     leaderboard tied at 0.0 for hundreds of rows is not a leaderboard.
-    The user's own row carries no such filter (see the next test)."""
+    The user's own row carries no such filter (see the next test).
+
+    The omission is counted, not just silent (his ruling): `omitted` must
+    say how many were left off, or an empty-looking board reads as
+    complete when it is not."""
     ranks_data = {**RANKS_DATA,
                   "star:2:0": {"Standard": {"Mario": 30.0, "Gold": 50.0}}}
     payload = {"targets": [
@@ -116,10 +121,11 @@ def test_a_runner_with_nothing_practiced_in_scope_is_left_off_the_board():
     ranks = FakeRanks(ranks_data)
     cache = board.RunnerScoreCache()
     you = scopes.aggregate({}, GROUPS)
-    rows = board.leaderboard(cache, library, {}, ranks, GROUPS, "overall",
-                             version="us", you_aggregate=you)
+    rows, omitted = board.leaderboard(cache, library, {}, ranks, GROUPS,
+                                      "overall", version="us", you_aggregate=you)
     runners = [row["runner"] for row in rows]
     assert "Speedy" in runners and "Ghost" not in runners
+    assert omitted == 1          # exactly Ghost
 
 
 def test_the_users_row_is_present_and_marked():
@@ -128,8 +134,8 @@ def test_the_users_row_is_present_and_marked():
     ranks = FakeRanks(RANKS_DATA)
     cache = board.RunnerScoreCache()
     you = scopes.aggregate({"star:1:0": 82.0}, GROUPS)
-    rows = board.leaderboard(cache, library, {}, ranks, GROUPS, "overall",
-                             version="us", you_aggregate=you)
+    rows, _omitted = board.leaderboard(cache, library, {}, ranks, GROUPS,
+                                       "overall", version="us", you_aggregate=you)
     you_rows = [row for row in rows if row["you"]]
     assert len(you_rows) == 1
     assert you_rows[0]["runner"] is None

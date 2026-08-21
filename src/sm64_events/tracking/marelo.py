@@ -14,7 +14,7 @@ An entity with no gradeable time is ABSENT from the returned map, never zero:
 scopes.aggregate() supplies the zero, because only it knows the denominator."""
 from typing import Callable, Iterable
 
-from sm64_events.ranks import scoring
+from sm64_events.ranks import scopes, scoring
 from sm64_events.ranks.classify import RANK_MODES, average_frames, display_cs
 from sm64_events.ranks.standards import entity_key
 from sm64_events.tracking.projection import Attempt
@@ -40,6 +40,42 @@ def entity_ladders(ranks_store, keys: Iterable[str]) -> dict[str, dict[str, int]
         if ladder:
             out[key] = ladder
     return out
+
+
+def classify_entity(ladder: dict[str, int], score: float | None,
+                    n: int) -> dict:
+    """{tier, division, next_tier, next_division, gain} for one score
+    against one entity's own best-possible ladder (`ladder`, e.g. one value
+    of `entity_ladders`'s result), `gain` diluted by the scope's `n` slots.
+
+    `ranks.scopes.aggregate` only sees SCORES, not ladders, and grades tier/
+    division/gain against the FULL rank table -- a ragged ladder (one
+    missing a tier) still crosses that tier's score range, so a full-table
+    lookup can name a tier the ladder does not define (`ranks/scoring.py`'s
+    invariant, line 8). This recomputes per-entity against the entity's OWN
+    ladder instead, which is why both `server/ranks_api.py::_score_scope`
+    (the user's own MARELO breakdown) and `library/board.py` (a runner's)
+    call through here rather than each carrying its own copy -- the same
+    "a value two surfaces show gets one door" rule this project enforces
+    everywhere else (`tests/test_single_source.py`'s "the entity breakdown
+    shape" row).
+
+    Unpracticed entities (`score is None`) target Gold with no division --
+    the breakdown's "next rank" column names what a first practiced attempt
+    would target (the same Gold anchor `gain` below already grades against),
+    and there is nothing to be a division INTO yet."""
+    defined = scoring.defined_tiers(ladder)
+    if score is None:
+        return {"tier": None, "division": None,
+                "next_tier": scopes.UNPRACTICED_TARGET_TIER,
+                "next_division": None,
+                "gain": scopes.gain_for(None, n, defined)}
+    tier, division = scoring.division_for(score, defined)
+    next_step = scoring.division_progress(score, defined)
+    return {"tier": tier, "division": division,
+            "next_tier": next_step["next_tier"],
+            "next_division": next_step["next_division"],
+            "gain": scopes.gain_for(score, n, defined)}
 
 
 def entity_scores(attempts: list[Attempt], ranks_store, keys: Iterable[str],

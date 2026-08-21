@@ -37,7 +37,7 @@ import hashlib
 import json
 
 from sm64_events.library import ratings
-from sm64_events.ranks import scopes, scoring
+from sm64_events.ranks import scopes
 from sm64_events.ranks.classify import display_cs
 from sm64_events.ranks.standards import entity_key
 from sm64_events.tracking import marelo as marelo_bridge
@@ -62,7 +62,7 @@ class RunnerScoreCache:
         self._key = None
         self._scores: dict[str, dict[str, float]] = {}
         self._times: dict[str, dict[str, int]] = {}
-        self._board_rows: dict[str, list[dict]] = {}
+        self._board_rows: dict[str, tuple[list[dict], int]] = {}
 
     def refresh(self, library, adoptions_rows: dict, ranks_store, *,
                 version: str):
@@ -83,17 +83,26 @@ class RunnerScoreCache:
         return self._scores, self._times
 
     def board_rows(self, scope_id: str, groups: list[dict],
-                   scores: dict[str, dict[str, float]]) -> list[dict]:
-        """Every runner's own row for `scope_id`, practiced entities only,
-        UNRANKED -- `leaderboard()` adds the user's row and ranks the two
-        together, which is why this stops short of a `position`."""
+                   scores: dict[str, dict[str, float]]
+                   ) -> tuple[list[dict], int]:
+        """(rows, omitted) for `scope_id` -- every runner's own row,
+        practiced entities only, UNRANKED (`leaderboard()` adds the user's
+        row and ranks the two together, which is why this stops short of a
+        `position`), plus a COUNT of the runners left out because they have
+        never practiced anything in this scope. The count exists because the
+        omission itself must never be silent: a board that drops most of the
+        sheet without saying so reads as "this is everyone" when it is not
+        (his ruling on this exact question -- keep dropping them, but never
+        silently)."""
         if scope_id not in self._board_rows:
-            rows = []
+            rows, omitted = [], 0
             for runner, by_entity in scores.items():
                 agg = scopes.aggregate(by_entity, groups)
                 if agg["practiced"]:
                     rows.append(_row(agg, runner=runner, you=False))
-            self._board_rows[scope_id] = rows
+                else:
+                    omitted += 1
+            self._board_rows[scope_id] = (rows, omitted)
         return self._board_rows[scope_id]
 
 
@@ -126,20 +135,28 @@ def _ranked(rows: list[dict]) -> list[dict]:
 
 def leaderboard(cache: RunnerScoreCache, library, adoptions_rows: dict,
                 ranks_store, groups: list[dict], scope_id: str, *,
-                version: str, you_aggregate: dict) -> list[dict]:
-    """Every runner who has practiced at least one entity in this scope,
-    plus the user's own row, MARELO-descending and competition-ranked.
+                version: str, you_aggregate: dict
+                ) -> tuple[list[dict], int]:
+    """(rows, omitted). `rows` is every runner who has practiced at least
+    one entity in this scope, plus the user's own row, MARELO-descending
+    and competition-ranked.
 
-    A runner with zero practiced entities here is left off rather than shown
-    tied at 0.0 -- the sheet holds 448 people, most of whom have never
-    touched most scopes, and a leaderboard is not improved by a tail of
-    hundreds of zero rows. The user's own row carries no such filter: it is
-    always present, even at 0, because it is the one row he came to find."""
+    A runner with zero practiced entities here is left off `rows` rather
+    than shown tied at 0.0 -- the sheet holds 448 people, most of whom have
+    never touched most scopes, and a leaderboard is not improved by a tail
+    of hundreds of zero rows. The user's own row carries no such filter: it
+    is always present, even at 0, because it is the one row he came to find.
+
+    `omitted` is how many were left off, and it is NOT optional to surface:
+    a board that silently drops most of the sheet reads as "this is
+    everyone" when it is not -- the caller must show this count, not just
+    the rows."""
     scores, _times = cache.refresh(library, adoptions_rows, ranks_store,
                                    version=version)
-    rows = list(cache.board_rows(scope_id, groups, scores))
+    runner_rows, omitted = cache.board_rows(scope_id, groups, scores)
+    rows = list(runner_rows)
     rows.append(_row(you_aggregate, runner=None, you=True))
-    return _ranked(rows)
+    return _ranked(rows), omitted
 
 
 def you_times_by_entity(pb_rows, ranks_store, keys) -> dict[str, int]:
@@ -164,41 +181,6 @@ def you_times_by_entity(pb_rows, ranks_store, keys) -> dict[str, int]:
         if key not in best or cs < best[key]:
             best[key] = cs
     return best
-
-
-def _classify(ladder: dict[str, int], score: float | None, n: int) -> dict:
-    """{tier, division, next_tier, next_division, gain} for one score
-    against one entity's own best-possible ladder (`ladder`, already
-    resolved by the caller via `tracking.marelo.entity_ladders` -- see the
-    note below on why this never calls `scoring.best_ladder` itself), `gain`
-    diluted by the scope's `n` slots -- the same recompute
-    `server/ranks_api.py::_score_scope` runs inline for the user's own
-    breakdown, because `scopes.aggregate` only sees scores (not ladders) and
-    grades tier/division/gain against the FULL rank table, which can name a
-    tier a ragged ladder does not define.
-
-    Deriving a LADDER here (rather than taking a pre-graded score and
-    classifying it) would trip `tests/test_single_source.py`'s "a sheet
-    entry's time graded against a standards ladder" guard, which reserves
-    `scoring.best_ladder` to `library/ratings.py` inside the whole library/
-    zone -- a second file in this zone naming it looks exactly like a
-    competing grading path from the outside, whether or not it actually is
-    one. `tracking.marelo.entity_ladders` gets the SAME pointwise-best
-    ladder from OUTSIDE the guarded zone (it is the function `_score_scope`
-    itself already depends on), so callers batch it once per request
-    instead of each row deriving its own copy."""
-    defined = scoring.defined_tiers(ladder)
-    if score is None:
-        return {"tier": None, "division": None,
-                "next_tier": scopes.UNPRACTICED_TARGET_TIER,
-                "next_division": None,
-                "gain": scopes.gain_for(None, n, defined)}
-    tier, division = scoring.division_for(score, defined)
-    next_step = scoring.division_progress(score, defined)
-    return {"tier": tier, "division": division,
-            "next_tier": next_step["next_tier"],
-            "next_division": next_step["next_division"],
-            "gain": scopes.gain_for(score, n, defined)}
 
 
 def runner_breakdown(cache: RunnerScoreCache, library, adoptions_rows: dict,
@@ -227,8 +209,9 @@ def runner_breakdown(cache: RunnerScoreCache, library, adoptions_rows: dict,
     for entity in agg["entities"]:
         key = entity["key"]
         ladder = ladders.get(key, {})
-        graded = _classify(ladder, entity["score"], agg["n"])
-        you_graded = _classify(ladder, you_scores.get(key), agg["n"])
+        graded = marelo_bridge.classify_entity(ladder, entity["score"], agg["n"])
+        you_graded = marelo_bridge.classify_entity(
+            ladder, you_scores.get(key), agg["n"])
         entities.append({
             "key": key, "label": label_of(key), "score": entity["score"],
             "tier": graded["tier"], "division": graded["division"],
