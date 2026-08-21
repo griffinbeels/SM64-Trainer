@@ -1,14 +1,15 @@
-"""The two import doors, RENDERED.
+"""Every import door, RENDERED.
 
 Unit tests plus `node --check` shipped an invisible feature in this project
-once, so a UI change is not verified until the page draws it. Both of these
-were mutation-proved by pointing their mount at nothing and watching them go
-red.
+once, so a UI change is not verified until the page draws it. These were
+mutation-proved by pointing their mount at nothing and watching them go red.
 
 Deliberately NOT tested here: the live sheet download. It is 7 MB over the
 network and belongs to a document nobody here controls — the failure path is
 covered by `tests/test_import_api.py`, which fakes the three ways a fetch can
-fail, and the snapshot path is covered there end to end.
+fail, and the snapshot path is covered there end to end. The LINK door's fetch
+is replaced in the SERVER instead (the fixture runs in-process), so what is
+driven there is the panel rather than Google.
 """
 import sys
 from pathlib import Path
@@ -42,6 +43,17 @@ WAIT = """
 })()
 """
 
+# The four doors live behind one chip row now, and nothing is open by default:
+# four stacked panels pushed Display and Sessions most of a drawer away.
+OPEN_DOOR = """
+(() => {
+  const chip = [...document.querySelectorAll('.importsection-doors .chip')]
+    .find((candidate) => candidate.textContent.trim() === 'LABEL');
+  if (chip) chip.click();
+  return !!chip;
+})()
+"""
+
 OPEN_SETTINGS = """
 (() => {
   const button = [...document.querySelectorAll('button')].find(
@@ -72,6 +84,13 @@ SET_BOX = """
 
 def wait(page, selector):
     return page.evaluate(WAIT.replace("SEL", selector))
+
+
+def open_door(page, label):
+    """Click the chip naming one import door, and confirm it was there."""
+    assert page.evaluate(OPEN_DOOR.replace("LABEL", label)), (
+        f"no import door called {label!r} — the chip row names the ways in, "
+        "so a missing one is a door nobody can reach")
 
 
 def settle(page, ms=300):
@@ -182,6 +201,8 @@ def test_the_sheet_picker_fills_from_the_bundled_snapshot(tmp_path):
             assert wait(page, ".practice-page")
             settle(page, 1500)
             assert page.evaluate(OPEN_SETTINGS)
+            assert wait(page, ".importsection")
+            open_door(page, "Ultimate Sheet")
             assert wait(page, ".importsheet"), (
                 "no import panel in the settings drawer")
             settle(page, 800)
@@ -237,6 +258,8 @@ def test_the_paste_door_previews_without_writing_anything(tmp_path):
             assert wait(page, ".practice-page")
             settle(page, 1500)
             assert page.evaluate(OPEN_SETTINGS)
+            assert wait(page, ".importsection")
+            open_door(page, "Paste a list")
             assert wait(page, ".importpaste"), "no paste panel in the drawer"
             settle(page, 500)
             assert page.evaluate(TYPE_BLOCK.replace("BLOCK", PASTE_BLOCK))
@@ -268,6 +291,8 @@ def test_a_line_it_could_not_read_keeps_its_number_and_its_text(tmp_path):
             assert wait(page, ".practice-page")
             settle(page, 1500)
             assert page.evaluate(OPEN_SETTINGS)
+            assert wait(page, ".importsection")
+            open_door(page, "Paste a list")
             assert wait(page, ".importpaste")
             settle(page, 500)
             page.evaluate(TYPE_BLOCK.replace("BLOCK", PASTE_BLOCK))
@@ -320,6 +345,8 @@ def test_a_livesplit_file_previews_and_names_what_did_not_land(tmp_path):
             assert wait(page, ".practice-page")
             settle(page, 1500)
             assert page.evaluate(OPEN_SETTINGS)
+            assert wait(page, ".importsection")
+            open_door(page, "LiveSplit file")
             assert wait(page, ".importlivesplit"), "no LiveSplit panel"
             settle(page, 500)
             before = _segment_pb_count(base)
@@ -347,6 +374,71 @@ def test_a_livesplit_file_previews_and_names_what_did_not_land(tmp_path):
                 "with no attempt behind it has to earn a card, same as a star")
 
 
+def test_a_sheet_link_reads_previews_and_names_the_rows_that_did_not_land(
+        tmp_path, monkeypatch):
+    """The fetch is replaced in the SERVER (the fixture runs in-process), so
+    what is driven here is the panel rather than Google."""
+    from library_fixture import build_workbook
+
+    import sm64_events.server.import_api as import_api
+    personal = build_workbook({
+        "Times": {
+            (1, 1): {"text": "Star"}, (1, 2): {"text": "Time"},
+            (2, 1): {"text": "BoB 1"}, (2, 2): {"text": "0:23.57"},
+            (3, 1): {"text": "WF 6"}, (3, 2): {"text": "8.86"},
+            (5, 1): {"text": "Chungus Skip"}, (5, 2): {"text": "12.00"},
+        },
+    })
+    monkeypatch.setattr(import_api, "_fetch_bytes", lambda _url: personal)
+
+    with serve_ui(tmp_path / "link.db") as base:
+        with driver.get_driver().launch(headless=True) as page:
+            page.goto(base)
+            assert wait(page, ".practice-page")
+            settle(page, 1500)
+            assert page.evaluate(OPEN_SETTINGS)
+            assert wait(page, ".importsection")
+            open_door(page, "My own sheet")
+            assert wait(page, ".importlink"), "no sheet-link panel"
+            settle(page, 500)
+            before = _star_pb_count(base)
+
+            page.evaluate("""
+              (() => {
+                const box = document.querySelector('.importlink-url');
+                const setter = Object.getOwnPropertyDescriptor(
+                  window.HTMLInputElement.prototype, 'value').set;
+                setter.call(box,
+                  "https://docs.google.com/spreadsheets/d/1J20aivGnvLlAuyRIMM/edit");
+                box.dispatchEvent(new Event('input', {bubbles: true}));
+              })()
+            """)
+            settle(page, 300)
+            page.evaluate(
+                "document.querySelector('.importlink .primary-button').click()")
+            settle(page, 1800)
+            state = page.evaluate("""
+              (() => {
+                const s = document.querySelector('.importlink');
+                return {button: s.querySelector('.primary-button').textContent.trim(),
+                        rejects: [...s.querySelectorAll('.importpaste-rejects li')]
+                          .map((li) => li.querySelector('code').textContent)};
+              })()
+            """)
+            assert state["button"] == "Import 2", state
+            assert _star_pb_count(base) == before, (
+                "reading the sheet WROTE something — it must preview first")
+            # A row that could not be read names its TAB and its ROW: "row 5
+            # of Times" is advice somebody can follow.
+            assert any(text.startswith("Times!5:") for text in state["rejects"]), \
+                state
+
+            page.evaluate(
+                "document.querySelector('.importlink .primary-button').click()")
+            settle(page, 1800)
+            assert _star_pb_count(base) == before + 2
+
+
 def _segment_pb_count(base):
     import json
     import urllib.request
@@ -363,16 +455,18 @@ def _star_pb_count(base):
     return sum(1 for s in view["stars"] if (s.get("pb") or {}).get("igt"))
 
 
-def test_the_import_panel_sits_above_the_display_tuning_links(tmp_path):
+def test_the_import_section_sits_above_display_and_stays_one_section(tmp_path):
     """A one-off setup gesture a new arrival makes on their first day must not
-    be below every tuning link in the drawer."""
+    be below every tuning link in the drawer — and the four doors must stay
+    ONE section, because as four they pushed Display and Sessions most of a
+    drawer away. A control you have to scroll to hunt for gets redesigned."""
     with serve_ui(tmp_path / "importplace.db") as base:
         with driver.get_driver().launch(headless=True) as page:
             page.goto(base)
             assert wait(page, ".practice-page")
             settle(page, 1500)
             assert page.evaluate(OPEN_SETTINGS)
-            assert wait(page, ".importsheet")
+            assert wait(page, ".importsection")
             settle(page, 400)
             order = page.evaluate("""
               (() => {
@@ -380,10 +474,24 @@ def test_the_import_panel_sits_above_the_display_tuning_links(tmp_path):
                 const sections = [...drawer.querySelectorAll('.settings-section')];
                 const heads = sections.map(
                   (s) => (s.querySelector('h3') || {}).textContent || '');
-                return {import: heads.findIndex((h) => /Ultimate Sheet/.test(h)),
-                        display: heads.findIndex((h) => /^Display$/.test(h))};
+                return {import: heads.findIndex((h) => /Bring in times/.test(h)),
+                        display: heads.findIndex((h) => /^Display$/.test(h)),
+                        sections: document.querySelectorAll(
+                          '.settings-drawer .importsection').length,
+                        doors: document.querySelectorAll(
+                          '.importsection-doors .chip').length,
+                        openDoors: document.querySelectorAll(
+                          '.importsection .importdoor').length};
               })()
             """)
             assert order["import"] >= 0 and order["display"] >= 0, order
             assert order["import"] < order["display"], (
-                "the import panel sank below Display and its tuning links")
+                "the import section sank below Display and its tuning links")
+            assert order["sections"] == 1, (
+                f"the doors have gone back to separate sections: {order}")
+            assert order["doors"] == 4, (
+                f"a door is missing from the chip row: {order}")
+            assert order["openDoors"] == 0, (
+                "a door is open before anything was picked — the resting "
+                "state has to be one heading and one row of chips, or the "
+                "drawer is long again")

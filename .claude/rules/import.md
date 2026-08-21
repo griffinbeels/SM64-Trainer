@@ -1,8 +1,16 @@
 ---
 paths:
   - "src/sm64_events/tracking/importing.py"
+  - "src/sm64_events/tracking/import_names.py"
+  - "src/sm64_events/tracking/livesplit.py"
   - "src/sm64_events/library/import_runner.py"
+  - "src/sm64_events/library/sheet_link.py"
   - "src/sm64_events/server/import_api.py"
+  - "tests/test_livesplit.py"
+  - "tests/test_sheet_link.py"
+  - "src/sm64_events/ui/components/importpaste.js"
+  - "src/sm64_events/ui/components/importlivesplit.js"
+  - "src/sm64_events/ui/components/importlink.js"
   - "tests/test_importing.py"
   - "tests/test_import_*.py"
   - "tests/test_service_import.py"
@@ -14,11 +22,36 @@ paths:
 # Bringing in a time the trainer never watched — where to change what
 
 An **imported time** is a personal best recorded with no attempt behind it. Its
-own zone rather than three rows across three rule files, because the whole point
-is that the five imagined sources (typed by hand, an Ultimate Sheet column, a
-runner's own xcam sheet, a paste template, LiveSplit golds) are five front doors
-onto ONE back room — a reader who finds only the door they are standing in front
-of will build the sixth one differently.
+own zone rather than rows scattered across three rule files, because the whole
+point is that the FIVE doors are one back room — a reader who finds only the
+door they are standing in front of will build the sixth one differently.
+
+| Door | Reads | Lands on |
+|---|---|---|
+| By hand, on a star's card | one time, the card's own strategy | that star, IGT |
+| A runner's Ultimate Sheet column | the live sheet | stars, IGT |
+| A pasted block | text, in the community's own names | stars and your own segments |
+| A LiveSplit `.lss` | each split's best-ever time | your own segments, RTA |
+| A link to your own spreadsheet | an Ultimate copy, or any grid | as the shape decides |
+
+Everything downstream of the candidate is shared: the improvement rule, the
+provenance, the version attribution, the watermark absorption, the undo. A
+sixth source means writing a parser that produces `ImportCandidate`s and
+nothing else.
+
+**The name resolver is what the sheet door never needed.** The sheet already
+speaks our vocabulary; every other source arrives as names a person wrote, so
+`tracking/import_names.py` answers "which star is `BoB 1`?" against the names
+already in play — the game's own star names, the abbreviations runners type,
+the sheet's target labels, and the segments built here. Precedence is add-order
+and star names go in FIRST, so nothing later can redirect a real one.
+
+**Your own segments can be imported onto; somebody else's id cannot.** A
+segment id resolved by NAME against this database is exactly what it says,
+while the Ultimate Sheet's segment rows carry ids from whichever machine
+scraped them — and a foreign id is worse than a missing one, because it very
+likely exists here too and names a different movement. Segments are RTA-only,
+so a segment candidate on the IGT clock is refused rather than re-clocked.
 
 | To change... | Edit |
 |---|---|
@@ -129,14 +162,47 @@ as anything that looked like a parse error. When a sheet-reading path is
 changed, run it against the LIVE document once — `tools/scrape_sheet.py`
 exists for exactly that, and its "unknown:" list is the deliverable.
 
+## A time with no strategy lands, and that reverses an earlier rule
+
+`decide` refused a strategy-less candidate until the paste door existed. That
+was right when every source had one — the sheet always does, and the card's
+control uses its own picker — and wrong the moment people could type. Most
+people writing down a gold write the star and the time and nothing else, so
+refusing those rejects the bulk of a real paste.
+
+The store already allows it: such a row shows a time and never GRADES, because
+`views.current_pbs_by_strat` cannot attribute it, and `tracking/caveats.py`'s
+`unattributed` mark is what says so where the click lands. It is compared
+against the strategy-blind best (`current_pb` with no `strat_tag` clause), so
+it has to beat everything to land — and counted as `without_strategy` in every
+summary, so it is never silent. Stored as NULL, never `""`: one spelling of an
+absence.
+
+## Two numbers that are measurements rather than choices
+
+**A LiveSplit gold ROUNDS, it does not truncate.** LiveSplit writes seven
+fractional digits from floating-point arithmetic, so a real 1:06.83 is on disk
+as `00:01:06.8299999`. Truncating gives 1:06.82 — a centisecond FASTER than the
+run, the one direction an import must never move a number.
+
+**A typed centisecond is snapped UP.** Only 30 of every 100 values can appear
+on the timer, so a hand-typed time has a 70% chance of naming one that cannot;
+`core/timefmt.frame_at_or_after` rounds up, which is the conservative
+direction. See the snap section below for why the FIELD has to show it too.
+
 ## What is deliberately not built yet
 
-A paste template, a runner's own xcam sheet with format detection, and
-LiveSplit segment golds. Each becomes a parser producing `ImportCandidate`s;
-none of them needs the record, the improvement rule, the version attribution or
-the watermark handling rebuilt — which is the point of the shape.
+All five doors from the task file are built. What is genuinely still open:
 
-Also not built: a way to say which ROM a hand-typed time was set on. It sends
-no version, so it grades on whichever is running, exactly as every time stored
-before this feature does. Stamping the running version onto a time he set years
-ago would assert something he never told us.
+  * **a way to say which ROM a hand-typed or pasted time was set on.** They
+    send no version, so they grade on whichever is running, exactly as every
+    time stored before this feature does. Stamping the running version onto a
+    time he set years ago would assert something he never told us. The SHEET
+    door sends one because the sheet actually says.
+  * **a per-line strategy for a LiveSplit file.** One strategy is named for
+    the whole file, because a `.lss` has nowhere to put a per-split one.
+  * **a tab picker for a linked sheet.** Every tab is read and merged; a sheet
+    with a "practice" tab and an "old times" tab cannot yet import only one.
+  * **a non-Google sheet host.** Only `docs.google.com` is fetched, and that is
+    a deliberate restriction rather than an omission — the SERVER does the
+    fetching, so any-URL means any URL reachable from this machine.

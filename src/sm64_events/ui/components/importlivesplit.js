@@ -81,7 +81,7 @@ export function ImportLiveSplit({ onDone }) {
   }
 
   const rejected = (preview && preview.rejected) || [];
-  return html`<section class="settings-section importlivesplit">
+  return html`<div class="importdoor importlivesplit">
     <div class="settings-section-head">
       <div>
         <h3>Import your LiveSplit golds</h3>
@@ -128,5 +128,5 @@ export function ImportLiveSplit({ onDone }) {
           }}>
         <${Icon} name="trash" size=${13} />${" "}Undo this import
       </button>`}
-  </section>`;
+  </div>`;
 }

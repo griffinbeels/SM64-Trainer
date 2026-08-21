@@ -1038,6 +1038,18 @@
   /* The file picker keeps the browser's own control: it is the one widget
      every OS already draws a familiar dialog for, and a styled stand-in would
      buy nothing but a second thing to keep working. */
+  /* FOUR doors, ONE section. Stacked as four sections they pushed Display and
+     Sessions most of a drawer away, and a control you have to scroll to hunt
+     for gets redesigned rather than scrolled to. Nothing is open by default,
+     so the resting state is a heading and a row of chips. */
+  .importsection-doors{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .importsection-door{margin-top:10px;padding-top:10px;
+    border-top:1px solid var(--hairline,#243044)}
+  .importdoor .settings-section-head{margin-bottom:2px}
+  .importdoor h3{font-size:13px}
+  .importlink-url{flex:1 1 220px;min-width:0;box-sizing:border-box;
+    background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6e9ee;
+    padding:4px 8px;font-size:12px}
   .importlivesplit-file{flex:1 1 200px;min-width:0;color:var(--text-dim,#8b98a6);
     font-size:12px}
   .importlivesplit-file::file-selector-button{margin-right:8px;padding:3px 10px;

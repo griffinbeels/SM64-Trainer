@@ -99,7 +99,7 @@ export function ImportSheet({ onDone }) {
     }
   }
 
-  return html`<section class="settings-section importsheet">
+  return html`<div class="importdoor importsheet">
     <div class="settings-section-head">
       <div>
         <h3>Import from the Ultimate Sheet</h3>
@@ -140,5 +140,5 @@ export function ImportSheet({ onDone }) {
     ${phase === "error" && html`<p class="settings-note is-bad">${error}</p>`}
     <p class="settings-note">Importing again later costs nothing: a time only
       lands when it beats the best you already hold for that star and strategy.</p>
-  </section>`;
+  </div>`;
 }

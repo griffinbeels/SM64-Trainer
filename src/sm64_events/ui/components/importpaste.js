@@ -91,7 +91,7 @@ export function ImportPaste({ onDone }) {
   const shown = phase === "done" ? result : preview;
   const rejected = (shown && shown.rejected) || [];
 
-  return html`<section class="settings-section importpaste">
+  return html`<div class="importdoor importpaste">
     <div class="settings-section-head">
       <div>
         <h3>Paste times you have written down</h3>
@@ -146,5 +146,5 @@ export function ImportPaste({ onDone }) {
           }}>
         <${Icon} name="trash" size=${13} />${" "}Undo this import
       </button>`}
-  </section>`;
+  </div>`;
 }

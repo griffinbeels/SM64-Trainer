@@ -16,14 +16,18 @@ the bundled snapshot, which is what lets the picker fill with no network wait
 while the import itself reads a fresh fetch.
 """
 import logging
+import urllib.request
 import xml.etree.ElementTree as ElementTree
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from sm64_events.library import sheet_link
+from sm64_events.library.build import build
 from sm64_events.library.import_runner import candidates_for
-from sm64_events.library.source import fetch
+from sm64_events.library.source import FETCH_TIMEOUT_S, fetch
 from sm64_events.server.ranks_api import absorb_after_regrade
 from sm64_events.tracking import import_names, livesplit
 from sm64_events.tracking.importing import ImportCandidate
@@ -33,6 +37,21 @@ _log = logging.getLogger("sm64.import")
 MANUAL_SOURCE = "manual"
 PASTE_SOURCE = "paste"
 LIVESPLIT_SOURCE = "livesplit"
+LINK_SOURCE = "link"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _fetch_bytes(url: str) -> bytes:
+    """One GET, with the same timeout the Ultimate Sheet's own fetch uses.
+
+    A separate function so the route can hand it to a threadpool: a sheet is
+    megabytes, and the poller shares this process — a blocked event loop is a
+    dropped star grab."""
+    with urllib.request.urlopen(url, timeout=FETCH_TIMEOUT_S) as reply:
+        return reply.read()
 
 
 class ManualImportBody(BaseModel):
@@ -47,6 +66,14 @@ class SheetImportBody(BaseModel):
     # Fetch the LIVE sheet first, so what lands is his most recent entry
     # rather than whatever we last bundled (his instruction, 2026-08-20).
     refresh: bool = True
+
+
+class LinkImportBody(BaseModel):
+    url: str
+    # Only needed when the link turns out to be a copy of the Ultimate Sheet:
+    # that shape has a column per runner and no way to guess which is yours.
+    runner: str = ""
+    dry_run: bool = False
 
 
 class PasteImportBody(BaseModel):
@@ -127,6 +154,62 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
                     "rejected": rejected, "dry_run": True}
         summary = await land(PASTE_SOURCE, candidates)
         return {**summary, "rejected": rejected, "dry_run": False}
+
+    @router.post("/link")
+    async def import_link(body: LinkImportBody):
+        """Import from a link to somebody's own spreadsheet.
+
+        The workbook says which shape it is: a copy of the Ultimate Sheet is
+        read by the real reader and a named runner's column extracted; any
+        other grid becomes lines and goes through the paste parser, so a
+        personal `star | time | strat` sheet needs no format of its own.
+
+        Only Google Sheets links are fetched — the SERVER does the fetching,
+        so "any URL" would mean "any URL reachable from this machine"."""
+        try:
+            url = sheet_link.export_url(sheet_link.sheet_id_from(body.url))
+        except ValueError as err:
+            raise HTTPException(422, str(err)) from err
+        try:
+            data = await run_in_threadpool(_fetch_bytes, url)
+        except Exception as err:                       # noqa: BLE001
+            _log.warning("sheet link fetch failed: %r", err)
+            raise HTTPException(
+                503, f"could not read that sheet: {err}. Is it shared with "
+                     "'anyone with the link'?") from err
+
+        shape = "grid"
+        if sheet_link.is_ultimate_shaped(data):
+            shape = "ultimate"
+            if not body.runner:
+                raise HTTPException(
+                    422, "that is a copy of the Ultimate Sheet — say which "
+                         "runner's column to take")
+            payload = build(data, _now_iso(), overrides)
+            candidates, dropped = candidates_for(payload, body.runner)
+            # The drop TALLY rather than a row apiece: this path counts by
+            # kind (`library/import_runner.py`), so inventing one line per
+            # dropped row would be reporting detail we do not have.
+            rejected = [{"line": 0, "text": f"{count} {kind}", "reason": kind}
+                        for kind, count in sorted(dropped.items()) if count]
+        else:
+            candidates, unresolved = sheet_link.candidates_from_grid(
+                data, build_catalog(), timer_mode_for=timer_mode_for)
+            rejected = [{"line": item.line, "text": item.text,
+                         "reason": item.reason} for item in unresolved]
+
+        if body.dry_run:
+            try:
+                summary = service.preview_import(candidates)
+            except ValueError as err:
+                raise HTTPException(422, str(err)) from err
+            except RuntimeError as err:
+                raise HTTPException(503, str(err)) from err
+            return {"source": LINK_SOURCE, **summary, "shape": shape,
+                    "rejected": rejected, "dry_run": True}
+        summary = await land(LINK_SOURCE, candidates)
+        return {**summary, "shape": shape, "rejected": rejected,
+                "dry_run": False}
 
     @router.post("/livesplit")
     async def import_livesplit(request: Request,

@@ -73,11 +73,16 @@ you can click to jump straight to an attempt — or open its replay.
 a pipe entry, a Bowser fight, a castle movement) and it becomes a first-class
 practice target with the same history, PBs, ranks and replays a star gets.
 
-**Bring your times with you.** Practised for years before finding this? Type a
-time straight onto any star's card and it becomes your PB — or, if you have a
-column on the Ultimate Sheet, pick your name in Settings and take the whole
-thing in one click. A time only lands when it beats the best you already hold
-for that star and strategy, so importing twice costs nothing.
+**Bring your times with you.** Practised for years before finding this? Five
+ways in, all in Settings except the first: type a time straight onto any star's
+card; pick your name if you have a column on the Ultimate Sheet; paste a block
+of times in whatever form you already have them (`BoB 1  0:23.57`, tabs or
+commas, the sheet's own names all work); hand it your LiveSplit splits file and
+it takes the golds onto the segments you have built; or paste a link to your own
+spreadsheet and it reads that. A time only lands when it beats the best you
+already hold for that star and strategy, so importing twice costs nothing — and
+every import can be undone in one click. Anything it could not read is listed
+back at you, line by line, rather than quietly skipped.
 
 **Ranks.** Every attempt, banner and route step wears a rank badge, graded
 against community standards — **per strategy**, so a fast time on one strat
