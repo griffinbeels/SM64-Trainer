@@ -161,14 +161,21 @@ def pb_backed_stars(pb_rows: list[dict]) -> set:
     THE door for "he has a time on this star even though he has never played
     it here" — an IMPORTED time is exactly that shape, and both surfaces that
     would otherwise miss it (the picker's rank map, the lifetime practice log)
-    ask this one question rather than each deciding what counts.
-
-    Segment rows are excluded because nothing can import one: a segment id is
-    local to the database that assigned it (`library/import_runner.py`), so a
-    segment best always came from a run recorded here and already has its
-    attempts."""
+    ask this one question rather than each deciding what counts."""
     return {(row["course_id"], row["star_id"]) for row in pb_rows
             if row["segment_id"] is None and row["course_id"] is not None}
+
+
+def pb_backed_segments(pb_rows: list[dict]) -> set:
+    """`{segment_id}` for every segment holding a visible saved best.
+
+    The same question as `pb_backed_stars`, for the other kind — rule 11, and
+    it stopped being hypothetical the day LiveSplit golds could land. A gold
+    is a real-time stretch of the run matched by NAME against a movement built
+    here, so a segment can now hold a best with no attempt behind it exactly
+    as a star can, and it has to earn a card the same way."""
+    return {row["segment_id"] for row in pb_rows
+            if row["segment_id"] is not None}
 
 
 def _attempt_json(a, pbs, clock, ranks=None, rank_clock=None, rank_ek=None):
@@ -673,8 +680,11 @@ def build_entity_ranks(db, service) -> dict[str, dict]:
     # above cannot see it — and this map is what the picker reads to answer
     # "how good am I at this star". Absence still means never practised: a
     # star with neither attempts nor a saved best stays out.
-    for (course_id, star_id) in pb_backed_stars(db.pbs()):
+    pb_rows_for_candidates = db.pbs()
+    for (course_id, star_id) in pb_backed_stars(pb_rows_for_candidates):
         attempts_by_star.setdefault((course_id, star_id), [])
+    for segment_id in pb_backed_segments(pb_rows_for_candidates):
+        attempts_by_seg.setdefault(segment_id, [])
 
     candidates = [
         (entity_key(course_id, star_id), history, (course_id, star_id))
@@ -1312,6 +1322,13 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     if scope == "lifetime":
         for star_key in pb_backed_stars(pb_rows):
             seen.setdefault(star_key, None)
+        # Both kinds, rule 11. `hundred_coin_ids` are excluded for the same
+        # reason the attempt pass above excludes them: those attempts are
+        # reattributed to the star, so a segment section for one would be a
+        # second card for the same run.
+        for segment_id in pb_backed_segments(pb_rows):
+            if segment_id not in hundred_coin_ids:
+                seen_segs.setdefault(segment_id, None)
     if service.target and service.target[0] == "star" \
             and service.target[1:] not in seen:
         seen[service.target[1:]] = None

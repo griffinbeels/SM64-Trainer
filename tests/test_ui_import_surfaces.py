@@ -290,6 +290,71 @@ def test_a_line_it_could_not_read_keeps_its_number_and_its_text(tmp_path):
             assert row["reason"].strip(), "no reason given for the rejection"
 
 
+def test_a_livesplit_file_previews_and_names_what_did_not_land(tmp_path):
+    """The file picker is the one control script cannot set, so this is the
+    only way to reach the feature at all — and it exists because a gold is a
+    real-time split, which is why a star among them has to be named back."""
+    splits = tmp_path / "sample.lss"
+    with serve_ui(tmp_path / "livesplit.db") as base:
+        import json
+        import urllib.request
+        with urllib.request.urlopen(f"{base}/api/segments") as reply:
+            rows = json.loads(reply.read())
+        names = [row["name"] for row in
+                 (rows if isinstance(rows, list)
+                  else rows.get("segments", []))][:2]
+        segments = "".join(
+            f"<Segment><Name>{name}</Name><BestSegmentTime>"
+            f"<RealTime>00:00:{10 + index:02d}.5000000</RealTime>"
+            "</BestSegmentTime></Segment>"
+            for index, name in enumerate(names))
+        splits.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?><Run version="1.7.0">'
+            f"<Segments>{segments}"
+            "<Segment><Name>BoB 1</Name><BestSegmentTime>"
+            "<RealTime>00:00:23.5700000</RealTime></BestSegmentTime>"
+            "</Segment></Segments></Run>", encoding="utf-8")
+
+        with driver.get_driver().launch(headless=True) as page:
+            page.goto(base)
+            assert wait(page, ".practice-page")
+            settle(page, 1500)
+            assert page.evaluate(OPEN_SETTINGS)
+            assert wait(page, ".importlivesplit"), "no LiveSplit panel"
+            settle(page, 500)
+            before = _segment_pb_count(base)
+
+            page.set_input_files(".importlivesplit-file", str(splits))
+            settle(page, 1500)
+            state = page.evaluate("""
+              (() => {
+                const s = document.querySelector('.importlivesplit');
+                return {button: (s.querySelector('.primary-button')||{}).textContent,
+                        rejects: [...s.querySelectorAll('.importpaste-rejects li')]
+                          .map((li) => li.querySelector('code').textContent)};
+              })()
+            """)
+            assert state["button"].strip() == "Import 2", state
+            assert state["rejects"] == ["BoB 1"], state
+            assert _segment_pb_count(base) == before, (
+                "picking a file WROTE something — it must preview first")
+
+            page.evaluate("document.querySelector("
+                          "'.importlivesplit .primary-button').click()")
+            settle(page, 1500)
+            assert _segment_pb_count(base) == before + 2, (
+                "the golds did not reach the practice log — a segment best "
+                "with no attempt behind it has to earn a card, same as a star")
+
+
+def _segment_pb_count(base):
+    import json
+    import urllib.request
+    with urllib.request.urlopen(f"{base}/api/session?scope=lifetime") as reply:
+        view = json.loads(reply.read())
+    return sum(1 for s in view["segments"] if (s.get("pb") or {}).get("rta"))
+
+
 def _star_pb_count(base):
     import json
     import urllib.request

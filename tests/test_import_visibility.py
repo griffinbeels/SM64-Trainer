@@ -75,6 +75,36 @@ def test_the_picker_ranks_a_star_he_has_only_imported(tmp_path):
     assert ranked["star:1:0"]["rank"] == "Mario"
 
 
+def an_imported_segment_pb(db):
+    segment_id = db.segment_defs()[0]["id"]
+    db.insert_pb(course_id=None, star_id=None, segment_id=segment_id,
+                 strat_tag="Standard", timer_mode="rta", frames=360,
+                 attempt_id=None, saved_utc="2026-08-21T00:00:00Z",
+                 imported_from="livesplit")
+    return segment_id
+
+
+def test_a_segment_with_only_an_imported_gold_gets_a_lifetime_section(tmp_path):
+    """Rule 11: a LiveSplit gold lands on a segment with no attempt behind
+    it, exactly as a sheet time lands on a star, so it earns a card the same
+    way. Found by driving the real drawer — the UI said "3 golds added" and
+    the practice log showed none of them."""
+    db, svc = make(tmp_path)
+    segment_id = an_imported_segment_pb(db)
+    view = build_session_view(db, svc, "igt", scope="lifetime")
+    section = next(s for s in view["segments"] if s["segment_id"] == segment_id)
+    assert section["pb"]["rta"]["frames"] == 360
+    assert section["attempts"] == []
+
+
+def test_the_session_view_stays_a_record_of_the_session_for_segments_too(
+        tmp_path):
+    db, svc = make(tmp_path)
+    segment_id = an_imported_segment_pb(db)
+    view = build_session_view(db, svc, "igt", scope="session")
+    assert not [s for s in view["segments"] if s["segment_id"] == segment_id]
+
+
 def test_a_star_with_neither_attempts_nor_a_pb_stays_absent(tmp_path):
     """Absence is the picker's 'never practised', so a corpus-wide listing
     here would erase that signal."""

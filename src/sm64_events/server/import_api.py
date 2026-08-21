@@ -16,21 +16,23 @@ the bundled snapshot, which is what lets the picker fill with no network wait
 while the import itself reads a fresh fetch.
 """
 import logging
+import xml.etree.ElementTree as ElementTree
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from sm64_events.library.import_runner import candidates_for
 from sm64_events.library.source import fetch
 from sm64_events.server.ranks_api import absorb_after_regrade
-from sm64_events.tracking import import_names
+from sm64_events.tracking import import_names, livesplit
 from sm64_events.tracking.importing import ImportCandidate
 
 _log = logging.getLogger("sm64.import")
 
 MANUAL_SOURCE = "manual"
 PASTE_SOURCE = "paste"
+LIVESPLIT_SOURCE = "livesplit"
 
 
 class ManualImportBody(BaseModel):
@@ -124,6 +126,45 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
             return {"source": PASTE_SOURCE, **summary,
                     "rejected": rejected, "dry_run": True}
         summary = await land(PASTE_SOURCE, candidates)
+        return {**summary, "rejected": rejected, "dry_run": False}
+
+    @router.post("/livesplit")
+    async def import_livesplit(request: Request,
+                               dry_run: bool = False,
+                               strategy: str = ""):
+        """A LiveSplit `.lss`, posted as the RAW request body.
+
+        Raw bytes rather than a multipart form for the reason
+        `server/compare_api.py`'s upload already gives: multipart would add
+        `python-multipart` to what the frozen exe ships, for one field.
+
+        Its golds are REAL-TIME stretches of the run, so they land on
+        segments the player built here, matched by name — never on a star,
+        whose bests are Usamune IGT."""
+        data = await request.body()
+        if not data:
+            raise HTTPException(422, "no splits file in the request body")
+        try:
+            candidates, unresolved = livesplit.candidates_for(
+                data, build_catalog(), strategy=strategy or None)
+        except ElementTree.ParseError as err:
+            # "Nothing landed" and "that was not a splits file" look identical
+            # from the outside, and only one is worth acting on.
+            raise HTTPException(
+                422, f"that does not read as a LiveSplit splits file: {err}"
+            ) from err
+        rejected = [{"line": item.line, "text": item.text,
+                     "reason": item.reason} for item in unresolved]
+        if dry_run:
+            try:
+                summary = service.preview_import(candidates)
+            except ValueError as err:
+                raise HTTPException(422, str(err)) from err
+            except RuntimeError as err:
+                raise HTTPException(503, str(err)) from err
+            return {"source": LIVESPLIT_SOURCE, **summary,
+                    "rejected": rejected, "dry_run": True}
+        summary = await land(LIVESPLIT_SOURCE, candidates)
         return {**summary, "rejected": rejected, "dry_run": False}
 
     @router.post("/manual")
