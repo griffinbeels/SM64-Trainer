@@ -31,7 +31,6 @@ import argparse
 import io
 import json
 import shutil
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -41,8 +40,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from find_uilab import find_uilab                       # noqa: E402
-from what_happened import label_for, newest_event, open_readonly  # noqa: E402
-
 from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
 from sm64_events.core.paths import overlays_dir, server_port  # noqa: E402
 from sm64_events.inputs.overlay import (DEFAULT_CODEC, DEFAULT_VIDEO_FPS,
