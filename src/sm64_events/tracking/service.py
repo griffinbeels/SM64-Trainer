@@ -1961,25 +1961,18 @@ class TrackerService:
         here because scoring a scope is server-side and `tracking/` must not
         import `server/`.
         """
+        plan = self._plan_import(candidates)
         db = self._require_db()
-        own_segments = {definition["id"] for definition in db.segment_defs()}
-        for candidate in candidates:
-            self._check_importable(candidate, own_segments)
-
-        def current_frames(entity_key, strat_tag, timer_mode):
-            course_id, star_id, segment_id = _import_identity(entity_key)
-            row = db.current_pb(course_id, star_id, timer_mode,
-                                segment_id=segment_id, strat_tag=strat_tag)
-            return row["frames"] if row else None
-
-        plan = importing.decide(candidates, current_frames)
         saved = _iso(_now())
         for candidate, frames in plan.landing:
             course_id, star_id, segment_id = _import_identity(
                 candidate.entity_key)
             db.insert_pb(course_id=course_id, star_id=star_id,
                          segment_id=segment_id,
-                         strat_tag=candidate.strat_tag,
+                         # NULL, never the empty string: every reader tests
+                         # `if not strat` and a "" would be a second spelling
+                         # of the same absence.
+                         strat_tag=candidate.strat_tag or None,
                          timer_mode=candidate.timer_mode, frames=frames,
                          attempt_id=None, saved_utc=saved,
                          imported_from=source,
@@ -1989,6 +1982,38 @@ class TrackerService:
             await self.publish(Event(type="times_imported", frame=0,
                                      timestamp_utc=_now(), payload=payload))
         return payload
+
+    def _plan_import(self, candidates):
+        """Check every candidate, then decide what lands. Writes nothing.
+
+        Shared by `import_times` and `preview_import` deliberately: a preview
+        computed a second way would answer a different question from the one
+        the button then performs, which is the whole reason to trust it."""
+        db = self._require_db()
+        own_segments = {definition["id"] for definition in db.segment_defs()}
+        for candidate in candidates:
+            self._check_importable(candidate, own_segments)
+
+        def current_frames(entity_key, strat_tag, timer_mode):
+            course_id, star_id, segment_id = _import_identity(entity_key)
+            # An empty tag means NO strategy, and `current_pb` reads that as
+            # "do not restrict" — which is the right comparison for such a
+            # time: it can only be claimed by the strategy-blind best, so it
+            # must beat everything to land.
+            row = db.current_pb(course_id, star_id, timer_mode,
+                                segment_id=segment_id,
+                                strat_tag=strat_tag or None)
+            return row["frames"] if row else None
+
+        return importing.decide(candidates, current_frames)
+
+    def preview_import(self, candidates) -> dict:
+        """What `import_times` WOULD do with this batch, without doing it.
+
+        A pasted block is where a silent misread is expensive — a few hundred
+        lines, most of them resolving, a handful not — so the paste door shows
+        this before it writes anything."""
+        return dict(self._plan_import(candidates).summary)
 
     @staticmethod
     def _check_importable(candidate, own_segments) -> None:

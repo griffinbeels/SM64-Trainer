@@ -1016,7 +1016,25 @@
   .importsheet-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;
     margin-top:6px}
   .importsheet-row .search-select{flex:1 1 200px;min-width:0}
-  .importsheet-undo{display:inline-flex;align-items:center;justify-content:flex-start;gap:5px;margin-top:2px}
+  .importsheet-undo,.importpaste-undo{display:inline-flex;align-items:center;justify-content:flex-start;gap:5px;margin-top:2px}
+  /* Pasting a block of times. The box is the control, so it gets the room:
+     six rows is enough to see a paste took, without the drawer's other
+     sections being pushed out of reach. */
+  .importpaste-box{width:100%;box-sizing:border-box;margin-top:6px;resize:vertical;
+    min-height:96px;background:#0d1117;border:1px solid #30363d;border-radius:6px;
+    color:#e6e9ee;padding:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:12px;line-height:1.5;white-space:pre;overflow:auto}
+  .importpaste-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:6px}
+  .importpaste-summary{flex:1 1 160px;min-width:0}
+  /* The lines it could not read. He has to be able to FIND them, so each
+     keeps its own number and its own text rather than being counted away. */
+  .importpaste-rejects ul{list-style:none;margin:4px 0 0;padding:0;
+    max-height:180px;overflow-y:auto}
+  .importpaste-rejects li{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;
+    padding:2px 0;font-size:12px}
+  .importpaste-rejects code{color:#e6e9ee;white-space:pre-wrap;word-break:break-word}
+  .importpaste-lineno{color:var(--text-dim,#8b98a6);font-variant-numeric:tabular-nums;
+    min-width:2ch;text-align:right}
   .settings-note.is-ok{color:var(--good,#5bc97a)}
   .settings-note.is-bad{color:var(--bad,#e2686b)}
   .stdcell{display:inline-flex;align-items:center;gap:4px}

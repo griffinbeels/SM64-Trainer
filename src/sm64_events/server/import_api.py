@@ -24,11 +24,13 @@ from pydantic import BaseModel
 from sm64_events.library.import_runner import candidates_for
 from sm64_events.library.source import fetch
 from sm64_events.server.ranks_api import absorb_after_regrade
+from sm64_events.tracking import import_names
 from sm64_events.tracking.importing import ImportCandidate
 
 _log = logging.getLogger("sm64.import")
 
 MANUAL_SOURCE = "manual"
+PASTE_SOURCE = "paste"
 
 
 class ManualImportBody(BaseModel):
@@ -43,6 +45,14 @@ class SheetImportBody(BaseModel):
     # Fetch the LIVE sheet first, so what lands is his most recent entry
     # rather than whatever we last bundled (his instruction, 2026-08-20).
     refresh: bool = True
+
+
+class PasteImportBody(BaseModel):
+    text: str
+    # Read the block and report what it would do WITHOUT writing anything.
+    # A block of a few hundred lines is exactly where a silent misread is
+    # expensive, so the preview is the default the UI uses.
+    dry_run: bool = False
 
 
 def create_import_router(service, library=None, overrides=None) -> APIRouter:
@@ -67,6 +77,54 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
             # (his ruling, 2026-08-01).
             absorb_after_regrade(service)
         return summary
+
+    def build_catalog():
+        """Every name this instance will answer to, newest-specific LAST.
+
+        Order is precedence (`Catalog.add_target`, first writer wins): the
+        game's own star names cannot be redirected by a sheet label or by a
+        segment somebody named after a star."""
+        catalog = import_names.star_catalog()
+        if library is not None:
+            import_names.sheet_catalog(library.payload, catalog)
+        database = getattr(service, "db", None)
+        if database is not None:
+            import_names.segment_catalog(database.segment_defs(), catalog)
+        return catalog
+
+    def timer_mode_for(entity_key: str) -> str:
+        """Segments are RTA-only and stars follow the IGT clock. Read off the
+        standards store where there is one, so a per-entity clock override is
+        honoured rather than second-guessed."""
+        ranks = getattr(service, "ranks", None)
+        if ranks is not None:
+            return ranks.clock_for(entity_key)
+        return "rta" if entity_key.startswith("segment:") else "igt"
+
+    @router.post("/paste")
+    async def import_paste(body: PasteImportBody):
+        """A block of times, in whatever the player already has them written
+        in. `dry_run` reports what WOULD land, which is what the UI shows
+        before anything is written."""
+        candidates, unresolved = import_names.parse_block(
+            body.text, build_catalog(), timer_mode_for=timer_mode_for)
+        rejected = [{"line": item.line, "text": item.text,
+                     "reason": item.reason} for item in unresolved]
+        if body.dry_run:
+            # The SAME planner the real run uses (`_plan_import`), so the
+            # preview answers the question the button then performs — a second
+            # implementation of the arithmetic is exactly what would make it
+            # not worth trusting.
+            try:
+                summary = service.preview_import(candidates)
+            except ValueError as err:
+                raise HTTPException(422, str(err)) from err
+            except RuntimeError as err:
+                raise HTTPException(503, str(err)) from err
+            return {"source": PASTE_SOURCE, **summary,
+                    "rejected": rejected, "dry_run": True}
+        summary = await land(PASTE_SOURCE, candidates)
+        return {**summary, "rejected": rejected, "dry_run": False}
 
     @router.post("/manual")
     async def import_manual(body: ManualImportBody):

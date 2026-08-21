@@ -208,6 +208,96 @@ def test_the_sheet_picker_fills_from_the_bundled_snapshot(tmp_path):
                 "the runner this feature was built for is not in the list")
 
 
+PASTE_BLOCK = (
+    "# my golds\\n"
+    "BoB 1\\t0:23.57\\n"
+    "WF 6, 8.86, LJ\\n"
+    "Sneaky Chungus Skip\\t12.00\\n")
+
+TYPE_BLOCK = """
+(() => {
+  const box = document.querySelector('.importpaste-box');
+  if (!box) return false;
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLTextAreaElement.prototype, 'value').set;
+  setter.call(box, "BLOCK");
+  box.dispatchEvent(new Event('input', {bubbles: true}));
+  return true;
+})()
+"""
+
+
+def test_the_paste_door_previews_without_writing_anything(tmp_path):
+    """A few hundred lines is where a silent misread is expensive, so the
+    panel says what WOULD land before it lands any of it — and the preview
+    runs the same planner the button then performs."""
+    with serve_ui(tmp_path / "paste.db") as base:
+        with driver.get_driver().launch(headless=True) as page:
+            page.goto(base)
+            assert wait(page, ".practice-page")
+            settle(page, 1500)
+            assert page.evaluate(OPEN_SETTINGS)
+            assert wait(page, ".importpaste"), "no paste panel in the drawer"
+            settle(page, 500)
+            assert page.evaluate(TYPE_BLOCK.replace("BLOCK", PASTE_BLOCK))
+            settle(page, 300)
+
+            before = _star_pb_count(base)
+            page.evaluate(
+                "document.querySelector('.importpaste .primary-button').click()")
+            settle(page, 1500)
+            state = page.evaluate("""
+              (() => {
+                const s = document.querySelector('.importpaste');
+                return {button: s.querySelector('.primary-button').textContent.trim(),
+                        rejects: s.querySelectorAll('.importpaste-rejects li').length};
+              })()
+            """)
+            assert state["button"].startswith("Import"), state
+            assert state["rejects"] == 1, state
+            assert _star_pb_count(base) == before, (
+                "checking a block WROTE something — the preview is the whole "
+                "reason to trust the button")
+
+
+def test_a_line_it_could_not_read_keeps_its_number_and_its_text(tmp_path):
+    """He has to be able to FIND the line to fix it. A count would not do."""
+    with serve_ui(tmp_path / "pasterejects.db") as base:
+        with driver.get_driver().launch(headless=True) as page:
+            page.goto(base)
+            assert wait(page, ".practice-page")
+            settle(page, 1500)
+            assert page.evaluate(OPEN_SETTINGS)
+            assert wait(page, ".importpaste")
+            settle(page, 500)
+            page.evaluate(TYPE_BLOCK.replace("BLOCK", PASTE_BLOCK))
+            settle(page, 300)
+            page.evaluate(
+                "document.querySelector('.importpaste .primary-button').click()")
+            settle(page, 1500)
+            row = page.evaluate("""
+              (() => {
+                const li = document.querySelector('.importpaste-rejects li');
+                if (!li) return null;
+                return {number: li.querySelector('.importpaste-lineno').textContent,
+                        text: li.querySelector('code').textContent,
+                        reason: li.querySelector('.meta').textContent};
+              })()
+            """)
+            assert row, "the rejected line is not drawn at all"
+            assert row["number"] == "4", row
+            assert "Sneaky Chungus Skip" in row["text"], row
+            assert row["reason"].strip(), "no reason given for the rejection"
+
+
+def _star_pb_count(base):
+    import json
+    import urllib.request
+    with urllib.request.urlopen(f"{base}/api/session?scope=lifetime") as reply:
+        view = json.loads(reply.read())
+    return sum(1 for s in view["stars"] if (s.get("pb") or {}).get("igt"))
+
+
 def test_the_import_panel_sits_above_the_display_tuning_links(tmp_path):
     """A one-off setup gesture a new arrival makes on their first day must not
     be below every tuning link in the drawer."""

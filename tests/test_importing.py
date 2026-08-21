@@ -9,8 +9,13 @@ def _candidate(cs, strat="Standard", key="star:1:0"):
 def test_a_first_time_on_a_strategy_lands():
     plan = decide([_candidate(886)], lambda ek, strat, mode: None)
     assert [frames for _, frames in plan.landing] == [266]
-    assert plan.summary == {"found": 1, "imported": 1,
-                            "already_faster": 0, "unmappable": 0}
+    # The keys this test owns, not the whole dict: a summary another door
+    # extends would fail here at MERGE time for a reason unrelated to the rule
+    # under test.
+    assert plan.summary["found"] == 1
+    assert plan.summary["imported"] == 1
+    assert plan.summary["already_faster"] == 0
+    assert plan.summary["unmappable"] == 0
 
 
 def test_a_slower_time_is_kept_out_and_counted():
@@ -54,10 +59,23 @@ def test_an_unreachable_centisecond_rounds_up_never_down():
     assert cs_of_frame(frames) == 1503
 
 
-def test_a_candidate_with_no_strategy_is_unmappable():
+def test_a_time_with_no_strategy_LANDS_and_is_counted():
+    """Refused until the paste door existed, when every source always had a
+    strategy. Most people writing down a gold write the star and the time and
+    nothing else, and refusing those would reject the bulk of a real paste —
+    so it lands, and the count is what keeps it from being silent."""
     plan = decide([_candidate(886, strat="")], lambda ek, strat, mode: None)
+    assert [frames for _, frames in plan.landing] == [266]
+    assert plan.summary["without_strategy"] == 1
+    assert plan.summary["unmappable"] == 0
+
+
+def test_a_strategy_less_time_is_measured_against_the_blind_best():
+    """It can only ever be claimed by the strategy-blind best, so it has to
+    beat everything to land."""
+    plan = decide([_candidate(886, strat="")], lambda ek, strat, mode: 200)
     assert plan.landing == []
-    assert plan.summary["unmappable"] == 1
+    assert plan.summary["already_faster"] == 1
 
 
 def test_a_candidate_with_no_entity_is_unmappable():

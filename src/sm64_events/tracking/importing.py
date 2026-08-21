@@ -57,13 +57,23 @@ def decide(candidates, current_frames: Callable) -> ImportPlan:
 
     `current_frames(entity_key, strat_tag, timer_mode) -> int | None` is the
     player's current best for exactly that combination, in game frames."""
-    landing, already_faster, unmappable = [], 0, 0
+    landing, already_faster, unmappable, unstrategised = [], 0, 0, 0
     landed_best: dict[tuple, int] = {}
     for candidate in candidates:
-        if not candidate.entity_key or not candidate.strat_tag \
-                or candidate.time_cs <= 0:
+        if not candidate.entity_key or candidate.time_cs <= 0:
             unmappable += 1
             continue
+        if not candidate.strat_tag:
+            # A time with NO strategy still lands, and is counted so it is
+            # never silent. It was refused until the paste door existed, when
+            # every source (the sheet, the card's own picker) always had one —
+            # but most people writing down a gold write the star and the time
+            # and nothing else, and refusing those would reject the bulk of a
+            # real paste. The store already allows it: such a row shows as a
+            # personal best and never GRADES, because `current_pbs_by_strat`
+            # cannot attribute it, and `tracking/caveats.py`'s `unattributed`
+            # mark is what says so where the click lands.
+            unstrategised += 1
         # The frame is the real unit; centiseconds are only how the timer
         # prints. Rounding UP is the conservative direction — it never credits
         # him with a time the timer could not display.
@@ -80,4 +90,8 @@ def decide(candidates, current_frames: Callable) -> ImportPlan:
     return ImportPlan(
         landing=landing,
         summary={"found": len(candidates), "imported": len(landing),
-                 "already_faster": already_faster, "unmappable": unmappable})
+                 "already_faster": already_faster, "unmappable": unmappable,
+                 # Counted, not hidden: a best with no strategy shows a time
+                 # and no rank, and the player deserves to know how many of
+                 # theirs arrived that way.
+                 "without_strategy": unstrategised})
