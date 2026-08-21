@@ -34,7 +34,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
-from source_scan import strip_comments  # noqa: E402
+from source_scan import python_code, strip_comments  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
@@ -1144,54 +1144,60 @@ def test_the_library_search_story_reaches_its_own_result_rows(page):
 
 # --- and it must not leave the state it reached behind ---------------------
 
-_STANDARDS_WRITE = re.compile(
-    r"""["'][^"']*?/api/ranks/standards/[^"']*?["']""")
+_SHARED_STORE_READ = re.compile(r"\brank_standards_path\b")
 
 
-def test_a_test_that_edits_standards_must_use_a_scratch_store():
-    """`serve_ui` points the rank-standards store at the WORKTREE's own
-    `data/rank_standards.json`, which is gitignored -- so a driven test that
-    edits a cutoff, or clears a strategy, leaves it edited for every run after
-    it and nothing reports that.
+def test_the_fixture_never_reaches_for_the_shared_ladder_store():
+    """`serve_ui` gives every fixture its OWN scratch rank-standards file, and
+    that has to stay structural rather than remembered.
 
-    Measured 2026-08-21, which is why this is a check rather than a note: one
-    new test cleared four of `star:2:4`'s five strategies and did not put them
-    back. The next full suite returned **6 failures and 4 errors across four
-    unrelated files** -- the JP toggles, the Library's overall ladder, the
-    rank-mode swap, the you-marker -- every one of them a test that simply
-    needed that star to still have its strategies. None of them named the
-    culprit, and none of them could: the damage is in a file no assertion
-    mentions.
+    Measured 2026-08-21. One new test cleared four of `star:2:4`'s five
+    strategies through the real endpoint and did not put them back; the next
+    full suite returned **6 failures and 4 errors across four unrelated
+    files** -- the JP toggles, the Library's overall ladder, the rank-mode
+    swap, the you-marker -- every one of them a test that simply needed that
+    star to still have its strategies. Not one of them could name the culprit:
+    the damage was in a gitignored file no assertion mentions.
 
-    So a test file that names a MUTATING standards route must also hand
-    `serve_ui` a `standards_path`. Restoring by hand is not enough and is not
-    accepted here: it works only when the test passes, and the run that most
-    needs the store intact is the run where something failed halfway."""
-    offenders = []
-    for path in sorted(Path(__file__).parent.glob("test_*.py")):
-        source = strip_comments(path.read_text(encoding="utf-8"))
-        if "serve_ui" not in source:
-            continue
-        writes = [hit for hit in _STANDARDS_WRITE.findall(source)
-                  if hit.rstrip('"\'').rstrip("/").count("/") > 3]
-        if writes and "standards_path" not in source:
-            offenders.append(f"{path.name} -> {writes[0]}")
-    assert not offenders, (
-        f"{offenders} edits rank standards against the SHARED store. Pass "
-        "serve_ui(..., standards_path=<scratch>) -- see this test's docstring "
-        "for what one unrestored edit did to four other files.")
+    `conftest.py` HAS an autouse `_isolate_rank_standards` for exactly this,
+    and it never reached any of it. It rebinds the attribute on the `paths`
+    MODULE, while `ui_fixture.py` held a `from ... import rank_standards_path`
+    alias taken at import time -- so the patch moved a name the fixture was
+    not looking at. An isolation fixture that protects nothing looks identical
+    to one that works, which is what makes this worth a check of its own
+    rather than a comment on the import.
+
+    Hence the invariant is stated where it can be enforced: the fixture may
+    not NAME the shared path at all. Restoring the store by hand is not an
+    accepted alternative -- it works only when the test passes, and the run
+    that most needs the store intact is the run where something failed
+    halfway."""
+    fixture = Path(__file__).resolve().parents[1] / "tools" / "ui_fixture.py"
+    # `python_code`, not `strip_comments` -- the latter removes JS/CSS comment
+    # styles and leaves Python `#` lines standing, so this guard would have
+    # tripped on a comment explaining the very absence it checks for. Caught by
+    # its own probe below, which is why both directions get asserted and not
+    # just the one that was failing.
+    source = python_code(fixture.read_text(encoding="utf-8"))
+    assert not _SHARED_STORE_READ.search(source), (
+        "tools/ui_fixture.py names rank_standards_path again, so every driven "
+        "test is once more writing the worktree's own data/rank_standards.json "
+        "-- and conftest's autouse isolation cannot help, because a "
+        "`from paths import` alias is invisible to its monkeypatch.")
+    # ... and it must still hand RankStandards a path under the scratch dir it
+    # already tears down, rather than simply having dropped the store.
+    assert "rank_standards.json" in source and "compare_cache_scratch" in source
 
 
-def test_the_scratch_store_guard_can_still_fail():
-    """Both directions through the same strip_comments the guard uses: a
-    comment naming the route must not trip it, and a real mutating URL must --
-    and a READ (`?entity=`) must not, since reads cannot poison anything."""
-    write = strip_comments(
-        'x = f"/api/ranks/standards/{entity}/{strat}/{rank}"\n')
-    read = strip_comments('y = f"/api/ranks/standards?entity={entity}"\n')
-    prose = strip_comments("# never PUT /api/ranks/standards/x/y/z here\n")
-    assert [h for h in _STANDARDS_WRITE.findall(write)
-            if h.rstrip('"\'').rstrip("/").count("/") > 3]
-    assert not [h for h in _STANDARDS_WRITE.findall(read)
-                if h.rstrip('"\'').rstrip("/").count("/") > 3]
-    assert not _STANDARDS_WRITE.findall(prose)
+def test_the_shared_store_guard_can_still_fail():
+    """Both directions through the same `python_code` the guard uses: real code
+    must trip it, and a Python comment naming the function must not.
+
+    The second half is not ceremony -- it failed on its first run, because the
+    guard was reaching for `strip_comments`, which only knows JS and CSS
+    comment styles. A `#` line naming `rank_standards_path` survived it, so the
+    guard would have gone red at the mere mention of what it forbids."""
+    real = python_code("ranks = RankStandards(rank_standards_path())\n")
+    prose = python_code("# never call rank_standards_path() from here\n")
+    assert _SHARED_STORE_READ.search(real)
+    assert not _SHARED_STORE_READ.search(prose)

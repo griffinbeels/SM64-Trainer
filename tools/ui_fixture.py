@@ -36,8 +36,9 @@ from sm64_events.compare.service import CompareService
 from sm64_events.core.events import Event
 from sm64_events.memory.behaviours import pointer_of
 from sm64_events.core.timefmt import format_igt
-from sm64_events.core.paths import (bundled_defaults_seed, bundled_rank_standards, bundled_sheet_ladders,
-                                    rank_standards_path)
+from sm64_events.core.paths import (bundled_defaults_seed,
+                                    bundled_rank_standards,
+                                    bundled_sheet_ladders)
 from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.app import create_app
 from sm64_events.server.broadcaster import Broadcaster
@@ -1079,7 +1080,6 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               target_segment: int | None = None,
               seed_editor_fixtures: bool = False,
               seed_subsections: bool = False,
-              standards_path: Path | None = None,
               reconcile_full_corpus: bool = False,
               bowser_stage: tuple[int, int] | None = None,
               castle_stage: int | None = None,
@@ -1225,23 +1225,30 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     # sweep run made exactly that mistake and under-reported the one card it
     # was built to measure (2026-07-28), which is the failure mode
     # .claude/rules/ui-core.md warns reads as a broken builder.
-    # `standards_path` into scratch for the SAME reason `adoptions_path` and
-    # `mode_path` below take one: a driven test that EDITS a cutoff -- through
-    # the panel's own PUT, or by clearing a strategy -- otherwise writes the
-    # worktree's real `data/rank_standards.json` and leaves it edited for every
-    # later run. `data/` is gitignored, so nothing reports it and nothing puts
-    # it back.
+    # ALWAYS a scratch store, exactly like `adoptions_path` and `mode_path`
+    # below, and for the same reason: a driven test that EDITS a cutoff --
+    # through the panel's own PUT, or by clearing a strategy -- otherwise
+    # writes the worktree's real `data/rank_standards.json` and leaves it
+    # edited for every later run. `data/` is gitignored, so nothing reports it
+    # and nothing puts it back.
     #
-    # Measured 2026-08-21, which is why this parameter exists: one new test
-    # cleared four of star:2:4's five strategies and did not restore them,
-    # and the next full suite came back with 6 failures and 4 errors spread
-    # across four unrelated files (the JP toggles, the Library's overall
-    # ladder, the rank-mode swap) -- every one of them a test that simply
-    # needed the star to still have its strategies. The failures name the
-    # WRONG file by construction, which is what makes this worth a parameter
-    # rather than a rule to remember.
-    ranks = RankStandards(standards_path or rank_standards_path(),
-                          bundled_rank_standards(), bundled_sheet_ladders())
+    # The scratch file does not exist yet, which is the POINT: `RankStandards`
+    # seeds an absent store from the bundle, so every fixture reads the shipped
+    # community defaults rather than whatever this worktree happens to have
+    # been left holding.
+    #
+    # Measured 2026-08-21, which is why this is unconditional rather than a
+    # parameter a careful test remembers to pass: one new test cleared four of
+    # star:2:4's five strategies and did not restore them, and the next full
+    # suite came back with 6 failures and 4 errors across four unrelated files
+    # (the JP toggles, the Library's overall ladder, the rank-mode swap, the
+    # you-marker) -- every one of them a test that simply needed that star to
+    # still have its strategies, and not one of them able to name the cause.
+    # An opt-in would have to be remembered by whoever writes the NEXT such
+    # test, which is precisely the person who does not know yet.
+    ranks = RankStandards(
+        Path(compare_cache_scratch.name) / "rank_standards.json",
+        bundled_rank_standards(), bundled_sheet_ladders())
     ranks.load()
     service = TrackerService(database, broadcaster, ranks=ranks)
     poller = Poller(_OfflineMemory(), [], service)

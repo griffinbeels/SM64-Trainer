@@ -48,6 +48,25 @@ def _isolate_recorder_lock(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolate_rank_standards(tmp_path, monkeypatch):
+    """No test may write the real rank-standards store.
+
+    KNOWN LIMIT, measured 2026-08-21 and stated here because it looked like
+    total cover for two years: this rebinds the attribute on the `paths`
+    MODULE, so it reaches callers that do `paths.rank_standards_path()` and
+    NOT ones holding a `from ... import rank_standards_path` alias taken at
+    import time. `tools/ui_fixture.py` held exactly such an alias, so every
+    driven test went straight past this fixture and wrote the worktree's own
+    `data/rank_standards.json` -- until one of them cleared four strategies
+    and the next full suite came back with 6 failures and 4 errors in four
+    unrelated files.
+
+    `serve_ui` now builds its store under its own scratch dir and never names
+    the shared path, which is enforced by
+    `test_fixture_reaches_the_real_page.py::
+    test_the_fixture_never_reaches_for_the_shared_ladder_store` rather than
+    left to this fixture. Any NEW consumer that imports the name directly is
+    outside this patch's reach too -- prefer `paths.rank_standards_path()`.
+    """
     from sm64_events.core import paths
     monkeypatch.setattr(paths, "rank_standards_path",
                         lambda: tmp_path / "rank_standards.json")

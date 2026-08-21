@@ -99,8 +99,7 @@ def note_states():
 
     out = {}
     with tempfile.TemporaryDirectory() as scratch:
-        with serve_ui(Path(scratch) / "ownernote.db",
-                      standards_path=Path(scratch) / "standards.json") as base:
+        with serve_ui(Path(scratch) / "ownernote.db") as base:
             with driver.get_driver().launch(headless=True,
                                             viewport=(1500, 1200)) as page:
                 page.goto(base)
@@ -202,8 +201,7 @@ def test_a_lone_strategy_is_not_told_it_won_a_race(note_states):
     import tempfile as _tempfile
 
     with _tempfile.TemporaryDirectory() as scratch:
-        with serve_ui(Path(scratch) / "lone.db",
-                      standards_path=Path(scratch) / "standards.json") as base:
+        with serve_ui(Path(scratch) / "lone.db") as base:
             with driver.get_driver().launch(headless=True,
                                             viewport=(1500, 1200)) as page:
                 page.goto(base)

@@ -226,8 +226,7 @@ def jp_server():
         # structural rather than conditional (2026-08-21 -- see
         # test_fixture_reaches_the_real_page.py's scratch-store guard for what
         # one unrestored edit cost).
-        with serve_ui(Path(scratch) / "stratmodal_jp.db",
-                      standards_path=Path(scratch) / "standards.json") as base:
+        with serve_ui(Path(scratch) / "stratmodal_jp.db") as base:
             yield base
 
 
