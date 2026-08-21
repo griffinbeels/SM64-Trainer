@@ -50,12 +50,19 @@
   .stick-box-frame { fill: rgba(4, 10, 18, .55); }
   /* A layer draws its own half and nothing else -- so the two files carry no
      overlapping ink and either can be dropped on its own. */
-  body[data-layer="stick"] .controller-buttons { display: none; }
-  body[data-layer="buttons"] .controller-panel-body { display: none; }
-  /* Usamune shows NOTHING when nothing is held, and an overlay that says
+  /* VISIBILITY, never display. `display: none` removes the box from layout,
+     so hiding the stick pulled the button row UP and the buttons layer no
+     longer sat where it sits in the combined one -- the files stopped
+     stacking, which is the entire reason there are layers instead of one file
+     to crop (caught by looking at three layers side by side, 2026-08-21).
+     Hidden-but-present keeps every element exactly where it is. */
+  body[data-layer="stick"] .controller-buttons { visibility: hidden; }
+  body[data-layer="buttons"] .controller-panel-body { visibility: hidden; }
+  /* Usamune shows NOTHING when nothing is held, and an overlay captioned
      "no buttons" over footage is a caption nobody asked for. The inspector
-     keeps it -- there, an empty row would read as a broken render. */
-  .controller-button.is-empty { display: none; }
+     keeps it -- there, an empty row would read as a broken render. Hidden
+     rather than removed for the same register reason as above. */
+  .controller-button.is-empty { visibility: hidden; }
 </style>
 </head>
 <body data-layer="combined">
