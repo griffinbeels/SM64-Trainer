@@ -27,7 +27,7 @@ function runnerName(row) {
   return row.you ? "You" : row.runner;
 }
 
-export function Leaderboard({ t, scopeId, onOpenRunner = () => {} }) {
+export function Leaderboard({ t, scopeId, onOpenRunner = () => {}, hasExcluded = false }) {
   const [board, setBoard] = useState(null);
   const [error, setError] = useState(null);
   const [query, setQuery] = useState("");
@@ -82,16 +82,27 @@ export function Leaderboard({ t, scopeId, onOpenRunner = () => {} }) {
       <button type="button" class="chip leaderboard-jump" onclick=${jumpToYou}>
         Jump to you</button>
     </div>
-    <!-- The basis line is unconditional (always PB, whatever rank_mode the
-         tab is showing) -- the mode-aware sentence only APPENDS a note, it
-         never replaces the always-true one, per the contract: the user must
-         read a mismatch as intended rather than discover it for himself. -->
+    <!-- The basis line is unconditional (always PB, every entity, whatever
+         rank_mode/exclusions the Rank tab is showing) -- the note only
+         APPENDS the reason(s) for a mismatch, it never replaces the
+         always-true one, per the contract: the user must read a mismatch as
+         intended rather than discover it for himself. TWO independent
+         causes (fix wave, final review, M2): the board's own scope
+         resolution always scores every entity, ignoring exclusions -- that
+         was already tested, but the note used to fire only on a rank_mode
+         mismatch, so an EXCLUDED-only mismatch (pb mode, an entity turned
+         off) showed two different numbers one card apart with no
+         explanation at all. -->
     <p class="meta leaderboard-basis">Ranked by PB — every runner's number is
       their lifetime best time on the Ultimate Sheet, graded the same way
-      your own practice PB is.${board.rank_mode !== "pb"
-        ? ` Your Rank tab is graded on ${modeLabel} right now, so its number `
-          + "for you and this board's number for you will differ."
-        : ""}</p>
+      your own practice PB is.${(() => {
+        const reasons = [];
+        if (board.rank_mode !== "pb") reasons.push(`it's graded on ${modeLabel} right now`);
+        if (hasExcluded) reasons.push("you've excluded an entity from this scope");
+        return reasons.length
+          ? ` That can differ from what your Rank tab shows — ${reasons.join(", and ")}.`
+          : "";
+      })()}</p>
     <p class="meta leaderboard-omitted">${board.omitted > 0
       ? `${board.omitted} more ${board.omitted === 1 ? "runner is" : "runners are"} `
         + `rated on the sheet elsewhere, but ${board.omitted === 1 ? "hasn't" : "haven't"} `

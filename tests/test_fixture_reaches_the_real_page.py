@@ -1070,8 +1070,8 @@ def fresh_db_page():
     """An UNSEEDED instance -- no stage, no target, no attempts anywhere --
     so `librarymodel.js::lastPracticed` has nothing to resolve and the
     Library tab's auto-open must fall back to the course grid rather than
-    erroring or rendering nothing (task-3-caveats.md point 3: null is the
-    empty-log case). A fresh fixture rather than a state reached by clicking
+    erroring or rendering nothing (null is the empty-log case). A fresh
+    fixture rather than a state reached by clicking
     around `page` -- that fixture's own default seeding is exactly what the
     OTHER new test below needs present."""
     with serve_ui(seed=False) as base, get_driver().launch() as opened:

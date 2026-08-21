@@ -2,9 +2,9 @@
 // community runner's ratings, read-only, reached through two doors — a
 // [[Rank board]] row (leaderboard.js) and a runner's name inside a
 // [[Library tab]] entry (librarytarget.js). ONE component either way, never
-// two that look alike (task-5-brief.md's own contract): it draws through
-// rankpage.js's own ScopeChips/CoverageStrip/Breakdown pointed at the
-// runner's `/api/leaderboard/runner/{name}` data instead of `/api/marelo` —
+// two that look alike: it draws through rankpage.js's own ScopeChips/
+// CoverageStrip/Breakdown pointed at the runner's
+// `/api/leaderboard/runner/{name}` data instead of `/api/marelo` —
 // never a second implementation of any of the three. No history curve (the
 // sheet holds one time per row, no series to plot) and no Leaderboard card
 // (that is where you arrived FROM). Read-only throughout: CoverageStrip gets

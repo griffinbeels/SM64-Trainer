@@ -121,6 +121,56 @@ def test_the_basis_line_names_pb(page):
     assert "PB" in text, f"the basis line never says PB: {text!r}"
 
 
+def test_excluding_an_entity_explains_the_discrepancy_it_causes(page):
+    """Fix wave (final review, M2). The board always resolves its scope with
+    `excluded=set()` -- correct, and already tested -- but that turns
+    EXCLUSIONS into a second, silent cause of "your number here and on the
+    Rank tab differ": the note used to fire only on a rank_mode mismatch, so
+    excluding an entity in pb mode showed two different numbers one card
+    apart with nothing explaining why. Drives the REAL control (the
+    Breakdown table's own Ignore button), not the API directly, so this
+    exercises the same prop wiring a user's click actually goes through."""
+    before = page.evaluate(
+        "document.querySelector('.leaderboard-basis').textContent")
+    assert "excluded" not in before.lower(), (
+        f"the board already mentions an exclusion before any were made: {before!r}")
+    clicked = page.evaluate("""
+      (() => {
+        const btn = Array.from(document.querySelectorAll('.rank-breakdown button.chip'))
+          .find((candidate) => candidate.textContent.trim() === 'Ignore');
+        if (!btn) return false;
+        btn.click();
+        return true;
+      })()
+    """)
+    assert clicked, "no practiced entity with an Ignore button on the Rank tab"
+    try:
+        page.wait_ms(400)
+        during = page.evaluate(
+            "document.querySelector('.leaderboard-basis').textContent")
+        assert "excluded" in during.lower(), (
+            f"excluding an entity did not add a reason to the basis line: {during!r}")
+    finally:
+        # Restore -- a driven test that edits the real exclusion set must
+        # not leave it edited for the next test in this module-scoped page
+        # (ui-core.md's own rule for anything that writes to the real store).
+        restored = page.evaluate("""
+          (() => {
+            const btn = Array.from(document.querySelectorAll('.rank-breakdown button.chip'))
+              .find((candidate) => candidate.textContent.trim() === 'Include');
+            if (!btn) return false;
+            btn.click();
+            return true;
+          })()
+        """)
+        assert restored, "could not find the Include button to undo the exclusion"
+        page.wait_ms(400)
+        after = page.evaluate(
+            "document.querySelector('.leaderboard-basis').textContent")
+        assert "excluded" not in after.lower(), (
+            f"the exclusion note survived un-excluding the entity: {after!r}")
+
+
 def test_the_omitted_count_is_stated_not_a_footnote(page):
     text = page.evaluate(
         "document.querySelector('.leaderboard-omitted').textContent")

@@ -3024,8 +3024,8 @@ def test_the_staleness_budget_never_clips_a_realistic_movement():
 
 
 def test_a_loose_def_armed_through_the_deferred_subarea_path_carries_a_deadline():
-    # THE GAP this task's brief missed (see task-3-report.md Item 0/1C): a
-    # destination-subarea start trigger (to_subarea) can't be confirmed on
+    # THE GAP this task's original brief missed: a destination-subarea
+    # start trigger (to_subarea) can't be confirmed on
     # the level edge — the castle interior loads the transient lobby before
     # the co-frame settle (module docstring's DESTINATION subarea section) —
     # so the engine holds a fresh _Arm in self._pending until the settled

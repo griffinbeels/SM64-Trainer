@@ -24,12 +24,11 @@ const NAV_GROUPS = [
   // "Library" (the sheet-library tab, below) goes HERE rather than into the
   // "Library" group two rows down -- that group already exists (Sessions /
   // Live feed) and putting a tab of the same name inside it renders the word
-  // twice (task-3-caveats.md point 2). It is a play-time reference tool, and
-  // Task 6 removed Compare's own entry from this group once the Library
-  // absorbed it (its "Study in Compare" routes to the SAME Compare pane,
-  // still mounted below -- task-6-caveats.md point 3: the pane never moved,
-  // only the nav entry into it did) -- so Library ends up standing exactly
-  // where Compare stood. Last item on purpose.
+  // twice. It is a play-time reference tool, and Task 6 removed Compare's
+  // own entry from this group once the Library absorbed it (its "Study in
+  // Compare" routes to the SAME Compare pane, still mounted below -- the
+  // pane never moved, only the nav entry into it did) -- so Library ends up
+  // standing exactly where Compare stood. Last item on purpose.
   ["Play", [
     ["Practice", "practice"],
     ["Run", "run"],
@@ -230,8 +229,8 @@ function App() {
   // clear above only fires for a DIFFERENT destination).
   const openRunner = (name) => { setTab("Rank"); setOpenRunnerName(name); };
   // The Compare PANE's own entry point -- unchanged from before Task 6
-  // (task-6-caveats.md point 3: the pane never moves, this is still the one
-  // thing that opens it). Renamed from `openCompare` because that name is
+  // (the pane never moves, this is still the one thing that opens it).
+  // Renamed from `openCompare` because that name is
   // now the PUBLIC one every outside caller keeps using, and it means
   // something different: see below.
   const enterCompare = (intent) => { setCompareIntent(intent); setTab("Compare"); };
@@ -246,8 +245,7 @@ function App() {
   // `enterCompare` with no browse stop, so the caller sees no behavioural
   // difference: attemptlog.js still calls a prop literally named
   // `openCompare`, unrenamed, with the same {attemptId, entity, strat} shape
-  // it always has (task-6-caveats.md point 4 -- change the ONE function,
-  // never the prop chain).
+  // it always has -- change the ONE function, never the prop chain.
   const openCompare = (intent) => openLibrary({ kind: "compare", ...intent });
 
   return html`<div class="app-shell">

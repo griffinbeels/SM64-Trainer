@@ -24,6 +24,16 @@ Prose ABOUT the convention is allowed, and needed: `.gitignore` explains the
 rule, and `docs/architecture.md`'s header tells a reader why specs are absent.
 Those are declared below by path, one line each, rather than pattern-matched —
 an exemption someone has to add on purpose is an exemption someone notices.
+
+The same one-directional failure has a SECOND shape the directory-prefix
+match above cannot see: a `.superpowers/sdd/<spec>/` task artifact cited by
+its bare basename ("see task-5-brief.md") never contains a PRIVATE_DIRS
+substring, so it sailed straight through this guard. Found 2026-08-20 as
+three citations in one branch's own changed files; hardening the pattern
+(BARE_TASK_ARTIFACT below) surfaced 40 across 16 files going back to an
+already-shipped, unrelated spec — all fixed in the same commit that added
+the pattern, because a half-hardened guard that fails the build on 36
+citations nobody asked about is not a state anyone can merge from.
 """
 import re
 import subprocess
@@ -37,6 +47,20 @@ REPO = Path(__file__).resolve().parents[1]
 # source by anything tracked.
 PRIVATE_DIRS = ("docs/superpowers/", "internal_notes/", ".planning/",
                 ".tasks/", ".superpowers/")
+
+# A `.superpowers/sdd/<spec>/` task artifact cited by its BARE BASENAME --
+# "see task-5-brief.md" rather than a path under one of the directories
+# above -- is exactly as dead in a fresh clone, and PRIVATE_DIRS's own
+# substring match cannot see it (fix wave, final review, L4: found first as
+# three citations in this branch's own changed files, then confirmed by this
+# harder pattern to be a much older, wider debt -- 40 citations across 16
+# files, all fixed in the same commit that added this row). IDs seen in this
+# project's history: plain digits, a single letter, and compounds like
+# "e2"/"f1"/"f23" -- `[A-Za-z0-9]+` covers all of them without over-matching
+# an ordinary sentence, since the `-{brief,report,review,caveats}.md` suffix
+# is what makes this a task-artifact reference and nothing else looks like it.
+BARE_TASK_ARTIFACT = re.compile(
+    r"task-[A-Za-z0-9]+-(?:brief|report|review|caveats)\.md")
 
 # Files allowed to name a private directory, because naming it IS their job.
 # (path, why) — add a row consciously; do not widen this into a glob.
@@ -65,12 +89,16 @@ def tracked_text_files() -> list[str]:
 
 
 def citations(path: str) -> list[str]:
-    """Private-directory paths named by a tracked file, one per hit."""
+    """Private-directory paths named by a tracked file, one per hit -- plus
+    any bare task-artifact basename (BARE_TASK_ARTIFACT), which names a file
+    just as dead without ever containing a PRIVATE_DIRS substring."""
     try:
         text = (REPO / path).read_text(encoding="utf-8")
     except (UnicodeDecodeError, FileNotFoundError):
         return []
-    return [directory for directory in PRIVATE_DIRS if directory in text]
+    named = [directory for directory in PRIVATE_DIRS if directory in text]
+    named += BARE_TASK_ARTIFACT.findall(text)
+    return named
 
 
 @pytest.mark.parametrize("path", tracked_text_files())
@@ -113,7 +141,19 @@ def test_the_guard_can_still_fail(tmp_path):
 
     def named(path: Path) -> list[str]:
         text = path.read_text(encoding="utf-8")
-        return [d for d in PRIVATE_DIRS if d in text]
+        return [d for d in PRIVATE_DIRS if d in text] + BARE_TASK_ARTIFACT.findall(text)
 
     assert named(live) == ["docs/superpowers/"]
     assert named(clean) == []
+
+    # The bare-basename shape (L4, final review): no PRIVATE_DIRS substring
+    # anywhere, so only BARE_TASK_ARTIFACT can catch it.
+    bare = tmp_path / "bare.md"
+    bare.write_text("see task-5-brief.md for the rationale", encoding="utf-8")
+    assert named(bare) == ["task-5-brief.md"]
+    # An ordinary sentence using the word "task" must not false-positive --
+    # the `-{brief,report,review,caveats}.md` suffix is what makes this a
+    # task-artifact reference, and nothing else should trip it.
+    ordinary = tmp_path / "ordinary.md"
+    ordinary.write_text("the next task is to report on progress", encoding="utf-8")
+    assert named(ordinary) == []

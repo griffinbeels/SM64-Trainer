@@ -1,9 +1,9 @@
 // src/sm64_events/ui/components/library.js — the Library tab.
 //
 // Mounted permanently (app.js, the same `display:none` trick Compare uses),
-// not remounted per tab switch: "on first activation" (task-3-brief.md step
-// 2) only means something if the component has a memory of having already
-// done it, and a persistent mount is what lets `intent` from elsewhere in the
+// not remounted per tab switch: "on first activation" only means something
+// if the component has a memory of having already done it, and a persistent
+// mount is what lets `intent` from elsewhere in the
 // app (Task 5's own job) arrive on an ALREADY-open tab and still navigate.
 //
 // Three things this component owns: browsing (course grid -> a group's
@@ -56,8 +56,8 @@ function statusLine(status, error) {
 }
 
 // All three /api/library/refresh outcomes render inline -- applied, not
-// newer, and the 503 a failed fetch raises (task-3-caveats.md point 4: "All
-// three outcomes must render"). `state` is null (nothing to say yet),
+// newer, and the 503 a failed fetch raises ("all three outcomes must
+// render"). `state` is null (nothing to say yet),
 // "loading", the refresh response body, or {error} from a caught throw.
 function RefreshMessage({ state }) {
   if (!state || state === "loading") return null;
@@ -68,8 +68,8 @@ function RefreshMessage({ state }) {
   return html`<p class="library-refresh-msg">Already up to date — ${state.reason}</p>`;
 }
 
-// A Twitch link failing must not sink the batch (task-6-brief.md step 1):
-// every tray item still gets its own import attempt, and this renders what
+// A Twitch link failing must not sink the batch: every tray item still gets
+// its own import attempt, and this renders what
 // came back for the ones that didn't land. `result` is null before the
 // first Study click. TWO independent lines, either or both -- a batch can
 // both fail partially AND span more than one entity:
@@ -295,9 +295,9 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
   // numeric index into the index we already fetched (librarynav.js's own
   // contract). A Castle Movement / stage RTA target has no entity to look up
   // by, but it still needs its FULL shape (approaches/subsections as real
-  // arrays, not `GET /api/library`'s own summary counts) -- exactly the door
-  // task-3-caveats.md point 4 left for this task: `GET
-  // /api/library/target/{index}`, which library_api.py already spreads as
+  // arrays, not `GET /api/library`'s own summary counts) -- exactly the
+  // door `GET /api/library/target/{index}` gives, which library_api.py
+  // already spreads as
   // `{index, ...target}`, the same full shape `/api/library/entity/{key}`'s
   // own `targets` array carries. One shape either door produces is what lets
   // librarytarget.js stay ignorant of which door it came through.
@@ -378,8 +378,8 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
 
   // First activation with no intent in hand: land on whatever was last
   // practiced (librarymodel.js::lastPracticed), same as a bookmark that
-  // follows the player. `null` is the empty-log case (task-3-caveats.md
-  // point 3, no attempts recorded anywhere yet) and stays on the course
+  // follows the player. `null` is the empty-log case (no attempts recorded
+  // anywhere yet) and stays on the course
   // grid, same as `stage`'s own initial value -- there is nothing to open.
   useEffect(() => {
     if (!active || autoOpenedRef.current) return;
@@ -399,8 +399,8 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
   }
 
   // Task 6, step 1: import every tray item -- EACH under its OWN
-  // `entity_key` (`trayToImport` reads it off the item, task-6-caveats.md
-  // point 6), never a single entity handed in from outside, because the
+  // `entity_key` (`trayToImport` reads it off the item), never a single
+  // entity handed in from outside, because the
   // tray is ordinary cross-entity state (librarytray.js's own header). One
   // item failing (a dead link, a private video) must not sink the batch, so
   // every item still gets its own POST + poll + optional trim PUT even after
@@ -439,8 +439,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
         // Non-null `edit` only: an untrimmed tray item must inherit whatever
         // trim the comparison already has saved (server-side dedupe on
         // `source_ref` within (entity_key, strat) reuses the existing row),
-        // never blank it out. task-6-caveats.md point 2 -- do not
-        // "simplify" this condition away.
+        // never blank it out. Do not "simplify" this condition away.
         if (status.comparison && edit) {
           await send("PUT", `/api/compare/videos/${status.comparison.id}`, edit);
         }
@@ -464,9 +463,9 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
       // FIX ROUND 1, CRITICAL: land on the first item's (entity, strat) AND
       // actually OPEN what imported there -- `enterCompare`'s `openIds` is
       // the door compare.js's own `openComp` already opens saved
-      // comparisons through (task-6-caveats.md point 3's "call the existing
-      // door", now applied to the fix too). Before this fix Study routed to
-      // the right pane and opened nothing in it.
+      // comparisons through ("call the existing door", now applied to the
+      // fix too). Before this fix Study routed to the right pane and
+      // opened nothing in it.
       const primary = succeeded[0];
       const openIds = succeeded
         .filter((s) => s.entity_key === primary.entity_key && s.strat === primary.strat

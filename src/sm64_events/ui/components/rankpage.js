@@ -588,9 +588,9 @@ function runnerGapTitle(entity) {
 // exclusion goes through. "runner" (the runner page, runnerpage.js) grades no
 // one -- it COMPARES: Rank is the runner's own tier on this entity, then
 // their time, your time and the gap between the two. One table, one named
-// difference, never a second implementation of the shell around it (the
-// amendment to task-5-brief.md is the record of why: both variants share
-// everything except these last columns and the Ignore control).
+// difference, never a second implementation of the shell around it: both
+// variants share everything except these last columns and the Ignore
+// control.
 export function Breakdown({ data, routeOrder, onToggle, variant = "yours" }) {
   const isRunner = variant === "runner";
   const [byGain, setByGain] = useState(!routeOrder);
@@ -1084,7 +1084,8 @@ export function RankPage({ t, onOpenRunner = () => {} }) {
           onToggle=${toggleExcluded} />
       </div>
       <div class="practice-card">
-        <${Leaderboard} key=${scopeId} t=${t} scopeId=${scopeId} onOpenRunner=${onOpenRunner} />
+        <${Leaderboard} key=${scopeId} t=${t} scopeId=${scopeId} onOpenRunner=${onOpenRunner}
+          hasExcluded=${data.entities.some((entity) => entity.excluded)} />
       </div>`}
   </div>`;
 }

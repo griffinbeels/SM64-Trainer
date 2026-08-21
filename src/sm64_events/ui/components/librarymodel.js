@@ -33,7 +33,7 @@ export const RANKS = ["Bronze", "Silver", "Gold", "Platinum", "Diamond",
 // default).
 export const GAME_FPS = 30;
 
-// SECOND-DOOR RULING (task-4-caveats.md point 1, 2026-08-07): `ladderorder.js`
+// SECOND-DOOR RULING (2026-08-07): `ladderorder.js`
 // already sorts strategies by the same Mario-cutoff idea (`slowestFirst`,
 // used by standards.js's rank table), and its no-ladder rule is the OPPOSITE
 // of this one -- there, an unproven strategy sorts FIRST ("it is not slow, it
@@ -552,7 +552,7 @@ export function lastPracticed(view) {
   return best;
 }
 
-// TASK 6 RULING (task-6-caveats.md point 6): `entityKey` used to be a second
+// TASK 6 RULING: `entityKey` used to be a second
 // parameter here. It is gone -- a tray item carries its OWN `entity_key`
 // (Task 5 fix round 1, `librarytray.js`'s own header comment), stamped at
 // the moment it was added, and import dedupe is scoped to (entity_key,
@@ -573,7 +573,7 @@ export function trayToImport(item) {
   // item came from already showed for the same time_cs, so the number the
   // user just read on the "+" button matches the number waiting for them in
   // Compare ("Kally 43"80", not a bare "43.80" the rest of the page never
-  // writes). TASK 5 RULING (task-5-caveats.md point 2): this was an
+  // writes). TASK 5 RULING: this was an
   // unpinned `.toFixed(2)` until now: pinned below and in
   // test_library_model_js.py.
   return { body: { entity_key: item.entity_key, strat: item.strat || "Standard",

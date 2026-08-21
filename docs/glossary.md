@@ -693,7 +693,9 @@ Every [[runner]] who has practiced something in a [[scope]], plus you,
 ordered by [[MARELO]] and numbered the same way [[Leaderboard mode]]
 numbers its own list: a tie shares a position and the next skips ahead by
 the tie's size. The board drops a [[runner]] with nothing practiced in this
-[[scope]] and always keeps your own row, even at zero. Opening one
+[[scope]] and always keeps your own row, even at zero — but it COUNTS the
+drop rather than staying silent about it: it states how many it left off, so
+the board can never read as "this is everyone" when it is not. Opening one
 [[runner]]'s row lands on their [[Runner page]], which widens every entity
 with your own score and time on it, so the two read side by side.
 
@@ -733,9 +735,9 @@ their name on a [[Rank board]] row or beside one of their times on the
 The same [[scope]] chips and the same coverage strip your own [[Rank tab]]
 draws, pointed at their [[runner rating]] instead of yours, and the same
 breakdown table with its last three columns widened for comparison: their
-[[rank]] on each entity, their time, your time, and the gap between the
-two. No control on it can change anything — no excluding an entity, no
-repointing an icon.
+time, your time, and the gap between the two — it keeps [[rank]] on each
+entity the same as your own tab's. No control on it can change anything —
+no excluding an entity, no repointing an icon.
 
 - **Lives** — the page
   (`src/sm64_events/ui/components/runnerpage.js`), reached from
@@ -982,8 +984,10 @@ on time share a number and the next distinct time skips ahead by the tie's
 size. Your own [[personal best]] inserts itself at the position it actually
 earns among the community's, read off the [[rank]] the section already
 grades you at rather than fetched again. A per-section switch swaps between
-the two readings; the default reading never changes, and closing the section
-forgets your pick rather than saving it.
+the two readings; the default reading never changes, and the pick lives in
+the section's own component state, so closing and reopening the section
+keeps it — only navigating away from this library page returns it to the
+default reading.
 
 - **Lives** — the mode switch and the flat list
   (`src/sm64_events/ui/components/librarytarget.js`)

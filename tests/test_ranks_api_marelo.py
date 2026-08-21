@@ -446,6 +446,25 @@ def test_browsing_a_non_active_scope_never_celebrates(tmp_path):
 # real name back off `/api/leaderboard` rather than hardcoding one, since the
 # sheet grows and any fixed name could stop scoring on "overall" someday.
 
+def test_the_three_leaderboard_routes_are_sync_so_fastapi_threadpools_them(client):
+    """Fix wave (final review, M3): these three routes used to be `async
+    def` with only the cache-hitting call itself hand-threadpooled, so
+    `_groups`/`_you_scores` ran on the poller's shared asyncio loop --
+    measured 13.32ms per `/api/leaderboard` request, one frame being 33.3ms.
+    A plain `def` route is what `/api/marelo` already does and lets FastAPI
+    threadpool the WHOLE body; a route sliding back to `async def` silently
+    reopens the on-loop cost with no red test anywhere else, since every
+    other test here only checks the RESPONSE shape."""
+    endpoints = {route.path: route.endpoint for route in client.app.routes
+                 if getattr(route, "path", "").startswith("/api/leaderboard")}
+    assert endpoints, "no /api/leaderboard routes found on the app"
+    for path, endpoint in endpoints.items():
+        assert not asyncio.iscoroutinefunction(endpoint), (
+            f"{path} is `async def` -- it must be a plain `def` so FastAPI "
+            "threadpools the whole route instead of running it on the "
+            "poller's shared asyncio loop")
+
+
 def test_leaderboard_shape(client):
     body = client.get("/api/leaderboard?scope=overall").json()
     assert body["scope_id"] == "overall" and body["basis"] == "pb"

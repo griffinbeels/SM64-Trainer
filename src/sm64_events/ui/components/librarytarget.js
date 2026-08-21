@@ -3,7 +3,7 @@
 // rank-standards TOC over community examples banded slowest -> fastest.
 // Scrolling down IS the climb (spec 2026-08-07-library-page, section 3).
 //
-// SECOND-DOOR RULING (task-4-caveats.md point 1): sections are ordered by
+// SECOND-DOOR RULING: sections are ordered by
 // `librarymodel.js::sectionOrder`, not `ladderorder.js::slowestFirst` --
 // deliberately, not by omission. The two rules disagree about where an
 // unproven (no-ladder) strategy belongs, and the reasoning for keeping them
@@ -484,13 +484,27 @@ function LeaderboardRow({ row, approach, entityKey, trayKeys, onAdd, onOpenRunne
 
 // The flat list itself -- `query` applies here exactly as it does to the
 // bands (round 4's rule, extended rather than re-derived): a live search
-// hides every non-matching row, "you" included when your own runner text
-// ("You") does not contain it, same as any other row would.
+// hides every non-matching row EXCEPT the reader's own (L5, below).
 function LeaderboardList({ leaderboard, approach, query, entityKey, trayKeys, onAdd, onOpenRunner }) {
+  // The reader's own row is never filtered out (fix wave, final review,
+  // L5) -- it used to fall through to `matchesRunner`'s ordinary text
+  // match on the literal string "You" like any other row, which is the
+  // Rank tab's own leaderboard.js's exact opposite ruling for the SAME
+  // gesture ("a search that hid the one row he came here to find would
+  // defeat the jump control"). One rule, both boards: `row.entry._isYou`
+  // always survives a query, matching leaderboard.js's `row.you ||`.
   const shown = query
-    ? leaderboard.filter((row) => matchesRunner(row.entry, query)) : leaderboard;
+    ? leaderboard.filter((row) => row.entry._isYou || matchesRunner(row.entry, query))
+    : leaderboard;
   if (!shown.length) {
-    return html`<p class="meta library-leaderboard-empty">No community times recorded here yet.</p>`;
+    // Two different empty causes need two different sentences (fix wave,
+    // final review, L6) -- "no community times recorded here yet" blamed a
+    // live search that simply matched nothing exactly the same as it blamed
+    // a genuinely empty leaderboard, which reads as the SEARCH being broken
+    // rather than honest.
+    return html`<p class="meta library-leaderboard-empty">${leaderboard.length
+      ? "No runner matches your search."
+      : "No community times recorded here yet."}</p>`;
   }
   return html`<div class="library-leaderboard">
     ${shown.map((row) => html`<${LeaderboardRow}
@@ -704,27 +718,40 @@ function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
  * favour of one switch in the Library hero (`library.js`) that every section
  * on the page reads, "for fun exploration of the differences."
  */
+// ROUND 1 (2026-08-07), superseding the round-2 version-badge ruling: the
+// JP/US control is a MODE, and a mode FILTERS -- "We should have 2 modes: JP
+// (shows only JP entries), US (shows only US entries)." An entry tagged with
+// the other version disappears; an entry never annotated with a version
+// shows in both modes (the combined-unless-annotated rule, applied to
+// display). Bands and counts are computed AFTER the filter, so every number
+// on screen describes what is actually shown.
+//
+// Pulled out of Section as its own top-level, Preact-free function (fix
+// wave, final review, L1) so tests/test_cross_language_parity.py can extract
+// and drive its REAL source text -- it mirrors library/ratings.py::
+// _visible_entries EXACTLY: a row is version-FILTERED AT ALL only when
+// there's something to distinguish (its own ladder_jp, or entries carrying
+// more than one distinct tag); otherwise every entry shows in both modes.
+// That second clause is not a corner case (see _visible_entries's own
+// docstring for the count), and the two had drifted apart before with no
+// test able to notice.
+function visibleEntriesFor(item, version) {
+  const entries = item.entries || [];
+  const hasJp = !!item.ladder_jp;
+  const tags = new Set(entries.map((entry) => entry.version).filter(Boolean));
+  const versioned = hasJp || tags.size > 1;
+  return versioned
+    ? entries.filter((entry) => !entry.version || entry.version === version)
+    : entries;
+}
+
 function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey, onAdd,
                    linkCtx, door = null, focusMark = null, version = "us",
                    gradingVersion = "us", onOpenRunner }) {
-  // ROUND 1 (2026-08-07), superseding the round-2 version-badge ruling: the
-  // JP/US control is a MODE, and a mode FILTERS -- "We should have 2 modes:
-  // JP (shows only JP entries), US (shows only US entries)." An entry tagged
-  // with the other version disappears; an entry never annotated with a
-  // version shows in both modes (the combined-unless-annotated rule, applied
-  // to display). With every visible run being the mode's own version, the
-  // per-entry version pill that used to badge mixed sections had nothing
-  // left to say and is deleted. Bands and counts are computed AFTER the
-  // filter, so every number on screen describes what is actually shown.
   const hasJp = !!approach.ladder_jp;
-  const mixedVersions = useMemo(() => new Set(
-    (approach.entries || []).map((entry) => entry.version).filter(Boolean),
-  ).size > 1, [approach.entries]);
-  const versioned = hasJp || mixedVersions;
   const ladder = (hasJp && version === "jp" ? approach.ladder_jp : approach.ladder) || {};
-  const visibleEntries = useMemo(() => (versioned
-    ? (approach.entries || []).filter((entry) => !entry.version || entry.version === version)
-    : (approach.entries || [])), [approach.entries, versioned, version]);
+  const visibleEntries = useMemo(() => visibleEntriesFor(approach, version),
+    [approach, version]);
   const bands = useMemo(() => bandsOf(ladder, visibleEntries),
     [ladder, visibleEntries]);
   // ROUND 4: a live query hides every band with no matching runner -- TOC
@@ -917,9 +944,8 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
  * `targets` — every FULL library target for the entity (several for a
  * 100-coin star's exit variants); `library.js` resolves both the
  * entity door (`/api/library/entity/{key}`) and the numeric-index door
- * (`/api/library/target/{index}`, owed to this task by task-3-caveats.md
- * point 4) to this same full shape before mounting this component, so it
- * never has to branch on which door it came through.
+ * (`/api/library/target/{index}`) to this same full shape before mounting
+ * this component, so it never has to branch on which door it came through.
  */
 export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us",
                                onAdd, trayKeys, focusStrat, focusTier,
@@ -1140,8 +1166,8 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
   }
 
   // A deep link (Task 7: the standards ladder's own tier rows, and the
-  // book mark) moves you once per LINK, then goes quiet — task-7-caveats.md
-  // point 2's own ruling. The effect's dependency list includes `approaches`
+  // book mark) moves you once per LINK, then goes quiet — deliberate.
+  // The effect's dependency list includes `approaches`
   // (needed to resolve the `hit`), and `approaches` is a `useMemo` over
   // `rows` — so with no guard, ANY later `rows` change (a library refresh, a
   // re-fetch, a second intent landing on this same entity) re-runs this

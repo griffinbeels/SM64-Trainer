@@ -66,8 +66,8 @@ class _OfflineMemory:
         pass
 
 
-# Task 6 fix round 2 (task-6-caveats.md's own root cause, cited three times
-# in ui-core.md): the fixture had NO Compare backend at all, so
+# Task 6 fix round 2 (the root cause is cited three times in
+# ui-core.md): the fixture had NO Compare backend at all, so
 # `/api/compare/view` 404d under it no matter what the code did and a
 # content-asserting render test could only prove itself against a hand-built
 # harness. `serve_ui` now wires a REAL `CompareService` -- real sqlite

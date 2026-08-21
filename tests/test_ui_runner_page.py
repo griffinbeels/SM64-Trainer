@@ -174,6 +174,26 @@ def click_a_lit_tile(page, scope_selector):
     """)
 
 
+def force_pseudo_state(page, selector, classes):
+    """Force CSS pseudo-classes (`["hover", "focus-visible"]`) on the ONE
+    element matching `selector`, via CDP `CSS.forcePseudoState` -- real input
+    state, so `getComputedStyle` reflects it exactly the way the browser
+    would after an actual hover/keyboard focus. uilab's `Page` protocol has
+    no hover verb (dispatching a synthetic `mouseover` does NOT flip Chromium's
+    internal `:hover` match, only real pointer/input-level state does), so this
+    reaches `page._cdp` directly rather than inventing a driver-specific
+    workaround here -- `matched_styles` already reaches the same CDP session
+    for the same reason (cascade explanation the DOM cannot answer)."""
+    cdp = page._cdp
+    cdp.send("DOM.enable")
+    cdp.send("CSS.enable")
+    root = cdp.send("DOM.getDocument")["root"]["nodeId"]
+    node = cdp.send("DOM.querySelector", {"nodeId": root, "selector": selector})["nodeId"]
+    if not node:
+        raise LookupError(f"no element matches {selector!r}")
+    cdp.send("CSS.forcePseudoState", {"nodeId": node, "forcedPseudoClasses": classes})
+
+
 def test_clicking_a_lit_coverage_tile_opens_nothing_on_the_runner_page(rank_page):
     click_a_runner_row(rank_page)
     rank_page.wait_for(".runner-page", timeout_ms=8000)
@@ -185,14 +205,37 @@ def test_clicking_a_lit_coverage_tile_opens_nothing_on_the_runner_page(rank_page
         "clicking a coverage tile on the runner page opened EntityDetail -- "
         "that panel reads the VIEWING USER's own attempts/PB, not the "
         "runner's, and must never open here")
-    # Dead-control contract: the tile must not look clickable either.
-    static_tiles = rank_page.evaluate(
-        "document.querySelectorAll('.runner-page .entity-tile.is-static').length")
-    assert static_tiles > 0, "no coverage tile carries .is-static on the runner page"
-    cursor = rank_page.evaluate("""
-      getComputedStyle(document.querySelector('.runner-page .entity-tile')).cursor
-    """)
+    # Dead-control contract: the tile must not look clickable either. Every
+    # tile on the runner page carries `.is-static` (CoverageStrip passes no
+    # `onToggle` there), so the plain `.entity-tile` selector below always
+    # lands on a static one -- a separate `.is-static` class-COUNT check is
+    # redundant with the affordance checks that follow and was dropped (fix
+    # wave, final review, H2).
+    TILE = ".runner-page .entity-tile"
+    cursor = rank_page.evaluate(f"getComputedStyle(document.querySelector({TILE!r})).cursor")
     assert cursor == "default", f"a runner-page coverage tile still shows cursor: {cursor!r}"
+    # H2 (final review): `cursor` was the ONLY property the shipped rule
+    # overrode, so the global `button:hover`/`:focus-visible` rules -- higher
+    # specificity than `.entity-tile` -- still repainted background/border on
+    # hover and outlined it on focus, wiping the one thing the tile carries
+    # (its tier tint) and announcing a dead control as clickable. Force both
+    # states and require NOTHING to move.
+    rest = rank_page.evaluate(f"""
+      (() => {{
+        const s = getComputedStyle(document.querySelector({TILE!r}));
+        return {{background: s.backgroundColor, border: s.borderTopColor, outline: s.outlineStyle}};
+      }})()
+    """)
+    force_pseudo_state(rank_page, TILE, ["hover", "focus-visible"])
+    hovered = rank_page.evaluate(f"""
+      (() => {{
+        const s = getComputedStyle(document.querySelector({TILE!r}));
+        return {{background: s.backgroundColor, border: s.borderTopColor, outline: s.outlineStyle}};
+      }})()
+    """)
+    assert hovered == rest, (
+        f"a static coverage tile changed on hover/focus: {rest} -> {hovered} "
+        "-- a dead control must show no affordance at all")
 
 
 def test_clicking_a_lit_coverage_tile_still_opens_the_panel_on_your_own_tab(rank_page):

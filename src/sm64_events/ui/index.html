@@ -333,8 +333,8 @@
   /* The Library tab (Task 3, spec 2026-08-07-library-page). Its course and
      target grids are `.entity-grid` + `PracticeCell` — the picker's own
      geometry and cell, reused rather than restyled, because the request was
-     literally "reuse the same exact design" (task-3-caveats.md point 1). Only
-     the bits the picker has no equivalent for get their own rule here: the
+     literally "reuse the same exact design". Only the bits the picker has
+     no equivalent for get their own rule here: the
      card frame is `.practice-card.workshop-card` (routes.js's own choice for
      a tab-level panel), so the two below are genuinely the whole addition. */
   .library-refresh-msg {
@@ -726,6 +726,16 @@
   .library-runner-link {
     appearance: none; background: none; border: none; padding: 0; margin: 0;
     font: inherit; color: inherit; text-align: left; cursor: pointer;
+    /* Fix wave (final review, H1): the global `button` rule sets
+       `min-height: 34px; display: inline-flex`, and this reset never
+       overrode either -- so a plain-text runner name that became a button
+       grew the row it lives in ~17px (measured: `.library-plain-entry`
+       41.75px -> 24.75px, `.library-example-meta` 48.38px -> 40.38px). Plain
+       rows are the dense ones (a band holds dozens), so that reads as a
+       silent geometry change to the whole ladder. `min-height: 0` is the
+       same override `.library-example-plus` already carries next to this
+       rule; `display: inline` puts it back to flowing as text. */
+    min-height: 0; display: inline;
   }
   .library-runner-link:hover, .library-runner-link:focus-visible {
     color: var(--gold); text-decoration: underline;
@@ -795,8 +805,8 @@
 
   /* The grid overlay (Task 5): a plain fixed backdrop rather than the shared
      `Modal` -- every existing Modal call site snaps open/closed with no
-     transition, and this surface needed one (task-5-caveats.md point 5), so
-     copying Modal's shell would have copied the thing it needed to NOT copy.
+     transition, and this surface needed one, so copying Modal's shell would
+     have copied the thing it needed to NOT copy.
      `container-type` sits on the PANEL, not the page, because the panel is
      `position: fixed` and sized off the viewport (`min(94vw, …)`) -- gating
      `cols = min(cols, 2)` against `.view-pane` would measure a width the
@@ -1697,8 +1707,7 @@
        ONE height budget serves every state without a resize when a segment
        arms/disarms (OBS-stable slot). Bumped from 122px (+28) for the room;
        a star card or an unarmed segment just gets a taller, still-centered
-       metrics row instead of an ugly gap -- measured by CDP geometry diff,
-       see task-6-report.md. */
+       metrics row instead of an ugly gap -- measured by CDP geometry diff. */
     grid-column: 1 / -1; height: 150px; min-height: 150px; overflow: visible;
     display: grid; grid-template-rows: auto 1fr auto; padding-block: 12px;
   }
@@ -2739,11 +2748,20 @@
   .entity-tile.is-unpracticed:not(.is-static):hover { opacity: .7; }
   /* Fix round 1 (task 5 review): a tile with no `onToggle` behind it (the
      runner page -- rankpage.js's own comment on `CoverageStrip`'s
-     `interactive` prop has the why) must not LOOK clickable. `cursor` is
-     the only property this needs to override -- there is no other
-     `:hover`/`:focus` affordance on a plain (practiced) tile to suppress,
-     and the unpracticed one is excluded above. */
+     `interactive` prop has the why) must not LOOK clickable. `cursor` alone
+     was NOT enough (fix wave, final review, H2): the global
+     `button:hover`/`:focus-visible` rules ((0,1,1) specificity) beat
+     `.entity-tile` ((0,1,0)) and repainted the background/border/outline on
+     hover and keyboard focus regardless -- which wipes the one thing a
+     coverage tile carries, its tier tint. `.is-static` adds a class each,
+     so `.entity-tile.is-static:hover`/`:focus-visible` ((0,3,0)) outrank the
+     global rule and hold the tile at its resting colours. */
   .entity-tile.is-static { cursor: default; }
+  .entity-tile.is-static:hover, .entity-tile.is-static:focus-visible {
+    background: rgba(8, 20, 34, .4);
+    border-color: var(--tier-tint, var(--border-soft));
+    outline: none;
+  }
   /* The whole scope in one strip — 24 entries for a 16 Star route, 120+ for
      a full run. The cap plus scroll is what stops a long route pushing the
      chart and the breakdown off the screen; four rows fit before it engages. */
@@ -3140,7 +3158,7 @@
   /* The next-rank column (task C.3) can run "Diamond III → Diamond IV" —
      the longest string on the row; it gets the room a wrap would otherwise
      take from the name column, and shrinks its type rather than reflow at
-     narrow widths (swept 900px in the harness, see task-c-report.md). */
+     narrow widths (swept 900px in the harness). */
   .rank-cell-next { white-space: nowrap; font-size: 12px; }
   /* The [[Rank board]] (leaderboard.js) -- draws GET /api/leaderboard's
      rows as a scrolling list rather than a <table>: an HTML table's column
@@ -3216,10 +3234,11 @@
   }
   /* No narrow-pane collapse rule here on purpose: measured directly, the
      Rank tab's own pane never drops below 731px (the 850px supported floor,
-     sidebar collapsed to its rail -- ui-core.md's own "850 -> 731" figure),
+     sidebar collapsed to its rail -- this file's own "card 731" arithmetic
+     below, not a figure ui-core.md carries),
      and the row -- including the corpus's actual longest name,
      SullyLikesBigChungus at 20 characters -- fits there with room to spare
-     (contact sheet, task-4-report.md). A collapse threshold below that would
+     (contact sheet). A collapse threshold below that would
      be unreachable at every supported width, which this project treats as
      the same failure as a rule that never fires. */
   .objective-live-state {

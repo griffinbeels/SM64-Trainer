@@ -258,9 +258,9 @@ def test_last_practiced_is_null_with_no_attempts_anywhere():
 
 
 def test_tray_to_import_carries_the_trim_as_frames():
-    # TASK 6: entity_key rides on the item itself now (task-6-caveats.md
-    # point 6), not a second argument -- see test_tray_to_import_reads_the_
-    # items_own_entity_key below for the case that argument existing used to
+    # TASK 6: entity_key rides on the item itself now, not a second
+    # argument -- see test_tray_to_import_reads_the_items_own_entity_key
+    # below for the case that argument existing used to
     # hide (a caller passing a DIFFERENT entity than the item's own).
     item = {"runner": "Kally", "time_cs": 4380, "video": "https://youtu.be/z",
             "trim": {"start_s": 12, "end_s": 19.5}, "entity_key": "star:1:0"}
@@ -269,7 +269,7 @@ def test_tray_to_import_carries_the_trim_as_frames():
     assert out["body"]["entity_key"] == "star:1:0"
     assert out["body"]["source_ref"] == "https://youtu.be/z"
     assert out["body"]["strat"] == "Standard"
-    # TASK 5 RULING (task-5-caveats.md point 2): `name` is a pre-filled
+    # TASK 5 RULING: `name` is a pre-filled
     # default for compare.js's editable "name this comparison" field, not a
     # fixed label -- pinned to fmtSeconds (the SAME notation the Library card
     # this item came from already showed for time_cs) rather than the raw
