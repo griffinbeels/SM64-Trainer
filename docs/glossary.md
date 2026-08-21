@@ -493,6 +493,34 @@ ticks and keeps the LAST reading of each one.
 
 - **Lives** — the input decoder (`src/sm64_events/inputs/frame.py`)
 
+### Input track
+
+Every [[input frame]] of one [[attempt]], from its [[anchor]] to its
+[[outcome]] — what you did, at the [[frame]] you did it. The trainer numbers a
+track from its own start rather than from the [[session]]'s, so two tracks lie
+on one axis whatever hour of whatever day you played each of them.
+
+- **Lives** — the input store (`src/sm64_events/inputs/store.py`)
+
+### Input document
+
+An [[input track]] written out as text you can send someone, and edit by hand.
+Export writes one, import reads one, and a [[template track]] is always one —
+which is what lets a template come from an [[attempt]] you marked, a file
+another player sent you, or one you typed out yourself.
+
+- **Lives** — the document format (`src/sm64_events/inputs/document.py`)
+
+### Template track
+
+The [[input track]] the trainer draws behind your own, so you can see where the
+two differ. You mark the [[attempt]] that felt right and it becomes the
+template for that [[target]] on that [[strategy]]. The trainer shows both and
+names neither as the reason — it reports what each was doing on a [[frame]],
+and you read the gap.
+
+- **Lives** — the input store (`src/sm64_events/inputs/store.py`)
+
 ### Epoch
 
 The stretch since Usamune's counter last restarted. Two readings from different
