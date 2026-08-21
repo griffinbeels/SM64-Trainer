@@ -286,11 +286,12 @@ def _attempt_json(a, pbs, clock, ranks=None, rank_clock=None, rank_ek=None,
             # "the number printed on this row is not the quantity you think
             # you were practising", as a caveats.py KEY or None — the mark the
             # practice log draws beside the time itself. Separate from
-            # `pb_blocked_by` because it answers a different question and
+            # `pb_blocked` above because it answers a different question and
             # survives where that one is not drawn: a row already saved as a
-            # PB shows Undo instead of a blocked button, and a cleared row
-            # shows no button at all, but both still carry a time that
-            # measures the wrong moment.
+            # PB shows Undo rather than a reason, a row on another strategy
+            # shows a gate chip, and a cleared row shows nothing at all --
+            # but every one of them still carries a time that measures the
+            # wrong moment.
             "caveat": attempt_caveat(a),
             "cleared_reason": a.cleared_reason,
             "started_utc": a.started_utc, "ended_utc": a.ended_utc,

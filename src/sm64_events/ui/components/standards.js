@@ -499,6 +499,23 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // THESE rows". `entityScore` below stays the server-GRADED score
   // regardless of what is shown, on purpose — flipping the switch changes
   // what you are looking at, never what you are rated on.
+  // The one strategy that sets EVERY defined cutoff of the entity's
+  // best-possible ladder, or null when several share the job (the ordinary
+  // case: star:2:4's Sideflip holds Mario and Metal while DJ Owlless holds the
+  // other six). Ties count as several -- "X is fastest at every rank" is not
+  // true when someone matches it.
+  const owners = (data && data.overall_owners) || {};
+  const ownerNames = Object.values(owners).flat();
+  // Gated on the number of LADDERS, not the number of ranks: with a single
+  // strategy defined it owns every cutoff trivially, and "X is the fastest
+  // strategy at every rank" would be a sentence about a race with one runner.
+  // The claim is only worth making where there was something to be faster
+  // than.
+  const laddered = Object.keys((data && data.strategies) || {})
+    .filter((strat) => Object.keys(data.strategies[strat] || {}).length);
+  const soleOverallOwner = ownerNames.length && laddered.length > 1
+    && ownerNames.every((name) => name === ownerNames[0])
+    ? ownerNames[0] : null;
   const sheetBest = (data && data.sheet_best) || null;
   const activeLadder = data && activeStrat ? (data.strategies[activeStrat] || {}) : {};
   const basisFrames = data && sectionRank && sectionRank.basis
@@ -544,6 +561,24 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
         ${data.xcams_url ? html`<a class="meta" href=${data.xcams_url} target="_blank" rel="noopener"
             title="browse every example run for this star on the xcams Daily Star page">Examples on xcams ↗</a>` : null}
       </div>
+      ${/* WHY the active strategy's ladder can BE the Overall one. His report,
+           2026-08-15: "it also still seems a bit weird that the 'Standard'
+           strategy is the exact progression for the 'Overall' ranking". It is
+           not weird and it is not a bug -- the entity's ladder is a pointwise
+           minimum across strategies, so a strategy that is fastest at every
+           rank IS that minimum, cutoff for cutoff, and the card then draws one
+           banner instead of two (views.py::ranks_share_ladder). Nothing on
+           screen said so, which is the "correct but unexplained reads as a
+           bug" shape.
+
+           Read off `overall_owners`, the server's own answer to which strategy
+           SETS each cutoff (ranks/scoring.py::best_ladder_owners) -- not
+           re-derived here, and not a new payload field. Drawn only when one
+           strategy owns every defined rank, because that is the only case the
+           sentence is true of. */""}
+      ${soleOverallOwner ? html`<p class="std-overall-note">
+        <b>${soleOverallOwner}</b> is the fastest strategy at every rank, so its
+        times are also the Overall standard for this star.</p>` : null}
       <table class="stdtable"><thead>
         ${bands.length ? html`<tr class="std-variant-row"><th></th>
           ${bands.map((band) => html`<th class="std-variant std-band-start"

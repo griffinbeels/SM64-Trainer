@@ -1079,6 +1079,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               target_segment: int | None = None,
               seed_editor_fixtures: bool = False,
               seed_subsections: bool = False,
+              standards_path: Path | None = None,
               reconcile_full_corpus: bool = False,
               bowser_stage: tuple[int, int] | None = None,
               castle_stage: int | None = None,
@@ -1224,8 +1225,23 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     # sweep run made exactly that mistake and under-reported the one card it
     # was built to measure (2026-07-28), which is the failure mode
     # .claude/rules/ui-core.md warns reads as a broken builder.
-    ranks = RankStandards(rank_standards_path(), bundled_rank_standards(),
-                          bundled_sheet_ladders())
+    # `standards_path` into scratch for the SAME reason `adoptions_path` and
+    # `mode_path` below take one: a driven test that EDITS a cutoff -- through
+    # the panel's own PUT, or by clearing a strategy -- otherwise writes the
+    # worktree's real `data/rank_standards.json` and leaves it edited for every
+    # later run. `data/` is gitignored, so nothing reports it and nothing puts
+    # it back.
+    #
+    # Measured 2026-08-21, which is why this parameter exists: one new test
+    # cleared four of star:2:4's five strategies and did not restore them,
+    # and the next full suite came back with 6 failures and 4 errors spread
+    # across four unrelated files (the JP toggles, the Library's overall
+    # ladder, the rank-mode swap) -- every one of them a test that simply
+    # needed the star to still have its strategies. The failures name the
+    # WRONG file by construction, which is what makes this worth a parameter
+    # rather than a rule to remember.
+    ranks = RankStandards(standards_path or rank_standards_path(),
+                          bundled_rank_standards(), bundled_sheet_ladders())
     ranks.load()
     service = TrackerService(database, broadcaster, ranks=ranks)
     poller = Poller(_OfflineMemory(), [], service)

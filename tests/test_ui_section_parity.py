@@ -255,3 +255,31 @@ def test_the_log_card_never_regrows_its_own_analysis_or_drawer():
         "LogCard calls the shared analysis card or drawer itself -- both "
         "are page-level surfaces, following the FOCUSED entity rather than "
         "whichever card is open")
+
+
+def test_both_section_builders_emit_the_per_strategy_pb():
+    """Rule 11, applied to the PB the card actually draws (2026-08-20).
+
+    `pb_by_strat` is what `PbTag` reads; `pb` stays the entity-wide number for
+    anything that wants a best-across-strategies answer. A star section
+    growing one without its segment twin is the asymmetry this file exists to
+    catch, and it would show up as segment cards silently reading "no PB"
+    forever -- a shape nothing else here would go red for, since the key is
+    OPTIONAL client-side (`sectionPbByStrat` defaults it) precisely so an
+    older payload degrades instead of throwing."""
+    source = VIEWS_PY.read_text(encoding="utf-8")
+    assert source.count('"pb_by_strat"') >= 2, (
+        "both the star and the segment section must ship pb_by_strat")
+
+
+def test_both_section_kinds_resolve_the_pb_action_server_side():
+    """The action column is ONE resolved field for both kinds, from one
+    resolver -- `_attempt_json` is shared, so this is really a guard against
+    someone re-deriving it per kind later. Asserted on the shipped keys rather
+    than on the call, because a second call site would satisfy "is pb_action
+    called" while still being a second door."""
+    source = strip_comments(VIEWS_PY.read_text(encoding="utf-8"))
+    assert source.count('"pb_action"') == 1, \
+        "pb_action is stamped in exactly one place (_attempt_json)"
+    assert source.count('"pb_blocked"') == 1
+    assert source.count("pb_action(a, active_strat") == 1

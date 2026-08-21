@@ -180,3 +180,67 @@ def test_shared_ladder_star_and_segment_only_offer_overall(tunelog_demo, card_na
         "  return card.querySelectorAll('.rank-banner.is-swapping').length;"
         "})()")
     assert swapping == 0
+
+
+# --- the tuning fixture must reach every state the real card has -----------
+
+ACTION_CELLS = """
+  (() => {
+    const rows = Array.from(document.querySelectorAll('.log-card tr'))
+      .filter((tr) => tr.querySelector('.attempt-actions'));
+    const cell = (tr) => tr.querySelector('.attempt-actions');
+    // `.attempt-result.good` IS the success class attemptlog.js stamps. A
+    // glyph match would depend on the tick surviving three layers of quoting,
+    // which is how the first version of this read zero success rows and
+    // reported the fixture broken when it was fine.
+    const success = rows.filter((tr) => tr.querySelector('.attempt-result.good'));
+    return {
+      rows: rows.length,
+      successRows: success.length,
+      // A success row must offer something or explain itself. An EMPTY
+      // actions cell (just the replay button) is the shape a fixture takes
+      // when it stops shipping the field the column is drawn from.
+      mute: success.filter((tr) => !cell(tr).querySelector(
+        'button:not(.icon-button), .pb-gate')).length,
+      saves: document.querySelectorAll('.log-card .attempt-actions button.pb-glow, '
+        + '.log-card .attempt-actions button:not(.icon-button)').length,
+      gates: document.querySelectorAll('.log-card .attempt-actions .pb-gate').length,
+      pbTags: [...new Set(Array.from(document.querySelectorAll('.log-card .pbtag'))
+        .map((t) => t.textContent.trim()))],
+    };
+  })()
+"""
+
+
+def test_the_tuning_fixture_draws_a_real_actions_column(tunelog_demo):
+    """This page is where the log card gets tuned by feel, so a state it
+    cannot draw is a state he cannot tune -- and the actions column is drawn
+    from a SERVER-resolved field now (`pb_action`/`pb_blocked`,
+    tracking/caveats.py::pb_action, 2026-08-20). A fixture still shipping only
+    the old `is_current_pb` renders every button away and nothing else here
+    goes red: no assertion in this suite reads that column, by the standing
+    rule that no test may pin a tuning page's CONTENTS.
+
+    So this pins COHERENCE, not contents: every success row either offers an
+    action or prints why it cannot, and both halves of the new column -- a
+    live button and a strategy gate chip -- appear at least once."""
+    state = tunelog_demo.evaluate(ACTION_CELLS)
+    assert state["successRows"] >= 3, state
+    assert state["mute"] == 0, (
+        "success rows with an empty actions cell -- tunelog.js is not shipping "
+        "pb_action/pb_blocked", state)
+    assert state["gates"] >= 1, (
+        "no strategy-gate chip anywhere on the tuning page: its widest, "
+        "name-driven control cannot be tuned against a page that never draws "
+        "it", state)
+
+
+def test_the_tuning_fixture_draws_every_pb_tag_state(tunelog_demo):
+    """The tag has three shapes since the PB became per-strategy, and they are
+    different WIDTHS in a grid track that was tuned against only the first --
+    which is exactly how the first version of this feature overflowed into the
+    strategy picker. All three have to be on the page he tunes it on."""
+    tags = tunelog_demo.evaluate(ACTION_CELLS)["pbTags"]
+    assert any(t.startswith("PB ") and '"' in t for t in tags), tags
+    assert any(t.startswith("no PB") for t in tags), tags
+    assert any("no strategy" in t for t in tags), tags

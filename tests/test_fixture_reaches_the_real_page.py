@@ -33,6 +33,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).parent))
+from source_scan import strip_comments  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from find_uilab import find_uilab  # noqa: E402
@@ -1137,3 +1140,58 @@ def test_the_library_search_story_reaches_its_own_result_rows(page):
         box.dispatchEvent(new Event('input', {bubbles: true}));
       })()
     """)
+
+
+# --- and it must not leave the state it reached behind ---------------------
+
+_STANDARDS_WRITE = re.compile(
+    r"""["'][^"']*?/api/ranks/standards/[^"']*?["']""")
+
+
+def test_a_test_that_edits_standards_must_use_a_scratch_store():
+    """`serve_ui` points the rank-standards store at the WORKTREE's own
+    `data/rank_standards.json`, which is gitignored -- so a driven test that
+    edits a cutoff, or clears a strategy, leaves it edited for every run after
+    it and nothing reports that.
+
+    Measured 2026-08-21, which is why this is a check rather than a note: one
+    new test cleared four of `star:2:4`'s five strategies and did not put them
+    back. The next full suite returned **6 failures and 4 errors across four
+    unrelated files** -- the JP toggles, the Library's overall ladder, the
+    rank-mode swap, the you-marker -- every one of them a test that simply
+    needed that star to still have its strategies. None of them named the
+    culprit, and none of them could: the damage is in a file no assertion
+    mentions.
+
+    So a test file that names a MUTATING standards route must also hand
+    `serve_ui` a `standards_path`. Restoring by hand is not enough and is not
+    accepted here: it works only when the test passes, and the run that most
+    needs the store intact is the run where something failed halfway."""
+    offenders = []
+    for path in sorted(Path(__file__).parent.glob("test_*.py")):
+        source = strip_comments(path.read_text(encoding="utf-8"))
+        if "serve_ui" not in source:
+            continue
+        writes = [hit for hit in _STANDARDS_WRITE.findall(source)
+                  if hit.rstrip('"\'').rstrip("/").count("/") > 3]
+        if writes and "standards_path" not in source:
+            offenders.append(f"{path.name} -> {writes[0]}")
+    assert not offenders, (
+        f"{offenders} edits rank standards against the SHARED store. Pass "
+        "serve_ui(..., standards_path=<scratch>) -- see this test's docstring "
+        "for what one unrestored edit did to four other files.")
+
+
+def test_the_scratch_store_guard_can_still_fail():
+    """Both directions through the same strip_comments the guard uses: a
+    comment naming the route must not trip it, and a real mutating URL must --
+    and a READ (`?entity=`) must not, since reads cannot poison anything."""
+    write = strip_comments(
+        'x = f"/api/ranks/standards/{entity}/{strat}/{rank}"\n')
+    read = strip_comments('y = f"/api/ranks/standards?entity={entity}"\n')
+    prose = strip_comments("# never PUT /api/ranks/standards/x/y/z here\n")
+    assert [h for h in _STANDARDS_WRITE.findall(write)
+            if h.rstrip('"\'').rstrip("/").count("/") > 3]
+    assert not [h for h in _STANDARDS_WRITE.findall(read)
+                if h.rstrip('"\'').rstrip("/").count("/") > 3]
+    assert not _STANDARDS_WRITE.findall(prose)

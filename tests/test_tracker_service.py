@@ -2171,9 +2171,10 @@ def test_a_live_PB_survives_the_orphan_sweep(tmp_path):
 # ---------------------------------------------------------------------------
 # A grab-timed star cannot be saved as a PB (2026-08-02): "these fake PBs
 # (fake because only xcam timing is legal) just shouldn't be allowed". The
-# button is drawn disabled from the SAME predicate (views._attempt_json's
-# `pb_blocked_by`), but this is the door — a PB row keeps GRADING once it is
-# in the table, and the API is reachable without the button.
+# button is drawn from the SAME resolver (caveats.pb_action, shipped as
+# _attempt_json's `pb_action`/`pb_blocked`), but this is the door — a PB row
+# keeps GRADING once it is in the table, and the API is reachable without the
+# button.
 # ---------------------------------------------------------------------------
 
 def grab_timed_star(frame=1350, igt=343):

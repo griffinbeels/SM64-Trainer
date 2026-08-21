@@ -574,6 +574,93 @@ def test_the_pb_door_guard_can_still_fail():
     assert not _STRAT_TAG_SUBSCRIPT.search(prose)
 
 
+_TOMBSTONE_READ = re.compile(r"deleted_strats")
+
+
+def _top_level_functions(path):
+    """Each `def`/`async def` in a file as one source string, comments already
+    stripped. Split by AST rather than by indentation because the question is
+    "does THIS function also write the KV", and a regex over a 2,000-line file
+    cannot say which body a line belongs to."""
+    import ast
+    import textwrap
+
+    source = code_only(path)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = "\n".join(lines[node.lineno - 1:node.end_lineno])
+            out.append(code_only(path, textwrap.dedent(body)))
+    assert out, f"no functions parsed out of {path.name}"
+    assert source, "code_only returned nothing"
+    return out
+
+
+def test_only_views_decides_which_strategy_is_ACTIVE():
+    """"Which strategy is this entity being practised with" has exactly one
+    answer, and since 2026-08-20 two very different callers need it: the
+    practice card draws its PB and its gate chip from it, and
+    `service.save_pb`/`undo_pb` REFUSE on it. A second reading is not a
+    cosmetic duplicate -- it is the API accepting a save the button refuses,
+    which is the precise failure `caveats.pb_action` was built as one resolver
+    to prevent.
+
+    The ingredient is the TOMBSTONE lookup (`deleted_strats`): a fully deleted
+    strategy must never surface as active, and any file computing that itself
+    has minted the second door. `views.masked_strat` owns it and
+    `views.active_strat_for` is the one composed answer; service.py reaches it
+    by IMPORT.
+
+    service.py is NOT simply exempted, because it is the likeliest file to
+    grow a second reading -- it already asks the question for `save_pb`. It is
+    allowed to touch the KV only as its OWNER: `purge_strategy` mints a
+    tombstone and `_clear_tombstone` retires one, and both WRITE. So every
+    read there must sit in a function that also writes, and service.py may
+    never call `masked_strat` itself. Interpreting the tombstone without
+    writing it is exactly the second door.
+
+    storage/db.py is exempt: it stores the KV and never interprets it."""
+    offenders = []
+    for folder in ("tracking", "ranks", "server"):
+        for path in (SRC / folder).glob("*.py"):
+            if path.name in ("views.py", "service.py"):
+                continue
+            if _TOMBSTONE_READ.search(code_only(path)):
+                offenders.append(f"{folder}/{path.name}")
+    assert not offenders, (
+        f"{offenders} reads the deleted-strats tombstone directly. The active "
+        "strategy resolves through tracking/views.py::masked_strat / "
+        "active_strat_for, so the practice card's chip and save_pb's refusal "
+        "cannot disagree.")
+
+    service = code_only(SRC / "tracking" / "service.py")
+    assert "masked_strat" not in service, (
+        "tracking/service.py masks a strategy itself. It must ask "
+        "views.active_strat_for, which composes the SAME masking the practice "
+        "card's own `masked` closure applies -- two maskings is how the API "
+        "starts accepting a save the button refuses.")
+    for function in _top_level_functions(SRC / "tracking" / "service.py"):
+        if "deleted_strats" in function and "set_state" not in function:
+            offenders.append(function.splitlines()[0].strip())
+    assert not offenders, (
+        f"{offenders} in service.py READS the deleted-strats tombstone "
+        "without writing it, i.e. interprets it. Only its owner's write paths "
+        "(purge_strategy / _clear_tombstone) may touch the KV there.")
+
+
+def test_the_active_strategy_guard_can_still_fail():
+    # Both directions through the SAME code_only() the guard uses: a comment
+    # naming the KV must not trip it, real code must.
+    real = code_only(Path("sample.py"),
+                     'names = db.get_state("deleted_strats", {})\n')
+    prose = code_only(Path("sample.py"),
+                      "# the deleted_strats tombstone lives in views.py\n")
+    assert _TOMBSTONE_READ.search(real)
+    assert not _TOMBSTONE_READ.search(prose)
+
+
 def test_no_file_reads_a_fragment_off_the_h_function():
     """`h.Fragment` is `undefined` in the vendored Preact, so htm's
     `<${h.Fragment}>` calls `h(undefined, ...)` and Preact's diff then runs
