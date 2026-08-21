@@ -1,0 +1,123 @@
+// src/sm64_events/ui/components/leaderboard.js — draws the [[Rank board]]
+// (docs/glossary.md) on the Rank tab: every community runner who has
+// practiced something in the tab's own scope, plus the user's own row,
+// ordered by MARELO. Computed and served by `library/board.py` at
+// `GET /api/leaderboard` (docs/api.md's Leaderboard section) — this module
+// only fetches and draws it; it owns no scoring and no second scope control.
+import { h } from "preact";
+import { useEffect, useRef, useState } from "preact/hooks";
+import htm from "htm";
+import { getJSON } from "../api.js";
+import { RankIcon } from "./rankicon.js";
+import { fmtPoints, fmtScore } from "./marelo.js";
+import { RANK_MODE_OPTIONS } from "./ranks.js";
+import { InlineState } from "./states.js";
+
+const html = htm.bind(h);
+
+// ranks.js keeps its own id->label lookup private (MODE_LABEL); this derives
+// its own copy from the SAME exported registry rather than hand-copying the
+// six pairs, so the two can never name a mode differently.
+const MODE_LABEL = Object.fromEntries(RANK_MODE_OPTIONS);
+
+// Task 5 wires this to the runner's own page. Until then a click on a row is
+// a DELIBERATE no-op, plan-mandated (spec 2026-08-20-ranked-leaderboard) —
+// not a forgotten handler, and not a destination invented ahead of Task 5.
+function openRunner(_row) { /* no-op until Task 5 */ }
+
+// Rows carry `you: true, runner: null` for the user's own row (board.py's
+// contract) — this is the only place in the file that turns that into text,
+// so a rename of the sentinel only breaks one line, not several.
+function runnerName(row) {
+  return row.you ? "You" : row.runner;
+}
+
+export function Leaderboard({ t, scopeId }) {
+  const [board, setBoard] = useState(null);
+  const [error, setError] = useState(null);
+  const [query, setQuery] = useState("");
+  const youRowRef = useRef(null);
+
+  // Same staleness fix rankpage.js's own `t.mareloRev` comment explains for
+  // the rest of the Rank tab: a board left open during play must not go
+  // stale. One door onto that rule, not a second mechanism — this effect's
+  // shape (clear-then-fetch on scope OR mareloRev) mirrors RankPage's.
+  useEffect(() => {
+    if (!scopeId) return undefined;
+    let alive = true;
+    setError(null);
+    setBoard(null);
+    setQuery("");
+    getJSON(`/api/leaderboard?scope=${encodeURIComponent(scopeId)}`)
+      .then((response) => alive && setBoard(response))
+      .catch((requestError) => alive && setError(requestError));
+    return () => { alive = false; };
+  }, [scopeId, t.mareloRev]);
+
+  if (error) return html`<${InlineState} kind="error">${error.status === 404
+    ? "This scope is gone — pick another from the list above."
+    : error.message}<//>`;
+  if (!board) return html`<${InlineState}>Loading the leaderboard…<//>`;
+
+  const needle = query.trim().toLowerCase();
+  // The user's own row is never filtered out — every row places (the
+  // product rule this surface exists to honour), and a search that hid the
+  // one row he came here to find would defeat the jump control below.
+  const rows = needle
+    ? board.rows.filter((row) => row.you
+        || (row.runner || "").toLowerCase().includes(needle))
+    : board.rows;
+  const modeLabel = MODE_LABEL[board.rank_mode] || board.rank_mode;
+
+  function jumpToYou() {
+    if (youRowRef.current) youRowRef.current.scrollIntoView({ block: "center" });
+  }
+
+  return html`<div class="leaderboard">
+    <div class="leaderboard-head">
+      <h3>Leaderboard</h3>
+      <div class="leaderboard-find">
+        <input type="search" class="leaderboard-find-input" value=${query}
+          placeholder="Find a runner…" aria-label="Filter the leaderboard by runner"
+          oninput=${(event) => setQuery(event.target.value)} />
+        ${query && html`<button type="button" class="leaderboard-find-clear"
+            title="Clear the filter" aria-label="Clear the filter"
+            onclick=${() => setQuery("")}>✕</button>`}
+      </div>
+      <button type="button" class="chip leaderboard-jump" onclick=${jumpToYou}>
+        Jump to you</button>
+    </div>
+    <!-- The basis line is unconditional (always PB, whatever rank_mode the
+         tab is showing) -- the mode-aware sentence only APPENDS a note, it
+         never replaces the always-true one, per the contract: the user must
+         read a mismatch as intended rather than discover it for himself. -->
+    <p class="meta leaderboard-basis">Ranked by PB — every runner's number is
+      their lifetime best time on the Ultimate Sheet, graded the same way
+      your own practice PB is.${board.rank_mode !== "pb"
+        ? ` Your Rank tab is graded on ${modeLabel} right now, so its number `
+          + "for you and this board's number for you will differ."
+        : ""}</p>
+    <p class="meta leaderboard-omitted">${board.omitted > 0
+      ? `${board.omitted} more ${board.omitted === 1 ? "runner is" : "runners are"} `
+        + `rated on the sheet elsewhere, but ${board.omitted === 1 ? "hasn't" : "haven't"} `
+        + "practiced anything in this scope yet."
+      : "Every runner rated on the sheet has practiced something in this scope."}</p>
+    <div class="leaderboard-body">
+      ${rows.map((row) => html`<div key=${row.you ? "you" : row.runner}
+          ref=${row.you ? youRowRef : null}
+          class="leaderboard-row ${row.you ? "is-you" : ""}"
+          onclick=${() => openRunner(row)}>
+        <span class="leaderboard-pos">${row.position}</span>
+        <span class="rank-icon-slot leaderboard-icon">
+          ${row.tier
+            ? html`<${RankIcon} tier=${row.tier} division=${row.division} size=${26} />`
+            : "–"}
+        </span>
+        <span class="leaderboard-name">${runnerName(row)}</span>
+        <span class="meta leaderboard-points">${fmtPoints(row.marelo)} pts</span>
+        <span class="meta leaderboard-mastery">${fmtScore(row.mastery)} mastery</span>
+        <span class="meta leaderboard-coverage">${row.practiced}/${row.n}</span>
+      </div>`)}
+    </div>
+  </div>`;
+}

@@ -1,0 +1,158 @@
+"""The leaderboard section on the Rank tab (Task 4, spec
+2026-08-20-ranked-leaderboard) — draws GET /api/leaderboard's rows.
+
+The default fixture already reaches a populated board with no extra seeding:
+`serve_ui()`'s app builds its `LibraryStore` unconditionally off the bundled
+Ultimate Sheet snapshot (`core/paths.py::bundled_sheet_library`), so the
+default "overall" scope carries real community rows and a real "you" row —
+measured directly before writing this file: 443 rows, longest runner name
+20 characters ("SullyLikesBigChungus"), the user's own row present and
+un-omitted. Seeding a fresh scenario for this test would only recreate what
+already renders.
+"""
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+
+from find_uilab import find_uilab  # noqa: E402
+
+_MISSING = find_uilab()
+if _MISSING:
+    pytest.skip(_MISSING, allow_module_level=True)
+
+from ui_fixture import serve_ui           # noqa: E402
+from uilab.driver import get_driver        # noqa: E402
+
+CLICK_RANK_TAB = 'document.querySelector(\'.nav-item[title="Rank"]\').click()'
+
+ROWS = """
+JSON.stringify(Array.from(document.querySelectorAll('.leaderboard-row')).map((row) => ({
+  isYou: row.classList.contains('is-you'),
+  position: row.querySelector('.leaderboard-pos').textContent,
+  name: row.querySelector('.leaderboard-name').textContent,
+})))
+"""
+
+
+def set_native_value(page, selector, value):
+    """The controlled-input trick this repo's own librarynav test uses
+    (test_fixture_reaches_the_real_page.py) — a plain `.value = x` bypasses
+    Preact's own value tracking, so the framework never sees the change and
+    the filter never runs."""
+    page.evaluate(f"""
+      (() => {{
+        const box = document.querySelector({json.dumps(selector)});
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype, 'value').set;
+        setter.call(box, {json.dumps(value)});
+        box.dispatchEvent(new Event('input', {{bubbles: true}}));
+      }})()
+    """)
+
+
+@pytest.fixture(scope="module")
+def page():
+    with serve_ui() as base, get_driver().launch() as opened:
+        opened.goto(f"{base}/ui/index.html")
+        opened.wait_for(".log-list-card")
+        opened.evaluate(CLICK_RANK_TAB)
+        opened.wait_for(".leaderboard-row", timeout_ms=15000)
+        opened.wait_ms(300)
+        yield opened
+
+
+def rows(page):
+    return json.loads(page.evaluate(ROWS))
+
+
+def test_the_board_draws_rows_in_order_with_positions(page):
+    drawn = rows(page)
+    assert len(drawn) > 1, f"expected many rows, drew {len(drawn)}"
+    positions = [int(row["position"]) for row in drawn]
+    assert positions == sorted(positions), (
+        f"rows are not in position order: {positions[:10]}…")
+    # Competition ranking (1-2-2-4): the first row is always 1.
+    assert positions[0] == 1, f"the first row's position is {positions[0]}, not 1"
+
+
+def test_exactly_one_row_carries_the_you_marker(page):
+    drawn = rows(page)
+    you_rows = [row for row in drawn if row["isYou"]]
+    assert len(you_rows) == 1, (
+        f"expected exactly one .is-you row, found {len(you_rows)}: {you_rows}")
+    assert you_rows[0]["name"] == "You", you_rows[0]
+
+
+def test_typing_in_the_filter_narrows_the_list_and_keeps_your_row(page):
+    before = rows(page)
+    assert len(before) > 20, "need a real board to prove narrowing at all"
+    # A runner name plucked from the real fetched board, not invented — the
+    # same "derive the example from the corpus" rule test_ui_core's own
+    # search-example lesson names (a hand-picked string can pass through the
+    # wrong path). Any named runner more than a few characters in does.
+    target = next(row["name"] for row in before
+                  if not row["isYou"] and len(row["name"]) >= 6)
+    needle = target[:4]
+    set_native_value(page, ".leaderboard-find-input", needle)
+    page.wait_ms(200)
+    try:
+        after = rows(page)
+        assert len(after) < len(before), (
+            f"typing {needle!r} did not narrow the list ({len(before)} -> "
+            f"{len(after)})")
+        assert any(row["isYou"] for row in after), (
+            "the user's own row disappeared once the filter matched fewer "
+            "names -- it must never be filtered out")
+        assert all(row["isYou"] or needle.lower() in row["name"].lower()
+                   for row in after), (
+            f"a row that does not match {needle!r} survived the filter: {after}")
+    finally:
+        set_native_value(page, ".leaderboard-find-input", "")
+        page.wait_ms(200)
+
+
+def test_the_basis_line_names_pb(page):
+    text = page.evaluate(
+        "document.querySelector('.leaderboard-basis').textContent")
+    assert "PB" in text, f"the basis line never says PB: {text!r}"
+
+
+def test_the_omitted_count_is_stated_not_a_footnote(page):
+    text = page.evaluate(
+        "document.querySelector('.leaderboard-omitted').textContent")
+    assert text.strip(), "the omitted line rendered empty"
+
+
+def test_jump_to_you_scrolls_the_board_toward_your_row(page):
+    """The user's row sits deep in a 400+ row board — reach without hunting
+    is the contract, so the jump control must actually move the scroll
+    position, not merely exist."""
+    page.evaluate("""
+      (() => {
+        document.querySelector('.leaderboard-body').scrollTop = 0;
+      })()
+    """)
+    page.wait_ms(100)
+    before = page.evaluate(
+        "document.querySelector('.leaderboard-body').scrollTop")
+    page.evaluate(
+        "Array.from(document.querySelectorAll('.leaderboard-jump'))[0].click()")
+    page.wait_ms(200)
+    after = page.evaluate(
+        "document.querySelector('.leaderboard-body').scrollTop")
+    assert after > before, (
+        f"the jump-to-you button did not move the board's scroll position "
+        f"({before} -> {after})")
+
+
+def test_a_row_click_is_a_no_op_not_a_dead_end(page):
+    """Task 5 wires this to the runner's page; until then clicking a row must
+    not throw or navigate away from the Rank tab."""
+    page.evaluate("document.querySelectorAll('.leaderboard-row')[1].click()")
+    page.wait_ms(100)
+    assert page.count(".leaderboard-row") > 0, (
+        "the Rank tab navigated away or crashed after a row click")

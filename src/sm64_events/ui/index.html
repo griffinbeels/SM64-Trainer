@@ -3121,6 +3121,76 @@
      take from the name column, and shrinks its type rather than reflow at
      narrow widths (swept 900px in the harness, see task-c-report.md). */
   .rank-cell-next { white-space: nowrap; font-size: 12px; }
+  /* The [[Rank board]] (leaderboard.js) -- draws GET /api/leaderboard's
+     rows as a scrolling list rather than a <table>: an HTML table's column
+     widths cannot compress under a @container query the way flex tracks
+     can, and this row is the densest one on the tab (position, icon, a long
+     runner name, three numbers, a coverage fraction).
+
+     FLEX, not grid, and that is load-bearing: `.rank-icon-slot` (the
+     ui-ranks.md "Rank icon SPACING" registry) reserves its wing spill with
+     its own MARGIN, which a flex parent counts toward each item's box on the
+     main axis -- a grid parent does not grow a track for a child's margin,
+     so the icon's ~42px rendered box (size 26, HAT_LAYOUT_WIDTH_RATIO
+     ~1.63) simply overflowed a 30px grid column into the name text. Caught
+     by the contact sheet, not by any assertion: every row read "arkdog47"
+     for "darkdog47". */
+  .leaderboard-head {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 6px;
+  }
+  .leaderboard-head h3 { margin: 0; margin-right: auto; }
+  .leaderboard-find { position: relative; display: flex; align-items: center; }
+  .leaderboard-find-input {
+    width: 180px; padding: 5px 26px 5px 9px; border-radius: 6px;
+    border: 1px solid var(--border-soft); background: #0b1929; color: var(--text);
+    font-size: 12px;
+  }
+  .leaderboard-find-input::placeholder { color: var(--muted); }
+  .leaderboard-find-input::-webkit-search-cancel-button { display: none; }
+  .leaderboard-find-clear {
+    position: absolute; right: 4px; background: none; border: 0; color: var(--muted);
+    cursor: pointer; padding: 2px 4px; font-size: 11px;
+  }
+  .leaderboard-find-clear:hover { color: var(--text); }
+  .leaderboard-basis, .leaderboard-omitted { margin: 0 0 4px; }
+  .leaderboard-body {
+    max-height: min(520px, 55vh); overflow-y: auto; margin-top: 8px;
+    border: 1px solid var(--border-soft); border-radius: 8px;
+  }
+  /* A plain DIV, not a <button>: the click is a deliberate no-op until Task
+     5 wires it to the runner's page (leaderboard.js's own comment), and a
+     control that LOOKS clickable while doing nothing is the dead-control
+     failure this project rejects on sight -- no pointer cursor, no hover
+     affordance, until there is a real destination behind it. */
+  .leaderboard-row {
+    display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .leaderboard-row:last-child { border-bottom: 0; }
+  .leaderboard-row.is-you { background: color-mix(in srgb, var(--gold) 14%, transparent); }
+  .leaderboard-pos {
+    flex: 0 0 24px; font-variant-numeric: tabular-nums; color: var(--muted); text-align: right;
+  }
+  .leaderboard-name {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .leaderboard-row.is-you .leaderboard-name { color: var(--gold); font-weight: 700; }
+  .leaderboard-points {
+    flex: 0 0 auto; min-width: 50px; text-align: right; white-space: nowrap;
+    font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600;
+  }
+  .leaderboard-mastery, .leaderboard-coverage {
+    flex: 0 0 auto; min-width: 46px; text-align: right; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  /* No narrow-pane collapse rule here on purpose: measured directly, the
+     Rank tab's own pane never drops below 731px (the 850px supported floor,
+     sidebar collapsed to its rail -- ui-core.md's own "850 -> 731" figure),
+     and the row -- including the corpus's actual longest name,
+     SullyLikesBigChungus at 20 characters -- fits there with room to spare
+     (contact sheet, task-4-report.md). A collapse threshold below that would
+     be unreachable at every supported width, which this project treats as
+     the same failure as a rule that never fires. */
   .objective-live-state {
     min-width: 0; min-height: 32px; display: flex; align-items: center; justify-content: center;
     gap: .4rem; color: var(--muted); border-inline: 1px solid var(--border-soft);

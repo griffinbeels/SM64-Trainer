@@ -18,6 +18,7 @@ import { useTween } from "../useTween.js";
 import { entityIconSrc, fallbackSlotForEntityKey,
          fallbackToGenericStar, isGenericArt } from "./entityicons.js";
 import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
+import { Leaderboard } from "./leaderboard.js";
 
 const html = htm.bind(h);
 
@@ -975,6 +976,9 @@ export function RankPage({ t }) {
       <div class="practice-card">
         <${Breakdown} key=${scopeId} data=${data} routeOrder=${routeOrder}
           onToggle=${toggleExcluded} />
+      </div>
+      <div class="practice-card">
+        <${Leaderboard} key=${scopeId} t=${t} scopeId=${scopeId} />
       </div>`}
   </div>`;
 }

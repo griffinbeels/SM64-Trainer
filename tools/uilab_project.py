@@ -426,6 +426,29 @@ if (!document.querySelector('.library-grid')) {
 }
 """)
 
+# The Rank tab's leaderboard section (Task 4, spec 2026-08-20-ranked-
+# leaderboard) -- neither Practice-page nor Segments-tab state, same as the
+# library stories above it. Guarded on `aria-current` rather than a bare
+# `.click()` per Story's own contract (setup MUST be idempotent -- it reruns
+# once per viewport, and an unguarded click on a tab button is harmless here
+# since nothing TOGGLES, but the guard is the house pattern `_EXPAND_ALL`
+# already sets and it costs nothing to match it). The board's own fetch is
+# async (`GET /api/leaderboard`), so this waits for a real row rather than
+# assuming the click alone is enough -- the same reason `_LIBRARY_NAV` waits
+# for a result row instead of just clicking the tab.
+_RANK_LEADERBOARD_SETUP = _script("""
+const rankBtn = document.querySelector('button.nav-item[title="Rank"]');
+if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') rankBtn.click();
+await waitFor(() => !!document.querySelector('.leaderboard-row'));
+// The section sits below the Progress chart and the Breakdown table, so it
+// is off the bottom of the viewport at the default probe height -- a clip
+// taken there throws ("Clipped area is either outside the resulting image")
+// instead of reporting a card. scrollIntoView puts it back in frame before
+// anything measures or screenshots it.
+document.querySelector('.leaderboard').scrollIntoView({block: 'start'});
+await sleep(60);
+""")
+
 STORIES = [
     Story(name="page", at="", setup=_EXPAND_ALL),
     # Re-pointed 2026-08-04 (amendment A8, spec practice-log-entity-cards):
@@ -494,6 +517,15 @@ STORIES = [
     # this tab somewhere other than a target page, and `_LIBRARY_NAV` heals
     # that for whatever runs next.
     Story(name="library-search", at=".library-searching", setup=_LIBRARY_SEARCH_SETUP),
+    # The densest row on the tab (position, rank icon, a long runner name,
+    # three numbers, a coverage fraction) -- see leaderboard.js. Placed here,
+    # between the library stories and the segments group, for the same
+    # reason library-search sits where it does: `_EXPAND_ALL` (the "page"
+    # story, first on every viewport pass) is what returns the app to
+    # Practice, so nothing after this needs to clean up either, and
+    # `segments-editor`'s own setup clicks its own tab regardless of what
+    # this one leaves the app on.
+    Story(name="rank-leaderboard", at=".leaderboard", setup=_RANK_LEADERBOARD_SETUP),
     # The four SEGMENTS-tab stories below are last on purpose: `_EXPAND_ALL`
     # (the "page" story's own setup, which runs first on every viewport) is
     # what returns the app to Practice for the next pass, so nothing after
