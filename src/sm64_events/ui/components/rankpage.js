@@ -701,6 +701,17 @@ export function ScopeChips({ activeScopeId, onPick, refreshKey, source = "/api/m
 // what makes a coverage row readable as "these, not those" at a glance
 // (round 8). Never two components that happen to look alike — the split
 // rank banners were exactly that mistake one card over.
+// `onToggle` is optional, the SAME contract `onEdit` already carries one line
+// down: omitting it renders a tile with no click behind it at all, not a
+// tile whose click silently does nothing. Fix round 1 (Task 5 review): the
+// runner page passes no `onToggle`, because the panel a click would open
+// (`EntityDetail`, below) reads `t.view` -- the VIEWING user's own attempts
+// and PB -- which has nothing to do with the runner whose tile was clicked.
+// Presence of `onToggle` is the ONE gate, not a second `interactive` prop:
+// no `aria-expanded`, no keyboard focus stop, and (index.html's
+// `.entity-tile.is-static` rule) no pointer cursor and no hover affordance
+// -- a tile with nothing behind it must not look like it has something
+// behind it (acceptance.md's dead-control rule).
 function EntityTile({ t, entity, size = 42, open, onToggle, onEdit }) {
   const fallbackSlot = fallbackSlotForEntityKey(entity.key);
   const iconSrc = entityIconSrc(t, entity.key);
@@ -711,10 +722,12 @@ function EntityTile({ t, entity, size = 42, open, onToggle, onEdit }) {
     keyEvent.preventDefault(); keyEvent.stopPropagation(); onEdit();
   };
   return html`<button type="button"
-      class="entity-tile ${open ? "is-open" : ""} ${practiced ? "" : "is-unpracticed"}"
+      class="entity-tile ${open ? "is-open" : ""} ${practiced ? "" : "is-unpracticed"} ${onToggle ? "" : "is-static"}"
       style=${`--tile-size:${size}px;`
         + (practiced ? `--tier-tint:${rankColor(entity.tier)}` : "")}
-      onclick=${onToggle} aria-expanded=${open ? "true" : "false"}
+      onclick=${onToggle || null}
+      aria-expanded=${onToggle ? (open ? "true" : "false") : null}
+      tabindex=${onToggle ? null : "-1"}
       title=${practiced
         ? `${entity.label} — ${capName(entity.tier)} ${divisionDigit(entity.division)} · ${fmtPoints(entity.score)} pts`
         : `${entity.label} — not practiced yet`}>
@@ -841,7 +854,25 @@ const COVERAGE_TILE_PX = 42;
 // repointing someone ELSE's icon is not a thing to offer. The icon picker
 // itself is still instantiated unconditionally (rules of hooks); when
 // `onEdit` is falsy it simply never opens.
-export function CoverageStrip({ t, data, caption, onEdit }) {
+//
+// `interactive` (Fix round 1, task 5 review): whether a tile's click opens
+// `EntityDetail` at all. Same shape as `onEdit` -- RankPage passes
+// `interactive=${true}` explicitly, the runner page passes nothing.
+// **Why this exists**: `EntityDetail` reads `t.view` -- the SIGNED-IN user's
+// own stars/segments, never the entity's owner. On the runner page `entity`
+// names the RUNNER's score/tier, so an interactive tile there opened a panel
+// printing the runner's MARELO beside the viewing user's own PB and attempts
+// table, with nothing on screen saying whose was whose (reproduced live:
+// "9575 pts · PB 0'11"43" for darkdog47's page, where 9575 is darkdog47's
+// score and 11"43 is the reviewer's own PB). The breakdown table directly
+// below already answers this comparison correctly, with both times labelled
+// (Their time / Your time / Gap) -- a second surface answering the same
+// question worse is the divergence this repo guards against, not a labelling
+// bug to fix in the panel. `EntityTile` reads the interactivity off whether
+// `onToggle` is a real function or `undefined` -- ONE gate, not two: `open`
+// below is never forced to `null` separately, because `openKey` can never
+// become non-null when no click ever reaches `setOpenKey`.
+export function CoverageStrip({ t, data, caption, onEdit, interactive }) {
   const [openKey, setOpenKey] = useState(null);
   // ONE icon picker for the whole strip, hoisted out of the tiles for the
   // same reason the banner hoists its own: a click inside the modal must
@@ -856,7 +887,9 @@ export function CoverageStrip({ t, data, caption, onEdit }) {
     <div class="entity-strip rank-coverage-strip">
       ${rated.map((entity) => html`<${EntityTile} key=${entity.key} t=${t}
         entity=${entity} size=${COVERAGE_TILE_PX} open=${entity.key === openKey}
-        onToggle=${() => setOpenKey(entity.key === openKey ? null : entity.key)}
+        onToggle=${interactive
+          ? () => setOpenKey(entity.key === openKey ? null : entity.key)
+          : undefined}
         onEdit=${onEdit ? () => setPicking(iconIdentityForKey(entity.key)) : undefined} />`)}
     </div>
     <span class="meta">${caption}</span>
@@ -1029,7 +1062,7 @@ export function RankPage({ t, onOpenRunner = () => {} }) {
                   + `rank score of the ${data.practiced} `
                   + `${data.practiced === 1 ? "entry" : "entries"} you have practiced`}</span></div>
               <div class="rank-factor">Coverage <${CoverageStrip} t=${t} data=${data}
-                onEdit=${true}
+                onEdit=${true} interactive=${true}
                 caption=${`${data.practiced} of ${data.n} rated `
                   + `${data.n === 1 ? "entry" : "entries"} practiced — dim tiles are `
                   + "the ones you have not run yet. MARELO is mastery × coverage, so "

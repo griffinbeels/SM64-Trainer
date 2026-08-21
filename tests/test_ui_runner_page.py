@@ -152,6 +152,65 @@ def test_back_returns_to_the_leaderboard(rank_page):
     assert rank_page.count(".runner-page") == 0, "the runner page never closed"
 
 
+# ---- Fix round 1: the coverage tile must not mix two people's numbers -----
+# CoverageStrip's EntityDetail panel reads t.view -- the VIEWING user's own
+# attempts/PB -- never the runner's. A lit tile on the runner page must not
+# open it: EntityDetail would print the runner's MARELO beside the reader's
+# own PB with nothing saying whose was whose (reviewer's live repro,
+# darkdog47: "9575 pts · PB 0'11\"43", where 9575 is the runner's score and
+# 11"43 is the reviewer's own PB).
+
+def click_a_lit_tile(page, scope_selector):
+    """Click the first PRACTICED (non-`.is-unpracticed`) coverage tile inside
+    `scope_selector`, return whether one was found."""
+    return page.evaluate(f"""
+      (() => {{
+        const tile = document.querySelector(
+          {json.dumps(scope_selector)} + ' .entity-tile:not(.is-unpracticed)');
+        if (!tile) return false;
+        tile.click();
+        return true;
+      }})()
+    """)
+
+
+def test_clicking_a_lit_coverage_tile_opens_nothing_on_the_runner_page(rank_page):
+    click_a_runner_row(rank_page)
+    rank_page.wait_for(".runner-page", timeout_ms=8000)
+    rank_page.wait_ms(200)
+    found = click_a_lit_tile(rank_page, ".runner-page")
+    assert found, "no practiced coverage tile on the runner page to click"
+    rank_page.wait_ms(200)
+    assert rank_page.count(".runner-page .entity-detail") == 0, (
+        "clicking a coverage tile on the runner page opened EntityDetail -- "
+        "that panel reads the VIEWING USER's own attempts/PB, not the "
+        "runner's, and must never open here")
+    # Dead-control contract: the tile must not look clickable either.
+    static_tiles = rank_page.evaluate(
+        "document.querySelectorAll('.runner-page .entity-tile.is-static').length")
+    assert static_tiles > 0, "no coverage tile carries .is-static on the runner page"
+    cursor = rank_page.evaluate("""
+      getComputedStyle(document.querySelector('.runner-page .entity-tile')).cursor
+    """)
+    assert cursor == "default", f"a runner-page coverage tile still shows cursor: {cursor!r}"
+
+
+def test_clicking_a_lit_coverage_tile_still_opens_the_panel_on_your_own_tab(rank_page):
+    """The regression guard for this fix round: before ever opening a
+    runner, the user's OWN coverage tile is still a real control."""
+    found = click_a_lit_tile(rank_page, ".rank-page")
+    assert found, "no practiced coverage tile on the user's own tab to click"
+    rank_page.wait_ms(200)
+    assert rank_page.count(".rank-page .entity-detail") == 1, (
+        "clicking a practiced coverage tile on the user's own tab did not "
+        "open EntityDetail")
+    static_tiles = rank_page.evaluate(
+        "document.querySelectorAll('.rank-page .entity-tile.is-static').length")
+    assert static_tiles == 0, (
+        f"found {static_tiles} .is-static tile(s) on the user's own tab -- "
+        "every tile there must stay interactive")
+
+
 # ---- the second door: a runner's name inside the Library ------------------
 
 def test_a_library_entry_runners_name_opens_the_same_runner_page(library_page):

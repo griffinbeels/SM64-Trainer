@@ -2736,7 +2736,14 @@
   /* Coverage's unpracticed entries: the art stays (you have to recognise
      WHICH star you haven't touched), the tier ring and the colour go. */
   .entity-tile.is-unpracticed { opacity: .38; filter: grayscale(.75); }
-  .entity-tile.is-unpracticed:hover { opacity: .7; }
+  .entity-tile.is-unpracticed:not(.is-static):hover { opacity: .7; }
+  /* Fix round 1 (task 5 review): a tile with no `onToggle` behind it (the
+     runner page -- rankpage.js's own comment on `CoverageStrip`'s
+     `interactive` prop has the why) must not LOOK clickable. `cursor` is
+     the only property this needs to override -- there is no other
+     `:hover`/`:focus` affordance on a plain (practiced) tile to suppress,
+     and the unpracticed one is excluded above. */
+  .entity-tile.is-static { cursor: default; }
   /* The whole scope in one strip — 24 entries for a 16 Star route, 120+ for
      a full run. The cap plus scroll is what stops a long route pushing the
      chart and the breakdown off the screen; four rows fit before it engages. */
