@@ -228,6 +228,33 @@ itself). It appears **0 times in those 875 grabs**, and the correction watch
 still covers it. That watch is unchanged and still runs to
 `RESULT_SETTLE_FRAMES`; it simply no longer bounds any publish.
 
+## A grab publishes one frame later since the loop stopped double-polling
+
+**2026-08-20.** The poll loop moved to 250 Hz and now calls every detector
+ONCE per game frame instead of the ~1.5 times a 60 Hz loop managed against
+30 fps logic. `tests/test_detector_cadence_parity.py` drives the REAL chain
+(`main.build_detectors`) over one synthetic sequence at both cadences and
+compares event for event; across a star grab and a level-change-plus-reset,
+**exactly one payload field moves and nothing else does.**
+
+`published_after` reads 1 where it used to read 0. The old double poll gave
+`star_grab.py` a SECOND look at the x-cam frame itself, so it could publish
+with zero frames held; at one look per frame the earliest chance after the
+x-cam is the next frame. **The row appears one game frame -- 33 ms -- later
+than it used to. The recorded TIME is identical**: same `igt_frames`, same
+`igt_source`, same star. `tools/star_to_screen.py` divides that field by 30
+to get milliseconds and was always right to -- `waited` has always been
+`curr.global_timer - grab.xcam_frame`, game frames rather than polls.
+
+The parity test's allowance is a WHITELIST, not an ignore, and it is
+mutation-proved: emptying it turns the star case red. Anything else moving
+with the cadence is a real behaviour change and that test says so.
+
+Why replaying the journal could NOT have answered this: `projection.replay()`
+re-derives attempts and segments from events that were already written, and
+never re-runs a detector over memory. It is structurally blind to how often
+the detectors were polled.
+
 ## The entrance touch names where it leads, on its own frame
 
 **Task 0081, 2026-08-04; corrected by measurement 2026-08-05.** `warp_entered`
