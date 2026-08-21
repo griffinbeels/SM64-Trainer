@@ -76,15 +76,24 @@ def test_manual_import_carries_the_version_through(tmp_path):
         assert row["game_version"] == "jp"
 
 
-def test_a_segment_key_is_refused(tmp_path):
-    """Segments are RTA-only, and a segment id means nothing outside the
-    database that assigned it."""
+def test_a_segment_on_the_igt_clock_is_refused(tmp_path):
+    """Segments are RTA-only. The manual door sends IGT, so a segment typed
+    there is refused rather than quietly re-clocked."""
     with make_client(tmp_path) as (client, _db, _svc):
         response = client.post("/api/import/manual", json={
             "entity_key": "segment:6", "strat_tag": "Standard",
             "time_cs": 886})
         assert response.status_code == 422
-        assert "only stars" in response.json()["detail"]
+        assert "IGT" in response.json()["detail"]
+
+
+def test_a_key_that_is_neither_a_star_nor_a_segment_is_refused(tmp_path):
+    with make_client(tmp_path) as (client, _db, _svc):
+        response = client.post("/api/import/manual", json={
+            "entity_key": "area:6:1", "strat_tag": "Standard",
+            "time_cs": 886})
+        assert response.status_code == 422
+        assert "only stars and your own segments" in response.json()["detail"]
 
 
 def test_importing_the_same_time_twice_is_free(tmp_path):

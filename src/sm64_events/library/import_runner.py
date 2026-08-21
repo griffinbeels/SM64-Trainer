@@ -16,12 +16,15 @@ Three kinds of row are dropped, and each matters:
     practice — stage RTA routes, mostly.
   * Rows mapped to a SEGMENT. Six of the snapshot's 252 targets carry one, and
     a segment id is LOCAL to each player's database — the mapper resolved
-    `segment:6` against the seeding order of the machine that scraped, so
-    landing it here would attribute a time to whatever that id happens to name
-    in his. Segments are also RTA-only while every sheet approach time is an
-    IGT star time, so the clock would be wrong even if the id were right.
-    Importing a movement needs the sheet row assigned to a segment the user
-    actually built, which is `library/adoptions.py`'s job.
+    `segment:6` against the seeding order of the machine that scraped it. A
+    FOREIGN id is worse than a missing one: it very likely exists here too and
+    names a different movement, so the time would land silently on the wrong
+    thing rather than failing. (A LiveSplit gold is the opposite case and does
+    land: `tracking/import_names.py` matches it by NAME against segments the
+    player built here, so the id it produces is this database's own.) Segments
+    are RTA-only besides, while every sheet approach time is an IGT star time.
+    Importing a movement FROM THE SHEET needs the row assigned to a segment
+    the user actually built, which is `library/adoptions.py`'s job.
 
 All three are COUNTED rather than silently skipped: a drop nobody can see
 reads as an import that half-worked.

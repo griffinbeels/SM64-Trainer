@@ -89,11 +89,47 @@ def test_removing_an_import_restores_what_it_superseded(tmp_path):
     assert db.current_pb(1, 0, "igt", strat_tag="Standard")["frames"] == 400
 
 
-def test_a_segment_key_is_refused_rather_than_split(tmp_path):
-    """A segment id is local to this database, and segments are RTA-only. The
-    sheet mapper already drops these; the door says so too, because the API
-    accepts an entity key from anyone."""
+def test_a_segment_of_yours_lands_on_the_rta_clock(tmp_path):
+    """A LiveSplit gold is a SEGMENT time, and a segment id resolved by name
+    against this database means exactly what it says — which is the whole
+    difference from the sheet's segment rows."""
+    db, svc = make(tmp_path)
+    mine = db.segment_defs()[0]["id"]
+    summary = asyncio.run(svc.import_times("livesplit", [ImportCandidate(
+        entity_key=f"segment:{mine}", strat_tag="Standard", time_cs=1200,
+        timer_mode="rta")]))
+    assert summary["imported"] == 1
+    row = db.current_pb(None, None, "rta", segment_id=mine,
+                        strat_tag="Standard")
+    assert row["frames"] == 360
+    assert row["attempt_id"] is None
+    assert row["imported_from"] == "livesplit"
+
+
+def test_a_segment_on_the_igt_clock_is_refused(tmp_path):
+    """Segments have no IGT clock — the same rule save_pb enforces. Quietly
+    re-clocking one would file a number against a measurement it is not."""
+    db, svc = make(tmp_path)
+    mine = db.segment_defs()[0]["id"]
+    import pytest
+    with pytest.raises(ValueError, match="no IGT clock"):
+        asyncio.run(svc.import_times("manual", [candidate(key=f"segment:{mine}")]))
+
+
+def test_a_segment_id_that_is_not_yours_is_refused(tmp_path):
+    """A FOREIGN id is worse than a missing one: it may well exist here and
+    name a different movement, so the time would land on the wrong thing."""
+    db, svc = make(tmp_path)
+    stranger = max(row["id"] for row in db.segment_defs()) + 500
+    import pytest
+    with pytest.raises(ValueError, match="not one of your segments"):
+        asyncio.run(svc.import_times("sheet:someone", [ImportCandidate(
+            entity_key=f"segment:{stranger}", strat_tag="Standard",
+            time_cs=1200, timer_mode="rta")]))
+
+
+def test_anything_that_is_neither_is_refused(tmp_path):
     _, svc = make(tmp_path)
     import pytest
-    with pytest.raises(ValueError, match="only stars"):
-        asyncio.run(svc.import_times("manual", [candidate(key="segment:6")]))
+    with pytest.raises(ValueError, match="only stars and your own segments"):
+        asyncio.run(svc.import_times("manual", [candidate(key="area:6:1")]))

@@ -78,6 +78,15 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
+def _import_identity(entity_key: str):
+    """`(course_id, star_id, segment_id)` for a pbs row — the kind-dispatched
+    shape `insert_pb` and `current_pb` both take, with the unused half None."""
+    parts = entity_key.split(":")
+    if parts[0] == "segment":
+        return None, None, int(parts[1])
+    return int(parts[1]), int(parts[2]), None
+
+
 def _strategies_key(ek: str) -> str:
     """`strategies` ui_state KV key for a rank entity_key.
 
@@ -1953,30 +1962,23 @@ class TrackerService:
         import `server/`.
         """
         db = self._require_db()
+        own_segments = {definition["id"] for definition in db.segment_defs()}
         for candidate in candidates:
-            # A star is the only thing this door can land, and saying so here
-            # is what keeps the split below honest. A SEGMENT id is local to
-            # this database — the sheet's six segment-mapped targets resolved
-            # against the seeding order of whichever machine scraped them — and
-            # segments are RTA-only besides, while every candidate here is an
-            # IGT star time.
-            if not candidate.entity_key.startswith("star:"):
-                raise ValueError(
-                    f"{candidate.entity_key!r} cannot be imported: only stars "
-                    "can be, and a segment id means nothing outside the "
-                    "database that assigned it")
+            self._check_importable(candidate, own_segments)
 
         def current_frames(entity_key, strat_tag, timer_mode):
-            _, course_s, star_s = entity_key.split(":")
-            row = db.current_pb(int(course_s), int(star_s), timer_mode,
-                                strat_tag=strat_tag)
+            course_id, star_id, segment_id = _import_identity(entity_key)
+            row = db.current_pb(course_id, star_id, timer_mode,
+                                segment_id=segment_id, strat_tag=strat_tag)
             return row["frames"] if row else None
 
         plan = importing.decide(candidates, current_frames)
         saved = _iso(_now())
         for candidate, frames in plan.landing:
-            _, course_s, star_s = candidate.entity_key.split(":")
-            db.insert_pb(course_id=int(course_s), star_id=int(star_s),
+            course_id, star_id, segment_id = _import_identity(
+                candidate.entity_key)
+            db.insert_pb(course_id=course_id, star_id=star_id,
+                         segment_id=segment_id,
                          strat_tag=candidate.strat_tag,
                          timer_mode=candidate.timer_mode, frames=frames,
                          attempt_id=None, saved_utc=saved,
@@ -1987,6 +1989,40 @@ class TrackerService:
             await self.publish(Event(type="times_imported", frame=0,
                                      timestamp_utc=_now(), payload=payload))
         return payload
+
+    @staticmethod
+    def _check_importable(candidate, own_segments) -> None:
+        """Refuse a candidate this database cannot honestly file.
+
+        A STAR always can be. A SEGMENT can only when the id is one of THIS
+        database's own — which is the whole difference between a LiveSplit
+        gold (matched by name against segments the player built here) and the
+        Ultimate Sheet's six segment-mapped targets, whose ids came from
+        whichever machine scraped them. A foreign id is worse than a missing
+        one: it may well EXIST here and name a different movement, so the time
+        would land silently on the wrong thing.
+
+        Segments are RTA-only, the same rule `save_pb` enforces, so a segment
+        candidate carrying the IGT clock is refused rather than quietly
+        re-clocked."""
+        key = candidate.entity_key
+        if key.startswith("star:"):
+            return
+        if key.startswith("segment:"):
+            try:
+                segment_id = int(key.split(":")[1])
+            except (IndexError, ValueError):
+                raise ValueError(f"{key!r} is not a segment id") from None
+            if segment_id not in own_segments:
+                raise ValueError(
+                    f"{key!r} is not one of your segments — a segment id from "
+                    "somewhere else may name a different movement here")
+            if candidate.timer_mode != "rta":
+                raise ValueError(
+                    f"{key!r} is timed on RTA; a segment has no IGT clock")
+            return
+        raise ValueError(
+            f"{key!r} cannot be imported: only stars and your own segments can")
 
     def remove_imported(self, source: str) -> int:
         """Erase every personal best one import brought, and say how many.
