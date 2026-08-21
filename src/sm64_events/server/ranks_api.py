@@ -2,10 +2,16 @@
 """REST CRUD for rank standards, plus the MARELO scope surface built on top of
 them. Same error taxonomy as api.py/replay_api.py: LookupError->404,
 ValueError->409, RuntimeError->503 -- `/marelo*` mostly raises HTTPException
-directly instead (an unknown scope IS a 404, not a caught LookupError)."""
+directly instead (an unknown scope IS a 404, not a caught LookupError).
+
+`/leaderboard*` (Task 3 of spec 2026-08-20-ranked-leaderboard) is the same
+scope machinery pointed at the community sheet instead of the user alone --
+see `library/board.py`'s module docstring for the scoring/caching contract."""
 from fastapi import APIRouter, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from sm64_events.library import board
 from sm64_events.links import xcams_url
 from sm64_events.memory.addresses import COURSE_NAMES
 from sm64_events.ranks import classify, history, scopes, scoring
@@ -330,6 +336,10 @@ def create_ranks_router(service, library=None, adoptions=None,
     from sm64_events.library import videocheck
     dead_videos = videocheck.dead_urls(videocheck.load_checks(
         video_checks_path or bundled_video_checks() or ""))
+    # One cache per running app, same lifetime as `dead_videos` above -- a
+    # module-level singleton would leak one test's cached board into an
+    # unrelated test whose inputs merely look identical.
+    board_cache = board.RunnerScoreCache()
     router = APIRouter(prefix="/api")
 
     @router.get("/ranks/standards")
@@ -597,5 +607,92 @@ def create_ranks_router(service, library=None, adoptions=None,
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}
+
+    def _you_scores(keys: list[str]) -> dict[str, float]:
+        """The user's own per-entity scores, graded PB-basis ALWAYS -- a
+        leaderboard compares everyone on the same basis, whatever
+        `rank_mode` the Rank tab happens to be showing him."""
+        return marelo_bridge.entity_scores(service.db.attempts(), service.ranks,
+                                           keys, "pb", service.db.pbs())
+
+    def _adoptions_rows() -> dict:
+        return adoptions.rows() if adoptions is not None else {}
+
+    @router.get("/leaderboard")
+    async def leaderboard(scope: str | None = None):
+        """Every community runner scored the same way MARELO scores the
+        user, plus the user's own row, for one scope -- `library/board.py`'s
+        module docstring has the caching contract. `library=None` (a
+        broadcast-only second instance with no sheet of its own) answers
+        "the sheet is not loaded" with an empty board rather than a 503,
+        matching `/api/library/entity/{k}`'s own precedent."""
+        if service.ranks is None or service.db is None:
+            raise HTTPException(503, "rank standards unavailable")
+        scope_id = scope or _active_scope(service)
+        label = _scope_label(service, scope_id)
+        rank_mode = _rank_mode(service)
+        if library is None:
+            groups = _groups(service, scope_id, excluded=set())  # 404s first
+            return {"scope_id": scope_id, "label": label, "n": 0,
+                    "basis": "pb", "rank_mode": rank_mode,
+                    "sheet_revision": None, "rows": []}
+        groups = _groups(service, scope_id, excluded=set())
+        keys = [key for group in groups for key in group["candidates"]]
+        you_aggregate = scopes.aggregate(_you_scores(keys), groups)
+        rows = await run_in_threadpool(
+            board.leaderboard, board_cache, library, _adoptions_rows(),
+            service.ranks, groups, scope_id,
+            version=service.ranks.grading_version, you_aggregate=you_aggregate)
+        return {"scope_id": scope_id, "label": label, "n": you_aggregate["n"],
+                "basis": "pb", "rank_mode": rank_mode,
+                "sheet_revision": library.revision, "rows": rows}
+
+    @router.get("/leaderboard/runner/{name:path}/summary")
+    async def leaderboard_runner_summary(name: str):
+        """The runner page's scope chip row -- the same chip shape
+        `/api/marelo/summary` returns, sourced from this runner instead of
+        the user. Registered ahead of the bare `{name:path}` route below,
+        because a path converter is greedy and would otherwise swallow
+        `.../summary` as part of the name."""
+        if service.ranks is None or service.db is None:
+            raise HTTPException(503, "rank standards unavailable")
+        if library is None:
+            raise HTTPException(404, f"unknown runner {name!r}")
+        scope_specs = [(scope_id, _groups(service, scope_id, excluded=set()),
+                        _scope_label(service, scope_id))
+                       for scope_id in _summary_scope_ids(service)]
+        chips = await run_in_threadpool(
+            board.runner_summary, board_cache, library, _adoptions_rows(),
+            service.ranks, scope_specs, name,
+            version=service.ranks.grading_version)
+        if chips is None:
+            raise HTTPException(404, f"unknown runner {name!r}")
+        return {"chips": chips}
+
+    @router.get("/leaderboard/runner/{name:path}")
+    async def leaderboard_runner(name: str, scope: str | None = None):
+        """One runner's scoped rating, per entity, each widened with the
+        user's own score/time/tier/division on the same entity -- the same
+        field set `/api/marelo` returns, plus `runner` (spec's contract, so
+        `Breakdown`/`CoverageStrip` render either source unchanged)."""
+        if service.ranks is None or service.db is None:
+            raise HTTPException(503, "rank standards unavailable")
+        if library is None:
+            raise HTTPException(404, f"unknown runner {name!r}")
+        scope_id = scope or _active_scope(service)
+        groups = _groups(service, scope_id, excluded=set())
+        keys = [key for group in groups for key in group["candidates"]]
+        you_scores = _you_scores(keys)
+        you_times = board.you_times_by_entity(service.db.pbs(), service.ranks, keys)
+        breakdown = await run_in_threadpool(
+            board.runner_breakdown, board_cache, library, _adoptions_rows(),
+            service.ranks, groups, name, version=service.ranks.grading_version,
+            you_scores=you_scores, you_times=you_times,
+            label_of=lambda key: entity_label(service.db, key))
+        if breakdown is None:
+            raise HTTPException(404, f"unknown runner {name!r}")
+        breakdown["scope_id"] = scope_id
+        breakdown["label"] = _scope_label(service, scope_id)
+        return breakdown
 
     return router

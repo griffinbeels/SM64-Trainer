@@ -412,6 +412,35 @@ In `pb` grading mode `/api/marelo/history`'s series replays SAVED PBs (`pbs`
 table), not every success — the same times the rating grades. Undoing a PB
 removes its point.
 
+## Leaderboard (the community sheet, scored on MARELO)
+
+The `/api/leaderboard*` routes point the SAME scope machinery at the
+Ultimate Sheet's community runners instead of the user alone: every
+runner's sheet time is graded through the identical 0-100 curve and
+standards ladders MARELO grades the user on (`library/board.py`), so a
+runner's number and the user's are directly comparable. Grading is always
+`pb`-basis and always the CURRENT grading version, whatever the user's own
+`rank_mode`/game-version setting happens to be — the payload echoes both so
+a client can say when they differ. `library=None` (a broadcast-only second
+instance with no sheet of its own) answers with an empty board rather than
+a `503`, matching `/api/library/entity/{k}`'s "the sheet is not loaded is an
+answer" precedent.
+
+| Method | Path | Body / Query | Effect |
+|---|---|---|---|
+| `GET` | `/api/leaderboard` | `?scope=<id>` (optional) | `{scope_id, label, n, basis:"pb", rank_mode, sheet_revision, rows:[{position,runner,you,marelo,tier,division,mastery,practiced,n}]}` for one scope (defaults to the active route, else Overall, same as `/api/marelo`). `rows` holds every community runner who has practiced at least one entity in this scope, plus exactly one `you:true, runner:null` row for the user — MARELO-descending, competition-ranked (a tie shares one `position` and the next skips by the tie's size). A runner with nothing practiced in this scope is left off; the user's own row never is. `404` for an unknown scope. |
+| `GET` | `/api/leaderboard/runner/{name}` | `?scope=<id>` (optional) | One runner's rating for a scope, the same field set `/api/marelo` returns plus `runner`, each entity widened with the user's own numbers: `{runner, scope_id, label, marelo, mastery, coverage, tier, division, next_division_at, division_progress, n, practiced, entities:[{key,label,score,tier,division,next_tier,next_division,gain,excluded,time_cs,you:{score,time_cs,tier,division}}]}`. `excluded` is always `false` — the user's own exclusions shape scopes for HIM and must not shrink the denominator every runner is judged on. `404` for an unknown runner (the sheet has never heard of that name) or an unknown scope. |
+| `GET` | `/api/leaderboard/runner/{name}/summary` | — | `{chips:[{scope_id,label,tier,division,marelo,n,practiced}]}` — the same chip shape `/api/marelo/summary` returns, sourced from this runner instead of the user, over the same fixed scope list (`overall`, `Main Categories` routes, the active scope). `404` for an unknown runner. |
+
+Reads run off the event loop (`run_in_threadpool`, same reason
+`POST /api/library/refresh` does): scoring 448 runners measures ~29ms to
+build the shared score map and up to ~46ms to aggregate Overall, both past
+a 33ms game frame, and the poller shares this process. A repeat request
+reuses the cached score map and, for an unchanged scope, its ranked rows —
+invalidated by a newer sheet revision, a changed adoption, a different
+grading version, or any standards edit (a threshold, a JP overlay, a new or
+deleted strategy).
+
 ## Compare (side-by-side video)
 
 **Compare** puts your run side-by-side with a reference video: the left

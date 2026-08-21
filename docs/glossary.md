@@ -687,6 +687,23 @@ simply absent from their rating, the same rule your own [[MARELO]] follows.
 - **Not** — your own [[MARELO]], which only ever grades your practice
   history, never a [[runner]]'s.
 
+### Rank board
+
+Every [[runner]] who has practiced something in a [[scope]], plus you,
+ordered by [[MARELO]] and numbered the same way [[Leaderboard mode]]
+numbers its own list: a tie shares a position and the next skips ahead by
+the tie's size. The board drops a [[runner]] with nothing practiced in this
+[[scope]] and always keeps your own row, even at zero. Opening one
+[[runner]]'s row widens every entity with your own score and time on it, so
+the two read side by side.
+
+- **Lives** — the board (`src/sm64_events/library/board.py`) → served at
+  /api/leaderboard
+- **Not** — [[Leaderboard mode]], which re-orders one [[approach]]'s
+  [[sheet entry]] list by raw time inside a single [[Library tab]] section;
+  this orders every [[runner]]'s [[runner rating]] across a whole [[scope]]
+  instead.
+
 ---
 
 ## What is on screen
