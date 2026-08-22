@@ -41,6 +41,7 @@ from sm64_events.replay.window import find_window
 from sm64_events.server.app import create_app
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.inputs.sampler import InputSampler
+from sm64_events.inputs.service import InputsService
 from sm64_events.inputs.store import ChunkWriter
 from sm64_events.server.poller import Poller
 from sm64_events.storage.db import Database
@@ -387,15 +388,15 @@ def build():
     # service IS the event sink; on_frame is its deferred-judgement heartbeat,
     # so a topological cancel reaches the screen on the next game frame rather
     # than whenever the next event happens to be journaled.
-    # The pad is sampled every tick and the game once per frame -- see
-    # server/poller.py's docstring for why the rate is set by the CONTROLLER
-    # rather than by the game. The writer reads the session id lazily because
-    # the tracker has not opened one yet at this point.
+    # Controller capture needs a place to write (a broadcast-only boot has no
+    # db) and a controller address (a version whose sync run has not found
+    # one captures nothing, and the poller falls back to its snapshot rate).
+    # The writer reads the session id lazily because the tracker has not
+    # opened one yet at this point.
     input_writer = None
     input_sampler = None
-    input_store = getattr(db, "inputs", None)
-    if input_store is not None and layout.player1_controller is not None:
-        input_writer = ChunkWriter(input_store, lambda: service.session_id)
+    if db is not None and layout.player1_controller is not None:
+        input_writer = ChunkWriter(db.inputs, lambda: service.session_id)
         input_sampler = InputSampler(memory, layout, input_writer.add)
     poller = Poller(memory, detectors, service, on_frame=service.settle_frame,
                     reader=reader, input_sampler=input_sampler)
@@ -403,19 +404,14 @@ def build():
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     if input_writer is not None:
         poller.on_stop = input_writer.close
-    inputs_bundle = None
-    if input_store is not None:
-        from sm64_events.inputs.service import InputsService
-        from sm64_events.inputs.templates import TemplateStore
-        templates = TemplateStore(db._conn, db._lock)
-        inputs_bundle = {
-            "store": input_store, "templates": templates,
-            "attempts": lambda: db.attempts(),
-            "service": InputsService(input_store, templates,
-                                     lambda: db.attempts()),
-        }
+    # Reading back what was captured needs no controller address, so the
+    # timeline and the templates are wired on every layout that has a db.
+    inputs = None
+    if db is not None:
+        inputs = InputsService(db.inputs, db.input_templates, db.attempts,
+                               version=layout.version)
     return create_app(poller, broadcaster, service=service, replay=replay,
-                      inputs=inputs_bundle,
+                      inputs=inputs,
                       updater=updater, compare=compare, compilation=compilation,
                       db_retry=db_retry)
 

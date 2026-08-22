@@ -19,28 +19,30 @@ import { h } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
+import { fmtIgtShort } from "../format.js";
 import { ControllerPanel, FacingDial, stickPhrase } from "./controllerpanel.js";
 
 const html = htm.bind(h);
 
-const FPS = 30;
 const STICK_HEIGHT = 46;
 const SPEED_HEIGHT = 30;
 
+// A run is `{start, length, buttons, stick_x, stick_y, yaw, speed}` on the
+// capture axis (zero-based, sorted), with holes between runs where capture
+// stopped. The field names are the payload's own, so a field added on the
+// server is readable here the moment it arrives.
 export function frameAt(runs, frame) {
-  // Runs are [start, length, buttons, stickX, stickY], zero-based and sorted,
-  // with holes between them where capture stopped. A frame inside a hole has
-  // no reading and answers null -- never the neighbouring run's, which would
-  // interpolate across exactly the gap the format exists to preserve.
+  // A frame inside a hole has no reading and answers null -- never the
+  // neighbouring run's, which would interpolate across exactly the gap the
+  // format exists to preserve.
   let low = 0;
   let high = runs.length - 1;
   while (low <= high) {
     const mid = (low + high) >> 1;
-    const [start, length, buttons, stickX, stickY] = runs[mid];
-    if (frame < start) high = mid - 1;
-    else if (frame >= start + length) low = mid + 1;
-    else return { buttons, stickX, stickY, yaw: runs[mid][5] || 0,
-                  speed: runs[mid][6] || 0 };
+    const run = runs[mid];
+    if (frame < run.start) high = mid - 1;
+    else if (frame >= run.start + run.length) low = mid + 1;
+    else return run;
   }
   return null;
 }
@@ -58,57 +60,56 @@ export function lanesOf(runs, table) {
   // three that carry the run.
   return (table || []).map(([bit, name]) => {
     const bars = [];
-    for (const [start, length, buttons] of runs) {
-      if (!(buttons & bit)) continue;
+    for (const run of runs) {
+      if (!(run.buttons & bit)) continue;
       const last = bars[bars.length - 1];
-      if (last && last.start + last.length === start) last.length += length;
-      else bars.push({ start, length });
+      if (last && last.start + last.length === run.start) last.length += run.length;
+      else bars.push({ start: run.start, length: run.length });
     }
     return { bit, name, bars };
   }).filter((lane) => lane.bars.length > 0);
+}
+
+// A step line: one value held across each run, drawn as a horizontal segment
+// from the run's start to its end. `valueOf` picks the field; `scale` maps it
+// into the lane's height.
+function stepPath(runs, valueOf, scale) {
+  const points = [];
+  for (const run of runs) {
+    const y = scale(valueOf(run)).toFixed(2);
+    points.push(`${run.start},${y}`, `${run.start + run.length},${y}`);
+  }
+  return points.join(" ");
 }
 
 // Speed is drawn against the fastest value in THIS track, not a fixed cap:
 // what he asked for is "where there are opportunities to go faster", which is
 // a comparison within one run. A fixed ceiling would flatten a whole slow
 // segment into a line at the bottom and hide exactly that.
-function speedPath(runs, frames) {
-  if (!runs.length || !frames) return "";
+function speedPath(runs) {
   let peak = 0;
-  for (const run of runs) peak = Math.max(peak, Math.abs(run[6] || 0));
+  for (const run of runs) peak = Math.max(peak, Math.abs(run.speed));
   if (peak <= 0) peak = 1;
-  const points = [];
-  for (const run of runs) {
-    const y = SPEED_HEIGHT - (Math.abs(run[6] || 0) / peak) * (SPEED_HEIGHT - 2);
-    points.push(`${run[0]},${y.toFixed(2)}`);
-    points.push(`${run[0] + run[1]},${y.toFixed(2)}`);
-  }
-  return points.join(" ");
+  return stepPath(runs, (run) => Math.abs(run.speed),
+    (speed) => SPEED_HEIGHT - (speed / peak) * (SPEED_HEIGHT - 2));
 }
 
-function stickPath(runs, frames, axis, height) {
-  if (!runs.length || !frames) return "";
-  const points = [];
-  for (const run of runs) {
-    const value = axis === "x" ? run[3] : run[4];
-    const y = height / 2 - (value / 84) * (height / 2 - 2);
-    points.push(`${run[0]},${y.toFixed(2)}`);
-    points.push(`${run[0] + run[1]},${y.toFixed(2)}`);
-  }
-  return points.join(" ");
+// The stick's reach is the pad's own, not the game's cap: his pad reaches 84
+// where the game clamps at 64, so scaling to the cap would pin every full
+// deflection to the lane's edge (the same call controllerpanel.js makes).
+function stickPath(runs, axis, stickMax) {
+  const valueOf = (run) => (axis === "x" ? run.stick_x : run.stick_y);
+  let reach = stickMax;
+  for (const run of runs) reach = Math.max(reach, Math.abs(valueOf(run)));
+  return stepPath(runs, valueOf,
+    (value) => STICK_HEIGHT / 2 - (value / reach) * (STICK_HEIGHT / 2 - 2));
 }
 
 // Times read as SECONDS, not as a frame count. His round-32 ask, quoting
 // k8ehops: "instead of using 30f or 35f, use xx.xx format instead, since thats
-// what most people read times as". The notation is the project's own display
-// form (`fmtIgtShort`, `ui/format.js`) rather than a fourth spelling invented
-// here -- same information, one notation across the whole app.
-function timeLabel(frame) {
-  const total = Math.abs(frame) / FPS;
-  const seconds = Math.floor(total);
-  const centis = Math.round((total - seconds) * 100);
-  return `${frame < 0 ? "-" : ""}${seconds}"${String(centis).padStart(2, "0")}`;
-}
+// what most people read times as". `fmtIgtShort` is the project's own display
+// form, so this surface cannot spell a time differently from the rest.
+const timeLabel = fmtIgtShort;
 
 function spanLabel(start, length) {
   return length === 1
@@ -140,14 +141,15 @@ export function InputTimeline({ attemptId, video, compact = false }) {
   useEffect(() => {
     if (!video || !following) return undefined;
     let raf = 0;
+    const fps = state.phase === "ready" ? state.data.fps : 30;
     const tick = () => {
-      const at = Math.floor((video.currentTime || 0) * FPS + 1e-4);
+      const at = Math.floor((video.currentTime || 0) * fps + 1e-4);
       setFrame((current) => (current === at ? current : at));
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [video, following]);
+  }, [video, following, state]);
 
   const data = state.phase === "ready" ? state.data : null;
   const lanes = useMemo(
@@ -181,7 +183,7 @@ export function InputTimeline({ attemptId, video, compact = false }) {
     setFrame(clamped);
     if (video) {
       if (!video.paused) video.pause();
-      video.currentTime = (clamped + 0.5) / FPS;
+      video.currentTime = (clamped + 0.5) / data.fps;
     }
   };
   const seekFromPointer = (event) => {
@@ -228,7 +230,7 @@ export function InputTimeline({ attemptId, video, compact = false }) {
     <header class="input-timeline-head">
       <div>
         <span class="eyebrow">Inputs</span>
-        <h4>${timeLabel(total)}${" "}·${" "}${total} frames${" "}·${" "}${FPS} fps</h4>
+        <h4>${timeLabel(total)}${" "}·${" "}${total} frames${" "}·${" "}${data.fps} fps</h4>
       </div>
       <div class="input-timeline-actions">
         ${video && html`<button class="icon-button" onclick=${() => setFollowing(true)}
@@ -264,13 +266,13 @@ export function InputTimeline({ attemptId, video, compact = false }) {
                   class="stick-axis" vector-effect="non-scaling-stroke" />
             ${data.template && html`
               <polyline class="stick-line is-x is-template" vector-effect="non-scaling-stroke"
-                        points=${stickPath(data.template.runs, total, "x", STICK_HEIGHT)} />
+                        points=${stickPath(data.template.runs, "x", data.stick_max)} />
               <polyline class="stick-line is-y is-template" vector-effect="non-scaling-stroke"
-                        points=${stickPath(data.template.runs, total, "y", STICK_HEIGHT)} />`}
+                        points=${stickPath(data.template.runs, "y", data.stick_max)} />`}
             <polyline class="stick-line is-x" vector-effect="non-scaling-stroke"
-                      points=${stickPath(data.runs, total, "x", STICK_HEIGHT)} />
+                      points=${stickPath(data.runs, "x", data.stick_max)} />
             <polyline class="stick-line is-y" vector-effect="non-scaling-stroke"
-                      points=${stickPath(data.runs, total, "y", STICK_HEIGHT)} />
+                      points=${stickPath(data.runs, "y", data.stick_max)} />
           </svg>
         </div>
       </div>
@@ -295,7 +297,7 @@ export function InputTimeline({ attemptId, video, compact = false }) {
           <svg viewBox=${`0 0 ${total} ${SPEED_HEIGHT}`} height=${SPEED_HEIGHT}
                preserveAspectRatio="none" aria-hidden="true">
             <polyline class="speed-line" vector-effect="non-scaling-stroke"
-                      points=${speedPath(data.runs, total)} />
+                      points=${speedPath(data.runs)} />
           </svg>
         </div>
       </div>
@@ -320,7 +322,7 @@ export function InputTimeline({ attemptId, video, compact = false }) {
             label=${data.template.name} />`}
       <div class="input-inspector-read">
         ${here
-          ? html`<span>Stick ${stickPhrase(here.stickX, here.stickY,
+          ? html`<span>Stick ${stickPhrase(here.stick_x, here.stick_y,
               data.dead_zone, data.stick_max)}</span>`
           : html`<span class="is-error">No capture on this frame</span>`}
         ${nowDoing && html`<span class="input-inspector-action">

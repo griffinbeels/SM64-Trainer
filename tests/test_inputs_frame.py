@@ -2,7 +2,8 @@ import struct
 
 import pytest
 
-from sm64_events.inputs.frame import (InputFrame, button_names, dead_zone,
+from sm64_events.inputs.frame import (MARIO_BLOCK_OFF, MARIO_BLOCK_SIZE,
+                                      InputFrame, button_names, dead_zone,
                                       decode, fits_controller)
 from sm64_events.memory import addresses as A
 
@@ -106,3 +107,25 @@ def test_a_run_of_zeroes_fits_and_that_is_why_the_gate_needs_movement():
 def test_button_names_reads_in_lane_order():
     assert button_names(0xE000) == ("A", "B", "Z")
     assert button_names(0) == ()
+
+
+def mario_block(action=0, yaw=0, speed=0.0) -> bytes:
+    """MARIO_BLOCK_SIZE bytes of gMarioState from the action field on."""
+    block = bytearray(MARIO_BLOCK_SIZE)
+    struct.pack_into(">I", block, 0, action)
+    struct.pack_into(">h", block, A.MARIO_YAW_OFF - MARIO_BLOCK_OFF, yaw)
+    struct.pack_into(">f", block, A.MARIO_FORWARD_VEL_OFF - MARIO_BLOCK_OFF,
+                     speed)
+    return bytes(block)
+
+
+def test_marios_block_decodes_beside_the_pad():
+    frame = decode(controller_block(raw_x=5, buttons=0x8000),
+                   mario_block(action=A.ACT_DIVE, yaw=-1234, speed=31.25))
+    assert (frame.action, frame.yaw, frame.speed) == (A.ACT_DIVE, -1234, 31.25)
+    assert (frame.buttons, frame.stick_x) == (0x8000, 5)
+
+
+def test_no_mario_block_reads_as_not_captured():
+    frame = decode(controller_block(raw_x=5), None)
+    assert (frame.action, frame.yaw, frame.speed) == (0, 0, 0.0)

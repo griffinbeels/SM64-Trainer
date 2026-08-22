@@ -103,8 +103,10 @@ export function ControllerPanel({
   frame, buttons: table, stickMax = 64, deadZone = 8, size = 108,
   showNumbers = true, showButtons = true, label = null,
 }) {
-  const stickX = frame ? frame.stickX : 0;
-  const stickY = frame ? frame.stickY : 0;
+  // `frame` is a timeline run (`{buttons, stick_x, stick_y, ...}`) or null
+  // for a frame with no capture, which draws as a centred, empty pad.
+  const stickX = frame ? frame.stick_x : 0;
+  const stickY = frame ? frame.stick_y : 0;
   const held = frame ? heldNames(frame.buttons, table) : [];
   const { vertical, horizontal } = stickWords(stickX, stickY, deadZone);
   // The box shows the stick's reach, and the pad reaches past the game's own

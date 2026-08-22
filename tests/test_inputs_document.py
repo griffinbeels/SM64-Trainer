@@ -130,3 +130,24 @@ def test_a_stick_inside_the_dead_zone_keeps_its_exact_value():
     text = a_document([(0, 0, 3, -2)])
     assert "neutral" not in text
     assert decode(text).frames[0][1].stick_x == 3
+
+
+def test_a_track_across_a_counter_restart_writes_rows_on_the_capture_axis():
+    """The counter restarts on a console reset. Before the run derivation was
+    shared, the document zero-based on the first frame alone and wrote a gap
+    row that ran BACKWARDS (`2--889 - gap`) -- the timeline had already been
+    fixed for the same input, in its own copy of the loop."""
+    text = a_document([(900, 0x8000, 0, 0), (901, 0x8000, 0, 0),
+                       (12, 0, 0, 0), (13, 0, 0, 0)])
+    assert "gap" not in text
+    assert [number for number, _ in decode(text).frames] == [0, 1, 2, 3]
+
+
+def test_a_facing_turning_under_a_held_stick_does_not_split_the_row():
+    """The document writes only the pad, so two frames that differ only in
+    what it does not write are one row."""
+    rows = [(0, InputFrame(0x8000, 0, 10, 10, 0, 100)),
+            (1, InputFrame(0x8000, 0, 10, 10, 0, 200))]
+    body = encode(rows, target="star WF 1", strategy=None, version="us",
+                  origin="test").split("--\n", 1)[1]
+    assert body.strip().splitlines() == ["0-1       A        +10,+10"]

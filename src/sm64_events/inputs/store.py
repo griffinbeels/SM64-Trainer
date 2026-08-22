@@ -24,6 +24,7 @@ import struct
 from datetime import datetime, timezone
 
 from sm64_events.inputs.frame import InputFrame
+from sm64_events.inputs.runs import collapse
 
 _HEADER = struct.Struct("<II")        # first frame number | run count
 # v1: start_frame u32 | run_length u16 | buttons u16 | stick_x s8 | stick_y s8
@@ -53,20 +54,11 @@ def _same_run(frame: InputFrame, previous: InputFrame) -> bool:
 def encode_runs(frames: list[tuple[int, InputFrame]]) -> bytes:
     """Collapse consecutive frames with identical state into runs.
 
-    A run extends only across CONSECUTIVE frame numbers. `pressed` is not
-    stored: it is derivable from consecutive frames, and a second copy of one
-    fact is a second thing that can disagree.
+    `pressed` is not stored: it is derivable from consecutive frames, and a
+    second copy of one fact is a second thing that can disagree.
     """
-    runs: list[list] = []
-    for number, frame in frames:
-        if runs:
-            start_number, length, previous = runs[-1]
-            if (number == start_number + length and length < _MAX_RUN
-                    and _same_run(frame, previous)):
-                runs[-1][1] = length + 1
-                continue
-        runs.append([number, 1, frame])
-    out = bytearray(_HEADER.pack(runs[0][0] if runs else 0, len(runs)))
+    runs = collapse(frames, _same_run, max_length=_MAX_RUN)
+    out = bytearray(_HEADER.pack(runs[0].start if runs else 0, len(runs)))
     for start_number, length, frame in runs:
         out += _RUN_V2.pack(start_number, length, frame.buttons,
                             frame.stick_x, frame.stick_y,

@@ -31,6 +31,12 @@ def frames(spec):
             for number, buttons, stick_x, stick_y in spec]
 
 
+def run(start, length, buttons, stick_x, stick_y, yaw=0, speed=0.0):
+    return {"start": start, "length": length, "buttons": buttons,
+            "stick_x": stick_x, "stick_y": stick_y, "yaw": yaw,
+            "speed": speed}
+
+
 @pytest.fixture
 def rig(tmp_path):
     db = Database(tmp_path / "t.db")
@@ -39,7 +45,7 @@ def rig(tmp_path):
         [(100 + n, 0, -45, -45) for n in range(13)]
         + [(113, 0x8000, -45, -45)]
         + [(114 + n, 0xC000, -45, -45) for n in range(14)]), AT, LATER)
-    templates = TemplateStore(db._conn, db._lock)
+    templates = db.input_templates
     attempt = FakeAttempt()
     service = InputsService(db.inputs, templates, lambda: [attempt])
     return service, templates, attempt
@@ -48,14 +54,14 @@ def rig(tmp_path):
 def test_runs_collapse_and_are_zero_based():
     got = runs_of(frames([(500, 0x8000, 1, 2), (501, 0x8000, 1, 2),
                           (502, 0, 0, 0)]))
-    # A run is [start, length, buttons, stick_x, stick_y, yaw] -- yaw joined in
-    # round 32, so Mario's facing turning under a held stick breaks a run.
-    assert got == [[0, 2, 0x8000, 1, 2, 0, 0.0], [2, 1, 0, 0, 0, 0, 0.0]]
+    # A run carries the pad AND Mario's facing and speed (round 32), so his
+    # facing turning under a held stick breaks a run.
+    assert got == [run(0, 2, 0x8000, 1, 2), run(2, 1, 0, 0, 0)]
 
 
 def test_a_gap_starts_a_new_run_at_its_own_offset():
     got = runs_of(frames([(0, 0x8000, 0, 0), (5, 0x8000, 0, 0)]))
-    assert got == [[0, 1, 0x8000, 0, 0, 0, 0.0], [5, 1, 0x8000, 0, 0, 0, 0.0]]
+    assert got == [run(0, 1, 0x8000, 0, 0), run(5, 1, 0x8000, 0, 0)]
 
 
 def test_both_kinds_of_attempt_answer_an_entity_key():
@@ -70,7 +76,7 @@ def test_the_timeline_carries_the_runs_and_the_span(rig):
     service, _templates, _attempt = rig
     payload = service.timeline(7)
     assert payload["frames"] == 28
-    assert payload["runs"][0] == [0, 13, 0, -45, -45, 0, 0.0]
+    assert payload["runs"][0] == run(0, 13, 0, -45, -45)
     assert payload["target"] == "star 24 1"
     assert payload["strategy"] == "10 coin"
 
@@ -99,7 +105,7 @@ def test_an_active_template_rides_along_with_its_own_runs(rig):
                                    version="us", origin="attempt 3"))
     payload = service.timeline(7)
     assert payload["template"]["name"] == "the good one"
-    assert payload["template"]["runs"] == [[0, 1, 0x8000, 10, 10, 0, 0.0]]
+    assert payload["template"]["runs"] == [run(0, 1, 0x8000, 10, 10)]
 
 
 def test_a_template_that_stopped_loading_says_so_instead_of_drawing_nothing(rig):
@@ -150,14 +156,14 @@ def test_a_counter_that_restarts_lays_the_next_stretch_END_TO_END():
     """
     got = runs_of(frames([(900, 0x8000, 0, 0), (901, 0x8000, 0, 0),
                           (12, 0x4000, 0, 0), (13, 0x4000, 0, 0)]))
-    assert got == [[0, 2, 0x8000, 0, 0, 0, 0.0], [2, 2, 0x4000, 0, 0, 0, 0.0]]
+    assert got == [run(0, 2, 0x8000, 0, 0), run(2, 2, 0x4000, 0, 0)]
 
 
 def test_a_hole_INSIDE_a_stretch_still_reads_as_a_hole():
     """A reset is a seam in the recording; a hole is a hole. Laying stretches
     end to end must not also close the gaps within one."""
     got = runs_of(frames([(0, 0x8000, 0, 0), (9, 0x8000, 0, 0)]))
-    assert got == [[0, 1, 0x8000, 0, 0, 0, 0.0], [9, 1, 0x8000, 0, 0, 0, 0.0]]
+    assert got == [run(0, 1, 0x8000, 0, 0), run(9, 1, 0x8000, 0, 0)]
 
 
 def test_the_span_is_never_negative_however_the_counter_moves(rig):
@@ -166,8 +172,8 @@ def test_the_span_is_never_negative_however_the_counter_moves(rig):
                  [(5, 0, 0, 0), (900, 0, 0, 0)],
                  [(7, 0, 0, 0)]):
         runs = runs_of(frames(spec))
-        assert runs[0][0] == 0
-        assert runs[-1][0] + runs[-1][1] > 0
+        assert runs[0]["start"] == 0
+        assert runs[-1]["start"] + runs[-1]["length"] > 0
 
 
 # --- round 32: Mario's own state alongside the pad --------------------------
@@ -204,13 +210,13 @@ def test_the_yaw_rides_on_each_run_because_it_moves_every_frame():
     would be one span per frame, which is the shape it already had."""
     rows = [(0, InputFrame(0, 0, 0, 0, 0, 100)),
             (1, InputFrame(0, 0, 0, 0, 0, 200))]
-    assert [run[5] for run in runs_of(rows)] == [100, 200]
+    assert [each["yaw"] for each in runs_of(rows)] == [100, 200]
 
 
 def test_speed_rides_on_each_run_too():
     rows = [(0, InputFrame(0, 0, 0, 0, 0, 0, 12.5)),
             (1, InputFrame(0, 0, 0, 0, 0, 0, 31.25))]
-    assert [run[6] for run in runs_of(rows)] == [12.5, 31.25]
+    assert [each["speed"] for each in runs_of(rows)] == [12.5, 31.25]
 
 
 def test_the_timeline_sends_the_angle_units_so_the_browser_does_no_maths(rig):

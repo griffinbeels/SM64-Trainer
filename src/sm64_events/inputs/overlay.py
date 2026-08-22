@@ -30,7 +30,8 @@ overlay against Usamune's pixels in that same footage.
 """
 from dataclasses import dataclass
 
-GAME_FPS = 30
+from sm64_events.core.timefmt import GAME_FPS
+
 DEFAULT_VIDEO_FPS = 60
 
 # Which parts of the controller each file draws. The names are the layer's own
@@ -69,7 +70,8 @@ class OverlayPlan:
 def plan_overlay(runs, *, layer: str = "combined", codec: str = DEFAULT_CODEC,
                  width: int = 480, height: int = 240,
                  video_fps: int = DEFAULT_VIDEO_FPS) -> OverlayPlan:
-    """Turn a track's runs into the DISTINCT pictures and a per-frame index.
+    """Turn a track's runs (the timeline payload's `runs`, one dict each)
+    into the DISTINCT pictures and a per-frame index.
 
     Distinct pictures rather than one per frame because the pad holds still
     most of the time: 45 s of real play is 1,348 frames and 289 runs, and
@@ -85,7 +87,7 @@ def plan_overlay(runs, *, layer: str = "combined", codec: str = DEFAULT_CODEC,
             f"{video_fps} fps does not divide by the game's {GAME_FPS}, so a "
             "game frame could not be held for a whole number of video frames "
             "-- which is the one thing this export exists to get right")
-    span = (runs[-1][0] + runs[-1][1]) if runs else 0
+    span = (runs[-1]["start"] + runs[-1]["length"]) if runs else 0
     index: dict[tuple[int, int, int, int], int] = {}
     states: list[tuple[int, int, int, int]] = []
     # A hole in capture draws NOTHING -- not the neighbouring frame's pad. The
@@ -96,17 +98,15 @@ def plan_overlay(runs, *, layer: str = "combined", codec: str = DEFAULT_CODEC,
     index[blank] = 0
     states.append(blank)
     for run in runs:
-        start, length, buttons, stick_x, stick_y = run[:5]
-        # A run may predate Mario's own capture (a v1 chunk), and 0 is what
-        # such a track honestly says about a facing it never recorded.
-        yaw = run[5] if len(run) > 5 else 0
-        key = _key_for(layer, buttons, stick_x, stick_y, yaw)
+        key = _key_for(layer, run["buttons"], run["stick_x"], run["stick_y"],
+                       run["yaw"])
         at = index.get(key)
         if at is None:
             at = len(states)
             index[key] = at
             states.append(key)
-        for frame in range(start, min(start + length, span)):
+        for frame in range(run["start"],
+                           min(run["start"] + run["length"], span)):
             per_frame[frame] = at
     return OverlayPlan(layer=layer, codec=codec, width=width, height=height,
                        video_fps=video_fps, game_frames=span,

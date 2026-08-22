@@ -6,8 +6,15 @@ from sm64_events.inputs.overlay import (CODECS, GAME_FPS, LAYERS,
 
 
 def runs(spec):
-    """spec: list of (start, length, buttons, stick_x, stick_y[, yaw])."""
-    return [list(row) for row in spec]
+    """spec: list of (start, length, buttons, stick_x, stick_y[, yaw]) --
+    the timeline payload's run dicts, as the export tool hands them over."""
+    out = []
+    for row in spec:
+        start, length, buttons, stick_x, stick_y = row[:5]
+        out.append({"start": start, "length": length, "buttons": buttons,
+                    "stick_x": stick_x, "stick_y": stick_y,
+                    "yaw": row[5] if len(row) > 5 else 0, "speed": 0.0})
+    return out
 
 
 def test_identical_pictures_collapse_to_one_state():

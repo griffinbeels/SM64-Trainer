@@ -111,7 +111,7 @@ window.showState = (state, options) => {
   if (settings.layer) document.body.dataset.layer = settings.layer;
   if (settings.bg) document.body.dataset.bg = settings.bg;
   const frame = state
-    ? { buttons: state[0], stickX: state[1], stickY: state[2] }
+    ? { buttons: state[0], stick_x: state[1], stick_y: state[2] }
     : null;
   const size = settings.size || 160;
   // The FACING layer draws Mario's own dial and nothing else; every other

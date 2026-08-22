@@ -2,9 +2,11 @@
 """One game frame's controller state, and the razor that identifies the pad.
 
 `decode` is the hot path: it runs 250 times a second, so it reads the four
-fields a timeline needs and nothing else. `fits_controller` is the cold path
--- the address gate and the address hunt -- and decodes the WHOLE struct in
-order to check it against itself.
+pad fields a timeline needs plus Mario's own block, and nothing else. Every
+byte-level fact about either struct is decoded HERE, so the sampler only reads
+memory and pairs the reads. `fits_controller` is the cold path -- the address
+gate and the address hunt -- and decodes the WHOLE struct in order to check it
+against itself.
 """
 import struct
 from typing import NamedTuple
@@ -49,17 +51,38 @@ class ControllerFit(NamedTuple):
     pressed: int
 
 
-def decode(block: bytes, action: int = 0, yaw: int = 0,
-           speed: float = 0.0) -> InputFrame:
-    """`block` is a `read_block` of CONTROLLER_SIZE bytes at the struct base.
+# Mario's own fields come from ONE block read of his struct, spanning action
+# (0x0C) through forwardVel (0x54): word aligned, 0x4C bytes, and it costs
+# what any single field would. Where each sits inside the block is derived
+# from the offsets rather than written down, so moving one in addresses.py
+# cannot leave a stale index here.
+MARIO_BLOCK_OFF = A.MARIO_ACTION_OFF
+_YAW_AT = A.MARIO_YAW_OFF - MARIO_BLOCK_OFF
+_SPEED_AT = A.MARIO_FORWARD_VEL_OFF - MARIO_BLOCK_OFF
+MARIO_BLOCK_SIZE = _SPEED_AT + 4
+_ACTION = struct.Struct(">I")
+_YAW = struct.Struct(">h")
+_SPEED = struct.Struct(">f")
 
-    `action` and `yaw` come from Mario's own struct, which is a different read
-    -- the sampler takes them inside the same coherent window and passes them
-    in, rather than this reaching for a second address of its own.
+
+def decode(block: bytes, mario: bytes | None = None) -> InputFrame:
+    """`block` is a `read_block` of CONTROLLER_SIZE bytes at the struct base;
+    `mario` is MARIO_BLOCK_SIZE bytes at his struct + MARIO_BLOCK_OFF, read
+    inside the same coherent window, or None when the layout has no Mario
+    address yet.
+
+    Zero is honest for a missing Mario block: `action_label(0)` reads "none",
+    and a speed of 0 is what a frame with no capture should say rather than
+    the last known value held on.
     """
     raw_x, raw_y = _RAW_STICK.unpack_from(block, A.CONTROLLER_RAW_STICK_X_OFF)
     buttons, pressed = _BUTTONS.unpack_from(block,
                                             A.CONTROLLER_BUTTON_DOWN_OFF)
+    action, yaw, speed = 0, 0, 0.0
+    if mario is not None:
+        action, = _ACTION.unpack_from(mario, 0)
+        yaw, = _YAW.unpack_from(mario, _YAW_AT)
+        speed, = _SPEED.unpack_from(mario, _SPEED_AT)
     return InputFrame(buttons=buttons, pressed=pressed,
                       stick_x=raw_x, stick_y=raw_y, action=action, yaw=yaw,
                       speed=speed)

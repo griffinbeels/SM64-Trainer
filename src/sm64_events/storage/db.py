@@ -671,6 +671,7 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         self._inputs = None
+        self._input_templates = None
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._migrate()
         self._repair_landmark_keys()
@@ -1474,6 +1475,14 @@ class Database:
             from sm64_events.inputs.store import InputStore
             self._inputs = InputStore(self._conn, self._lock)
         return self._inputs
+
+    @property
+    def input_templates(self):
+        """The template-track store, over the same connection and lock."""
+        if self._input_templates is None:
+            from sm64_events.inputs.templates import TemplateStore
+            self._input_templates = TemplateStore(self._conn, self._lock)
+        return self._input_templates
 
     # -- ui_state ------------------------------------------------------------
     def get_state(self, key: str, default):

@@ -444,9 +444,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
 
     if inputs is not None:
         from sm64_events.server.inputs_api import create_inputs_router
-        app.include_router(create_inputs_router(
-            inputs["service"], inputs["templates"], inputs["store"],
-            inputs["attempts"]))
+        app.include_router(create_inputs_router(inputs))
 
     if compare is not None:
         from sm64_events.server.compare_api import create_compare_router

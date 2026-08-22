@@ -34,11 +34,12 @@ import math
 import re
 from typing import NamedTuple
 
+from sm64_events.core.timefmt import GAME_FPS as FPS
 from sm64_events.inputs.frame import InputFrame
+from sm64_events.inputs.runs import capture_axis, collapse
 from sm64_events.memory import addresses as A
 
 MAGIC = "# sm64-inputs v1"
-FPS = 30
 _BY_NAME = {name: bit for bit, name in A.BUTTON_BITS}
 _OCTANTS = {"R": 0, "UR": 45, "U": 90, "UL": 135,
             "L": 180, "DL": 225, "D": 270, "DR": 315}
@@ -100,9 +101,20 @@ def _parse_buttons(word: str) -> int:
     return mask
 
 
+def _same_row(frame: InputFrame, previous: InputFrame) -> bool:
+    """Two frames that WRITE identically. Only the pad is written, so a yaw
+    or speed moving under a held stick must not split a row in two."""
+    return (frame.buttons == previous.buttons
+            and frame.stick_x == previous.stick_x
+            and frame.stick_y == previous.stick_y)
+
+
+def _span_word(start: int, end: int) -> str:
+    return f"{start}" if start == end else f"{start}-{end}"
+
+
 def encode(frames: list[tuple[int, InputFrame]], *, target: str,
            strategy: str | None, version: str, origin: str) -> str:
-    base = frames[0][0] if frames else 0
     lines = [MAGIC,
              f"target:   {target}",
              f"strategy: {strategy if strategy else '-'}",
@@ -110,25 +122,16 @@ def encode(frames: list[tuple[int, InputFrame]], *, target: str,
              f"fps:      {FPS}",
              f"origin:   {origin}",
              "--"]
-    runs: list[list] = []
-    previous: int | None = None
-    for number, frame in frames:
-        local = number - base
-        if previous is not None and local != previous + 1:
-            runs.append([previous + 1, local - 1, None])   # the hole itself
-        if runs and runs[-1][2] == frame and runs[-1][1] == local - 1:
-            runs[-1][1] = local
-        else:
-            runs.append([local, local, frame])
-        previous = local
-    for start, end, frame in runs:
-        span = f"{start}" if start == end else f"{start}-{end}"
-        if frame is None:
-            lines.append(f"{span:<10}{'-':<9}gap")
-        else:
-            names = "+".join(
-                name for bit, name in A.BUTTON_BITS if frame.buttons & bit)
-            lines.append(f"{span:<10}{names or '-':<9}{_stick_word(frame)}")
+    next_expected = 0
+    for run in collapse(capture_axis(frames), _same_row):
+        if run.start > next_expected:                # the hole itself
+            lines.append(
+                f"{_span_word(next_expected, run.start - 1):<10}{'-':<9}gap")
+        names = "+".join(
+            name for bit, name in A.BUTTON_BITS if run.frame.buttons & bit)
+        lines.append(f"{_span_word(run.start, run.end - 1):<10}"
+                     f"{names or '-':<9}{_stick_word(run.frame)}")
+        next_expected = run.end
     return "\n".join(lines) + "\n"
 
 

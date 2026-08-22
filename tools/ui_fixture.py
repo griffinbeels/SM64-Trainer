@@ -1309,16 +1309,10 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     # this attempt's inputs" -- a clean render of the wrong thing, which is
     # the failure mode ui-core.md warns about.
     from sm64_events.inputs.service import InputsService
-    from sm64_events.inputs.templates import TemplateStore
-    input_templates = TemplateStore(database._conn, database._lock)
-    inputs_bundle = {
-        "store": database.inputs, "templates": input_templates,
-        "attempts": lambda: database.attempts(),
-        "service": InputsService(database.inputs, input_templates,
-                                 lambda: database.attempts()),
-    }
+    inputs = InputsService(database.inputs, database.input_templates,
+                           database.attempts)
     app = create_app(poller, broadcaster, service=service, compare=compare,
-                     inputs=inputs_bundle,
+                     inputs=inputs,
                      adoptions_path=Path(compare_cache_scratch.name)
                      / "library_adoptions.json",
                      mode_path=Path(compare_cache_scratch.name) / "tracker_mode.json")

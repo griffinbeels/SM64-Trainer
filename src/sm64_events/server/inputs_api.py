@@ -1,7 +1,8 @@
 # src/sm64_events/server/inputs_api.py
-"""Captured-input REST surface.
+"""Captured-input REST surface: a thin skin over `inputs/service.py`.
 
-Same error taxonomy as api.py: LookupError -> 404, ValueError -> 409,
+No logic lives here. Every route asks the service and maps its exceptions,
+with the same taxonomy as api.py: LookupError -> 404, ValueError -> 409,
 RuntimeError -> 503. A `DocumentError` is a ValueError, so an unloadable
 document comes back as a 409 carrying the reason — never a 500, and never a
 silent acceptance that would store something the timeline cannot draw.
@@ -9,9 +10,6 @@ silent acceptance that would store something the timeline cannot draw.
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
-
-from sm64_events.inputs.document import encode
-from sm64_events.inputs.track import target_of, track_for_attempt
 
 MAX_DOCUMENT_BYTES = 4 * 1024 * 1024      # ~30 minutes of dense play
 
@@ -36,15 +34,17 @@ def _http(error: Exception) -> HTTPException:
     return HTTPException(503, str(error))
 
 
-def create_inputs_router(inputs, templates, store, attempts) -> APIRouter:
-    """`attempts` is a callable returning the projected attempts."""
-    router = APIRouter(prefix="/api")
+def _template_summary(template) -> dict:
+    return {"id": template.id, "kind": template.kind,
+            "entity_key": template.entity_key, "strat_tag": template.strat_tag,
+            "name": template.name, "origin": template.origin,
+            "active": template.active, "created_utc": template.created_utc}
 
-    def _attempt(attempt_id: int):
-        for attempt in attempts():
-            if attempt.id == attempt_id:
-                return attempt
-        raise HTTPException(404, f"no attempt {attempt_id}")
+
+def create_inputs_router(inputs) -> APIRouter:
+    """`inputs` is the `InputsService`; its `.templates` is the store."""
+    router = APIRouter(prefix="/api")
+    templates = inputs.templates
 
     @router.get("/attempts/{attempt_id}/inputs")
     def timeline(attempt_id: int):
@@ -56,32 +56,16 @@ def create_inputs_router(inputs, templates, store, attempts) -> APIRouter:
     @router.get("/attempts/{attempt_id}/inputs/document",
                 response_class=PlainTextResponse)
     def document(attempt_id: int):
-        attempt = _attempt(attempt_id)
-        frames = track_for_attempt(store, attempt)
-        if not frames:
-            raise HTTPException(404, "this attempt has no captured input")
-        return encode(frames, target=target_of(attempt),
-                      strategy=attempt.strat_tag, version="us",
-                      origin=f"attempt {attempt.id}")
+        try:
+            return inputs.document(attempt_id)
+        except Exception as error:
+            raise _http(error) from error
 
     @router.post("/attempts/{attempt_id}/inputs/template")
     def mark(attempt_id: int, body: MarkBody):
         """Make this attempt the template for its target and strategy."""
-        from sm64_events.inputs.service import entity_key_of
-        attempt = _attempt(attempt_id)
-        frames = track_for_attempt(store, attempt)
-        if not frames:
-            raise HTTPException(409, "this attempt has no captured input, so "
-                                     "there is nothing to compare against")
-        kind, key = entity_key_of(attempt)
-        text = encode(frames, target=target_of(attempt),
-                      strategy=attempt.strat_tag, version="us",
-                      origin=f"attempt {attempt.id}")
         try:
-            template = templates.save(
-                kind=kind, entity_key=key, strat_tag=attempt.strat_tag,
-                name=body.name or f"attempt #{attempt.id}",
-                origin=f"attempt:{attempt.id}", document=text)
+            template = inputs.mark_template(attempt_id, body.name)
         except Exception as error:
             raise _http(error) from error
         return {"id": template.id, "name": template.name,
@@ -91,11 +75,7 @@ def create_inputs_router(inputs, templates, store, attempts) -> APIRouter:
     def list_templates(kind: str | None = None, entity_key: str | None = None):
         rows = (templates.list_for(kind, entity_key)
                 if kind and entity_key else templates.all())
-        return {"templates": [
-            {"id": row.id, "kind": row.kind, "entity_key": row.entity_key,
-             "strat_tag": row.strat_tag, "name": row.name,
-             "origin": row.origin, "active": row.active,
-             "created_utc": row.created_utc} for row in rows]}
+        return {"templates": [_template_summary(row) for row in rows]}
 
     @router.get("/inputs/templates/{template_id}/document",
                 response_class=PlainTextResponse)

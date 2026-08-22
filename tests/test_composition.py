@@ -177,6 +177,14 @@ def _stubbed_main(monkeypatch):
         def insert_segment_def(self, *args, **kwargs):
             return 1
 
+        # build() wires the input timeline on every layout, so the stub
+        # carries the two stores it asks for -- unreachable here, never read.
+        inputs = None
+        input_templates = None
+
+        def attempts(self):
+            return []
+
     import importlib
     import sm64_events.main as main_mod
     importlib.reload(main_mod)
@@ -224,6 +232,14 @@ def test_build_wires_replay_endpoints(monkeypatch, tmp_path):
 
         def insert_segment_def(self, *args, **kwargs):
             return 1
+
+        # build() wires the input timeline on every layout, so the stub
+        # carries the two stores it asks for -- unreachable here, never read.
+        inputs = None
+        input_templates = None
+
+        def attempts(self):
+            return []
 
     monkeypatch.setattr(main_mod, "Database", lambda path: _DbStub())
     app = main_mod.build()
