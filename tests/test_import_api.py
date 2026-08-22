@@ -1,4 +1,5 @@
-"""The two import doors, over HTTP.
+"""The manual and sheet doors, over HTTP — and the undo and the celebration
+guard, which every door shares.
 
 The runner LIST is deliberately not tested here: `GET /api/library/runners`
 already served it before this feature and `tests/test_library_api.py` owns it.
@@ -6,53 +7,9 @@ Reusing it is the point — the picker fills from the bundled snapshot with no
 network wait, while the import itself reads a fresh fetch.
 """
 import zipfile
-from contextlib import contextmanager
-from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
-
-import sm64_events
-from sm64_events.ranks.standards import RankStandards
-from sm64_events.server.app import create_app
-from sm64_events.server.broadcaster import Broadcaster
-from sm64_events.server.poller import Poller
-from sm64_events.storage.db import Database
-from sm64_events.tracking.service import TrackerService
-
-
-class OfflineMemory:
-    attached = False
-
-    def attach(self):
-        return False
-
-    def detach(self):
-        pass
-
-
-def bundled_standards_seed():
-    """The REAL shipped ladders, so the stars a sheet import lands on actually
-    grade. A hand-made seed would leave every imported time unrankable and the
-    celebration guard below unable to fail."""
-    return (Path(sm64_events.__file__).parent / "data"
-            / "rank_standards.seed.json")
-
-
-@contextmanager
-def make_client(tmp_path):
-    """Driven through the real lifespan, deliberately: importing requires a
-    live session the way every other write command does, so a harness that
-    skipped startup would be exercising a path the app never takes."""
-    db = Database(tmp_path / "t.db")
-    broadcaster = Broadcaster()
-    ranks = RankStandards(tmp_path / "rs.json",
-                          seed_path=bundled_standards_seed())
-    ranks.load()
-    service = TrackerService(db, broadcaster, ranks=ranks)
-    poller = Poller(OfflineMemory(), [], service)
-    with TestClient(create_app(poller, broadcaster, service=service)) as client:
-        yield client, db, service
+from import_fixture import make_client
 
 
 def test_manual_import_lands_one_pb(tmp_path):
@@ -116,8 +73,11 @@ def test_the_sheet_door_lands_a_runners_column_from_the_snapshot(tmp_path):
             "runner": "DentoriousRed", "refresh": False}).json()
         assert payload["found"] == 14
         assert payload["imported"] == 14
-        assert payload["rejected"] == {"subsections": 0, "no_entity": 1,
-                                       "segments": 2}
+        # One row per KIND dropped, the same `{line, text, reason}` shape
+        # every door answers with; a kind with nothing dropped has no row.
+        assert payload["rejected"] == [
+            {"line": 0, "text": "1 no_entity", "reason": "no_entity"},
+            {"line": 0, "text": "2 segments", "reason": "segments"}]
         assert payload["sheet_revision"]
         assert all(row["imported_from"] == "sheet:DentoriousRed"
                    for row in db.pbs())

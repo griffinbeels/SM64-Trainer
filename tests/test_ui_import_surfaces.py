@@ -273,7 +273,7 @@ def test_the_paste_door_previews_without_writing_anything(tmp_path):
               (() => {
                 const s = document.querySelector('.importpaste');
                 return {button: s.querySelector('.primary-button').textContent.trim(),
-                        rejects: s.querySelectorAll('.importpaste-rejects li').length};
+                        rejects: s.querySelectorAll('.importdoor-rejects li').length};
               })()
             """)
             assert state["button"].startswith("Import"), state
@@ -302,9 +302,9 @@ def test_a_line_it_could_not_read_keeps_its_number_and_its_text(tmp_path):
             settle(page, 1500)
             row = page.evaluate("""
               (() => {
-                const li = document.querySelector('.importpaste-rejects li');
+                const li = document.querySelector('.importdoor-rejects li');
                 if (!li) return null;
-                return {number: li.querySelector('.importpaste-lineno').textContent,
+                return {number: li.querySelector('.importdoor-lineno').textContent,
                         text: li.querySelector('code').textContent,
                         reason: li.querySelector('.meta').textContent};
               })()
@@ -357,7 +357,7 @@ def test_a_livesplit_file_previews_and_names_what_did_not_land(tmp_path):
               (() => {
                 const s = document.querySelector('.importlivesplit');
                 return {button: (s.querySelector('.primary-button')||{}).textContent,
-                        rejects: [...s.querySelectorAll('.importpaste-rejects li')]
+                        rejects: [...s.querySelectorAll('.importdoor-rejects li')]
                           .map((li) => li.querySelector('code').textContent)};
               })()
             """)
@@ -421,7 +421,7 @@ def test_a_sheet_link_reads_previews_and_names_the_rows_that_did_not_land(
               (() => {
                 const s = document.querySelector('.importlink');
                 return {button: s.querySelector('.primary-button').textContent.trim(),
-                        rejects: [...s.querySelectorAll('.importpaste-rejects li')]
+                        rejects: [...s.querySelectorAll('.importdoor-rejects li')]
                           .map((li) => li.querySelector('code').textContent)};
               })()
             """)

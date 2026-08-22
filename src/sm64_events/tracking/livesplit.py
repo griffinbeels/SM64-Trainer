@@ -34,6 +34,9 @@ import re
 import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 
+from sm64_events.tracking.import_names import Unresolved, resolve_target
+from sm64_events.tracking.importing import ImportCandidate
+
 # `HH:MM:SS.fffffff`, and LiveSplit writes all of it even for a 12-second
 # split. Minutes and hours are optional anyway, because hand-edited files
 # exist.
@@ -122,9 +125,6 @@ def candidates_for(data, catalog, strategy: str | None = None):
     stage, "Reset" — is reported rather than dropped, because a file of thirty
     splits that lands four times has twenty-six answers the player is owed.
     """
-    from sm64_events.tracking.import_names import Unresolved, resolve_target
-    from sm64_events.tracking.importing import ImportCandidate
-
     candidates, unresolved = [], []
     for number, gold in enumerate(read_golds(data), start=1):
         entity_key = resolve_target(gold.name, catalog)

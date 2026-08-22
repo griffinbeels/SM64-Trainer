@@ -4,43 +4,7 @@ The format is the community's own vocabulary rather than one we invented, so
 most of these are assertions about text a runner would actually have lying
 around.
 """
-from contextlib import contextmanager
-from pathlib import Path
-
-from fastapi.testclient import TestClient
-
-import sm64_events
-from sm64_events.ranks.standards import RankStandards
-from sm64_events.server.app import create_app
-from sm64_events.server.broadcaster import Broadcaster
-from sm64_events.server.poller import Poller
-from sm64_events.storage.db import Database
-from sm64_events.tracking.service import TrackerService
-
-
-class OfflineMemory:
-    attached = False
-
-    def attach(self):
-        return False
-
-    def detach(self):
-        pass
-
-
-@contextmanager
-def make_client(tmp_path):
-    db = Database(tmp_path / "t.db")
-    broadcaster = Broadcaster()
-    ranks = RankStandards(
-        tmp_path / "rs.json",
-        seed_path=(Path(sm64_events.__file__).parent / "data"
-                   / "rank_standards.seed.json"))
-    ranks.load()
-    service = TrackerService(db, broadcaster, ranks=ranks)
-    poller = Poller(OfflineMemory(), [], service)
-    with TestClient(create_app(poller, broadcaster, service=service)) as client:
-        yield client, db, service
+from import_fixture import make_client
 
 
 BLOCK = """# my golds

@@ -5,11 +5,15 @@ Its own router rather than another block in `server/api.py`, for the reason
 snapshot, and mounting it beside them is cheaper than threading the sheet into
 the general API router.
 
-Two doors, one back room. `POST /import/manual` lands a single time he typed;
-`POST /import/sheet` lands a whole runner column. Both build
-`tracking/importing.ImportCandidate`s and go through `TrackerService.
-import_times`, so the improvement rule, the provenance and the version
-attribution are decided in exactly one place.
+FIVE DOORS, ONE BACK ROOM. Every door is the same three steps:
+
+  1. READ its source into `ImportCandidate`s, plus the rows it could not use;
+  2. PREVIEW or LAND them through `TrackerService` (one planner for both, so
+     the preview answers exactly the question the button then performs);
+  3. ANSWER in one shape -- the service's summary, `rejected`, `dry_run`.
+
+`finish` is steps 2 and 3. A door is step 1 and nothing else, which is what a
+sixth door should cost: a reader that produces candidates, and one `finish`.
 
 The runner LIST is not here: `GET /api/library/runners` already serves it from
 the bundled snapshot, which is what lets the picker fill with no network wait
@@ -18,6 +22,8 @@ while the import itself reads a fresh fetch.
 import logging
 import urllib.request
 import xml.etree.ElementTree as ElementTree
+from contextlib import contextmanager
+from dataclasses import asdict
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
@@ -52,6 +58,34 @@ def _fetch_bytes(url: str) -> bytes:
     dropped star grab."""
     with urllib.request.urlopen(url, timeout=FETCH_TIMEOUT_S) as reply:
         return reply.read()
+
+
+def _rows(unresolved) -> list[dict]:
+    """`[{line, text, reason}]` — THE reject shape every door answers with."""
+    return [asdict(item) for item in unresolved]
+
+
+def _tally_rows(dropped: dict) -> list[dict]:
+    """The same shape from a COUNT per kind.
+
+    The Ultimate Sheet reader counts its drops rather than naming rows
+    (`library/import_runner.py`), so each kind becomes one row and `line` 0
+    says there is no line to point at. Inventing a row apiece would be
+    reporting detail that path does not have."""
+    return [{"line": 0, "text": f"{count} {kind}", "reason": kind}
+            for kind, count in sorted(dropped.items()) if count]
+
+
+@contextmanager
+def _service_refusals():
+    """The service's two refusals as HTTP answers: a candidate it cannot file
+    is the caller's fault (422); no live session is the server's (503)."""
+    try:
+        yield
+    except ValueError as err:
+        raise HTTPException(422, str(err)) from err
+    except RuntimeError as err:
+        raise HTTPException(503, str(err)) from err
 
 
 class ManualImportBody(BaseModel):
@@ -90,14 +124,15 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
     broadcast-only instance."""
     router = APIRouter(prefix="/api/import", tags=["import"])
 
-    async def land(source: str, candidates: list) -> dict:
-        try:
-            summary = await service.import_times(source, candidates)
-        except ValueError as err:
-            raise HTTPException(422, str(err)) from err
-        except RuntimeError as err:
-            raise HTTPException(503, str(err)) from err
-        if summary.get("imported"):
+    async def finish(source: str, candidates: list, rejected: list,
+                     dry_run: bool, **extra) -> dict:
+        """Preview or land, and answer in the one shape every door shares."""
+        with _service_refusals():
+            if dry_run:
+                summary = service.preview_import(candidates)
+            else:
+                summary = await service.import_times(source, candidates)
+        if not dry_run and summary.get("imported"):
             # Every rank on every scope just moved for a reason that is not a
             # run -- the same shape as the game-version flip, and handled the
             # same way (`server/mode_api.py`). Without this the next rank fetch
@@ -105,7 +140,8 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
             # something he did not just do, which he reads as a bug outright
             # (his ruling, 2026-08-01).
             absorb_after_regrade(service)
-        return summary
+        return {"source": source, **summary, "rejected": rejected,
+                "dry_run": dry_run, **extra}
 
     def build_catalog():
         """Every name this instance will answer to, newest-specific LAST.
@@ -130,86 +166,22 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
             return ranks.clock_for(entity_key)
         return "rta" if entity_key.startswith("segment:") else "igt"
 
+    @router.post("/manual")
+    async def import_manual(body: ManualImportBody):
+        """One time he typed on a star's card."""
+        candidate = ImportCandidate(
+            entity_key=body.entity_key.strip(), strat_tag=body.strat_tag.strip(),
+            time_cs=body.time_cs, game_version=body.game_version)
+        return await finish(MANUAL_SOURCE, [candidate], [], dry_run=False)
+
     @router.post("/paste")
     async def import_paste(body: PasteImportBody):
         """A block of times, in whatever the player already has them written
-        in. `dry_run` reports what WOULD land, which is what the UI shows
-        before anything is written."""
+        in."""
         candidates, unresolved = import_names.parse_block(
             body.text, build_catalog(), timer_mode_for=timer_mode_for)
-        rejected = [{"line": item.line, "text": item.text,
-                     "reason": item.reason} for item in unresolved]
-        if body.dry_run:
-            # The SAME planner the real run uses (`_plan_import`), so the
-            # preview answers the question the button then performs — a second
-            # implementation of the arithmetic is exactly what would make it
-            # not worth trusting.
-            try:
-                summary = service.preview_import(candidates)
-            except ValueError as err:
-                raise HTTPException(422, str(err)) from err
-            except RuntimeError as err:
-                raise HTTPException(503, str(err)) from err
-            return {"source": PASTE_SOURCE, **summary,
-                    "rejected": rejected, "dry_run": True}
-        summary = await land(PASTE_SOURCE, candidates)
-        return {**summary, "rejected": rejected, "dry_run": False}
-
-    @router.post("/link")
-    async def import_link(body: LinkImportBody):
-        """Import from a link to somebody's own spreadsheet.
-
-        The workbook says which shape it is: a copy of the Ultimate Sheet is
-        read by the real reader and a named runner's column extracted; any
-        other grid becomes lines and goes through the paste parser, so a
-        personal `star | time | strat` sheet needs no format of its own.
-
-        Only Google Sheets links are fetched — the SERVER does the fetching,
-        so "any URL" would mean "any URL reachable from this machine"."""
-        try:
-            url = sheet_link.export_url(sheet_link.sheet_id_from(body.url))
-        except ValueError as err:
-            raise HTTPException(422, str(err)) from err
-        try:
-            data = await run_in_threadpool(_fetch_bytes, url)
-        except Exception as err:                       # noqa: BLE001
-            _log.warning("sheet link fetch failed: %r", err)
-            raise HTTPException(
-                503, f"could not read that sheet: {err}. Is it shared with "
-                     "'anyone with the link'?") from err
-
-        shape = "grid"
-        if sheet_link.is_ultimate_shaped(data):
-            shape = "ultimate"
-            if not body.runner:
-                raise HTTPException(
-                    422, "that is a copy of the Ultimate Sheet — say which "
-                         "runner's column to take")
-            payload = build(data, _now_iso(), overrides)
-            candidates, dropped = candidates_for(payload, body.runner)
-            # The drop TALLY rather than a row apiece: this path counts by
-            # kind (`library/import_runner.py`), so inventing one line per
-            # dropped row would be reporting detail we do not have.
-            rejected = [{"line": 0, "text": f"{count} {kind}", "reason": kind}
-                        for kind, count in sorted(dropped.items()) if count]
-        else:
-            candidates, unresolved = sheet_link.candidates_from_grid(
-                data, build_catalog(), timer_mode_for=timer_mode_for)
-            rejected = [{"line": item.line, "text": item.text,
-                         "reason": item.reason} for item in unresolved]
-
-        if body.dry_run:
-            try:
-                summary = service.preview_import(candidates)
-            except ValueError as err:
-                raise HTTPException(422, str(err)) from err
-            except RuntimeError as err:
-                raise HTTPException(503, str(err)) from err
-            return {"source": LINK_SOURCE, **summary, "shape": shape,
-                    "rejected": rejected, "dry_run": True}
-        summary = await land(LINK_SOURCE, candidates)
-        return {**summary, "shape": shape, "rejected": rejected,
-                "dry_run": False}
+        return await finish(PASTE_SOURCE, candidates, _rows(unresolved),
+                            body.dry_run)
 
     @router.post("/livesplit")
     async def import_livesplit(request: Request,
@@ -236,25 +208,52 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
             raise HTTPException(
                 422, f"that does not read as a LiveSplit splits file: {err}"
             ) from err
-        rejected = [{"line": item.line, "text": item.text,
-                     "reason": item.reason} for item in unresolved]
-        if dry_run:
-            try:
-                summary = service.preview_import(candidates)
-            except ValueError as err:
-                raise HTTPException(422, str(err)) from err
-            except RuntimeError as err:
-                raise HTTPException(503, str(err)) from err
-            return {"source": LIVESPLIT_SOURCE, **summary,
-                    "rejected": rejected, "dry_run": True}
-        summary = await land(LIVESPLIT_SOURCE, candidates)
-        return {**summary, "rejected": rejected, "dry_run": False}
+        return await finish(LIVESPLIT_SOURCE, candidates, _rows(unresolved),
+                            dry_run)
 
-    @router.post("/manual")
-    async def import_manual(body: ManualImportBody):
-        return await land(MANUAL_SOURCE, [ImportCandidate(
-            entity_key=body.entity_key.strip(), strat_tag=body.strat_tag.strip(),
-            time_cs=body.time_cs, game_version=body.game_version)])
+    @router.post("/link")
+    async def import_link(body: LinkImportBody):
+        """Import from a link to somebody's own spreadsheet.
+
+        The workbook says which shape it is: a copy of the Ultimate Sheet is
+        read by the real reader and a named runner's column extracted; any
+        other grid becomes lines and goes through the paste parser, so a
+        personal `star | time | strat` sheet needs no format of its own.
+
+        Only Google Sheets links are fetched — the SERVER does the fetching,
+        so "any URL" would mean "any URL reachable from this machine"."""
+        try:
+            url = sheet_link.export_url(sheet_link.sheet_id_from(body.url))
+        except ValueError as err:
+            raise HTTPException(422, str(err)) from err
+        try:
+            data = await run_in_threadpool(_fetch_bytes, url)
+        except Exception as err:                       # noqa: BLE001
+            _log.warning("sheet link fetch failed: %r", err)
+            raise HTTPException(
+                503, f"could not read that sheet: {err}. Is it shared with "
+                     "'anyone with the link'?") from err
+
+        if not sheet_link.is_ultimate_shaped(data):
+            candidates, unresolved = sheet_link.candidates_from_grid(
+                data, build_catalog(), timer_mode_for=timer_mode_for)
+            return await finish(LINK_SOURCE, candidates, _rows(unresolved),
+                                body.dry_run, shape="grid")
+        if not body.runner:
+            # A preview ANSWERS this rather than failing: "it is an Ultimate
+            # copy, whose column?" is what the preview found, and the UI
+            # asks for the name on the strength of it. Landing without one
+            # is still a refusal.
+            if body.dry_run:
+                return await finish(LINK_SOURCE, [], [], dry_run=True,
+                                    shape="ultimate", needs_runner=True)
+            raise HTTPException(
+                422, "that is a copy of the Ultimate Sheet — say which "
+                     "runner's column to take")
+        payload = build(data, _now_iso(), overrides)
+        candidates, dropped = candidates_for(payload, body.runner)
+        return await finish(LINK_SOURCE, candidates, _tally_rows(dropped),
+                            body.dry_run, shape="ultimate")
 
     @router.delete("/{source:path}")
     async def remove_import(source: str):
@@ -264,14 +263,13 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
         Just completely erase them" (2026-08-02). Latest-row-wins means each
         deletion restores whatever that row superseded, exactly as undoing a
         single PB save does."""
-        try:
+        with _service_refusals():
             return {"removed": service.remove_imported(source)}
-        except RuntimeError as err:
-            raise HTTPException(503, str(err)) from err
 
     if library is not None:
         @router.post("/sheet")
         async def import_sheet(body: SheetImportBody):
+            """A whole runner's Ultimate Sheet column."""
             if body.refresh:
                 try:
                     # ~5.6 MB and a full re-derive, so off the event loop: the
@@ -293,9 +291,9 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
                     _log.warning("sheet refresh failed: %r", err)
                     raise HTTPException(
                         503, f"could not read the sheet: {err}") from err
-            candidates, rejected = candidates_for(library.payload, body.runner)
-            summary = await land(f"sheet:{body.runner}", candidates)
-            return {**summary, "rejected": rejected,
-                    "sheet_revision": library.revision}
+            candidates, dropped = candidates_for(library.payload, body.runner)
+            return await finish(f"sheet:{body.runner}", candidates,
+                                _tally_rows(dropped), dry_run=False,
+                                sheet_revision=library.revision)
 
     return router

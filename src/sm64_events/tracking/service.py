@@ -80,11 +80,22 @@ def _iso(dt: datetime) -> str:
 
 def _import_identity(entity_key: str):
     """`(course_id, star_id, segment_id)` for a pbs row — the kind-dispatched
-    shape `insert_pb` and `current_pb` both take, with the unused half None."""
-    parts = entity_key.split(":")
-    if parts[0] == "segment":
-        return None, None, int(parts[1])
-    return int(parts[1]), int(parts[2]), None
+    shape `insert_pb` and `current_pb` both take, with the unused half None.
+
+    THE one parser of an import's entity key. The API takes that key from
+    anyone, so anything that is not a well-formed star or segment key raises
+    `ValueError` here rather than surfacing as a bare `int()` failure."""
+    kind, _, rest = entity_key.partition(":")
+    try:
+        if kind == "segment":
+            return None, None, int(rest)
+        if kind == "star":
+            course_id, star_id = rest.split(":")
+            return int(course_id), int(star_id), None
+    except ValueError:
+        pass
+    raise ValueError(
+        f"{entity_key!r} cannot be imported: only stars and your own segments can")
 
 
 def _strategies_key(ek: str) -> str:
@@ -2031,23 +2042,16 @@ class TrackerService:
         candidate carrying the IGT clock is refused rather than quietly
         re-clocked."""
         key = candidate.entity_key
-        if key.startswith("star:"):
-            return
-        if key.startswith("segment:"):
-            try:
-                segment_id = int(key.split(":")[1])
-            except (IndexError, ValueError):
-                raise ValueError(f"{key!r} is not a segment id") from None
-            if segment_id not in own_segments:
-                raise ValueError(
-                    f"{key!r} is not one of your segments — a segment id from "
-                    "somewhere else may name a different movement here")
-            if candidate.timer_mode != "rta":
-                raise ValueError(
-                    f"{key!r} is timed on RTA; a segment has no IGT clock")
-            return
-        raise ValueError(
-            f"{key!r} cannot be imported: only stars and your own segments can")
+        _course_id, _star_id, segment_id = _import_identity(key)
+        if segment_id is None:
+            return                       # a star: always filable
+        if segment_id not in own_segments:
+            raise ValueError(
+                f"{key!r} is not one of your segments — a segment id from "
+                "somewhere else may name a different movement here")
+        if candidate.timer_mode != "rta":
+            raise ValueError(
+                f"{key!r} is timed on RTA; a segment has no IGT clock")
 
     def remove_imported(self, source: str) -> int:
         """Erase every personal best one import brought, and say how many.

@@ -29,6 +29,7 @@ import re
 from urllib.parse import urlparse
 
 from sm64_events.library.workbook import (SHEET_MAIN, read_sheet, sheet_names)
+from sm64_events.tracking.import_names import Unresolved, parse_block
 
 # `https://docs.google.com/spreadsheets/d/<id>/edit#gid=0` and every other
 # form of the same link. The id is the only part that matters.
@@ -113,8 +114,6 @@ def candidates_from_grid(data: bytes, catalog, timer_mode_for=None):
     numbers, and each unreadable row is stamped with the tab it came from —
     `Times!14` is findable, `line 214` is not.
     """
-    from sm64_events.tracking.import_names import Unresolved, parse_block
-
     candidates, unresolved = [], []
     for name, block in grid_blocks(data):
         found, problems = parse_block(block, catalog,

@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 
 from sm64_events.memory.addresses import (COURSE_ABBREV, COURSE_NAMES,
                                           STAR_NAMES)
+from sm64_events.tracking.importing import ImportCandidate
 
 # The 100-coin star's slot. Named here rather than repeated as a literal in the
 # three places below that reach for it.
@@ -219,8 +220,6 @@ def parse_block(text: str, catalog: Catalog, timer_mode_for=None):
     Blank lines and `#` comments are skipped silently — they are punctuation,
     not data. Everything else that fails comes back in the second list.
     """
-    from sm64_events.tracking.importing import ImportCandidate
-
     candidates, unresolved = [], []
     for number, raw in enumerate(str(text or "").splitlines(), start=1):
         line = raw.strip()
@@ -260,9 +259,9 @@ def parse_block(text: str, catalog: Catalog, timer_mode_for=None):
 def _split_trailing_time(text: str):
     """`["BoB 1", "0:23.57"]` for a line written with single spaces.
 
-    Walks in from the RIGHT and takes the longest trailing run of tokens that
-    still parses as one time, so `BoB 1 0:23.57` splits after the `1` rather
-    than treating the whole line as a name."""
+    Walks in from the RIGHT and takes the SHORTEST trailing run of tokens
+    that parses as one time, so `BoB 1 0:23.57` splits after the `1` — the
+    `1` stays with the name instead of being read as minutes."""
     tokens = text.split()
     for start in range(len(tokens) - 1, 0, -1):
         if parse_time_cs(" ".join(tokens[start:])) is not None:

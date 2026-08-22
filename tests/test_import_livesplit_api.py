@@ -1,33 +1,5 @@
 """Uploading a LiveSplit splits file, over HTTP."""
-from contextlib import contextmanager
-
-from fastapi.testclient import TestClient
-
-from sm64_events.server.app import create_app
-from sm64_events.server.broadcaster import Broadcaster
-from sm64_events.server.poller import Poller
-from sm64_events.storage.db import Database
-from sm64_events.tracking.service import TrackerService
-
-
-class OfflineMemory:
-    attached = False
-
-    def attach(self):
-        return False
-
-    def detach(self):
-        pass
-
-
-@contextmanager
-def make_client(tmp_path):
-    db = Database(tmp_path / "t.db")
-    broadcaster = Broadcaster()
-    service = TrackerService(db, broadcaster)
-    poller = Poller(OfflineMemory(), [], service)
-    with TestClient(create_app(poller, broadcaster, service=service)) as client:
-        yield client, db
+from import_fixture import make_client
 
 
 def splits_for(names):
@@ -41,7 +13,7 @@ def splits_for(names):
 
 
 def test_golds_land_on_your_own_segments(tmp_path):
-    with make_client(tmp_path) as (client, db):
+    with make_client(tmp_path) as (client, db, _svc):
         mine = db.segment_defs()[:2]
         body = client.post(
             "/api/import/livesplit",
@@ -56,7 +28,7 @@ def test_golds_land_on_your_own_segments(tmp_path):
 def test_a_split_naming_a_star_is_reported_rather_than_landed(tmp_path):
     """A gold is a real-time stretch of the run; a star's bests are Usamune
     IGT. Filing one against the other reads as a wildly good time."""
-    with make_client(tmp_path) as (client, db):
+    with make_client(tmp_path) as (client, db, _svc):
         body = client.post("/api/import/livesplit",
                            content=splits_for(["BoB 1"])).json()
         assert body["imported"] == 0
@@ -65,7 +37,7 @@ def test_a_split_naming_a_star_is_reported_rather_than_landed(tmp_path):
 
 
 def test_a_split_this_database_has_never_heard_of_is_reported(tmp_path):
-    with make_client(tmp_path) as (client, _db):
+    with make_client(tmp_path) as (client, _db, _svc):
         body = client.post("/api/import/livesplit",
                            content=splits_for(["Chungus Skip"])).json()
         assert [(r["text"], r["reason"]) for r in body["rejected"]] == [
@@ -75,7 +47,7 @@ def test_a_split_this_database_has_never_heard_of_is_reported(tmp_path):
 def test_a_file_that_is_not_a_splits_file_says_so(tmp_path):
     """"Nothing landed" and "that was a screenshot" look identical from the
     outside, and only one is worth acting on."""
-    with make_client(tmp_path) as (client, _db):
+    with make_client(tmp_path) as (client, _db, _svc):
         response = client.post("/api/import/livesplit",
                                content=b"this is not xml at all")
         assert response.status_code == 422
@@ -83,13 +55,13 @@ def test_a_file_that_is_not_a_splits_file_says_so(tmp_path):
 
 
 def test_an_empty_body_is_refused(tmp_path):
-    with make_client(tmp_path) as (client, _db):
+    with make_client(tmp_path) as (client, _db, _svc):
         assert client.post("/api/import/livesplit",
                            content=b"").status_code == 422
 
 
 def test_a_dry_run_writes_nothing(tmp_path):
-    with make_client(tmp_path) as (client, db):
+    with make_client(tmp_path) as (client, db, _svc):
         mine = db.segment_defs()[:2]
         data = splits_for([row["name"] for row in mine])
         preview = client.post("/api/import/livesplit?dry_run=true",
@@ -101,7 +73,7 @@ def test_a_dry_run_writes_nothing(tmp_path):
 
 
 def test_a_strategy_can_be_named_for_the_whole_file(tmp_path):
-    with make_client(tmp_path) as (client, db):
+    with make_client(tmp_path) as (client, db, _svc):
         row = db.segment_defs()[0]
         client.post("/api/import/livesplit?strategy=Standard",
                     content=splits_for([row["name"]]))
@@ -111,7 +83,7 @@ def test_a_strategy_can_be_named_for_the_whole_file(tmp_path):
 
 
 def test_a_livesplit_import_can_be_undone_as_a_whole(tmp_path):
-    with make_client(tmp_path) as (client, db):
+    with make_client(tmp_path) as (client, db, _svc):
         mine = db.segment_defs()[:2]
         client.post("/api/import/livesplit",
                     content=splits_for([row["name"] for row in mine]))
