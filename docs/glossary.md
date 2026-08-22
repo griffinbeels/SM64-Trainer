@@ -501,9 +501,13 @@ own state rides in that same reading, so the two can never describe different
 Every [[input frame]] of one [[attempt]], from its [[anchor]] to its
 [[outcome]] — what you did, at the [[frame]] you did it. The trainer numbers a
 track from its own start rather than from the [[session]]'s, so two tracks lie
-on one axis whatever hour of whatever day you played each of them.
+on one axis whatever hour of whatever day you played each of them; a [[reset]]
+in the middle of a track continues that axis rather than restarting it, and a
+[[frame]] the trainer did not capture stays a hole on it.
 
-- **Lives** — the input store (`src/sm64_events/inputs/store.py`)
+- **Lives** — the input store (`src/sm64_events/inputs/store.py`) resolves
+  the frames; the run derivation (`src/sm64_events/inputs/runs.py`) lays them
+  on the axis
 
 ### Input timeline
 
@@ -544,7 +548,7 @@ template for that [[target]] on that [[strategy]]. The trainer shows both and
 names neither as the reason — it reports what each was doing on a [[frame]],
 and you read the gap.
 
-- **Lives** — the input store (`src/sm64_events/inputs/store.py`)
+- **Lives** — the template store (`src/sm64_events/inputs/templates.py`)
 
 ### Epoch
 
