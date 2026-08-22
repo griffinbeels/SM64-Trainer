@@ -119,3 +119,17 @@ def test_no_sampler_leaves_the_loop_exactly_as_it_was():
     for _ in range(4):
         asyncio.run(poller.tick())
     assert reader.reads == 4
+
+
+def test_the_rate_follows_the_sampler():
+    """250 Hz exists to catch the pad after the game's rewrite. Without a
+    sampler every tick reads the whole snapshot, so the loop keeps the old
+    60 Hz rather than reading eight snapshots per game frame for nothing --
+    which is what a layout with no controller row would otherwise pay."""
+    sampler = ScriptedSampler([100])
+    with_pad = Poller(memory=None, detectors=[], broadcaster=NullBroadcaster(),
+                      reader=CountingReader(sampler), input_sampler=sampler)
+    without = Poller(memory=None, detectors=[], broadcaster=NullBroadcaster(),
+                     reader=CountingReader(sampler))
+    assert round(1 / with_pad.interval) == 250
+    assert round(1 / without.interval) == 60

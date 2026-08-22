@@ -26,8 +26,9 @@ from datetime import datetime, timezone
 from time import perf_counter
 
 from sm64_events.core.events import Event
-from sm64_events.memory import addresses as A
 from sm64_events.core.snapshot import GameSnapshot, SnapshotReader
+from sm64_events.core.timefmt import GAME_FPS
+from sm64_events.memory import addresses as A
 from sm64_events.detectors.anchors import BOOT_TIMER_MAX
 from sm64_events.memory.base import MemoryReadError
 
@@ -49,11 +50,22 @@ def _plausible(snap: GameSnapshot) -> bool:
 
 
 class Poller:
-    def __init__(self, memory, detectors, broadcaster, hz: int = 250,
+    SAMPLING_HZ = 250        # with a pad to catch after the game's rewrite
+    SNAPSHOT_HZ = 60         # without one: the old loop, every tick a read
+
+    def __init__(self, memory, detectors, broadcaster, hz: int | None = None,
                  reader=None, on_frame=None, input_sampler=None):
         self.memory = memory
         self.detectors = list(detectors)
         self.broadcaster = broadcaster
+        # The rate follows the sampler. Without one there is nothing to do
+        # between game frames and every tick reads the whole snapshot -- so
+        # 250 Hz would be eight snapshots per game frame for no reason, on
+        # exactly the layouts (a version with no controller row yet) that
+        # have the least to spend.
+        if hz is None:
+            hz = (self.SAMPLING_HZ if input_sampler is not None
+                  else self.SNAPSHOT_HZ)
         # The input half runs EVERY tick; the snapshot and the detectors run
         # once per GAME frame. See this module's docstring for why the rate
         # moved and why that costs less than the 60 Hz loop it replaces.
@@ -68,7 +80,8 @@ class Poller:
         # of them. Snapshotting on the frame-change tick instead would take
         # every reading at the EARLIEST moment in a frame, which is worse than
         # the arbitrary phase it replaced.
-        self._settle_ticks = max(1, round(A.CONTROLLER_SETTLE_PHASE * hz / 30))
+        self._settle_ticks = max(
+            1, round(A.CONTROLLER_SETTLE_PHASE * hz / GAME_FPS))
         # Awaited with the live game frame after each tick's events are
         # published — the tracker's deferred-judgement heartbeat (main.py wires
         # TrackerService.settle_frame). Injected rather than duck-typed off
