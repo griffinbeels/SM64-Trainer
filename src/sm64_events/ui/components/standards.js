@@ -16,6 +16,7 @@ import { Disclose } from "./collapsible.js";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { fmtIgtShort, fmtSeconds } from "../format.js";
+import { nounOfKey } from "../entitysection.js";
 import { TimeFields } from "./timefields.js";
 import { ceilingOf, slowestFirst } from "../ladderorder.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
@@ -50,6 +51,42 @@ const ROW_ORDER = ["Iron", ...RANK_NAMES.filter((r) => r !== "Iron").reverse()];
 // pattern is reimplemented here at row grain: each cell's `.std-sub-clip`
 // animates height with the SAME disclosurePlan/feedTuning numbers, and the
 // padding lives inside the clip so a closed row is genuinely 0px tall).
+// SHEET BEST -- the last row of the standards table, always, and the only one
+// that is not a rank. The top of a ladder is not the top of the sport: he
+// expanded Mario into its divisions, read Mario 1 and said "there actually ARE
+// faster times than this" (2026-08-15). One cell per strategy column carrying
+// the fastest time on the Ultimate Sheet for that strategy, its runner, and a
+// link where the run was filmed (server/ranks_api.py -> library/examples.py::
+// sheet_best). No cap icon, by his instruction -- it grades nothing, so wearing
+// a rank's art would say it does. A strategy with no sheet row gets an empty
+// cell rather than a guess, and the row never takes a "you are here" bracket:
+// markerPosition walks the LADDER, which this is not part of. A real <tr> in
+// the same <tbody> as the ladder rows, so the columns stay aligned by
+// construction -- the same reason StdSubRows works the way it does.
+function SheetBestRow({ strats, sheetBest }) {
+  if (!sheetBest || !strats.some((strat) => sheetBest[strat])) return null;
+  return html`<tr class="std-sheet-best">
+    <td class="std-tier">
+      <span class="std-tier-label"><span
+        class="std-sheet-best-name">Sheet Best</span></span>
+    </td>
+    ${strats.map((strat) => {
+      const best = sheetBest[strat];
+      if (!best) return html`<td class="std-sheet-best-cell">—</td>`;
+      const label = fmtSeconds(best.time_cs / 100);
+      const runner = best.runner || "";
+      return html`<td class="std-sheet-best-cell">
+        ${best.video
+          ? html`<a href=${best.video} target="_blank" rel="noopener"
+              title=${`${runner || "the fastest run"} on the Ultimate Sheet`}
+              >${label}</a>`
+          : html`<span>${label}</span>`}
+        ${runner ? html`<span class="std-sheet-best-runner"
+          >${runner}</span>` : null}</td>`;
+    })}
+  </tr>`;
+}
+
 function StdSubRows({ rank, open, strats, bandFor, cellClass, cellStyle,
     labelStyle, exampleLink }) {
   const rowRefs = useRef([]);
@@ -183,7 +220,7 @@ function displayCs(frames) {
 }
 
 // A Bowser Reds star and its paired seg:reds->pipe:<abbrev> segment share
-// ONE rank-standards entity (the star's -- views.py's _reds_pipe_segments)
+// ONE rank-standards entity (the star's -- tracking/activestrat.py)
 // but must never show each other's half: `family` ("Star" | "Pipe" | null)
 // filters the COLUMN list to names ending " (<family>)" -- the fetched
 // `data.strategies` is the community store's raw entity data (every
@@ -499,24 +536,10 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // THESE rows". `entityScore` below stays the server-GRADED score
   // regardless of what is shown, on purpose — flipping the switch changes
   // what you are looking at, never what you are rated on.
-  // The one strategy that sets EVERY defined cutoff of the entity's
-  // best-possible ladder, or null when several share the job (the ordinary
-  // case: star:2:4's Sideflip holds Mario and Metal while DJ Owlless holds the
-  // other six). Ties count as several -- "X is fastest at every rank" is not
-  // true when someone matches it.
-  const owners = (data && data.overall_owners) || {};
-  const ownerNames = Object.values(owners).flat();
-  // Gated on the number of LADDERS, not the number of ranks: with a single
-  // strategy defined it owns every cutoff trivially, and "X is the fastest
-  // strategy at every rank" would be a sentence about a race with one runner.
-  // The claim is only worth making where there was something to be faster
-  // than.
-  const laddered = Object.keys((data && data.strategies) || {})
-    .filter((strat) => Object.keys(data.strategies[strat] || {}).length);
-  const soleOverallOwner = ownerNames.length && laddered.length > 1
-    && ownerNames.every((name) => name === ownerNames[0])
-    ? ownerNames[0] : null;
-  const sheetBest = (data && data.sheet_best) || null;
+  // The one strategy that sets EVERY Overall cutoff, or null -- resolved
+  // SERVER-side (ranks/scoring.py::sole_overall_owner, which carries the
+  // rule and its gates) so this panel and the Library page cannot disagree.
+  const soleOverallOwner = (data && data.sole_overall_owner) || null;
   const activeLadder = data && activeStrat ? (data.strategies[activeStrat] || {}) : {};
   const basisFrames = data && sectionRank && sectionRank.basis
     ? sectionRank.basis.frames
@@ -561,24 +584,15 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
         ${data.xcams_url ? html`<a class="meta" href=${data.xcams_url} target="_blank" rel="noopener"
             title="browse every example run for this star on the xcams Daily Star page">Examples on xcams ↗</a>` : null}
       </div>
-      ${/* WHY the active strategy's ladder can BE the Overall one. His report,
+      ${/* WHY the active strategy's ladder can BE the Overall one -- the
+           "correct but unexplained reads as a bug" shape (his report,
            2026-08-15: "it also still seems a bit weird that the 'Standard'
-           strategy is the exact progression for the 'Overall' ranking". It is
-           not weird and it is not a bug -- the entity's ladder is a pointwise
-           minimum across strategies, so a strategy that is fastest at every
-           rank IS that minimum, cutoff for cutoff, and the card then draws one
-           banner instead of two (views.py::ranks_share_ladder). Nothing on
-           screen said so, which is the "correct but unexplained reads as a
-           bug" shape.
-
-           Read off `overall_owners`, the server's own answer to which strategy
-           SETS each cutoff (ranks/scoring.py::best_ladder_owners) -- not
-           re-derived here, and not a new payload field. Drawn only when one
-           strategy owns every defined rank, because that is the only case the
-           sentence is true of. */""}
+           strategy is the exact progression for the 'Overall' ranking"). The
+           sentence is the only thing that lives here; when it is true is the
+           server's call. */""}
       ${soleOverallOwner ? html`<p class="std-overall-note">
         <b>${soleOverallOwner}</b> is the fastest strategy at every rank, so its
-        times are also the Overall standard for this star.</p>` : null}
+        times are also the Overall standard for this ${nounOfKey(entity)}.</p>` : null}
       <table class="stdtable"><thead>
         ${bands.length ? html`<tr class="std-variant-row"><th></th>
           ${bands.map((band) => html`<th class="std-variant std-band-start"
@@ -729,39 +743,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
                 strat === activeStrat ? "col-active" : "")}
               cellStyle=${bandStyle}
               labelStyle=${`background:color-mix(in srgb, ${rankColor(rank)} 18%, transparent)`} />`)}
-        ${/* SHEET BEST -- the last row, always, and the only one that is not a
-             rank. The top of a ladder is not the top of the sport: he
-             expanded Mario into its divisions, read Mario 1 and said "there
-             actually ARE faster times than this" (2026-08-15). One cell per
-             strategy column carrying the fastest time on the Ultimate Sheet
-             for that strategy, its runner, and a link where the run was
-             filmed. No cap icon, by his instruction -- it grades nothing, so
-             wearing a rank's art would say it does. A strategy with no sheet
-             row gets an empty cell rather than a guess, and the row never
-             takes a "you are here" bracket: markerPosition walks the LADDER,
-             which this is not part of. */""}
-        ${sheetBest && strats.some((strat) => sheetBest[strat])
-          ? html`<tr class="std-sheet-best">
-              <td class="std-tier">
-                <span class="std-tier-label"><span
-                  class="std-sheet-best-name">Sheet Best</span></span>
-              </td>
-              ${strats.map((strat) => {
-                const best = sheetBest[strat];
-                if (!best) return html`<td class="std-sheet-best-cell">—</td>`;
-                const label = fmtSeconds(best.time_cs / 100);
-                const runner = best.runner || "";
-                return html`<td class="std-sheet-best-cell">
-                  ${best.video
-                    ? html`<a href=${best.video} target="_blank" rel="noopener"
-                        title=${`${runner || "the fastest run"} on the Ultimate Sheet`}
-                        >${label}</a>`
-                    : html`<span>${label}</span>`}
-                  ${runner ? html`<span class="std-sheet-best-runner"
-                    >${runner}</span>` : null}</td>`;
-              })}
-            </tr>`
-          : null}
+        <${SheetBestRow} strats=${strats} sheetBest=${data.sheet_best} />
         </tbody></table>
     </div>` : null}
     <//>

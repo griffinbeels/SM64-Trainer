@@ -33,19 +33,8 @@ if _MISSING:
     pytest.skip(_MISSING, allow_module_level=True)
 
 from uilab import driver  # noqa: E402
+from standards_panel import BEAT, OPEN_PANEL, SETTLE  # noqa: E402
 
-SETTLE = "new Promise(r => setTimeout(r, 2500))"
-BEAT = "new Promise(r => setTimeout(r, 900))"
-
-OPEN_PANEL = """
-  (() => {
-    const card = Array.from(document.querySelectorAll('.log-card'))
-      .find((c) => c.querySelector('.standards-toggle'));
-    if (!card) return null;
-    card.querySelector('.standards-toggle').click();
-    return true;
-  })()
-"""
 
 # Switch the card's ACTIVE strategy through the real endpoint, so the whole
 # chain (strat_set -> reprojection -> session view -> panel refetch) runs

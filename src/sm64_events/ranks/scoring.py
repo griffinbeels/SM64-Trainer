@@ -78,6 +78,36 @@ def best_ladder_owners(ladders: dict[str, dict[str, float]]) -> dict[str, list[s
     return {rank: sorted(names) for rank, names in owners.items()}
 
 
+def sole_overall_owner(ladders: dict[str, dict[str, float]]) -> str | None:
+    """The ONE strategy that sets every defined cutoff of `best_ladder`, or
+    None when several share the job (the ordinary case: star:2:4's Sideflip
+    holds Mario and Metal while DJ Owlless holds the other six).
+
+    This is WHY a strategy's ladder can BE the Overall one, printed above the
+    standards table -- his report, 2026-08-15: "it also still seems a bit
+    weird that the 'Standard' strategy is the exact progression for the
+    'Overall' ranking". Not weird and not a bug: the entity's ladder is a
+    pointwise minimum, so a strategy fastest at every rank IS that minimum,
+    cutoff for cutoff. Nothing on screen said so, which is the
+    correct-but-unexplained shape he reads as a bug. 76 seeded
+    multi-strategy entities have a sole owner (measured 2026-08-21), so the
+    sentence draws often rather than rarely.
+
+    Gated on the number of LADDERS, not of ranks: with one strategy defined
+    it owns everything trivially, and "X is the fastest at every rank" would
+    be a sentence about a race with one runner. Ties count as several -- "X
+    is fastest at every rank" is not true when someone matches it. Derived
+    HERE beside `best_ladder_owners` rather than in the browser (it was, for
+    a day) so the Library page and the practice card cannot disagree."""
+    if sum(1 for ladder in ladders.values() if ladder) < 2:
+        return None
+    owners = best_ladder_owners(ladders)
+    if not owners or any(len(winners) != 1 for winners in owners.values()):
+        return None
+    names = {winners[0] for winners in owners.values()}
+    return names.pop() if len(names) == 1 else None
+
+
 def score_for(ladder_cs: dict[str, int], time_cs: int) -> float | None:
     """0..100 for a displayed time against one ladder; None if empty.
 

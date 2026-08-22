@@ -852,9 +852,15 @@ under a 3x LJ heading, and the standards table drawing a "you are here" marker
 from a time run on a strategy other than the column it was drawn on.
 
 **A time may only be BANKED under the strategy being practised.**
-`caveats.pb_action(attempt, active_strat, owns_strat_pb)` is the one resolver
-behind both the button and the API, with an illegal QUANTITY outranking the
-strategy gate. The consequence worth knowing is a capability removed: with no
+`tracking/pbaction.py::pb_action(attempt, active_strat, owns_strat_pb)` is the
+one resolver behind both the button and the API (`TrackerService.pb_action`
+asks it of the database for the commands), with an illegal QUANTITY outranking
+the strategy gate. Both of its ingredients have one door of their own:
+"which strategy is active" is `tracking/activestrat.py::ActiveStrats`, asked
+with identity (a star, a segment, an attempt) by the session view, the
+selector's medals, the route candidates AND the commands — until 2026-08-22
+that rule was restated at six call sites and the route candidates skipped the
+Bowser reds/pipe family reject. The consequence worth knowing is a capability removed: with no
 strategy selected nothing may be saved at all, which makes the `unattributed`
 caveat a HISTORICAL state rather than one that can still be created. Measured
 on the dev journal before shipping: 44 of 251 pb rows carried no strat_tag, 3

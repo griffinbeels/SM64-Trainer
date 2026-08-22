@@ -1167,12 +1167,18 @@ def test_the_fixture_never_reaches_for_the_shared_ladder_store():
     to one that works, which is what makes this worth a check of its own
     rather than a comment on the import.
 
-    Hence the invariant is stated where it can be enforced: the fixture may
-    not NAME the shared path at all. Restoring the store by hand is not an
-    accepted alternative -- it works only when the test passes, and the run
-    that most needs the store intact is the run where something failed
-    halfway."""
-    fixture = Path(__file__).resolve().parents[1] / "tools" / "ui_fixture.py"
+    Hence the invariant is stated where it can be enforced, in two halves.
+    The fixture may not NAME the shared path at all -- it serves from its own
+    scratch store. And NOTHING under src/ or tools/ may hold a MODULE-LEVEL
+    alias of it (`main.py`'s is function-local, which re-resolves on every
+    call and is therefore inside the monkeypatch's reach), so the conftest
+    fixture is honest again for every caller that remains, and the next
+    driven harness nobody has written yet cannot reopen the hole. Restoring
+    the store by hand is not an accepted alternative -- it works only when
+    the test passes, and the run that most needs the store intact is the run
+    where something failed halfway."""
+    repo = Path(__file__).resolve().parents[1]
+    fixture = repo / "tools" / "ui_fixture.py"
     # `python_code`, not `strip_comments` -- the latter removes JS/CSS comment
     # styles and leaves Python `#` lines standing, so this guard would have
     # tripped on a comment explaining the very absence it checks for. Caught by
@@ -1184,9 +1190,30 @@ def test_the_fixture_never_reaches_for_the_shared_ladder_store():
         "test is once more writing the worktree's own data/rank_standards.json "
         "-- and conftest's autouse isolation cannot help, because a "
         "`from paths import` alias is invisible to its monkeypatch.")
-    # ... and it must still hand RankStandards a path under the scratch dir it
-    # already tears down, rather than simply having dropped the store.
-    assert "rank_standards.json" in source and "compare_cache_scratch" in source
+    # ... and it must still hand RankStandards a path under a scratch dir,
+    # rather than simply having dropped the store.
+    assert "rank_standards.json" in source
+
+    aliased = [str(path.relative_to(repo)).replace("\\", "/")
+               for folder in ("src", "tools")
+               for path in (repo / folder).rglob("*.py")
+               if path.name != "paths.py" and _module_level_alias(path)]
+    assert not aliased, (
+        f"{aliased} import rank_standards_path at module level, which takes "
+        "the name at import time and is invisible to conftest's "
+        "_isolate_rank_standards monkeypatch. Call paths.rank_standards_path() "
+        "through the module, or import it inside the function that needs it.")
+
+
+def _module_level_alias(path: Path) -> bool:
+    """Does this file hold `rank_standards_path` as a MODULE-level import
+    alias? A function-local `from ... import` re-resolves at call time and is
+    fine; a top-level one is a copy the monkeypatch cannot reach."""
+    import ast
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return any(isinstance(node, ast.ImportFrom)
+               and any(alias.name == "rank_standards_path" for alias in node.names)
+               for node in tree.body)
 
 
 def test_the_shared_store_guard_can_still_fail():
@@ -1201,3 +1228,16 @@ def test_the_shared_store_guard_can_still_fail():
     prose = python_code("# never call rank_standards_path() from here\n")
     assert _SHARED_STORE_READ.search(real)
     assert not _SHARED_STORE_READ.search(prose)
+
+
+def test_the_alias_scan_can_still_fail(tmp_path):
+    """The module-level alias is the whole mechanism of the 2026-08-21 leak,
+    so the scan has to tell it from the function-local import main.py holds."""
+    top = tmp_path / "top.py"
+    top.write_text("from sm64_events.core.paths import rank_standards_path\n")
+    local = tmp_path / "local.py"
+    local.write_text("def build():\n"
+                     "    from sm64_events.core.paths import rank_standards_path\n"
+                     "    return rank_standards_path()\n")
+    assert _module_level_alias(top)
+    assert not _module_level_alias(local)

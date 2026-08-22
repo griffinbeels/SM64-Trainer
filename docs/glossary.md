@@ -321,6 +321,28 @@ different things, so each strategy carries its own [[ladder]].
 - **Lives** — the standards file (`src/sm64_events/ranks/standards.py`)
   → the [[strategy picker]]
 
+### Active strategy
+
+The [[strategy]] you have selected for one [[target]] — the one the
+[[practice log]] shows, the one a [[personal best]] saves under, and the one
+the quick-select medal grades. One resolver answers it for every surface and
+for the PB commands, so the card and the API cannot disagree about it.
+
+- **Lives** — the resolver (`src/sm64_events/tracking/activestrat.py`)
+  → the [[strategy picker]]
+
+### PB gate
+
+Why a [[practice log]] row's Save/Undo button is not there: the row belongs to
+a [[strategy]] other than the [[active strategy]], or you have selected no
+[[strategy]] at all. The row prints the reason as a chip where the button was.
+
+- **Not** — a [[caveat mark]]. A [[caveat mark]] says the time is not the
+  quantity it looks like; this chip says the row is fine and simply not yours
+  to act on right now.
+- **Lives** — the resolver (`src/sm64_events/tracking/pbaction.py`)
+  → the chip in the [[practice log]]'s action column
+
 ### Route
 
 An ordered plan of [[route step]]s covering a stretch of a full game — the

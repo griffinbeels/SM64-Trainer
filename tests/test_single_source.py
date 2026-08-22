@@ -598,49 +598,56 @@ def _top_level_functions(path):
     return out
 
 
-def test_only_views_decides_which_strategy_is_ACTIVE():
+def test_only_activestrat_decides_which_strategy_is_ACTIVE():
     """"Which strategy is this entity being practised with" has exactly one
     answer, and since 2026-08-20 two very different callers need it: the
     practice card draws its PB and its gate chip from it, and
     `service.save_pb`/`undo_pb` REFUSE on it. A second reading is not a
     cosmetic duplicate -- it is the API accepting a save the button refuses,
-    which is the precise failure `caveats.pb_action` was built as one resolver
-    to prevent.
+    which is the precise failure `pbaction.pb_action` was built as one
+    resolver to prevent.
 
-    The ingredient is the TOMBSTONE lookup (`deleted_strats`): a fully deleted
-    strategy must never surface as active, and any file computing that itself
-    has minted the second door. `views.masked_strat` owns it and
-    `views.active_strat_for` is the one composed answer; service.py reaches it
-    by IMPORT.
-
-    service.py is NOT simply exempted, because it is the likeliest file to
-    grow a second reading -- it already asks the question for `save_pb`. It is
-    allowed to touch the KV only as its OWNER: `purge_strategy` mints a
-    tombstone and `_clear_tombstone` retires one, and both WRITE. So every
-    read there must sit in a function that also writes, and service.py may
-    never call `masked_strat` itself. Interpreting the tombstone without
-    writing it is exactly the second door.
+    Two ingredients, both fenced. The TOMBSTONE (`deleted_strats`): a fully
+    deleted strategy must never surface as active, and any file in the three
+    zones computing that itself has minted a second door -- except views.py,
+    which reads the KV once to hand it to `ActiveStrats` AND to filter the
+    strategies a dropdown OFFERS (a different question; tombstones stay out
+    of lists), and service.py as the KV's OWNER: `purge_strategy` mints a
+    tombstone and `_clear_tombstone` retires one, both WRITE, so every read
+    there must sit in a function that also writes. The FAMILY REJECT (the
+    Bowser reds/pipe suffix rule): until 2026-08-22 it was restated at six
+    call sites in views.py plus one in service's path, and the route
+    candidates applied the tombstone but never the family -- so
+    `masked_strat`, the primitive that takes both as INGREDIENTS, may be
+    called by nobody outside `tracking/activestrat.py`. Every other reader
+    asks `ActiveStrats` with IDENTITY (a star, a segment, an attempt).
 
     storage/db.py is exempt: it stores the KV and never interprets it."""
     offenders = []
     for folder in ("tracking", "ranks", "server"):
         for path in (SRC / folder).glob("*.py"):
-            if path.name in ("views.py", "service.py"):
+            if path.name in ("views.py", "service.py", "activestrat.py"):
                 continue
             if _TOMBSTONE_READ.search(code_only(path)):
                 offenders.append(f"{folder}/{path.name}")
     assert not offenders, (
         f"{offenders} reads the deleted-strats tombstone directly. The active "
-        "strategy resolves through tracking/views.py::masked_strat / "
-        "active_strat_for, so the practice card's chip and save_pb's refusal "
-        "cannot disagree.")
+        "strategy resolves through tracking/activestrat.py::ActiveStrats, so "
+        "the practice card's chip and save_pb's refusal cannot disagree.")
 
-    service = code_only(SRC / "tracking" / "service.py")
-    assert "masked_strat" not in service, (
-        "tracking/service.py masks a strategy itself. It must ask "
-        "views.active_strat_for, which composes the SAME masking the practice "
-        "card's own `masked` closure applies -- two maskings is how the API "
-        "starts accepting a save the button refuses.")
+    callers = []
+    for folder in ("tracking", "ranks", "server"):
+        for path in (SRC / folder).glob("*.py"):
+            if path.name == "activestrat.py":
+                continue
+            if re.search(r"\bmasked_strat\s*\(", code_only(path)):
+                callers.append(f"{folder}/{path.name}")
+    assert not callers, (
+        f"{callers} masks a strategy name itself. `masked_strat` takes the "
+        "tombstone list and the family suffix as INGREDIENTS, which is exactly "
+        "how six call sites came to restate the family rule; ask "
+        "ActiveStrats.for_star / for_segment / for_attempt instead.")
+
     for function in _top_level_functions(SRC / "tracking" / "service.py"):
         if "deleted_strats" in function and "set_state" not in function:
             offenders.append(function.splitlines()[0].strip())

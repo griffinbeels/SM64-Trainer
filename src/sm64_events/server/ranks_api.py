@@ -6,6 +6,7 @@ directly instead (an unknown scope IS a 404, not a caught LookupError)."""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from sm64_events.library.examples import example_clips, sheet_best
 from sm64_events.links import xcams_url
 from sm64_events.memory.addresses import COURSE_NAMES
 from sm64_events.ranks import classify, history, scopes, scoring
@@ -314,21 +315,15 @@ def create_ranks_router(service, library=None, adoptions=None,
     overrides where the liveness verdicts load from (tests; production takes
     the bundled seed)."""
 
-    def _library_clips(entity: str) -> dict:
+    def _from_library(reader, entity: str, **kwargs) -> dict:
+        """One of `library/examples.py`'s two readers (`example_clips`,
+        `sheet_best`) over this instance's library, or {} when there is no
+        library or no standards to grade on (a broadcast-only instance)."""
         if library is None or service.ranks is None:
             return {}
-        from sm64_events.library.examples import example_clips
         rows = adoptions.rows() if adoptions is not None else {}
-        return example_clips(library.payload, rows, entity,
-                             service.ranks.has_jp_ladder)
-
-    def _sheet_best(entity: str) -> dict:
-        if library is None or service.ranks is None:
-            return {}
-        from sm64_events.library.examples import sheet_best
-        rows = adoptions.rows() if adoptions is not None else {}
-        return sheet_best(library.payload, rows, entity,
-                          service.ranks.has_jp_ladder)
+        return reader(library.payload, rows, entity,
+                      service.ranks.has_jp_ladder, **kwargs)
 
     # Videos the liveness sweep (tools/check_videos.py) marked gone — round 2
     # of task 0098: a dead video must never be THE example a standard links
@@ -356,7 +351,7 @@ def create_ranks_router(service, library=None, adoptions=None,
         ladders = service.ranks.ladders(entity, resolved)
         alive = lambda clips: [c for c in clips if c[1] not in dead_videos]
         extra_clips = {strat: alive(clips) for strat, clips
-                       in _library_clips(entity).items()}
+                       in _from_library(example_clips, entity).items()}
         return {"entity": entity, "clock": service.ranks.clock_for(entity),
                 "strategies": ladders,
                 # Which version the ladders above are resolved on, and which
@@ -391,6 +386,10 @@ def create_ranks_router(service, library=None, adoptions=None,
                 "overall": {rank: cs / 100 for rank, cs
                             in scoring.best_ladder(ladders).items()},
                 "overall_owners": scoring.best_ladder_owners(ladders),
+                # The ONE strategy that sets every Overall cutoff, or null --
+                # the practice card prints why that strategy's ladder IS the
+                # Overall one (scoring.sole_overall_owner has the story).
+                "sole_overall_owner": scoring.sole_overall_owner(ladders),
                 # Which of the names above (keys of "strategies") came off the
                 # Ultimate Sheet rather than community-vetted standards --
                 # ranks.is_fitted's own contract, exposed as a sibling LIST
@@ -429,21 +428,10 @@ def create_ranks_router(service, library=None, adoptions=None,
                 # The bottom row of the standards table: the fastest time
                 # anybody has recorded on the Ultimate Sheet for each
                 # strategy, with its runner and (where one exists) its video.
-                # The top of a ladder is not the top of the sport -- he read
-                # Mario 1 and said "there actually ARE faster times than
-                # this" (2026-08-15).
-                #
-                # A dead video costs the LINK, never the row: this row asserts
-                # a TIME, so dropping the fastest run because its clip rotted
-                # would make the number wrong in order to protect a link. That
-                # is the opposite trade from `cutoff_videos` above, where the
-                # link IS the payload -- same verdict set, different
-                # consequence, stated here so the difference reads as a
-                # decision rather than an oversight.
-                "sheet_best": {
-                    strat: ({**best, "video": None}
-                            if best["video"] in dead_videos else best)
-                    for strat, best in _sheet_best(entity).items()},
+                # Same liveness verdicts as `cutoff_videos` above, opposite
+                # consequence -- `sheet_best` says why.
+                "sheet_best": _from_library(sheet_best, entity,
+                                            dead_urls=dead_videos),
                 "user_videos": service.ranks.user_videos(entity),
                 "seeded": service.ranks.seeded_strategies(entity),
                 # Grouping is resolved HERE, not in the browser: a 100-coin

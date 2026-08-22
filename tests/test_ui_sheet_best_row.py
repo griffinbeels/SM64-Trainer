@@ -31,19 +31,8 @@ if _MISSING:
     pytest.skip(_MISSING, allow_module_level=True)
 
 from uilab import driver  # noqa: E402
+from standards_panel import BEAT, OPEN_PANEL, SETTLE  # noqa: E402
 
-SETTLE = "new Promise(r => setTimeout(r, 2500))"
-BEAT = "new Promise(r => setTimeout(r, 900))"
-
-OPEN_PANEL = """
-  (() => {
-    const card = Array.from(document.querySelectorAll('.log-card'))
-      .find((c) => c.querySelector('.standards-toggle'));
-    if (!card) return null;
-    card.querySelector('.standards-toggle').click();
-    return true;
-  })()
-"""
 
 # Everything the row claims, read off the RENDERED table plus the payload it
 # came from — so the assertions below compare the screen against the server's

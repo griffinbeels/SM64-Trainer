@@ -10,6 +10,7 @@ from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
+from pb_commands import save_pb, undo_pb
 
 T0 = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -27,33 +28,6 @@ def star(frame, course=2, star_id=2, igt=343):
               {"course_id": course, "star_id": star_id, "igt_frames": igt,
                "igt_timed_at": "xcam"})
 
-
-def save_pb(svc, db, attempt_id, mode):
-    """Save a PB the way the app does since 2026-08-20: under the strategy the
-    run was tagged with, which must also be the one being practised
-    (caveats.pb_action). One expression of the rule, so a test that only needs
-    A saved pb does not have to restate it -- the tests that are ABOUT the
-    gate call svc.save_pb directly."""
-    attempt = next(a for a in db.attempts() if a.id == attempt_id)
-    tag = attempt.strat_tag or "Standard"
-    if attempt.segment_id is not None:
-        asyncio.run(svc.set_strat_segment(attempt.segment_id, tag))
-    else:
-        asyncio.run(svc.set_strat(attempt.course_id, attempt.star_id, tag))
-    if not attempt.strat_tag:
-        asyncio.run(svc.set_attempt_strat(attempt_id, tag))
-    return asyncio.run(svc.save_pb(attempt_id, mode))
-
-
-def undo_pb(svc, db, attempt_id, mode):
-    """Undo the way the app does: only the active strategy's own PB."""
-    attempt = next(a for a in db.attempts() if a.id == attempt_id)
-    if attempt.segment_id is not None:
-        asyncio.run(svc.set_strat_segment(attempt.segment_id, attempt.strat_tag))
-    else:
-        asyncio.run(svc.set_strat(attempt.course_id, attempt.star_id,
-                                  attempt.strat_tag))
-    return asyncio.run(svc.undo_pb(attempt_id, mode))
 
 
 def make(tmp_path):

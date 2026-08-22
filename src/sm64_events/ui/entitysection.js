@@ -25,6 +25,12 @@ export function entityKey(sec) {
 }
 
 export const entityNoun = (sec) => (isSegment(sec) ? "Segment" : "Star");
+// The same noun from an entity KEY ("star:c:s" / "segment:id"), lower-case,
+// for the surfaces that hold a key rather than a section (the standards
+// panels). Rule 11 in one word: a star and a segment are two kinds of the
+// same practiced thing, and only the noun differs on screen.
+export const nounOfKey = (key) =>
+  (key && key.startsWith("segment:") ? "segment" : "star");
 
 // The POST /api/strat identity for THIS entity's active strategy -- the same
 // shape StarSection/SegmentSection used to build by hand, one door now that
@@ -43,8 +49,8 @@ export function entityIdentity(sec) {
 // view's clock applies to stars alone.
 export const sectionClock = (sec, clock) => (isSegment(sec) ? "rta" : clock);
 
-// The entity's best time on ANY strategy -- what the trend graph and the
-// progress dots measure against.
+// The entity's best time on ANY strategy -- the Rank tab's entity heading, and
+// the `unattributed` fallback behind the practice card's caveat badge.
 export const sectionPb = (sec, clock) => sec.pb[sectionClock(sec, clock)];
 
 // The PB on the strategy being practised, which is the one the card's tag

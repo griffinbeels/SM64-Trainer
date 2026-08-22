@@ -57,36 +57,33 @@ const STORE_KEY = "sm64.logTuneDraft";
 // enforces for tuning pages: no test may assert a preview's CONTENTS) --
 // these numbers exist purely to give the real components something to draw.
 
+// The action column (`pb_action`/`pb_blocked`) is SERVER-resolved
+// (tracking/pbaction.py, 2026-08-20) and this file hand-builds the payload,
+// so each row STATES its action as data rather than deriving it -- a
+// derivation here would be a second copy of the server's precedence that
+// nothing compares, and the first version of this fixture was exactly that
+// (it read an `is_current_pb` flag that no longer exists). A plain success
+// defaults to Save; a row that is the PB says "undo", a row on another
+// strategy says null with its reason.
 let nextAttemptId = 1;
 function mkAttempt(overrides = {}) {
   const id = nextAttemptId++;
-  const row = {
-    id, journal_id: id, outcome: "success",
+  const outcome = overrides.outcome || "success";
+  return {
+    id, journal_id: id, outcome,
     igt: "0'24\"11", igt_frames: 733, rta: "0'25\"02", rta_frames: 750,
     pb_delta_frames: null, cleared: false, cleared_reason: null,
     strat_tag: "Standard", rank: null, caveat: null,
-    segment_id: null, is_current_pb: false, outcome_detail: null,
+    segment_id: null, outcome_detail: null,
+    pb_action: outcome === "success" ? "save" : null, pb_blocked: null,
     rollouts_total: 0, jumps_total: 0, rollouts_dustless: 0, jumps_dustless: 0,
     ...overrides,
-  };
-  // The action column is one SERVER-resolved field now
-  // (tracking/caveats.py::pb_action, 2026-08-20), so a fixture that only sets
-  // `is_current_pb` draws no button at all -- and a tuning page with an empty
-  // actions column is measuring a row nobody has. Derived from the same
-  // inputs the server derives it from, AFTER the overrides, so a row that
-  // asks for `is_current_pb` gets Undo and a plain success gets Save without
-  // either having to say so.
-  const saveable = row.outcome === "success" && !row.cleared;
-  return {
-    pb_action: !saveable ? null : (row.is_current_pb ? "undo" : "save"),
-    pb_blocked: null,
-    ...row,
   };
 }
 
 const OPEN_ATTEMPTS = [
   mkAttempt({ outcome: "success", igt: "0'22\"41", igt_frames: 673,
-    is_current_pb: true, pb_delta_frames: -34 }),
+    pb_action: "undo", pb_delta_frames: -34 }),
   mkAttempt({ outcome: "reset", igt: "0'06\"10" }),
   mkAttempt({ outcome: "death", outcome_detail: "fell", igt: "0'14\"02" }),
   mkAttempt({ outcome: "success", igt: "0'25\"77", igt_frames: 773, pb_delta_frames: 100 }),

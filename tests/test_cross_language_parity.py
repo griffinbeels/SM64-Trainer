@@ -214,7 +214,7 @@ def test_reds_family_suffix_agrees():
     (JS); disagreeing would mean a strategy named " (Pipe)" server-side that
     the client never recognises as the Pipe family, or a card suffix that
     doesn't match any strategy the server will actually grade against."""
-    from sm64_events.tracking.views import PIPE_FAMILY_SUFFIX, STAR_FAMILY_SUFFIX
+    from sm64_events.tracking.activestrat import PIPE_FAMILY_SUFFIX, STAR_FAMILY_SUFFIX
 
     js = run_node(
         f"import {{ STAR_FAMILY_SUFFIX, PIPE_FAMILY_SUFFIX, familyLabel }} "
@@ -285,20 +285,20 @@ def test_pb_gate_keys_agree():
     these say the row is fine and simply is not what you are practising. One
     vocabulary for two questions is how a badge starts appearing on rows that
     have nothing wrong with them."""
-    from sm64_events.tracking.caveats import PB_GATE_REASONS
+    from sm64_events.tracking.pbaction import PB_GATE_REASONS
 
     js = run_node(
         declaration(MARKS_JS, "PB_GATES") + "\n"
         "console.log(JSON.stringify({\n"
         "  keys: Object.keys(PB_GATES),\n"
         "  incomplete: Object.entries(PB_GATES).filter(([, g]) =>\n"
-        "    typeof g.text !== 'function'\n"
+        "    typeof g.tail !== 'function'\n"
         "    || typeof g.sentence !== 'function'\n"
-        "    || !g.text('3x LJ') || !g.sentence('3x LJ')).map(([k]) => k),\n"
+        "    || !g.tail('3x LJ') || !g.sentence('3x LJ')).map(([k]) => k),\n"
         "}));")
     assert sorted(js["keys"]) == sorted(PB_GATE_REASONS), (
         "the PB-gate vocabulary disagrees across languages.\n"
-        f"  tracking/caveats.py PB_GATE_REASONS: {sorted(PB_GATE_REASONS)}\n"
+        f"  tracking/pbaction.py PB_GATE_REASONS: {sorted(PB_GATE_REASONS)}\n"
         f"  ui/components/marks.js PB_GATES:     {sorted(js['keys'])}\n"
         "A key only Python knows leaves the action cell blank; a key only JS "
         "knows is wording nothing can ever show.")

@@ -76,7 +76,7 @@ def example_clips(payload: dict, adoption_rows: dict, entity: str,
 
 
 def sheet_best(payload: dict, adoption_rows: dict, entity: str,
-               has_jp_ladder) -> dict:
+               has_jp_ladder, dead_urls: frozenset | set = frozenset()) -> dict:
     """{strategy: {"time_cs", "runner", "video"}} — the fastest time anybody
     has recorded on the Ultimate Sheet for each of this entity's strategies.
 
@@ -96,13 +96,20 @@ def sheet_best(payload: dict, adoption_rows: dict, entity: str,
     own `best_runner` field reads "Multiple [3]" where three runners share the
     time, and a per-entry tie here resolves to whichever the sheet lists
     first.
+
+    `dead_urls` (the liveness sweep's verdicts, tools/check_videos.py) costs
+    a row its LINK, never the row: this row asserts a TIME, so dropping the
+    fastest run because its clip rotted would make the number wrong in order
+    to protect a link. That is the opposite trade from `cutoff_videos`, where
+    the link IS the payload — same verdict set, different consequence.
     """
     out: dict[str, dict] = {}
     for strat, entry in strategy_entries(payload, adoption_rows, entity,
                                          has_jp_ladder):
         best = out.get(strat)
         if best is None or entry["time_cs"] < best["time_cs"]:
+            video = entry.get("video")
             out[strat] = {"time_cs": entry["time_cs"],
                           "runner": entry.get("runner"),
-                          "video": entry.get("video")}
+                          "video": None if video in dead_urls else video}
     return out

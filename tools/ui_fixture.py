@@ -350,7 +350,11 @@ def _seed_target(base: str, course_id: int = FIXTURE_COURSE,
                         "strat_tag": FIXTURE_STRAT})
     attempts = json.loads(urllib.request.urlopen(
         f"{base}/api/session?clock=igt&scope=session", timeout=10).read())
+    # THIS star's rows only: the session view lists every star's section, and
+    # both the PB save and the foreign retag below must land on the target
+    # (`_seed_target` is called with other stars too).
     rows = [a for star in attempts.get("stars", [])
+            if star.get("course_id") == course_id and star.get("star_id") == star_id
             for a in star.get("attempts", []) if a.get("outcome") == "success"]
     if rows:
         post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "igt"})
@@ -364,7 +368,7 @@ def _seed_target(base: str, course_id: int = FIXTURE_COURSE,
     # attempt's tag is stamped at CLOSE time from the then-active strategy,
     # so a retag is the only way to make an EXISTING row foreign.
     # NOT the PB row and NOT a caveated one: an illegal QUANTITY outranks the
-    # strategy gate (caveats.pb_action), so retagging the fixture's deliberate
+    # strategy gate (tracking/pbaction.py), so retagging the fixture's deliberate
     # grab-timed row would draw the grab-timed button and leave the chip
     # unrendered again -- which is exactly what the first version of this did,
     # and the contact sheet is what caught it.

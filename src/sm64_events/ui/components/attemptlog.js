@@ -21,7 +21,7 @@ import { RankIcon } from "./rankicon.js";
 import { StratPicker } from "./stratpicker.js";
 import { Icon } from "./icons.js";
 import { EmptyState } from "./emptystate.js";
-import { caveatOf, cardBadge, pbGateOf } from "./marks.js";
+import { caveatOf, cardBadge, gateChip, pbGateOf } from "./marks.js";
 
 const html = htm.bind(h);
 
@@ -143,17 +143,13 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   const entity = a.segment_id != null ? `segment:${a.segment_id}`
     : (sec ? `star:${sec.course_id}:${sec.star_id}` : null);
   const strat = a.strat_tag || (sec && sec.last_strat) || null;
-  // The server's answer to "may this be saved as a PB", as a caveat key we
-  // already know how to draw. Never re-derived here: save_pb refuses on the
-  // same predicate, and a button that offers what the server rejects is the
-  // drift this shares one door to prevent.
   // The server's own resolved answer for this row's action column: "save" |
   // "undo" | null, and when null, why. Never re-derived here -- save_pb and
-  // undo_pb refuse on the SAME resolver (tracking/caveats.py::pb_action), and
-  // a button that offers what the server rejects is the drift one door
-  // prevents. Two shapes of "why": a caveat key (the TIME is not a legal
-  // quantity), drawn as the disabled button it always was, and a STRATEGY
-  // gate, drawn as a chip that says which strategy would accept it.
+  // undo_pb refuse on the SAME resolver (tracking/pbaction.py), and a button
+  // that offers what the server rejects is the drift one door prevents. Two
+  // shapes of "why": a caveat key (the TIME is not a legal quantity), drawn
+  // as the disabled button it always was, and a STRATEGY gate, drawn as a
+  // chip that says which strategy would accept it (marks.js::gateChip).
   const blockedPb = caveatOf(a.pb_blocked && a.pb_blocked.reason);
   const pbGate = pbGateOf(a.pb_blocked);
   // The mark on the TIME, not on the save button: this row's number is not
@@ -198,8 +194,8 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
           title="View replay" aria-label="View replay">
         <${Icon} name=${showReplay ? "chevron" : "play"} size=${16} /></button>
       ${/* THE action column, a straight cascade over the server's own
-           resolved answer (tracking/caveats.py::pb_action). Four states and
-           no client-side precedence: undo, save, "the time is not a legal
+           resolved answer (tracking/pbaction.py). Four states and no
+           client-side precedence: undo, save, "the time is not a legal
            quantity", "the row is not this strategy's". A failure, a cleared
            row and an attempt with no entity resolve to nothing at all, which
            is the empty last arm. */""}
@@ -224,16 +220,9 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
             <span class="save-pb-wide">Save as PB</span>
             <span class="save-pb-narrow">Save PB</span>
             ${cardBadge(blockedPb)}</button>`
-        : pbGate
-          // The row is fine and belongs to another strategy. The reason is
-          // PRINTED, never left on a hover: an explanation that only arrives
-          // on hover never arrives (his rule, 2026-08-02, about a disabled
-          // control whose own tooltip nobody reaches). Retagging the row with
-          // the picker one cell to the left re-enables it.
-        ? html` <span class="pb-gate" title=${pbGate.sentence}
-            aria-label=${pbGate.sentence}>${pbGate.name
-              ? html`<span class="pb-gate-strat">${pbGate.name}</span>` : null
-            }${pbGate.tail}</span>`
+        // The row is fine and belongs to another strategy; retagging it with
+        // the picker one cell to the left re-enables the button.
+        : pbGate ? html` ${gateChip(pbGate)}`
         : ""}
       ${a.cleared
         ? html` <button onclick=${restore}>undo</button>`

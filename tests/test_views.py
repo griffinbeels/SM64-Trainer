@@ -7,6 +7,7 @@ from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
 from sm64_events.tracking.segments import start_areas, start_levels
 from sm64_events.tracking.views import build_session_view
+from pb_commands import save_pb
 
 T0 = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -39,22 +40,6 @@ def make(tmp_path):
     svc = TrackerService(db, Broadcaster())
     asyncio.run(svc.start())
     return db, svc
-
-
-def save_pb(svc, db, attempt_id, mode):
-    """Save a PB the way the app does since 2026-08-20: under the strategy the
-    run was tagged with, which must also be the one being practised
-    (caveats.pb_action). Tests that only need A pb, rather than a specific
-    untagged one, go through here so the rule has one expression."""
-    attempt = next(a for a in db.attempts() if a.id == attempt_id)
-    tag = attempt.strat_tag or "Standard"
-    if attempt.segment_id is not None:
-        asyncio.run(svc.set_strat_segment(attempt.segment_id, tag))
-    else:
-        asyncio.run(svc.set_strat(attempt.course_id, attempt.star_id, tag))
-    if not attempt.strat_tag:
-        asyncio.run(svc.set_attempt_strat(attempt_id, tag))
-    return asyncio.run(svc.save_pb(attempt_id, mode))   # the real command
 
 
 def seed(svc):
@@ -451,25 +436,29 @@ def test_progress_superseded_pbs_stay_gold(tmp_path):
     assert flags[a343] is True and flags[a350] is True   # every saved PB is gold
 
 
-def test_attempt_is_current_pb_follows_latest_save_and_clock(tmp_path):
+def test_the_undo_action_follows_the_latest_save_and_the_clock(tmp_path):
+    """`pb_action == "undo"` is THE statement that a row owns its strategy's
+    current PB (the `is_current_pb` flag it replaced said the same thing under
+    a name the Rank tab misread)."""
     db, svc = make(tmp_path)
+    asyncio.run(svc.set_strat(2, 2, "Standard"))   # both rows tagged, both saveable
     seed(svc)
     a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
     a350 = next(a.id for a in db.attempts() if a.igt_frames == 350)
     save_pb(svc, db, a350, "igt")
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
-    flags = {a["id"]: a["is_current_pb"] for a in sec["attempts"]}
-    assert flags[a350] is True and flags[a343] is False
-    save_pb(svc, db, a343, "igt")      # supersedes: the flag moves
+    actions = {a["id"]: a["pb_action"] for a in sec["attempts"]}
+    assert actions[a350] == "undo" and actions[a343] == "save"
+    save_pb(svc, db, a343, "igt")      # supersedes: the action moves
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
-    flags = {a["id"]: a["is_current_pb"] for a in sec["attempts"]}
-    assert flags[a343] is True and flags[a350] is False
+    actions = {a["id"]: a["pb_action"] for a in sec["attempts"]}
+    assert actions[a343] == "undo" and actions[a350] == "save"
     # per-clock: nothing is saved on rta, so no rta row is "current"
     view = build_session_view(db, svc, clock="rta")
     [sec] = view["stars"]
-    assert all(a["is_current_pb"] is False for a in sec["attempts"])
+    assert all(a["pb_action"] != "undo" for a in sec["attempts"])
 
 
 def test_hiding_an_attempt_undoes_the_pb_it_saved(tmp_path):
@@ -489,8 +478,8 @@ def test_hiding_an_attempt_undoes_the_pb_it_saved(tmp_path):
     asyncio.run(svc.clear_attempt(a343, reason="accidental"))
     [sec] = build_session_view(db, svc, clock="igt")["stars"]
     assert sec["pb"]["igt"]["frames"] == 350 and sec["pb"]["igt"]["attempt_id"] == a350
-    flags = {a["id"]: a["is_current_pb"] for a in sec["attempts"]}
-    assert flags[a343] is False and flags[a350] is True
+    actions = {a["id"]: a["pb_action"] for a in sec["attempts"]}
+    assert actions[a343] is None and actions[a350] == "undo"
     asyncio.run(svc.restore_attempt(a343))
     [sec] = build_session_view(db, svc, clock="igt")["stars"]
     assert sec["pb"]["igt"]["attempt_id"] == a350
@@ -2544,7 +2533,7 @@ def test_section_pb_display_stays_on_the_view_clock_after_the_grading_fix(tmp_pa
 # data/rank_standards.seed.json): the reds grab alone (" (Star)" strategies)
 # or the whole reds-then-pipe run (" (Pipe)"), and BOTH ladders live on the
 # star -- the seg:reds->pipe:<abbrev> segment that actually records the Pipe
-# family's attempts has no rank entity of its own. _reds_pipe_segments is the
+# family's attempts has no rank entity of its own. reds_pipe_segments is the
 # resolver; every grading call site below borrows the star's entity_key
 # through it rather than the segment's own (empty) one.
 
@@ -2619,13 +2608,13 @@ def _run_reds_pipe_sequence(svc, star_id=0, course_id=16, level=17,
     asyncio.run(svc.publish(ev("warp_entered", close_frame, {"level": level})))
 
 
-def test_reds_pipe_segments_pairs_by_seed_key_prefix_and_level():
-    """Pure unit test of the resolver (views._reds_pipe_segments): matches a
+def testreds_pipe_segments_pairs_by_seed_key_prefix_and_level():
+    """Pure unit test of the resolver (views.reds_pipe_segments): matches a
     seg:reds->pipe:* row to its course via start_levels/COURSE_BY_LEVEL, and
     -- mutation-proved -- a row at the SAME level with a DIFFERENT seed_key
     (the legacy exclusive 'no reds' pipe segment shares this level and must
     never be mistaken for the reds->pipe one) is not paired."""
-    from sm64_events.tracking.views import _reds_pipe_segments
+    from sm64_events.tracking.activestrat import reds_pipe_segments
 
     reds_pipe_row = {"id": 67, "seed_key": "seg:reds->pipe:bitdw",
                      "start_triggers": [{"type": "level_enter", "to": 17}]}
@@ -2634,7 +2623,7 @@ def test_reds_pipe_segments_pairs_by_seed_key_prefix_and_level():
     unrelated_row = {"id": 1, "seed_key": None,
                      "start_triggers": [{"type": "level_enter", "to": 6}]}
 
-    by_course, grading_ek = _reds_pipe_segments(
+    by_course, grading_ek = reds_pipe_segments(
         [reds_pipe_row, legacy_pipe_row, unrelated_row])
     assert by_course == {16: 67}
     assert grading_ek == {67: "star:16:0"}
@@ -2643,7 +2632,7 @@ def test_reds_pipe_segments_pairs_by_seed_key_prefix_and_level():
     # one -- the level-based match alone would still find IT (same level),
     # proving the prefix check, not the level, is what tells them apart.
     renamed = {**reds_pipe_row, "seed_key": "seg:bitdw-pipe-v2"}
-    by_course2, grading_ek2 = _reds_pipe_segments([renamed, legacy_pipe_row])
+    by_course2, grading_ek2 = reds_pipe_segments([renamed, legacy_pipe_row])
     assert by_course2 == {} and grading_ek2 == {}
 
 
@@ -2720,7 +2709,7 @@ def test_legacy_no_reds_segments_matched_by_seed_key_suffix():
     mutation proves this is the actual reason, not a level-based accident:
     a row at the SAME level but a DIFFERENT seed_key shape is excluded, and
     a row with the reds->pipe seed_key RENAMED to end in "-pipe" would be
-    (wrongly) swept in, which is exactly why _reds_pipe_segments' own
+    (wrongly) swept in, which is exactly why reds_pipe_segments' own
     prefix must never change shape without re-checking this resolver too."""
     from sm64_events.tracking.views import _legacy_no_reds_segments
 
@@ -2851,7 +2840,7 @@ def test_route_candidate_ranks_the_reds_pipe_segment_against_the_star_ladder(tmp
 def _service_with_corpus(tmp_path):
     """A fresh service with the SHIPPED 84-def corpus reconciled -- unlike
     `_make_with_def`'s hand-built reds->pipe stand-in above, this exercises
-    the REAL seg:reds->pipe:bitdw definition `_reds_pipe_segments` pairs by
+    the REAL seg:reds->pipe:bitdw definition `reds_pipe_segments` pairs by
     seed_key prefix, which is what the star section's own `parents` stamp
     (spec 2026-08-10-reds-as-subsection) has to read.
 
@@ -2884,7 +2873,7 @@ def _star_section(view, course_id, star_id):
 def test_a_bowser_reds_star_names_its_movement_as_a_parent(tmp_path):
     """Round 31. The reds star is a piece of seg:reds->pipe:<abbrev> -- the
     movement that already carries its grab as a waypoint -- so the practice
-    log nests it there. Stamped from `_reds_pipe_segments`, the pairing this
+    log nests it there. Stamped from `reds_pipe_segments`, the pairing this
     module already computes for the shared ladder, never a second table."""
     db, svc = _service_with_corpus(tmp_path)
     # A section only exists for a scoped entity (attempts, target, or armed) --
@@ -2905,8 +2894,8 @@ def test_a_bowser_reds_star_names_its_movement_as_a_parent(tmp_path):
 
 
 def _reds_pipe_id_for_course(db, course_id):
-    from sm64_events.tracking.views import _reds_pipe_segments
-    by_course, _ = _reds_pipe_segments(db.segment_defs())
+    from sm64_events.tracking.activestrat import reds_pipe_segments
+    by_course, _ = reds_pipe_segments(db.segment_defs())
     return by_course[course_id]
 
 
@@ -3018,15 +3007,16 @@ def test_a_row_measures_against_its_OWN_strategys_pb(tmp_path):
 
 
 def test_each_strategys_pb_row_owns_its_own_undo(tmp_path):
-    """`is_current_pb` is per strategy, so saving a 3x LJ PB no longer takes
-    the Undo button away from the Standard row that still holds Standard's."""
+    """PB ownership is per strategy, so saving a 3x LJ PB no longer takes the
+    Undo button away from the Standard row that still holds Standard's --
+    whichever of the two is active, ITS row is the one offering Undo."""
     db, svc = make(tmp_path)
     fast, slow = _two_strats(db, svc)
-    asyncio.run(svc.set_strat(2, 2, "Standard"))
-    [sec] = build_session_view(db, svc, clock="igt")["stars"]
-    owns = {r["id"]: r["is_current_pb"] for r in sec["attempts"]
-            if r["outcome"] == "success"}
-    assert owns == {fast: True, slow: True}
+    for active, owner in (("Standard", fast), ("3x LJ", slow)):
+        asyncio.run(svc.set_strat(2, 2, active))
+        [sec] = build_session_view(db, svc, clock="igt")["stars"]
+        undo = [r["id"] for r in sec["attempts"] if r["pb_action"] == "undo"]
+        assert undo == [owner], active
 
 
 def test_the_action_column_offers_only_the_active_strategys_rows(tmp_path):

@@ -47,6 +47,7 @@ import { Disclose } from "./collapsible.js";
 import { Icon } from "./icons.js";
 import { RankIcon } from "./rankicon.js";
 import { getJSON } from "../api.js";
+import { nounOfKey } from "../entitysection.js";
 import { capName, divisionDigit, DIVISION_NUMERALS } from "./caps.js";
 import {
   ladderBands, bandRangeLabel, divisionRangeLabel, standingOn,
@@ -96,9 +97,7 @@ export function OverallStandards({ entity, label, pbCs = null, version = null })
   const owners = (data && data.overall_owners) || {};
   const bands = ladderBands(overall);
   const you = entity ? standingOn(overall, pbCs) : null;
-  // Rule 11 in one word: a star and a segment are two kinds of the same
-  // practiced thing, and only the noun differs on screen.
-  const noun = entity && entity.startsWith("segment:") ? "segment" : "star";
+  const noun = nounOfKey(entity);
   // "Next" is the very next SUBDIVISION he can reach, which is the finest
   // honest answer to "what does it take to rank up" — and with the bands
   // running easiest-first it is simply the step after his own.
