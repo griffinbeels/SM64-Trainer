@@ -473,7 +473,7 @@ def test_leaderboard_shape(client):
     assert isinstance(body["omitted"], int)
     # `overall` is structurally the one scope where `omitted` can never move:
     # every rankable entity is its own single-candidate group there, so
-    # anyone `ratings.runner_scores` holds a score for AT ALL is scored on
+    # anyone `ratings.rate_runners` holds a score for AT ALL is scored on
     # overall too. A nonzero value here would mean the wrong POPULATION is
     # feeding the count (e.g. counting the sheet's roster instead of the
     # already-rated corpus) -- `>= 0` alone would pass under that bug.
@@ -540,7 +540,7 @@ def test_leaderboard_omitted_counts_a_runner_scored_elsewhere_but_not_here(clien
     course 9, which is exactly the shape `omitted` exists to count.
 
     Checked against the EXACT count, computed independently over
-    `ratings.runner_scores`'s own output rather than through
+    `ratings.rate_runners`'s own output rather than through
     `scopes.aggregate` -- reusing that would just be board.py's own
     aggregation checking itself, and `>= 1` alone would pass under an
     off-by-one or a wrong-population bug just as easily as a correct one
@@ -558,8 +558,8 @@ def test_leaderboard_omitted_counts_a_runner_scored_elsewhere_but_not_here(clien
     assert [entity["key"] for entity in course_scope["entities"]] == ["star:9:2"]
     library = client.app.state.library
     adoptions = client.app.state.library_adoptions
-    scores = ratings.runner_scores(library.payload, adoptions.standards,
-                                   adoptions.rows(), version="us")
+    scores = ratings.rate_runners(library.payload, adoptions.standards,
+                                  adoptions.rows(), version="us").scores
     expected_omitted = sum(1 for by_entity in scores.values()
                            if "star:9:2" not in by_entity)
     assert expected_omitted >= 1, "scenario didn't produce anyone to omit"

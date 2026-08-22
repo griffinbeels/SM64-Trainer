@@ -30,6 +30,8 @@ is missing; writing a 0.0 here would double it.
 
 Pure: no db, no file I/O, no network, same discipline `ranks/scopes.py`
 already holds to, so pytest drives this module directly."""
+from dataclasses import dataclass
+
 from sm64_events.library.audit import row_key
 from sm64_events.ranks import scoring
 
@@ -116,12 +118,22 @@ def runner_times(payload: dict, adopted_rows: dict, *, version: str = "us"
     return times
 
 
-def runner_scores(payload: dict, ranks_store, adopted_rows: dict, *,
-                  version: str = "us") -> dict[str, dict[str, float]]:
-    """{runner: {entity_key: 0..100}} -- the input `scopes.aggregate` takes,
-    one call per runner. An entity with no ladder in `ranks_store` (a target
-    the sheet reaches that carries no rank standards) is omitted the same as
-    an entity the runner never ran."""
+@dataclass(frozen=True)
+class RatedRunners:
+    """Every runner on the sheet, rated. `times` is {runner: {entity_key:
+    best time_cs}}; `scores` is {runner: {entity_key: 0..100}}, the input
+    `ranks/scopes.py::aggregate` takes one runner at a time. A runner whose
+    entities all lack a standards ladder is absent from `scores`."""
+    times: dict[str, dict[str, int]]
+    scores: dict[str, dict[str, float]]
+
+
+def rate_runners(payload: dict, ranks_store, adopted_rows: dict, *,
+                 version: str = "us") -> RatedRunners:
+    """The one door from a sheet payload to every runner's rating. An
+    entity with no ladder in `ranks_store` (a target the sheet reaches that
+    carries no rank standards) is omitted the same as an entity the runner
+    never ran."""
     times = runner_times(payload, adopted_rows, version=version)
     entity_keys = {entity_key for by_entity in times.values()
                    for entity_key in by_entity}
@@ -139,4 +151,4 @@ def runner_scores(payload: dict, ranks_store, adopted_rows: dict, *,
                 runner_scores_map[entity_key] = score
         if runner_scores_map:
             scores[runner] = runner_scores_map
-    return scores
+    return RatedRunners(times=times, scores=scores)

@@ -4,6 +4,13 @@
 // ordered by MARELO. Computed and served by `library/board.py` at
 // `GET /api/leaderboard` (docs/api.md's Leaderboard section) — this module
 // only fetches and draws it; it owns no scoring and no second scope control.
+//
+// Three things to know before changing the reading:
+// - a row's COLUMNS are `LeaderboardRow` below, one place;
+// - the two sentences above the list are `basisNote`/`omittedNote`, so the
+//   wording and the rule it states change together;
+// - the user's own row is `you: true, runner: null` (board.py's contract),
+//   and `runnerName` is the only place that sentinel becomes text.
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
@@ -20,11 +27,66 @@ const html = htm.bind(h);
 // six pairs, so the two can never name a mode differently.
 const MODE_LABEL = Object.fromEntries(RANK_MODE_OPTIONS);
 
-// Rows carry `you: true, runner: null` for the user's own row (board.py's
-// contract) — this is the only place in the file that turns that into text,
-// so a rename of the sentinel only breaks one line, not several.
 function runnerName(row) {
   return row.you ? "You" : row.runner;
+}
+
+// The basis line is unconditional -- always PB, every entity, whatever the
+// Rank tab is showing -- and only APPENDS the reason(s) the two numbers can
+// differ. Two independent causes, and a mismatch from either must be read as
+// intended rather than discovered: the board ignores the user's rank mode,
+// and it ignores his exclusions.
+function basisNote(board, hasExcluded) {
+  const reasons = [];
+  if (board.rank_mode !== "pb") {
+    reasons.push(`it's graded on ${MODE_LABEL[board.rank_mode] || board.rank_mode} right now`);
+  }
+  if (hasExcluded) reasons.push("you've excluded an entity from this scope");
+  return "Ranked by PB — every runner's number is their lifetime best time on "
+    + "the Ultimate Sheet, graded the same way your own practice PB is."
+    + (reasons.length
+      ? ` That can differ from what your Rank tab shows — ${reasons.join(", and ")}.`
+      : "");
+}
+
+// The drop is never silent: a board that hides most of the sheet without a
+// count reads as "this is everyone" (his ruling; `board.py` has the numbers).
+function omittedNote(omitted) {
+  if (omitted === 0) return "Every runner rated on the sheet has practiced something in this scope.";
+  const plural = omitted !== 1;
+  return `${omitted} more ${plural ? "runners are" : "runner is"} rated on the sheet elsewhere, `
+    + `but ${plural ? "haven't" : "hasn't"} practiced anything in this scope yet.`;
+}
+
+// One board row. Every OTHER runner's row is a door onto their runner page;
+// your own stays inert (no destination -- it is the page you are reading)
+// and so carries no role/tabindex/click and no hover affordance. The row is
+// a plain DIV, so a clickable one brings its own keyboard path -- the same
+// role="button"/tabindex/keydown shape rankpage.js's hover ✎ uses.
+function LeaderboardRow({ row, youRowRef, onOpenRunner }) {
+  const open = () => onOpenRunner(row.runner);
+  const door = row.you ? {} : {
+    role: "button", tabindex: "0", title: `View ${row.runner}'s ratings`,
+    onclick: open,
+    onkeydown: (keyEvent) => {
+      if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
+      keyEvent.preventDefault();
+      open();
+    },
+  };
+  return html`<div ref=${row.you ? youRowRef : null}
+      class="leaderboard-row ${row.you ? "is-you" : "is-clickable"}" ...${door}>
+    <span class="leaderboard-pos">${row.position}</span>
+    <span class="rank-icon-slot leaderboard-icon">
+      ${row.tier
+        ? html`<${RankIcon} tier=${row.tier} division=${row.division} size=${26} />`
+        : "–"}
+    </span>
+    <span class="leaderboard-name">${runnerName(row)}</span>
+    <span class="meta leaderboard-points">${fmtPoints(row.marelo)} pts</span>
+    <span class="meta leaderboard-mastery">${fmtScore(row.mastery)} mastery</span>
+    <span class="meta leaderboard-coverage">${row.practiced}/${row.n}</span>
+  </div>`;
 }
 
 export function Leaderboard({ t, scopeId, onOpenRunner = () => {}, hasExcluded = false }) {
@@ -35,8 +97,7 @@ export function Leaderboard({ t, scopeId, onOpenRunner = () => {}, hasExcluded =
 
   // Same staleness fix rankpage.js's own `t.mareloRev` comment explains for
   // the rest of the Rank tab: a board left open during play must not go
-  // stale. One door onto that rule, not a second mechanism — this effect's
-  // shape (clear-then-fetch on scope OR mareloRev) mirrors RankPage's.
+  // stale. Clear-then-fetch on scope OR mareloRev, mirroring RankPage.
   useEffect(() => {
     if (!scopeId) return undefined;
     let alive = true;
@@ -54,15 +115,12 @@ export function Leaderboard({ t, scopeId, onOpenRunner = () => {}, hasExcluded =
     : error.message}<//>`;
   if (!board) return html`<${InlineState}>Loading the leaderboard…<//>`;
 
+  // The user's own row is never filtered out: a search that hid the one row
+  // he came here to find would defeat the jump control.
   const needle = query.trim().toLowerCase();
-  // The user's own row is never filtered out — every row places (the
-  // product rule this surface exists to honour), and a search that hid the
-  // one row he came here to find would defeat the jump control below.
   const rows = needle
-    ? board.rows.filter((row) => row.you
-        || (row.runner || "").toLowerCase().includes(needle))
+    ? board.rows.filter((row) => row.you || (row.runner || "").toLowerCase().includes(needle))
     : board.rows;
-  const modeLabel = MODE_LABEL[board.rank_mode] || board.rank_mode;
 
   function jumpToYou() {
     if (youRowRef.current) youRowRef.current.scrollIntoView({ block: "center" });
@@ -82,65 +140,11 @@ export function Leaderboard({ t, scopeId, onOpenRunner = () => {}, hasExcluded =
       <button type="button" class="chip leaderboard-jump" onclick=${jumpToYou}>
         Jump to you</button>
     </div>
-    <!-- The basis line is unconditional (always PB, every entity, whatever
-         rank_mode/exclusions the Rank tab is showing) -- the note only
-         APPENDS the reason(s) for a mismatch, it never replaces the
-         always-true one, per the contract: the user must read a mismatch as
-         intended rather than discover it for himself. TWO independent
-         causes (fix wave, final review, M2): the board's own scope
-         resolution always scores every entity, ignoring exclusions -- that
-         was already tested, but the note used to fire only on a rank_mode
-         mismatch, so an EXCLUDED-only mismatch (pb mode, an entity turned
-         off) showed two different numbers one card apart with no
-         explanation at all. -->
-    <p class="meta leaderboard-basis">Ranked by PB — every runner's number is
-      their lifetime best time on the Ultimate Sheet, graded the same way
-      your own practice PB is.${(() => {
-        const reasons = [];
-        if (board.rank_mode !== "pb") reasons.push(`it's graded on ${modeLabel} right now`);
-        if (hasExcluded) reasons.push("you've excluded an entity from this scope");
-        return reasons.length
-          ? ` That can differ from what your Rank tab shows — ${reasons.join(", and ")}.`
-          : "";
-      })()}</p>
-    <p class="meta leaderboard-omitted">${board.omitted > 0
-      ? `${board.omitted} more ${board.omitted === 1 ? "runner is" : "runners are"} `
-        + `rated on the sheet elsewhere, but ${board.omitted === 1 ? "hasn't" : "haven't"} `
-        + "practiced anything in this scope yet."
-      : "Every runner rated on the sheet has practiced something in this scope."}</p>
+    <p class="meta leaderboard-basis">${basisNote(board, hasExcluded)}</p>
+    <p class="meta leaderboard-omitted">${omittedNote(board.omitted)}</p>
     <div class="leaderboard-body">
-      ${/* Task 5's own door: every OTHER runner's row opens their
-           runnerpage.js page. Your own row stays inert — it has no
-           `runner` name to open (board.py's `you: true, runner: null`
-           contract) and it is the page you are already reading, so it
-           gets no role/tabindex/click at all (still no pointer cursor,
-           still no hover affordance -- the CSS comment this class carried
-           since Task 4). `.leaderboard-row` is a plain DIV, so a clickable
-           row carries its own keyboard path -- the same
-           role="button"/tabindex="0"/keydown shape rankpage.js's own
-           hover ✎ already uses for a clickable non-button element. */""}
-      ${rows.map((row) => html`<div key=${row.you ? "you" : row.runner}
-          ref=${row.you ? youRowRef : null}
-          class="leaderboard-row ${row.you ? "is-you" : "is-clickable"}"
-          role=${row.you ? null : "button"} tabindex=${row.you ? null : "0"}
-          title=${row.you ? null : `View ${row.runner}'s ratings`}
-          onclick=${row.you ? null : () => onOpenRunner(row.runner)}
-          onkeydown=${row.you ? null : (keyEvent) => {
-            if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
-            keyEvent.preventDefault();
-            onOpenRunner(row.runner);
-          }}>
-        <span class="leaderboard-pos">${row.position}</span>
-        <span class="rank-icon-slot leaderboard-icon">
-          ${row.tier
-            ? html`<${RankIcon} tier=${row.tier} division=${row.division} size=${26} />`
-            : "–"}
-        </span>
-        <span class="leaderboard-name">${runnerName(row)}</span>
-        <span class="meta leaderboard-points">${fmtPoints(row.marelo)} pts</span>
-        <span class="meta leaderboard-mastery">${fmtScore(row.mastery)} mastery</span>
-        <span class="meta leaderboard-coverage">${row.practiced}/${row.n}</span>
-      </div>`)}
+      ${rows.map((row) => html`<${LeaderboardRow} key=${row.you ? "you" : row.runner}
+          row=${row} youRowRef=${youRowRef} onOpenRunner=${onOpenRunner} />`)}
     </div>
   </div>`;
 }

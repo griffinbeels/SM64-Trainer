@@ -289,16 +289,7 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd,
       <span class="rank-icon-slot library-example-tier" style="--icon-size: 20px">
         ${tier ? html`<${RankIcon} tier=${tier} division=${division} size=${20} />` : "–"}</span>
       <span class="library-example-runner-wrap">
-        ${/* Task 5's own player-click door: a runner's name in the Library
-             opens their runnerpage.js page. "You" (the leaderboard-mode
-             sentinel row, `entry._isYou`) never gets one -- that name has
-             no runner behind it, and it is the page you are already
-             reading. */""}
-        ${onOpenRunner && !entry._isYou
-          ? html`<button type="button" class="library-example-runner library-runner-link"
-              onclick=${(clickEvent) => { clickEvent.stopPropagation(); onOpenRunner(entry.runner); }}
-              title=${`View ${entry.runner}'s ratings`}>${entry.runner}</button>`
-          : html`<span class="library-example-runner">${entry.runner}</span>`}
+        <${RunnerName} entry=${entry} className="library-example-runner" onOpenRunner=${onOpenRunner} />
       </span>
       <span class="library-example-time">${fmtSeconds(entry.time_cs / 100)}</span>
       <button type="button" class="library-example-plus"
@@ -313,6 +304,22 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd,
   </div>`;
 }
 
+// A runner's name, wherever an entry draws one (ExampleCard and PlainEntry,
+// in both the ladder reading and [[Leaderboard mode]]): the door onto their
+// [[Runner page]] when `onOpenRunner` is wired, plain text otherwise. The
+// synthetic "You" row (`entry._isYou`) never gets a door -- no runner stands
+// behind that name, and it is the page you are already reading. The click
+// stops propagating so a name inside a video card never also plays it.
+// `.library-runner-link` resets the button to flowing text (index.html):
+// the global `button` rule would otherwise grow every row it sits in.
+function RunnerName({ entry, className, onOpenRunner }) {
+  if (!onOpenRunner || entry._isYou) return html`<span class=${className}>${entry.runner}</span>`;
+  return html`<button type="button" class="${className} library-runner-link"
+      title=${`View ${entry.runner}'s ratings`}
+      onclick=${(clickEvent) => { clickEvent.stopPropagation(); onOpenRunner(entry.runner); }}
+      >${entry.runner}</button>`;
+}
+
 // A run nobody filmed: still evidence (a real runner, a real time, a real
 // subdivision), never a video card. No "+" -- the tray imports videos, and a
 // row with nothing to import must not offer the gesture.
@@ -320,11 +327,7 @@ function PlainEntry({ entry, tier, division, onOpenRunner }) {
   return html`<span class="library-plain-entry">
     ${tier ? html`<span class="rank-icon-slot" style="--icon-size: 15px">
       <${RankIcon} tier=${tier} division=${division} size=${15} /></span>` : ""}
-    ${onOpenRunner && !entry._isYou
-      ? html`<button type="button" class="library-plain-runner library-runner-link"
-          onclick=${() => onOpenRunner(entry.runner)}
-          title=${`View ${entry.runner}'s ratings`}>${entry.runner}</button>`
-      : html`<span class="library-plain-runner">${entry.runner}</span>`}
+    <${RunnerName} entry=${entry} className="library-plain-runner" onOpenRunner=${onOpenRunner} />
     <span class="library-plain-time">${fmtSeconds(entry.time_cs / 100)}</span>
   </span>`;
 }

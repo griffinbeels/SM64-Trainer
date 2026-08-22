@@ -3,7 +3,7 @@ rating on MARELO's own 0..100 curve. Its twin, tracking/marelo.py, has its own
 test file (test_marelo_bridge.py); this one proves the same absent-vs-zero
 and standards-ladder rules hold for a sheet entry instead of an attempt."""
 from sm64_events.library.audit import row_key
-from sm64_events.library.ratings import runner_scores, runner_times
+from sm64_events.library.ratings import rate_runners, runner_times
 from sm64_events.ranks import scopes
 
 
@@ -61,7 +61,7 @@ def test_an_entity_with_no_time_is_absent_never_zero():
         _target("star:1:0", "Way A",
                approaches=[_item("Way A", [_entry("Fast", 4400)])]),
         _target("star:9:9", "Untouched", approaches=[_item("Untouched", [])])]}
-    scores = runner_scores(payload, RANKS, {}, version="us")
+    scores = rate_runners(payload, RANKS, {}, version="us").scores
     assert "star:9:9" not in scores["Fast"]
     assert set(scores["Fast"]) == {"star:1:0"}
 
@@ -72,7 +72,7 @@ def test_a_row_with_no_standards_ladder_is_absent_not_scored_zero():
     payload = {"targets": [_target(
         "star:5:5", "No standards",
         approaches=[_item("No standards", [_entry("Fast", 100)])])]}
-    scores = runner_scores(payload, RANKS, {}, version="us")
+    scores = rate_runners(payload, RANKS, {}, version="us").scores
     assert scores == {}
 
 
@@ -133,17 +133,17 @@ def test_scoring_grades_on_the_standards_ladder_never_the_fitted_item_ladder():
     payload = {"targets": [_target(
         "star:1:0", "Way A",
         approaches=[_item("Way A", [_entry("Fast", 4500)], ladder=WRONG_LADDER)])]}
-    scores = runner_scores(payload, RANKS, {}, version="us")
+    scores = rate_runners(payload, RANKS, {}, version="us").scores
     assert scores["Fast"]["star:1:0"] == 95.0        # RANKS's Mario cutoff, not WRONG_LADDER's
 
 
-def test_runner_scores_feeds_scopes_aggregate_directly():
+def test_rated_scores_feed_scopes_aggregate_directly():
     """The contract the interface promises: `{entity_key: score}` is exactly
     what `scopes.aggregate` wants, with no reshaping in between."""
     payload = {"targets": [_target(
         "star:1:0", "Way A",
         approaches=[_item("Way A", [_entry("Fast", 4500)])])]}
-    scores = runner_scores(payload, RANKS, {}, version="us")
+    scores = rate_runners(payload, RANKS, {}, version="us").scores
     groups = [{"need": 1, "candidates": ["star:1:0"]}]
     result = scopes.aggregate(scores["Fast"], groups)
     assert result["marelo"] == 95.0
@@ -180,7 +180,7 @@ def test_real_snapshot_shape_matches_the_measured_expectations(tmp_path):
     standards = RankStandards(tmp_path / "rank_standards.json", seed_path=real_seed)
     standards.load()
 
-    scores = runner_scores(payload, standards, {}, version="us")
+    scores = rate_runners(payload, standards, {}, version="us").scores
 
     # "Runners with >=1 time on a mapped entity" -- measured 446.
     assert len(scores) > 400
@@ -208,7 +208,7 @@ def test_real_snapshot_shape_matches_the_measured_expectations(tmp_path):
     # rule actually moves. `scopes.aggregate` folds a missing entity and an
     # explicit 0.0 into `marelo` IDENTICALLY (`total += score or 0.0`), so a
     # `marelo` bound alone cannot tell "omitted" from "scored zero" apart --
-    # it would pass unchanged even if `runner_scores` wrote 0.0 for every
+    # it would pass unchanged even if `rate_runners` wrote 0.0 for every
     # entity a runner never touched. `practiced` is the field the rule
     # actually gates (`if score is not None: practiced += 1`), and it is
     # what the leaderboard PRINTS on every row as coverage (practiced/n) --

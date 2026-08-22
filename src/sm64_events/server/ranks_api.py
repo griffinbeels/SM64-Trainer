@@ -337,7 +337,7 @@ def create_ranks_router(service, library=None, adoptions=None,
     # One cache per running app, same lifetime as `dead_videos` above -- a
     # module-level singleton would leak one test's cached board into an
     # unrelated test whose inputs merely look identical.
-    board_cache = board.RunnerScoreCache()
+    board_cache = board.RatingsCache()
     router = APIRouter(prefix="/api")
 
     @router.get("/ranks/standards")
@@ -606,133 +606,96 @@ def create_ranks_router(service, library=None, adoptions=None,
             raise _http(e)
         return {"ok": True}
 
+    # The three /leaderboard routes are plain `def`, never `async def`: FastAPI
+    # threadpools a sync route's WHOLE body, and everything here -- `_groups`,
+    # the PB reads, the 29ms rating build -- would otherwise run on the
+    # poller's own asyncio loop, one game frame being 33.3ms (measured 13.32ms
+    # per request when this was `async`; `tests/test_ranks_api_marelo.py`
+    # pins the sync-ness). `library` is never None in the running app
+    # (`server/app.py` loads a `LibraryStore` unconditionally); the guards
+    # below exist for a test that builds this router with no library at all.
+
+    def _rated_sheet() -> board.RatedSheet:
+        """Every runner rated on the CURRENT sheet/adoptions/standards/
+        version -- cached, rebuilt only when one of those moves."""
+        adoptions_rows = adoptions.rows() if adoptions is not None else {}
+        return board_cache.current(library, adoptions_rows, service.ranks,
+                                   version=service.ranks.grading_version)
+
     def _you_scores(keys: list[str]) -> dict[str, float]:
         """The user's own per-entity scores, graded PB-basis ALWAYS -- a
         leaderboard compares everyone on the same basis, whatever
-        `rank_mode` the Rank tab happens to be showing him.
-
-        `attempts=()`, not `service.db.attempts()` (fix wave, final review,
-        M3): `entity_scores` in `"pb"` mode always takes the `_pb_scores`
-        branch, which reads only `pb_rows` -- `attempts` is dead weight on
-        this path, measured at 12.35ms of the loop's 13.32ms per board
-        request (this route runs on the poller's own asyncio loop before the
-        threadpooled build below; see the sync-route note on the routes
-        themselves)."""
+        `rank_mode` the Rank tab happens to be showing him. `attempts=()`
+        because pb mode reads only `pb_rows`; passing `db.attempts()` was
+        12.35ms of dead weight per request."""
         return marelo_bridge.entity_scores((), service.ranks,
                                            keys, "pb", service.db.pbs())
 
-    def _adoptions_rows() -> dict:
-        return adoptions.rows() if adoptions is not None else {}
+    def _require_ranks():
+        if service.ranks is None or service.db is None:
+            raise HTTPException(503, "rank standards unavailable")
+
+    def _scope_groups(scope_id: str) -> list[dict]:
+        """Scope membership with NO exclusion filter: the user's exclusions
+        shape the scope for him, and must not shrink the denominator every
+        runner is judged on."""
+        return _groups(service, scope_id, excluded=set())
 
     @router.get("/leaderboard")
     def leaderboard(scope: str | None = None):
-        """Every community runner scored the same way MARELO scores the
-        user, plus the user's own row, for one scope -- `library/board.py`'s
-        module docstring has the caching contract. `library` is never
-        actually `None` in the running app -- `server/app.py` constructs a
-        `LibraryStore` and calls `.load()` unconditionally before
-        `create_ranks_router` is ever wired in, same as `_library_clips`
-        above. The `library=None` branch below exists for the one caller
-        that CAN reach it: a standalone test constructing this router
-        directly with no library at all, which answers "the sheet is not
-        loaded" with an empty board rather than a 503, matching
-        `/api/library/entity/{k}`'s own precedent for an entity nobody has
-        timed.
-
-        `def`, not `async def` (fix wave, final review, M3): this route was
-        `async` with only `board.leaderboard` itself hand-threadpooled, so
-        everything ABOVE that call -- `_groups`, `_you_scores` (a
-        `db.attempts()`/`db.pbs()` read) -- ran on the poller's shared
-        asyncio loop, one frame being 33.3ms. A sync `def` route is what
-        `/api/marelo` already does, and FastAPI threadpools the WHOLE
-        function body for one exactly for this reason; `board.py`'s own
-        docstring makes the same argument for its 46ms build one call
-        later."""
-        if service.ranks is None or service.db is None:
-            raise HTTPException(503, "rank standards unavailable")
+        """The [[Rank board]] for one scope: every community runner scored
+        the way MARELO scores the user, plus the user's own row. `omitted`
+        is how many rated runners have nothing in this scope and so got no
+        row -- the UI must show it (`board.py::RatedSheet._scope_rows`)."""
+        _require_ranks()
         scope_id = scope or _active_scope(service)
-        label = _scope_label(service, scope_id)
-        rank_mode = _rank_mode(service)
+        groups = _scope_groups(scope_id)          # 404s an unknown scope first
+        body = {"scope_id": scope_id, "label": _scope_label(service, scope_id),
+                "basis": "pb", "rank_mode": _rank_mode(service)}
         if library is None:
-            groups = _groups(service, scope_id, excluded=set())  # 404s first
-            return {"scope_id": scope_id, "label": label, "n": 0,
-                    "basis": "pb", "rank_mode": rank_mode,
-                    "sheet_revision": None, "rows": [], "omitted": 0}
-        groups = _groups(service, scope_id, excluded=set())
+            return {**body, "n": 0, "sheet_revision": None, "rows": [], "omitted": 0}
         keys = [key for group in groups for key in group["candidates"]]
         you_aggregate = scopes.aggregate(_you_scores(keys), groups)
-        rows, omitted = board.leaderboard(
-            board_cache, library, _adoptions_rows(),
-            service.ranks, groups, scope_id,
-            version=service.ranks.grading_version, you_aggregate=you_aggregate)
-        return {"scope_id": scope_id, "label": label, "n": you_aggregate["n"],
-                "basis": "pb", "rank_mode": rank_mode,
-                "sheet_revision": library.revision, "rows": rows,
-                # How many runners are rated SOMEWHERE on the sheet but have
-                # no time for anything THIS scope covers, and are therefore
-                # absent from `rows` -- a board that drops most of the sheet
-                # without saying so reads as "this is everyone". NOT the
-                # count of roster names with no time anywhere at all (those
-                # never reach `board.py`'s scores map, so they count in
-                # neither `rows` nor `omitted`); see `board.py::
-                # RunnerScoreCache.board_rows` for the exact population.
-                "omitted": omitted}
+        rows, omitted = _rated_sheet().leaderboard(
+            scope_id, groups, you_aggregate=you_aggregate)
+        return {**body, "n": you_aggregate["n"], "sheet_revision": library.revision,
+                "rows": rows, "omitted": omitted}
 
     @router.get("/leaderboard/runner/{name:path}/summary")
     def leaderboard_runner_summary(name: str):
-        """The runner page's scope chip row -- the same chip shape
-        `/api/marelo/summary` returns, sourced from this runner instead of
-        the user. Registered ahead of the bare `{name:path}` route below,
-        because a path converter is greedy and would otherwise swallow
-        `.../summary` as part of the name.
-
-        `def`, not `async def` (fix wave, final review, M3) -- `_groups` runs
-        up to SIX times here (once per summary scope), 1.28ms each on the
-        loop when this was `async`; see `leaderboard` above for the general
-        argument."""
-        if service.ranks is None or service.db is None:
-            raise HTTPException(503, "rank standards unavailable")
+        """The [[Runner page]]'s scope chip row -- the same chip shape
+        `/api/marelo/summary` returns, sourced from this runner. Registered
+        ahead of the bare `{name:path}` route below: a path converter is
+        greedy and would otherwise swallow `.../summary` into the name."""
+        _require_ranks()
         if library is None:
             raise HTTPException(404, f"unknown runner {name!r}")
-        scope_specs = [(scope_id, _groups(service, scope_id, excluded=set()),
-                        _scope_label(service, scope_id))
+        scope_specs = [(scope_id, _scope_groups(scope_id), _scope_label(service, scope_id))
                        for scope_id in _summary_scope_ids(service)]
-        chips = board.runner_summary(
-            board_cache, library, _adoptions_rows(),
-            service.ranks, scope_specs, name,
-            version=service.ranks.grading_version)
+        chips = _rated_sheet().runner_summary(name, scope_specs)
         if chips is None:
             raise HTTPException(404, f"unknown runner {name!r}")
         return {"chips": chips}
 
     @router.get("/leaderboard/runner/{name:path}")
     def leaderboard_runner(name: str, scope: str | None = None):
-        """One runner's scoped rating, per entity, each widened with the
+        """One runner's scoped rating per entity, each widened with the
         user's own score/time/tier/division on the same entity -- the same
-        field set `/api/marelo` returns, plus `runner` (spec's contract, so
-        `Breakdown`/`CoverageStrip` render either source unchanged).
-
-        `def`, not `async def` (fix wave, final review, M3) -- adds a third
-        `db.pbs()` read (`you_times_by_entity`) to the on-loop cost
-        `leaderboard` above already paid; see its docstring."""
-        if service.ranks is None or service.db is None:
-            raise HTTPException(503, "rank standards unavailable")
+        field set `/api/marelo` returns plus `runner`, so `Breakdown` and
+        `CoverageStrip` render either source unchanged."""
+        _require_ranks()
         if library is None:
             raise HTTPException(404, f"unknown runner {name!r}")
         scope_id = scope or _active_scope(service)
-        groups = _groups(service, scope_id, excluded=set())
+        groups = _scope_groups(scope_id)
         keys = [key for group in groups for key in group["candidates"]]
-        you_scores = _you_scores(keys)
-        you_times = board.you_times_by_entity(service.db.pbs(), service.ranks, keys)
-        breakdown = board.runner_breakdown(
-            board_cache, library, _adoptions_rows(),
-            service.ranks, groups, name, version=service.ranks.grading_version,
-            you_scores=you_scores, you_times=you_times,
+        breakdown = _rated_sheet().runner_breakdown(
+            name, groups, you_scores=_you_scores(keys),
+            you_times=board.you_times_by_entity(service.db.pbs(), service.ranks, keys),
             label_of=lambda key: entity_label(service.db, key))
         if breakdown is None:
             raise HTTPException(404, f"unknown runner {name!r}")
-        breakdown["scope_id"] = scope_id
-        breakdown["label"] = _scope_label(service, scope_id)
-        return breakdown
+        return {**breakdown, "scope_id": scope_id,
+                "label": _scope_label(service, scope_id)}
 
     return router

@@ -1,38 +1,32 @@
-"""Serves the two surfaces built on top of `library.ratings` (spec
-2026-08-20-ranked-leaderboard, Task 3): an ordered leaderboard for a scope --
-every community runner scored the same way MARELO scores the user, plus the
-user's own row -- and one runner's scoped rating widened for comparison
-against the user's own numbers on the same entities.
+"""The [[Rank board]] and the [[Runner page]]'s data, read off
+`library.ratings` (spec 2026-08-20-ranked-leaderboard, Task 3).
 
-Pure over its INPUTS, `ranks/scopes.py`'s own discipline (no db, no file I/O,
-no network), except for the one thing a leaderboard cannot be pure about:
-`RunnerScoreCache` holds the {runner: {entity: score}} map between requests,
-because building it costs ~29ms over 448 runners (`library.ratings.
-runner_scores`) and a leaderboard fetch happens far more often than the
-things that actually change it.
+One object, `RatedSheet`, holds every community runner's rating for the
+current sheet/adoptions/standards/version, and every reading the UI draws is
+a method on it: `leaderboard` (every runner + the user, one scope, ranked),
+`runner_breakdown` (one runner per entity, widened with the user's own
+numbers) and `runner_summary` (one runner's chip row). A new reading -- the
+ghost, "who is directly above me" -- is one more method here and one route
+in `server/ranks_api.py`, nothing else.
 
-It rebuilds only when one of FOUR inputs moves: the library's sheet
-revision, the user's adoptions map, the grading version, and a fingerprint
-of the standards ladders. The last one is the trap this task was warned
-about: `ranks_store.to_json()["version"]` is the bundled SEED's version (a
-literal `1`, `ranks/standards.py::_seed_version`) and never moves -- not on
-a threshold edit, a JP overlay, a new strategy, or a reset. Keying the cache
-on it would serve a stale board forever after any standards edit, and
-stale-but-plausible is the failure mode nobody reports. `_standards_fingerprint`
-hashes the whole vetted store instead (`ranks_store.to_json()`, the same
-dict `set_threshold`/`create_strategy`/`clear_jp`/`reset_entity` all mutate
-before their own `save()`), which is what actually moves -- proved in
-`tests/test_library_board.py` by editing one threshold and asserting the
-board's numbers change on the next fetch.
+`RatingsCache` is the one impure piece: it holds the current `RatedSheet`
+between requests, because rating 448 runners costs ~29ms
+(`ratings.rate_runners`) and a board fetch happens far more often than the
+things that change it. It rebuilds only when one of FOUR inputs moves: the
+library's sheet revision, the user's adoptions map, the grading version, and
+a fingerprint of the standards ladders. The last one is the trap:
+`ranks_store.to_json()["version"]` is the bundled SEED's version (a literal
+`1`, `ranks/standards.py::_seed_version`) and never moves -- not on a
+threshold edit, a JP overlay, a new strategy, or a reset. Keying on it would
+serve a stale board forever after any standards edit, and stale-but-plausible
+is the failure mode nobody reports. `_standards_fingerprint` hashes the whole
+vetted store instead, the same dict `set_threshold`/`create_strategy`/
+`clear_jp`/`reset_entity` all mutate -- proved in `tests/test_library_board.py`
+by editing one threshold and asserting the board's numbers change.
 
-Per-scope AGGREGATES memoize on top of that map too: for an unchanged score
-map, a repeat request for the SAME scope reuses its ranked runner rows
-rather than re-running `scopes.aggregate` over all 448 runners again (46ms
-measured for Overall). Known gap, same shape this project already tolerates
-elsewhere (`ranks/standards.py::_reconcile`'s own docstring calls one out
-the same way): a ROUTE-based scope can go stale mid-key if the route's own
-steps are edited without any of the four tracked inputs moving. Nobody has
-asked for that yet; it is noted rather than guessed at."""
+Known gap, same shape `ranks/standards.py::_reconcile` already tolerates: a
+ROUTE-based scope's memoized rows can go stale if the route's own steps are
+edited without any of the four inputs moving. Noted, not guessed at."""
 import hashlib
 import json
 
@@ -51,74 +45,9 @@ def _standards_fingerprint(ranks_store) -> str:
         json.dumps(ranks_store.to_json(), sort_keys=True).encode()).hexdigest()
 
 
-class RunnerScoreCache:
-    """One instance per running app (created once in
-    `server/ranks_api.py::create_ranks_router`, like the module's
-    process-lifetime `dead_videos` set) -- never a module-level singleton,
-    which would leak one test's cached board into an unrelated test's
-    identical-looking inputs."""
-
-    def __init__(self):
-        self._key = None
-        self._scores: dict[str, dict[str, float]] = {}
-        self._times: dict[str, dict[str, int]] = {}
-        self._board_rows: dict[str, tuple[list[dict], int]] = {}
-
-    def refresh(self, library, adoptions_rows: dict, ranks_store, *,
-                version: str):
-        """Rebuilds the runner score/time maps iff one of the four tracked
-        inputs moved since the last call; always returns the current
-        (scores, times) either way. `library.payload` and `ratings.
-        runner_scores`/`runner_times` are Task 2's own contract -- this
-        never re-grades a time itself, only caches what they compute."""
-        key = (library.revision, dict(adoptions_rows), version,
-               _standards_fingerprint(ranks_store))
-        if key != self._key:
-            self._times = ratings.runner_times(library.payload, adoptions_rows,
-                                               version=version)
-            self._scores = ratings.runner_scores(library.payload, ranks_store,
-                                                 adoptions_rows, version=version)
-            self._board_rows = {}          # stale with the map that made them
-            self._key = key
-        return self._scores, self._times
-
-    def board_rows(self, scope_id: str, groups: list[dict],
-                   scores: dict[str, dict[str, float]]
-                   ) -> tuple[list[dict], int]:
-        """(rows, omitted) for `scope_id` -- every runner's own row,
-        practiced entities only, UNRANKED (`leaderboard()` adds the user's
-        row and ranks the two together, which is why this stops short of a
-        `position`), plus a COUNT of the runners left out because they have
-        never practiced anything in THIS SCOPE. The count exists because the
-        omission itself must never be silent: a board that drops most of the
-        sheet without saying so reads as "this is everyone" when it is not
-        (his ruling on this exact question -- keep dropping them, but never
-        silently).
-
-        `omitted` counts a NARROWER population than "every roster name":
-        `scores` (from `ratings.runner_scores`) already excludes a runner
-        with no time on ANY entity anywhere -- that runner is never a key
-        here at all, so this loop never sees them and `omitted` never counts
-        them either. What it counts is a runner who IS rated somewhere in
-        the whole corpus but has nothing for the entities THIS scope covers
-        -- rated elsewhere, not rated at all are different facts, and only
-        the first is this field's job. On `overall` specifically this count
-        is always 0: every rankable entity is its own single-candidate group
-        there, so anyone `scores` holds at all necessarily has SOME entity
-        it covers."""
-        if scope_id not in self._board_rows:
-            rows, omitted = [], 0
-            for runner, by_entity in scores.items():
-                agg = scopes.aggregate(by_entity, groups)
-                if agg["practiced"]:
-                    rows.append(_row(agg, runner=runner, you=False))
-                else:
-                    omitted += 1
-            self._board_rows[scope_id] = (rows, omitted)
-        return self._board_rows[scope_id]
-
-
 def _row(agg: dict, *, runner: str | None, you: bool) -> dict:
+    """One board row. The user's own row is `runner=None, you=True` -- the
+    sentinel `leaderboard.js` turns into "You"."""
     return {"runner": runner, "you": you, "marelo": agg["marelo"],
             "tier": agg["tier"], "division": agg["division"],
             "mastery": agg["mastery"], "practiced": agg["practiced"],
@@ -145,34 +74,140 @@ def _ranked(rows: list[dict]) -> list[dict]:
     return ranked
 
 
-def leaderboard(cache: RunnerScoreCache, library, adoptions_rows: dict,
-                ranks_store, groups: list[dict], scope_id: str, *,
-                version: str, you_aggregate: dict
-                ) -> tuple[list[dict], int]:
-    """(rows, omitted). `rows` is every runner who has practiced at least
-    one entity in this scope, plus the user's own row, MARELO-descending
-    and competition-ranked.
+class RatedSheet:
+    """Every runner's times and scores off one (sheet, adoptions, standards,
+    version) -- built once per change by `RatingsCache`, then read by the
+    three methods below. Per-scope board rows memoize on the instance, so
+    the memo can never outlive the ratings it was computed from."""
 
-    A runner with zero practiced entities here is left off `rows` rather
-    than shown tied at 0.0 -- the sheet holds 448 people, most of whom have
-    never touched most scopes, and a leaderboard is not improved by a tail
-    of hundreds of zero rows. The user's own row carries no such filter: it
-    is always present, even at 0, because it is the one row he came to find.
+    def __init__(self, rated: ratings.RatedRunners, ranks_store):
+        self.times = rated.times
+        self.scores = rated.scores
+        self._ranks_store = ranks_store
+        self._rows_by_scope: dict[str, tuple[list[dict], int]] = {}
 
-    `omitted` is how many were left off, and it is NOT optional to surface:
-    a board that silently drops most of the sheet reads as "this is
-    everyone" when it is not -- the caller must show this count, not just
-    the rows. It counts runners rated SOMEWHERE in the whole corpus but
-    nowhere in THIS scope -- see `RunnerScoreCache.board_rows` for exactly
-    which population that is (narrower than "every roster name": a runner
-    with no time anywhere is never in `omitted` either, since they never
-    reach this count's loop at all)."""
-    scores, _times = cache.refresh(library, adoptions_rows, ranks_store,
-                                   version=version)
-    runner_rows, omitted = cache.board_rows(scope_id, groups, scores)
-    rows = list(runner_rows)
-    rows.append(_row(you_aggregate, runner=None, you=True))
-    return _ranked(rows), omitted
+    def _scope_rows(self, scope_id: str, groups: list[dict]
+                    ) -> tuple[list[dict], int]:
+        """(rows, omitted) for one scope, unranked and without the user.
+
+        `omitted` counts the runners who are rated SOMEWHERE on the sheet
+        but have no time for anything THIS scope covers -- they get no row
+        here rather than a tail of hundreds tied at 0.0 (338 of 448 on Wing
+        Mario Over the Rainbow), but the drop is never silent: a board that
+        hides most of the sheet without a count reads as "this is everyone".
+        A runner with no time ANYWHERE is not in `scores` at all and so is
+        counted in neither. On `overall` the count is always 0, since every
+        rankable entity is its own group there."""
+        if scope_id not in self._rows_by_scope:
+            rows, omitted = [], 0
+            for runner, by_entity in self.scores.items():
+                agg = scopes.aggregate(by_entity, groups)
+                if agg["practiced"]:
+                    rows.append(_row(agg, runner=runner, you=False))
+                else:
+                    omitted += 1
+            self._rows_by_scope[scope_id] = (rows, omitted)
+        return self._rows_by_scope[scope_id]
+
+    def leaderboard(self, scope_id: str, groups: list[dict], *,
+                    you_aggregate: dict) -> tuple[list[dict], int]:
+        """(rows, omitted): every runner who has practiced something in
+        this scope plus the user's own row, MARELO-descending and
+        competition-ranked. The user's row is always present, even at 0 --
+        it is the one row he came to find. `omitted` is `_scope_rows`'s
+        count, and the caller must show it."""
+        rows, omitted = self._scope_rows(scope_id, groups)
+        rows = [*rows, _row(you_aggregate, runner=None, you=True)]
+        return _ranked(rows), omitted
+
+    def runner_summary(self, runner_name: str, scope_specs
+                       ) -> list[dict] | None:
+        """[{scope_id, label, tier, division, marelo, n, practiced}] over
+        every (scope_id, groups, label) in `scope_specs` -- the same chip
+        shape `/api/marelo/summary` returns, so the runner page's chip row
+        is the existing component with a different source. `None` when the
+        sheet has never heard of this runner."""
+        runner_scores = self.scores.get(runner_name)
+        if runner_scores is None:
+            return None
+        chips = []
+        for scope_id, groups, label in scope_specs:
+            agg = scopes.aggregate(runner_scores, groups)
+            chips.append({"scope_id": scope_id, "label": label,
+                          "tier": agg["tier"], "division": agg["division"],
+                          "marelo": agg["marelo"], "n": agg["n"],
+                          "practiced": agg["practiced"]})
+        return chips
+
+    def runner_breakdown(self, runner_name: str, groups: list[dict], *,
+                         you_scores: dict, you_times: dict, label_of
+                         ) -> dict | None:
+        """One runner's scoped rating per entity, each row widened with the
+        user's own score/time/tier/division on the SAME entity -- the same
+        field set `/api/marelo` returns plus `runner`, so `Breakdown` and
+        `CoverageStrip` render either source unchanged. `None` when the
+        sheet has never heard of this runner.
+
+        `excluded` is always False: the caller resolved `groups` with no
+        exclusion filter, because the user's exclusions shape the scope for
+        HIM and must not shrink the denominator every runner is judged on."""
+        runner_scores = self.scores.get(runner_name)
+        if runner_scores is None:
+            return None
+        runner_times = self.times.get(runner_name, {})
+        agg = scopes.aggregate(runner_scores, groups)
+        ladders = marelo_bridge.entity_ladders(
+            self._ranks_store, [entity["key"] for entity in agg["entities"]])
+        entities = []
+        for entity in agg["entities"]:
+            key = entity["key"]
+            # Every key in `groups` cleared `rankable_entities`' non-empty-
+            # ladder bar, so the `{}` default never fires in practice.
+            ladder = ladders.get(key, {})
+            graded = marelo_bridge.classify_entity(ladder, entity["score"], agg["n"])
+            you_graded = marelo_bridge.classify_entity(
+                ladder, you_scores.get(key), agg["n"])
+            entities.append({
+                "key": key, "label": label_of(key), "score": entity["score"],
+                "tier": graded["tier"], "division": graded["division"],
+                "next_tier": graded["next_tier"],
+                "next_division": graded["next_division"],
+                "gain": graded["gain"], "excluded": False,
+                "time_cs": runner_times.get(key),
+                "you": {"score": you_scores.get(key),
+                        "time_cs": you_times.get(key),
+                        "tier": you_graded["tier"],
+                        "division": you_graded["division"]}})
+        return {"runner": runner_name, "marelo": agg["marelo"],
+                "mastery": agg["mastery"], "coverage": agg["coverage"],
+                "tier": agg["tier"], "division": agg["division"],
+                "next_division_at": agg["next_division_at"],
+                "division_progress": agg["division_progress"],
+                "n": agg["n"], "practiced": agg["practiced"],
+                "entities": entities}
+
+
+class RatingsCache:
+    """Holds the current `RatedSheet` between requests and rebuilds it only
+    when one of the four tracked inputs moves (module docstring). One
+    instance per running app, created in `create_ranks_router` -- never a
+    module-level singleton, which would leak one test's cached board into
+    an unrelated test with identical-looking inputs."""
+
+    def __init__(self):
+        self._key = None
+        self._sheet: RatedSheet | None = None
+
+    def current(self, library, adoptions_rows: dict, ranks_store, *,
+                version: str) -> RatedSheet:
+        key = (library.revision, dict(adoptions_rows), version,
+               _standards_fingerprint(ranks_store))
+        if key != self._key or self._sheet is None:
+            rated = ratings.rate_runners(library.payload, ranks_store,
+                                         adoptions_rows, version=version)
+            self._sheet = RatedSheet(rated, ranks_store)
+            self._key = key
+        return self._sheet
 
 
 def you_times_by_entity(pb_rows, ranks_store, keys) -> dict[str, int]:
@@ -197,80 +232,3 @@ def you_times_by_entity(pb_rows, ranks_store, keys) -> dict[str, int]:
         if key not in best or cs < best[key]:
             best[key] = cs
     return best
-
-
-def runner_breakdown(cache: RunnerScoreCache, library, adoptions_rows: dict,
-                     ranks_store, groups: list[dict], runner_name: str, *,
-                     version: str, you_scores: dict, you_times: dict,
-                     label_of) -> dict | None:
-    """The one runner's scoped rating, per entity, each row widened with the
-    user's own score/time/tier/division on the SAME entity -- what Tasks 4
-    and 5 draw side by side. `None` (the caller's 404) when the sheet has
-    never heard of this runner at all.
-
-    `excluded` is always False: the user's exclusions shape the scope for
-    HIM (`_groups(..., excluded=set())` upstream already resolved this
-    scope with no exclusion filter), and must not silently shrink the
-    denominator every runner is judged on."""
-    scores, times = cache.refresh(library, adoptions_rows, ranks_store,
-                                  version=version)
-    runner_scores_map = scores.get(runner_name)
-    if runner_scores_map is None:
-        return None
-    runner_times_map = times.get(runner_name, {})
-    agg = scopes.aggregate(runner_scores_map, groups)
-    ladders = marelo_bridge.entity_ladders(
-        ranks_store, [entity["key"] for entity in agg["entities"]])
-    entities = []
-    for entity in agg["entities"]:
-        key = entity["key"]
-        # The `{}` default never actually fires: every candidate in `groups`
-        # (the caller's `_groups(..., excluded=set())`) already cleared
-        # `rankable_entities`'s bar of a non-empty ladder, so every key
-        # reaching this loop has one in `ladders`. See the matching comment
-        # in `ranks_api.py::_score_scope` for the full invariant.
-        ladder = ladders.get(key, {})
-        graded = marelo_bridge.classify_entity(ladder, entity["score"], agg["n"])
-        you_graded = marelo_bridge.classify_entity(
-            ladder, you_scores.get(key), agg["n"])
-        entities.append({
-            "key": key, "label": label_of(key), "score": entity["score"],
-            "tier": graded["tier"], "division": graded["division"],
-            "next_tier": graded["next_tier"],
-            "next_division": graded["next_division"],
-            "gain": graded["gain"], "excluded": False,
-            "time_cs": runner_times_map.get(key),
-            "you": {"score": you_scores.get(key),
-                    "time_cs": you_times.get(key),
-                    "tier": you_graded["tier"],
-                    "division": you_graded["division"]}})
-    return {"runner": runner_name, "marelo": agg["marelo"],
-            "mastery": agg["mastery"], "coverage": agg["coverage"],
-            "tier": agg["tier"], "division": agg["division"],
-            "next_division_at": agg["next_division_at"],
-            "division_progress": agg["division_progress"],
-            "n": agg["n"], "practiced": agg["practiced"], "entities": entities}
-
-
-def runner_summary(cache: RunnerScoreCache, library, adoptions_rows: dict,
-                   ranks_store, scope_specs, runner_name: str, *,
-                   version: str) -> list[dict] | None:
-    """[{scope_id, label, tier, division, marelo, n, practiced}] over every
-    (scope_id, groups, label) in `scope_specs` -- the same chip shape
-    `/api/marelo/summary` returns, sourced from this runner instead of the
-    user, so the runner page's scope chip row is the existing component
-    with a different source. `None` when the sheet has never heard of this
-    runner at all."""
-    scores, _times = cache.refresh(library, adoptions_rows, ranks_store,
-                                   version=version)
-    runner_scores_map = scores.get(runner_name)
-    if runner_scores_map is None:
-        return None
-    chips = []
-    for scope_id, groups, label in scope_specs:
-        agg = scopes.aggregate(runner_scores_map, groups)
-        chips.append({"scope_id": scope_id, "label": label,
-                      "tier": agg["tier"], "division": agg["division"],
-                      "marelo": agg["marelo"], "n": agg["n"],
-                      "practiced": agg["practiced"]})
-    return chips

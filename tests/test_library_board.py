@@ -1,10 +1,10 @@
 # tests/test_library_board.py
-"""library/board.py -- the ordered leaderboard and one-runner breakdown built
-on top of library.ratings' runner score map, plus the cache that keeps
-rebuilding it off the request path (spec 2026-08-20-ranked-leaderboard,
-Task 3). Driven directly against a hand-built store/library, matching
-library.ratings' own "pure over inputs" test style; test_ranks_api_marelo.py
-covers the two REST routes wired on top of this module."""
+"""library/board.py -- the [[Rank board]] and [[Runner page]] readings on a
+`RatedSheet`, plus the `RatingsCache` that keeps rebuilding it off the
+request path (spec 2026-08-20-ranked-leaderboard, Task 3). Driven directly
+against a hand-built store/library, matching library.ratings' own "pure over
+inputs" test style; test_ranks_api_marelo.py covers the REST routes wired on
+top of this module."""
 from sm64_events.library import board, ratings
 from sm64_events.ranks import scopes
 from sm64_events.ranks.classify import display_cs
@@ -36,6 +36,7 @@ class FakeLibrary:
 
 RANKS_DATA = {"star:1:0": {"Standard": {"Mario": 45.0, "Gold": 60.0}}}
 GROUPS = [{"need": 1, "candidates": ["star:1:0"]}]
+OVERALL_SPEC = [("overall", GROUPS, "Overall")]
 
 
 def _entry(runner, time_cs):
@@ -58,44 +59,43 @@ def _payload(entries):
     return {"targets": [_target("star:1:0", "Way A", [_item("Way A", entries)])]}
 
 
+def _sheet(entries, ranks_data=RANKS_DATA):
+    """A RatedSheet over one star with these entries -- the shape every
+    reading test below starts from."""
+    return board.RatingsCache().current(
+        FakeLibrary(_payload(entries)), {}, FakeRanks(ranks_data), version="us")
+
+
 def _counting(monkeypatch):
-    """Patches ratings.runner_scores with a call-counting wrapper around the
+    """Patches ratings.rate_runners with a call-counting wrapper around the
     real function -- the memoization proof needs a STUB, not a stopwatch."""
     calls = []
-    real = ratings.runner_scores
+    real = ratings.rate_runners
 
     def wrapper(*args, **kwargs):
         calls.append(1)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(ratings, "runner_scores", wrapper)
+    monkeypatch.setattr(ratings, "rate_runners", wrapper)
     return calls
 
 
 # -- ordering / ranking -------------------------------------------------
 
 def test_leaderboard_orders_by_marelo_descending():
-    payload = _payload([_entry("Speedy", 4000), _entry("Plodder", 9000)])
-    library = FakeLibrary(payload)
-    ranks = FakeRanks(RANKS_DATA)
-    cache = board.RunnerScoreCache()
+    sheet = _sheet([_entry("Speedy", 4000), _entry("Plodder", 9000)])
     you = scopes.aggregate({}, GROUPS)
-    rows, omitted = board.leaderboard(cache, library, {}, ranks, GROUPS,
-                                      "overall", version="us", you_aggregate=you)
+    rows, omitted = sheet.leaderboard("overall", GROUPS, you_aggregate=you)
     order = [row["runner"] for row in rows if row["runner"]]
     assert order.index("Speedy") < order.index("Plodder")
     assert omitted == 0          # both runners practiced this scope's entity
 
 
 def test_tied_marelo_shares_a_position_and_the_next_skips():
-    payload = _payload([_entry("Speedy", 4000), _entry("Twin1", 5000),
-                        _entry("Twin2", 5000), _entry("Plodder", 9000)])
-    library = FakeLibrary(payload)
-    ranks = FakeRanks(RANKS_DATA)
-    cache = board.RunnerScoreCache()
+    sheet = _sheet([_entry("Speedy", 4000), _entry("Twin1", 5000),
+                    _entry("Twin2", 5000), _entry("Plodder", 9000)])
     you = scopes.aggregate({}, GROUPS)          # never practiced -> 0.0, last
-    rows, _omitted = board.leaderboard(cache, library, {}, ranks, GROUPS,
-                                       "overall", version="us", you_aggregate=you)
+    rows, _omitted = sheet.leaderboard("overall", GROUPS, you_aggregate=you)
     by_runner = {row["runner"]: row for row in rows if row["runner"]}
     assert by_runner["Twin1"]["marelo"] == by_runner["Twin2"]["marelo"]
     assert by_runner["Twin1"]["position"] == by_runner["Twin2"]["position"]
@@ -117,75 +117,66 @@ def test_a_runner_with_nothing_practiced_in_scope_is_left_off_the_board():
     payload = {"targets": [
         _target("star:1:0", "Way A", [_item("Way A", [_entry("Speedy", 4000)])]),
         _target("star:2:0", "Way B", [_item("Way B", [_entry("Ghost", 3000)])])]}
-    library = FakeLibrary(payload)
-    ranks = FakeRanks(ranks_data)
-    cache = board.RunnerScoreCache()
+    sheet = board.RatingsCache().current(
+        FakeLibrary(payload), {}, FakeRanks(ranks_data), version="us")
     you = scopes.aggregate({}, GROUPS)
-    rows, omitted = board.leaderboard(cache, library, {}, ranks, GROUPS,
-                                      "overall", version="us", you_aggregate=you)
+    rows, omitted = sheet.leaderboard("overall", GROUPS, you_aggregate=you)
     runners = [row["runner"] for row in rows]
     assert "Speedy" in runners and "Ghost" not in runners
     assert omitted == 1          # exactly Ghost
 
 
 def test_the_users_row_is_present_and_marked():
-    payload = _payload([_entry("Speedy", 4000)])
-    library = FakeLibrary(payload)
-    ranks = FakeRanks(RANKS_DATA)
-    cache = board.RunnerScoreCache()
+    sheet = _sheet([_entry("Speedy", 4000)])
     you = scopes.aggregate({"star:1:0": 82.0}, GROUPS)
-    rows, _omitted = board.leaderboard(cache, library, {}, ranks, GROUPS,
-                                       "overall", version="us", you_aggregate=you)
+    rows, _omitted = sheet.leaderboard("overall", GROUPS, you_aggregate=you)
     you_rows = [row for row in rows if row["you"]]
     assert len(you_rows) == 1
     assert you_rows[0]["runner"] is None
     assert you_rows[0]["marelo"] == you["marelo"]
 
 
-# -- the memoized {runner: {entity: score}} map --------------------------
+# -- the cached RatedSheet ------------------------------------------------
+
+def _cache_inputs(revision="rev1", ranks_data=RANKS_DATA):
+    library = FakeLibrary(_payload([_entry("Speedy", 4000)]), revision=revision)
+    return library, FakeRanks(ranks_data)
+
 
 def test_unchanged_inputs_do_not_rebuild(monkeypatch):
-    payload = _payload([_entry("Speedy", 4000)])
-    library = FakeLibrary(payload)
-    ranks = FakeRanks(RANKS_DATA)
-    cache = board.RunnerScoreCache()
+    library, ranks = _cache_inputs()
+    cache = board.RatingsCache()
     calls = _counting(monkeypatch)
-    cache.refresh(library, {}, ranks, version="us")
-    cache.refresh(library, {}, ranks, version="us")
-    assert len(calls) == 1
+    first = cache.current(library, {}, ranks, version="us")
+    second = cache.current(library, {}, ranks, version="us")
+    assert len(calls) == 1 and first is second
 
 
 def test_changing_the_adoptions_map_invalidates(monkeypatch):
-    payload = _payload([_entry("Speedy", 4000)])
-    library = FakeLibrary(payload)
-    ranks = FakeRanks(RANKS_DATA)
-    cache = board.RunnerScoreCache()
+    library, ranks = _cache_inputs()
+    cache = board.RatingsCache()
     calls = _counting(monkeypatch)
-    cache.refresh(library, {}, ranks, version="us")
-    cache.refresh(library, {"some-row": "star:1:0"}, ranks, version="us")
+    cache.current(library, {}, ranks, version="us")
+    cache.current(library, {"some-row": "star:1:0"}, ranks, version="us")
     assert len(calls) == 2
 
 
 def test_a_different_grading_version_invalidates(monkeypatch):
-    payload = _payload([_entry("Speedy", 4000)])
-    library = FakeLibrary(payload)
-    ranks = FakeRanks(RANKS_DATA)
-    cache = board.RunnerScoreCache()
+    library, ranks = _cache_inputs()
+    cache = board.RatingsCache()
     calls = _counting(monkeypatch)
-    cache.refresh(library, {}, ranks, version="us")
-    cache.refresh(library, {}, ranks, version="jp")
+    cache.current(library, {}, ranks, version="us")
+    cache.current(library, {}, ranks, version="jp")
     assert len(calls) == 2
 
 
 def test_a_newer_library_revision_invalidates(monkeypatch):
-    payload = _payload([_entry("Speedy", 4000)])
-    library = FakeLibrary(payload, revision="rev1")
-    ranks = FakeRanks(RANKS_DATA)
-    cache = board.RunnerScoreCache()
+    library, ranks = _cache_inputs(revision="rev1")
+    cache = board.RatingsCache()
     calls = _counting(monkeypatch)
-    cache.refresh(library, {}, ranks, version="us")
+    cache.current(library, {}, ranks, version="us")
     library.revision = "rev2"
-    cache.refresh(library, {}, ranks, version="us")
+    cache.current(library, {}, ranks, version="us")
     assert len(calls) == 2
 
 
@@ -193,18 +184,32 @@ def test_editing_a_threshold_invalidates_and_the_board_changes(monkeypatch):
     """THE trap this task was warned about: `ranks_store.to_json()["version"]`
     is the bundled seed's version and never moves on an edit like this one --
     a cache keyed on it would miss this entirely and serve a stale board."""
-    payload = _payload([_entry("Speedy", 4000)])
-    library = FakeLibrary(payload)
-    ranks = FakeRanks({"star:1:0": {"Standard": {"Mario": 45.0, "Gold": 60.0}}})
-    cache = board.RunnerScoreCache()
+    library, ranks = _cache_inputs(
+        ranks_data={"star:1:0": {"Standard": {"Mario": 45.0, "Gold": 60.0}}})
+    cache = board.RatingsCache()
     calls = _counting(monkeypatch)
-    before, _ = cache.refresh(library, {}, ranks, version="us")
+    before = cache.current(library, {}, ranks, version="us").scores
     assert ranks.to_json()["version"] == 1        # the seed version: inert
     ranks._data["star:1:0"]["Standard"]["Mario"] = 39.0     # a threshold edit
-    after, _ = cache.refresh(library, {}, ranks, version="us")
+    after = cache.current(library, {}, ranks, version="us").scores
     assert ranks.to_json()["version"] == 1        # ...stays inert throughout
     assert len(calls) == 2                        # yet the cache rebuilt
     assert before["Speedy"]["star:1:0"] != after["Speedy"]["star:1:0"]
+
+
+def test_scope_rows_memoize_on_the_sheet_and_die_with_it():
+    """A repeat read of the same scope reuses its rows (46ms to aggregate
+    Overall over 448 runners); a rebuilt sheet starts from nothing, so no
+    memo can outlive the ratings it came from."""
+    library, ranks = _cache_inputs()
+    cache = board.RatingsCache()
+    sheet = cache.current(library, {}, ranks, version="us")
+    you = scopes.aggregate({}, GROUPS)
+    sheet.leaderboard("overall", GROUPS, you_aggregate=you)
+    assert "overall" in sheet._rows_by_scope
+    library.revision = "rev2"
+    rebuilt = cache.current(library, {}, ranks, version="us")
+    assert rebuilt is not sheet and rebuilt._rows_by_scope == {}
 
 
 # -- you_times_by_entity --------------------------------------------------
@@ -232,14 +237,10 @@ def test_you_times_omits_an_entity_with_no_pb():
 # -- runner_breakdown -------------------------------------------------------
 
 def test_runner_breakdown_widens_entities_with_the_users_own_numbers():
-    payload = _payload([_entry("Speedy", 4000)])
-    library = FakeLibrary(payload)
-    ranks = FakeRanks(RANKS_DATA)
-    cache = board.RunnerScoreCache()
-    breakdown = board.runner_breakdown(
-        cache, library, {}, ranks, GROUPS, "Speedy", version="us",
-        you_scores={"star:1:0": 50.0}, you_times={"star:1:0": 5200},
-        label_of=lambda key: key)
+    sheet = _sheet([_entry("Speedy", 4000)])
+    breakdown = sheet.runner_breakdown(
+        "Speedy", GROUPS, you_scores={"star:1:0": 50.0},
+        you_times={"star:1:0": 5200}, label_of=lambda key: key)
     assert breakdown["runner"] == "Speedy"
     assert breakdown["n"] == 1 and breakdown["practiced"] == 1
     entity = breakdown["entities"][0]
@@ -253,23 +254,16 @@ def test_runner_breakdown_widens_entities_with_the_users_own_numbers():
 
 
 def test_runner_breakdown_of_an_unknown_runner_is_none():
-    payload = _payload([_entry("Speedy", 4000)])
-    library = FakeLibrary(payload)
-    ranks = FakeRanks(RANKS_DATA)
-    cache = board.RunnerScoreCache()
-    assert board.runner_breakdown(
-        cache, library, {}, ranks, GROUPS, "Ghost", version="us",
-        you_scores={}, you_times={}, label_of=lambda key: key) is None
+    sheet = _sheet([_entry("Speedy", 4000)])
+    assert sheet.runner_breakdown(
+        "Ghost", GROUPS, you_scores={}, you_times={},
+        label_of=lambda key: key) is None
 
 
 def test_runner_breakdown_entity_with_no_you_time_is_null_not_zero():
-    payload = _payload([_entry("Speedy", 4000)])
-    library = FakeLibrary(payload)
-    ranks = FakeRanks(RANKS_DATA)
-    cache = board.RunnerScoreCache()
-    breakdown = board.runner_breakdown(
-        cache, library, {}, ranks, GROUPS, "Speedy", version="us",
-        you_scores={}, you_times={}, label_of=lambda key: key)
+    sheet = _sheet([_entry("Speedy", 4000)])
+    breakdown = sheet.runner_breakdown(
+        "Speedy", GROUPS, you_scores={}, you_times={}, label_of=lambda key: key)
     you = breakdown["entities"][0]["you"]
     assert you == {"score": None, "time_cs": None, "tier": None, "division": None}
 
@@ -277,13 +271,8 @@ def test_runner_breakdown_entity_with_no_you_time_is_null_not_zero():
 # -- runner_summary -----------------------------------------------------
 
 def test_runner_summary_shape():
-    payload = _payload([_entry("Speedy", 4000)])
-    library = FakeLibrary(payload)
-    ranks = FakeRanks(RANKS_DATA)
-    cache = board.RunnerScoreCache()
-    chips = board.runner_summary(
-        cache, library, {}, ranks, [("overall", GROUPS, "Overall")],
-        "Speedy", version="us")
+    sheet = _sheet([_entry("Speedy", 4000)])
+    chips = sheet.runner_summary("Speedy", OVERALL_SPEC)
     assert len(chips) == 1
     assert set(chips[0]) == {"scope_id", "label", "tier", "division",
                              "marelo", "n", "practiced"}
@@ -292,10 +281,5 @@ def test_runner_summary_shape():
 
 
 def test_runner_summary_of_an_unknown_runner_is_none():
-    payload = _payload([_entry("Speedy", 4000)])
-    library = FakeLibrary(payload)
-    ranks = FakeRanks(RANKS_DATA)
-    cache = board.RunnerScoreCache()
-    assert board.runner_summary(
-        cache, library, {}, ranks, [("overall", GROUPS, "Overall")],
-        "Ghost", version="us") is None
+    sheet = _sheet([_entry("Speedy", 4000)])
+    assert sheet.runner_summary("Ghost", OVERALL_SPEC) is None

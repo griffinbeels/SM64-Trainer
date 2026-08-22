@@ -1,15 +1,14 @@
-// src/sm64_events/ui/components/runnerpage.js — the [[runner page]]: one
+// src/sm64_events/ui/components/runnerpage.js — the [[Runner page]]: one
 // community runner's ratings, read-only, reached through two doors — a
 // [[Rank board]] row (leaderboard.js) and a runner's name inside a
 // [[Library tab]] entry (librarytarget.js). ONE component either way, never
 // two that look alike: it draws through rankpage.js's own ScopeChips/
-// CoverageStrip/Breakdown pointed at the runner's
-// `/api/leaderboard/runner/{name}` data instead of `/api/marelo` —
-// never a second implementation of any of the three. No history curve (the
-// sheet holds one time per row, no series to plot) and no Leaderboard card
-// (that is where you arrived FROM). Read-only throughout: CoverageStrip gets
-// no `onEdit` (no ✎) and Breakdown's `variant="runner"` carries no Ignore
-// button.
+// CoverageStrip/Breakdown pointed at `/api/leaderboard/runner/{name}` instead
+// of `/api/marelo` — never a second implementation of any of the three. No
+// history curve (the sheet holds one time per row, no series to plot) and no
+// Leaderboard card (that is where you arrived FROM). Read-only throughout:
+// CoverageStrip is `readOnly` (no ✎, no detail panel) and Breakdown's
+// `variant="runner"` carries no Ignore button.
 import { h, Fragment } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
@@ -23,23 +22,19 @@ import { Breakdown, CoverageStrip, ScopeChips } from "./rankpage.js";
 const html = htm.bind(h);
 
 export function RunnerPage({ t, runnerName, onClose }) {
-  const [activeScopeKnown, setActiveScopeKnown] = useState(false);
-  const [scopesErr, setScopesErr] = useState(null);
   const [scopeId, setScopeId] = useState(null);
+  const [scopesErr, setScopesErr] = useState(null);
   const [data, setData] = useState(null);
   const [dataErr, setDataErr] = useState(null);
+  const runnerApi = `/api/leaderboard/runner/${encodeURIComponent(runnerName)}`;
 
-  // This door is YOURS, not the runner's -- the chip row below gets its own
-  // scope list from ScopeChips' `source`, off the runner's own summary. The
-  // only thing wanted here is `active`, to seed the page open on the scope
-  // you are yourself currently focused on rather than defaulting to Overall.
+  // Open on the scope YOU are focused on, not on Overall -- the one thing
+  // read off your own scopes; the chip row below lists the runner's.
   useEffect(() => {
     let alive = true;
-    getJSON("/api/marelo/scopes").then((response) => {
-      if (!alive) return;
-      setActiveScopeKnown(true);
-      setScopeId((current) => current ?? response.active);
-    }).catch((error) => alive && setScopesErr(error));
+    getJSON("/api/marelo/scopes")
+      .then((response) => alive && setScopeId((current) => current ?? response.active))
+      .catch((error) => alive && setScopesErr(error));
     return () => { alive = false; };
   }, []);
 
@@ -51,17 +46,14 @@ export function RunnerPage({ t, runnerName, onClose }) {
     // scope's breakdown on screen under the new scope's label.
     setDataErr(null);
     setData(null);
-    getJSON(`/api/leaderboard/runner/${encodeURIComponent(runnerName)}`
-        + `?scope=${encodeURIComponent(scopeId)}`)
+    getJSON(`${runnerApi}?scope=${encodeURIComponent(scopeId)}`)
       .then((response) => alive && setData(response))
       .catch((error) => alive && setDataErr(error));
     return () => { alive = false; };
   }, [scopeId, runnerName]);
 
-  if (!activeScopeKnown) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
-      title=${`Loading ${runnerName}'s ranks`} message=${scopesErr ? scopesErr.message : undefined} />`;
   if (!scopeId) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
-      title=${`Loading ${runnerName}'s ranks`} />`;
+      title=${`Loading ${runnerName}'s ranks`} message=${scopesErr ? scopesErr.message : undefined} />`;
 
   const routeOrder = scopeId.startsWith("route:");
 
@@ -84,8 +76,7 @@ export function RunnerPage({ t, runnerName, onClose }) {
         </div>
       </div>
     </div>
-    <${ScopeChips} activeScopeId=${scopeId} onPick=${setScopeId}
-        source=${`/api/leaderboard/runner/${encodeURIComponent(runnerName)}/summary`} />
+    <${ScopeChips} activeScopeId=${scopeId} onPick=${setScopeId} source=${`${runnerApi}/summary`} />
     ${dataErr
       ? html`<div class="practice-card"><${InlineState} kind="error">
           ${dataErr.status === 404
@@ -95,7 +86,7 @@ export function RunnerPage({ t, runnerName, onClose }) {
         ? html`<div class="practice-card"><${InlineState}>Loading ${runnerName}'s rating…<//></div>`
         : html`<${Fragment}>
             <div class="practice-card">
-              <div class="rank-factor">Coverage <${CoverageStrip} t=${t} data=${data}
+              <div class="rank-factor">Coverage <${CoverageStrip} t=${t} data=${data} readOnly
                 caption=${`${data.practiced} of ${data.n} rated `
                   + `${data.n === 1 ? "entry" : "entries"} ${runnerName} has practiced — `
                   + "dim tiles are the ones they have not run yet."} /></div>

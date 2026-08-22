@@ -456,7 +456,7 @@ INVARIANTS = (
             "the sheet's own curve produces a number that LOOKS like MARELO "
             "and cannot be compared to the user's. A second library file "
             "calling either function directly is building a competing "
-            "grading path beside ratings.py -- 'is runner_scores() called' "
+            "grading path beside ratings.py -- 'is rate_runners() called' "
             "would pass while that second path sat right beside it.",
     ),
     SingleSource(

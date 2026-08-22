@@ -433,8 +433,8 @@ with `rows: []` rather than a `503`, matching `/api/library/entity/{k}`'s
 | `GET` | `/api/leaderboard/runner/{name}` | `?scope=<id>` (optional) | One runner's rating for a scope, the same field set `/api/marelo` returns plus `runner`, each entity widened with the user's own numbers: `{runner, scope_id, label, marelo, mastery, coverage, tier, division, next_division_at, division_progress, n, practiced, entities:[{key,label,score,tier,division,next_tier,next_division,gain,excluded,time_cs,you:{score,time_cs,tier,division}}]}`. `excluded` is always `false` — the user's own exclusions shape scopes for HIM and must not shrink the denominator every runner is judged on. `404` for an unknown runner (the sheet has never heard of that name) or an unknown scope. |
 | `GET` | `/api/leaderboard/runner/{name}/summary` | — | `{chips:[{scope_id,label,tier,division,marelo,n,practiced}]}` — the same chip shape `/api/marelo/summary` returns, sourced from this runner instead of the user, over the same fixed scope list (`overall`, `Main Categories` routes, the active scope). `404` for an unknown runner. |
 
-Reads run off the event loop (`run_in_threadpool`, same reason
-`POST /api/library/refresh` does): scoring 448 runners measures ~29ms to
+Reads run off the event loop (plain `def` routes, which FastAPI threadpools
+whole): scoring 448 runners measures ~29ms to
 build the shared score map and up to ~46ms to aggregate Overall, both past
 a 33ms game frame, and the poller shares this process. A repeat request
 reuses the cached score map and, for an unchanged scope, its ranked rows —
