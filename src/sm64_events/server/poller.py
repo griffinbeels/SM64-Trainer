@@ -54,7 +54,8 @@ class Poller:
     SNAPSHOT_HZ = 60         # without one: the old loop, every tick a read
 
     def __init__(self, memory, detectors, broadcaster, hz: int | None = None,
-                 reader=None, on_frame=None, input_sampler=None):
+                 reader=None, on_frame=None, input_sampler=None,
+                 frame_clock=None):
         self.memory = memory
         self.detectors = list(detectors)
         self.broadcaster = broadcaster
@@ -88,6 +89,11 @@ class Poller:
         # `broadcaster`, which is sometimes a plain Broadcaster: this poller's
         # sink contract is publish(), and a clock consumer is a second concern.
         self.on_frame = on_frame
+        # WHEN each game frame happened, on the wall clock -- the replay
+        # sidecar's frame_map source (replay/frameclock.py). Marked on the
+        # counter EDGE, so with a sampler the stamp is 250 Hz-precise; the
+        # 60 Hz path marks at snapshot time, one poll coarser.
+        self.frame_clock = frame_clock
         self.interval = 1.0 / hz
         self.reader = reader or SnapshotReader(memory)
         # Set when the reader can never read (core/snapshot.py::UnreadyReader
@@ -142,6 +148,11 @@ class Poller:
             return False                       # straddled or unreadable
         if frame_now != self._frame_now:
             ended = self._frame_now
+            if self.frame_clock is not None and ended is not None:
+                # A real observed edge -- the first sample after an attach is
+                # mid-frame, and stamping "now" onto a frame that started
+                # earlier would file its picture under the wrong wall time.
+                self.frame_clock.mark(frame_now)
             self._frame_now = frame_now
             self._ticks_in_frame = 0
             return ended is not None and self._snapshot_frame != ended
@@ -164,6 +175,10 @@ class Poller:
             self.latest = None
             await self.broadcaster.publish(_lifecycle_event("emulator_disconnected"))
             return
+        if (self.frame_clock is not None and self.input_sampler is None
+                and self._last_timer is not None
+                and curr.global_timer != self._last_timer):
+            self.frame_clock.mark(curr.global_timer)
         if not _plausible(curr):
             log.error("memory layout mismatch (impossible values read) — "
                       "refusing to emit events; check the address registry")
@@ -238,6 +253,10 @@ class Poller:
         except MemoryReadError:
             self.memory.detach()
             return False
+        if (self.frame_clock is not None and self.input_sampler is None
+                and self._last_timer is not None
+                and curr.global_timer != self._last_timer):
+            self.frame_clock.mark(curr.global_timer)
         if not _plausible(curr):
             log.error("memory layout mismatch (impossible values read) — "
                       "refusing to serve; check ROM / address registry")

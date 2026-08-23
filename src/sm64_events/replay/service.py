@@ -120,11 +120,15 @@ class ReplayService:
     """
 
     def __init__(self, cfg: ReplayConfig, recorder, extractor, tracker,
-                 revealer=None):
+                 revealer=None, frame_clock=None):
         self.cfg = cfg
         self.recorder = recorder
         self.extractor = extractor
         self.tracker = tracker
+        # WHEN each game frame happened (replay/frameclock.py), fed by the
+        # poller. At extraction it becomes the sidecar's frame_map; None
+        # (older wiring, tests) just means clips carry no map.
+        self._frame_clock = frame_clock
         self._revealer = revealer or _open_explorer_select
         # clips_dir lives inside scratch_dir; it is created in lifecycle_start
         # AFTER recorder.start() so any future recursive wipe by the recorder
@@ -269,6 +273,18 @@ class ReplayService:
             m = {"duration_s": res.duration_s, "truncated": res.truncated}
             if res.start_utc is not None:
                 m["start_utc"] = res.start_utc.isoformat()
+                if self._frame_clock is not None and res.duration_s:
+                    # WHICH game frame each video frame shows (round 32 item
+                    # 17): built here, at the one moment the clip's span and
+                    # the clock's coverage overlap, and stored in the sidecar
+                    # so a saved copy keeps it after the clock forgets. The
+                    # display lag rides INSIDE the map; anchor_offset_s stays
+                    # the fallback for a clip that has none.
+                    fm = self._frame_clock.frame_map(
+                        res.start_utc, res.duration_s, self.cfg.fps,
+                        DISPLAY_LAG_FRAMES / GAME_FPS)
+                    if fm is not None:
+                        m["frame_map"] = fm
             meta.write_text(json.dumps(m))
             url, source = f"/api/replay/clips/{name}", "buffer"
         # fps = encoded rate (CFR); game_fps = SM64 logic rate — the
@@ -282,6 +298,7 @@ class ReplayService:
                 "fps": m.get("fps", self.cfg.fps), "game_fps": GAME_FPS,
                 "source": source,
                 "anchor_offset_s": self._anchor_offset(a, m),
+                "frame_map": m.get("frame_map"),
                 "saved_path": str(saved) if saved is not None else None}
 
     def _anchor_offset(self, a, meta: dict) -> float:
@@ -301,6 +318,11 @@ class ReplayService:
         The display-lag part, `DISPLAY_LAG_FRAMES`: the screen shows the
         frame the game finished a frame ago, so the picture of frame N sits
         one frame later in the footage than N's wall time. See the constant.
+
+        A clip whose sidecar carries a `frame_map` does not need this number
+        -- the map says outright which game frame each video frame shows,
+        jitter included -- so consumers use the map first and this offset is
+        the fallback for clips cut before the frame clock existed.
         """
         start = meta.get("start_utc")
         if start is None:

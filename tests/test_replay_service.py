@@ -94,6 +94,50 @@ def test_view_pads_span_and_returns_clip_url(tmp_path):
     assert res["anchor_offset_s"] == 3.0 + DISPLAY_LAG_FRAMES / 30
 
 
+def test_the_sidecar_carries_the_frame_map_and_a_save_keeps_it(tmp_path):
+    """Round 32 item 17: with a frame clock wired, a cut clip's sidecar says
+    which game frame each video frame shows, the view payload returns it,
+    and the saved copy keeps it after the clock (and the ring) are gone. A
+    service with no clock, or a clip the clock cannot cover, carries none
+    -- the offset fallback stays what it was."""
+    import json as _json
+    from sm64_events.replay.frameclock import FrameClock
+
+    clock = FrameClock(now=lambda: 0.0)
+    base = (T0 - timedelta(seconds=3)).timestamp()
+    for n in range(17 * 30):                     # the whole padded span, 30fps
+        clock._now = lambda t=base + n / 30: t
+        clock.mark(7000 + n)
+    svc = make_service(tmp_path, [attempt()])
+    svc._frame_clock = clock
+    res = svc.view(42)
+    fm = res["frame_map"]
+    assert fm is not None and len(fm) == 17 * 60
+    # The display lag rides INSIDE the map: the first slots predate the
+    # first marked frame's picture (None, honestly), and the last slot shows
+    # the frame the game finished DISPLAY_LAG_FRAMES earlier.
+    from sm64_events.replay.service import DISPLAY_LAG_FRAMES
+    assert fm[0] is None and fm[2] == 7000
+    assert fm[-1] == 7000 + 17 * 30 - 1 - DISPLAY_LAG_FRAMES
+    ordered = [frame for frame in fm if frame is not None]
+    assert ordered == sorted(ordered)
+    sidecar = _json.loads(
+        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
+    assert sidecar["frame_map"] == fm
+    saved = svc.save(42)
+    assert _json.loads(Path(saved["path"]).with_suffix(".json").read_text())[
+        "frame_map"] == fm
+
+
+def test_no_clock_or_no_coverage_means_no_map_not_a_crash(tmp_path):
+    svc = make_service(tmp_path, [attempt()])
+    assert svc.view(42)["frame_map"] is None     # no clock wired
+    from sm64_events.replay.frameclock import FrameClock
+    svc2 = make_service(tmp_path / "b", [attempt()])
+    svc2._frame_clock = FrameClock()             # wired, never marked
+    assert svc2.view(42)["frame_map"] is None
+
+
 def test_the_anchor_offset_follows_the_clip_s_REAL_start_not_the_pad(tmp_path):
     """The ring may have evicted part of the lead-in; the offset is then
     shorter than the pad, and the sidecar's own start_utc says by how much."""

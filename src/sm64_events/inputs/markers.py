@@ -16,24 +16,8 @@ console reset, so a track can hold the same number twice, and the axis lays
 each stretch end to end (`inputs/runs.py`).
 """
 from sm64_events.inputs.frame import InputFrame
-from sm64_events.inputs.runs import capture_axis
+from sm64_events.inputs.runs import axis_of, stretches
 from sm64_events.tracking.eventlabel import is_step, label_event
-
-
-def _stretches(frames: list[tuple[int, InputFrame]]
-               ) -> list[tuple[list[int], list[int]]]:
-    """The track split at every counter restart: (raw numbers, axis
-    positions) per stretch, both ascending within it."""
-    axis = capture_axis(frames)
-    out: list[tuple[list[int], list[int]]] = []
-    previous: int | None = None
-    for (raw, _frame), (position, _same) in zip(frames, axis):
-        if previous is None or raw < previous:
-            out.append(([], []))
-        out[-1][0].append(raw)
-        out[-1][1].append(position)
-        previous = raw
-    return out
 
 
 def markers_of(rows, frames: list[tuple[int, InputFrame]],
@@ -50,8 +34,8 @@ def markers_of(rows, frames: list[tuple[int, InputFrame]],
     Rows and stretches are both in time order, so a row that does not fit
     the current stretch is looked for in the later ones, never the earlier.
     """
-    stretches = _stretches(frames)
-    if not stretches:
+    seams = stretches(frames)
+    if not seams:
         return []
     markers: list[dict] = []
     repeats: dict[str, int] = {}
@@ -63,13 +47,11 @@ def markers_of(rows, frames: list[tuple[int, InputFrame]],
         if label is None:
             continue
         placed = None
-        for index in range(current, len(stretches)):
-            raws, positions = stretches[index]
-            if row.frame < raws[0] or row.frame > raws[-1]:
-                continue
-            placed = positions[0] + (row.frame - raws[0])
-            current = index
-            break
+        for index in range(current, len(seams)):
+            placed = axis_of(row.frame, [seams[index]])
+            if placed is not None:
+                current = index
+                break
         if placed is None:
             continue
         repeat = repeats[label] = repeats.get(label, 0) + 1

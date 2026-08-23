@@ -45,7 +45,8 @@ from sm64_events.core.paths import (candidate_server_ports,  # noqa: E402
                                     overlays_dir)
 from sm64_events.inputs.overlay import (DEFAULT_CODEC, DEFAULT_VIDEO_FPS,
                                         CODECS, LAYERS, concat_script,
-                                        encode_argv, output_name,
+                                        encode_argv, mapped_concat_script,
+                                        output_name,
                                         plan_overlay)  # noqa: E402
 
 _MISSING = find_uilab()
@@ -88,6 +89,19 @@ def track_from_server(base: str, attempt_id: int) -> dict:
     with urllib.request.urlopen(
             f"{base}/api/attempts/{attempt_id}/inputs") as response:
         return json.load(response)
+
+
+def clip_view_from_server(base: str, attempt_id: int) -> dict | None:
+    """The attempt's replay view -- carrying the clip's `frame_map` when one
+    was recorded. None when there is no clip to line up with (no footage,
+    aged out): the uniform script is then the only honest export."""
+    request = urllib.request.Request(
+        f"{base}/api/attempts/{attempt_id}/replay", method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.load(response)
+    except Exception:
+        return None
 
 
 def _show(page, state, settings) -> dict:
@@ -216,12 +230,22 @@ def recover_alpha(over_black: bytes, over_white: bytes) -> bytes:
     return buffer.getvalue()
 
 
-def encode(plan, files: list[Path], out_path: Path, work: Path) -> None:
+def encode(plan, files: list[Path], out_path: Path, work: Path,
+           frame_map=None, seams=None) -> None:
     script = work / f"{plan.layer}.ffconcat"
-    script.write_text(
-        concat_script(plan, lambda index: files[index].name),
-        encoding="utf-8", newline="\n")
-    argv = encode_argv(ffmpeg_path(), str(script), str(out_path), plan)
+    if frame_map:
+        # The clip's own frame map decides which pad each video frame draws
+        # (round 32 item 17): the export then matches the footage from ITS
+        # frame 0, duplicates and skips included -- drop it at 0:00.
+        text = mapped_concat_script(plan, lambda index: files[index].name,
+                                    frame_map, seams or [])
+        frames = len(frame_map)
+    else:
+        text = concat_script(plan, lambda index: files[index].name)
+        frames = None
+    script.write_text(text, encoding="utf-8", newline="\n")
+    argv = encode_argv(ffmpeg_path(), str(script), str(out_path), plan,
+                       frames=frames)
     result = subprocess.run(argv, capture_output=True, text=True,
                             encoding="utf-8", cwd=str(work),
                             **quiet_spawn_kwargs())
@@ -250,6 +274,8 @@ def main() -> int:
     if base is None:
         return _no_server()
     data = track_from_server(base, args.attempt)
+    view = clip_view_from_server(base, args.attempt)
+    frame_map = (view or {}).get("frame_map")
     if not data["runs"]:
         print(f"attempt #{args.attempt} has no captured input, so there is "
               "nothing to draw. That is a finding, not an error.")
@@ -270,7 +296,8 @@ def main() -> int:
                 data["dead_zone"], args.size, canvas,
                 data.get("angle_units", 0x10000))
             out_path = out_dir / output_name(stem, plan)
-            encode(plan, files, out_path, work)
+            encode(plan, files, out_path, work,
+                   frame_map=frame_map, seams=data.get("stretches"))
         written.append((out_path, plan, len(files)))
 
     print(f"read attempt #{args.attempt} from {base}\n")
@@ -279,6 +306,11 @@ def main() -> int:
         print(f"    {plan.video_frames} frames at {plan.video_fps} fps "
               f"({plan.game_frames} game frames), {pictures} distinct "
               f"pictures, {plan.codec}")
+    if frame_map:
+        print("\nThis export is MAPPED to the clip's own frame map: it "
+              "starts at the clip's frame 0 (not the anchor), so drop it at "
+              "0:00 over that clip — no offset, duplicates and skips "
+              "included.")
     print("\nEvery layer is the same canvas, frame rate and frame 0, so they "
           "stack in register — drop them on the timeline and delete the one "
           "you do not want. Nothing needs cropping.")

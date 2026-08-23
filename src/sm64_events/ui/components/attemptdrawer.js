@@ -24,6 +24,9 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
   // measured from the clip's own first frame by the server). The timeline
   // shifts by it so clip time and track frame are one axis.
   const [anchorOffsetS, setAnchorOffsetS] = useState(0);
+  // The clip's own frame map (which game frame each video frame shows) and
+  // its encode rate -- the timeline's exact clock; the offset is its fallback.
+  const [clipClock, setClipClock] = useState({ frameMap: null, fps: 60 });
   const [marking, setMarking] = useState(null);   // null | "busy" | a message
 
   async function markTemplate() {
@@ -45,10 +48,15 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
   return html`<div class="attempt-drawer">
     <${ReplayPlayer} attemptId=${attemptId} onCompare=${onCompare}
         onVideoEl=${setVideo}
-        onView=${(view) => setAnchorOffsetS(view.anchor_offset_s || 0)} />
+        onView=${(view) => {
+          setAnchorOffsetS(view.anchor_offset_s || 0);
+          setClipClock({ frameMap: view.frame_map || null,
+                         fps: view.fps || 60 });
+        }} />
     <div class="attempt-drawer-inputs">
       <${InputTimeline} attemptId=${attemptId} video=${video}
-          anchorOffsetS=${anchorOffsetS} />
+          anchorOffsetS=${anchorOffsetS}
+          frameMap=${clipClock.frameMap} clipFps=${clipClock.fps} />
       <div class="attempt-drawer-tools">
         <button onclick=${markTemplate} disabled=${marking === "busy"}
             title="Compare every future run against THIS one">

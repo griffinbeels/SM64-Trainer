@@ -198,6 +198,14 @@ function MomentRow({ markers, total, percent, seek }) {
 // every input landed three seconds early (his first live run, 2026-08-22:
 // "the input reader shows a totally different angle and shows me pressing
 // A/B"). Pure and exported so tests/test_ui_input_clock.py can drive them.
+//
+// This arithmetic is the FALLBACK. A clip whose sidecar carries a
+// `frame_map` uses the mapped pair below instead: the capture duplicates
+// and skips single game frames (round 32 items 16/24 -- his counter read
+// 26, 27, 27, 29, ...), so no offset can be right on every frame, and his
+// ruling was "we need 100% accuracy". The map says, per video frame, which
+// game frame its picture shows; the arithmetic remains for clips cut
+// before the frame clock existed.
 export const frameAtTime = (seconds, anchorOffsetS, fps, frames) => {
   const raw = Math.floor((seconds - anchorOffsetS) * fps + 1e-4);
   return Math.max(0, Math.min(Math.max(frames - 1, 0), raw));
@@ -205,7 +213,60 @@ export const frameAtTime = (seconds, anchorOffsetS, fps, frames) => {
 export const timeAtFrame = (frame, anchorOffsetS, fps) =>
   anchorOffsetS + (frame + 0.5) / fps;
 
+// A raw game frame <-> the track's zero-based axis, through the payload's
+// `stretches` ([axis_start, raw_start, length] per ascending stretch of the
+// counter -- the server's own restart rule, shipped rather than re-derived).
+export function trackFrameOf(raw, stretches) {
+  for (const [axisStart, rawStart, length] of stretches || []) {
+    if (raw >= rawStart && raw < rawStart + length) {
+      return axisStart + (raw - rawStart);
+    }
+  }
+  return null;
+}
+export function gameFrameOf(axis, stretches) {
+  for (const [axisStart, rawStart, length] of stretches || []) {
+    if (axis >= axisStart && axis < axisStart + length) {
+      return rawStart + (axis - axisStart);
+    }
+  }
+  return null;
+}
+
+// The mapped clock. `frameMap[k]` is the raw game frame video frame k shows
+// (null before the clock's coverage); `clipFps` is the clip's encode rate.
+// Answers null when the map cannot say, and the caller falls back to the
+// offset arithmetic -- never a silent guess.
+export function mappedFrameAtTime(seconds, frameMap, clipFps, stretches, frames) {
+  if (!frameMap || !frameMap.length) return null;
+  const slot = Math.max(0, Math.min(frameMap.length - 1,
+    Math.floor(seconds * clipFps + 1e-4)));
+  const raw = frameMap[slot];
+  if (raw == null) return null;
+  const axis = trackFrameOf(raw, stretches);
+  if (axis === null) {
+    // The clip's lead-in (before the anchor) or its tail (after the grab).
+    const first = (stretches || [])[0];
+    return first && raw < first[1] ? 0 : Math.max(frames - 1, 0);
+  }
+  return Math.max(0, Math.min(Math.max(frames - 1, 0), axis));
+}
+export function mappedTimeAtFrame(frame, frameMap, clipFps, stretches) {
+  if (!frameMap || !frameMap.length) return null;
+  const raw = gameFrameOf(frame, stretches);
+  if (raw === null) return null;
+  // The FIRST video frame showing this game frame -- or, when the capture
+  // skipped it entirely, the first one past it (his 26, 27, 27, 29 shape:
+  // frame 28's picture never existed, so its inputs show over 29's slot).
+  for (let slot = 0; slot < frameMap.length; slot += 1) {
+    const shown = frameMap[slot];
+    if (shown != null && shown >= raw) return (slot + 0.5) / clipFps;
+  }
+  return null;
+}
+
 export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
+                                frameMap = null, clipFps = 60,
                                 compact = false }) {
   const [state, setState] = useState({ phase: "loading" });
   const [frame, setFrame] = useState(0);
@@ -238,15 +299,20 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   useEffect(() => {
     if (!video || state.phase !== "ready") return undefined;
     let raf = 0;
-    const { fps, frames } = state.data;
+    const { fps, frames, stretches } = state.data;
     const tick = () => {
-      const at = frameAtTime(video.currentTime || 0, anchorOffsetS, fps, frames);
+      const seconds = video.currentTime || 0;
+      const mapped = mappedFrameAtTime(seconds, frameMap, clipFps,
+        stretches, frames);
+      const at = mapped !== null
+        ? mapped
+        : frameAtTime(seconds, anchorOffsetS, fps, frames);
       setFrame((current) => (current === at ? current : at));
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [video, state, anchorOffsetS]);
+  }, [video, state, anchorOffsetS, frameMap, clipFps]);
 
   const data = state.phase === "ready" ? state.data : null;
   const lanes = useMemo(
@@ -282,7 +348,11 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       // reads the new time back on the next frame, so the two cannot
       // disagree even for a frame.
       if (!video.paused) video.pause();
-      video.currentTime = timeAtFrame(clamped, anchorOffsetS, data.fps);
+      const mapped = mappedTimeAtFrame(clamped, frameMap, clipFps,
+        data.stretches);
+      video.currentTime = mapped !== null
+        ? mapped
+        : timeAtFrame(clamped, anchorOffsetS, data.fps);
     }
   };
   const seekFromPointer = (event) => {

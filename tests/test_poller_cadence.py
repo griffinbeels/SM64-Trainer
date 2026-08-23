@@ -109,6 +109,35 @@ def test_a_short_frame_does_not_cause_its_successor_to_be_read_twice():
     assert reader.frames_read == [101]
 
 
+def test_the_frame_clock_is_marked_on_the_edge_tick_once_per_frame():
+    """The frame_map's precision IS this stamp (round 32 item 17): the mark
+    must land on the 250 Hz tick that SEES the counter advance -- not at
+    snapshot time, which is deliberately ~62% later -- and the attach frame
+    is never marked, because its edge was not observed and stamping "now"
+    onto it would file its picture under the wrong wall time."""
+
+    class RecordingClock:
+        def __init__(self):
+            self.marks = []
+
+        def mark(self, frame):
+            self.marks.append(frame)
+
+    sampler = ScriptedSampler([100] * 8 + [101] * 8 + [102] * 8)
+    reader = CountingReader(sampler)
+    clock = RecordingClock()
+    poller = Poller(memory=None, detectors=[], broadcaster=NullBroadcaster(),
+                    hz=250, reader=reader, input_sampler=sampler,
+                    frame_clock=clock)
+    ticks_at_mark = []
+    for tick in range(24):
+        asyncio.run(poller.tick())
+        if len(ticks_at_mark) != len(clock.marks):
+            ticks_at_mark.append(tick)
+    assert clock.marks == [101, 102]        # the attach frame 100 is not marked
+    assert ticks_at_mark == [8, 16]         # the edge ticks, not the settle ones
+
+
 def test_no_sampler_leaves_the_loop_exactly_as_it_was():
     """Every existing poller test drives tick() with no sampler, so the gate
     must be invisible without one or those tests stop meaning anything."""

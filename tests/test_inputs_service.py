@@ -97,6 +97,20 @@ def test_the_timeline_carries_the_journals_moments_when_wired(rig):
                       "label": "Grab a pole in Bob-omb Battlefield"}
 
 
+def test_the_timeline_ships_the_axis_seams(rig):
+    """`stretches` is how a clip's frame_map (raw counter values) lands on
+    the zero-based axis in the browser: one (axis_start, raw_start, length)
+    per ascending stretch, split at a counter restart."""
+    service, _templates, _attempt = rig
+    assert service.timeline(7)["stretches"] == [[0, 100, 28]]
+
+    from sm64_events.inputs.runs import stretches
+    from sm64_events.inputs.frame import InputFrame
+    reset = [(number, InputFrame(0, 0, 0, 0)) for number in
+             [1000, 1001, 1002, 50, 51]]
+    assert stretches(reset) == [(0, 1000, 3), (3, 50, 2)]
+
+
 def test_the_timeline_carries_the_runs_and_the_span(rig):
     service, _templates, _attempt = rig
     payload = service.timeline(7)

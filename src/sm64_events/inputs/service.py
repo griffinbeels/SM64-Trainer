@@ -15,7 +15,7 @@ cannot be written needs no parity test to keep it honest.
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.inputs.frame import InputFrame
 from sm64_events.inputs.markers import markers_of
-from sm64_events.inputs.runs import Run, capture_axis, collapse
+from sm64_events.inputs.runs import Run, capture_axis, collapse, stretches
 from sm64_events.inputs.templates import TemplateStore
 from sm64_events.inputs.track import (document_for_attempt, target_of,
                                       track_for_attempt)
@@ -153,6 +153,10 @@ class InputsService:
             "runs": runs_of(frames),
             "actions": actions_of(frames),
             "markers": self._markers(attempt, frames),
+            # The axis's seams -- (axis_start, raw_start, length) per stretch
+            # -- so the clip's frame_map (raw game frames) lands on the axis
+            # in the browser without a second copy of the restart rule.
+            "stretches": [list(row) for row in stretches(frames)],
             "angle_units": A.ANGLE_UNITS,
             "buttons": [[bit, name] for bit, name in A.BUTTON_BITS],
             "stick_max": A.STICK_MAX,

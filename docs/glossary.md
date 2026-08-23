@@ -522,6 +522,22 @@ the gap yourself. It opens inside an [[attempt]]'s own row, beside that
 - **Lives** — the timeline component
   (`src/sm64_events/ui/components/inputtimeline.js`)
 
+### Frame map
+
+The list a clip carries naming which [[frame]] of the game each picture of
+that clip shows. The trainer stamps the wall time of every [[frame]] as you
+play and writes the map when it cuts a clip, so a [[frame]] the emulator
+held on screen twice maps twice and one it skipped never maps -- the
+duplicates and skips a single offset cannot describe. The [[input
+timeline]] and every [[overlay layer]] read the clip through its map; a
+clip cut before maps existed falls back to a fixed offset.
+
+- **Lives** -- the frame clock (`src/sm64_events/replay/frameclock.py`)
+  records the stamps; the map rides the clip's own metadata
+  (`src/sm64_events/replay/service.py`)
+- **Not** -- the [[input track]]'s own axis. The track says what you DID on
+  each [[frame]]; the map says which [[frame]] the footage SHOWS.
+
 ### Overlay layer
 
 One transparent video file drawing part of the pad — the stick, the

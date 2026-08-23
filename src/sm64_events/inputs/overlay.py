@@ -149,8 +149,38 @@ def concat_script(plan: OverlayPlan, name_of) -> str:
     return "\n".join(lines) + "\n"
 
 
+def mapped_concat_script(plan: OverlayPlan, name_of, frame_map,
+                         seams) -> str:
+    """One line per CLIP video frame, through the clip's own frame map.
+
+    Where `concat_script` holds every game frame for a uniform
+    `video_fps // GAME_FPS` slots -- exactly the assumption the capture
+    jitter breaks (round 32 item 17) -- this reads `frame_map[k]` (the raw
+    game frame video frame k shows, from the clip's sidecar) and draws THAT
+    frame's pad on slot k. The overlay then lines up with the footage from
+    the clip's own frame 0, duplicates and skips included, and the editor
+    drops it at 0:00 with no offset at all. A slot before the map's
+    coverage, or outside the track, draws the blank -- "we do not know",
+    never a neighbour's pad.
+    """
+    from sm64_events.inputs.runs import axis_of
+    lines = ["ffconcat version 1.0"]
+    last_file = None
+    for raw in frame_map:
+        axis = axis_of(raw, seams) if raw is not None else None
+        state = (plan.per_frame[axis]
+                 if axis is not None and 0 <= axis < len(plan.per_frame)
+                 else 0)
+        last_file = f"file '{name_of(state)}'"
+        lines.append(last_file)
+        lines.append(f"duration {1 / plan.video_fps:.9f}")
+    if last_file is not None:                # the demuxer drops the last entry
+        lines.append(last_file)
+    return "\n".join(lines) + "\n"
+
+
 def encode_argv(ffmpeg: str, script_path: str, out_path: str,
-                plan: OverlayPlan) -> list[str]:
+                plan: OverlayPlan, frames: int | None = None) -> list[str]:
     """The ffmpeg call. Constant frame rate, because an editor lining this up
     against footage needs frame N to be at N/fps and nowhere else.
 
@@ -164,7 +194,8 @@ def encode_argv(ffmpeg: str, script_path: str, out_path: str,
     return [ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
             "-f", "concat", "-safe", "0", "-i", script_path,
             "-fps_mode", "cfr", "-r", str(plan.video_fps),
-            "-frames:v", str(plan.video_frames),
+            "-frames:v", str(frames if frames is not None
+                             else plan.video_frames),
             *CODECS[plan.codec],
             "-movflags", "+write_colr", out_path]
 

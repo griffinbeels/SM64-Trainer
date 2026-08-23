@@ -40,12 +40,17 @@ def run(expression: str):
     return json.loads(result.stdout)
 
 
-def run_function(name: str, expression: str):
+def run_function(name, expression: str):
     code = strip_comments(TIMELINE.read_text(encoding="utf-8"))
-    match = re.search(rf"^export function {name}\(.*?^\}}\s*$", code,
-                      re.M | re.S)
-    assert match, f"no top-level `export function {name}(...)` in inputtimeline.js"
-    script = (match.group(0).replace("export ", "", 1)
+    names = [name] if isinstance(name, str) else list(name)
+    parts = []
+    for one in names:
+        match = re.search(rf"^export function {one}\(.*?^\}}\s*$", code,
+                          re.M | re.S)
+        assert match, (
+            f"no top-level `export function {one}(...)` in inputtimeline.js")
+        parts.append(match.group(0).replace("export ", "", 1))
+    script = ("\n".join(parts)
               + f"\nconsole.log(JSON.stringify({expression}));")
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True,
@@ -66,6 +71,61 @@ def test_the_inspector_reads_the_last_moment_at_or_before_the_frame():
 def test_before_the_first_moment_there_is_nothing_to_read():
     assert run_function("momentAt", f"momentAt({MARKERS}, 9)") is None
     assert run_function("momentAt", "momentAt([], 5)") is None
+
+
+# --- the mapped clock (round 32 item 17) ------------------------------------
+# frameMap[k] = the raw game frame video frame k shows. This map holds his
+# own measured shape: a duplicate (100 shown twice) and a skip (103 never
+# shown) -- the 26, 27, 27, 29 counter he photographed. Track: anchor at raw
+# 90, so raw 100 is axis 10. Clip encodes at 60 fps.
+MAPPED = ("[null, 100, 100, 101, 102, 102, 104, 104], 60, [[0, 90, 20]], 20")
+BOTH = ("trackFrameOf", "gameFrameOf", "mappedFrameAtTime", "mappedTimeAtFrame")
+
+
+def test_a_duplicated_video_frame_maps_both_slots_to_one_game_frame():
+    at = lambda slot: run_function(BOTH,
+        f"mappedFrameAtTime({(slot + 0.25) / 60}, {MAPPED})")
+    assert at(1) == 10 and at(2) == 10       # the duplicate: display holds too
+    assert at(3) == 11
+    assert at(4) == 12 and at(5) == 12
+    assert at(6) == 14                       # 103 was skipped by the capture
+
+
+def test_before_the_maps_coverage_the_caller_falls_back():
+    assert run_function(BOTH, f"mappedFrameAtTime(0.001, {MAPPED})") is None
+
+
+def test_seeking_a_skipped_game_frame_lands_on_the_first_slot_past_it():
+    # axis 13 = raw 103, which the footage never shows: the seek lands on
+    # the first slot showing anything at or past it (slot 6, raw 104).
+    assert run_function(BOTH, f"mappedTimeAtFrame(13, {MAPPED})") == 6.5 / 60
+    assert run_function(BOTH, f"mappedTimeAtFrame(10, {MAPPED})") == 1.5 / 60
+
+
+def test_the_two_mapped_directions_agree_on_every_shown_frame():
+    got = run_function(BOTH, f"""(() => {{
+      const out = [];
+      for (let axis = 10; axis <= 14; axis += 1) {{
+        const t = mappedTimeAtFrame(axis, {MAPPED});
+        out.push(t === null ? null : mappedFrameAtTime(t, {MAPPED}));
+      }}
+      return out;
+    }})()""")
+    assert got == [10, 11, 12, 14, 14]       # 13 was never shown; 14 stands in
+
+
+def test_a_counter_restart_converts_through_its_own_stretch():
+    stretches = "[[0, 1000, 3], [3, 50, 2]]"
+    assert run_function(BOTH, f"trackFrameOf(51, {stretches})") == 4
+    assert run_function(BOTH, f"gameFrameOf(4, {stretches})") == 51
+    assert run_function(BOTH, f"trackFrameOf(500, {stretches})") is None
+
+
+def test_the_lead_in_and_the_tail_clamp_to_the_tracks_ends():
+    lead = "[80], 60, [[0, 90, 20]], 20"
+    assert run_function(BOTH, f"mappedFrameAtTime(0.001, {lead})") == 0
+    tail = "[200], 60, [[0, 90, 20]], 20"
+    assert run_function(BOTH, f"mappedFrameAtTime(0.001, {tail})") == 19
 
 
 def test_six_seconds_into_a_three_second_lead_in_is_frame_ninety():

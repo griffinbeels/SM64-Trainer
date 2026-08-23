@@ -169,3 +169,37 @@ def test_a_run_with_no_facing_captured_still_plans():
     """A v1 chunk predates Mario's capture; 0 is what it honestly says."""
     plan = plan_overlay(runs([(0, 3, 0x8000, 0, 0)]), layer="facing")
     assert plan.states[plan.per_frame[0]] == (0, 0, 0, 0)
+
+# --- the mapped script (round 32 item 17) -----------------------------------
+
+def test_the_mapped_script_draws_what_each_video_frame_actually_shows():
+    """A duplicate holds the same pad for two slots; a skipped game frame's
+    pad never draws; a slot before the map's coverage or outside the track
+    draws the blank. One line pair per CLIP frame, plus the demuxer's
+    repeated last entry."""
+    from sm64_events.inputs.overlay import mapped_concat_script, plan_overlay
+    runs = [{"start": 0, "length": 2, "buttons": 0x8000, "stick_x": 10,
+             "stick_y": 0, "yaw": 0},
+            {"start": 2, "length": 2, "buttons": 0x4000, "stick_x": 20,
+             "stick_y": 0, "yaw": 0}]
+    plan = plan_overlay(runs, layer="combined", video_fps=60)
+    # raw 90 = axis 0. The map: a lead-in slot (null), frame 90 twice (the
+    # duplicate), 92 (91 skipped), then past the track (94).
+    frame_map = [None, 90, 90, 92, 94]
+    script = mapped_concat_script(plan, lambda index: f"s{index}.png",
+                                  frame_map, [(0, 90, 4)])
+    files = [line for line in script.splitlines() if line.startswith("file")]
+    blank, first, second = "file 's0.png'", "file 's1.png'", "file 's2.png'"
+    assert files == [blank, first, first, second, blank, blank]
+    #                 ^lead  ^90   ^dup   ^92     ^past  ^demuxer repeat
+
+
+def test_the_mapped_encode_asks_for_the_maps_own_frame_count():
+    from sm64_events.inputs.overlay import encode_argv, plan_overlay
+    plan = plan_overlay([{"start": 0, "length": 2, "buttons": 0,
+                          "stick_x": 0, "stick_y": 0, "yaw": 0}],
+                        video_fps=60)
+    argv = encode_argv("ffmpeg", "s", "o", plan, frames=123)
+    assert argv[argv.index("-frames:v") + 1] == "123"
+    plain = encode_argv("ffmpeg", "s", "o", plan)
+    assert plain[plain.index("-frames:v") + 1] == str(plan.video_frames)

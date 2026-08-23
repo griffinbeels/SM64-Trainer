@@ -31,6 +31,7 @@ from sm64_events.core.snapshot import UnreadyReader, reader_for
 from sm64_events.memory.layout import LAYOUT_ROWS, layout_for
 from sm64_events.memory.pj64 import Pj64Memory
 from sm64_events.replay.audio import ProcessAudioSource, SystemAudioSource
+from sm64_events.replay.frameclock import FrameClock
 from sm64_events.replay.config import ReplayConfig, apply_settings_file
 from sm64_events.replay.extract import ClipExtractor
 from sm64_events.replay.recorder import ReplayRecorder
@@ -286,6 +287,9 @@ def build():
     # when replay is disabled this run -- the clips he saved are on disk either
     # way, and their filenames are the only index to them.
     service.saved_clip_ids = lambda: saved_attempt_ids(replay_cfg.save_root)
+    # ONE frame clock, shared by the poller (writer) and the replay service
+    # (reader): the sidecar's frame_map is built from it at extraction.
+    frame_clock = FrameClock()
     replay = None
     if replay_cfg.enabled:
         from sm64_events.replay.encoder import pick_video_codec
@@ -336,7 +340,7 @@ def build():
         replay = ReplayService(
             cfg=replay_cfg, recorder=recorder,
             extractor=ClipExtractor(cfg=replay_cfg, codec=codec),
-            tracker=service)
+            tracker=service, frame_clock=frame_clock)
     # Compare tab: import comparison videos (yt-dlp/copy -> ffmpeg normalize)
     # into the content cache, then serve them as plain clips. Only built when
     # ffmpeg is available (same binary the replay sink uses). Deliberately NOT
@@ -399,7 +403,8 @@ def build():
         input_writer = ChunkWriter(db.inputs, lambda: service.session_id)
         input_sampler = InputSampler(memory, layout, input_writer.add)
     poller = Poller(memory, detectors, service, on_frame=service.settle_frame,
-                    reader=reader, input_sampler=input_sampler)
+                    reader=reader, input_sampler=input_sampler,
+                    frame_clock=frame_clock)
     updater = UpdateService(current_version=__version__)
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     if input_writer is not None:

@@ -71,6 +71,36 @@ def collapse(frames: list[tuple[int, InputFrame]], same: Same = operator.eq,
     return runs
 
 
+def stretches(frames: list[tuple[int, InputFrame]]
+              ) -> list[tuple[int, int, int]]:
+    """The axis's seams: one (axis_start, raw_start, length) per stretch of
+    ascending counter, split at every restart. THE raw<->axis conversion
+    fact -- the moment markers join through it, and the timeline payload
+    ships it so a clip's frame_map (raw game frames) can land on the axis
+    in the browser without a second copy of this rule."""
+    axis = capture_axis(frames)
+    out: list[list[int]] = []
+    previous: int | None = None
+    for (raw, _frame), (position, _same) in zip(frames, axis):
+        if previous is None or raw < previous:
+            out.append([position, raw, 0])
+        current = out[-1]
+        current[2] = raw - current[1] + 1
+        previous = raw
+    return [tuple(row) for row in out]
+
+
+def axis_of(raw: int, seams: list[tuple[int, int, int]]) -> int | None:
+    """A raw counter value's place on the axis, through `stretches`' seams;
+    None when no stretch holds it (before the track, after it, or between
+    two epochs). THE conversion -- the markers and the overlay both call
+    this, and the browser runs the same rule off the shipped seams."""
+    for axis_start, raw_start, length in seams:
+        if raw_start <= raw < raw_start + length:
+            return axis_start + (raw - raw_start)
+    return None
+
+
 def capture_axis(frames: list[tuple[int, InputFrame]]
                  ) -> list[tuple[int, InputFrame]]:
     """The same frames renumbered from zero along the capture."""
