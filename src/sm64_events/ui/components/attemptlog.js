@@ -161,8 +161,14 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // the server decides which rows earn it (tracking/caveats.py's PROVEN-only
   // rule, measured), this only draws it.
   const timeMark = caveatOf(a.caveat);
+  // `other-strat` dims the row (index.html, tuned by logtuning.js's
+  // otherStratDim/otherStratFade): the row is keyed by id, so a strategy
+  // change keeps the same <tr> and the opacity TRANSITIONS rather than
+  // snapping -- "the dimming should naturally animate to the correct
+  // states" (2026-08-23). The server decides which rows are other
+  // (`other_strat`, the same gate that withholds the button).
   const row = html`<tr ref=${(el) => { rowRef.current = el; }}
-      class="${a.cleared ? "cleared" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""}">
+      class="${a.cleared ? "cleared" : ""} ${a.other_strat ? "other-strat" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""}">
     <td class="meta attempt-index">#${idx + 1}</td>
     <td class="attempt-medal">${a.rank
       ? html`<${RankIcon} tier=${a.rank.rank} division=${a.rank.division} size=${22} />` : ""}</td>

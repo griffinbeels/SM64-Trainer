@@ -3008,6 +3008,24 @@ def test_only_the_active_strategys_rows_carry_a_delta(tmp_path):
         assert deltas == {active: 0, other: None}, active
 
 
+def test_other_strat_marks_every_row_outside_the_active_strategy(tmp_path):
+    """The practice log dims a row on a strategy other than the selected one
+    (2026-08-23), decided by the SAME gate that withholds its PB button: an
+    untagged row is other too, and with no strategy selected nothing is."""
+    db, svc = make(tmp_path)
+    fast, slow = _two_strats(db, svc)
+    asyncio.run(svc.set_strat(2, 2, "Standard"))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    other = {r["strat_tag"]: r["other_strat"] for r in sec["attempts"]}
+    assert other == {"Standard": False, "3x LJ": True}
+    asyncio.run(svc.set_attempt_strat(slow, None))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert [r["other_strat"] for r in sec["attempts"] if r["id"] == slow] == [True]
+    asyncio.run(svc.set_strat(2, 2, None))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert not any(r["other_strat"] for r in sec["attempts"])
+
+
 def test_each_strategys_pb_row_owns_its_own_undo(tmp_path):
     """PB ownership is per strategy, so saving a 3x LJ PB no longer takes the
     Undo button away from the Standard row that still holds Standard's --

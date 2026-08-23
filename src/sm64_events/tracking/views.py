@@ -61,7 +61,7 @@ from sm64_events.tracking.activestrat import (PIPE_FAMILY_SUFFIX,
                                               reds_pipe_segments)
 from sm64_events.tracking.caveats import (attempt_caveat, caveat_for,
                                           igt_seen_in)
-from sm64_events.tracking.pbaction import pb_action
+from sm64_events.tracking.pbaction import pb_action, pb_strat_gate
 from sm64_events.tracking.segments import (arm_level, arms_ambiently,
                                             card_step_labels,
                                             card_waiting_for_sentence,
@@ -235,6 +235,16 @@ def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
             "rta_frames": a.rta_frames,
             "rta": format_igt(a.rta_frames) if a.rta_frames is not None else None,
             "pb_delta_frames": delta, "cleared": a.cleared,
+            # This row belongs to a strategy OTHER than the one being
+            # practised (an untagged row included), so the card dims it --
+            # "it should slightly dim the row, so that it's very clear that
+            # it's for a different strategy" (2026-08-23). The SAME gate that
+            # withholds its button decides, so a row can never be dimmed as
+            # foreign while offering Save, or vice versa; every row carries
+            # it (failures too), where `pb_blocked` only speaks for
+            # successes. False when no strategy is picked: with nothing
+            # selected, nothing is "other".
+            "other_strat": pb_strat_gate(a, active_strat) == "foreign_strat",
             # THE action column, resolved server-side: "save" | "undo" | null,
             # and when it is null, why. Two predicates (is this TIME legal,
             # does this row belong to what I am practising) with a precedence

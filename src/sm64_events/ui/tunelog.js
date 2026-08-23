@@ -74,7 +74,7 @@ function mkAttempt(overrides = {}) {
     igt: "0'24\"11", igt_frames: 733, rta: "0'25\"02", rta_frames: 750,
     pb_delta_frames: null, cleared: false, cleared_reason: null,
     strat_tag: "Standard", rank: null, caveat: null,
-    segment_id: null, outcome_detail: null,
+    segment_id: null, outcome_detail: null, other_strat: false,
     pb_action: outcome === "success" ? "save" : null, pb_blocked: null,
     rollouts_total: 0, jumps_total: 0, rollouts_dustless: 0, jumps_dustless: 0,
     ...overrides,
@@ -95,7 +95,8 @@ const OPEN_ATTEMPTS = [
   // including the one with the emptiest actions cell.
   mkAttempt({ outcome: "success", igt: "0'26\"05", igt_frames: 782,
     strat_tag: "Cannonless", pb_delta_frames: null, pb_action: null,
-    pb_blocked: { reason: "foreign_strat", strat: "Standard" } }),
+    pb_blocked: { reason: "foreign_strat", strat: "Standard" },
+    other_strat: true }),
 ];
 
 // A graded strategy rank, shared shape between the star and segment secs.
