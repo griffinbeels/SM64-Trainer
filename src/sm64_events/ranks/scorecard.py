@@ -1,4 +1,4 @@
-"""The scorecard card builder (spec docs/superpowers/specs/2026-08-23-scorecard-design.md).
+"""The scorecard card builder.
 
 A scorecard tile prints your gap to a goal, entity by entity, and each ROW
 also prints a summed gap across its tiles. The one rule that makes a summed
@@ -9,6 +9,10 @@ sides, or the Sigma gap is not a gap. `fold` names that one shared exit star
 per course; its tile still draws (with its own numbers) but never joins a
 sum. A tile missing either side is the same problem in miniature -- it also
 skips both sums, so a Sigma is always computed over one fully comparable set.
+
+The endpoint this feeds and the persisted goal shape are `docs/api.md`'s
+`GET /api/scorecard` / `PUT /api/scorecard/goal` rows; this module's own
+tile/row/fold contract is `tests/test_scorecard.py`.
 
 Pure: no db, no I/O, no imports outside `ranks.scoring` and `memory.addresses`.
 """

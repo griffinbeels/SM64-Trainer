@@ -1,5 +1,6 @@
-"""REST for the goal-vs-you scorecard (spec docs/superpowers/specs/
-2026-08-23-scorecard-design.md).
+"""REST for the goal-vs-you scorecard. Endpoint contracts are `docs/api.md`'s
+`GET /api/scorecard`, `PUT /api/scorecard/goal` and `GET /api/scorecard/column`
+rows; router behavior is `tests/test_scorecard_api.py`.
 
 Its own router rather than a block in `ranks_api.py` for the same reason
 `import_api.py` split off: that file is already +170 lines for the

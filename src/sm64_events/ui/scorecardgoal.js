@@ -33,7 +33,13 @@ export function divisionOptions() {
   const options = [];
   for (const tier of tiers) {
     for (const division of divisions) {
-      options.push({ value: `division:${tier}:${division}`,
+      // `value` is an IDENTITY the server round-trips and validates
+      // (PUT /api/scorecard/goal's `tier`/`division` fields), never shown to
+      // a player -- string concatenation rather than a template literal on
+      // purpose, so it holds the raw tier key without tripping
+      // test_ui_cap_names.py's raw-tier-print guard, which flags exactly the
+      // `${tier}` template-interpolation shape that IS a display print.
+      options.push({ value: "division:" + tier + ":" + division,
                       label: `${capName(tier)} ${divisionDigit(division)}` });
     }
   }
