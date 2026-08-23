@@ -28,7 +28,16 @@ def make_client(tmp_path):
     b = Broadcaster()
     ranks = RankStandards(tmp_path / "rs.json", seed_path=_seed(tmp_path)); ranks.load()
     svc = TrackerService(db, b, ranks=ranks)
-    app = create_app(Poller(OfflineMemory(), [], svc), b, service=svc)
+    # `adoptions_path` MUST be scratch: create_app's default resolves the
+    # adoption store cwd-relative (`core.paths.library_adoptions_path()`),
+    # so a driven test adopting a row through the API was writing the
+    # CHECKOUT's own data/library_adoptions.json -- and every later test in
+    # the same checkout inherited that row as ambient board state (caught
+    # 2026-08-23 by the wrap's clean-worktree run: a leaderboard test that
+    # passed here for weeks failed there, because "here" had a leaked
+    # adoption and the clean tree did not).
+    app = create_app(Poller(OfflineMemory(), [], svc), b, service=svc,
+                     adoptions_path=tmp_path / "library_adoptions.json")
     return TestClient(app), svc
 
 def test_get_empty_then_put_then_read_back(tmp_path):

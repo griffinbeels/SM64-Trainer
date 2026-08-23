@@ -528,7 +528,15 @@ def test_leaderboard_applies_the_users_exclusions(client):
     the entity leaves every runner's breakdown -- on the very next fetch,
     with none of the cache's four inputs having moved (the per-scope row
     memo keys on the resolved groups). star:9:2 is the seeded ladder every
-    fixture in this file relies on being present, so it is restored."""
+    fixture in this file relies on being present, so it is restored.
+
+    Seeds its OWN board state (a star:8:2 ladder over the sheet's real
+    coverage, plus a row adopted onto star:9:2) the same way the omitted
+    test below does -- the first version read the board bare and passed
+    only while the checkout's data/library_adoptions.json held a leaked
+    adoption from an earlier, unisolated run (make_client's own comment)."""
+    client.put("/api/ranks/standards/star:8:2/Standard/Mario", json={"seconds": 10.0})
+    _adopt_row_onto(client, "star:9:2")
     before = client.get("/api/leaderboard?scope=overall").json()
     runner = next(row["runner"] for row in before["rows"] if row["runner"])
     assert "star:9:2" in {entity["key"] for entity in
