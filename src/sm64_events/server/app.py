@@ -543,6 +543,13 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                    else "error" if service.db is None else "ok"),
             "session_id": service.session_id if service is not None else None,
             "memory": monitor.latest,
+            # The pad sampler's own counters. `edge_mismatches` is the one
+            # that matters: the game's buttonPressed says which frame a press
+            # was NEW on, so non-zero means a frame was filed under the wrong
+            # number. This is the only surface that reads it -- without it
+            # the live capture check has no number to check.
+            "inputs": (poller.input_sampler.health()
+                       if getattr(poller, "input_sampler", None) else None),
         }
 
     @app.post("/api/diagnostics")
