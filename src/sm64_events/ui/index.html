@@ -3203,10 +3203,33 @@
      ~1.63) simply overflowed a 30px grid column into the name text. Caught
      by the contact sheet, not by any assertion: every row read "arkdog47"
      for "darkdog47". */
+  /* The board's own card (fourth read, 2026-08-23): a head button wearing
+     the Library section head's shape and chevron, the body behind the
+     project's `Disclose`. Padding lives on the head and body, not the card,
+     so the fold measures a box that closes to exactly 0. */
+  .leaderboard-card { padding: 0; overflow: hidden; }
+  /* `.practice-card` opts out of cross-axis stretch (`align-self: start`,
+     the collapse-transition section below) -- inside `.rank-page`'s flex
+     column that sizes a card to its CONTENT, and this card's closed content
+     is one line of text. Its siblings only look full-width because their
+     contents are wider than the pane. Stretch, explicitly, with the base
+     rule's own specificity plus one. */
+  .rank-page .leaderboard-card { align-self: stretch; }
+  .leaderboard-card-head {
+    width: 100%; display: flex; justify-content: flex-start; align-items: center; gap: .6rem;
+    text-align: left; padding: .7rem .9rem; border: none; border-radius: 0; background: transparent;
+    color: var(--text); min-height: 0;
+  }
+  .leaderboard-card-head:hover { background: rgba(240,189,50,.06); }
+  .leaderboard-card-title { font-weight: 700; font-size: 1.05rem; }
+  .leaderboard-card-hint { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .leaderboard-card-chevron { flex: 0 0 auto; margin-left: auto; color: var(--muted); transition: transform .15s ease; }
+  .leaderboard-card.open .leaderboard-card-chevron { transform: rotate(180deg); }
+  .leaderboard-card-body { padding: 0 .9rem .9rem; }
   .leaderboard-head {
     display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 6px;
   }
-  .leaderboard-head h3 { margin: 0; margin-right: auto; }
+  .leaderboard-head .leaderboard-find { margin-right: auto; }
   .leaderboard-find { position: relative; display: flex; align-items: center; }
   .leaderboard-find-input {
     width: 180px; padding: 5px 26px 5px 9px; border-radius: 6px;

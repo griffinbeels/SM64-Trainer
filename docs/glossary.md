@@ -698,7 +698,10 @@ practiced in this [[scope]] and always keeps your own row, even at zero —
 but it COUNTS the drop rather than staying silent about it: it states how many it left off, so
 the board can never read as "this is everyone" when it is not. Opening one
 [[runner]]'s row lands on their [[Runner page]], which widens every entity
-with your own score and time on it, so the two read side by side.
+with your own score and time on it, so the two read side by side. On the
+[[Rank tab]] it is its own card titled Leaderboard, sitting between the
+[[scope]] chips and your [[MARELO]] card, closed until you open it and folding
+open and shut the same way a [[Library tab]] section does.
 
 - **Lives** — the board (`src/sm64_events/library/board.py`) → served at
   /api/leaderboard → drawn on the [[Rank tab]]

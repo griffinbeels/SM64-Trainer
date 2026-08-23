@@ -33,6 +33,16 @@ from ui_fixture import FIXTURE_SEGMENT, serve_ui  # noqa: E402
 from uilab import driver  # noqa: E402
 
 CLICK_RANK_TAB = 'document.querySelector(\'.nav-item[title="Rank"]\').click()'
+
+# The board is a CLOSED card by default (fourth read, 2026-08-23): every page
+# that needs its rows opens it first, through the real head button.
+OPEN_LEADERBOARD = """
+  (() => {
+    const head = document.querySelector('.leaderboard-card-head');
+    if (head && head.getAttribute('aria-expanded') !== 'true') head.click();
+    return !!head;
+  })()
+"""
 CLICK_LIBRARY_TAB = 'document.querySelector(\'.nav-item[title="Library"]\').click()'
 # Subdivision groups ship collapsed by default -- same helper
 # test_ui_library_target.py uses to reveal the ExampleCard/PlainEntry rows a
@@ -59,8 +69,10 @@ def rank_page(server):
         page.goto(f"{server}/ui/index.html")
         page.wait_for(".log-list-card", timeout_ms=20000)
         page.evaluate(CLICK_RANK_TAB)
+        page.wait_for(".leaderboard-card-head", timeout_ms=15000)
+        assert page.evaluate(OPEN_LEADERBOARD)
         page.wait_for(".leaderboard-row", timeout_ms=15000)
-        page.wait_ms(200)
+        page.wait_ms(500)
         yield page
 
 
@@ -153,6 +165,8 @@ def test_back_returns_to_the_leaderboard(rank_page):
     click_a_runner_row(rank_page)
     rank_page.wait_for(".runner-page", timeout_ms=8000)
     rank_page.evaluate("document.querySelector('.runner-page .entity-back').click()")
+    rank_page.wait_for(".leaderboard-card-head", timeout_ms=8000)
+    assert rank_page.evaluate(OPEN_LEADERBOARD)
     rank_page.wait_for(".leaderboard-row", timeout_ms=8000)
     assert rank_page.count(".runner-page") == 0, "the runner page never closed"
 
@@ -515,4 +529,83 @@ def test_a_row_with_a_video_plays_it_beneath_itself(rank_page):
     rank_page.evaluate("document.querySelector('.runner-page .rank-row-play').click()")
     rank_page.wait_ms(200)
     assert rank_page.count(".runner-page .rank-video-row") == 0, "the video row did not close"
+
+
+# ---- Round 1, fourth read (2026-08-23): the board is its own closed card at
+# the top of the Rank tab, and it folds open and shut ----------------------
+
+@pytest.fixture
+def closed_rank_page(server):
+    """A fresh Rank tab with the board card left exactly as it loads."""
+    with driver.get_driver().launch(headless=True) as page:
+        page.goto(f"{server}/ui/index.html")
+        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.evaluate(CLICK_RANK_TAB)
+        page.wait_for(".leaderboard-card-head", timeout_ms=15000)
+        page.wait_ms(300)
+        yield page
+
+
+CARD_PLACE = """
+  JSON.stringify((() => {
+    const page = document.querySelector('.rank-page');
+    const kids = Array.from(page.children).map((el) =>
+      el.classList.contains('leaderboard-card') ? 'leaderboard-card'
+        : el.classList.contains('rank-card') ? 'rank-card' : el.className.split(' ')[0]);
+    const card = document.querySelector('.leaderboard-card');
+    return {order: kids, expanded: card.querySelector('.leaderboard-card-head').getAttribute('aria-expanded'),
+      title: card.querySelector('.leaderboard-card-title').textContent.trim(),
+      rows: card.querySelectorAll('.leaderboard-row').length,
+      bodyH: card.querySelector('.leaderboard-card-disclose').getBoundingClientRect().height};
+  })())
+"""
+
+
+def card_state(page):
+    return json.loads(page.evaluate(CARD_PLACE))
+
+
+def test_the_board_is_a_closed_card_between_the_chips_and_the_marelo_card(closed_rank_page):
+    """"it should up top, and it should be a dropdown Titled 'Leaderboard'.
+    Closed by default... underneath all of the route selectors... and above
+    the MARELO card. It should be its own card." Closed means folded to
+    zero height with nothing drawn -- the CARD holds the fetched board so the
+    open can measure real rows."""
+    state = card_state(closed_rank_page)
+    order = state["order"]
+    assert order.index("scope-chip-row") < order.index("leaderboard-card") < order.index("rank-card"), order
+    assert state["title"] == "Leaderboard"
+    assert state["expanded"] == "false" and state["rows"] == 0 and state["bodyH"] == 0, state
+
+
+def test_the_board_card_animates_open_and_shut(closed_rank_page):
+    """"Animate open / closed, reusing our dropdown system" -- the fold is
+    `collapsible.js::Disclose`, so the body's height is mid-travel shortly
+    after the click and settled later, in both directions."""
+    page = closed_rank_page
+    # The card fetches while closed so the fold opens onto real rows; give
+    # the fetch its moment, then open.
+    page.wait_ms(1200)
+    def travel_samples():
+        # A handful of samples across the run's first ~250ms -- one sample at
+        # a fixed offset is a coin flip on where the frame lands.
+        samples = []
+        for _ in range(5):
+            page.wait_ms(50)
+            samples.append(card_state(page)["bodyH"])
+        return samples
+    page.evaluate("document.querySelector('.leaderboard-card-head').click()")
+    opening = travel_samples()
+    page.wait_ms(600)
+    opened = card_state(page)
+    assert opened["expanded"] == "true" and opened["rows"] > 20, opened
+    assert any(0 < h < opened["bodyH"] for h in opening), (
+        f"the open did not travel: {opening} vs {opened['bodyH']} settled")
+    page.evaluate("document.querySelector('.leaderboard-card-head').click()")
+    closing = travel_samples()
+    page.wait_ms(600)
+    closed = card_state(page)
+    assert closed["expanded"] == "false" and closed["bodyH"] == 0, closed
+    assert any(0 < h < opened["bodyH"] for h in closing), (
+        f"the close cut instead of folding: {closing}")
 

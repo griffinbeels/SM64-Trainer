@@ -15,6 +15,8 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON } from "../api.js";
+import { Disclose } from "./collapsible.js";
+import { Icon } from "./icons.js";
 import { RankIcon } from "./rankicon.js";
 import { fmtPoints, fmtScore } from "./marelo.js";
 import { RANK_MODE_OPTIONS } from "./ranks.js";
@@ -86,26 +88,64 @@ function LeaderboardRow({ row, youRowRef, onOpenRunner }) {
   </div>`;
 }
 
-export function Leaderboard({ t, scopeId, onOpenRunner = () => {} }) {
+// The card the Rank tab mounts (his fourth read, 2026-08-23: "pretty hidden
+// on the rank screen... it should up top, and it should be a dropdown
+// Titled 'Leaderboard'. Closed by default. Animate open / closed, reusing
+// our dropdown system"): its own card between the scope chips and the
+// MARELO card, a head button and the project's own `Disclose` -- the same
+// fold every Library section opens with, never a second animation. The
+// CARD owns the fetch (`useBoard`), not the board: `Disclose` renders its
+// contents only while open and animates to the height it MEASURES at that
+// moment, so a board that began fetching on the click folded open onto a
+// one-line "Loading…" and then jumped to 443 rows -- measured, not guessed
+// (early height == settled height on the first cut). Fetching while closed
+// costs what every scope switch already cost before this card existed.
+// Open/closed is per mount -- "closed by default", nothing said about
+// remembering.
+export function LeaderboardCard({ t, scopeId, onOpenRunner = () => {} }) {
+  const [open, setOpen] = useState(false);
+  const { board, error } = useBoard(scopeId, t.mareloRev);
+  return html`<div class=${`practice-card leaderboard-card ${open ? "open" : ""}`}>
+    <button type="button" class="leaderboard-card-head" onclick=${() => setOpen(!open)}
+        aria-expanded=${open ? "true" : "false"}>
+      <span class="leaderboard-card-title">Leaderboard</span>
+      <span class="meta leaderboard-card-hint">${open ? "" : "every runner on the sheet, ranked on this scope"}</span>
+      <${Icon} name="chevron" size=${16} className="leaderboard-card-chevron" />
+    </button>
+    <${Disclose} open=${open} className="leaderboard-card-disclose">
+      <div class="leaderboard-card-body">
+        <${Leaderboard} key=${scopeId} board=${board} error=${error} onOpenRunner=${onOpenRunner} />
+      </div>
+    <//>
+  </div>`;
+}
+
+// The board for one scope, refetched on a scope switch OR on `mareloRev` --
+// the same staleness fix rankpage.js's own comment explains for the rest of
+// the Rank tab: a board left open during play must not go stale.
+// Clear-then-fetch, so a 404 on a new scope never leaves the old scope's
+// rows under the new scope's name.
+function useBoard(scopeId, mareloRev) {
   const [board, setBoard] = useState(null);
   const [error, setError] = useState(null);
-  const [query, setQuery] = useState("");
-  const youRowRef = useRef(null);
-
-  // Same staleness fix rankpage.js's own `t.mareloRev` comment explains for
-  // the rest of the Rank tab: a board left open during play must not go
-  // stale. Clear-then-fetch on scope OR mareloRev, mirroring RankPage.
   useEffect(() => {
     if (!scopeId) return undefined;
     let alive = true;
     setError(null);
     setBoard(null);
-    setQuery("");
     getJSON(`/api/leaderboard?scope=${encodeURIComponent(scopeId)}`)
       .then((response) => alive && setBoard(response))
       .catch((requestError) => alive && setError(requestError));
     return () => { alive = false; };
-  }, [scopeId, t.mareloRev]);
+  }, [scopeId, mareloRev]);
+  return { board, error };
+}
+
+// Draws one fetched board. `key=scopeId` on the call site resets the filter
+// on a scope switch.
+export function Leaderboard({ board, error, onOpenRunner = () => {} }) {
+  const [query, setQuery] = useState("");
+  const youRowRef = useRef(null);
 
   if (error) return html`<${InlineState} kind="error">${error.status === 404
     ? "This scope is gone — pick another from the list above."
@@ -125,7 +165,6 @@ export function Leaderboard({ t, scopeId, onOpenRunner = () => {} }) {
 
   return html`<div class="leaderboard">
     <div class="leaderboard-head">
-      <h3>Leaderboard</h3>
       <div class="leaderboard-find">
         <input type="search" class="leaderboard-find-input" value=${query}
           placeholder="Find a runner…" aria-label="Filter the leaderboard by runner"

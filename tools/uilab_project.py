@@ -439,14 +439,15 @@ if (!document.querySelector('.library-grid')) {
 _RANK_LEADERBOARD_SETUP = _script("""
 const rankBtn = document.querySelector('button.nav-item[title="Rank"]');
 if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') rankBtn.click();
+// The board is its own card between the scope chips and the MARELO card,
+// CLOSED by default (fourth read, 2026-08-23) -- open it, then wait for
+// the rows its first open fetches.
+await waitFor(() => !!document.querySelector('.leaderboard-card-head'));
+const head = document.querySelector('.leaderboard-card-head');
+if (head.getAttribute('aria-expanded') !== 'true') head.click();
 await waitFor(() => !!document.querySelector('.leaderboard-row'));
-// The section sits below the Progress chart and the Breakdown table, so it
-// is off the bottom of the viewport at the default probe height -- a clip
-// taken there throws ("Clipped area is either outside the resulting image")
-// instead of reporting a card. scrollIntoView puts it back in frame before
-// anything measures or screenshots it.
 document.querySelector('.leaderboard').scrollIntoView({block: 'start'});
-await sleep(60);
+await sleep(400);   // the fold's open run must land before anything measures
 """)
 
 # The runner page (Task 5, spec 2026-08-20-ranked-leaderboard) -- opened by
@@ -458,9 +459,12 @@ await sleep(60);
 _RUNNER_PAGE_SETUP = _script("""
 const rankBtn = document.querySelector('button.nav-item[title="Rank"]');
 if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') rankBtn.click();
-await waitFor(() => !!document.querySelector('.leaderboard-row')
+await waitFor(() => !!document.querySelector('.leaderboard-card-head')
   || !!document.querySelector('.runner-page'));
 if (!document.querySelector('.runner-page')) {
+  const head = document.querySelector('.leaderboard-card-head');
+  if (head.getAttribute('aria-expanded') !== 'true') head.click();   // closed by default
+  await waitFor(() => !!document.querySelector('.leaderboard-row'));
   const row = Array.from(document.querySelectorAll('.leaderboard-row'))
     .find((candidate) => !candidate.classList.contains('is-you'));
   if (row) row.click();

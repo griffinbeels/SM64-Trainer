@@ -19,7 +19,7 @@ import { useTween } from "../useTween.js";
 import { entityIconSrc, fallbackSlotForEntityKey,
          fallbackToGenericStar, isGenericArt } from "./entityicons.js";
 import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
-import { Leaderboard } from "./leaderboard.js";
+import { LeaderboardCard } from "./leaderboard.js";
 import { ExampleMedia } from "./librarytarget.js";
 
 const html = htm.bind(h);
@@ -1029,6 +1029,7 @@ export function RankPage({ t, onOpenRunner = () => {} }) {
 
   return html`<div class="rank-page">
     <${ScopeChips} activeScopeId=${scopeId} onPick=${setScopeId} refreshKey=${t.mareloRev} />
+    <${LeaderboardCard} t=${t} scopeId=${scopeId} onOpenRunner=${onOpenRunner} />
     <div class="practice-card rank-card">
       <label class="route-focus-control">
         <${Icon} name="rank" size=${18} />
@@ -1132,9 +1133,6 @@ export function RankPage({ t, onOpenRunner = () => {} }) {
       <div class="practice-card">
         <${Breakdown} key=${scopeId} t=${t} data=${data} routeOrder=${routeOrder}
           onToggle=${toggleExcluded} />
-      </div>
-      <div class="practice-card">
-        <${Leaderboard} key=${scopeId} t=${t} scopeId=${scopeId} onOpenRunner=${onOpenRunner} />
       </div>`}
   </div>`;
 }

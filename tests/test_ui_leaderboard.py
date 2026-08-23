@@ -29,6 +29,16 @@ from uilab.driver import get_driver        # noqa: E402
 
 CLICK_RANK_TAB = 'document.querySelector(\'.nav-item[title="Rank"]\').click()'
 
+# The board is a CLOSED card by default (fourth read, 2026-08-23): every page
+# that needs its rows opens it first, through the real head button.
+OPEN_LEADERBOARD = """
+  (() => {
+    const head = document.querySelector('.leaderboard-card-head');
+    if (head && head.getAttribute('aria-expanded') !== 'true') head.click();
+    return !!head;
+  })()
+"""
+
 ROWS = """
 JSON.stringify(Array.from(document.querySelectorAll('.leaderboard-row')).map((row) => ({
   isYou: row.classList.contains('is-you'),
@@ -60,8 +70,10 @@ def page():
         opened.goto(f"{base}/ui/index.html")
         opened.wait_for(".log-list-card")
         opened.evaluate(CLICK_RANK_TAB)
+        opened.wait_for(".leaderboard-card-head", timeout_ms=15000)
+        assert opened.evaluate(OPEN_LEADERBOARD)
         opened.wait_for(".leaderboard-row", timeout_ms=15000)
-        opened.wait_ms(300)
+        opened.wait_ms(500)
         yield opened
 
 
