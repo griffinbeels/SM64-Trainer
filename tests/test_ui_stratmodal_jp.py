@@ -220,6 +220,12 @@ def _wait_for_modal_to_close(page) -> None:
 @pytest.fixture(scope="module")
 def jp_server():
     with tempfile.TemporaryDirectory() as scratch:
+        # Scratch standards store: this file CREATES a strategy and writes a
+        # JP overlay on it, and its own cleanup runs only when the test gets
+        # that far. Pointing the store at scratch makes the isolation
+        # structural rather than conditional (2026-08-21 -- see
+        # test_fixture_reaches_the_real_page.py's scratch-store guard for what
+        # one unrestored edit cost).
         with serve_ui(Path(scratch) / "stratmodal_jp.db") as base:
             yield base
 

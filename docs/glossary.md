@@ -305,7 +305,9 @@ rather than a finish.
 
 Your fastest finished [[attempt]] at one [[target]] on one [[strategy]]. The
 trainer keeps personal bests separately from the [[journal]], so clearing
-history never erases one.
+history never erases one, and it saves one only under the [[strategy]] you are
+practicing — so every [[strategy]] holds its own, and the [[practice log]]
+shows whichever [[strategy]] you have selected.
 
 - **Lives** — the store (`src/sm64_events/storage/db.py`)
   → the PB tag on the [[practice log]]
@@ -318,6 +320,30 @@ different things, so each strategy carries its own [[ladder]].
 
 - **Lives** — the standards file (`src/sm64_events/ranks/standards.py`)
   → the [[strategy picker]]
+
+### Active strategy
+
+The [[strategy]] you have selected for one [[target]] — the one the
+[[practice log]] shows, the one a [[personal best]] saves under, and the one
+the quick-select medal grades. One resolver answers it for every surface and
+for the PB commands, so the card and the API cannot disagree about it.
+
+- **Lives** — the resolver (`src/sm64_events/tracking/activestrat.py`)
+  → the [[strategy picker]]
+
+### PB gate
+
+Why a [[practice log]] row's Save/Undo button is not there: the row belongs to
+a [[strategy]] other than the [[active strategy]], or you have selected no
+[[strategy]] at all. The row shows no button and no time comparison at all —
+nothing of the [[active strategy]]'s applies to it — and the server refuses
+the save for the same stated reason.
+
+- **Not** — a [[caveat mark]]. A [[caveat mark]] says the time is not the
+  quantity it looks like and draws a mark; a gated row is fine and simply
+  not yours to act on right now, and draws nothing.
+- **Lives** — the resolver (`src/sm64_events/tracking/pbaction.py`)
+  → the absent button in the [[practice log]]'s action column
 
 ### Route
 
@@ -803,6 +829,21 @@ blinks on arrival.
 
 - **Lives** — the standards panel
   (`src/sm64_events/ui/components/standards.js`)
+
+### Sheet best
+
+The fastest [[sheet entry]] anybody holds for one [[strategy]] — the last row
+of the [[standards ladder]], under every [[rank]] rather than in it. The
+trainer names it for what it is: the top of a [[ladder]] is not the top of the
+sport, and the [[Ultimate Sheet]] proves only that nobody there has gone
+faster.
+
+- **Not** — a [[standard]]. A [[standard]] is a time the trainer grades you
+  against; a sheet best grades nothing and wears no [[rank icon]].
+
+- **Lives** — the library examples
+  (`src/sm64_events/library/examples.py`)
+  → the last row of the [[standards ladder]]
 
 ### Game version
 

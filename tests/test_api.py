@@ -37,6 +37,10 @@ def make_client(tmp_path):
 
 def seed(service):
     async def go():
+        # The strategy is in play before the run closes, so the attempt is
+        # tagged with it -- since 2026-08-20 a PB may only be saved under the
+        # strategy it was run with (tracking/caveats.py::pb_action).
+        await service.set_strat(2, 2, "Standard")
         await service.publish(Event(type="practice_reset", frame=1000,
                                     timestamp_utc=T0,
                                     payload={"igt_frames_before": 0}))

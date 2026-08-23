@@ -142,13 +142,13 @@ def test_the_climb_hook_count_guard_can_fail(tmp_path):
         "the real file already fails this check -- fix ranks.js first")
     duplicated = real.replace(
         "const climb = useRankClimb(graded, identity, {\n"
-        "    lane, order, replayKey, exchangeKey: swapKey,\n"
+        "    lane, order, exchangeKey: swapKey,\n"
         "  });",
         "const climb = useRankClimb(graded, identity, {\n"
-        "    lane, order, replayKey, exchangeKey: swapKey,\n"
+        "    lane, order, exchangeKey: swapKey,\n"
         "  });\n"
         "  const secondClimb = useRankClimb(graded, identity, {\n"
-        "    lane, order, replayKey, exchangeKey: swapKey,\n"
+        "    lane, order, exchangeKey: swapKey,\n"
         "  });",
         1)
     assert duplicated != real, "the mutation's anchor text did not match ranks.js -- update it"

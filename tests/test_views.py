@@ -7,6 +7,7 @@ from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
 from sm64_events.tracking.segments import start_areas, start_levels
 from sm64_events.tracking.views import build_session_view
+from pb_commands import save_pb
 
 T0 = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -51,9 +52,13 @@ def seed(svc):
 
 def test_view_groups_by_star_with_stats_and_pb_delta(tmp_path):
     db, svc = make(tmp_path)
+    # Both runs land on ONE strategy, so the delta column has something to
+    # measure against: a row's delta is now against its OWN strategy's PB
+    # (views._attempt_json), and an untagged row belongs to no ladder.
+    asyncio.run(svc.set_strat(2, 2, "Standard"))
     seed(svc)
     aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
-    asyncio.run(svc.save_pb(aid, "igt"))
+    save_pb(svc, db, aid, "igt")
     view = build_session_view(db, svc, clock="igt")
     assert view["session"]["id"] == 1
     assert view["clock"] == "igt"
@@ -113,7 +118,7 @@ def test_rta_clock_path_with_pb_and_race_guard(tmp_path):
     asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(1350, igt=343)))      # rta = 350
     aid = db.attempts()[0].id
-    asyncio.run(svc.save_pb(aid, "rta"))
+    save_pb(svc, db, aid, "rta")
     asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(1760, igt=355)))      # rta = 360
     view = build_session_view(db, svc, clock="rta")
@@ -377,7 +382,7 @@ def test_progress_groups_successes_by_session_with_pb_flags(tmp_path):
     db, svc = make(tmp_path)
     seed(svc)                                   # session 1: igt 343 + igt 350
     aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
-    asyncio.run(svc.save_pb(aid, "igt"))
+    save_pb(svc, db, aid, "igt")
     asyncio.run(svc.new_session())
     asyncio.run(svc.publish(ev("practice_reset", 5000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(5400, igt=330)))   # session 2
@@ -422,8 +427,8 @@ def test_progress_superseded_pbs_stay_gold(tmp_path):
     seed(svc)
     a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
     a350 = next(a.id for a in db.attempts() if a.igt_frames == 350)
-    asyncio.run(svc.save_pb(a350, "igt"))
-    asyncio.run(svc.save_pb(a343, "igt"))     # supersedes a350 as current PB
+    save_pb(svc, db, a350, "igt")
+    save_pb(svc, db, a343, "igt")     # supersedes a350 as current PB
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
     flags = {p["attempt_id"]: p["is_pb_igt"]
@@ -431,25 +436,29 @@ def test_progress_superseded_pbs_stay_gold(tmp_path):
     assert flags[a343] is True and flags[a350] is True   # every saved PB is gold
 
 
-def test_attempt_is_current_pb_follows_latest_save_and_clock(tmp_path):
+def test_the_undo_action_follows_the_latest_save_and_the_clock(tmp_path):
+    """`pb_action == "undo"` is THE statement that a row owns its strategy's
+    current PB (the `is_current_pb` flag it replaced said the same thing under
+    a name the Rank tab misread)."""
     db, svc = make(tmp_path)
+    asyncio.run(svc.set_strat(2, 2, "Standard"))   # both rows tagged, both saveable
     seed(svc)
     a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
     a350 = next(a.id for a in db.attempts() if a.igt_frames == 350)
-    asyncio.run(svc.save_pb(a350, "igt"))
+    save_pb(svc, db, a350, "igt")
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
-    flags = {a["id"]: a["is_current_pb"] for a in sec["attempts"]}
-    assert flags[a350] is True and flags[a343] is False
-    asyncio.run(svc.save_pb(a343, "igt"))      # supersedes: the flag moves
+    actions = {a["id"]: a["pb_action"] for a in sec["attempts"]}
+    assert actions[a350] == "undo" and actions[a343] == "save"
+    save_pb(svc, db, a343, "igt")      # supersedes: the action moves
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
-    flags = {a["id"]: a["is_current_pb"] for a in sec["attempts"]}
-    assert flags[a343] is True and flags[a350] is False
+    actions = {a["id"]: a["pb_action"] for a in sec["attempts"]}
+    assert actions[a343] == "undo" and actions[a350] == "save"
     # per-clock: nothing is saved on rta, so no rta row is "current"
     view = build_session_view(db, svc, clock="rta")
     [sec] = view["stars"]
-    assert all(a["is_current_pb"] is False for a in sec["attempts"])
+    assert all(a["pb_action"] != "undo" for a in sec["attempts"])
 
 
 def test_hiding_an_attempt_undoes_the_pb_it_saved(tmp_path):
@@ -464,13 +473,13 @@ def test_hiding_an_attempt_undoes_the_pb_it_saved(tmp_path):
     seed(svc)
     a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
     a350 = next(a.id for a in db.attempts() if a.igt_frames == 350)
-    asyncio.run(svc.save_pb(a350, "igt"))
-    asyncio.run(svc.save_pb(a343, "igt"))          # a343 is the current save
+    save_pb(svc, db, a350, "igt")
+    save_pb(svc, db, a343, "igt")          # a343 is the current save
     asyncio.run(svc.clear_attempt(a343, reason="accidental"))
     [sec] = build_session_view(db, svc, clock="igt")["stars"]
     assert sec["pb"]["igt"]["frames"] == 350 and sec["pb"]["igt"]["attempt_id"] == a350
-    flags = {a["id"]: a["is_current_pb"] for a in sec["attempts"]}
-    assert flags[a343] is False and flags[a350] is True
+    actions = {a["id"]: a["pb_action"] for a in sec["attempts"]}
+    assert actions[a343] is None and actions[a350] == "undo"
     asyncio.run(svc.restore_attempt(a343))
     [sec] = build_session_view(db, svc, clock="igt")["stars"]
     assert sec["pb"]["igt"]["attempt_id"] == a350
@@ -702,7 +711,7 @@ def test_segment_pb_keying_isolates_segments_and_stars(tmp_path):
     db, svc = make(tmp_path)
     lblj_success(svc, rta=85)
     seg_aid = next(a.id for a in db.attempts() if a.segment_id == 1)
-    asyncio.run(svc.save_pb(seg_aid, "rta"))
+    save_pb(svc, db, seg_aid, "rta")
     # a LATER pb row for ANOTHER segment must not shadow LBLJ's pb — the
     # pre-fix keying collapsed every segment row onto (None, None, "rta")
     db.insert_pb(course_id=None, star_id=None, strat_tag=None,
@@ -712,7 +721,7 @@ def test_segment_pb_keying_isolates_segments_and_stars(tmp_path):
     asyncio.run(svc.publish(ev("practice_reset", 2000, {"igt_frames_before": 0})))
     asyncio.run(svc.publish(star(2400, igt=343)))
     star_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
-    asyncio.run(svc.save_pb(star_aid, "igt"))
+    save_pb(svc, db, star_aid, "igt")
     view = build_session_view(db, svc, clock="igt")
     sec = seg_section(view, 1)
     assert sec["pb"]["rta"]["frames"] == 85
@@ -938,7 +947,7 @@ def test_segment_pb_dict_ships_igt_as_none(tmp_path):
     view = build_session_view(db, svc, clock="igt")
     assert seg_section(view, 1)["pb"] == {"igt": None, "rta": None}
     aid = next(a.id for a in db.attempts() if a.segment_id == 1)
-    asyncio.run(svc.save_pb(aid, "rta"))
+    save_pb(svc, db, aid, "rta")
     pb = seg_section(build_session_view(db, svc, clock="igt"), 1)["pb"]
     assert pb["igt"] is None and pb["rta"]["frames"] == 85
 
@@ -1367,7 +1376,13 @@ def test_segment_pb_shown_but_untagged_reads_unattributed_not_floor(tmp_path):
     db, svc = make(tmp_path)
     lblj_success(svc, rta=85)          # segment_id=1, no active strat ever set
     aid = next(a.id for a in db.attempts() if a.segment_id == 1)
-    asyncio.run(svc.save_pb(aid, "rta"))
+    # Inserted straight into the table, because since 2026-08-20 an untagged
+    # PB is HISTORY and no longer reachable through save_pb: a time may only
+    # be banked under the strategy being practised (caveats.pb_action). Rows
+    # like this one are exactly why `unattributed` still has to render.
+    db.insert_pb(course_id=None, star_id=None, strat_tag=None,
+                 timer_mode="rta", frames=85, attempt_id=aid,
+                 saved_utc="2026-06-11T00:00:00Z", segment_id=1)
     p = tmp_path / "rs.json"
     p.write_text(json.dumps({"version": 1, "entities": {
         "segment:1": {"clock": "rta", "strategies": {
@@ -1389,7 +1404,7 @@ def test_session_view_attaches_ranks(tmp_path):
     db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
     db._conn.commit()
     best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
-    asyncio.run(svc.save_pb(best_aid, "igt"))
+    save_pb(svc, db, best_aid, "igt")
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
     assert sec["rank"]["rank"] in {"Mario", "Diamond", "Silver", "Iron"}
@@ -1414,7 +1429,7 @@ def test_rank_by_star_grades_active_strat_for_quick_select(tmp_path):
     db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
     db._conn.commit()
     best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
-    asyncio.run(svc.save_pb(best_aid, "igt"))
+    save_pb(svc, db, best_aid, "igt")
     view = build_session_view(db, svc, clock="igt")
     assert view["rank_by_star"]["2:2"] == {"rank": "Diamond", "division": "III",
                                            "fitted": False}
@@ -1457,7 +1472,7 @@ def test_rank_uses_only_that_strategys_pb_not_the_overall_best(tmp_path):
     db._conn.execute("UPDATE attempts SET strat_tag='A' WHERE course_id=2")
     db._conn.commit()
     aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
-    asyncio.run(svc.save_pb(aid, "igt"))
+    save_pb(svc, db, aid, "igt")
     sec = build_session_view(db, svc, clock="igt")["stars"][0]
     assert sec["rank"]["rank"] == "Diamond"          # A graded by A's 343f
 
@@ -1473,7 +1488,7 @@ def test_rank_uses_only_that_strategys_pb_not_the_overall_best(tmp_path):
     db._conn.execute("UPDATE attempts SET strat_tag='B' WHERE igt_frames=350")
     db._conn.commit()
     bid = next(a.id for a in db.attempts() if a.igt_frames == 350)
-    asyncio.run(svc.save_pb(bid, "igt"))
+    save_pb(svc, db, bid, "igt")
     sec = build_session_view(db, svc, clock="igt")["stars"][0]
     assert sec["rank"]["rank"] == "Silver"
 
@@ -1580,7 +1595,7 @@ def _seed_fast_with_pb(db, svc, tmp_path):
     db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
     db._conn.commit()
     best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
-    asyncio.run(svc.save_pb(best_aid, "igt"))
+    save_pb(svc, db, best_aid, "igt")
     return best_aid
 
 
@@ -1643,8 +1658,8 @@ def test_hiding_a_pb_attempt_regrades_off_the_earlier_save(tmp_path):
     db._conn.commit()
     a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
     a350 = next(a.id for a in db.attempts() if a.igt_frames == 350)
-    asyncio.run(svc.save_pb(a350, "igt"))
-    asyncio.run(svc.save_pb(a343, "igt"))
+    save_pb(svc, db, a350, "igt")
+    save_pb(svc, db, a343, "igt")
     [sec] = build_session_view(db, svc, clock="igt")["stars"]
     assert sec["rank"]["rank"] == "Mario"
     # A pb row snapshots its strat_tag, so the surviving save still grades
@@ -1668,7 +1683,7 @@ def test_a_time_filter_hiding_the_pb_run_regrades_and_is_reversible(tmp_path):
     db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
     db._conn.commit()
     a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
-    asyncio.run(svc.save_pb(a343, "igt"))
+    save_pb(svc, db, a343, "igt")
     [sec] = build_session_view(db, svc, clock="igt")["stars"]
     assert sec["rank"]["rank"] == "Mario" and sec["pb"]["igt"]["frames"] == 343
 
@@ -2091,8 +2106,8 @@ def test_entity_ranks_pick_the_best_strategy_not_the_active_one(tmp_path):
     db._conn.commit()
     fast_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
     slow_aid = next(a.id for a in db.attempts() if a.igt_frames == 350)
-    asyncio.run(svc.save_pb(fast_aid, "igt"))
-    asyncio.run(svc.save_pb(slow_aid, "igt"))
+    save_pb(svc, db, fast_aid, "igt")
+    save_pb(svc, db, slow_aid, "igt")
     asyncio.run(svc.set_strat(2, 2, "Slow"))   # active strat is the SLOWER one
 
     out = build_entity_ranks(db, svc)
@@ -2138,7 +2153,7 @@ def test_entity_ranks_skip_a_strategy_with_no_ladder_rows(tmp_path):
     db._conn.execute("UPDATE attempts SET strat_tag='Empty' WHERE course_id=2")
     db._conn.commit()
     aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
-    asyncio.run(svc.save_pb(aid, "igt"))
+    save_pb(svc, db, aid, "igt")
 
     out = build_entity_ranks(db, svc)
     assert "star:2:2" not in out
@@ -2172,8 +2187,8 @@ def test_entity_ranks_break_ties_on_the_strategy_name(tmp_path):
     db._conn.execute("UPDATE attempts SET strat_tag='Zebra' WHERE id=?", (successes[0].id,))
     db._conn.execute("UPDATE attempts SET strat_tag='Ant' WHERE id=?", (successes[1].id,))
     db._conn.commit()
-    asyncio.run(svc.save_pb(successes[0].id, "igt"))
-    asyncio.run(svc.save_pb(successes[1].id, "igt"))
+    save_pb(svc, db, successes[0].id, "igt")
+    save_pb(svc, db, successes[1].id, "igt")
 
     out = build_entity_ranks(db, svc)
     assert out["star:2:2"]["strat"] == "Ant"
@@ -2202,8 +2217,8 @@ def test_entity_ranks_skip_a_tombstoned_strategy(tmp_path):
     db._conn.commit()
     ghost_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
     real_aid = next(a.id for a in db.attempts() if a.igt_frames == 350)
-    asyncio.run(svc.save_pb(ghost_aid, "igt"))
-    asyncio.run(svc.save_pb(real_aid, "igt"))
+    save_pb(svc, db, ghost_aid, "igt")
+    save_pb(svc, db, real_aid, "igt")
     db.set_state("deleted_strats", {"star:2:2": ["Ghost"]})
 
     out = build_entity_ranks(db, svc)
@@ -2240,7 +2255,7 @@ def test_entity_strategies_rank_matches_the_section_banner_for_the_same_strategy
     db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
     db._conn.commit()
     best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
-    asyncio.run(svc.save_pb(best_aid, "igt"))
+    save_pb(svc, db, best_aid, "igt")
 
     sec = build_session_view(db, svc, clock="igt")["stars"][0]
     out = build_entity_strategies(db, svc, "star:2:2")
@@ -2310,7 +2325,7 @@ def test_fitted_reaches_every_rank_surface_the_session_view_builds(tmp_path):
     db._conn.commit()
     asyncio.run(svc.set_strat(2, 2, "sheet strat"))
     aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
-    asyncio.run(svc.save_pb(aid, "igt"))
+    save_pb(svc, db, aid, "igt")
 
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
@@ -2329,7 +2344,7 @@ def test_fitted_reaches_every_rank_surface_the_session_view_builds(tmp_path):
     asyncio.run(svc.set_strat(2, 2, "fast"))
     db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
     db._conn.commit()
-    asyncio.run(svc.save_pb(aid, "igt"))
+    save_pb(svc, db, aid, "igt")
 
     view = build_session_view(db, svc, clock="igt")
     [sec] = view["stars"]
@@ -2381,7 +2396,7 @@ def test_a_route_steps_rank_flags_a_sheet_derived_ladder(tmp_path):
     db._conn.commit()
     asyncio.run(svc.set_strat(2, 2, "sheet strat"))
     aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
-    asyncio.run(svc.save_pb(aid, "igt"))
+    save_pb(svc, db, aid, "igt")
 
     route_id = asyncio.run(svc.create_route({
         "name": "R", "steps": [{"need": 1, "candidates": [
@@ -2448,8 +2463,8 @@ def test_a_star_section_grades_on_its_ladders_clock_not_the_view_clock(tmp_path)
     asyncio.run(svc.set_strat(2, 2, "fast"))
 
     aid = next(a.id for a in db.attempts() if a.outcome == "success")
-    asyncio.run(svc.save_pb(aid, "igt"))
-    asyncio.run(svc.save_pb(aid, "rta"))
+    save_pb(svc, db, aid, "igt")
+    save_pb(svc, db, aid, "rta")
 
     igt_view = build_session_view(db, svc, clock="igt")["stars"][0]
     rta_view = build_session_view(db, svc, clock="rta")["stars"][0]
@@ -2503,8 +2518,8 @@ def test_section_pb_display_stays_on_the_view_clock_after_the_grading_fix(tmp_pa
     asyncio.run(svc.set_strat(2, 2, "fast"))
 
     aid = next(a.id for a in db.attempts() if a.outcome == "success")
-    asyncio.run(svc.save_pb(aid, "igt"))
-    asyncio.run(svc.save_pb(aid, "rta"))
+    save_pb(svc, db, aid, "igt")
+    save_pb(svc, db, aid, "rta")
 
     for clock in ("igt", "rta"):
         sec = build_session_view(db, svc, clock=clock)["stars"][0]
@@ -2518,7 +2533,7 @@ def test_section_pb_display_stays_on_the_view_clock_after_the_grading_fix(tmp_pa
 # data/rank_standards.seed.json): the reds grab alone (" (Star)" strategies)
 # or the whole reds-then-pipe run (" (Pipe)"), and BOTH ladders live on the
 # star -- the seg:reds->pipe:<abbrev> segment that actually records the Pipe
-# family's attempts has no rank entity of its own. _reds_pipe_segments is the
+# family's attempts has no rank entity of its own. reds_pipe_segments is the
 # resolver; every grading call site below borrows the star's entity_key
 # through it rather than the segment's own (empty) one.
 
@@ -2593,13 +2608,13 @@ def _run_reds_pipe_sequence(svc, star_id=0, course_id=16, level=17,
     asyncio.run(svc.publish(ev("warp_entered", close_frame, {"level": level})))
 
 
-def test_reds_pipe_segments_pairs_by_seed_key_prefix_and_level():
-    """Pure unit test of the resolver (views._reds_pipe_segments): matches a
+def testreds_pipe_segments_pairs_by_seed_key_prefix_and_level():
+    """Pure unit test of the resolver (views.reds_pipe_segments): matches a
     seg:reds->pipe:* row to its course via start_levels/COURSE_BY_LEVEL, and
     -- mutation-proved -- a row at the SAME level with a DIFFERENT seed_key
     (the legacy exclusive 'no reds' pipe segment shares this level and must
     never be mistaken for the reds->pipe one) is not paired."""
-    from sm64_events.tracking.views import _reds_pipe_segments
+    from sm64_events.tracking.activestrat import reds_pipe_segments
 
     reds_pipe_row = {"id": 67, "seed_key": "seg:reds->pipe:bitdw",
                      "start_triggers": [{"type": "level_enter", "to": 17}]}
@@ -2608,7 +2623,7 @@ def test_reds_pipe_segments_pairs_by_seed_key_prefix_and_level():
     unrelated_row = {"id": 1, "seed_key": None,
                      "start_triggers": [{"type": "level_enter", "to": 6}]}
 
-    by_course, grading_ek = _reds_pipe_segments(
+    by_course, grading_ek = reds_pipe_segments(
         [reds_pipe_row, legacy_pipe_row, unrelated_row])
     assert by_course == {16: 67}
     assert grading_ek == {67: "star:16:0"}
@@ -2617,7 +2632,7 @@ def test_reds_pipe_segments_pairs_by_seed_key_prefix_and_level():
     # one -- the level-based match alone would still find IT (same level),
     # proving the prefix check, not the level, is what tells them apart.
     renamed = {**reds_pipe_row, "seed_key": "seg:bitdw-pipe-v2"}
-    by_course2, grading_ek2 = _reds_pipe_segments([renamed, legacy_pipe_row])
+    by_course2, grading_ek2 = reds_pipe_segments([renamed, legacy_pipe_row])
     assert by_course2 == {} and grading_ek2 == {}
 
 
@@ -2638,8 +2653,8 @@ def test_pipe_segment_grades_against_the_paired_star_ladder(tmp_path):
                         if a["outcome"] == "success")
     seg_attempt = next(a for a in seg_section(session, seg_id)["attempts"]
                        if a["outcome"] == "success")
-    asyncio.run(svc.save_pb(star_attempt["id"], "igt"))
-    asyncio.run(svc.save_pb(seg_attempt["id"], "rta"))
+    save_pb(svc, db, star_attempt["id"], "igt")
+    save_pb(svc, db, seg_attempt["id"], "rta")
 
     view = build_session_view(db, svc, clock="igt")
     star_sec = next(s for s in view["stars"] if s["course_id"] == 16)
@@ -2694,7 +2709,7 @@ def test_legacy_no_reds_segments_matched_by_seed_key_suffix():
     mutation proves this is the actual reason, not a level-based accident:
     a row at the SAME level but a DIFFERENT seed_key shape is excluded, and
     a row with the reds->pipe seed_key RENAMED to end in "-pipe" would be
-    (wrongly) swept in, which is exactly why _reds_pipe_segments' own
+    (wrongly) swept in, which is exactly why reds_pipe_segments' own
     prefix must never change shape without re-checking this resolver too."""
     from sm64_events.tracking.views import _legacy_no_reds_segments
 
@@ -2787,7 +2802,7 @@ def test_ordinary_segments_are_unaffected_by_the_reds_pipe_pairing(tmp_path):
     asyncio.run(svc.set_strat_segment(1, "hyperspeed"))
     lblj_success(svc, rta=85)                   # 2.83s, beats Mario's 3.0s cutoff
     aid = next(a.id for a in db.attempts() if a.segment_id == 1)
-    asyncio.run(svc.save_pb(aid, "rta"))
+    save_pb(svc, db, aid, "rta")
 
     view = build_session_view(db, svc, clock="igt")
     sec = seg_section(view, 1)
@@ -2811,7 +2826,7 @@ def test_route_candidate_ranks_the_reds_pipe_segment_against_the_star_ladder(tmp
     seg_attempt = next(a for a in seg_section(
         build_session_view(db, svc, clock="igt"), seg_id)["attempts"]
         if a["outcome"] == "success")
-    asyncio.run(svc.save_pb(seg_attempt["id"], "rta"))
+    save_pb(svc, db, seg_attempt["id"], "rta")
 
     from sm64_events.tracking.views import build_route_view
     rid = asyncio.run(svc.create_route({"name": "R", "steps": [
@@ -2825,7 +2840,7 @@ def test_route_candidate_ranks_the_reds_pipe_segment_against_the_star_ladder(tmp
 def _service_with_corpus(tmp_path):
     """A fresh service with the SHIPPED 84-def corpus reconciled -- unlike
     `_make_with_def`'s hand-built reds->pipe stand-in above, this exercises
-    the REAL seg:reds->pipe:bitdw definition `_reds_pipe_segments` pairs by
+    the REAL seg:reds->pipe:bitdw definition `reds_pipe_segments` pairs by
     seed_key prefix, which is what the star section's own `parents` stamp
     (spec 2026-08-10-reds-as-subsection) has to read.
 
@@ -2858,7 +2873,7 @@ def _star_section(view, course_id, star_id):
 def test_a_bowser_reds_star_names_its_movement_as_a_parent(tmp_path):
     """Round 31. The reds star is a piece of seg:reds->pipe:<abbrev> -- the
     movement that already carries its grab as a waypoint -- so the practice
-    log nests it there. Stamped from `_reds_pipe_segments`, the pairing this
+    log nests it there. Stamped from `reds_pipe_segments`, the pairing this
     module already computes for the shared ladder, never a second table."""
     db, svc = _service_with_corpus(tmp_path)
     # A section only exists for a scoped entity (attempts, target, or armed) --
@@ -2879,8 +2894,8 @@ def test_a_bowser_reds_star_names_its_movement_as_a_parent(tmp_path):
 
 
 def _reds_pipe_id_for_course(db, course_id):
-    from sm64_events.tracking.views import _reds_pipe_segments
-    by_course, _ = _reds_pipe_segments(db.segment_defs())
+    from sm64_events.tracking.activestrat import reds_pipe_segments
+    by_course, _ = reds_pipe_segments(db.segment_defs())
     return by_course[course_id]
 
 
@@ -2930,3 +2945,124 @@ def test_an_untouched_bowser_course_publishes_neither_section(tmp_path):
     assert not any(s["segment_id"] == pipe_id for s in view["segments"]), (
         "an untouched course must publish no segment section for its "
         "movement either")
+
+
+# --- a PB is per (target, strategy), and the card finally says so ----------
+
+def _two_strats(db, svc):
+    """One star, two strategies, one success each: 343f tagged Standard and
+    350f tagged 3x LJ, each saved as that strategy's own PB. The shape behind
+    the 2026-08-15 report."""
+    asyncio.run(svc.set_strat(2, 2, "Standard"))
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350, igt=343)))
+    asyncio.run(svc.set_strat(2, 2, "3x LJ"))
+    asyncio.run(svc.publish(ev("practice_reset", 1400, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1760, igt=350)))
+    fast = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    slow = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    save_pb(svc, db, fast, "igt")
+    save_pb(svc, db, slow, "igt")
+    return fast, slow
+
+
+def test_the_card_shows_the_active_strategys_pb_not_the_entitys_best(tmp_path):
+    """His report, 2026-08-15: switching the card to 3x LJ kept quoting a
+    Standard time. `pb` is still the entity's best-ever for anything that
+    wants it; `pb_by_strat` is what the tag draws."""
+    db, svc = make(tmp_path)
+    _two_strats(db, svc)
+    asyncio.run(svc.set_strat(2, 2, "3x LJ"))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert sec["pb"]["igt"]["frames"] == 350          # latest save, blind
+    assert sec["pb_by_strat"]["igt"]["frames"] == 350
+    asyncio.run(svc.set_strat(2, 2, "Standard"))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert sec["pb_by_strat"]["igt"]["frames"] == 343  # follows the dropdown
+
+
+def test_a_strategy_with_no_pb_of_its_own_reports_none(tmp_path):
+    """"No PB on 3x LJ" is a real state the tag has to be able to draw, and
+    quoting another strategy's time there is the bug this replaces."""
+    db, svc = make(tmp_path)
+    _two_strats(db, svc)
+    asyncio.run(svc.set_strat(2, 2, "Beginner"))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert sec["pb"]["igt"] is not None               # the entity has one
+    assert sec["pb_by_strat"]["igt"] is None          # this strategy does not
+
+
+def test_only_the_active_strategys_rows_carry_a_delta(tmp_path):
+    """A row is measured only when it belongs to the ACTIVE strategy, against
+    that strategy's own PB; a row on any other strategy shows no comparison at
+    all (2026-08-22: "The 0.00s makes no sense, because it cannot logically be
+    compared to the current strategy"). Each active row's delta is 0 here
+    because each is its own strategy's PB."""
+    db, svc = make(tmp_path)
+    _two_strats(db, svc)
+    for active, other in (("Standard", "3x LJ"), ("3x LJ", "Standard")):
+        asyncio.run(svc.set_strat(2, 2, active))
+        [sec] = build_session_view(db, svc, clock="igt")["stars"]
+        deltas = {r["strat_tag"]: r["pb_delta_frames"]
+                  for r in sec["attempts"] if r["outcome"] == "success"}
+        assert deltas == {active: 0, other: None}, active
+
+
+def test_other_strat_marks_every_row_outside_the_active_strategy(tmp_path):
+    """The practice log dims a row on a strategy other than the selected one
+    (2026-08-23), decided by the SAME gate that withholds its PB button: an
+    untagged row is other too, and with no strategy selected nothing is."""
+    db, svc = make(tmp_path)
+    fast, slow = _two_strats(db, svc)
+    asyncio.run(svc.set_strat(2, 2, "Standard"))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    other = {r["strat_tag"]: r["other_strat"] for r in sec["attempts"]}
+    assert other == {"Standard": False, "3x LJ": True}
+    asyncio.run(svc.set_attempt_strat(slow, None))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert [r["other_strat"] for r in sec["attempts"] if r["id"] == slow] == [True]
+    asyncio.run(svc.set_strat(2, 2, None))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    assert not any(r["other_strat"] for r in sec["attempts"])
+
+
+def test_each_strategys_pb_row_owns_its_own_undo(tmp_path):
+    """PB ownership is per strategy, so saving a 3x LJ PB no longer takes the
+    Undo button away from the Standard row that still holds Standard's --
+    whichever of the two is active, ITS row is the one offering Undo."""
+    db, svc = make(tmp_path)
+    fast, slow = _two_strats(db, svc)
+    for active, owner in (("Standard", fast), ("3x LJ", slow)):
+        asyncio.run(svc.set_strat(2, 2, active))
+        [sec] = build_session_view(db, svc, clock="igt")["stars"]
+        undo = [r["id"] for r in sec["attempts"] if r["pb_action"] == "undo"]
+        assert undo == [owner], active
+
+
+def test_the_action_column_offers_only_the_active_strategys_rows(tmp_path):
+    """Undo on the active strategy's own PB, a stated reason on every other
+    row -- one rule for the whole column. The browser draws nothing for a
+    strategy reason (2026-08-22); the payload still names it, so the API's
+    refusal and the absent button have one stated cause."""
+    db, svc = make(tmp_path)
+    fast, slow = _two_strats(db, svc)
+    asyncio.run(svc.set_strat(2, 2, "3x LJ"))
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    rows = {r["id"]: (r["pb_action"], r["pb_blocked"]) for r in sec["attempts"]
+            if r["outcome"] == "success"}
+    assert rows[slow] == ("undo", None)
+    assert rows[fast] == (None, {"reason": "foreign_strat", "strat": "3x LJ"})
+
+
+def test_with_no_strategy_selected_nothing_may_be_saved(tmp_path):
+    """The consequence of the rule, stated as a test because it removes a
+    capability: a PB no ladder can grade is what produced the `unattributed`
+    caveat in the first place (live report 2026-07-31), and it is now
+    unreachable rather than merely marked."""
+    db, svc = make(tmp_path)
+    seed(svc)                                    # no strategy ever set
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    blocked = [r["pb_blocked"] for r in sec["attempts"]
+               if r["outcome"] == "success"]
+    assert blocked and all(b == {"reason": "no_active_strat", "strat": None}
+                           for b in blocked)

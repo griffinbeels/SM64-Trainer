@@ -33,6 +33,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).parent))
+from source_scan import python_code, strip_comments  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from find_uilab import find_uilab  # noqa: E402
@@ -327,11 +330,13 @@ def test_one_rank_banner_with_both_mode_buttons_renders(page):
 def test_rank_mode_button_runs_the_shared_swap_and_remembers_the_entity(page):
     """A mode pick is only an exchange, never a second earned-rank climb.
 
-    Strategy alone carries a climb `replayKey`, so changing to Overall changes
-    that key at the same moment as the rank. That used to outrank the ordinary
-    identity guard and start a full Capless-5 climb underneath MARELO's short
-    exchange. Once the exchange finished, the floor climb became visible and
-    made a measurement swap feel like another rank-up.
+    Strategy used to carry a climb `replayKey`, so changing to Overall changed
+    that key at the same moment as the rank. That outranked the ordinary
+    identity guard and started a full Capless-5 climb underneath MARELO's
+    short exchange; once the exchange finished, the floor climb became
+    visible and made a measurement swap feel like another rank-up. The replay
+    is gone altogether since 2026-08-23 (a strategy swap is an exchange too),
+    and this still pins that the exchange never runs a climb underneath.
     """
     page.evaluate(
         "Array.from(document.querySelectorAll("
@@ -1137,3 +1142,104 @@ def test_the_library_search_story_reaches_its_own_result_rows(page):
         box.dispatchEvent(new Event('input', {bubbles: true}));
       })()
     """)
+
+
+# --- and it must not leave the state it reached behind ---------------------
+
+_SHARED_STORE_READ = re.compile(r"\brank_standards_path\b")
+
+
+def test_the_fixture_never_reaches_for_the_shared_ladder_store():
+    """`serve_ui` gives every fixture its OWN scratch rank-standards file, and
+    that has to stay structural rather than remembered.
+
+    Measured 2026-08-21. One new test cleared four of `star:2:4`'s five
+    strategies through the real endpoint and did not put them back; the next
+    full suite returned **6 failures and 4 errors across four unrelated
+    files** -- the JP toggles, the Library's overall ladder, the rank-mode
+    swap, the you-marker -- every one of them a test that simply needed that
+    star to still have its strategies. Not one of them could name the culprit:
+    the damage was in a gitignored file no assertion mentions.
+
+    `conftest.py` HAS an autouse `_isolate_rank_standards` for exactly this,
+    and it never reached any of it. It rebinds the attribute on the `paths`
+    MODULE, while `ui_fixture.py` held a `from ... import rank_standards_path`
+    alias taken at import time -- so the patch moved a name the fixture was
+    not looking at. An isolation fixture that protects nothing looks identical
+    to one that works, which is what makes this worth a check of its own
+    rather than a comment on the import.
+
+    Hence the invariant is stated where it can be enforced, in two halves.
+    The fixture may not NAME the shared path at all -- it serves from its own
+    scratch store. And NOTHING under src/ or tools/ may hold a MODULE-LEVEL
+    alias of it (`main.py`'s is function-local, which re-resolves on every
+    call and is therefore inside the monkeypatch's reach), so the conftest
+    fixture is honest again for every caller that remains, and the next
+    driven harness nobody has written yet cannot reopen the hole. Restoring
+    the store by hand is not an accepted alternative -- it works only when
+    the test passes, and the run that most needs the store intact is the run
+    where something failed halfway."""
+    repo = Path(__file__).resolve().parents[1]
+    fixture = repo / "tools" / "ui_fixture.py"
+    # `python_code`, not `strip_comments` -- the latter removes JS/CSS comment
+    # styles and leaves Python `#` lines standing, so this guard would have
+    # tripped on a comment explaining the very absence it checks for. Caught by
+    # its own probe below, which is why both directions get asserted and not
+    # just the one that was failing.
+    source = python_code(fixture.read_text(encoding="utf-8"))
+    assert not _SHARED_STORE_READ.search(source), (
+        "tools/ui_fixture.py names rank_standards_path again, so every driven "
+        "test is once more writing the worktree's own data/rank_standards.json "
+        "-- and conftest's autouse isolation cannot help, because a "
+        "`from paths import` alias is invisible to its monkeypatch.")
+    # ... and it must still hand RankStandards a path under a scratch dir,
+    # rather than simply having dropped the store.
+    assert "rank_standards.json" in source
+
+    aliased = [str(path.relative_to(repo)).replace("\\", "/")
+               for folder in ("src", "tools")
+               for path in (repo / folder).rglob("*.py")
+               if path.name != "paths.py" and _module_level_alias(path)]
+    assert not aliased, (
+        f"{aliased} import rank_standards_path at module level, which takes "
+        "the name at import time and is invisible to conftest's "
+        "_isolate_rank_standards monkeypatch. Call paths.rank_standards_path() "
+        "through the module, or import it inside the function that needs it.")
+
+
+def _module_level_alias(path: Path) -> bool:
+    """Does this file hold `rank_standards_path` as a MODULE-level import
+    alias? A function-local `from ... import` re-resolves at call time and is
+    fine; a top-level one is a copy the monkeypatch cannot reach."""
+    import ast
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return any(isinstance(node, ast.ImportFrom)
+               and any(alias.name == "rank_standards_path" for alias in node.names)
+               for node in tree.body)
+
+
+def test_the_shared_store_guard_can_still_fail():
+    """Both directions through the same `python_code` the guard uses: real code
+    must trip it, and a Python comment naming the function must not.
+
+    The second half is not ceremony -- it failed on its first run, because the
+    guard was reaching for `strip_comments`, which only knows JS and CSS
+    comment styles. A `#` line naming `rank_standards_path` survived it, so the
+    guard would have gone red at the mere mention of what it forbids."""
+    real = python_code("ranks = RankStandards(rank_standards_path())\n")
+    prose = python_code("# never call rank_standards_path() from here\n")
+    assert _SHARED_STORE_READ.search(real)
+    assert not _SHARED_STORE_READ.search(prose)
+
+
+def test_the_alias_scan_can_still_fail(tmp_path):
+    """The module-level alias is the whole mechanism of the 2026-08-21 leak,
+    so the scan has to tell it from the function-local import main.py holds."""
+    top = tmp_path / "top.py"
+    top.write_text("from sm64_events.core.paths import rank_standards_path\n")
+    local = tmp_path / "local.py"
+    local.write_text("def build():\n"
+                     "    from sm64_events.core.paths import rank_standards_path\n"
+                     "    return rank_standards_path()\n")
+    assert _module_level_alias(top)
+    assert not _module_level_alias(local)
