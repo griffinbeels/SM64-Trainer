@@ -308,6 +308,53 @@ if ({picks} >= 2) {{
 # how the two drifted into disagreeing about what "the Library is open" means.
 _LIBRARY_TARGET_SETUP = None   # assigned below, once _LIBRARY_NAV exists
 
+# The Rank tab's scorecard (spec 2026-08-23-scorecard-design, task 3). No
+# `skip_if`, same reasoning as the Segments-tab stories below: reaching this
+# card is entirely the setup's own job, not something the default fixture
+# state happens to produce. A division goal is set so the sheet and the
+# sweep both measure real good/bad tiles, not an all-uncoloured no-goal grid
+# -- the exact "reaches the state" trap this file's own history keeps
+# warning about (`.claude/rules/ui-core.md`'s responsiveness section).
+_SCORECARD_SETUP = _script("""
+const rankBtn = document.querySelector('button.nav-item[title="Rank"]');
+if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') {
+  rankBtn.click();
+}
+await waitFor(() => !!document.querySelector('.rank-page .scorecard-card'));
+await waitFor(() => !!document.querySelector('.rank-page .score-tile'));
+if (!document.querySelector('.rank-page .scorecard-card .score-tile.good, '
+    + '.rank-page .scorecard-card .score-tile.bad')) {
+  // Through the REAL picker, not a raw fetch() -- the card refetches only
+  // through its own onGoalChange handler (the spec's own rule: "the picker
+  // is the only writer and refetches itself"), so a PUT that bypasses it
+  // leaves the mounted card showing stale "No goal" forever. Measured: the
+  // first version of this story did exactly that and the sheet showed
+  // every tile dashed with 'No goal' still in the header.
+  const trigger = document.querySelector(
+    '.rank-page .scorecard-card .search-select-trigger');
+  if (trigger) {
+    trigger.click();
+    await waitFor(() => !!document.querySelector(
+      '.rank-page .scorecard-card .search-menu'));
+    const option = Array.from(document.querySelectorAll(
+      '.rank-page .scorecard-card .search-menu-option'))
+      .find((b) => b.dataset.value === 'division:Bronze:V');
+    if (option) {
+      option.click();
+      await waitFor(() => !!document.querySelector(
+        '.rank-page .scorecard-card .score-tile.good, '
+        + '.rank-page .scorecard-card .score-tile.bad'), 3000);
+    }
+  }
+}
+// Last practice-card on the Rank tab -- below the fold at the contact
+// sheet's fixed 1100px capture height, and `page.screenshot(clip=)` is
+// viewport-relative (`.claude/rules/ui-core.md`: it throws on anything
+// below the fold). Scroll it into view before uilab measures its rect.
+document.querySelector('.rank-page .scorecard-card').scrollIntoView({block: 'start'});
+await sleep(60);
+""")
+
 # The tray and the grid overlay (Task 5, spec 2026-08-07-library-page).
 # Shares its navigation with `_LIBRARY_TARGET_SETUP` above and its own
 # populate-the-tray step with tests/test_ui_library_tray.py's own
@@ -494,6 +541,11 @@ STORIES = [
     # this tab somewhere other than a target page, and `_LIBRARY_NAV` heals
     # that for whatever runs next.
     Story(name="library-search", at=".library-searching", setup=_LIBRARY_SEARCH_SETUP),
+    # Rank tab, scorecard card (spec 2026-08-23-scorecard-design, task 3).
+    # Same "sits between the groups" placement as the library stories above
+    # -- `_EXPAND_ALL` heals the tab back to Practice at the start of every
+    # viewport pass, so this story owes no cleanup of its own either.
+    Story(name="scorecard", at=".scorecard-card", setup=_SCORECARD_SETUP),
     # The four SEGMENTS-tab stories below are last on purpose: `_EXPAND_ALL`
     # (the "page" story's own setup, which runs first on every viewport) is
     # what returns the app to Practice for the next pass, so nothing after

@@ -18,6 +18,7 @@ import { useTween } from "../useTween.js";
 import { entityIconSrc, fallbackSlotForEntityKey,
          fallbackToGenericStar, isGenericArt } from "./entityicons.js";
 import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
+import { Scorecard } from "./scorecard.js";
 
 const html = htm.bind(h);
 
@@ -985,5 +986,6 @@ export function RankPage({ t }) {
         <${Breakdown} key=${scopeId} data=${data} routeOrder=${routeOrder}
           onToggle=${toggleExcluded} />
       </div>`}
+    <${Scorecard} t=${t} />
   </div>`;
 }

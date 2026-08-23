@@ -6996,6 +6996,110 @@
       .log-list-card.log-nextstep-wide-two-hover, .log-list-card.log-nextstep-wide-one-hover
     ) .rank-next-popup { font-size: 11px; }
 
+  /* ===================================================================
+     Scorecard card (spec 2026-08-23-scorecard-design, task 3)
+     ===================================================================
+     One tile per star (+ the two BitDW/BitFS castle movements), one row per
+     course plus the Secret row, a Sigma per row and one Upstairs RTA total
+     -- the community's template spreadsheet as a live, screenshot-able
+     card. `.rank-page` (above) declares no `container-type` of its own --
+     every other card on that page gates on the PAGE's own width, never a
+     card-local pane -- so this card opens its own inline-size container
+     rather than widen that rule for every sibling on the tab. Appended
+     here, at the end of the stylesheet's converted-blocks section,
+     wide-narrow, per the standing rule: a converted block placed where an
+     old @media block used to sit can land ABOVE a same-specificity base
+     rule and lose the cascade silently (.claude/rules/ui-core.md). */
+  /* `width: 100%` is LOAD-BEARING, not decoration -- measured, not assumed
+     (`.claude/rules/ui-core.md`'s "assert the painted value" warning applies
+     here too: the class and the property are both exactly where you'd put
+     them, and the card still renders at 34px). `.rank-page` is a flex
+     COLUMN and stretches every card to its own width with no explicit
+     `width` needed anywhere else on the page -- but `container-type:
+     inline-size` implies content containment, and Chromium resolves a
+     stretch-sized flex item's own width AFTER a containering element would
+     need it to answer `@container` queries from its children, so a
+     `width: auto` grid box under it collapses to its content's zero-size
+     containment fallback instead of the stretched width (measured: 34px
+     tall-and-narrow instead of the pane's 1251px, tiles wrapping into a
+     single vertical column). A plain `width: 100%` gives the box a
+     DEFINITE size with nothing left to resolve circularly. */
+  .scorecard-card { container-type: inline-size; width: 100%; display: grid; gap: 10px; }
+  .scorecard-head {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px;
+  }
+  .scorecard-head h3 { margin: 0; margin-right: auto; }
+  .scorecard-note { margin: 0; flex-basis: 100%; }
+  .score-rows { display: grid; gap: 6px; }
+  .score-row {
+    display: grid; grid-template-columns: minmax(84px, 130px) 1fr auto;
+    align-items: center; gap: 10px;
+  }
+  .score-row-label {
+    font-size: .85rem; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .score-row-tiles { display: flex; gap: 4px; flex-wrap: wrap; }
+  /* Tiles never shrink to fit the row -- the CoverageStrip squish lesson
+     (.claude/rules/ui-core.md: a route's worth of tiles otherwise shrinking
+     to fit their row while the row's height stays put IS the squished-art
+     bug). Fixed at ~44px regardless of row length (7 stars or the Secret
+     row's 10). */
+  .score-tile {
+    position: relative; flex: 0 0 auto;
+    width: 44px; height: 32px; border-radius: 5px; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,.04); border: 1px solid var(--border-soft);
+  }
+  /* The art rides a custom property the component supplies (--tile-art),
+     painted by a separate absolutely-positioned layer at low opacity --
+     never a plain `background` on the tile itself, which would sit UNDER
+     nothing (there would be no dim layer left to hold at reduced opacity).
+     `.score-tile-text` is a real, explicitly-stacked sibling element
+     (never assume paint order between a positioned pseudo-element and
+     ordinary inline text -- the pseudo is a POSITIONED descendant and can
+     paint above in-flow text by the CSS2.1 stacking order otherwise). */
+  .score-tile::before {
+    content: ""; position: absolute; inset: 0; z-index: 0;
+    background-image: var(--tile-art); background-size: cover;
+    background-position: center; opacity: .22; pointer-events: none;
+  }
+  .score-tile-text {
+    position: relative; z-index: 1;
+    font-size: .68rem; font-weight: 700; font-variant-numeric: tabular-nums;
+    color: var(--text);
+  }
+  .score-tile.good .score-tile-text { color: var(--green); }
+  .score-tile.bad .score-tile-text { color: var(--coral); }
+  .score-tile.dim .score-tile-text { color: var(--muted); opacity: .7; }
+  /* A faint ring, not a second colour -- a folded tile still draws with its
+     own real numbers (spec), it is only excluded from the Sigma below it. */
+  .score-tile.folded { box-shadow: inset 0 0 0 1px rgba(255,255,255,.28); }
+  .score-sum {
+    display: flex; align-items: center; gap: 4px; justify-self: end;
+    font-size: .78rem; font-variant-numeric: tabular-nums; white-space: nowrap;
+    color: var(--text);
+  }
+  .score-sum.good { color: var(--green); }
+  .score-sum.bad { color: var(--coral); }
+  .score-sum-coverage { color: var(--muted); font-size: .7rem; }
+  .score-foot {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding-top: 8px; border-top: 1px solid var(--border-soft);
+  }
+  .score-foot-label { font-weight: 700; }
+  .score-foot .score-sum { font-size: 1.05rem; font-weight: 700; }
+
+  /* Narrow: the label column no longer earns its own track -- it sits
+     above the tile strip instead of squeezing it, which is what keeps the
+     Secret row's ten tiles from ever needing to shrink or scroll. */
+  @container (max-width: 620px) {
+    .score-row { grid-template-columns: 1fr auto; grid-template-areas: "label sum" "tiles tiles"; row-gap: 4px; }
+    .score-row-label { grid-area: label; }
+    .score-sum { grid-area: sum; }
+    .score-row-tiles { grid-area: tiles; }
+  }
+
 </style></head>
 <body>
 <div id="app"></div>
