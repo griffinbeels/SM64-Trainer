@@ -264,7 +264,7 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
         deletion restores whatever that row superseded, exactly as undoing a
         single PB save does."""
         with _service_refusals():
-            return {"removed": service.remove_imported(source)}
+            return {"removed": await service.remove_imported(source)}
 
     if library is not None:
         @router.post("/sheet")

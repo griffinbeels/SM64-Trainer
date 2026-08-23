@@ -276,7 +276,12 @@ class TrackerService:
     # for the poller's on_frame heartbeat.
     on_attempt_boundary = None
 
-    async def publish(self, event: Event) -> None:
+    async def publish(self, event: Event) -> int | None:
+        """Broadcast, then journal and track. Returns the JOURNAL ID of the
+        row written, or None when nothing was (a broadcast-only type, no live
+        session). An attempt's id is the journal id of its first event, so a
+        caller that journals a single-event attempt — `import_times` — learns
+        the attempt's id from this and nowhere else."""
         if event.type == "stage_changed":
             # The world NODE the player is standing in, stamped BEFORE the
             # broadcast because the browser MERGES this payload into its held
@@ -317,12 +322,15 @@ class TrackerService:
         if self.db is None or self.session_id is None:
             return
         try:
-            await self._track(event, seq)
+            return await self._track(event, seq)
         except Exception:
             log.exception("tracking pipeline failed for %s; event broadcast only",
                           event.type)
+            return None
 
-    async def _track(self, event: Event, seq: int) -> None:
+    async def _track(self, event: Event, seq: int) -> int:
+        """Journal the event, feed the projector, persist what closed.
+        Returns the journal id from every exit."""
         jid = self.db.append_event(self.session_id, seq, event)
         row = EventRow(id=jid, session_id=self.session_id, seq=seq,
                        type=event.type, frame=event.frame,
@@ -338,7 +346,7 @@ class TrackerService:
             # rebuild. Measured at ~140 ms over his 20k-event journal, paid
             # once per SUBAREA star, while Mario is locked in a dance.
             await self._reproject()
-            return
+            return jid
         if event.type == PRUNE_EVENT:
             # Startup prune of unlabelled attempts (tracking/prune.py). Like a
             # clear or a correction it is a compensating event folded in by
@@ -348,7 +356,7 @@ class TrackerService:
             # already-open page drop the rows, and delete_orphaned_pbs runs in
             # there too (a protected attempt is exactly one it must not find).
             await self._reproject()
-            return
+            return jid
         proj = self._projector
         target_before = proj.target
         closed = proj.feed(row)
@@ -382,7 +390,7 @@ class TrackerService:
                 payload={k: v for k, v in n.items()
                          if k not in ("event", "frame")}))
             if self._projector is not proj:
-                return
+                return jid
         # Run drain: persist any newly finished/aborted runs produced by this
         # event. These are broadcast-only derived events (run_finished/run_aborted
         # must NEVER be journaled — the projector re-derives them on replay from
@@ -393,13 +401,13 @@ class TrackerService:
             self._persisted_runs.append(r.id)
             await self.broadcaster.publish(self._run_completed_event(r, event))
             if self._projector is not proj:
-                return
+                return jid
         for n in list(proj.run_notices):
             await self.broadcaster.publish(Event(
                 type=n["event"], frame=event.frame,
                 timestamp_utc=event.timestamp_utc, payload=n))
             if self._projector is not proj:
-                return
+                return jid
         for attempt in closed:
             self.db.upsert_attempt(attempt)
             # The derived event's journal row carries the CURRENT session_id,
@@ -407,12 +415,13 @@ class TrackerService:
             # session_id — the payload's session_id is authoritative.
             await self.publish(self._attempt_completed_event(attempt, event))
             if self._projector is not proj:
-                return
+                return jid
         if self._projector.target != target_before:
             await self.publish(Event(
                 type="target_changed", frame=event.frame,
                 timestamp_utc=event.timestamp_utc,
                 payload=self.target_payload()))
+        return jid
 
     async def settle_frame(self, frame: int) -> None:
         """The game frame advanced; deliver any topological verdict waiting on
@@ -1948,19 +1957,24 @@ class TrackerService:
         return payload
 
     async def import_times(self, source: str, candidates) -> dict:
-        """Land a batch of brought-in times as personal bests.
+        """Land a batch of brought-in times, each as an attempt with a PB.
 
-        Every import door arrives here — typed by hand, read off a runner's
-        Ultimate Sheet column, and later a paste file or LiveSplit golds. The
+        Every import door arrives here — typed by hand, a runner's Ultimate
+        Sheet column, a pasted block, LiveSplit golds, a linked sheet. The
         improvement rule lives in `tracking/importing.py` and is pure; this
         owns only the parts that touch the world.
 
-        No attempt is created, deliberately. The journal records what the GAME
-        did and `tracking/projection.py` re-derives every attempt from it on
-        replay, so inventing one for a run that never happened would make the
-        projection non-idempotent. The pbs table is mutated directly, exactly
-        as `save_pb` does; the `times_imported` row is record/broadcast only,
-        the same standing `pb_saved` and `pb_undone` have.
+        Each landed time is ONE journaled `time_imported` event, and the
+        PROJECTOR turns it into the attempt row he sees (`projection.
+        Projector._imported_attempt`) — "It should show the new entry in the
+        practice log as an entry row... it then affords us all of the
+        functionality of a practice log entry row (deleting, undoing, etc)"
+        (2026-08-22). Journaled rather than inserted so the row survives every
+        reproject like any other attempt. The PB row is written here, linked
+        to that attempt by the journal id `publish` hands back, exactly as
+        `save_pb` links one — so clearing the row erases its PB through the
+        door `clear_attempt` already has, and `delete_orphaned_pbs` collects
+        it if the event itself is ever erased (`remove_imported`).
 
         CALLER'S OBLIGATION: a batch that lands anything moves ranks for a
         reason that is not a run, so the caller must follow it with
@@ -1974,25 +1988,29 @@ class TrackerService:
         """
         plan = self._plan_import(candidates)
         db = self._require_db()
-        saved = _iso(_now())
         for candidate, frames in plan.landing:
             course_id, star_id, segment_id = _import_identity(
                 candidate.entity_key)
+            # NULL, never the empty string: every reader tests `if not strat`
+            # and a "" would be a second spelling of the same absence.
+            strat_tag = candidate.strat_tag or None
+            now = _now()
+            attempt_id = await self.publish(Event(
+                type=importing.IMPORT_EVENT, frame=0, timestamp_utc=now,
+                payload={"source": source, "course_id": course_id,
+                         "star_id": star_id, "segment_id": segment_id,
+                         "strat_tag": strat_tag,
+                         "timer_mode": candidate.timer_mode, "frames": frames,
+                         "game_version": candidate.game_version}))
+            if attempt_id is None:
+                raise RuntimeError("the import could not be journaled")
             db.insert_pb(course_id=course_id, star_id=star_id,
-                         segment_id=segment_id,
-                         # NULL, never the empty string: every reader tests
-                         # `if not strat` and a "" would be a second spelling
-                         # of the same absence.
-                         strat_tag=candidate.strat_tag or None,
+                         segment_id=segment_id, strat_tag=strat_tag,
                          timer_mode=candidate.timer_mode, frames=frames,
-                         attempt_id=None, saved_utc=saved,
+                         attempt_id=attempt_id, saved_utc=_iso(now),
                          imported_from=source,
                          game_version=candidate.game_version)
-        payload = {"source": source, **plan.summary}
-        if plan.landing:
-            await self.publish(Event(type="times_imported", frame=0,
-                                     timestamp_utc=_now(), payload=payload))
-        return payload
+        return {"source": source, **plan.summary}
 
     def _plan_import(self, candidates):
         """Check every candidate, then decide what lands. Writes nothing.
@@ -2053,14 +2071,26 @@ class TrackerService:
             raise ValueError(
                 f"{key!r} is timed on RTA; a segment has no IGT clock")
 
-    def remove_imported(self, source: str) -> int:
-        """Erase every personal best one import brought, and say how many.
+    async def remove_imported(self, source: str) -> int:
+        """Erase every time one import brought, and say how many.
 
-        Deleting the rows makes whatever each one superseded current again —
-        latest-row-wins is the pbs contract (`views.current_pbs_by_strat`), so
-        this restores exactly as `undo_pb` does, in bulk."""
+        Erased, not marked — "marking them as 'removed' is still worthless.
+        Just completely erase them" (2026-08-02). The `time_imported` journal
+        rows are deleted and the journal replayed, so the attempts vanish and
+        `_reproject`'s orphan sweep takes their PB rows with them; whatever
+        each PB superseded is current again (latest-row-wins). Safe to cut
+        from the journal where a played attempt's events are not: an import
+        is a single self-contained row the projector reads without state, so
+        removing it rewrites no neighbour (contrast `purge_event_types`'s
+        measured 288 rewritten survivors for a span cut)."""
         db = self._require_db()
-        return db.delete_pbs_imported_from(source)
+        doomed = [row.id for row in db.events()
+                  if row.type == importing.IMPORT_EVENT
+                  and row.payload.get("source") == source]
+        if doomed:
+            db.delete_events(doomed)
+            await self._reproject()
+        return len(doomed)
 
     async def wipe_data(self, kind: str, course_id: int | None = None,
                         star_id: int | None = None,

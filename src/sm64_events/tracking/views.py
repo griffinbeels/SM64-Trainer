@@ -155,29 +155,6 @@ def current_pbs_by_strat(pb_rows: list[dict]) -> dict:
     return out
 
 
-def pb_backed_stars(pb_rows: list[dict]) -> set:
-    """`{(course_id, star_id)}` for every star holding a visible saved best.
-
-    THE door for "he has a time on this star even though he has never played
-    it here" — an IMPORTED time is exactly that shape, and both surfaces that
-    would otherwise miss it (the picker's rank map, the lifetime practice log)
-    ask this one question rather than each deciding what counts."""
-    return {(row["course_id"], row["star_id"]) for row in pb_rows
-            if row["segment_id"] is None and row["course_id"] is not None}
-
-
-def pb_backed_segments(pb_rows: list[dict]) -> set:
-    """`{segment_id}` for every segment holding a visible saved best.
-
-    The same question as `pb_backed_stars`, for the other kind — rule 11, and
-    it stopped being hypothetical the day LiveSplit golds could land. A gold
-    is a real-time stretch of the run matched by NAME against a movement built
-    here, so a segment can now hold a best with no attempt behind it exactly
-    as a star can, and it has to earn a card the same way."""
-    return {row["segment_id"] for row in pb_rows
-            if row["segment_id"] is not None}
-
-
 def _attempt_json(a, pbs, clock, ranks=None, rank_clock=None, rank_ek=None):
     pb = pbs.get(("segment", a.segment_id, clock) if a.segment_id is not None
                  else (a.course_id, a.star_id, clock))
@@ -236,6 +213,12 @@ def _attempt_json(a, pbs, clock, ranks=None, rank_clock=None, rank_ek=None):
             # shows no button at all, but both still carry a time that
             # measures the wrong moment.
             "caveat": attempt_caveat(a),
+            # A time he brought rather than played: a real row with every
+            # row affordance, and provably no replay -- the one control the
+            # log hides for it, rather than drawing a player for a run the
+            # recorder never saw ("We just obviously can't see any video for
+            # it", 2026-08-22). Provenance is never DRAWN beyond that.
+            "imported": a.timed_by == "imported",
             "cleared_reason": a.cleared_reason,
             "started_utc": a.started_utc, "ended_utc": a.ended_utc,
             "rollouts_total": a.rollouts_total,
@@ -676,16 +659,6 @@ def build_entity_ranks(db, service) -> dict[str, dict]:
     # One (ek, history, pb_key_prefix) triple per candidate entity, stars
     # then segments, so the grading loop below runs ONCE for both kinds —
     # a field added to the emitted dict is then a one-place edit, not two.
-    # A star he only IMPORTED has no attempt anywhere, so the attempt pass
-    # above cannot see it — and this map is what the picker reads to answer
-    # "how good am I at this star". Absence still means never practised: a
-    # star with neither attempts nor a saved best stays out.
-    pb_rows_for_candidates = db.pbs()
-    for (course_id, star_id) in pb_backed_stars(pb_rows_for_candidates):
-        attempts_by_star.setdefault((course_id, star_id), [])
-    for segment_id in pb_backed_segments(pb_rows_for_candidates):
-        attempts_by_seg.setdefault(segment_id, [])
-
     candidates = [
         (entity_key(course_id, star_id), history, (course_id, star_id))
         for (course_id, star_id), history in attempts_by_star.items()
@@ -1313,22 +1286,6 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     # per THIS entity rather than per course (his correction, live report
     # 2026-08-05: a course with one chosen ambient def beside an unchosen one
     # -- 8 Red Coins (Pipe) picked, No Reds not -- must keep exactly one).
-    # A star he only IMPORTED has no attempt in any session, so nothing above
-    # can surface it. LIFETIME only, deliberately: the lifetime view answers
-    # "what do I have", where a brought-in best belongs, while the session view
-    # answers "what did I just do" — and a time that belongs to no session
-    # would otherwise sit in every session's log forever. No recency entry, so
-    # these sort last exactly as a fresh target does.
-    if scope == "lifetime":
-        for star_key in pb_backed_stars(pb_rows):
-            seen.setdefault(star_key, None)
-        # Both kinds, rule 11. `hundred_coin_ids` are excluded for the same
-        # reason the attempt pass above excludes them: those attempts are
-        # reattributed to the star, so a segment section for one would be a
-        # second card for the same run.
-        for segment_id in pb_backed_segments(pb_rows):
-            if segment_id not in hundred_coin_ids:
-                seen_segs.setdefault(segment_id, None)
     if service.target and service.target[0] == "star" \
             and service.target[1:] not in seen:
         seen[service.target[1:]] = None

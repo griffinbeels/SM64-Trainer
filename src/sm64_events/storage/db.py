@@ -593,6 +593,18 @@ MIGRATIONS = [
     ALTER TABLE pbs ADD COLUMN imported_from TEXT;
     ALTER TABLE pbs ADD COLUMN game_version TEXT;
     """,
+
+    # v28 -- an imported time is an ATTEMPT now (journaled `time_imported`,
+    # projected like any other row), and its pb row links to it. For the few
+    # days v27 shipped on its own branch an import wrote a pb row with NO
+    # attempt: a number in the card's head and no row in its log, which is
+    # the shape he reported (2026-08-22). Those rows cannot be upgraded --
+    # nothing journaled them -- so they go, and a re-import lands them
+    # properly. Touches nothing a played attempt ever wrote: a played pb
+    # always carries its attempt_id.
+    """
+    DELETE FROM pbs WHERE imported_from IS NOT NULL AND attempt_id IS NULL;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -1296,18 +1308,6 @@ class Database:
         with self._lock:
             self._conn.execute("DELETE FROM pbs WHERE id=?", (pb_id,))
             self._conn.commit()
-
-    def delete_pbs_imported_from(self, source: str) -> int:
-        """Erase every pb row one import brought, returning how many went.
-
-        Speaks SQL directly rather than through `pbs()` for the same reason
-        the other delete/repair paths do: this must see EVERY row it wrote,
-        including any the grading view filters out."""
-        with self._lock:
-            cur = self._conn.execute(
-                "DELETE FROM pbs WHERE imported_from=?", (source,))
-            self._conn.commit()
-            return cur.rowcount
 
     def purge_event_types(self, types) -> int:
         """Delete every journal row of the given types and RECLAIM the file

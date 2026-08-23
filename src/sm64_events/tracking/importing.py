@@ -1,10 +1,11 @@
 """Deciding which brought-in times become personal bests.
 
-An IMPORTED TIME is a personal best the trainer recorded without an attempt
-behind it — typed by hand, or lifted off a runner's Ultimate Sheet column.
-Every source produces the same `ImportCandidate` and lands through the same
-rule here, so adding a paste format or a LiveSplit reader later is a parser
-rather than a feature.
+An IMPORTED TIME is a personal best the trainer never watched him set — typed
+by hand, lifted off a runner's Ultimate Sheet column, pasted, read out of a
+LiveSplit file or a linked sheet. Every source produces the same
+`ImportCandidate` and lands through the same rule here, so a sixth source is
+a parser rather than a feature. What lands is a real attempt row (see
+`IMPORT_EVENT`) carrying its personal best.
 
 The rule is IMPROVEMENT, and it is what makes the whole thing safe to press
 twice: a candidate lands only when it BEATS the current best for that target
@@ -28,6 +29,14 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from sm64_events.core import timefmt
+
+# The journal event one landed time becomes. The PROJECTOR turns it into the
+# attempt row he sees — "It should show the new entry in the practice log as an
+# entry row... it then affords us all of the functionality of a practice log
+# entry row (deleting, undoing, etc)" (2026-08-22) — so the row is rebuilt from
+# the journal on every replay like every other attempt, rather than being an
+# attempts-table insert that the next reproject would drop.
+IMPORT_EVENT = "time_imported"
 
 
 @dataclass(frozen=True)

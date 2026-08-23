@@ -3286,6 +3286,8 @@
   }
   .attempt-actions button { min-height: 30px; padding: .25rem .45rem; font-size: .76rem; }
   .attempt-actions .icon-button { width: 31px; padding-inline: 0; }
+  /* An imported row has no replay; the blank keeps its buttons in column. */
+  .attempt-actions .attempt-no-replay { display: inline-block; visibility: hidden; }
   .save-pb-narrow { display: none; }
   /* THE DISCLOSURE PRIMITIVE (components/collapsible.js::Disclose). Two
      rules and no more, deliberately: everything about HOW it opens is a

@@ -186,9 +186,15 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
         : html`<span>${a.strat_tag || "— no strategy —"}</span>`}
     </td>
     <td class="attempt-actions">
-      <button class="icon-button" onclick=${() => setShowReplay(!showReplay)}
-          title="View replay" aria-label="View replay">
-        <${Icon} name=${showReplay ? "chevron" : "play"} size=${16} /></button>
+      ${a.imported
+        // A brought-in time was never recorded, so there is no replay to
+        // offer and a dead play button would be the shape he reports as a
+        // bug. The spacer keeps this row's buttons on the same columns as
+        // its neighbours'.
+        ? html`<span class="icon-button attempt-no-replay" aria-hidden="true"></span>`
+        : html`<button class="icon-button" onclick=${() => setShowReplay(!showReplay)}
+            title="View replay" aria-label="View replay">
+          <${Icon} name=${showReplay ? "chevron" : "play"} size=${16} /></button>`}
       ${a.outcome === "success" && !a.cleared
         ? (a.is_current_pb
           ? html` <button onclick=${undoPb}

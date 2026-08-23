@@ -99,8 +99,8 @@ def settle(page, ms=300):
 
 def test_a_time_typed_by_hand_becomes_the_cards_personal_best(tmp_path):
     """The whole chain: the control draws, the field snaps to a displayable
-    centisecond, the save lands, and the card's PB is the imported one with no
-    attempt behind it."""
+    centisecond, the save lands, the card's PB is the imported one, and the
+    time is a row in the card's own log."""
     with serve_ui(tmp_path / "addtime.db") as base:
         with driver.get_driver().launch(headless=True) as page:
             page.goto(base)
@@ -119,6 +119,18 @@ def test_a_time_typed_by_hand_becomes_the_cards_personal_best(tmp_path):
             # every 100 can be), so this exercises the snap rather than
             # assuming it.
             for index, value in ((0, "0"), (1, "10"), (2, "01")):
+                if index == 2:
+                    # Committing the seconds box must NOT fill this one in:
+                    # "i typed '11' into the middle box, and then clicked into
+                    # the right box, which autofilled '00'... It shouldn't
+                    # prefill any text there" (2026-08-22). The echo of the
+                    # control's own commit used to re-pad every box.
+                    untouched = page.evaluate(
+                        "document.querySelectorAll('.addtime-body .timefield')"
+                        "[2].value")
+                    assert untouched == "", (
+                        f"the centis box was prefilled with {untouched!r} "
+                        "after committing the seconds box")
                 page.evaluate(
                     SET_BOX.replace("IDX", str(index)).replace("VAL", value))
                 settle(page, 150)
@@ -148,6 +160,17 @@ def test_a_time_typed_by_hand_becomes_the_cards_personal_best(tmp_path):
             assert '0\'10"03' in landed, (
                 "the card does not show the time that was just saved — an "
                 "import that lands on a screen nobody sees did not happen")
+
+            # And it is a ROW in the card's log, not only a number in its
+            # head: "It should show the new entry in the practice log as an
+            # entry row. This is because it then affords us all of the
+            # functionality of a practice log entry row (deleting, undoing,
+            # etc)" (2026-08-22).
+            rows = page.evaluate(
+                "[...document.querySelectorAll('.attempt-table tr')]"
+                ".map((row) => row.textContent.replace(/\\s+/g, ' ').trim())")
+            assert any('10"03' in row for row in rows), (
+                f"the saved time is not an attempt row in the log; rows: {rows}")
 
 
 def test_the_control_is_gated_on_the_KIND_not_on_course_id():

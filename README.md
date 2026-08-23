@@ -80,9 +80,11 @@ of times in whatever form you already have them (`BoB 1  0:23.57`, tabs or
 commas, the sheet's own names all work); hand it your LiveSplit splits file and
 it takes the golds onto the segments you have built; or paste a link to your own
 spreadsheet and it reads that. A time only lands when it beats the best you
-already hold for that star and strategy, so importing twice costs nothing — and
-every import can be undone in one click. Anything it could not read is listed
-back at you, line by line, rather than quietly skipped.
+already hold for that star and strategy, so importing twice costs nothing. Each
+one becomes a real row in that star's practice log — clear it, undo it, move
+it to another strategy like any run — and every import can be undone in one
+click. Anything it could not read is listed back at you, line by line, rather
+than quietly skipped.
 
 **Ranks.** Every attempt, banner and route step wears a rank badge, graded
 against community standards — **per strategy**, so a fast time on one strat

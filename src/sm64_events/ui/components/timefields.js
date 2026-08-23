@@ -47,15 +47,34 @@ export function TimeFields({ seconds, onCommit, compact = false, label = "" }) {
     return next;
   }
 
-  useEffect(() => { write(toFields(seconds)); }, [seconds]);
+  // The value THIS control last committed. Every blur commits, the parent
+  // stores it, and `seconds` comes straight back — and re-deriving the boxes
+  // from it padded every box he had not touched yet: typing 11 in seconds and
+  // clicking into centis found "00" already there, which he then had to
+  // delete ("it shouldn't prefill any text there", 2026-08-22). An echo of our
+  // own commit leaves the boxes exactly as typed; only a value from OUTSIDE
+  // — the card loading a different time — rewrites them.
+  const committed = useRef(undefined);
+
+  useEffect(() => {
+    if (seconds === committed.current) return;
+    committed.current = undefined;
+    write(toFields(seconds));
+  }, [seconds]);
+
+  function commit(next) {
+    const value = readFields(next);
+    committed.current = value;
+    onCommit(value);
+  }
 
   const box = (key, placeholder, max, width) => html`<input
       type="number" min="0" max=${max} step="1" inputmode="numeric"
       class="timefield" style=${`--tf-width:${width}`}
       placeholder=${placeholder} value=${fields[key]}
       aria-label=${`${label} ${key}`.trim()}
-      onblur=${(e) => onCommit(readFields(
-        write({ ...latest.current, [key]: pad(key, e.target.value) })))}
+      onblur=${(e) => commit(
+        write({ ...latest.current, [key]: pad(key, e.target.value) }))}
       oninput=${(e) => write({ ...latest.current, [key]: e.target.value })} />`;
 
   return html`<span class=${`timefields${compact ? " compact" : ""}`}>

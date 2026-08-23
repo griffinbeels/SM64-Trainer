@@ -313,20 +313,25 @@ erases one.
 
 ### Imported time
 
-A [[personal best]] the trainer recorded with no [[attempt]] behind it, because
-you set it before this tool watched you. It remembers the source that brought
-it — you typed it, you pasted it, you named your column in the
-[[Ultimate Sheet]], you handed over a LiveSplit splits file, or you linked your
-own spreadsheet — and the [[game version]] that set it, so a JP time grades on
-the JP [[ladder]] while you play US. The trainer draws neither fact: nothing
-marks an imported time on any screen.
+An [[attempt]] the trainer never watched you make, because you set the time
+before this tool existed. It is a real row in the [[practice log]] — stamped
+with the time you pressed Save, holding the [[personal best]] it brought — so you
+can clear it, undo it, or move it to another [[strategy]] exactly as you would
+a played one. The one thing it cannot offer is a replay.
+
+It remembers the source that brought it — you typed it, you pasted it, you
+named your column in the [[Ultimate Sheet]], you handed over a LiveSplit
+splits file, or you linked your own spreadsheet — and the [[game version]]
+that set it, so a JP time grades on the JP [[ladder]] while you play US. The
+trainer draws neither fact: nothing marks an imported time on any screen.
 
 An import lands a time only when it beats the [[personal best]] you already
-hold for that [[target]] and [[strategy]], so importing twice changes nothing.
-Every source names back what it could not read, rather than importing what it
-understood and staying quiet about the rest.
+hold for that [[target]] and [[strategy]], so importing twice changes nothing
+and grows no second row. Every source names back what it could not read,
+rather than importing what it understood and staying quiet about the rest.
 
 - **Lives** — the import rule (`src/sm64_events/tracking/importing.py`)
+  → the projector (`src/sm64_events/tracking/projection.py`)
   → the store (`src/sm64_events/storage/db.py`)
 
 ### Import name
