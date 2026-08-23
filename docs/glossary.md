@@ -724,6 +724,22 @@ name, the assignment still lands and the vetted [[ladder]] keeps grading.
 - **Lives** — the assignments (`src/sm64_events/library/adoptions.py`)
   → the link strip on the [[Library tab]]'s target page
 
+### Column export
+
+The reverse of an [[imported time]] — your [[personal best]]s written out in
+the [[Ultimate Sheet]]'s own notation, one line per live worksheet row, ready
+to paste back into the sheet as your own [[runner]] column. An [[approach]]
+on a [[star]] prints only where a [[matched strategy]] names which
+[[strategy]] it is; a [[sheet piece]] or a castle-movement [[approach]] prints
+only where an [[adoption]] (or the unasked name/seed-key match that grants
+one) says which [[segment]] it lands on. Anything neither names stays blank
+— it never guesses a [[strategy]] from the sheet's own row name the way an
+import will.
+
+- **Lives** — the column builder
+  (`src/sm64_events/library/export_column.py`)
+  → the scorecard's column endpoint (`src/sm64_events/server/scorecard_api.py`)
+
 ---
 
 ## What is on screen
