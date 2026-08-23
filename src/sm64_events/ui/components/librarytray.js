@@ -13,9 +13,9 @@
 // that still disables it (an import batch already running); library.js owns
 // what the click actually does.
 //
-// Tray item shape (library.js's own state, grown here, not reinvented --
-// task-5-caveats.md point 1): {key, runner, time_cs, video, strat, trim,
-// entity_key}. FIX ROUND 1: `key` is NOT `entry.video` -- that claim was
+// Tray item shape (library.js's own state, grown here, not reinvented):
+// {key, runner, time_cs, video, strat, trim, entity_key}.
+// FIX ROUND 1: `key` is NOT `entry.video` -- that claim was
 // checked against the real bundled snapshot and was false. 8 videos are
 // cited by more than one ENTITY (one recording standing as evidence for two
 // different stars is ordinary in this corpus -- e.g. JoSniffy's
@@ -95,15 +95,14 @@ function TrayChip({ item, editing, onToggleEdit, onTrim, onRemove }) {
 /**
  * The dock. Wrapped in its OWN `Disclose` so arriving/leaving the tray is a
  * measured-height animation like every other drop-down in this app
- * (`.claude/rules/ui-core.md`'s "a state change animates" rule, and
- * task-5-caveats.md point 5 naming this surface specifically) rather than the
- * bar popping in and shoving the page down. `items.length > 0` IS `open` --
+ * (`.claude/rules/ui-core.md`'s "a state change animates" rule) rather than
+ * the bar popping in and shoving the page down. `items.length > 0` IS `open` --
  * library.js never mounts/unmounts this component itself, so the close
  * direction gets to play too, not just the open one.
  */
 // TASK 6: `onStudy` is real now (library.js's `studyInCompare`), so the
-// always-visible "coming soon" note (task-5-caveats.md's own fix round 1,
-// citing acceptance.md: a disabled control must explain itself where the
+// always-visible "coming soon" note (fix round 1, citing acceptance.md: a
+// disabled control must explain itself where the
 // click lands, never only on hover) is gone -- the reason it existed for is
 // gone with it. `studying` is the ONE remaining state that still disables
 // the button (an import batch already running), and it keeps the same
@@ -186,8 +185,8 @@ function GridTile({ item, restartNonce }) {
 /**
  * The overlay. A plain fixed backdrop, not the shared `Modal` -- every
  * existing `Modal` call site snaps open/closed with no transition, and this
- * surface was called out on its own (task-5-caveats.md point 5) as one that
- * must not. Reuses the practice log's own tuned numbers (`feedTuning()` /
+ * surface was called out on its own as one that must not. Reuses the
+ * practice log's own tuned numbers (`feedTuning()` /
  * `curve()`) rather than inventing a duration -- "match a neighbouring
  * surface" -- so no new tunable and no inspector is owed here.
  *

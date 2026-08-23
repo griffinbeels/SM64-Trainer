@@ -416,6 +416,37 @@ In `pb` grading mode `/api/marelo/history`'s series replays SAVED PBs (`pbs`
 table), not every success — the same times the rating grades. Undoing a PB
 removes its point.
 
+## Leaderboard (the community sheet, scored on MARELO)
+
+The `/api/leaderboard*` routes point the SAME scope machinery at the
+Ultimate Sheet's community runners instead of the user alone: every
+runner's sheet time is graded through the identical 0-100 curve and
+standards ladders MARELO grades the user on (`library/board.py`), so a
+runner's number and the user's are directly comparable. Grading is always
+`pb`-basis and always the CURRENT grading version, whatever the user's own
+`rank_mode`/game-version setting happens to be — the payload echoes both so
+a client can say when they differ. `library` is never actually `None` in
+the running app (`server/app.py` builds it unconditionally); the empty-board
+fallback exists for a standalone caller with no library at all, and answers
+with `rows: []` rather than a `503`, matching `/api/library/entity/{k}`'s
+"the sheet is not loaded is an answer" precedent.
+
+| Method | Path | Body / Query | Effect |
+|---|---|---|---|
+| `GET` | `/api/marelo/exclusions` | — | `{excluded:[entity_key]}` — the EFFECTIVE set every scope drops. Since 2026-08-23 that set has a DEFAULT: every segment whose definition's category is not `Bowser Fights` or `100 Coin Exit` (castle movements, tricks, hand-built segments) is excluded until the user includes it — except the three Bowser COURSE entries (`seg:bitdw-pipe`/`seg:bitfs-pipe`/`seg:bits-pipe`, the "No Reds" pipe runs), exempt by seed key since his sixth read (his ruling: "by default all segments should be ignored... other than the Bowser stages / 100C stars"). `POST /api/marelo/exclude {entity, excluded}` overrides the default either way and clears the override on the opposite move; stars are never default-excluded. `/api/marelo`'s entities carry `pb_attempt_id` — the attempt that set the user's fastest PB on that entity (null without one) — so the Rank tab can offer that attempt's replay where `/api/replay/available` lists it. |
+| `GET` | `/api/leaderboard` | `?scope=<id>` (optional) | `{scope_id, label, n, basis:"pb", rank_mode, sheet_revision, omitted, rows:[{position,runner,you,marelo,tier,division,mastery,practiced,n}]}` for one scope (defaults to the active route, else Overall, same as `/api/marelo`). `rows` holds every community runner who has practiced at least one entity in this scope, plus exactly one `you:true, runner:null` row for the user — MARELO-descending, competition-ranked (a tie shares one `position` and the next skips by the tie's size). A runner with nothing practiced in this scope is left off `rows`, and `omitted` COUNTS them — a board that drops most of the sheet with no count would read as "this is everyone" when it is not. **`omitted` counts runners rated SOMEWHERE on the sheet but nowhere in this particular scope — not the handful of roster names (6 of 448 today) the sheet has no time for at all**, since those never enter either `rows` or this count. On `overall` specifically `omitted` is always `0` — every rankable entity is its own single-candidate group there, so anyone rated at all is rated on `overall`. The user's own row is never counted in `omitted` and never left off. `404` for an unknown scope. |
+| `GET` | `/api/leaderboard/runner/{name}` | `?scope=<id>` (optional) | One runner's rating for a scope, the same field set `/api/marelo` returns plus `runner`, each entity widened with the user's own numbers: `{runner, scope_id, label, marelo, mastery, coverage, tier, division, next_division_at, division_progress, n, practiced, entities:[{key,label,score,tier,division,next_tier,next_division,gain,excluded,time_cs,video,you:{score,time_cs,tier,division}}]}`. `video` is the URL of the sheet entry that set the runner's graded time, or `null`. `excluded` is always `false`: since 2026-08-23 the scope is resolved WITH the user's own exclusion set — exactly as `/api/marelo` is — so an excluded entity is simply absent (his ruling: "excluded for all of the fake leaderboards & their pages as well"); the same applies to `/api/leaderboard`'s `n` and to the summary chips. `404` for an unknown runner (the sheet has never heard of that name) or an unknown scope. |
+| `GET` | `/api/leaderboard/runner/{name}/summary` | — | `{chips:[{scope_id,label,tier,division,marelo,n,practiced}]}` — the same chip shape `/api/marelo/summary` returns, sourced from this runner instead of the user, over the same fixed scope list (`overall`, `Main Categories` routes, the active scope). `404` for an unknown runner. |
+
+Reads run off the event loop (plain `def` routes, which FastAPI threadpools
+whole): scoring 448 runners measures ~29ms to
+build the shared score map and up to ~46ms to aggregate Overall, both past
+a 33ms game frame, and the poller shares this process. A repeat request
+reuses the cached score map and, for an unchanged scope, its ranked rows —
+invalidated by a newer sheet revision, a changed adoption, a different
+grading version, or any standards edit (a threshold, a JP overlay, a new or
+deleted strategy).
+
 ## Compare (side-by-side video)
 
 **Compare** puts your run side-by-side with a reference video: the left

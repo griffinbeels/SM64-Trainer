@@ -1,7 +1,7 @@
 // src/sm64_events/ui/components/librarynav.js — the Library tab's own
 // course -> target navigation.
 //
-// task-3-caveats.md (2026-08-07) corrected the plan here: `.picker-grid` /
+// A 2026-08-07 correction to the original plan here: `.picker-grid` /
 // `.picker-cell` do not exist anywhere in this repo. The real picker markup
 // is entitymodal.js's `PickerDialog`, and it is a DIALOG (an overlay with its
 // own close button) -- the Library's navigation is the PAGE, so this module

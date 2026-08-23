@@ -24,6 +24,50 @@ _UNPRACTICED_TARGET = scoring.SCORE_ANCHORS["Gold"]
 UNPRACTICED_TARGET_TIER = scoring.tier_from_score(_UNPRACTICED_TARGET)
 
 
+# A segment RANKS BY DEFAULT only when it is one of these (the seeded
+# category on its definition); every other segment -- the castle movements,
+# LBLJ / MIPS Clip / Lakitu Skip, a hand-built one with no category -- is
+# excluded from every scope until the user includes it. His ruling (round 1
+# of the ranked leaderboard, fifth read, 2026-08-23): "by default all
+# segments should be ignored by default (other than the Bowser stages / 100C
+# stars, which I think are technically segments)... We should apply this to
+# the overall ranking + all routes by default. The user can go in and
+# manually include those later if they want". Keyed on the category rather
+# than a name list so a future Bowser fight or 100-coin exit inherits it.
+# A star is never default-excluded.
+RANKED_SEGMENT_CATEGORIES = frozenset({"Bowser Fights", "100 Coin Exit"})
+
+# The one exemption keyed on IDENTITY rather than category: the three Bowser
+# COURSE entries -- the "No Reds" run from the castle into the pipe. They sit
+# in the seed as `Castle Movement` beside the reds-inclusive `seg:reds->pipe:*`
+# runs, and a category cannot tell the two apart; his sixth read, on seeing
+# them dimmed: "these should not be ignored in any route, because those are
+# just the Bowser Course entries (i.e., No Reds). These are actually very
+# important and should be part of the default ranking."
+RANKED_SEGMENT_SEED_KEYS = frozenset({"seg:bitdw-pipe", "seg:bitfs-pipe", "seg:bits-pipe"})
+
+
+def ranks_by_default(definition: dict) -> bool:
+    """Whether one segment definition counts toward ranking before the user
+    has said anything about it."""
+    return (definition.get("category") in RANKED_SEGMENT_CATEGORIES
+            or definition.get("seed_key") in RANKED_SEGMENT_SEED_KEYS)
+
+
+def default_excluded(segment_defs: Iterable[dict]) -> set[str]:
+    """Entity keys excluded from ranking unless the user includes them --
+    every segment definition that does not `ranks_by_default`."""
+    return {f"segment:{definition['id']}" for definition in segment_defs
+            if not ranks_by_default(definition)}
+
+
+def effective_excluded(default: set[str], included: Iterable[str],
+                       excluded: Iterable[str]) -> set[str]:
+    """The set every scope actually drops: the defaults minus what the user
+    has explicitly included, plus what the user has explicitly excluded."""
+    return (set(default) - set(included)) | set(excluded)
+
+
 def rankable_entities(ladders_by_entity: dict[str, dict[str, dict[str, float]]],
                        excluded: Iterable[str] = ()) -> list[str]:
     """Entity keys with at least one ladder, minus the user's exclusions.

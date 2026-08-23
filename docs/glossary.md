@@ -700,6 +700,43 @@ name, the assignment still lands and the vetted [[ladder]] keeps grading.
 - **Lives** — the assignments (`src/sm64_events/library/adoptions.py`)
   → the link strip on the [[Library tab]]'s target page
 
+### Runner rating
+
+The [[MARELO]] this project derives for a [[runner]] from their [[sheet
+entry]] times, on the exact same 0-100 curve your own [[MARELO]] grades on —
+what turns the [[Ultimate Sheet]] into a board you can climb against a
+[[runner]]'s best time on each [[target]], not just your own. A [[runner]]
+with no time on a [[target]] never grades as zero there; that [[target]] is
+simply absent from their rating, the same rule your own [[MARELO]] follows.
+
+- **Lives** — the ratings bridge (`src/sm64_events/library/ratings.py`)
+- **Not** — your own [[MARELO]], which only ever grades your practice
+  history, never a [[runner]]'s.
+
+### Rank board
+
+Every [[runner]] who has practiced something in a [[scope]], plus you,
+ordered by [[MARELO]] and numbered the same way [[Leaderboard mode]]
+numbers its own list: a tie shares a position and the next skips ahead by
+the tie's size. The board covers the entities your own rating covers — exclude an
+entity from your own rating and the board drops it too. It drops a [[runner]] with nothing
+practiced in this [[scope]] and always keeps your own row, even at zero —
+but it COUNTS the drop rather than staying silent about it: it states how many it left off, so
+the board can never read as "this is everyone" when it is not. Opening one
+[[runner]]'s row lands on their [[Runner page]], which widens every entity
+with your own score and time on it, so the two read side by side. On the
+[[Rank tab]] it is its own card titled Leaderboard, sitting between the
+[[scope]] chips and your [[MARELO]] card, closed until you open it and folding
+open and shut the same way a [[Library tab]] section does.
+
+- **Lives** — the board (`src/sm64_events/library/board.py`) → served at
+  /api/leaderboard → drawn on the [[Rank tab]]
+  (`src/sm64_events/ui/components/leaderboard.js`)
+- **Not** — [[Leaderboard mode]], which re-orders one [[approach]]'s
+  [[sheet entry]] list by raw time inside a single [[Library tab]] section;
+  this orders every [[runner]]'s [[runner rating]] across a whole [[scope]]
+  instead.
+
 ---
 
 ## What is on screen
@@ -719,6 +756,34 @@ pill]], the [[scope]] control, and your [[rank]]s across everything.
 
 - **Lives** — the rank page
   (`src/sm64_events/ui/components/rankpage.js`)
+
+### Runner page
+
+One community [[runner]]'s own standing, read-only, reached by clicking
+their name on a [[Rank board]] row or beside one of their times on the
+[[Library tab]] — one screen either way, never two that draw it differently.
+Your own [[Rank tab]]'s breakdown has the same door: an entity's name opens the
+[[Library tab]] on that entity and lands on the subdivision your own
+[[personal best]] sits in. The same [[scope]] chips and the same coverage strip your own [[Rank tab]]
+draws, pointed at their [[runner rating]] instead of yours, and the same
+breakdown table with its last three columns widened for comparison: their
+time, your time, and the gap between the two — it keeps [[rank]] on each
+entity the same as your own tab's. No control on it can change anything —
+no excluding an entity, no repointing an icon. Its one door out: a lit
+coverage tile, or an entity's name (icon included) in the breakdown, opens
+the [[Library tab]] on that entity landed on this [[runner]]'s own [[sheet
+entry]] for it, and the [[Rank tab]] afterwards returns to the same page.
+A row whose entry has a video carries a play control that opens that video
+right beneath the row. Exclude an entity from your own rating and this page drops it too — it
+covers the same entities your [[Rank tab]] does.
+
+- **Lives** — the page
+  (`src/sm64_events/ui/components/runnerpage.js`), reached from
+  `src/sm64_events/ui/components/leaderboard.js` and
+  `src/sm64_events/ui/components/librarytarget.js`
+- **Not** — the [[Rank tab]], the same shell around YOUR OWN [[MARELO]] —
+  it grades nobody's [[rank]] but yours, and its breakdown table carries the
+  Ignore/Include control this page never shows.
 
 ### Library tab
 
@@ -962,6 +1027,26 @@ link reads the same registry.
   the [[Library tab]] (`src/sm64_events/ui/components/librarytarget.js`)
 - **Not** — the [[book mark]]. The [[book mark]] leads INTO the Library from a
   practice card; the wiki mark leads OUT of it, to Ukikipedia.
+
+### Leaderboard mode
+
+A second reading of an [[approach]]'s [[sheet entry]] list on its [[Library
+tab]] section — every entry ranked fastest first and numbered, instead of the
+default reading's bands split by [[tier]] and [[division]]. Each entry is one
+condensed line — position, [[rank]] cap, [[runner]], time — with a play
+control where the entry has a video; the video stays folded beneath the line
+until you open it. Two entries tied
+on time share a number and the next distinct time skips ahead by the tie's
+size. Your own [[personal best]] inserts itself at the position it actually
+earns among the community's, read off the [[rank]] the section already
+grades you at rather than fetched again. A per-section switch swaps between
+the two readings; the default reading never changes, and the pick lives in
+the section's own component state, so closing and reopening the section
+keeps it — only navigating away from this library page returns it to the
+default reading.
+
+- **Lives** — the mode switch and the flat list
+  (`src/sm64_events/ui/components/librarytarget.js`)
 
 ### Progress graph
 

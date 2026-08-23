@@ -1055,6 +1055,51 @@ the chip row can poll safely.
 | A **tier colour** | `ui/components/caps.js::CAP` — the single authority (pinned by `tests/test_ui_caps.py`). The old `ranks/standards.py::RANK_COLORS` Python copy was deleted (2026-07-25): it had no runtime consumer, existing only to be mirrored, and the mirror is what made a tier swap a three-edit job across two languages. Every `Hat` icon (medal-style and division-bearing alike — one component replaced both `Medal` and `Crest`, Task 4, 2026-07-25), gridline, rank-up dot, ladder band and card wash reads its colour from `caps.js`. |
 | **Keeping an entity out of a rating** | `POST /api/marelo/exclude` (reversible; excluded rows stay in the payload as inert display rows). Entities with no standards are excluded by construction, not by flag. |
 
+### Runner ratings — the same curve, a different source (2026-08-20/21)
+
+`library/ratings.py` derives `{runner: {entity: score}}` for the Ultimate
+Sheet's 448 runners, and `library/board.py` aggregates and ranks it. **No new
+scoring math exists**: a runner's time goes through the identical pair the
+user's own PB does — `scoring.best_ladder(ranks_store.ladders(key, version))`
+then `scoring.progress_for_time(ladder, cs)["score"]` — because a rating you
+cannot compare against your own is not worth computing. Never the raw
+`score_for`; that reserve is what stops the two disagreeing by up to half a
+centisecond at a division edge.
+
+Four facts that took measuring, each with its number:
+
+* **A runner's entity time is the MINIMUM across every approach and target that
+  maps to it, and a SUBSECTION never inherits its target's entity.** A
+  subsection times a fragment of a star, so an inherited fragment always beats
+  the runner's real star time under that minimum. Letting them inherit moves
+  the corpus 442 → 446 runners and the top rating 85.2 → 88.8 — a rating rising
+  because a piece was graded as the whole.
+* **Absent is not zero on either side.** An entity with no time is omitted;
+  `scopes.aggregate` supplies the zero. Only `practiced`/`coverage` can tell the
+  two apart — `marelo` folds them identically through `total += score or 0.0`,
+  so a test asserting a *rating* cannot guard this rule and a test asserting
+  *coverage* can.
+* **The sheet's times share the standards ladder's clock** (measured
+  2026-08-21). Ratio of each entity's best sheet time to its ladder's Mario
+  cutoff: median **0.983** across 106 `igt` entities and **0.983** across 6
+  `rta` ones, the `rta` group the tighter of the two. A different clock would
+  put a systematic offset on one group; there is none. So the runner path
+  correctly applies no `clock_for` filter — the user's PB path filters because a
+  PB row can be *saved* under either timer mode, and a sheet entry carries no
+  timer mode at all.
+* **One entity is distorted by the sheet's own convention.** `star:15:1`
+  (Rainbow Ride) is labelled "(PAUSE TIME INCLUDED)" on all three approaches
+  while its ladder is not — best 35.23s against a 10.00s Mario cutoff, ratio
+  3.523 against that 0.983 median. Every runner scores near the floor there for
+  a reason that is not skill. Left in deliberately: silently dropping an entity
+  is worse than a known distortion, and it is 1 slot of 117.
+
+Coverage is scope-dependent and Overall is the sparse one: 6 of 448 runners have
+no mapped time at all, but per course the median runner is absent from **167**,
+ranging 64 (Whomp's Fortress) to 338 (Wing Mario Over the Rainbow). That is why
+the board omits zero-coverage runners and states the count rather than listing
+several hundred identical zero rows.
+
 ## Default routes foundation (2026-07-23, spec #1)
 
 Ships the engine + storage mechanism for the standard Usamune route corpus

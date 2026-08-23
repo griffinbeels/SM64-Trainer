@@ -8,6 +8,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { requestTarget } from "../target.js";
+import { fmtSeconds } from "../format.js";
 import { rankColor } from "./ranks.js";
 import { capGradient, capName, divisionDigit } from "./caps.js";
 import { fmtPoints, fmtScore, toPoints } from "./marelo.js";
@@ -18,6 +19,9 @@ import { useTween } from "../useTween.js";
 import { entityIconSrc, fallbackSlotForEntityKey,
          fallbackToGenericStar, isGenericArt } from "./entityicons.js";
 import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
+import { LeaderboardCard } from "./leaderboard.js";
+import { ExampleMedia } from "./librarytarget.js";
+import { ReplayPlayer } from "./replay.js";
 
 const html = htm.bind(h);
 
@@ -547,8 +551,138 @@ function gainTitle(entity) {
   return `What this scope's rating would gain if you reached the next tier here.`;
 }
 
-function Breakdown({ data, routeOrder, onToggle }) {
-  const [byGain, setByGain] = useState(!routeOrder);
+// A runner-variant row's own last column: how far your saved time is from
+// theirs on the SAME entity, from your own side ("gap to close"). `null`
+// whenever either side has no time to compare -- a gap is a fact about TWO
+// times, and showing one without the other would imply a comparison that was
+// never made. Positive = you are slower (the gap you'd have to close);
+// negative = you are already faster.
+function runnerGapCs(entity) {
+  if (entity.time_cs == null || !entity.you || entity.you.time_cs == null) return null;
+  return entity.you.time_cs - entity.time_cs;
+}
+
+function runnerTimeLabel(cs) {
+  return cs == null ? "–" : fmtSeconds(cs / 100);
+}
+
+function runnerGapLabel(entity) {
+  const gap = runnerGapCs(entity);
+  if (gap == null) return "–";
+  if (gap === 0) return "Tied";
+  return `${gap > 0 ? "+" : "−"}${fmtSeconds(Math.abs(gap) / 100)}`;
+}
+
+function runnerGapTitle(entity) {
+  const gap = runnerGapCs(entity);
+  if (gap == null)
+    return entity.time_cs == null
+      ? "This runner has no recorded time here."
+      : "You have no recorded time here.";
+  if (gap === 0) return "Tied.";
+  return gap > 0
+    ? `You are ${fmtSeconds(Math.abs(gap) / 100)} slower than this runner here.`
+    : `You are ${fmtSeconds(Math.abs(gap) / 100)} faster than this runner here.`;
+}
+
+// `variant`: "yours" (default, unchanged) grades the entity by YOUR score --
+// Score/Next rank/Gain, plus the Ignore/Include control every scope-shaping
+// exclusion goes through. "runner" (the runner page, runnerpage.js) grades no
+// one -- it COMPARES: Rank is the runner's own tier on this entity, then
+// their time, your time and the gap between the two. One table, one named
+// difference, never a second implementation of the shell around it: both
+// variants share everything except these last columns and the Ignore
+// control. `onOpenEntity(entity)` (runner variant only, 2026-08-22): the
+// entity's NAME becomes a door onto that runner's entry in the Library for
+// every row the runner has a time on -- his first read: "click the name of
+// any of the entities and be brought immediately to the library page for
+// that entity, focused specifically on this player's entry". A row with no
+// time has no entry to land on and stays plain text.
+//
+// Rows open in the SERVED order -- route order on a route, scope order
+// otherwise ("Default sort should be Route Order", his second read,
+// 2026-08-22; until then biggest-gain-first was the default off a route).
+// The toggle to biggest gain stays. Every row leads with the entity's own
+// art (`EntityArt`), on both variants: "make it easier to parse quickly".
+// One breakdown row -- and, on the runner variant, the player beneath it.
+// The last column is the practice log's own ▶ (`icon-button`, play/chevron,
+// attemptlog.js) for every entity the runner's graded entry has a video for;
+// pressing it opens a `replay-row` under the entry with the Library card's
+// own `ExampleMedia`, so a runner's run can be inspected from the Rank tab
+// without leaving it (his third read, 2026-08-23: "like the exact one in
+// the practice log... like how we do it with the replay system"). The
+// entity's art sits INSIDE the name's door, so the icon is as clickable as
+// the name ("The course icon should be clickable as well"). On HIS OWN
+// tab the same ▶ plays the saved replay of the attempt that set the row's
+// PB (`entity.pb_attempt_id`, when `/api/replay/available` lists it) --
+// the practice log's own `ReplayPlayer`, so his run and a runner's run are
+// inspected from the same seat ("I should be able to view any of my PBs on
+// this page the same way as the fake leaderboard", fifth read).
+function BreakdownRow({ t, data, entity, isRunner, onToggle, onOpenEntity,
+                        replayable = null }) {
+  const [showVideo, setShowVideo] = useState(false);
+  const canReplay = !isRunner && replayable && entity.pb_attempt_id != null
+    && replayable.has(entity.pb_attempt_id);
+  const playButton = (label) => html`<button type="button" class="icon-button rank-row-play"
+      onclick=${() => setShowVideo(!showVideo)}
+      title=${showVideo ? "Close the video" : label}
+      aria-label=${showVideo ? "Close the video" : label}
+      aria-expanded=${showVideo ? "true" : "false"}>
+      <${Icon} name=${showVideo ? "chevron" : "play"} size=${16} /></button>`;
+  const art = html`<${EntityArt} t=${t} entityKey=${entity.key} className="rank-row-icon" />`;
+  // A runner's row is a door only where they have a time (an entry to land
+  // on); his own row is always one -- the Library page exists for every
+  // entity, and lands on his PB's subdivision where he has one.
+  const hasDoor = onOpenEntity && (isRunner ? entity.time_cs != null : true);
+  const row = html`<tr class=${[
+      entity.score == null ? "unpracticed" : "",
+      entity.excluded ? "is-excluded" : ""].filter(Boolean).join(" ")}>
+    <td class="rank-cell-name">
+      ${hasDoor
+        ? html`<button type="button" class="rank-entity-link textlink"
+            title=${isRunner
+              ? `Open ${data.runner}'s entry for this in the Library`
+              : entity.pb_attempt_id != null
+                ? "Open your PB's entry in the Library"
+                : "Open this in the Library"}
+            onclick=${() => onOpenEntity(entity)}>${art}${entity.label}</button>`
+        : html`<span>${art}${entity.label}</span>`}</td>
+    <td>${entity.tier
+      ? html`<${RankIcon} tier=${entity.tier} division=${entity.division} size=${30} />`
+      : "–"}</td>
+    ${isRunner
+      ? html`<td class="meta rank-cell-points">${runnerTimeLabel(entity.time_cs)}</td>
+          <td class="meta rank-cell-points">${runnerTimeLabel(entity.you.time_cs)}</td>
+          <td class="meta rank-cell-gain" title=${runnerGapTitle(entity)}>${runnerGapLabel(entity)}</td>
+          <td class="rank-cell-play">${entity.video
+            ? playButton(`Watch ${data.runner}'s run`) : null}</td>`
+      : html`<td class="meta rank-cell-points">${fmtPoints(entity.score)}</td>
+          <td class="meta rank-cell-next">${nextRankLabel(entity)}</td>
+          <td class="meta rank-cell-gain" title=${gainTitle(entity)}>+${toPoints(entity.gain)}</td>
+          <td><button type="button" class="chip"
+            onclick=${() => onToggle(entity.key, !entity.excluded)}
+            title=${entity.excluded
+              ? "Include this in every rating again"
+              : "Exclude this from every rating"}>
+            ${entity.excluded ? "Include" : "Ignore"}</button></td>
+          <td class="rank-cell-play">${canReplay ? playButton("Watch your PB's replay") : null}</td>`}
+  </tr>`;
+  const videoRow = showVideo
+    ? html`<tr class="replay-row rank-video-row"><td colspan=${isRunner ? 6 : 7}>
+        <div class="rank-video-box ${isRunner ? "" : "is-replay"}">
+          ${isRunner
+            ? html`<${ExampleMedia} entry=${{ video: entity.video, runner: data.runner,
+                                               time_cs: entity.time_cs }} autoplay />`
+            : html`<${ReplayPlayer} attemptId=${entity.pb_attempt_id} />`}
+        </div></td></tr>`
+    : null;
+  return [row, videoRow];
+}
+
+export function Breakdown({ t, data, routeOrder, onToggle, variant = "yours",
+                            onOpenEntity = null, replayable = null }) {
+  const isRunner = variant === "runner";
+  const [byGain, setByGain] = useState(false);
   const rows = byGain
     ? [...data.entities].sort((entityA, entityB) => entityB.gain - entityA.gain)
     : data.entities;
@@ -561,29 +695,21 @@ function Breakdown({ data, routeOrder, onToggle }) {
     <table class="rank-table">
       <thead><tr>
         <th>Entity</th><th>Rank</th>
-        <th class="rank-cell-points">Score (pts)</th>
-        <th>Next rank</th>
-        <th class="rank-cell-gain">Gain (pts)</th>
-        <th></th>
+        ${isRunner
+          ? html`<th class="rank-cell-points">Their time</th>
+              <th class="rank-cell-points">Your time</th>
+              <th class="rank-cell-gain">Gap</th>
+              <th></th>`
+          : html`<th class="rank-cell-points">Score (pts)</th>
+              <th>Next rank</th>
+              <th class="rank-cell-gain">Gain (pts)</th>
+              <th></th>
+              <th></th>`}
       </tr></thead>
       <tbody>
-      ${rows.map((entity) => html`<tr class=${[
-          entity.score == null ? "unpracticed" : "",
-          entity.excluded ? "is-excluded" : ""].filter(Boolean).join(" ")}>
-        <td class="rank-cell-name">${entity.label}</td>
-        <td>${entity.tier
-          ? html`<${RankIcon} tier=${entity.tier} division=${entity.division} size=${30} />`
-          : "–"}</td>
-        <td class="meta rank-cell-points">${fmtPoints(entity.score)}</td>
-        <td class="meta rank-cell-next">${nextRankLabel(entity)}</td>
-        <td class="meta rank-cell-gain" title=${gainTitle(entity)}>+${toPoints(entity.gain)}</td>
-        <td><button type="button" class="chip"
-          onclick=${() => onToggle(entity.key, !entity.excluded)}
-          title=${entity.excluded
-            ? "Include this in every rating again"
-            : "Exclude this from every rating"}>
-          ${entity.excluded ? "Include" : "Ignore"}</button></td>
-      </tr>`)}
+      ${rows.map((entity) => html`<${BreakdownRow} key=${entity.key} t=${t} data=${data}
+          entity=${entity} isRunner=${isRunner} onToggle=${onToggle}
+          onOpenEntity=${onOpenEntity} replayable=${replayable} />`)}
       </tbody>
     </table>
   </div>`;
@@ -598,14 +724,20 @@ function Breakdown({ data, routeOrder, onToggle }) {
 // tab's own staleness fix (t.mareloRev): the chips must not go stale while
 // the tab is left open during play, same reason the breakdown re-fetches
 // on every REFRESH_ON event.
-function ScopeChips({ activeScopeId, onPick, refreshKey }) {
+//
+// `source` (runnerpage.js's own addition): the endpoint to read chips FROM,
+// defaulting to the user's own `/api/marelo/summary`. The runner page passes
+// `/api/leaderboard/runner/{name}/summary` instead -- the identical chip
+// shape (board.py::runner_summary's own docstring), so this is a data-source
+// swap and nothing about the row itself changes.
+export function ScopeChips({ activeScopeId, onPick, refreshKey, source = "/api/marelo/summary" }) {
   const [chips, setChips] = useState(null);
   useEffect(() => {
     let alive = true;
-    getJSON("/api/marelo/summary").then((response) => alive && setChips(response.chips))
+    getJSON(source).then((response) => alive && setChips(response.chips))
       .catch(() => alive && setChips([]));
     return () => { alive = false; };
-  }, [refreshKey]);
+  }, [refreshKey, source]);
   if (!chips || !chips.length) return null;
   return html`<div class="scope-chip-row">
     ${chips.map((chip) => html`<button type="button" key=${chip.scope_id}
@@ -642,26 +774,46 @@ function ScopeChips({ activeScopeId, onPick, refreshKey }) {
 // what makes a coverage row readable as "these, not those" at a glance
 // (round 8). Never two components that happen to look alike — the split
 // rank banners were exactly that mistake one card over.
-function EntityTile({ t, entity, size = 42, open, onToggle, onEdit }) {
-  const fallbackSlot = fallbackSlotForEntityKey(entity.key);
-  const iconSrc = entityIconSrc(t, entity.key);
+// A tile's click is ONE of two things, or nothing: `onToggle` expands the
+// detail panel under the strip (your own Rank tab; carries `aria-expanded`),
+// `onOpen` is a DOOR elsewhere (the [[Runner page]]'s tiles open that
+// runner's entry in the Library; no aria-expanded, the title names the
+// destination). Omitting both renders a STATIC tile (`.is-static` -- no
+// focus stop, no pointer cursor, no hover), never a tile whose click
+// silently does nothing. `onEdit` (the ✎) is optional the same way.
+// The one way this file draws an entity's ART -- the coverage tile and
+// (since 2026-08-22, his second read: "to the left of all the names, we
+// should include their star/segment icons... reuse them") every breakdown
+// row. `entityIconSrc` is the SAME call the practice selector's cells make,
+// with the same generic-star fallback, so a segment or a repointed star can
+// never look different here than there.
+function EntityArt({ t, entityKey, className = "" }) {
+  const iconSrc = entityIconSrc(t, entityKey);
+  return html`<img class="${className} ${isGenericArt(iconSrc) ? "" : "courseicon"}" src=${iconSrc}
+       onerror=${(event) => fallbackToGenericStar(event, fallbackSlotForEntityKey(entityKey))}
+       alt="" draggable="false" />`;
+}
+
+function EntityTile({ t, entity, size = 42, open, onToggle, onOpen, onEdit }) {
   const practiced = entity.score != null;
+  const onClick = onToggle || onOpen || null;
   // Enter/Space on the ✎ must not also fire the tile's own click.
   const editKey = (keyEvent) => {
     if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
     keyEvent.preventDefault(); keyEvent.stopPropagation(); onEdit();
   };
   return html`<button type="button"
-      class="entity-tile ${open ? "is-open" : ""} ${practiced ? "" : "is-unpracticed"}"
+      class="entity-tile ${open ? "is-open" : ""} ${practiced ? "" : "is-unpracticed"} ${onClick ? "" : "is-static"}"
       style=${`--tile-size:${size}px;`
         + (practiced ? `--tier-tint:${rankColor(entity.tier)}` : "")}
-      onclick=${onToggle} aria-expanded=${open ? "true" : "false"}
-      title=${practiced
+      onclick=${onClick}
+      aria-expanded=${onToggle ? (open ? "true" : "false") : null}
+      tabindex=${onClick ? null : "-1"}
+      title=${(practiced
         ? `${entity.label} — ${capName(entity.tier)} ${divisionDigit(entity.division)} · ${fmtPoints(entity.score)} pts`
-        : `${entity.label} — not practiced yet`}>
-    <img class="entity-tile-icon ${isGenericArt(iconSrc) ? "" : "courseicon"}" src=${iconSrc}
-         onerror=${(event) => fallbackToGenericStar(event, fallbackSlot)}
-         alt="" draggable="false" />
+        : `${entity.label} — not practiced yet`)
+        + (onOpen ? " · open their entry in the Library" : "")}>
+    <${EntityArt} t=${t} entityKey=${entity.key} className="entity-tile-icon" />
     ${onEdit ? html`<span class="editicon tile-editicon" role="button"
           tabindex="0" title=${`Choose icon for ${entity.label}…`}
           aria-label=${`Choose icon for ${entity.label}`}
@@ -783,7 +935,22 @@ const COVERAGE_TILE_PX = 42;
 // above it. Tiles open the SAME detail panel Best-in-scope uses — on an
 // unpracticed entry that panel is just "Practice this", which is the
 // obvious next move from a dim tile.
-function CoverageStrip({ t, data, caption }) {
+//
+// `readOnly` (the [[Runner page]], runnerpage.js): no ✎ (repointing
+// someone else's icon is not a thing to offer) and no click into
+// `EntityDetail`, which reads `t.view`, the VIEWING user's own attempts and
+// PB; on a runner's page that panel printed the runner's score beside the
+// viewer's PB with nothing saying whose was whose (reproduced live, task 5
+// review). The icon picker is still instantiated (rules of hooks); it just
+// never opens.
+//
+// `onOpenEntity(entity)` (2026-08-22, his first read of the runner page: "I
+// should be able to click on any of the icons within the Coverage list and
+// jump straight to their Library entry for that specific time"): a DOOR
+// for a tile the runner has a time on -- `entity.time_cs != null` -- which
+// is a different click from the detail panel and stands on its own. A tile
+// with no time has no entry to land on and stays `.is-static`.
+export function CoverageStrip({ t, data, caption, readOnly = false, onOpenEntity = null }) {
   const [openKey, setOpenKey] = useState(null);
   // ONE icon picker for the whole strip, hoisted out of the tiles for the
   // same reason the banner hoists its own: a click inside the modal must
@@ -798,22 +965,36 @@ function CoverageStrip({ t, data, caption }) {
     <div class="entity-strip rank-coverage-strip">
       ${rated.map((entity) => html`<${EntityTile} key=${entity.key} t=${t}
         entity=${entity} size=${COVERAGE_TILE_PX} open=${entity.key === openKey}
-        onToggle=${() => setOpenKey(entity.key === openKey ? null : entity.key)}
-        onEdit=${() => setPicking(iconIdentityForKey(entity.key))} />`)}
+        onToggle=${readOnly ? undefined
+          : () => setOpenKey(entity.key === openKey ? null : entity.key)}
+        onOpen=${onOpenEntity && entity.time_cs != null
+          ? () => onOpenEntity(entity) : undefined}
+        onEdit=${readOnly ? undefined
+          : () => setPicking(iconIdentityForKey(entity.key))} />`)}
     </div>
     <span class="meta">${caption}</span>
     ${open && html`<${EntityDetail} t=${t} entity=${open}
       onClose=${() => setOpenKey(null)} />`}
-    ${pickerModal}
+    ${!readOnly && pickerModal}
   </div>`;
 }
 
-export function RankPage({ t }) {
+// `onOpenRunner` (task 5's own addition): the door from a leaderboard row to
+// runnerpage.js's page -- threaded straight to `<Leaderboard>`, unopened
+// here. `app.js` owns which of RankPage/RunnerPage is actually mounted for
+// the "Rank" nav slot (never both, and never a cycle: runnerpage.js imports
+// this file's Breakdown/CoverageStrip/ScopeChips, so this file cannot import
+// runnerpage.js back).
+// `openLibrary` (2026-08-23): the door from his OWN breakdown's entity names
+// -- "yes" to the fork left open since the first read -- opening the Library
+// on that entity and landing on his own PB's subdivision.
+export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null }) {
   const [scopes, setScopes] = useState(null);
   const [scopesErr, setScopesErr] = useState(null);
   const [scopeId, setScopeId] = useState(null);
   const [data, setData] = useState(null);
   const [dataErr, setDataErr] = useState(null);
+  const [replayable, setReplayable] = useState(new Set());
   const [points, setPoints] = useState([]);
 
   useEffect(() => {
@@ -848,6 +1029,12 @@ export function RankPage({ t }) {
     const query = `?scope=${encodeURIComponent(scopeId)}`;
     getJSON(`/api/marelo${query}`).then((response) => alive && setData(response))
       .catch((error) => alive && setDataErr(error));
+    // Which attempts can play right now (saved, or still in the ring) --
+    // the breakdown's own ▶ shows only where the row's PB is one of them.
+    // Recomputed with the data: the ring shifts as play goes on.
+    getJSON("/api/replay/available")
+      .then((response) => alive && setReplayable(new Set(response.available)))
+      .catch(() => alive && setReplayable(new Set()));
     getJSON(`/api/marelo/history${query}`).then((response) => alive && setPoints(response.points))
       .catch(() => alive && setPoints([]));
     return () => { alive = false; };
@@ -881,6 +1068,7 @@ export function RankPage({ t }) {
 
   return html`<div class="rank-page">
     <${ScopeChips} activeScopeId=${scopeId} onPick=${setScopeId} refreshKey=${t.mareloRev} />
+    <${LeaderboardCard} t=${t} scopeId=${scopeId} onOpenRunner=${onOpenRunner} />
     <div class="practice-card rank-card">
       <label class="route-focus-control">
         <${Icon} name="rank" size=${18} />
@@ -982,8 +1170,11 @@ export function RankPage({ t }) {
           editing this route or ignoring an entry rewrites the curve.</p>
       </div>
       <div class="practice-card">
-        <${Breakdown} key=${scopeId} data=${data} routeOrder=${routeOrder}
-          onToggle=${toggleExcluded} />
+        <${Breakdown} key=${scopeId} t=${t} data=${data} routeOrder=${routeOrder}
+          onToggle=${toggleExcluded} replayable=${replayable}
+          onOpenEntity=${openLibrary
+            ? (entity) => openLibrary({ kind: "target", entity: entity.key, you: true })
+            : null} />
       </div>`}
   </div>`;
 }

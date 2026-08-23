@@ -6,6 +6,7 @@ so `entities` may be non-empty from the start -- the seeded star:9:2 ladder.
 """
 import asyncio
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import pytest
 
@@ -108,11 +109,14 @@ def test_exclusions_endpoint_reports_the_raw_set(client):
     ONE entity, possibly one with no standards yet and therefore in no scope
     at all, so it can't get the answer from /api/marelo's per-entity
     `excluded` flag (spec 2026-07-25 round 7)."""
-    assert client.get("/api/marelo/exclusions").json()["excluded"] == []
+    # The EFFECTIVE set, defaults included (every seeded movement/trick
+    # segment, round 1's fifth read) -- the tick reads what ranking uses.
+    baseline = client.get("/api/marelo/exclusions").json()["excluded"]
+    assert "star:9:2" not in baseline
     client.post("/api/marelo/exclude", json={"entity": "star:9:2", "excluded": True})
-    assert client.get("/api/marelo/exclusions").json()["excluded"] == ["star:9:2"]
+    assert client.get("/api/marelo/exclusions").json()["excluded"] == sorted(baseline + ["star:9:2"])
     client.post("/api/marelo/exclude", json={"entity": "star:9:2", "excluded": False})
-    assert client.get("/api/marelo/exclusions").json()["excluded"] == []
+    assert client.get("/api/marelo/exclusions").json()["excluded"] == baseline
 
 
 def test_history_returns_points_for_a_valid_scope(client):
@@ -435,3 +439,258 @@ def test_browsing_a_non_active_scope_never_celebrates(tmp_path):
         # Browsing must not move the ACTIVE-scope memory either, or the next
         # header fetch would read as an arrival and swallow a real rank-up.
         assert service.db.get_state("marelo_active_scope", None) == "overall"
+
+
+# -- /api/leaderboard + /api/leaderboard/runner/{name}[/summary] (Task 3) ---
+#
+# `make_client` wires a real `library`/`adoptions` pair (server/app.py mounts
+# them unconditionally), so these routes see the actual bundled Ultimate
+# Sheet snapshot -- real runners, real ladders. Runner-specific tests read a
+# real name back off `/api/leaderboard` rather than hardcoding one, since the
+# sheet grows and any fixed name could stop scoring on "overall" someday.
+
+def test_the_three_leaderboard_routes_are_sync_so_fastapi_threadpools_them(client):
+    """Fix wave (final review, M3): these three routes used to be `async
+    def` with only the cache-hitting call itself hand-threadpooled, so
+    `_groups`/`_you_scores` ran on the poller's shared asyncio loop --
+    measured 13.32ms per `/api/leaderboard` request, one frame being 33.3ms.
+    A plain `def` route is what `/api/marelo` already does and lets FastAPI
+    threadpool the WHOLE body; a route sliding back to `async def` silently
+    reopens the on-loop cost with no red test anywhere else, since every
+    other test here only checks the RESPONSE shape."""
+    endpoints = {route.path: route.endpoint for route in client.app.routes
+                 if getattr(route, "path", "").startswith("/api/leaderboard")}
+    assert endpoints, "no /api/leaderboard routes found on the app"
+    for path, endpoint in endpoints.items():
+        assert not asyncio.iscoroutinefunction(endpoint), (
+            f"{path} is `async def` -- it must be a plain `def` so FastAPI "
+            "threadpools the whole route instead of running it on the "
+            "poller's shared asyncio loop")
+
+
+def test_leaderboard_shape(client):
+    body = client.get("/api/leaderboard?scope=overall").json()
+    assert body["scope_id"] == "overall" and body["basis"] == "pb"
+    assert set(body) >= {"scope_id", "label", "n", "basis", "rank_mode",
+                         "sheet_revision", "omitted", "rows"}
+    assert isinstance(body["omitted"], int)
+    # `overall` is structurally the one scope where `omitted` can never move:
+    # every rankable entity is its own single-candidate group there, so
+    # anyone `ratings.rate_runners` holds a score for AT ALL is scored on
+    # overall too. A nonzero value here would mean the wrong POPULATION is
+    # feeding the count (e.g. counting the sheet's roster instead of the
+    # already-rated corpus) -- `>= 0` alone would pass under that bug.
+    assert body["omitted"] == 0
+    you_rows = [row for row in body["rows"] if row["you"]]
+    assert len(you_rows) == 1 and you_rows[0]["runner"] is None
+    for row in body["rows"]:
+        assert set(row) >= {"position", "runner", "you", "marelo", "tier",
+                            "division", "mastery", "practiced", "n"}
+        # `omitted` counts what `rows` left out; a runner already IN `rows`
+        # is never also part of that count.
+        if row["runner"] is not None:
+            assert row["practiced"] >= 1
+
+
+def test_leaderboard_defaults_to_the_active_scope(client):
+    assert client.get("/api/leaderboard").json()["scope_id"] == "overall"
+
+
+def test_leaderboard_unknown_scope_is_404(client):
+    assert client.get("/api/leaderboard?scope=route:999999").status_code == 404
+    assert client.get("/api/leaderboard?scope=garbage").status_code == 404
+
+
+def test_leaderboard_rows_are_marelo_descending_and_competition_ranked(client):
+    rows = client.get("/api/leaderboard?scope=overall").json()["rows"]
+    scored = [row["marelo"] for row in rows if row["marelo"] is not None]
+    assert scored == sorted(scored, reverse=True)
+    positions = [row["position"] for row in rows]
+    assert positions == sorted(positions)
+    assert positions[0] == 1
+
+
+def test_leaderboard_basis_is_pb_even_under_avg_mode(client):
+    """The board grades PB-basis always -- `rank_mode` rides along only so
+    the UI can tell him the board's number and the Rank tab's differ."""
+    client.put("/api/ranks/mode", json={"mode": "avg10"})
+    body = client.get("/api/leaderboard?scope=overall").json()
+    assert body["basis"] == "pb" and body["rank_mode"] == "avg10"
+    client.put("/api/ranks/mode", json={"mode": "pb"})
+
+
+def test_leaderboard_applies_the_users_exclusions(client):
+    """Round 1, third read (2026-08-23), reversing the design-session rule
+    that a runner's denominator must not shrink by the user's choices: "if
+    I have personally excluded certain segments... it should also be
+    excluded for all of the fake leaderboards & their pages as well". So an
+    exclusion narrows the board's `n` exactly as it narrows his own, and
+    the entity leaves every runner's breakdown -- on the very next fetch,
+    with none of the cache's four inputs having moved (the per-scope row
+    memo keys on the resolved groups). star:9:2 is the seeded ladder every
+    fixture in this file relies on being present, so it is restored.
+
+    Seeds its OWN board state (a star:8:2 ladder over the sheet's real
+    coverage, plus a row adopted onto star:9:2) the same way the omitted
+    test below does -- the first version read the board bare and passed
+    only while the checkout's data/library_adoptions.json held a leaked
+    adoption from an earlier, unisolated run (make_client's own comment)."""
+    client.put("/api/ranks/standards/star:8:2/Standard/Mario", json={"seconds": 10.0})
+    _adopt_row_onto(client, "star:9:2")
+    before = client.get("/api/leaderboard?scope=overall").json()
+    runner = next(row["runner"] for row in before["rows"] if row["runner"])
+    assert "star:9:2" in {entity["key"] for entity in
+                          client.get(f"/api/leaderboard/runner/{runner}?scope=overall").json()["entities"]}
+    client.post("/api/marelo/exclude", json={"entity": "star:9:2", "excluded": True})
+    try:
+        after = client.get("/api/leaderboard?scope=overall").json()
+        assert after["n"] == before["n"] - 1
+        keys = {entity["key"] for entity in
+                client.get(f"/api/leaderboard/runner/{runner}?scope=overall").json()["entities"]}
+        assert "star:9:2" not in keys
+    finally:
+        client.post("/api/marelo/exclude", json={"entity": "star:9:2", "excluded": False})
+    assert client.get("/api/leaderboard?scope=overall").json()["n"] == before["n"]
+
+
+def test_leaderboard_omitted_counts_a_runner_scored_elsewhere_but_not_here(client):
+    """`omitted` must count a runner who has SOME score in the whole corpus
+    but none in THIS narrower scope -- not merely "everyone minus rows",
+    which "overall" over the fixture's single laddered entity (star:9:2)
+    can't distinguish: with only one entity graded anywhere, any runner
+    with a score at all necessarily has it for that one entity, so `omitted`
+    can never move there. `course:9` (star:9:2 only) stays that narrow
+    scope; giving star:8:2 a ladder brings in the sheet's own REAL,
+    unadopted coverage of it (a real star, plenty of community times) as
+    the "elsewhere" population -- runners scored there and nowhere in
+    course 9, which is exactly the shape `omitted` exists to count.
+
+    Checked against the EXACT count, computed independently over
+    `ratings.rate_runners`'s own output rather than through
+    `scopes.aggregate` -- reusing that would just be board.py's own
+    aggregation checking itself, and `>= 1` alone would pass under an
+    off-by-one or a wrong-population bug just as easily as a correct one
+    (the re-reviewer measured `omitted=251` against `rows=46` on this exact
+    scenario, and `>= 1` cannot tell 251 from 1)."""
+    from sm64_events.library import ratings
+    client.put("/api/ranks/standards/star:8:2/Standard/Mario", json={"seconds": 10.0})
+    in_scope = _adopt_row_onto(client, "star:9:2")
+    # The independence claim above rests on course:9 resolving to exactly
+    # this one rankable entity -- star:8:2 (just laddered, two lines up) is
+    # course 8 and must NOT join it. Assert that directly: if a second
+    # course-9 entity ever gains a ladder, `expected_omitted` below silently
+    # starts measuring a different scope than `body["omitted"]` does.
+    course_scope = client.get("/api/marelo?scope=course:9").json()
+    assert [entity["key"] for entity in course_scope["entities"]] == ["star:9:2"]
+    library = client.app.state.library
+    adoptions = client.app.state.library_adoptions
+    scores = ratings.rate_runners(library.payload, adoptions.standards,
+                                  adoptions.rows(), version="us").scores
+    expected_omitted = sum(1 for by_entity in scores.values()
+                           if "star:9:2" not in by_entity)
+    assert expected_omitted >= 1, "scenario didn't produce anyone to omit"
+    body = client.get("/api/leaderboard?scope=course:9").json()
+    runners = [row["runner"] for row in body["rows"]]
+    assert in_scope in runners
+    assert body["omitted"] == expected_omitted
+
+
+def test_leaderboard_never_moves_marelo_watermarks(tmp_path):
+    """THE trap: `_build_marelo` seeds/syncs/lowers a celebration watermark
+    as a side effect of scoring a scope -- a board read must never fire a
+    rank-up the user did not earn. `_score_scope` (used here, never
+    `_build_marelo`) has no such side effect; this proves it end to end."""
+    test_client, service = make_client(tmp_path)
+    with test_client:
+        before = service.marelo_watermarks()
+        test_client.get("/api/leaderboard?scope=overall")
+        assert service.marelo_watermarks() == before
+
+
+def _adopt_row_onto(test_client, entity_key: str, skip_runner: str | None = None
+                    ) -> str:
+    """Points a real library row (one with a fitted ladder and at least one
+    runner entry, whose first runner is not `skip_runner`) at `entity_key`,
+    and returns the runner name that adoption guarantees will score.
+    Whether the bundled sheet's OWN mapping happens to reach a given entity
+    on its own is not something a test should depend on -- the sheet grows
+    and a real intersection today is not one tomorrow; adopting one makes
+    the scenario deterministic.
+
+    Mutates the in-memory `Adoptions` object directly rather than calling
+    `POST /api/library/adopt`: that endpoint SAVES to the real, un-overridden
+    `library_adoptions_path()` this fixture wires (`make_client` passes no
+    `adoptions_path`), and a test must never write into a real data file
+    beside the repo it runs from."""
+    from sm64_events.library.audit import row_key
+    adoptions = test_client.app.state.library_adoptions
+    library = test_client.app.state.library
+    for target in library.payload["targets"]:
+        for item in target["approaches"]:
+            entries = [e for e in item["entries"] if e.get("runner")
+                      and e["runner"] != skip_runner]
+            if entries and item.get("ladder"):
+                key = row_key(target, item["name"], item["ids"])
+                adoptions._rows[key] = entity_key
+                adoptions._sync()
+                return entries[0]["runner"]
+    pytest.fail(f"bundled sheet has no approach with both a ladder and a "
+               f"runner entry (excluding {skip_runner!r}) -- nothing left "
+               f"to adopt onto {entity_key!r}")
+
+
+def _adopt_a_scored_runner(test_client) -> str:
+    """The single-entity case: adopts onto star:9:2, the fixture's one
+    seeded ladder."""
+    return _adopt_row_onto(test_client, "star:9:2")
+
+
+def test_leaderboard_runner_breakdown_shape(client):
+    name = _adopt_a_scored_runner(client)
+    body = client.get(
+        f"/api/leaderboard/runner/{quote(name, safe='')}?scope=overall").json()
+    assert body["runner"] == name and body["scope_id"] == "overall"
+    assert set(body) >= {"runner", "scope_id", "label", "marelo", "mastery",
+                         "coverage", "tier", "division", "next_division_at",
+                         "division_progress", "n", "practiced", "entities"}
+    assert body["entities"], "a scored runner must widen at least one entity"
+    entity = next(e for e in body["entities"] if e["key"] == "star:9:2")
+    assert entity["score"] is not None and entity["time_cs"] is not None
+    assert set(entity) >= {"key", "label", "score", "tier", "division",
+                           "next_tier", "next_division", "gain",
+                           "excluded", "time_cs", "you"}
+    assert entity["excluded"] is False
+    assert set(entity["you"]) == {"score", "time_cs", "tier", "division"}
+
+
+def test_leaderboard_runner_excluded_entities_stay_false(client):
+    """The board's denominator ignores exclusions (see above); a runner's
+    own breakdown must say the same about every one of its rows."""
+    name = _adopt_a_scored_runner(client)
+    client.post("/api/marelo/exclude", json={"entity": "star:9:2", "excluded": True})
+    body = client.get(
+        f"/api/leaderboard/runner/{quote(name, safe='')}?scope=overall").json()
+    assert all(entity["excluded"] is False for entity in body["entities"])
+    client.post("/api/marelo/exclude", json={"entity": "star:9:2", "excluded": False})
+
+
+def test_leaderboard_runner_unknown_is_404(client):
+    assert client.get(
+        "/api/leaderboard/runner/ThisRunnerDoesNotExist999").status_code == 404
+
+
+def test_leaderboard_runner_summary_shape(client):
+    name = _adopt_a_scored_runner(client)
+    body = client.get(
+        f"/api/leaderboard/runner/{quote(name, safe='')}/summary").json()
+    assert body["chips"] and body["chips"][0]["scope_id"] == "overall"
+    assert set(body["chips"][0]) >= {"scope_id", "label", "tier", "division",
+                                     "marelo", "n", "practiced"}
+    chip = next(c for c in body["chips"] if c["scope_id"] == "overall")
+    assert chip["practiced"] == 1
+
+
+def test_leaderboard_runner_summary_unknown_is_404(client):
+    assert client.get(
+        "/api/leaderboard/runner/ThisRunnerDoesNotExist999/summary"
+    ).status_code == 404

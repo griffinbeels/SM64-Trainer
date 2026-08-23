@@ -2,10 +2,15 @@
 """REST CRUD for rank standards, plus the MARELO scope surface built on top of
 them. Same error taxonomy as api.py/replay_api.py: LookupError->404,
 ValueError->409, RuntimeError->503 -- `/marelo*` mostly raises HTTPException
-directly instead (an unknown scope IS a 404, not a caught LookupError)."""
+directly instead (an unknown scope IS a 404, not a caught LookupError).
+
+`/leaderboard*` (Task 3 of spec 2026-08-20-ranked-leaderboard) is the same
+scope machinery pointed at the community sheet instead of the user alone --
+see `library/board.py`'s module docstring for the scoring/caching contract."""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from sm64_events.library import board
 from sm64_events.library.examples import example_clips, sheet_best
 from sm64_events.links import xcams_url
 from sm64_events.memory.addresses import COURSE_NAMES
@@ -151,12 +156,14 @@ def _score_scope(service, scope_id: str) -> dict:
     # it only sees scores, not ladders. A ragged ladder (one missing a tier)
     # still crosses that tier's score range, so a full-table lookup can name
     # a tier the ladder does not define (scoring.py's invariant, line 8).
-    # Recompute per-entity against each entity's OWN ladder here, where the
-    # ladders are actually available; the scope-level tier/division above
+    # `classify_entity` recomputes per-entity against each entity's OWN
+    # ladder instead -- the SAME door `library/board.py`'s runner breakdown
+    # calls, so the user's own numbers and a runner's can never derive this
+    # shape two different ways (`tests/test_single_source.py`'s "the entity
+    # breakdown shape" row). The scope-level tier/division above
     # (out["tier"]/out["division"]) stays full-table on purpose -- a scope
     # score has no single ladder of its own.
-    defined_by_key = {key: scoring.defined_tiers(ladder) for key, ladder in
-                      marelo_bridge.entity_ladders(service.ranks, keys).items()}
+    ladders_by_key = marelo_bridge.entity_ladders(service.ranks, keys)
     for entity in out["entities"]:
         entity["label"] = entity_label(service.db, entity["key"])
         # Always False here: `groups` above was already built from the
@@ -164,30 +171,36 @@ def _score_scope(service, scope_id: str) -> dict:
         # aggregate's numerator/denominator. The excluded rows themselves
         # are appended below, outside the scored block.
         entity["excluded"] = entity["key"] in excluded
-        defined = defined_by_key.get(entity["key"])
-        if entity["score"] is None:
-            entity["tier"] = entity["division"] = None
-            # No score to step up from -- the breakdown's "next rank" column
-            # names what a FIRST practiced attempt targets (spec task C.3),
-            # the same Gold anchor gain_for below already grades unpracticed
-            # entities against. No division: there is nothing to be a
-            # division INTO yet.
-            entity["next_tier"] = scopes.UNPRACTICED_TARGET_TIER
-            entity["next_division"] = None
-        else:
-            entity["tier"], entity["division"] = scoring.division_for(
-                entity["score"], defined)
-            # One DIVISION up, not one tier up: `next_tier_target` (used by
-            # gain_for below) answers "how much score is the next TIER
-            # worth", the whole-ladder quest; `division_progress` answers
-            # "what's the very next step", the LP-style near-goal the
-            # breakdown's next-rank column exists to show. `next_tier`/
-            # `next_division` are None exactly when maxed (hardest tier this
-            # ladder defines, division I) -- the UI reads that as "Maxed".
-            next_step = scoring.division_progress(entity["score"], defined)
-            entity["next_tier"] = next_step["next_tier"]
-            entity["next_division"] = next_step["next_division"]
-        entity["gain"] = scopes.gain_for(entity["score"], out["n"], defined)
+        # The `{}` default never actually fires: every key in
+        # out["entities"] came from `groups`, which `_groups` built from
+        # `rankable_entities` -- and that function's own bar for "rankable"
+        # is `scoring.best_ladder(ladders)` being non-empty. So every entity
+        # reaching this loop already has a non-empty ladder in
+        # `ladders_by_key`, and `classify_entity`'s `score is None` branch
+        # (unpracticed) is what actually handles "nothing to grade" -- an
+        # EMPTY ladder is a different, structurally unreachable case here,
+        # and `defined_tiers({})` would silently walk the full tier table
+        # instead of this entity's own if it ever were reached.
+        classified = marelo_bridge.classify_entity(
+            ladders_by_key.get(entity["key"], {}), entity["score"], out["n"])
+        entity["tier"] = classified["tier"]
+        entity["division"] = classified["division"]
+        # One DIVISION up, not one tier up: `next_tier`/`next_division` name
+        # the LP-style near-goal the breakdown's next-rank column exists to
+        # show, None exactly when maxed (hardest tier this ladder defines,
+        # division I) -- the UI reads that as "Maxed".
+        entity["next_tier"] = classified["next_tier"]
+        entity["next_division"] = classified["next_division"]
+        entity["gain"] = classified["gain"]
+    # The attempt that set his fastest PB here, whatever rank mode grades
+    # the row -- the Rank tab's ▶ plays its saved replay (round 1, fifth
+    # read: "if I have a PB and I've saved a replay for it... I should be
+    # able to view any of my PBs on this page"). None when no PB exists;
+    # whether a replay is actually obtainable is `/api/replay/available`'s
+    # answer, read by the page.
+    your_pbs = board.you_pb_by_entity(service.db.pbs(), service.ranks, keys)
+    for entity in out["entities"]:
+        entity["pb_attempt_id"] = your_pbs.get(entity["key"], {}).get("attempt_id")
     _append_excluded_rows(service, scope_id, groups, excluded, out)
     out["scope_id"] = scope_id
     out["label"] = _scope_label(service, scope_id)
@@ -333,6 +346,10 @@ def create_ranks_router(service, library=None, adoptions=None,
     from sm64_events.library import videocheck
     dead_videos = videocheck.dead_urls(videocheck.load_checks(
         video_checks_path or bundled_video_checks() or ""))
+    # One cache per running app, same lifetime as `dead_videos` above -- a
+    # module-level singleton would leak one test's cached board into an
+    # unrelated test whose inputs merely look identical.
+    board_cache = board.RatingsCache()
     router = APIRouter(prefix="/api")
 
     @router.get("/ranks/standards")
@@ -611,5 +628,100 @@ def create_ranks_router(service, library=None, adoptions=None,
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}
+
+    # The three /leaderboard routes are plain `def`, never `async def`: FastAPI
+    # threadpools a sync route's WHOLE body, and everything here -- `_groups`,
+    # the PB reads, the 29ms rating build -- would otherwise run on the
+    # poller's own asyncio loop, one game frame being 33.3ms (measured 13.32ms
+    # per request when this was `async`; `tests/test_ranks_api_marelo.py`
+    # pins the sync-ness). `library` is never None in the running app
+    # (`server/app.py` loads a `LibraryStore` unconditionally); the guards
+    # below exist for a test that builds this router with no library at all.
+
+    def _rated_sheet() -> board.RatedSheet:
+        """Every runner rated on the CURRENT sheet/adoptions/standards/
+        version -- cached, rebuilt only when one of those moves."""
+        adoptions_rows = adoptions.rows() if adoptions is not None else {}
+        return board_cache.current(library, adoptions_rows, service.ranks,
+                                   version=service.ranks.grading_version)
+
+    def _you_scores(keys: list[str]) -> dict[str, float]:
+        """The user's own per-entity scores, graded PB-basis ALWAYS -- a
+        leaderboard compares everyone on the same basis, whatever
+        `rank_mode` the Rank tab happens to be showing him. `attempts=()`
+        because pb mode reads only `pb_rows`; passing `db.attempts()` was
+        12.35ms of dead weight per request."""
+        return marelo_bridge.entity_scores((), service.ranks,
+                                           keys, "pb", service.db.pbs())
+
+    def _require_ranks():
+        if service.ranks is None or service.db is None:
+            raise HTTPException(503, "rank standards unavailable")
+
+    def _scope_groups(scope_id: str) -> list[dict]:
+        """Scope membership WITH the user's own exclusion set -- the same
+        resolution his own `/api/marelo` grades on. Until round 1's third
+        read (2026-08-23) this passed `excluded=set()` so a runner's
+        denominator could not shrink by his choices; his ruling reversed
+        it: "it should also be excluded for all of the fake leaderboards &
+        their pages as well"."""
+        return _groups(service, scope_id)
+
+    @router.get("/leaderboard")
+    def leaderboard(scope: str | None = None):
+        """The [[Rank board]] for one scope: every community runner scored
+        the way MARELO scores the user, plus the user's own row. `omitted`
+        is how many rated runners have nothing in this scope and so got no
+        row -- the UI must show it (`board.py::RatedSheet._scope_rows`)."""
+        _require_ranks()
+        scope_id = scope or _active_scope(service)
+        groups = _scope_groups(scope_id)          # 404s an unknown scope first
+        body = {"scope_id": scope_id, "label": _scope_label(service, scope_id),
+                "basis": "pb", "rank_mode": _rank_mode(service)}
+        if library is None:
+            return {**body, "n": 0, "sheet_revision": None, "rows": [], "omitted": 0}
+        keys = [key for group in groups for key in group["candidates"]]
+        you_aggregate = scopes.aggregate(_you_scores(keys), groups)
+        rows, omitted = _rated_sheet().leaderboard(
+            scope_id, groups, you_aggregate=you_aggregate)
+        return {**body, "n": you_aggregate["n"], "sheet_revision": library.revision,
+                "rows": rows, "omitted": omitted}
+
+    @router.get("/leaderboard/runner/{name:path}/summary")
+    def leaderboard_runner_summary(name: str):
+        """The [[Runner page]]'s scope chip row -- the same chip shape
+        `/api/marelo/summary` returns, sourced from this runner. Registered
+        ahead of the bare `{name:path}` route below: a path converter is
+        greedy and would otherwise swallow `.../summary` into the name."""
+        _require_ranks()
+        if library is None:
+            raise HTTPException(404, f"unknown runner {name!r}")
+        scope_specs = [(scope_id, _scope_groups(scope_id), _scope_label(service, scope_id))
+                       for scope_id in _summary_scope_ids(service)]
+        chips = _rated_sheet().runner_summary(name, scope_specs)
+        if chips is None:
+            raise HTTPException(404, f"unknown runner {name!r}")
+        return {"chips": chips}
+
+    @router.get("/leaderboard/runner/{name:path}")
+    def leaderboard_runner(name: str, scope: str | None = None):
+        """One runner's scoped rating per entity, each widened with the
+        user's own score/time/tier/division on the same entity -- the same
+        field set `/api/marelo` returns plus `runner`, so `Breakdown` and
+        `CoverageStrip` render either source unchanged."""
+        _require_ranks()
+        if library is None:
+            raise HTTPException(404, f"unknown runner {name!r}")
+        scope_id = scope or _active_scope(service)
+        groups = _scope_groups(scope_id)
+        keys = [key for group in groups for key in group["candidates"]]
+        breakdown = _rated_sheet().runner_breakdown(
+            name, groups, you_scores=_you_scores(keys),
+            you_times=board.you_times_by_entity(service.db.pbs(), service.ranks, keys),
+            label_of=lambda key: entity_label(service.db, key))
+        if breakdown is None:
+            raise HTTPException(404, f"unknown runner {name!r}")
+        return {**breakdown, "scope_id": scope_id,
+                "label": _scope_label(service, scope_id)}
 
     return router

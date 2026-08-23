@@ -426,6 +426,53 @@ if (!document.querySelector('.library-grid')) {
 }
 """)
 
+# The Rank tab's leaderboard section (Task 4, spec 2026-08-20-ranked-
+# leaderboard) -- neither Practice-page nor Segments-tab state, same as the
+# library stories above it. Guarded on `aria-current` rather than a bare
+# `.click()` per Story's own contract (setup MUST be idempotent -- it reruns
+# once per viewport, and an unguarded click on a tab button is harmless here
+# since nothing TOGGLES, but the guard is the house pattern `_EXPAND_ALL`
+# already sets and it costs nothing to match it). The board's own fetch is
+# async (`GET /api/leaderboard`), so this waits for a real row rather than
+# assuming the click alone is enough -- the same reason `_LIBRARY_NAV` waits
+# for a result row instead of just clicking the tab.
+_RANK_LEADERBOARD_SETUP = _script("""
+const rankBtn = document.querySelector('button.nav-item[title="Rank"]');
+if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') rankBtn.click();
+// The board is its own card between the scope chips and the MARELO card,
+// CLOSED by default (fourth read, 2026-08-23) -- open it, then wait for
+// the rows its first open fetches.
+await waitFor(() => !!document.querySelector('.leaderboard-card-head'));
+const head = document.querySelector('.leaderboard-card-head');
+if (head.getAttribute('aria-expanded') !== 'true') head.click();
+await waitFor(() => !!document.querySelector('.leaderboard-row'));
+document.querySelector('.leaderboard').scrollIntoView({block: 'start'});
+await sleep(400);   // the fold's open run must land before anything measures
+""")
+
+# The runner page (Task 5, spec 2026-08-20-ranked-leaderboard) -- opened by
+# clicking a leaderboard row, exactly the gesture leaderboard.js itself now
+# wires. Idempotent per Story's own contract: on a re-run the runner page is
+# already open (app.js's `openRunnerName` survives across viewport passes as
+# long as nothing navigates away from "Rank"), so the guard skips straight to
+# the wait instead of clicking a row that no longer exists.
+_RUNNER_PAGE_SETUP = _script("""
+const rankBtn = document.querySelector('button.nav-item[title="Rank"]');
+if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') rankBtn.click();
+await waitFor(() => !!document.querySelector('.leaderboard-card-head')
+  || !!document.querySelector('.runner-page'));
+if (!document.querySelector('.runner-page')) {
+  const head = document.querySelector('.leaderboard-card-head');
+  if (head.getAttribute('aria-expanded') !== 'true') head.click();   // closed by default
+  await waitFor(() => !!document.querySelector('.leaderboard-row'));
+  const row = Array.from(document.querySelectorAll('.leaderboard-row'))
+    .find((candidate) => !candidate.classList.contains('is-you'));
+  if (row) row.click();
+}
+await waitFor(() => !!document.querySelector('.runner-page'));
+await sleep(60);
+""")
+
 STORIES = [
     Story(name="page", at="", setup=_EXPAND_ALL),
     # Re-pointed 2026-08-04 (amendment A8, spec practice-log-entity-cards):
@@ -494,6 +541,19 @@ STORIES = [
     # this tab somewhere other than a target page, and `_LIBRARY_NAV` heals
     # that for whatever runs next.
     Story(name="library-search", at=".library-searching", setup=_LIBRARY_SEARCH_SETUP),
+    # The densest row on the tab (position, rank icon, a long runner name,
+    # three numbers, a coverage fraction) -- see leaderboard.js. Placed here,
+    # between the library stories and the segments group, for the same
+    # reason library-search sits where it does: `_EXPAND_ALL` (the "page"
+    # story, first on every viewport pass) is what returns the app to
+    # Practice, so nothing after this needs to clean up either, and
+    # `segments-editor`'s own setup clicks its own tab regardless of what
+    # this one leaves the app on.
+    Story(name="rank-leaderboard", at=".leaderboard", setup=_RANK_LEADERBOARD_SETUP),
+    # Right after rank-leaderboard for the same reason it sits where it does:
+    # `_EXPAND_ALL` heals the tab back to Practice on the next viewport pass,
+    # so nothing after this needs to clean up either.
+    Story(name="runner-page", at=".runner-page", setup=_RUNNER_PAGE_SETUP),
     # The four SEGMENTS-tab stories below are last on purpose: `_EXPAND_ALL`
     # (the "page" story's own setup, which runs first on every viewport) is
     # what returns the app to Practice for the next pass, so nothing after

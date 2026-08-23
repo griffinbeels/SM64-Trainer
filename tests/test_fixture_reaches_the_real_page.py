@@ -1075,8 +1075,8 @@ def fresh_db_page():
     """An UNSEEDED instance -- no stage, no target, no attempts anywhere --
     so `librarymodel.js::lastPracticed` has nothing to resolve and the
     Library tab's auto-open must fall back to the course grid rather than
-    erroring or rendering nothing (task-3-caveats.md point 3: null is the
-    empty-log case). A fresh fixture rather than a state reached by clicking
+    erroring or rendering nothing (null is the empty-log case). A fresh
+    fixture rather than a state reached by clicking
     around `page` -- that fixture's own default seeding is exactly what the
     OTHER new test below needs present."""
     with serve_ui(seed=False) as base, get_driver().launch() as opened:
@@ -1243,3 +1243,63 @@ def test_the_alias_scan_can_still_fail(tmp_path):
                      "    return rank_standards_path()\n")
     assert _module_level_alias(top)
     assert not _module_level_alias(local)
+
+
+# --- the Rank tab's leaderboard (Task 4, spec 2026-08-20-ranked-leaderboard) -
+# This file's own canary lesson, a sixth time: no story ever navigated to the
+# Rank tab at all before this, so a whole tab -- not just one card on it --
+# was invisible to the responsive sweep. `uilab_project.py`'s new
+# "rank-leaderboard" story is what tests/test_responsive.py now drives; this
+# reuses the SAME named story on the SAME shared `page`, so the sweep and this
+# assertion can never quietly disagree about whether the state is reachable.
+
+def test_the_rank_tab_story_reaches_a_real_leaderboard(page):
+    """The default fixture needs no extra seeding for this -- `serve_ui()`'s
+    app builds its LibraryStore off the bundled Ultimate Sheet snapshot
+    unconditionally, so the default "overall" scope already carries hundreds
+    of real community rows plus the user's own. Confirmed directly before
+    writing this file (443 rows, one `you` row, never omitted from it)."""
+    reach(page, "rank-leaderboard")
+    rows = page.evaluate(
+        "document.querySelectorAll('.leaderboard-row').length")
+    assert rows > 20, f"the leaderboard drew only {rows} rows"
+    you_rows = page.evaluate(
+        "document.querySelectorAll('.leaderboard-row.is-you').length")
+    assert you_rows == 1, (
+        f"expected exactly one .is-you row, found {you_rows} -- the user's "
+        "own row must always place, even on a fresh fixture")
+    # Leave the tab as the "page" story's own self-heal expects to find it —
+    # it only clicks Practice if aria-current says otherwise, so this just
+    # confirms that guard actually sees the Rank tab as active.
+    on_rank = page.evaluate(
+        'document.querySelector(\'button.nav-item[title="Rank"]\')'
+        ".getAttribute('aria-current')")
+    assert on_rank == "page", (
+        "the rank-leaderboard story left the tab in an unexpected state")
+
+
+# --- the runner page (Task 5, spec 2026-08-20-ranked-leaderboard) ----------
+# Same lesson as the leaderboard story above, one layer deeper: a story that
+# reaches the BOARD does not thereby reach the PAGE it opens. `uilab_project`'s
+# new "runner-page" story clicks the gesture leaderboard.js itself wires
+# (Task 5) and this reuses that SAME named story on the SAME shared `page`.
+
+def test_the_runner_page_story_reaches_a_real_runner(page):
+    reach(page, "runner-page")
+    heading = page.evaluate(
+        "document.querySelector('.runner-page h2')?.textContent || ''")
+    assert heading, "the runner page rendered with no name in its heading"
+    assert page.count(".runner-page .scope-chip") > 0, (
+        "the runner page drew no scope chips")
+    headers = page.evaluate(
+        "Array.from(document.querySelectorAll('.runner-page .rank-breakdown th'))"
+        ".map(e => e.textContent.trim())")
+    assert "Their time" in headers and "Gap" in headers, headers
+    # `.rank-entity-link` is the entity name's door into the Library (round
+    # 1) -- a button that navigates, not one that edits -- so it is excluded.
+    ignore_buttons = page.evaluate(
+        "document.querySelectorAll('.runner-page .rank-breakdown tbody "
+        "button:not(.rank-entity-link):not(.rank-row-play)').length")
+    assert ignore_buttons == 0, (
+        f"found {ignore_buttons} button(s) in the runner page's breakdown -- "
+        "read-only means no Ignore/Include control")
