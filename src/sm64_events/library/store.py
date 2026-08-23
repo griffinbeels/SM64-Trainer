@@ -56,6 +56,31 @@ def _usable(snapshot) -> bool:
     return bool(snapshot) and snapshot.get("schema_version") == SCHEMA_VERSION
 
 
+def build_and_stamp(data: bytes, overrides: dict | None = None) -> dict:
+    """Raw workbook bytes -> a library payload with the vetted
+    `matched_strategy` pairing stamped on -- the two steps every reader of
+    raw sheet bytes needs together: a payload with no stamp cannot show "=
+    your …" on the Library tab, and cannot resolve
+    `library/export_column.py::column_lines`'s matched-strategy path either.
+    `LibraryStore.refresh()` fits a ladder on top of this before persisting;
+    a live column-export read never touches `item["ladder"]` and stops here."""
+    from datetime import datetime, timezone
+    from sm64_events.core.paths import bundled_rank_standards
+    from sm64_events.library.adopt import stamp_matches
+    from sm64_events.library.build import build
+
+    fetched_at = (datetime.now(timezone.utc).replace(microsecond=0)
+                  .isoformat().replace("+00:00", "Z"))
+    payload = build(data, fetched_at=fetched_at, overrides=overrides)
+    seed_path = bundled_rank_standards()
+    if seed_path:
+        seed = json.loads(Path(seed_path).read_text(encoding="utf-8"))
+        stamp_matches(payload,
+                      {ek: {s: l for s, l in e.get("strategies", {}).items() if l}
+                       for ek, e in seed["entities"].items()})
+    return payload
+
+
 def newer(first, second):
     """Whichever snapshot carries the later SHEET revision, ignoring anything
     written by an older schema. Ties go to the first argument."""
@@ -212,26 +237,10 @@ class LibraryStore:
         A refresh that lands on an older revision than what we already have is
         not an error and is not applied: the sheet is the authority on its own
         age, and re-fetching an unchanged sheet should not churn the file."""
-        from sm64_events.library.build import build
         from sm64_events.library.ladders import fit_payload
-        from datetime import datetime, timezone
 
         data = fetch_fn()
-        fetched_at = (datetime.now(timezone.utc).replace(microsecond=0)
-                      .isoformat().replace("+00:00", "Z"))
-        fresh = fit_payload(build(data, fetched_at=fetched_at,
-                                  overrides=overrides))
-        # Stamp each approach's vetted twin, exactly as the bundled snapshot
-        # does at scrape time -- a refresh must not produce a snapshot the
-        # Library page reads differently.
-        from sm64_events.core.paths import bundled_rank_standards
-        from sm64_events.library.adopt import stamp_matches
-        seed_path = bundled_rank_standards()
-        if seed_path:
-            seed = json.loads(Path(seed_path).read_text(encoding="utf-8"))
-            stamp_matches(fresh,
-                          {ek: {s: l for s, l in e.get("strategies", {}).items() if l}
-                           for ek, e in seed["entities"].items()})
+        fresh = fit_payload(build_and_stamp(data, overrides))
         current = self._payload
         if current is not None and newer(current, fresh) is current:
             return {"applied": False, "sheet_revision": self.revision,

@@ -28,15 +28,14 @@ from fastapi import APIRouter, Body, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from sm64_events.library import adoptions as adoptions_store
-from sm64_events.library.audit import row_key
 from sm64_events.library.export_column import column_lines
-from sm64_events.library.mapping import segment_seed_key
 from sm64_events.library.sheet import read_rows
 from sm64_events.library.source import fetch
+from sm64_events.library.store import build_and_stamp
 from sm64_events.ranks.classify import RANK_NAMES, display_cs
 from sm64_events.ranks.scorecard import build_card, card_keys, division_goal_cs
 from sm64_events.ranks.scoring import DIVISION_NUMERALS, best_ladder, best_ladder_owners
+from sm64_events.server.import_api import sheet_row_placer
 
 _log = logging.getLogger("sm64.scorecard")
 _GOAL_KEY = "scorecard_goal"
@@ -50,87 +49,17 @@ class GoalBody(BaseModel):
     runner: str | None = None
 
 
-def _build_sheet_payload(data: bytes, overrides):
-    """A library payload from raw workbook bytes, stamped with the vetted
-    matched_strategy pairing -- the same two steps `LibraryStore.refresh`
-    runs, minus the ladder fit (`column_lines` never reads `item["ladder"]`)
-    and minus the "keep it only if newer" gate: this payload must describe
-    the EXACT bytes `read_rows` also parsed for the same request, or the two
-    walks fall out of step (a target-opening row lines up against the wrong
-    target). Not persisted -- this is a read, not a library refresh."""
-    from datetime import datetime, timezone
-    from sm64_events.library.build import build
-
-    fetched_at = (datetime.now(timezone.utc).replace(microsecond=0)
-                  .isoformat().replace("+00:00", "Z"))
-    payload = build(data, fetched_at=fetched_at, overrides=overrides)
-    from sm64_events.core.paths import bundled_rank_standards
-    from sm64_events.library.adopt import stamp_matches
-    import json
-    from pathlib import Path
-    seed_path = bundled_rank_standards()
-    if seed_path:
-        seed = json.loads(Path(seed_path).read_text(encoding="utf-8"))
-        stamp_matches(payload,
-                      {ek: {s: l for s, l in e.get("strategies", {}).items() if l}
-                       for ek, e in seed["entities"].items()})
-    return payload
-
-
 def _fetch_column_source(overrides):
-    """Off the event loop, together: `read_rows` and `_build_sheet_payload`
-    must see the identical bytes `fetch()` just returned, and both are
-    real CPU work over a ~5.6 MB document (`server/import_api.py` notes the
-    same concern for its own refresh)."""
+    """Off the event loop, together: `read_rows` and `build_and_stamp`
+    (`library/store.py` -- the SAME bytes-to-payload step `LibraryStore.
+    refresh()` runs, minus the ladder fit `column_lines` never reads) must
+    see the identical bytes `fetch()` just returned, or the two walks fall
+    out of step (a target-opening row lines up against the wrong target).
+    Both are real CPU work over a ~5.6 MB document (`server/import_api.py`
+    notes the same concern for its own refresh). Not persisted -- this is a
+    read, not a library refresh."""
     data = fetch()
-    return read_rows(data), _build_sheet_payload(data, overrides)
-
-
-def _column_placer(service, adoptions):
-    """The export's answer to `server/import_api.py::sheet_row_placer` --
-    the SAME three facts in the SAME order of authority (an explicit
-    adoption link, then a name-matched segment for an entity-less target,
-    then a Bowser row's seed key), so a row the export prints a time for is
-    a row the import would land too. Duplicated rather than imported:
-    `sheet_row_placer` is a closure private to `create_import_router`, and
-    reaching into it would couple this router to that one's internals for a
-    handful of lines."""
-    database = getattr(service, "db", None)
-    if database is None:
-        return None
-    definitions = database.segment_defs()
-    local_ids = {definition["seed_key"]: definition["id"]
-                 for definition in definitions if definition.get("seed_key")}
-    names = [(definition["id"], definition["name"]) for definition in definitions]
-    linked = adoptions.rows() if adoptions is not None else {}
-
-    def timer_mode_for(entity_key: str) -> str:
-        ranks = getattr(service, "ranks", None)
-        if ranks is not None:
-            return ranks.clock_for(entity_key)
-        return "rta" if entity_key.startswith("segment:") else "igt"
-
-    def place(target, item, kind):
-        entity = linked.get(row_key(target, item["name"], item["ids"]))
-        if entity:
-            return (entity, timer_mode_for(entity),
-                    adoptions_store.strategy_name(target["label"], item["name"],
-                                                  kind=kind))
-        if kind != "approach":
-            return None
-        target_key = target.get("entity_key") or ""
-        if not target_key:
-            hit = adoptions_store.auto_match(target["label"], names)
-            if hit:
-                return (hit["entity"], timer_mode_for(hit["entity"]),
-                        adoptions_store.strategy_name(target["label"], item["name"]))
-            return None
-        local = local_ids.get(segment_seed_key(target_key))
-        if local is None:
-            return None
-        local_key = f"segment:{local}"
-        return local_key, timer_mode_for(local_key), None
-    return place
+    return read_rows(data), build_and_stamp(data, overrides)
 
 
 def _column_resolve(service):
@@ -300,7 +229,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
             _log.warning("column export could not read the sheet: %r", err)
             raise HTTPException(
                 503, f"could not read the sheet: {err}") from err
-        place = _column_placer(service, adoptions)
+        place = sheet_row_placer(service, adoptions)
         lines = column_lines(rows, payload, _column_resolve(service), place=place)
         return {"lines": lines, "sheet_revision": payload.get("sheet_revision"),
                 "mapped": sum(1 for line in lines if line),

@@ -209,32 +209,63 @@ def test_column_resolve_reads_a_segment_pb_on_its_own_clock(tmp_path):
         assert resolve(f"segment:{piece}", "Standard", "rta", None) == display_cs(476)
 
 
-def test_column_placer_name_matches_an_entity_less_target(tmp_path):
-    """Round 6's auto-match, the same one `server/import_api.py::
-    sheet_row_placer` grants an unlinked castle-movement row. Every fresh
+def test_the_endpoints_placer_is_the_same_one_the_import_door_uses(tmp_path):
+    """`scorecard_api.py` no longer carries its own copy of the placement
+    rule -- it calls `import_api.py::sheet_row_placer` directly, so this is
+    really exercising that shared function's name-match path (round 6, the
+    same one an unlinked castle-movement row gets on import). Every fresh
     database seeds a "Lakitu Skip" segment (see `test_import_api.py`)."""
-    from sm64_events.server.scorecard_api import _column_placer
+    from sm64_events.server.import_api import sheet_row_placer
     with make_client(tmp_path) as (_client, db, svc):
         lakitu_id = {d["seed_key"]: d["id"]
                     for d in db.segment_defs()}["seg:lakitu-skip"]
-        place = _column_placer(svc, None)
+        place = sheet_row_placer(svc, None)
         placed = place({"section": "Castle Movements", "label": "Lakitu Skip",
                         "entity_key": None},
                        {"name": "Lakitu Skip", "ids": ["1"]}, "approach")
         assert placed[0] == f"segment:{lakitu_id}"
 
 
-def test_column_placer_lands_a_bowser_row_on_the_seeded_movement(tmp_path):
-    """The sheet says `segment:6`; the placer resolves it by seed_key to
-    whichever id THIS database holds for the BitFS pipe entry."""
-    from sm64_events.server.scorecard_api import _column_placer
+def test_the_endpoints_placer_lands_a_bowser_row_on_the_seeded_movement(tmp_path):
+    """Same shared placer, its Bowser seed-key path: the sheet says
+    `segment:6`, and it resolves by seed_key to whichever id THIS database
+    holds for the BitFS pipe entry."""
+    from sm64_events.server.import_api import sheet_row_placer
     with make_client(tmp_path) as (_client, db, svc):
         bitfs_id = {d["seed_key"]: d["id"]
                    for d in db.segment_defs()}["seg:bitfs-pipe"]
-        place = _column_placer(svc, None)
+        place = sheet_row_placer(svc, None)
         placed = place({"section": "Bowser Courses",
                         "label": "Bowser in the Fire Sea Course",
                         "entity_key": "segment:6"},
                        {"name": "Bowser in the Fire Sea Course", "ids": ["1"]},
                        "approach")
         assert placed == (f"segment:{bitfs_id}", "rta", None)
+
+
+def test_a_star_approach_with_no_matched_strategy_stays_blank_through_the_real_placer(
+        tmp_path):
+    """The join rule's literal 3 branches, end to end through `column_lines`
+    with the REAL shared placer (not a stub): a star approach with no vetted
+    `matched_strategy` and no explicit adoption link is not rescued by
+    either of the placer's other two facts (name-match only fires for an
+    entity-LESS target; the seed-key fact only fires for a `segment:` key),
+    so it stays blank rather than landing under a guessed strategy name."""
+    from sm64_events.library.export_column import column_lines
+    from sm64_events.library.sheet import SheetRow
+    from sm64_events.server.import_api import sheet_row_placer
+
+    with make_client(tmp_path) as (_client, _db, svc):
+        rows = [SheetRow(row=2, group="G", section="1. Bob-omb Battlefield",
+                         label="Big Bob-omb on the Summit", ids=frozenset({"1"}),
+                         kind="approach", opens_target=True, version=None,
+                         best_cs=None, best_runner="", ideal_cs=None,
+                         fill_rate=None)]
+        payload = {"targets": [
+            {"section": "1. Bob-omb Battlefield", "entity_key": "star:1:0",
+             "label": "Big Bob-omb on the Summit",
+             "approaches": [{"name": "Big Bob-omb on the Summit", "ids": ["1"]}],
+             "subsections": []}]}
+        place = sheet_row_placer(svc, None)
+        lines = column_lines(rows, payload, lambda *a: 4370, place=place)
+        assert lines == [""]

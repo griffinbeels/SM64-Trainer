@@ -69,6 +69,75 @@ class SheetImportBody(BaseModel):
     refresh: bool = True
 
 
+def _timer_mode_for(service, entity_key: str) -> str:
+    """Segments are RTA-only and stars follow the IGT clock. Read off the
+    standards store where there is one, so a per-entity clock override is
+    honoured rather than second-guessed."""
+    ranks = getattr(service, "ranks", None)
+    if ranks is not None:
+        return ranks.clock_for(entity_key)
+    return "rta" if entity_key.startswith("segment:") else "igt"
+
+
+def sheet_row_placer(service, adoptions):
+    """Where a sheet row that is not a star row lands HERE, if anywhere.
+
+    The same three facts the Library tab shows for a row, in the same
+    order of authority, so what the import does and what the page says
+    cannot disagree:
+      1. the row's explicit link to a segment he built (`adoptions`) --
+         a subsection's or a movement's, under the strategy the link
+         names (a piece's community timing is its Standard);
+      2. the name-match an entity-less target gets unasked (round 6:
+         "we should autoassign any segments that exist already");
+      3. the seed_key behind a sheet Bowser id -- `segment:6` is the
+         BitFS pipe entry, the stage's No Reds card, on the machine that
+         scraped it; HERE it is whichever `segment_defs` row carries
+         `seg:bitfs-pipe`.
+    Every answer is a LOCAL id on that row's own clock; a row none of the
+    three can place stays in the could-not-use list. Built per request --
+    the links and the ids are read at the moment of the call, so a caller
+    keeps calling this once per request rather than caching the result.
+
+    Module-level (not a router closure) because `server/scorecard_api.py`'s
+    column export vouches for its own non-star rows with these SAME facts,
+    in this SAME order of authority, so a row the export prints a time for
+    is always a row this import would land too -- one door, not two honest
+    copies of the same derivation."""
+    database = getattr(service, "db", None)
+    if database is None:
+        return None
+    definitions = database.segment_defs()
+    local_ids = {definition["seed_key"]: definition["id"]
+                 for definition in definitions if definition.get("seed_key")}
+    names = [(definition["id"], definition["name"])
+             for definition in definitions]
+    linked = adoptions.rows() if adoptions is not None else {}
+
+    def place(target, item, kind):
+        entity = linked.get(row_key(target, item["name"], item["ids"]))
+        if entity:
+            return (entity, _timer_mode_for(service, entity),
+                    adoptions_store.strategy_name(
+                        target["label"], item["name"], kind=kind))
+        if kind != "approach":
+            return None
+        target_key = target.get("entity_key") or ""
+        if not target_key:
+            hit = adoptions_store.auto_match(target["label"], names)
+            if hit:
+                return (hit["entity"], _timer_mode_for(service, hit["entity"]),
+                        adoptions_store.strategy_name(
+                            target["label"], item["name"]))
+            return None
+        local = local_ids.get(segment_seed_key(target_key))
+        if local is None:
+            return None
+        local_key = f"segment:{local}"
+        return local_key, _timer_mode_for(service, local_key), None
+    return place
+
+
 def create_import_router(service, library=None, overrides=None,
                          adoptions=None) -> APIRouter:
     """`library` is the `LibraryStore`; omit it and the sheet door is simply
@@ -92,66 +161,6 @@ def create_import_router(service, library=None, overrides=None,
             # (his ruling, 2026-08-01).
             absorb_after_regrade(service)
         return {"source": source, **summary, "rejected": rejected, **extra}
-
-    def timer_mode_for(entity_key: str) -> str:
-        """Segments are RTA-only and stars follow the IGT clock. Read off the
-        standards store where there is one, so a per-entity clock override is
-        honoured rather than second-guessed."""
-        ranks = getattr(service, "ranks", None)
-        if ranks is not None:
-            return ranks.clock_for(entity_key)
-        return "rta" if entity_key.startswith("segment:") else "igt"
-
-    def sheet_row_placer():
-        """Where a sheet row that is not a star row lands HERE, if anywhere.
-
-        The same three facts the Library tab shows for a row, in the same
-        order of authority, so what the import does and what the page says
-        cannot disagree:
-          1. the row's explicit link to a segment he built (`adoptions`) --
-             a subsection's or a movement's, under the strategy the link
-             names (a piece's community timing is its Standard);
-          2. the name-match an entity-less target gets unasked (round 6:
-             "we should autoassign any segments that exist already");
-          3. the seed_key behind a sheet Bowser id -- `segment:6` is the
-             BitFS pipe entry, the stage's No Reds card, on the machine that
-             scraped it; HERE it is whichever `segment_defs` row carries
-             `seg:bitfs-pipe`.
-        Every answer is a LOCAL id on that row's own clock; a row none of the
-        three can place stays in the could-not-use list. Built per request:
-        the links and the ids are read at the moment of the import."""
-        database = getattr(service, "db", None)
-        if database is None:
-            return None
-        definitions = database.segment_defs()
-        local_ids = {definition["seed_key"]: definition["id"]
-                     for definition in definitions if definition.get("seed_key")}
-        names = [(definition["id"], definition["name"])
-                 for definition in definitions]
-        linked = adoptions.rows() if adoptions is not None else {}
-
-        def place(target, item, kind):
-            entity = linked.get(row_key(target, item["name"], item["ids"]))
-            if entity:
-                return (entity, timer_mode_for(entity),
-                        adoptions_store.strategy_name(
-                            target["label"], item["name"], kind=kind))
-            if kind != "approach":
-                return None
-            target_key = target.get("entity_key") or ""
-            if not target_key:
-                hit = adoptions_store.auto_match(target["label"], names)
-                if hit:
-                    return (hit["entity"], timer_mode_for(hit["entity"]),
-                            adoptions_store.strategy_name(
-                                target["label"], item["name"]))
-                return None
-            local = local_ids.get(segment_seed_key(target_key))
-            if local is None:
-                return None
-            local_key = f"segment:{local}"
-            return local_key, timer_mode_for(local_key), None
-        return place
 
     @router.post("/manual")
     async def import_manual(body: ManualImportBody):
@@ -199,7 +208,7 @@ def create_import_router(service, library=None, overrides=None,
                         503, f"could not read the sheet: {err}") from err
             candidates, dropped = candidates_for(
                 library.payload, body.runner,
-                place=sheet_row_placer())
+                place=sheet_row_placer(service, adoptions))
             return await finish(f"sheet:{body.runner}", candidates, dropped,
                                 sheet_revision=library.revision)
 
