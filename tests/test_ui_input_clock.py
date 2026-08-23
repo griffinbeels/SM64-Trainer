@@ -63,3 +63,16 @@ def test_the_two_directions_agree_on_every_frame():
 
 def test_no_lead_in_is_the_old_behaviour():
     assert run("frameAtTime(6.0, 0, 30, 598)") == 180
+
+
+def test_every_always_drawn_lane_names_a_button_the_server_sends():
+    """CORE_BUTTONS is matched against the button TABLE's names, so a name
+    the table does not use is a lane that silently never draws."""
+    from sm64_events.memory import addresses as A
+    code = strip_comments(TIMELINE.read_text(encoding="utf-8"))
+    match = re.search(r"^export const CORE_BUTTONS\s*=\s*(\[.*?\]);", code, re.M)
+    assert match, "no CORE_BUTTONS in inputtimeline.js"
+    core = json.loads(match.group(1))
+    names = {name for _bit, name in A.BUTTON_BITS}
+    assert set(core) <= names, set(core) - names
+    assert {"Cup", "Cdown", "Cleft", "Cright"} <= set(core)

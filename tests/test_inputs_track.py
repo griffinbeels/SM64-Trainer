@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import pytest
 
 from sm64_events.inputs.frame import InputFrame
+from sm64_events.memory import addresses as A
 from sm64_events.inputs.store import InputStore
 from sm64_events.inputs.track import (document_for_attempt, target_of,
                                       track_for_attempt)
@@ -79,3 +80,27 @@ def test_the_document_starts_at_frame_zero(store):
     text = document_for_attempt(store, FakeAttempt(anchor_frame=105))
     body = [line for line in text.splitlines() if line and line[0].isdigit()]
     assert body[0].startswith("0")
+
+
+def test_the_track_runs_THROUGH_the_first_star_grab_frame(tmp_path):
+    """His rule 2026-08-22: "It should stop only AFTER mario enters the star
+    grab. Once mario is in star grab, none of the players inputs matter, so
+    that's where it should stop." The closing event's frame can sit a frame
+    before the grab action; the track ends on the grab frame itself."""
+    db = Database(tmp_path / "t.db")
+    rollout = InputFrame(0xC000, 0, -45, 75, 0x010008A6)
+    grab = InputFrame(0xC000, 0, -45, 75, A.ACT_FALL_AFTER_STAR_GRAB)
+    dance = InputFrame(0, 0, 0, 0, A.ACT_STAR_DANCE_EXIT)
+    db.inputs.append(db.insert_session(AT),
+                     [(100 + step, rollout) for step in range(10)]
+                     + [(110, grab), (111, dance), (112, dance), (113, dance)],
+                     AT, LATER)
+    got = track_for_attempt(db.inputs,
+                            FakeAttempt(anchor_frame=100, rta_frames=9))
+    assert [number for number, _f in got][-2:] == [109, 110]
+    assert got[-1][1].action == A.ACT_FALL_AFTER_STAR_GRAB
+
+
+def test_an_attempt_with_no_grab_after_its_close_ends_at_the_close(store):
+    got = track_for_attempt(store, FakeAttempt(anchor_frame=102, rta_frames=3))
+    assert [number for number, _f in got] == [102, 103, 104, 105]
