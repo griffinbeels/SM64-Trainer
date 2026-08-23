@@ -475,37 +475,52 @@ function TocRow({ band, count, you, onJump }) {
 }
 
 // LEADERBOARD MODE (task 1, spec 2026-08-20-ranked-leaderboard): one row of
-// `leaderboardOf`'s flat list. Reuses the SAME two entry-row components a
-// tier band already renders through -- ExampleCard for a videoed entry,
-// PlainEntry for one with none -- rather than a third component, so a video
-// mark or a tier badge can never draw differently in the two modes. The
-// synthetic "you" row Section inserts (`_isYou`) carries no video by
-// construction, so it always falls to the PlainEntry branch; the ◀ you
-// marker beside it is the SAME class/text TocRow and DivisionGroup already
-// wear for the identical fact, not a new indicator.
-function LeaderboardRow({ row, approach, entityKey, trayKeys, onAdd, onOpenRunner }) {
+// `leaderboardOf`'s flat list -- since round 1's fifth read (2026-08-23) a
+// CONDENSED line, his words: "Each row should be the rank achieved, the
+// runner, the time, and then a button for opening the video. The videos
+// should be collapsed by default, so the leaderboard display is very
+// condensed by default." The ▶ is the practice log's own `icon-button`
+// (play/chevron, `aria-expanded`), the fold is `Disclose`, and the player
+// is `ExampleMedia` -- the same block the ladder's cards and the Rank tab's
+// runner page play through, never a second embed. The tray's "+" stays on
+// the Ladder reading's cards; a leaderboard row holds the four things he
+// listed. The synthetic "you" row (`_isYou`) carries no video and wears the
+// SAME ◀ you marker TocRow and DivisionGroup already wear for the identical
+// fact. `data-runner`/`data-time-cs` on the row root is what the runner
+// page's arrival lands on (the blink rides the whole row).
+function LeaderboardRow({ row, onOpenRunner }) {
   const { position, entry, tier, division } = row;
   const isYou = !!entry._isYou;
-  const trayKey = entry.video ? entryTrayKey(approach, entry) : null;
-  return html`<div class="library-leaderboard-row ${isYou ? "is-you" : ""}">
-    <span class="library-leaderboard-position">#${position}</span>
-    <div class="library-leaderboard-entry">
-      ${entry.video
-        ? html`<${ExampleCard} entry=${entry} tier=${tier} division=${division}
-              trayKey=${trayKey} entityKey=${entityKey}
-              inTray=${trayKeys.has(trayKey)} onAdd=${onAdd} onOpenRunner=${onOpenRunner} />`
-        : html`<${PlainEntry} entry=${entry} tier=${tier} division=${division}
-              onOpenRunner=${onOpenRunner} />`}
+  const [showVideo, setShowVideo] = useState(false);
+  return html`<div class="library-leaderboard-row ${isYou ? "is-you" : ""}"
+      data-runner=${entry.runner} data-time-cs=${entry.time_cs}>
+    <div class="library-leaderboard-line">
+      <span class="library-leaderboard-position">#${position}</span>
+      <span class="rank-icon-slot library-leaderboard-tier" style="--icon-size: 18px">
+        ${tier ? html`<${RankIcon} tier=${tier} division=${division} size=${18} />` : "–"}</span>
+      <${RunnerName} entry=${entry} className="library-plain-runner" onOpenRunner=${onOpenRunner} />
       ${isYou ? html`<span class="library-toc-you"
             title="your current standing on this strategy"> ◀ you</span>` : ""}
+      <span class="library-leaderboard-time">${fmtSeconds(entry.time_cs / 100)}</span>
+      ${entry.video
+        ? html`<button type="button" class="icon-button library-leaderboard-play"
+            onclick=${() => setShowVideo(!showVideo)}
+            title=${showVideo ? "Close the video" : `Watch ${entry.runner}'s run`}
+            aria-label=${showVideo ? "Close the video" : `Watch ${entry.runner}'s run`}
+            aria-expanded=${showVideo ? "true" : "false"}>
+            <${Icon} name=${showVideo ? "chevron" : "play"} size=${16} /></button>`
+        : html`<span class="library-leaderboard-noplay"></span>`}
     </div>
+    <${Disclose} open=${showVideo} className="library-leaderboard-disclose">
+      <div class="library-leaderboard-video"><${ExampleMedia} entry=${entry} autoplay /></div>
+    <//>
   </div>`;
 }
 
 // The flat list itself -- `query` applies here exactly as it does to the
 // bands (round 4's rule, extended rather than re-derived): a live search
 // hides every non-matching row EXCEPT the reader's own (L5, below).
-function LeaderboardList({ leaderboard, approach, query, entityKey, trayKeys, onAdd, onOpenRunner }) {
+function LeaderboardList({ leaderboard, query, onOpenRunner }) {
   // The reader's own row is never filtered out (fix wave, final review,
   // L5) -- it used to fall through to `matchesRunner`'s ordinary text
   // match on the literal string "You" like any other row, which is the
@@ -529,8 +544,7 @@ function LeaderboardList({ leaderboard, approach, query, entityKey, trayKeys, on
   return html`<div class="library-leaderboard">
     ${shown.map((row) => html`<${LeaderboardRow}
         key=${`${row.position}-${row.entry.runner}-${row.entry.time_cs}-${row.entry.video || ""}`}
-        row=${row} approach=${approach} entityKey=${entityKey}
-        trayKeys=${trayKeys} onAdd=${onAdd} onOpenRunner=${onOpenRunner} />`)}
+        row=${row} onOpenRunner=${onOpenRunner} />`)}
   </div>`;
 }
 
@@ -905,8 +919,7 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
               onclick=${() => setMode("leaderboard")}>Leaderboard</button>
         </div>
         ${mode === "leaderboard" ? html`<${LeaderboardList}
-            leaderboard=${leaderboard} approach=${approach} query=${query}
-            entityKey=${entityKey} trayKeys=${trayKeys} onAdd=${onAdd}
+            leaderboard=${leaderboard} query=${query}
             onOpenRunner=${onOpenRunner} />` : html`<${Fragment}>
         <table class="library-toc"><tbody>
           ${shownBands.map((band) => html`<${TocRow} key=${bandAnchorId(approach, band.tier || "unranked")} band=${band}

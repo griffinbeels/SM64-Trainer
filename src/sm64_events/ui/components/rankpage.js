@@ -21,6 +21,7 @@ import { entityIconSrc, fallbackSlotForEntityKey,
 import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
 import { LeaderboardCard } from "./leaderboard.js";
 import { ExampleMedia } from "./librarytarget.js";
+import { ReplayPlayer } from "./replay.js";
 
 const html = htm.bind(h);
 
@@ -611,9 +612,23 @@ function runnerGapTitle(entity) {
 // without leaving it (his third read, 2026-08-23: "like the exact one in
 // the practice log... like how we do it with the replay system"). The
 // entity's art sits INSIDE the name's door, so the icon is as clickable as
-// the name ("The course icon should be clickable as well").
-function BreakdownRow({ t, data, entity, isRunner, onToggle, onOpenEntity }) {
+// the name ("The course icon should be clickable as well"). On HIS OWN
+// tab the same ▶ plays the saved replay of the attempt that set the row's
+// PB (`entity.pb_attempt_id`, when `/api/replay/available` lists it) --
+// the practice log's own `ReplayPlayer`, so his run and a runner's run are
+// inspected from the same seat ("I should be able to view any of my PBs on
+// this page the same way as the fake leaderboard", fifth read).
+function BreakdownRow({ t, data, entity, isRunner, onToggle, onOpenEntity,
+                        replayable = null }) {
   const [showVideo, setShowVideo] = useState(false);
+  const canReplay = !isRunner && replayable && entity.pb_attempt_id != null
+    && replayable.has(entity.pb_attempt_id);
+  const playButton = (label) => html`<button type="button" class="icon-button rank-row-play"
+      onclick=${() => setShowVideo(!showVideo)}
+      title=${showVideo ? "Close the video" : label}
+      aria-label=${showVideo ? "Close the video" : label}
+      aria-expanded=${showVideo ? "true" : "false"}>
+      <${Icon} name=${showVideo ? "chevron" : "play"} size=${16} /></button>`;
   const art = html`<${EntityArt} t=${t} entityKey=${entity.key} className="rank-row-icon" />`;
   const hasDoor = onOpenEntity && entity.time_cs != null;
   const row = html`<tr class=${[
@@ -633,13 +648,7 @@ function BreakdownRow({ t, data, entity, isRunner, onToggle, onOpenEntity }) {
           <td class="meta rank-cell-points">${runnerTimeLabel(entity.you.time_cs)}</td>
           <td class="meta rank-cell-gain" title=${runnerGapTitle(entity)}>${runnerGapLabel(entity)}</td>
           <td class="rank-cell-play">${entity.video
-            ? html`<button type="button" class="icon-button rank-row-play"
-                onclick=${() => setShowVideo(!showVideo)}
-                title=${showVideo ? "Close the video" : `Watch ${data.runner}'s run`}
-                aria-label=${showVideo ? "Close the video" : `Watch ${data.runner}'s run`}
-                aria-expanded=${showVideo ? "true" : "false"}>
-                <${Icon} name=${showVideo ? "chevron" : "play"} size=${16} /></button>`
-            : null}</td>`
+            ? playButton(`Watch ${data.runner}'s run`) : null}</td>`
       : html`<td class="meta rank-cell-points">${fmtPoints(entity.score)}</td>
           <td class="meta rank-cell-next">${nextRankLabel(entity)}</td>
           <td class="meta rank-cell-gain" title=${gainTitle(entity)}>+${toPoints(entity.gain)}</td>
@@ -648,20 +657,23 @@ function BreakdownRow({ t, data, entity, isRunner, onToggle, onOpenEntity }) {
             title=${entity.excluded
               ? "Include this in every rating again"
               : "Exclude this from every rating"}>
-            ${entity.excluded ? "Include" : "Ignore"}</button></td>`}
+            ${entity.excluded ? "Include" : "Ignore"}</button></td>
+          <td class="rank-cell-play">${canReplay ? playButton("Watch your PB's replay") : null}</td>`}
   </tr>`;
   const videoRow = showVideo
-    ? html`<tr class="replay-row rank-video-row"><td colspan="6">
-        <div class="rank-video-box">
-          <${ExampleMedia} entry=${{ video: entity.video, runner: data.runner,
-                                      time_cs: entity.time_cs }} autoplay />
+    ? html`<tr class="replay-row rank-video-row"><td colspan=${isRunner ? 6 : 7}>
+        <div class="rank-video-box ${isRunner ? "" : "is-replay"}">
+          ${isRunner
+            ? html`<${ExampleMedia} entry=${{ video: entity.video, runner: data.runner,
+                                               time_cs: entity.time_cs }} autoplay />`
+            : html`<${ReplayPlayer} attemptId=${entity.pb_attempt_id} />`}
         </div></td></tr>`
     : null;
   return [row, videoRow];
 }
 
 export function Breakdown({ t, data, routeOrder, onToggle, variant = "yours",
-                            onOpenEntity = null }) {
+                            onOpenEntity = null, replayable = null }) {
   const isRunner = variant === "runner";
   const [byGain, setByGain] = useState(false);
   const rows = byGain
@@ -684,12 +696,13 @@ export function Breakdown({ t, data, routeOrder, onToggle, variant = "yours",
           : html`<th class="rank-cell-points">Score (pts)</th>
               <th>Next rank</th>
               <th class="rank-cell-gain">Gain (pts)</th>
+              <th></th>
               <th></th>`}
       </tr></thead>
       <tbody>
       ${rows.map((entity) => html`<${BreakdownRow} key=${entity.key} t=${t} data=${data}
           entity=${entity} isRunner=${isRunner} onToggle=${onToggle}
-          onOpenEntity=${onOpenEntity} />`)}
+          onOpenEntity=${onOpenEntity} replayable=${replayable} />`)}
       </tbody>
     </table>
   </div>`;
@@ -962,6 +975,7 @@ export function RankPage({ t, onOpenRunner = () => {} }) {
   const [scopeId, setScopeId] = useState(null);
   const [data, setData] = useState(null);
   const [dataErr, setDataErr] = useState(null);
+  const [replayable, setReplayable] = useState(new Set());
   const [points, setPoints] = useState([]);
 
   useEffect(() => {
@@ -996,6 +1010,12 @@ export function RankPage({ t, onOpenRunner = () => {} }) {
     const query = `?scope=${encodeURIComponent(scopeId)}`;
     getJSON(`/api/marelo${query}`).then((response) => alive && setData(response))
       .catch((error) => alive && setDataErr(error));
+    // Which attempts can play right now (saved, or still in the ring) --
+    // the breakdown's own ▶ shows only where the row's PB is one of them.
+    // Recomputed with the data: the ring shifts as play goes on.
+    getJSON("/api/replay/available")
+      .then((response) => alive && setReplayable(new Set(response.available)))
+      .catch(() => alive && setReplayable(new Set()));
     getJSON(`/api/marelo/history${query}`).then((response) => alive && setPoints(response.points))
       .catch(() => alive && setPoints([]));
     return () => { alive = false; };
@@ -1132,7 +1152,7 @@ export function RankPage({ t, onOpenRunner = () => {} }) {
       </div>
       <div class="practice-card">
         <${Breakdown} key=${scopeId} t=${t} data=${data} routeOrder=${routeOrder}
-          onToggle=${toggleExcluded} />
+          onToggle=${toggleExcluded} replayable=${replayable} />
       </div>`}
   </div>`;
 }

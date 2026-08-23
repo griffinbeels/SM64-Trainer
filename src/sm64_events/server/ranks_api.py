@@ -191,6 +191,15 @@ def _score_scope(service, scope_id: str) -> dict:
         entity["next_tier"] = classified["next_tier"]
         entity["next_division"] = classified["next_division"]
         entity["gain"] = classified["gain"]
+    # The attempt that set his fastest PB here, whatever rank mode grades
+    # the row -- the Rank tab's ▶ plays its saved replay (round 1, fifth
+    # read: "if I have a PB and I've saved a replay for it... I should be
+    # able to view any of my PBs on this page"). None when no PB exists;
+    # whether a replay is actually obtainable is `/api/replay/available`'s
+    # answer, read by the page.
+    your_pbs = board.you_pb_by_entity(service.db.pbs(), service.ranks, keys)
+    for entity in out["entities"]:
+        entity["pb_attempt_id"] = your_pbs.get(entity["key"], {}).get("attempt_id")
     _append_excluded_rows(service, scope_id, groups, excluded, out)
     out["scope_id"] = scope_id
     out["label"] = _scope_label(service, scope_id)

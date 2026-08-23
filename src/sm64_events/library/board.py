@@ -224,10 +224,12 @@ class RatingsCache:
         return self._sheet
 
 
-def you_times_by_entity(pb_rows, ranks_store, keys) -> dict[str, int]:
-    """The user's own best DISPLAYED time (centiseconds) per entity in
-    `keys` -- the raw number behind `tracking.marelo.entity_scores`'s
-    pb-mode score, which returns only the score. Same PB source
+def you_pb_by_entity(pb_rows, ranks_store, keys) -> dict[str, dict]:
+    """The user's own fastest PB per entity in `keys`: `{key: {time_cs,
+    attempt_id}}` -- the DISPLAYED centiseconds behind
+    `tracking.marelo.entity_scores`'s pb-mode score (which returns only the
+    score) and the attempt that set it (the Rank tab's own ▶ plays its
+    saved replay, round 1's fifth read). Same PB source
     (`current_pbs_by_strat`) and the same clock filter that function
     applies (`row["timer_mode"] == ranks_store.clock_for(key)`).
 
@@ -237,12 +239,19 @@ def you_times_by_entity(pb_rows, ranks_store, keys) -> dict[str, int]:
     `scoring.progress_for_time` is monotone in time against a fixed ladder,
     so the fastest raw time is always the highest-scoring one."""
     wanted = set(keys)
-    best: dict[str, int] = {}
+    best: dict[str, dict] = {}
     for row in current_pbs_by_strat(list(pb_rows)).values():
         key = entity_key(row["course_id"], row["star_id"], row["segment_id"])
         if key not in wanted or row["timer_mode"] != ranks_store.clock_for(key):
             continue
         cs = display_cs(row["frames"])
-        if key not in best or cs < best[key]:
-            best[key] = cs
+        if key not in best or cs < best[key]["time_cs"]:
+            best[key] = {"time_cs": cs, "attempt_id": row.get("attempt_id")}
     return best
+
+
+def you_times_by_entity(pb_rows, ranks_store, keys) -> dict[str, int]:
+    """`you_pb_by_entity` reduced to the time -- what the runner breakdown's
+    "Your time" column compares against."""
+    return {key: pb["time_cs"]
+            for key, pb in you_pb_by_entity(pb_rows, ranks_store, keys).items()}

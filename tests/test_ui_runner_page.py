@@ -44,6 +44,7 @@ OPEN_LEADERBOARD = """
   })()
 """
 CLICK_LIBRARY_TAB = 'document.querySelector(\'.nav-item[title="Library"]\').click()'
+CLICK_PRACTICE_TAB = 'document.querySelector(\'.nav-item[title="Practice"]\').click()'
 # Subdivision groups ship collapsed by default -- same helper
 # test_ui_library_target.py uses to reveal the ExampleCard/PlainEntry rows a
 # runner's name lives in.
@@ -608,4 +609,73 @@ def test_the_board_card_animates_open_and_shut(closed_rank_page):
     assert closed["expanded"] == "false" and closed["bodyH"] == 0, closed
     assert any(0 < h < opened["bodyH"] for h in closing), (
         f"the close cut instead of folding: {closing}")
+
+
+# ---- Fifth read (2026-08-23): segments are ignored by default, and his own
+# PB's replay plays beneath its row ----------------------------------------
+
+def test_segments_outside_bowser_and_hundred_coin_are_ignored_by_default(closed_rank_page):
+    """"by default all segments should be ignored by default (other than
+    the Bowser stages / 100C stars)... The user can go in and manually
+    include those later". On his own tab an ignored entity is the inert row
+    with an Include button; the fixture's own armed segment (BitFS Pipe
+    Entry, a legacy trick with no category) must be one of them."""
+    page = closed_rank_page
+    page.wait_for(".rank-page .rank-table tbody tr", timeout_ms=15000)
+    state = json.loads(page.evaluate("""
+      JSON.stringify((() => {
+        const rows = Array.from(document.querySelectorAll('.rank-page .rank-table tbody tr'));
+        const excluded = rows.filter((r) => r.classList.contains('is-excluded'))
+          .map((r) => r.querySelector('.rank-cell-name').textContent.trim());
+        const includeButtons = rows.filter((r) => Array.from(r.querySelectorAll('button.chip'))
+          .some((b) => b.textContent.trim() === 'Include')).length;
+        return {excluded, includeButtons};
+      })())"""))
+    assert any("Pipe Entry" in name for name in state["excluded"]), state
+    assert state["includeButtons"] == len(state["excluded"]) > 0, state
+
+
+def test_his_own_pb_with_a_replay_gets_the_same_play_button(server):
+    """"if I have a PB and I've saved a replay for it... it should show the
+    same video dropdown option for each row here." The fixture records
+    nothing, so `/api/replay/available` is answered in-page with the
+    fixture star's PB attempt -- the only way to reach the state without a
+    recording -- and the row's ▶ must mount the practice log's own player
+    beneath it. With nothing replayable (the real fixture answer) no row
+    carries a ▶ at all."""
+    with driver.get_driver().launch(headless=True) as page:
+        page.goto(f"{server}/ui/index.html")
+        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.evaluate(CLICK_RANK_TAB)
+        page.wait_for(".rank-page .rank-table tbody tr", timeout_ms=15000)
+        page.wait_ms(300)
+        assert page.count(".rank-page .rank-row-play") == 0, "a ▶ with nothing replayable"
+        pb_attempt = page.evaluate(
+            "fetch('/api/marelo?scope=overall').then((r) => r.json())"
+            ".then((b) => (b.entities.find((e) => e.pb_attempt_id != null) || {}).pb_attempt_id)")
+        assert pb_attempt is not None, "the fixture seeded no PB with an attempt id"
+        page.evaluate(f"""
+          (() => {{
+            const real = window.fetch;
+            window.fetch = (url, opts) => (typeof url === 'string' && url.endsWith('/api/replay/available'))
+              ? Promise.resolve(new Response(JSON.stringify({{available: [{pb_attempt}]}}),
+                  {{headers: {{'Content-Type': 'application/json'}}}}))
+              : real(url, opts);
+          }})()""")
+        # Leave and re-enter the tab: RankPage remounts and fetches both the
+        # breakdown and the (now answered) replay list afresh.
+        page.evaluate(CLICK_PRACTICE_TAB)
+        page.wait_ms(200)
+        page.evaluate(CLICK_RANK_TAB)
+        page.wait_for(".rank-page .rank-table tbody tr", timeout_ms=15000)
+        page.wait_ms(500)
+        assert page.count(".rank-page .rank-row-play") == 1, "the PB's row carries no ▶"
+        page.evaluate("document.querySelector('.rank-page .rank-row-play').click()")
+        page.wait_ms(500)
+        # The practice log's own player: `.replay-player` once footage is
+        # extracted, `.replay-state` while extracting or when (as here, with
+        # no recording behind the fixture) there is none to extract.
+        assert page.count(".rank-page .rank-video-row .replay-player, "
+                          ".rank-page .rank-video-row .replay-state") == 1, (
+            "pressing ▶ on his own row did not mount the practice log's player beneath it")
 

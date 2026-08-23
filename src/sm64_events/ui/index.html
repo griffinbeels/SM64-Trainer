@@ -614,42 +614,39 @@
   }
   .library-mode-seg:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 
-  /* One flat row per runner: a fixed position column, then whichever entry
-     row component the entry already draws through (ExampleCard for a
-     videoed entry, PlainEntry for none -- never a new one, so a video mark
-     or a tier badge can never disagree between the two modes). The position
-     column is the one piece that must NEVER shrink or wrap into the runner
-     name at 850px, so it alone gets a fixed width; the runner name is what
-     gives, via the SAME ellipsis rule ExampleCard's own runner cell already
-     applies -- extended to PlainEntry's, which was never asked to sit at
-     full row width before this task. */
-  .library-leaderboard { display: grid; gap: .4rem; margin-top: .3rem; }
-  .library-leaderboard-row { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+  /* One CONDENSED line per runner (fifth read, 2026-08-23): position, rank
+     cap, runner, time, and -- when the entry has a video -- the practice
+     log's own ▶, which folds the Library card's media block open beneath
+     the line through `Disclose`. The position column must NEVER shrink or
+     wrap into the runner name at 850px, so it alone gets a fixed width; the
+     runner name is what gives, via ellipsis. The video box is capped like
+     the runner page's (480px): an uncapped 16/9 across a full row is a
+     screenful. */
+  .library-leaderboard { display: grid; gap: .25rem; margin-top: .3rem; }
+  .library-leaderboard-row {
+    border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-2);
+    min-width: 0;
+  }
+  .library-leaderboard-line { display: flex; align-items: center; gap: .6rem; padding: .3rem .55rem; min-width: 0; min-height: 41px; }
   .library-leaderboard-position {
     flex: 0 0 auto; width: 2.6rem; text-align: right;
     font-variant-numeric: tabular-nums; font-weight: 700; color: var(--muted);
   }
-  .library-leaderboard-entry {
-    flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: .4rem;
-  }
-  /* Capped, not left to `flex: 1` alone -- an uncapped video card in a
-     single-column list stretches to the FULL row width at 1200/1500px,
-     which grows its 16/9 media box tall enough to push its own runner/time
-     line out of a normal screenful (measured with a contact sheet: visible
-     at 900/850px, cropped away above them). The band grid never hits this
-     because several cards share one row there; a flat list only ever has
-     one, so it needs its own ceiling. */
-  .library-leaderboard-row .library-example { flex: 1 1 auto; min-width: 0; max-width: 420px; }
-  .library-leaderboard-row .library-plain-entry {
-    flex: 1 1 auto; min-width: 0; display: flex; align-items: center; width: 100%;
-  }
-  .library-leaderboard-row .library-plain-runner {
+  .library-leaderboard-tier { flex: 0 0 auto; }
+  .library-leaderboard-line .library-plain-runner {
     flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  .library-leaderboard-time {
+    flex: 0 0 auto; font-variant-numeric: tabular-nums; color: #dfe7ef; font-weight: 600;
+  }
+  .library-leaderboard-play, .library-leaderboard-noplay { flex: 0 0 31px; width: 31px; }
+  .library-leaderboard-line .icon-button { min-width: 31px; min-height: 31px; padding-inline: 0; }
+  .library-leaderboard-video { padding: 0 .55rem .55rem; max-width: 480px; }
+  .library-leaderboard-video .library-example-media { border-radius: 6px; overflow: hidden; }
   /* Your own synthetic PB row -- the SAME gold "you" language TocRow and
      DivisionGroup already wear for the identical fact (`.library-toc-you`),
-     applied to its own pill so it reads as the standout row in the list. */
-  .library-leaderboard-row.is-you .library-plain-entry {
+     applied to the row so it reads as the standout line in the list. */
+  .library-leaderboard-row.is-you {
     border-color: var(--gold); background: rgba(240,189,50,.12);
   }
   .library-leaderboard-empty { margin: .3rem 0 0; }
@@ -3176,6 +3173,9 @@
   .rank-cell-play { width: 34px; padding-inline: 4px; }
   .rank-cell-play .icon-button { width: 31px; min-width: 31px; min-height: 31px; padding-inline: 0; }
   .rank-video-box { max-width: 480px; }
+  /* His own PB's replay is the practice log's full player (transport, save,
+     compare) -- it needs the log's own width, not the 480px clip box. */
+  .rank-video-box.is-replay { max-width: none; }
   .rank-video-box .library-example-media { border-radius: 6px; overflow: hidden; }
   .rank-table tr.unpracticed .rank-cell-name { opacity: .55; }
   /* Excluded dims the WHOLE row (it counts nowhere); unpracticed dims only the

@@ -1136,3 +1136,61 @@ def test_a_movement_with_no_wiki_page_draws_no_mark(library_server):
         page.wait_for(".library-target .library-target-titleline h3", timeout_ms=10000)
         assert page.evaluate(
             "document.querySelectorAll('.library-target .wiki-mark').length") == 0
+
+
+# ---- Round 1 of the ranked leaderboard, fifth read (2026-08-23): a
+# leaderboard row is one condensed line, the video folded beneath it ------
+
+def _open_leaderboard_mode(page):
+    page.evaluate("""Array.from(document.querySelectorAll(
+      '.library-section.open .library-mode-seg')).find((b) => b.textContent.trim() === 'Leaderboard').click()""")
+    page.wait_for(".library-section.open .library-leaderboard-row", timeout_ms=10000)
+    page.wait_ms(200)
+
+
+def test_leaderboard_rows_are_condensed_lines_with_the_video_folded(library_page):
+    """"Each row should be the rank achieved, the runner, the time, and then
+    a button for opening the video. The videos should be collapsed by
+    default, so the leaderboard display is very condensed by default."
+    No video card in the list; every row under ~44px; a ▶ only where the
+    entry has a video; pressing it folds the Library's own media block open
+    beneath that row and pressing again folds it shut."""
+    _open_leaderboard_mode(library_page)
+    shape = library_page.evaluate("""
+      JSON.stringify((() => {
+        const rows = Array.from(document.querySelectorAll('.library-section.open .library-leaderboard-row'));
+        return {rows: rows.length,
+          cards: document.querySelectorAll('.library-section.open .library-example').length,
+          tallest: Math.max(...rows.map((r) => r.getBoundingClientRect().height)),
+          plays: rows.filter((r) => r.querySelector('.library-leaderboard-play')).length,
+          caps: rows.filter((r) => r.querySelector('.library-leaderboard-tier .hat')).length,
+          times: rows.filter((r) => r.querySelector('.library-leaderboard-time')).length};
+      })())""")
+    import json as _json
+    shape = _json.loads(shape)
+    assert shape["rows"] > 10 and shape["cards"] == 0, shape
+    assert shape["tallest"] < 48, f"a closed leaderboard row is not condensed: {shape}"
+    assert 0 < shape["plays"] < shape["rows"], shape
+    assert shape["times"] == shape["rows"] and shape["caps"] > 0, shape
+    library_page.evaluate(
+        "document.querySelector('.library-section.open .library-leaderboard-play').click()")
+    library_page.wait_ms(700)
+    opened = _json.loads(library_page.evaluate("""
+      JSON.stringify((() => {
+        const btn = document.querySelector('.library-section.open .library-leaderboard-play');
+        const fold = btn.closest('.library-leaderboard-row').querySelector('.library-leaderboard-disclose');
+        return {expanded: btn.getAttribute('aria-expanded'), h: fold.getBoundingClientRect().height,
+          media: !!fold.querySelector('.library-example-media')};
+      })())"""))
+    assert opened["expanded"] == "true" and opened["media"] and opened["h"] > 100, opened
+    library_page.evaluate(
+        "document.querySelector('.library-section.open .library-leaderboard-play').click()")
+    library_page.wait_ms(700)
+    closed = _json.loads(library_page.evaluate("""
+      JSON.stringify((() => {
+        const btn = document.querySelector('.library-section.open .library-leaderboard-play');
+        const fold = btn.closest('.library-leaderboard-row').querySelector('.library-leaderboard-disclose');
+        return {expanded: btn.getAttribute('aria-expanded'), h: fold.getBoundingClientRect().height};
+      })())"""))
+    assert closed["expanded"] == "false" and closed["h"] == 0, closed
+

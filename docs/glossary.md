@@ -989,7 +989,10 @@ link reads the same registry.
 
 A second reading of an [[approach]]'s [[sheet entry]] list on its [[Library
 tab]] section — every entry ranked fastest first and numbered, instead of the
-default reading's bands split by [[tier]] and [[division]]. Two entries tied
+default reading's bands split by [[tier]] and [[division]]. Each entry is one
+condensed line — position, [[rank]] cap, [[runner]], time — with a play
+control where the entry has a video; the video stays folded beneath the line
+until you open it. Two entries tied
 on time share a number and the next distinct time skips ahead by the tie's
 size. Your own [[personal best]] inserts itself at the position it actually
 earns among the community's, read off the [[rank]] the section already
