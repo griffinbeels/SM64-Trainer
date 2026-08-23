@@ -20,11 +20,17 @@ const html = htm.bind(h);
 const BOX = 100;          // the stick box's own coordinate space
 const DOT = 9;
 
-// Which way the raw stick is leaning, in the words Usamune's own display uses.
-export function stickWords(stickX, stickY, deadZone = 8) {
-  const vertical = Math.abs(stickY) < deadZone
+// Which way the raw stick is leaning, in the words Usamune's own display
+// uses -- and to the same digit. Only an axis at EXACTLY zero reads as
+// nothing: a reading inside the game's dead zone is still a reading, and
+// Usamune prints it (his report 2026-08-23: "U19 L2 in game, but U19 with a
+// -- entry in the input display... It should match Usamune identically").
+// The dead zone is a fact about what the GAME does with the value, which
+// `stickPhrase` says in words; it is not a reason to hide the value.
+export function stickWords(stickX, stickY) {
+  const vertical = stickY === 0
     ? null : `${stickY > 0 ? "U" : "D"}${Math.abs(stickY)}`;
-  const horizontal = Math.abs(stickX) < deadZone
+  const horizontal = stickX === 0
     ? null : `${stickX > 0 ? "R" : "L"}${Math.abs(stickX)}`;
   return { vertical, horizontal };
 }
@@ -115,7 +121,7 @@ export function ControllerPanel({
   const stickX = frame ? frame.stick_x : 0;
   const stickY = frame ? frame.stick_y : 0;
   const held = frame ? heldNames(frame.buttons, table) : [];
-  const { vertical, horizontal } = stickWords(stickX, stickY, deadZone);
+  const { vertical, horizontal } = stickWords(stickX, stickY);
   // The box shows the stick's reach, and the pad reaches past the game's own
   // cap of 64 -- his own maximum is 84 -- so clamping to the cap here would
   // park the dot on the edge for every full deflection and lose the

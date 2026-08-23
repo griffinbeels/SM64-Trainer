@@ -3180,7 +3180,7 @@
   .reset-toggle input { position: absolute; opacity: 0; pointer-events: none; }
   .reset-toggle:has(input:checked) { color: var(--gold-soft); border-color: #8e7330; }
   .attempt-table { margin: 0; font-size: .79rem; font-variant-numeric: tabular-nums; }
-  .attempt-table tr { height: 40px; }
+  .attempt-table tr:not(.replay-row) { height: 40px; }   /* the drawer's row grows -- see the narrow-layout note by --log-row-height */
   .attempt-table td { padding: .3rem .36rem; border-bottom: 1px solid var(--border-soft); }
   .attempt-index { width: 38px; }
   /* Round 5 (addendum, task 8, 2026-07-26 -- "sweep every container sized
@@ -6078,7 +6078,13 @@
     border-top: 1px solid var(--border-soft);
     background: rgba(0, 0, 0, var(--log-body-tint, 0.16));
   }
-  .log-card-body .attempt-table tr { height: var(--log-row-height, 40px); }
+  /* NOT the replay row. In the narrow layout the rows become blocks, and
+     on a block `height` is a hard size where on a table row it was only a
+     minimum -- so this rule pinned the open drawer's row to 40px and the
+     clip and the timeline painted over every card beneath (his report
+     2026-08-23, "it gets totally messed up on a small enough screen
+     width"). Above 760px the row was still a table row and grew. */
+  .log-card-body .attempt-table tr:not(.replay-row) { height: var(--log-row-height, 40px); }
   /* A STAR'S PIECES, inside its own card (round 22, 2026-08-08): "the
      subsection should appear WITHIN the star's practice log entry as a
      sub-entry... indented a bit so it's clear that it's owned by the parent

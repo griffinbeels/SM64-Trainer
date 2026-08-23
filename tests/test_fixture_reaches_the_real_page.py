@@ -1226,3 +1226,25 @@ def test_the_playhead_travels_over_the_tracks_and_never_the_labels(page):
             f"but the tracks start at {track_left:.1f}")
         assert column_left >= label_right - 0.5, (
             f"at {viewport}: the playhead column overlaps the label column")
+
+
+def test_the_open_drawer_stays_inside_its_card_below_the_supported_width(page):
+    """Below 760px the attempt rows become blocks, and a block's `height` is
+    a hard size where a table row's was a minimum -- so two row-height rules
+    pinned the drawer's row to 40px and the clip and the timeline painted
+    over every card beneath (his report 2026-08-23: "it gets totally messed
+    up on a small enough screen width"). Below the 850px floor is not swept,
+    so this is the one check that the drawer's row is exempt."""
+    reach(page, "input-timeline")
+    for viewport in ((600, 1400), (850, 1400)):
+        page.set_viewport(*viewport)
+        page.wait_ms(250)
+        drawer_bottom, card_bottom = page.evaluate(
+            "(() => { const d = document.querySelector('.attempt-drawer');"
+            " const c = d.closest('.log-card');"
+            " return [d.getBoundingClientRect().bottom,"
+            " c.getBoundingClientRect().bottom]; })()")
+        assert drawer_bottom <= card_bottom + 1, (
+            f"at {viewport}: the drawer ends at {drawer_bottom:.0f} but its "
+            f"card ends at {card_bottom:.0f} -- the drawer's row is clamped")
+    page.set_viewport(1400, 900)

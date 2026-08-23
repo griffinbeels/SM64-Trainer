@@ -76,3 +76,23 @@ def test_every_always_drawn_lane_names_a_button_the_server_sends():
     names = {name for _bit, name in A.BUTTON_BITS}
     assert set(core) <= names, set(core) - names
     assert {"Cup", "Cdown", "Cleft", "Cright"} <= set(core)
+
+
+def test_the_inspector_prints_a_stick_reading_however_small():
+    """His report 2026-08-23: "U19 L2 in game, but U19 with a -- entry in
+    the input display... It should match Usamune identically". Only an axis
+    at exactly zero reads as nothing."""
+    panel = (Path(__file__).resolve().parents[1]
+             / "src/sm64_events/ui/components/controllerpanel.js")
+    code = strip_comments(panel.read_text(encoding="utf-8"))
+    match = re.search(r"^export function stickWords\(.*?\n\}\n", code, re.M | re.S)
+    assert match, "no stickWords in controllerpanel.js"
+    script = (match.group(0).replace("export ", "", 1)
+              + "\nconsole.log(JSON.stringify([stickWords(-2, 19), stickWords(0, 0), stickWords(84, -7)]));")
+    result = subprocess.run(["node", "--input-type=module", "-"], input=script,
+                            capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert result.returncode == 0, result.stderr
+    small, centred, mixed = json.loads(result.stdout)
+    assert small == {"vertical": "U19", "horizontal": "L2"}
+    assert centred == {"vertical": None, "horizontal": None}
+    assert mixed == {"vertical": "D7", "horizontal": "R84"}
