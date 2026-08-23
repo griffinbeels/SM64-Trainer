@@ -294,7 +294,7 @@ def test_pb_gate_keys_agree():
         "  incomplete: Object.entries(PB_GATES).filter(([, g]) =>\n"
         "    typeof g.tail !== 'function'\n"
         "    || typeof g.sentence !== 'function'\n"
-        "    || !g.tail('3x LJ') || !g.sentence('3x LJ')).map(([k]) => k),\n"
+        "    || !g.sentence('3x LJ')).map(([k]) => k),\n"
         "}));")
     assert sorted(js["keys"]) == sorted(PB_GATE_REASONS), (
         "the PB-gate vocabulary disagrees across languages.\n"

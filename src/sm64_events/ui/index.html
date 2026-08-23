@@ -296,14 +296,11 @@
     border: 1px dashed #2c3440; color: #7d8794;
     font-size: 11px; letter-spacing: .2px; gap: .28em;
   }
-  /* Only the NAME clamps. The word beside it is what makes the chip a
-     sentence rather than a label, so it must survive a long strategy name --
-     a 100-coin star's is variant-qualified and runs past 20 characters. */
-  .attempt-actions .pb-gate .pb-gate-strat {
-    display: inline-block; max-width: 9ch;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    color: #98a2ae;
-  }
+  /* The NAME prints in full -- same ruling as the header's PB tag
+     (2026-08-22): a name you cannot read is a chip that says nothing. The
+     cell is a table cell, so a long name widens the actions column and the
+     row's other columns give way. */
+  .attempt-actions .pb-gate .pb-gate-strat { color: #98a2ae; }
   /* The mark beside a practice-log row's TIME keeps the glyph and drops the
      word at EVERY width, unlike the objective card's chip which only drops it
      under 793px. Two reasons, and the first is measured: at 1500px the two-
@@ -5849,16 +5846,19 @@
     margin-left: var(--log-pb-offset, 0px);
     white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 700;
   }
-  /* The empty state names the strategy, and a strategy name has no length
-     limit (a 100-coin star's is variant-qualified). Only the NAME clamps --
-     the tag itself must not, or "no PB" ellipsises away and the row says
-     nothing. Sized so the whole tag stays inside the `--log-pb-width` floor
-     the track was tuned to, which is what keeps it from overflowing LEFT
-     into the strategy picker (test_log_card_caveat_layout.py). */
-  .log-card-head .pbtag .pbtag-strat {
-    display: inline-block; max-width: 8ch; vertical-align: bottom;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
+  /* The empty state names the strategy IN FULL, and the track GROWS to fit
+     it, pushing the strategy picker left (his call, 2026-08-22: "the text for
+     'no PB - Single J...' should expand horizontally so that the full
+     strategy name is displayed. It should push the strategy selector to the
+     left when expanding"). The first version clamped the name at 8ch
+     instead, because a longer tag overflowed LEFT into the picker -- and the
+     reason it overflowed is worth knowing before anyone re-adds a clamp: the
+     `min-width` floor above REPLACES the tag's automatic minimum size, so a
+     `minmax(auto, …)` track read that floor as the tag's minimum and never
+     grew past it. The pb track is `minmax(max-content, …)` now (the two
+     one-line grids below), which keeps the floor for short tags -- every row
+     still reads the same 100px and the pickers still line up -- and lets a
+     long name widen its own row's track. */
   /* Book mark (Task 7, spec 2026-08-07-library-page) sits BESIDE the fold
      button now, sharing its "fold" grid-area through this wrapper rather
      than claiming a fifth named area of its own -- see practicelog.js's own
@@ -6640,7 +6640,7 @@
     grid-template-columns:
       minmax(var(--log-identity-floor, 220px), var(--log-identity-percent, 20fr))
       minmax(0, var(--log-ranks-percent, 70fr))
-      minmax(auto, var(--log-pb-percent, 8fr))
+      minmax(max-content, var(--log-pb-percent, 8fr))
       auto;
     grid-template-areas: "identity ranks pb fold";
   }
@@ -6815,7 +6815,7 @@
   .log-list-card.log-layout-oneline .log-card.log-card-ranks-in-body:not(.is-unassigned) .log-card-head {
     grid-template-columns:
       minmax(var(--log-identity-floor, 220px), 90fr)
-      minmax(auto, var(--log-pb-percent, 8fr))
+      minmax(max-content, var(--log-pb-percent, 8fr))
       auto;
     grid-template-areas: "identity pb fold";
   }

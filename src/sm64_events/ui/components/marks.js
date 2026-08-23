@@ -135,11 +135,9 @@ export function cardBadge(caveat) {
 // The wording lives HERE and not on the server for the same reason the caveat
 // sentences do — the server ships a key, the browser owns the words — and each
 // is a function of the strategy name because one of the two prints it. The
-// chip reads `<name> <tail>`: the two are split so the chip can clamp the NAME
-// and always keep the word that carries the meaning. Strategy names run long
-// -- a 100-coin star's are variant-qualified ("100c + Slide - Standard") --
-// and a single string clamped to the column's width ellipsised away the
-// "only", leaving a chip that just repeated a name (contact sheet, 2026-08-20).
+// chip reads `<name> <tail>`, split so the name can carry its own style; it
+// used to be split so the NAME could clamp while the word survived, until his
+// 2026-08-22 ruling that the name prints in full.
 export const PB_GATES = {
   foreign_strat: {
     // Reads as a fact about the button rather than an accusation: the run was
@@ -153,8 +151,15 @@ export const PB_GATES = {
       + `it was run with. Change the strategy on this row to save it.`,
   },
   no_active_strat: {
-    name: () => null,               // no strategy to name -- that IS the state
-    tail: () => "Pick a strategy",
+    // NO CHIP: the button is simply absent until a strategy is picked. His
+    // ruling, 2026-08-22, on the first version's "Pick a strategy" chip: "it
+    // should just hide the button until the action is valid again" -- the
+    // header's own picker is already red and reads "no strat", so a second
+    // prompt in every row repeated what the card was already saying. A null
+    // `tail` is how a gate says "draw nothing"; the sentence stays for the
+    // parity test and any surface that wants to explain the absence.
+    name: () => null,
+    tail: () => null,
     sentence: () =>
       "A PB is saved under one strategy, so pick the one you are practising "
       + "before saving.",
@@ -177,9 +182,10 @@ export function pbGateOf(blocked) {
 // explanation that only arrives on hover never arrives (his rule, 2026-08-02,
 // about a disabled control whose own tooltip nobody reaches). Lives beside
 // `cardBadge` so "change how the chip looks" is one function and one CSS block
-// (`.pb-gate` in index.html), the same split the caveat badge has.
+// (`.pb-gate` in index.html), the same split the caveat badge has. A gate
+// with no `tail` draws nothing at all -- see `no_active_strat`.
 export function gateChip(gate) {
-  if (!gate) return null;
+  if (!gate || !gate.tail) return null;
   return html`<span class="pb-gate" title=${gate.sentence}
       aria-label=${gate.sentence}>${gate.name
         ? html`<span class="pb-gate-strat">${gate.name}</span>` : null

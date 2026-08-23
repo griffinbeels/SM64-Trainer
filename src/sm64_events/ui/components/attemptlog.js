@@ -197,8 +197,9 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
            resolved answer (tracking/pbaction.py). Four states and no
            client-side precedence: undo, save, "the time is not a legal
            quantity", "the row is not this strategy's". A failure, a cleared
-           row and an attempt with no entity resolve to nothing at all, which
-           is the empty last arm. */""}
+           row, an attempt with no entity, and a card with NO strategy picked
+           all resolve to nothing at all (the last by his 2026-08-22 ruling:
+           hide the button until the action is valid again). */""}
       ${a.pb_action === "undo"
         ? html` <button onclick=${undoPb}
             title="delete this save — the previous PB on this strategy becomes current again">Undo PB</button>`
@@ -336,13 +337,10 @@ export function PbTag({ pb, mode, rows, pick, t, strat = null,
   // (2026-08-15). The empty states say WHICH answer is missing rather than a
   // bare "no PB yet": no strategy chosen is a different situation from a
   // strategy you have not banked a time on, and the fix is different too.
-  // Both empty states clamp the STRATEGY NAME rather than the whole tag: the
-  // tag sits in a grid track whose floor is a tuned number (`--log-pb-width`,
-  // tuned against "no PB yet"), and a tag wider than its track overflows LEFT
-  // into the strategy picker beside it -- which is what
-  // tests/test_log_card_caveat_layout.py caught the first version of this
-  // doing, at every width. The lead-in stays whole so the sentence survives
-  // a name long enough to ellipsise.
+  // The strategy name prints IN FULL and the card's pb track grows to fit it,
+  // pushing the picker left (his call, 2026-08-22; the track rule in
+  // index.html has the mechanics). `.pbtag-strat` is a hook for that rule,
+  // not a clamp.
   if (!strat) return html`<span class="pbtag">no strategy</span>`;
   if (!pb) return html`<span class="pbtag">no PB · <span
     class="pbtag-strat">${strat}</span></span>`;
