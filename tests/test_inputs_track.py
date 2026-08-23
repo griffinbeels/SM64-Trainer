@@ -18,6 +18,7 @@ class FakeAttempt:
     started_utc: str = AT
     ended_utc: str = LATER
     anchor_frame: int | None = None
+    rta_frames: int | None = None
     segment_id: int | None = None
     course_id: int | None = None
     star_id: int | None = None
@@ -37,6 +38,15 @@ def store(tmp_path):
 def test_an_anchor_frame_trims_what_came_before_it(store):
     got = track_for_attempt(store, FakeAttempt(anchor_frame=105))
     assert [number for number, _f in got] == [105, 106, 107, 108, 109]
+
+
+def test_the_closing_frame_trims_what_the_chunk_held_after_it(store):
+    """A chunk is ten seconds of capture that OVERLAPS the attempt's span,
+    so it carries frames past the closing event. His first live attempt
+    (2026-08-22) read 598 frames for a 444-frame run: the extra 154 were
+    the next five seconds of the chunk the star landed in."""
+    got = track_for_attempt(store, FakeAttempt(anchor_frame=102, rta_frames=3))
+    assert [number for number, _f in got] == [102, 103, 104, 105]
 
 
 def test_no_anchor_frame_keeps_everything_the_span_covers(store):

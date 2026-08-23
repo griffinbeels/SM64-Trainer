@@ -147,11 +147,28 @@ function ActionRow({ name, spans, percent, seek, ghost = false }) {
   </div>`;
 }
 
-export function InputTimeline({ attemptId, video, compact = false }) {
+// THE clock mapping, in both directions. `anchorOffsetS` is how far into
+// the clip the attempt's anchor sits: the clip is cut a few seconds BEFORE
+// the anchor (the replay pre-pad) while the track starts AT it. Without it
+// every input landed three seconds early (his first live run, 2026-08-22:
+// "the input reader shows a totally different angle and shows me pressing
+// A/B"). Pure and exported so tests/test_ui_input_clock.py can drive them.
+export const frameAtTime = (seconds, anchorOffsetS, fps, frames) => {
+  const raw = Math.floor((seconds - anchorOffsetS) * fps + 1e-4);
+  return Math.max(0, Math.min(Math.max(frames - 1, 0), raw));
+};
+export const timeAtFrame = (frame, anchorOffsetS, fps) =>
+  anchorOffsetS + (frame + 0.5) / fps;
+
+export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
+                                compact = false }) {
   const [state, setState] = useState({ phase: "loading" });
   const [frame, setFrame] = useState(0);
-  const [following, setFollowing] = useState(true);
-  const laneBox = useRef(null);
+  // The pointer and the playhead both work in the TRACK column's own box,
+  // never the lane row's: the row starts with the label column, and a
+  // playhead measured against it could be dragged over the words "Stick"
+  // and "Mario" (his report, 2026-08-22).
+  const trackColumn = useRef(null);
 
   useEffect(() => {
     let alive = true;
@@ -165,21 +182,26 @@ export function InputTimeline({ attemptId, video, compact = false }) {
     return () => { alive = false; };
   }, [attemptId]);
 
-  // ONE CLOCK. The video is the clock whenever there is one -- the timeline
-  // follows it rather than running a second one beside it, which is what keeps
-  // "both stay in sync" structural instead of a thing we keep re-fixing.
+  // ONE CLOCK, ALWAYS. The video is the clock whenever there is one: the
+  // timeline reads it every frame and never keeps a position of its own, so
+  // dragging the video's scrubber moves the playhead and dragging the
+  // playhead seeks the video. There is no "stop following" state -- that
+  // was how the two drifted apart (his report, 2026-08-22: "if I drag the
+  // video playhead itself, it should automatically move the input playback
+  // system's playhead as well. We need both of these to always stay in
+  // sync").
   useEffect(() => {
-    if (!video || !following) return undefined;
+    if (!video || state.phase !== "ready") return undefined;
     let raf = 0;
-    const fps = state.phase === "ready" ? state.data.fps : 30;
+    const { fps, frames } = state.data;
     const tick = () => {
-      const at = Math.floor((video.currentTime || 0) * fps + 1e-4);
+      const at = frameAtTime(video.currentTime || 0, anchorOffsetS, fps, frames);
       setFrame((current) => (current === at ? current : at));
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [video, following, state]);
+  }, [video, state, anchorOffsetS]);
 
   const data = state.phase === "ready" ? state.data : null;
   const lanes = useMemo(
@@ -209,15 +231,17 @@ export function InputTimeline({ attemptId, video, compact = false }) {
   const total = data.frames || 1;
   const seek = (next) => {
     const clamped = Math.max(0, Math.min(total - 1, next));
-    setFollowing(false);
     setFrame(clamped);
     if (video) {
+      // Seeking the video is how the timeline moves: the clock loop above
+      // reads the new time back on the next frame, so the two cannot
+      // disagree even for a frame.
       if (!video.paused) video.pause();
-      video.currentTime = (clamped + 0.5) / data.fps;
+      video.currentTime = timeAtFrame(clamped, anchorOffsetS, data.fps);
     }
   };
   const seekFromPointer = (event) => {
-    const box = laneBox.current;
+    const box = trackColumn.current;
     if (!box) return;
     const rect = box.getBoundingClientRect();
     if (rect.width <= 0) return;
@@ -266,9 +290,6 @@ export function InputTimeline({ attemptId, video, compact = false }) {
         <h4>${timeLabel(total)}${" "}·${" "}${total} frames${" "}·${" "}${data.fps} fps</h4>
       </div>
       <div class="input-timeline-actions">
-        ${video && html`<button class="icon-button" onclick=${() => setFollowing(true)}
-            title="Follow the video again" aria-label="Follow the video again"
-            disabled=${following}><${Icon} name="play" size=${14} /></button>`}
         <button class="icon-button" onclick=${() => seek(frame - 1)}
             title="Previous frame" aria-label="Previous frame">−1f</button>
         <button class="icon-button" onclick=${() => seek(frame + 1)}
@@ -285,11 +306,13 @@ export function InputTimeline({ attemptId, video, compact = false }) {
           : ", drawn behind your own. Both start at frame 0."}</span>
     </div>`}
 
-    <div class="input-lanes" ref=${laneBox}
+    <div class="input-lanes"
          onpointerdown=${seekFromPointer}
          onpointermove=${(event) => { if (event.buttons & 1) seekFromPointer(event); }}
          role="group" aria-label="Input lanes">
-      <div class="input-playhead" style=${`left:${percent(frame)}`}></div>
+      <div class="input-track-column" ref=${trackColumn}>
+        <div class="input-playhead" style=${`left:${percent(frame)}`}></div>
+      </div>
       <div class="input-lane is-stick">
         <span class="input-lane-name">Stick</span>
         <div class="input-lane-track">

@@ -1202,3 +1202,27 @@ def test_the_drawer_draws_the_TEMPLATE_S_MARIO_behind_yours(page):
         "Array.from(document.querySelectorAll('.controller-panel-label'))"
         ".map((el) => el.textContent.trim())")
     assert "Template faces" in labels, labels
+
+
+def test_the_playhead_travels_over_the_tracks_and_never_the_labels(page):
+    """His report 2026-08-22: "I can drag the frame start position to the
+    left of the row labels... Frame 0 should start AFTER the labels". The
+    playhead lives in a column overlay whose left edge must be the tracks'
+    own left edge -- at the wide label width and the narrow one, since the
+    width is a container-query variable and a drift there is a playhead
+    over the words again."""
+    reach(page, "input-timeline")
+    for viewport in ((1400, 900), (860, 900)):
+        page.set_viewport(*viewport)
+        page.wait_ms(150)
+        column_left, track_left, label_right = page.evaluate(
+            "(() => { const c = document.querySelector('.input-track-column')"
+            ".getBoundingClientRect(); const t = document.querySelector("
+            "'.input-lane-track').getBoundingClientRect(); const l = document"
+            ".querySelector('.input-lane-name').getBoundingClientRect();"
+            " return [c.left, t.left, l.right]; })()")
+        assert abs(column_left - track_left) < 1.0, (
+            f"at {viewport}: the playhead column starts at {column_left:.1f} "
+            f"but the tracks start at {track_left:.1f}")
+        assert column_left >= label_right - 0.5, (
+            f"at {viewport}: the playhead column overlaps the label column")

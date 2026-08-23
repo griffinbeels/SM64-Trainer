@@ -12,12 +12,23 @@ from sm64_events.inputs.frame import InputFrame
 
 
 def track_for_attempt(store, attempt) -> list[tuple[int, InputFrame]]:
-    """Every captured frame between the attempt's anchor and its outcome."""
+    """Every captured frame from the attempt's anchor to its closing event.
+
+    The wall-clock span picks CHUNKS, and a chunk is ten seconds of capture
+    that overlaps the span -- so it carries frames from before the anchor
+    and after the close. Both ends are trimmed on the frame counter. The
+    end trim was missing until 2026-08-22, and his first real attempt read
+    598 frames for a 444-frame run: the extra 154 were the next five seconds
+    of the chunk the star landed in, drawn as if they were the run.
+    """
     frames = store.frames_between(attempt.started_utc, attempt.ended_utc)
     if attempt.anchor_frame is None:
         return frames
+    first = attempt.anchor_frame
+    last = (first + attempt.rta_frames if attempt.rta_frames is not None
+            else None)
     return [(number, frame) for number, frame in frames
-            if number >= attempt.anchor_frame]
+            if number >= first and (last is None or number <= last)]
 
 
 def target_of(attempt) -> str:

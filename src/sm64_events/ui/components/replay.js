@@ -41,7 +41,10 @@ function attachSharedVolume(el) {
 // `onVideoEl` reports the <video> element upward so a sibling can follow
 // the SAME clock -- the input timeline does. Mirrors VideoStage's own
 // `onEl` rather than inventing a second way to hand an element out.
-export function ReplayPlayer({ attemptId, onCompare, onVideoEl }) {
+// `onView` reports the clip's metadata the same way, because that clock
+// only lines up with the input track once the sibling knows where in the
+// clip the attempt's anchor sits (`anchor_offset_s`).
+export function ReplayPlayer({ attemptId, onCompare, onVideoEl, onView }) {
   const [state, setState] = useState({ phase: "loading" });
   const [savedPath, setSavedPath] = useState(null);
   const [playing, setPlaying] = useState(false); // event-driven (onplay/onpause)
@@ -60,6 +63,7 @@ export function ReplayPlayer({ attemptId, onCompare, onVideoEl }) {
       .then((r) => {
         if (!alive) return;
         setState({ phase: "ready", ...r });
+        if (onView) onView(r);
         // saved_path persists across sessions (server globs the save tree):
         // the Save button correctly shows "Saved" for clips saved last week
         setSavedPath(r.saved_path || null);

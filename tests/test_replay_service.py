@@ -62,7 +62,7 @@ class FakeExtractor:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(b"mp4")
         return ClipResult(path=out_path, duration_s=(end - start).total_seconds(),
-                          truncated=False)
+                          truncated=False, start_utc=start)
 
 
 def make_service(tmp_path, attempts, cov=None):
@@ -84,6 +84,25 @@ def test_view_pads_span_and_returns_clip_url(tmp_path):
     start, end, _ = svc.extractor.calls[0]
     assert start == T0 - timedelta(seconds=3)            # pre_pad
     assert end == T0 + timedelta(seconds=12 + 2)         # post_pad
+    # The anchor sits pre_pad into the clip, MEASURED from the clip's own
+    # first frame -- the input track starts at the anchor, so this is what
+    # lets the two share one axis (live report 2026-08-22: every input
+    # landed three seconds early).
+    assert res["anchor_offset_s"] == 3.0
+
+
+def test_the_anchor_offset_follows_the_clip_s_REAL_start_not_the_pad(tmp_path):
+    """The ring may have evicted part of the lead-in; the offset is then
+    shorter than the pad, and the sidecar's own start_utc says by how much."""
+    class LateExtractor(FakeExtractor):
+        def extract(self, ring, start, end, out_path):
+            res = super().extract(ring, start, end, out_path)
+            return ClipResult(path=res.path, duration_s=res.duration_s,
+                              truncated=True,
+                              start_utc=start + timedelta(seconds=2))
+    svc = make_service(tmp_path, [attempt()])
+    svc.extractor = LateExtractor()
+    assert svc.view(42)["anchor_offset_s"] == 1.0
 
 
 def test_available_attempt_ids_saved_or_buffer_covered(tmp_path):
@@ -205,6 +224,7 @@ def test_view_fallback_tolerates_legacy_saved_file_without_sidecar(tmp_path):
     assert res["duration_s"] is None
     assert res["truncated"] is False
     assert res["fps"] == 60             # falls back to current config
+    assert res["anchor_offset_s"] == 3.0  # and to the pad, with no start_utc
 
 
 def test_view_prefers_scratch_cache_and_reports_saved_path(tmp_path):

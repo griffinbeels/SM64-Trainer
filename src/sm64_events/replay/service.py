@@ -254,6 +254,8 @@ class ReplayService:
             self._wait_for_tail(end)
             res = self.extractor.extract(self.recorder.ring, start, end, clip)
             m = {"duration_s": res.duration_s, "truncated": res.truncated}
+            if res.start_utc is not None:
+                m["start_utc"] = res.start_utc.isoformat()
             meta.write_text(json.dumps(m))
             url, source = f"/api/replay/clips/{name}", "buffer"
         # fps = encoded rate (CFR); game_fps = SM64 logic rate — the
@@ -266,7 +268,27 @@ class ReplayService:
                 "truncated": m.get("truncated", False),
                 "fps": m.get("fps", self.cfg.fps), "game_fps": GAME_FPS,
                 "source": source,
+                "anchor_offset_s": self._anchor_offset(a, m),
                 "saved_path": str(saved) if saved is not None else None}
+
+    def _anchor_offset(self, a, meta: dict) -> float:
+        """How far into the clip the attempt's anchor sits, in seconds.
+
+        The clip is cut `pre_pad_s` BEFORE the anchor on the wall clock,
+        while the input track starts AT the anchor on the frame counter; a
+        consumer drawing the two on one axis has to shift by this, or every
+        input lands three seconds early (live report 2026-08-22: "the input
+        reader shows a totally different angle and shows me pressing A/B").
+        Measured from the clip's own recorded first frame where the sidecar
+        has it; a sidecar written before that field existed falls back to
+        the pad setting, which is exact unless the ring had evicted the
+        lead-in.
+        """
+        start = meta.get("start_utc")
+        if start is None:
+            return float(self.pre_pad_s)
+        offset = (_parse_utc(a.started_utc) - _parse_utc(start)).total_seconds()
+        return max(0.0, offset)
 
     def _wait_for_tail(self, end_utc: datetime) -> None:
         """Bounded wait: a click right after the event can outrace the last

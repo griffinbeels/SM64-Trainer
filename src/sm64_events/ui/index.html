@@ -4630,10 +4630,22 @@
   }
   .input-template-note strong { color: #e3c27c; }
 
-  .input-lanes { position: relative; cursor: crosshair; touch-action: none; }
+  /* The label column's width lives in ONE variable: the lane grid reads it
+     for its first column and the track column overlay reads it for where
+     the tracks begin, so the playhead can only ever travel over the tracks
+     -- never over the words "Stick" and "Mario" (his report 2026-08-22). */
+  .input-lanes {
+    position: relative; cursor: crosshair; touch-action: none;
+    --lane-label: 3.4rem; --lane-gap: .4rem;
+  }
   .input-lane {
-    display: grid; grid-template-columns: 3.4rem 1fr; align-items: center;
-    gap: .4rem; margin-bottom: .18rem;
+    display: grid; grid-template-columns: var(--lane-label) 1fr;
+    align-items: center; gap: var(--lane-gap); margin-bottom: .18rem;
+  }
+  .input-track-column {
+    position: absolute; top: 0; bottom: 0; right: 0;
+    left: calc(var(--lane-label) + var(--lane-gap));
+    pointer-events: none; z-index: 2;
   }
   .input-lane-name {
     font-size: .64rem; color: #8fa3b6; text-align: right;
@@ -4730,7 +4742,7 @@
 
   .input-playhead {
     position: absolute; top: 0; bottom: 0; width: 0;
-    border-left: 1px solid #f4f7fb; pointer-events: none; z-index: 2;
+    border-left: 1px solid #f4f7fb; pointer-events: none;
   }
 
   .input-inspector {
@@ -4776,7 +4788,7 @@
   /* 850px is the supported floor, and the drawer is narrower than the window.
      The lane label column and the inspector are what run out of room first. */
   @container drawer (max-width: 520px) {
-    .input-lane { grid-template-columns: 2.4rem 1fr; }
+    .input-lanes { --lane-label: 2.4rem; }
     .input-inspector { gap: .5rem; }
     .input-inspector-read { flex-basis: 100%; }
   }

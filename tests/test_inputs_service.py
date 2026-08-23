@@ -20,6 +20,7 @@ class FakeAttempt:
     started_utc: str = AT
     ended_utc: str = LATER
     anchor_frame: int | None = None
+    rta_frames: int | None = None
     segment_id: int | None = None
     course_id: int | None = 24
     star_id: int | None = 1

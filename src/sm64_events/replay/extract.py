@@ -49,6 +49,11 @@ class ClipResult:
     path: Path
     duration_s: float
     truncated: bool
+    # The wall time of the clip's FIRST frame -- the requested start unless
+    # the ring's coverage moved it. What lets anything cut on the frame
+    # counter (the input track) line up with the clip: the attempt's anchor
+    # sits at `started_utc - start_utc` seconds into the video.
+    start_utc: datetime | None = None
 
 
 def _joinable(prev, seg) -> bool:
@@ -166,7 +171,8 @@ class ClipExtractor:
                 f"ffmpeg extract failed: {exc.stderr.decode('utf-8', 'replace')[-500:]}"
             ) from exc
 
-        return ClipResult(path=out_path, duration_s=dur, truncated=truncated)
+        return ClipResult(path=out_path, duration_s=dur, truncated=truncated,
+                          start_utc=s)
 
     def _codec_opts(self) -> list[str]:
         """Quality settings for the cut, from the ONE registry in config.py.
