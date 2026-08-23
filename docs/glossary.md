@@ -319,8 +319,8 @@ with the time you pressed Save, holding the [[personal best]] it brought — so 
 can clear it, undo it, or move it to another [[strategy]] exactly as you would
 a played one. The one thing it cannot offer is a replay.
 
-It remembers the source that brought it — you typed it, you named your
-column in the [[Ultimate Sheet]], or you linked your own spreadsheet — and the
+It remembers the source that brought it — you typed it, or you named your
+column in the [[Ultimate Sheet]] — and the
 [[game version]]
 that set it, so a JP time grades on the JP [[ladder]] while you play US. The
 trainer draws neither fact: nothing marks an imported time on any screen.
@@ -333,18 +333,6 @@ rather than importing what it understood and staying quiet about the rest.
 - **Lives** — the import rule (`src/sm64_events/tracking/importing.py`)
   → the projector (`src/sm64_events/tracking/projection.py`)
   → the store (`src/sm64_events/storage/db.py`)
-
-### Import name
-
-The words a source calls a [[target]] by, and the reason no import needs a
-format of its own. The trainer answers to the game's own [[star]] names, the
-abbreviations a [[runner]] types (`BoB 1`, `WF 100c`), the [[Ultimate Sheet]]'s
-labels, and the names of the [[segment]]s you built — so a sheet you already
-keep resolves without editing, and a name the trainer does not know comes back
-to you rather than vanishing.
-
-- **Lives** — the name resolver
-  (`src/sm64_events/tracking/import_names.py`)
 
 ### Strategy
 

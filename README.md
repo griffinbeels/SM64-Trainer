@@ -73,17 +73,16 @@ you can click to jump straight to an attempt — or open its replay.
 a pipe entry, a Bowser fight, a castle movement) and it becomes a first-class
 practice target with the same history, PBs, ranks and replays a star gets.
 
-**Bring your times with you.** Practised for years before finding this? Three
-ways in, all in Settings except the first: type a time straight onto any star's
-card; pick your name if you have a column on the Ultimate Sheet; or paste a link
-to your own spreadsheet and it reads that — a copy of the Ultimate Sheet, or any
-grid of `star | time | strategy` in the names runners already use (`BoB 1`,
-`WF 100c`, the sheet's own labels). A time only lands when it beats the best you
-already hold for that star and strategy, so importing twice costs nothing. Each
-one becomes a real row in that star's practice log — clear it, undo it, move
-it to another strategy like any run — and every import can be undone in one
-click. Anything it could not read is listed back at you, line by line, rather
-than quietly skipped.
+**Bring your times with you.** Practised for years before finding this? Two
+ways in: type a time straight onto any star's card, or pick your name in
+Settings if you have a column on the Ultimate Sheet — every star time lands,
+the Bowser course and fight rows land on their movements, and a subsection
+lands the moment you link its Library row to a segment you built. A time only
+lands when it beats the best you already hold for that star and strategy, so
+importing twice costs nothing. Each one becomes a real row in that star's
+practice log — clear it, undo it, move it to another strategy like any run —
+and every import can be undone in one click. Anything it could not use is
+listed back at you by name, under the reason, rather than quietly skipped.
 
 **Ranks.** Every attempt, banner and route step wears a rank badge, graded
 against community standards — **per strategy**, so a fast time on one strat

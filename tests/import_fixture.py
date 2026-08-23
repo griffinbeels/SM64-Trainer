@@ -48,5 +48,12 @@ def make_client(tmp_path):
     ranks.load()
     service = TrackerService(db, broadcaster, ranks=ranks)
     poller = Poller(OfflineMemory(), [], service)
-    with TestClient(create_app(poller, broadcaster, service=service)) as client:
+    # Both user-data files into scratch: the import reads the library links
+    # (`adoptions_path`), and the default resolves to the REAL dev data dir,
+    # so a test that links a row would otherwise write it into the next dev
+    # server -- and a link he made in dev would change what these tests land.
+    app = create_app(poller, broadcaster, service=service,
+                     adoptions_path=tmp_path / "library_adoptions.json",
+                     mode_path=tmp_path / "tracker_mode.json")
+    with TestClient(app) as client:
         yield client, db, service

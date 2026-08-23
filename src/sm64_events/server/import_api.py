@@ -5,64 +5,42 @@ Its own router rather than another block in `server/api.py`, for the reason
 snapshot, and mounting it beside them is cheaper than threading the sheet into
 the general API router.
 
-THREE DOORS, ONE BACK ROOM (five until round 2, 2026-08-22 -- the paste and
-LiveSplit doors are a backlog task; commit d70721b9 last carries them).
-Every door is the same three steps:
+TWO DOORS, ONE BACK ROOM -- the card's own box and a runner's Ultimate Sheet
+column. Five until round 2 (2026-08-22: the paste and LiveSplit doors, commit
+d70721b9 last carries them) and three until round 3 (2026-08-23: the link to
+your own sheet -- "too much for us to handle, we need to just get the
+Ultimate Sheet parsing as good as possible"; the commit before this one
+last carries it). All backlog task 0103. Every door is the same three steps:
 
   1. READ its source into `ImportCandidate`s, plus the rows it could not use;
-  2. PREVIEW or LAND them through `TrackerService` (one planner for both, so
-     the preview answers exactly the question the button then performs);
-  3. ANSWER in one shape -- the service's summary, `rejected`, `dry_run`.
+  2. LAND them through `TrackerService.import_times`;
+  3. ANSWER in one shape -- the service's summary plus `rejected`.
 
 `finish` is steps 2 and 3. A door is step 1 and nothing else, which is what a
-sixth door should cost: a reader that produces candidates, and one `finish`.
+third door should cost: a reader that produces candidates, and one `finish`.
 
 The runner LIST is not here: `GET /api/library/runners` already serves it from
 the bundled snapshot, which is what lets the picker fill with no network wait
 while the import itself reads a fresh fetch.
 """
 import logging
-import urllib.request
 from contextlib import contextmanager
-from dataclasses import asdict
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from sm64_events.library import sheet_link
-from sm64_events.library.build import build
+from sm64_events.library import adoptions as adoptions_store
+from sm64_events.library.audit import row_key
 from sm64_events.library.import_runner import candidates_for
 from sm64_events.library.mapping import segment_seed_key
-from sm64_events.library.source import FETCH_TIMEOUT_S, fetch
+from sm64_events.library.source import fetch
 from sm64_events.server.ranks_api import absorb_after_regrade
-from sm64_events.tracking import import_names
 from sm64_events.tracking.importing import ImportCandidate
 
 _log = logging.getLogger("sm64.import")
 
 MANUAL_SOURCE = "manual"
-LINK_SOURCE = "link"
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _fetch_bytes(url: str) -> bytes:
-    """One GET, with the same timeout the Ultimate Sheet's own fetch uses.
-
-    A separate function so the route can hand it to a threadpool: a sheet is
-    megabytes, and the poller shares this process — a blocked event loop is a
-    dropped star grab."""
-    with urllib.request.urlopen(url, timeout=FETCH_TIMEOUT_S) as reply:
-        return reply.read()
-
-
-def _rows(unresolved) -> list[dict]:
-    """`[{line, text, reason}]` — THE reject shape every door answers with."""
-    return [asdict(item) for item in unresolved]
 
 
 @contextmanager
@@ -91,29 +69,21 @@ class SheetImportBody(BaseModel):
     refresh: bool = True
 
 
-class LinkImportBody(BaseModel):
-    url: str
-    # Only needed when the link turns out to be a copy of the Ultimate Sheet:
-    # that shape has a column per runner and no way to guess which is yours.
-    runner: str = ""
-    dry_run: bool = False
-
-
-def create_import_router(service, library=None, overrides=None) -> APIRouter:
+def create_import_router(service, library=None, overrides=None,
+                         adoptions=None) -> APIRouter:
     """`library` is the `LibraryStore`; omit it and the sheet door is simply
     not mounted, the same way the library router drops its adopt routes on a
-    broadcast-only instance."""
+    broadcast-only instance. `adoptions` is the SAME `Adoptions` the library
+    router holds -- the user's row->segment links -- so an import lands a
+    linked row exactly where the Library tab says it is linked."""
     router = APIRouter(prefix="/api/import", tags=["import"])
 
     async def finish(source: str, candidates: list, rejected: list,
-                     dry_run: bool, **extra) -> dict:
-        """Preview or land, and answer in the one shape every door shares."""
+                     **extra) -> dict:
+        """Land, and answer in the one shape every door shares."""
         with _service_refusals():
-            if dry_run:
-                summary = service.preview_import(candidates)
-            else:
-                summary = await service.import_times(source, candidates)
-        if not dry_run and summary.get("imported"):
+            summary = await service.import_times(source, candidates)
+        if summary.get("imported"):
             # Every rank on every scope just moved for a reason that is not a
             # run -- the same shape as the game-version flip, and handled the
             # same way (`server/mode_api.py`). Without this the next rank fetch
@@ -121,22 +91,7 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
             # something he did not just do, which he reads as a bug outright
             # (his ruling, 2026-08-01).
             absorb_after_regrade(service)
-        return {"source": source, **summary, "rejected": rejected,
-                "dry_run": dry_run, **extra}
-
-    def build_catalog():
-        """Every name this instance will answer to, newest-specific LAST.
-
-        Order is precedence (`Catalog.add_target`, first writer wins): the
-        game's own star names cannot be redirected by a sheet label or by a
-        segment somebody named after a star."""
-        catalog = import_names.star_catalog()
-        if library is not None:
-            import_names.sheet_catalog(library.payload, catalog)
-        database = getattr(service, "db", None)
-        if database is not None:
-            import_names.segment_catalog(database.segment_defs(), catalog)
-        return catalog
+        return {"source": source, **summary, "rejected": rejected, **extra}
 
     def timer_mode_for(entity_key: str) -> str:
         """Segments are RTA-only and stars follow the IGT clock. Read off the
@@ -147,29 +102,56 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
             return ranks.clock_for(entity_key)
         return "rta" if entity_key.startswith("segment:") else "igt"
 
-    def sheet_segment_resolver():
-        """How the Ultimate Sheet's six Bowser rows reach THIS database.
+    def sheet_row_placer():
+        """Where a sheet row that is not a star row lands HERE, if anywhere.
 
-        The sheet's `segment:6` is the BitFS pipe entry -- the stage's No
-        Reds card -- on the machine that scraped it. What it is HERE is
-        whichever `segment_defs` row carries the same seed_key, on that
-        row's own clock. A movement he deleted resolves to nothing and the
-        row stays in the could-not-use list. Built per request: the ids are
-        read off the database at the moment of the import, not at mount."""
+        The same three facts the Library tab shows for a row, in the same
+        order of authority, so what the import does and what the page says
+        cannot disagree:
+          1. the row's explicit link to a segment he built (`adoptions`) --
+             a subsection's or a movement's, under the strategy the link
+             names (a piece's community timing is its Standard);
+          2. the name-match an entity-less target gets unasked (round 6:
+             "we should autoassign any segments that exist already");
+          3. the seed_key behind a sheet Bowser id -- `segment:6` is the
+             BitFS pipe entry, the stage's No Reds card, on the machine that
+             scraped it; HERE it is whichever `segment_defs` row carries
+             `seg:bitfs-pipe`.
+        Every answer is a LOCAL id on that row's own clock; a row none of the
+        three can place stays in the could-not-use list. Built per request:
+        the links and the ids are read at the moment of the import."""
         database = getattr(service, "db", None)
         if database is None:
             return None
+        definitions = database.segment_defs()
         local_ids = {definition["seed_key"]: definition["id"]
-                     for definition in database.segment_defs()
-                     if definition.get("seed_key")}
+                     for definition in definitions if definition.get("seed_key")}
+        names = [(definition["id"], definition["name"])
+                 for definition in definitions]
+        linked = adoptions.rows() if adoptions is not None else {}
 
-        def resolve(entity_key: str):
-            local = local_ids.get(segment_seed_key(entity_key))
+        def place(target, item, kind):
+            entity = linked.get(row_key(target, item["name"], item["ids"]))
+            if entity:
+                return (entity, timer_mode_for(entity),
+                        adoptions_store.strategy_name(
+                            target["label"], item["name"], kind=kind))
+            if kind != "approach":
+                return None
+            target_key = target.get("entity_key") or ""
+            if not target_key:
+                hit = adoptions_store.auto_match(target["label"], names)
+                if hit:
+                    return (hit["entity"], timer_mode_for(hit["entity"]),
+                            adoptions_store.strategy_name(
+                                target["label"], item["name"]))
+                return None
+            local = local_ids.get(segment_seed_key(target_key))
             if local is None:
                 return None
             local_key = f"segment:{local}"
-            return local_key, timer_mode_for(local_key)
-        return resolve
+            return local_key, timer_mode_for(local_key), None
+        return place
 
     @router.post("/manual")
     async def import_manual(body: ManualImportBody):
@@ -177,53 +159,7 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
         candidate = ImportCandidate(
             entity_key=body.entity_key.strip(), strat_tag=body.strat_tag.strip(),
             time_cs=body.time_cs, game_version=body.game_version)
-        return await finish(MANUAL_SOURCE, [candidate], [], dry_run=False)
-
-    @router.post("/link")
-    async def import_link(body: LinkImportBody):
-        """Import from a link to somebody's own spreadsheet.
-
-        The workbook says which shape it is: a copy of the Ultimate Sheet is
-        read by the real reader and a named runner's column extracted; any
-        other grid becomes lines and goes through the block parser
-        (`tracking/import_names.py`), so a personal `star | time | strat`
-        sheet needs no format of its own.
-
-        Only Google Sheets links are fetched — the SERVER does the fetching,
-        so "any URL" would mean "any URL reachable from this machine"."""
-        try:
-            url = sheet_link.export_url(sheet_link.sheet_id_from(body.url))
-        except ValueError as err:
-            raise HTTPException(422, str(err)) from err
-        try:
-            data = await run_in_threadpool(_fetch_bytes, url)
-        except Exception as err:                       # noqa: BLE001
-            _log.warning("sheet link fetch failed: %r", err)
-            raise HTTPException(
-                503, f"could not read that sheet: {err}. Is it shared with "
-                     "'anyone with the link'?") from err
-
-        if not sheet_link.is_ultimate_shaped(data):
-            candidates, unresolved = sheet_link.candidates_from_grid(
-                data, build_catalog(), timer_mode_for=timer_mode_for)
-            return await finish(LINK_SOURCE, candidates, _rows(unresolved),
-                                body.dry_run, shape="grid")
-        if not body.runner:
-            # A preview ANSWERS this rather than failing: "it is an Ultimate
-            # copy, whose column?" is what the preview found, and the UI
-            # asks for the name on the strength of it. Landing without one
-            # is still a refusal.
-            if body.dry_run:
-                return await finish(LINK_SOURCE, [], [], dry_run=True,
-                                    shape="ultimate", needs_runner=True)
-            raise HTTPException(
-                422, "that is a copy of the Ultimate Sheet — say which "
-                     "runner's column to take")
-        payload = build(data, _now_iso(), overrides)
-        candidates, dropped = candidates_for(
-            payload, body.runner, resolve_segment=sheet_segment_resolver())
-        return await finish(LINK_SOURCE, candidates, dropped,
-                            body.dry_run, shape="ultimate")
+        return await finish(MANUAL_SOURCE, [candidate], [])
 
     @router.delete("/{source:path}")
     async def remove_import(source: str):
@@ -263,9 +199,8 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
                         503, f"could not read the sheet: {err}") from err
             candidates, dropped = candidates_for(
                 library.payload, body.runner,
-                resolve_segment=sheet_segment_resolver())
+                place=sheet_row_placer())
             return await finish(f"sheet:{body.runner}", candidates, dropped,
-                                dry_run=False,
                                 sheet_revision=library.revision)
 
     return router

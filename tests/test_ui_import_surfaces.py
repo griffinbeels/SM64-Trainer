@@ -7,10 +7,10 @@ mutation-proved by pointing their mount at nothing and watching them go red.
 Deliberately NOT tested here: the live sheet download. It is 7 MB over the
 network and belongs to a document nobody here controls — the failure path is
 covered by `tests/test_import_api.py`, which fakes the three ways a fetch can
-fail, and the snapshot path is covered there end to end. Both doors' fetches
-are replaced in the SERVER instead (the fixture runs in-process) — the link
-door's `_fetch_bytes`, the sheet door's `LibraryStore.refresh` — so what is
-driven here is the panel rather than Google.
+fail, and the snapshot path is covered there end to end. The sheet door's
+download is replaced in the SERVER instead (the fixture runs in-process,
+`LibraryStore.refresh`), so what is driven here is the panel rather than
+Google.
 """
 import sys
 from pathlib import Path
@@ -310,88 +310,24 @@ def test_the_sheet_door_lists_every_dropped_row_by_name_under_its_reason(
                 };
               })()
             """)
-            assert drawn["heading"].startswith("25 rows"), drawn
+            assert drawn["heading"].startswith("24 rows"), drawn
             assert [g["reason"] for g in drawn["groups"]] == [
                 "rows timing part of a star rather than the star (2)",
-                "rows the trainer has no target for (23)"], drawn
+                "rows the trainer has no target for (22)"], drawn
             assert drawn["groups"][0]["rows"] == [
                 "Hot-Foot-It into the Volcano — Inside the volcano — 0'08\"53",
                 "Hot-Foot-It into the Volcano — Volcano entry — 0'08\"06"], drawn
-            assert len(drawn["groups"][1]["rows"]) == 23, drawn
+            assert len(drawn["groups"][1]["rows"]) == 22, drawn
             assert drawn["groups"][1]["rows"][0] == \
-                "Lakitu skip — JD -> Speedkick ending — 0'05\"53", drawn
+                "Lobby door (L) - CCM wooden door — 0'02\"43", drawn
             # His Bowser correction: the seeded movements took their rows --
-            # none sits in the list, and the segment PBs on the page grew by
-            # the five GTM has times for (BitFS/BitS No Reds, Bowser 1/2/3;
+            # none sits in the list -- and "Lakitu skip" name-matched the
+            # seeded Lakitu Skip. Segment PBs on the page grew by the six
+            # GTM has times for (BitFS/BitS No Reds, Bowser 1/2/3, Lakitu;
             # he has no BitDW Course row).
-            assert not any("Bowser" in row for g in drawn["groups"]
-                           for row in g["rows"]), drawn
-            assert _segment_pb_count(base) == segment_pbs_before + 5
-
-
-def test_a_sheet_link_reads_previews_and_names_the_rows_that_did_not_land(
-        tmp_path, monkeypatch):
-    """The fetch is replaced in the SERVER (the fixture runs in-process), so
-    what is driven here is the panel rather than Google."""
-    from library_fixture import build_workbook
-
-    import sm64_events.server.import_api as import_api
-    personal = build_workbook({
-        "Times": {
-            (1, 1): {"text": "Star"}, (1, 2): {"text": "Time"},
-            (2, 1): {"text": "BoB 1"}, (2, 2): {"text": "0:23.57"},
-            (3, 1): {"text": "WF 6"}, (3, 2): {"text": "8.86"},
-            (5, 1): {"text": "Chungus Skip"}, (5, 2): {"text": "12.00"},
-        },
-    })
-    monkeypatch.setattr(import_api, "_fetch_bytes", lambda _url: personal)
-
-    with serve_ui(tmp_path / "link.db") as base:
-        with driver.get_driver().launch(headless=True) as page:
-            page.goto(base)
-            assert wait(page, ".practice-page")
-            settle(page, 1500)
-            assert page.evaluate(OPEN_SETTINGS)
-            assert wait(page, ".importsection")
-            open_door(page, "My own sheet")
-            assert wait(page, ".importlink"), "no sheet-link panel"
-            settle(page, 500)
-            before = _star_pb_count(base)
-
-            page.evaluate("""
-              (() => {
-                const box = document.querySelector('.importlink-url');
-                const setter = Object.getOwnPropertyDescriptor(
-                  window.HTMLInputElement.prototype, 'value').set;
-                setter.call(box,
-                  "https://docs.google.com/spreadsheets/d/1J20aivGnvLlAuyRIMM/edit");
-                box.dispatchEvent(new Event('input', {bubbles: true}));
-              })()
-            """)
-            settle(page, 300)
-            page.evaluate(
-                "document.querySelector('.importlink .primary-button').click()")
-            settle(page, 1800)
-            state = page.evaluate("""
-              (() => {
-                const s = document.querySelector('.importlink');
-                return {button: s.querySelector('.primary-button').textContent.trim(),
-                        rejects: [...s.querySelectorAll('.importdoor-rejects li')]
-                          .map((li) => li.querySelector('code').textContent)};
-              })()
-            """)
-            assert state["button"] == "Import 2", state
-            assert _star_pb_count(base) == before, (
-                "reading the sheet WROTE something — it must preview first")
-            # A row that could not be read names its TAB and its ROW: "row 5
-            # of Times" is advice somebody can follow.
-            assert any(text.startswith("Times!5:") for text in state["rejects"]), \
-                state
-
-            page.evaluate(
-                "document.querySelector('.importlink .primary-button').click()")
-            settle(page, 1800)
-            assert _star_pb_count(base) == before + 2
+            assert not any("Bowser" in row or row.startswith("Lakitu")
+                           for g in drawn["groups"] for row in g["rows"]), drawn
+            assert _segment_pb_count(base) == segment_pbs_before + 6
 
 
 def _segment_pb_count(base):
@@ -445,11 +381,14 @@ def test_the_import_section_sits_above_display_and_stays_one_section(tmp_path):
                 "the import section sank below Display and its tuning links")
             assert order["sections"] == 1, (
                 f"the doors have gone back to separate sections: {order}")
-            # TWO doors since round 2 (2026-08-22): "Paste a list" and
-            # "LiveSplit file" were removed — "too difficult to get quite
-            # right... we'll spend too much time getting distracted here."
-            assert order["doors"] == 2, (
-                f"the chip row does not hold exactly the two doors: {order}")
+            # ONE door since round 3 (2026-08-23): "Paste a list" and
+            # "LiveSplit file" went in round 2 ("too difficult to get quite
+            # right... we'll spend too much time getting distracted here")
+            # and "My own sheet" in round 3 ("too much for us to handle, we
+            # need to just get the Ultimate Sheet parsing as good as
+            # possible"). The other way in is the box on a star's card.
+            assert order["doors"] == 1, (
+                f"the chip row does not hold exactly the one door: {order}")
             assert order["openDoors"] == 0, (
                 "a door is open before anything was picked — the resting "
                 "state has to be one heading and one row of chips, or the "

@@ -6,44 +6,32 @@ the vetted strategy they are the same thing as. So this is a mapping over data
 we ship, not a scrape — 15 of DentoriousRed's 16 rows arrive with their
 strategy already named.
 
-Three kinds of row are dropped, and each matters:
+A STAR row lands on its star. Every other row — a SUBSECTION (a stretch inside
+a target), a castle-movement approach the mapper never paired, a Bowser row
+the mapper stamped with a foreign `segment:N` — lands only where the CALLER
+can place it, through `place(target, item, kind)`. The router builds that
+placer from the same facts the Library tab shows (`server/import_api.py::
+sheet_row_placer`): the row's explicit link to a segment he built
+(`library/adoptions.py`), the name-match an entity-less target gets unasked,
+and the seed_key behind a sheet Bowser id (`library/mapping.py`). His ruling
+(2026-08-23): *"If an entry is a subsection AND we've successfully linked an
+actual subsection segment that we've recorded to that library entry, then
+when we import, it should import correctly... once we've defined what the
+subsection actually links to, we should be able to import it very easily."*
+Until then every subsection row was dropped regardless of any link.
 
-  * SUBSECTIONS time a stretch inside a target rather than the target. Reading
-    one as a personal best would publish a 15.90 s way of doing a 43 s star.
-    Filing a subsection under a segment the user built is a different feature
-    and already has an owner (`library/adoptions.py`).
-  * Rows whose target carries no entity key map to nothing the player can
-    practice — the sheet's castle-movement rows, mostly, which
-    `library/mapping.py` has not yet paired with the movements we seed.
-  * Rows mapped to a SEGMENT that the caller cannot vouch for. Six of the
-    snapshot's 252 targets carry one — the three Bowser stages' "Course" (the
-    stage's No Reds card, a pipe-entry movement) and "Battle" (Bowser 1/2/3)
-    — and a bare segment id is LOCAL to each player's database: the mapper
-    resolved `segment:6` against the seeding order of the machine that
-    scraped it, and a FOREIGN id may well exist here naming a different
-    movement. So the reader never trusts the number. The CALLER hands it
-    `resolve_segment`, which turns the sheet's key into this database's own
-    row for the same seeded movement through its seed_key
-    (`library/mapping.py::segment_seed_key`) and names the clock that row is
-    timed on; a row it cannot place stays in the list. His ruling
-    (2026-08-23): *"'Bowser in the Fire Sea Course' and 'Bowser in the Sky
-    Course' and 'Bowser in the Dark World Course' are just the No Reds
-    options for each bowser course. Bowser in the Dark World Battle == Bowser
-    1 ... These should also be allowed to be imported, as they're obviously
-    valid."* Until then every one of the eight such rows a runner like GTM
-    carries was dropped. (A segment named in his OWN sheet is a different
-    path and always did land: `tracking/import_names.py` matches it by NAME
-    against segments built here.)
-
-Every dropped entry comes back as ONE NAMED ROW — the target, the approach or
-piece where it adds anything, and the sheet's own time — in the same
-`{line, text, reason}` shape every door answers with (`line` 0: a sheet cell
-has no line to point at). They were COUNTED by kind until round 3
+A row nobody can place is dropped, NAMED — one row per dropped entry in the
+`{text, reason}` shape every door answers with. They were COUNTED by kind until round 3
 (2026-08-23), which hid exactly what he asked to see: *"it makes more sense to
-just show all the things that failed as a list"* — a runner like GTM dropped
-33 rows to 29 landed that day (25 to 37 once his Bowser correction landed),
-and the list is what lets him review them and say what each should have
-mapped to.
+just show all the things that failed as a list"*. The reasons:
+
+  * `subsections` — a piece with no link. Landing it on the target's star
+    would publish a 15.90 s way of doing a 43 s star.
+  * `no_entity` — a castle movement neither linked nor name-matched.
+  * `segments` — a Bowser row whose seeded movement this database no longer
+    holds. A bare segment id is LOCAL to each database (the mapper resolved
+    `segment:6` against the seeding order of the machine that scraped it),
+    so the reader never lands the number itself.
 
 Pure — takes a payload, returns candidates. The caller decides where the
 payload came from, which is what lets the picker fill from the bundled
@@ -52,11 +40,11 @@ snapshot while the import itself reads a fresh fetch.
 from sm64_events.tracking.importing import ImportCandidate
 
 # Sheet approach times are STAR times measured the way Usamune measures them.
-# A resolved segment lands on whatever clock the resolver names for it.
+# A placed row lands on whatever clock the placer names for it.
 TIMER_MODE = "igt"
 
-# What this door lands without anyone vouching. A segment key needs the
-# caller's `resolve_segment` — see the module docstring.
+# What this door lands without anyone vouching. Everything else goes through
+# `place` — see the module docstring.
 IMPORTABLE_KIND = "star:"
 
 # The three reasons a sheet row is dropped. `ui/components/importflow.js`
@@ -91,50 +79,57 @@ def _dropped(target: dict, detail: str | None, time_cs: int, reason: str) -> dic
     if detail and detail != target.get("label"):
         parts.append(detail)
     parts.append(_sheet_time(time_cs))
-    return {"line": 0, "text": " — ".join(parts), "reason": reason}
+    return {"text": " — ".join(parts), "reason": reason}
 
 
-def candidates_for(payload: dict, runner: str, resolve_segment=None):
-    """`([ImportCandidate, ...], [{line: 0, text, reason}, ...])` — what lands,
+def _drop_reason(target: dict, kind: str) -> str:
+    if kind == "subsection":
+        return SUBSECTION
+    entity_key = target.get("entity_key") or ""
+    return SEGMENT if entity_key.startswith("segment:") else NO_ENTITY
+
+
+def candidates_for(payload: dict, runner: str, place=None):
+    """`([ImportCandidate, ...], [{text, reason}, ...])` — what lands,
     and one named row per entry that could not.
 
-    `resolve_segment(sheet_entity_key) -> (local_entity_key, timer_mode) |
-    None` is how the caller vouches for a segment-mapped target; without it
-    (or when it answers None) those rows are dropped, named."""
+    `place(target, item, kind) -> (entity_key, timer_mode, strategy | None)`
+    is how the caller vouches for anything that is not a star row: the local
+    entity it lands on, the clock that entity is timed on, and the strategy
+    to file it under (None = the sheet's own: the vetted pairing where there
+    is one, else the approach's name). Without it, or when it answers None,
+    such rows are dropped, named."""
     candidates = []
     rejected = []
     for target in payload.get("targets") or []:
-        entity_key = target.get("entity_key")
+        target_key = target.get("entity_key") or ""
         version = target.get("version")
-        timer_mode = TIMER_MODE
-        if entity_key and not entity_key.startswith(IMPORTABLE_KIND):
-            placed = resolve_segment(entity_key) if resolve_segment else None
-            if placed:
-                entity_key, timer_mode = placed
-            else:
-                entity_key = None
-                drop_reason = SEGMENT
-        else:
-            drop_reason = NO_ENTITY
-        for piece in target.get("subsections") or []:
-            for entry in piece.get("entries") or []:
-                if entry.get("runner") == runner:
-                    rejected.append(_dropped(
-                        target, piece.get("name"), entry["time_cs"], SUBSECTION))
-        for approach in target.get("approaches") or []:
-            # The vetted name wins where the sheet's approach was paired with
-            # one; the sheet's own name is the honest fallback.
-            strategy = approach.get("matched_strategy") or approach.get("name")
-            for entry in approach.get("entries") or []:
-                if entry.get("runner") != runner:
+        for kind, collection in (("subsection", "subsections"),
+                                 ("approach", "approaches")):
+            for item in target.get(collection) or []:
+                entries = [entry for entry in item.get("entries") or []
+                           if entry.get("runner") == runner]
+                if not entries:
                     continue
-                if not entity_key:
-                    rejected.append(_dropped(
-                        target, approach.get("name"), entry["time_cs"],
-                        drop_reason))
+                # The vetted name wins where the sheet's approach was paired
+                # with one; the sheet's own name is the honest fallback.
+                sheet_strategy = (item.get("matched_strategy")
+                                  or item.get("name"))
+                placed = place(target, item, kind) if place else None
+                if placed:
+                    entity_key, timer_mode, strategy = placed
+                    strategy = strategy or sheet_strategy
+                elif kind == "approach" and target_key.startswith(IMPORTABLE_KIND):
+                    entity_key, timer_mode, strategy = (
+                        target_key, TIMER_MODE, sheet_strategy)
+                else:
+                    reason = _drop_reason(target, kind)
+                    rejected.extend(_dropped(target, item.get("name"),
+                                             entry["time_cs"], reason)
+                                    for entry in entries)
                     continue
-                candidates.append(ImportCandidate(
+                candidates.extend(ImportCandidate(
                     entity_key=entity_key, strat_tag=strategy,
                     time_cs=int(entry["time_cs"]), game_version=version,
-                    timer_mode=timer_mode))
+                    timer_mode=timer_mode) for entry in entries)
     return candidates, rejected

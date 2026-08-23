@@ -436,7 +436,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         # beside the ranks one rather than another block in the general API.
         from sm64_events.server.import_api import create_import_router
         app.include_router(create_import_router(
-            service, library=library, overrides=library_overrides))
+            service, library=library, overrides=library_overrides,
+            adoptions=adoptions))
     if replay is not None:
         from sm64_events.server.replay_api import create_replay_router
         app.include_router(create_replay_router(replay))

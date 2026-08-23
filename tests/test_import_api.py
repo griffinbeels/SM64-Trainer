@@ -75,11 +75,10 @@ def test_the_sheet_door_lands_a_runners_column_from_the_snapshot(tmp_path):
             "runner": "DentoriousRed", "refresh": False}).json()
         assert payload["found"] == 16
         assert payload["imported"] == 16
-        # One row per dropped ENTRY, named, in the same `{line, text, reason}`
+        # One row per dropped ENTRY, named, in the same `{text, reason}`
         # shape every door answers with -- he reviews these by name (round 3).
-        # `line` 0: a sheet cell has no line to point at.
         assert payload["rejected"] == [
-            {"line": 0, "reason": "no_entity",
+            {"reason": "no_entity",
              "text": "CCM wooden door - Enter BitDW (LBLJ) — 0'09\"23"}]
         assert payload["sheet_revision"]
         assert all(row["imported_from"] == "sheet:DentoriousRed"
@@ -114,6 +113,54 @@ def test_a_bowser_row_lands_on_this_databases_row_for_the_movement(tmp_path):
                                strat_tag="Zero Cycle")
         assert landed and landed["frames"] == 1183
         assert db.current_pb(None, None, "rta", segment_id=old["id"]) is None
+
+
+VOLCANO_ENTRY_ROW = ("7. Lethal Lava Land||Hot-Foot-It into the Volcano"
+                     "||Volcano entry||1|2|3|4|5")
+
+
+def test_a_subsection_linked_in_the_library_imports_onto_that_segment(tmp_path):
+    """His question, 2026-08-23: "If an entry is a subsection AND we've
+    successfully linked an actual subsection segment that we've recorded to
+    that library entry, then when we import, it should import correctly. Is
+    this the case?" Now it is: the link is made the way the Library tab makes
+    it, and the import lands the piece on the linked segment as Standard, on
+    the segment's clock. The piece he did NOT link stays in the list."""
+    with make_client(tmp_path) as (client, db, _svc):
+        piece = db.insert_segment_def(
+            "Volcano entry", [{"type": "level_enter", "to": 22}],
+            [{"type": "area_enter", "level": 22, "area": 2}], [],
+            "2026-08-23T00:00:00Z")
+        linked = client.post("/api/library/adopt", json={
+            "row_key": VOLCANO_ENTRY_ROW, "entity_key": f"segment:{piece}"})
+        assert linked.status_code == 200, linked.text
+        assert linked.json()["strategy"] == "Standard"
+
+        payload = client.post("/api/import/sheet", json={
+            "runner": "GTM", "refresh": False}).json()
+        landed = db.current_pb(None, None, "rta", segment_id=piece,
+                               strat_tag="Standard")
+        assert landed and landed["frames"] == 242          # 8.06s, rounded up
+        texts = [row["text"] for row in payload["rejected"]]
+        assert not any("Volcano entry" in text for text in texts), texts
+        assert "Hot-Foot-It into the Volcano — Inside the volcano — 0'08\"53" in texts
+
+
+def test_a_movement_that_name_matches_one_of_your_segments_imports_onto_it(tmp_path):
+    """The Library pairs an entity-less target with a segment of the same
+    name unasked (round 6); the import honours the same pairing. Every
+    database seeds "Lakitu Skip", so GTM's "Lakitu skip" row lands on it
+    under the sheet's own approach name."""
+    with make_client(tmp_path) as (client, db, _svc):
+        lakitu = {d["seed_key"]: d["id"]
+                  for d in db.segment_defs()}["seg:lakitu-skip"]
+        payload = client.post("/api/import/sheet", json={
+            "runner": "GTM", "refresh": False}).json()
+        landed = db.current_pb(None, None, "rta", segment_id=lakitu,
+                               strat_tag="JD -> Speedkick ending")
+        assert landed and landed["frames"] == 166           # 5.53s
+        assert not any(row["text"].startswith("Lakitu skip")
+                       for row in payload["rejected"])
 
 
 @pytest.mark.parametrize("failure", [

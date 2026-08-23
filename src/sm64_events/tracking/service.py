@@ -1960,9 +1960,8 @@ class TrackerService:
         """Land a batch of brought-in times, each as an attempt with a PB.
 
         Every import door arrives here — typed by hand, a runner's Ultimate
-        Sheet column, a linked sheet. The
-        improvement rule lives in `tracking/importing.py` and is pure; this
-        owns only the parts that touch the world.
+        Sheet column. The improvement rule lives in `tracking/importing.py`
+        and is pure; this owns only the parts that touch the world.
 
         Each landed time is ONE journaled `time_imported` event, and the
         PROJECTOR turns it into the attempt row he sees (`projection.
@@ -2015,9 +2014,9 @@ class TrackerService:
     def _plan_import(self, candidates):
         """Check every candidate, then decide what lands. Writes nothing.
 
-        Shared by `import_times` and `preview_import` deliberately: a preview
-        computed a second way would answer a different question from the one
-        the button then performs, which is the whole reason to trust it."""
+        Separate from the landing so the whole batch is checked before any
+        row is journaled: a candidate the database cannot file refuses the
+        batch, never half of it."""
         db = self._require_db()
         own_segments = {definition["id"] for definition in db.segment_defs()}
         for candidate in candidates:
@@ -2035,14 +2034,6 @@ class TrackerService:
             return row["frames"] if row else None
 
         return importing.decide(candidates, current_frames)
-
-    def preview_import(self, candidates) -> dict:
-        """What `import_times` WOULD do with this batch, without doing it.
-
-        A linked sheet is where a silent misread is expensive — a few hundred
-        rows, most of them resolving, a handful not — so the link door shows
-        this before it writes anything."""
-        return dict(self._plan_import(candidates).summary)
 
     @staticmethod
     def _check_importable(candidate, own_segments) -> None:

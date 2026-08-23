@@ -24,15 +24,15 @@ def test_dentoriousred_maps_to_fourteen_times_over_ten_stars():
     assert len(candidates) == 14
     assert len({c.entity_key for c in candidates}) == 10
     # ONE ROW PER DROPPED ENTRY, named so he can review it -- a tally by kind
-    # hid exactly the rows he wants to see (round 3, 2026-08-23). `line` 0
-    # says there is no line to point at; the text names the target, the
-    # approach where it differs from the target, and the sheet's own time.
+    # hid exactly the rows he wants to see (round 3, 2026-08-23). The text
+    # names the target, the approach where it differs from the target, and
+    # the sheet's own time.
     assert rejected == [
-        {"line": 0, "reason": "segments",
+        {"reason": "segments",
          "text": "Bowser in the Fire Sea Course — No pole glitch — 0'39\"43"},
-        {"line": 0, "reason": "segments",
+        {"reason": "segments",
          "text": "Bowser in the Sky Course — 0'48\"00"},
-        {"line": 0, "reason": "no_entity",
+        {"reason": "no_entity",
          "text": "CCM wooden door - Enter BitDW (LBLJ) — 0'09\"23"},
     ]
 
@@ -48,26 +48,28 @@ def test_a_segment_row_drops_unless_the_caller_can_vouch_for_the_id():
 
 
 def _seeded(local_ids):
-    """A resolver the way the router builds one: the sheet's segment key ->
-    THIS database's id for the same seeded movement, on the segment's clock."""
+    """A placer the way the router builds one, Bowser half only: the sheet's
+    segment key -> THIS database's id for the same seeded movement, on the
+    segment's clock, the sheet's own strategy."""
     from sm64_events.library.mapping import segment_seed_key
 
-    def resolve(entity_key):
-        local = local_ids.get(segment_seed_key(entity_key))
-        return (f"segment:{local}", "rta") if local is not None else None
-    return resolve
+    def place(target, _item, kind):
+        if kind != "approach":
+            return None
+        local = local_ids.get(segment_seed_key(target.get("entity_key") or ""))
+        return (f"segment:{local}", "rta", None) if local is not None else None
+    return place
 
 
 def test_the_bowser_rows_land_on_the_seeded_movement_by_seed_key():
     """His correction, 2026-08-23: "Bowser in the Fire Sea Course ... are just
     the No Reds options for each bowser course. Bowser in the Dark World
     Battle == Bowser 1 ... These should also be allowed to be imported."
-    The sheet's `segment:6` means the BitFS pipe entry; the resolver says
+    The sheet's `segment:6` means the BitFS pipe entry; the placer says
     which id THAT is here -- 60 in this fixture, not 6 -- and the time lands
     on it, RTA, with the vetted strategy the adopt layer already paired."""
-    resolve = _seeded({"seg:bitfs-pipe": 60, "seg:bits-pipe": 70})
-    candidates, rejected = candidates_for(payload(), "DentoriousRed",
-                                          resolve_segment=resolve)
+    place = _seeded({"seg:bitfs-pipe": 60, "seg:bits-pipe": 70})
+    candidates, rejected = candidates_for(payload(), "DentoriousRed", place=place)
     bowser = [c for c in candidates if c.entity_key.startswith("segment:")]
     assert {(c.entity_key, c.strat_tag, c.time_cs, c.timer_mode) for c in bowser} == {
         ("segment:60", "Zero Cycle", 3943, "rta"),
@@ -78,14 +80,49 @@ def test_the_bowser_rows_land_on_the_seeded_movement_by_seed_key():
 
 
 def test_a_bowser_row_whose_movement_this_database_lacks_still_drops():
-    """A resolver that cannot place the key (he deleted Bowser 2, say) leaves
+    """A placer that cannot place the key (he deleted Bowser 2, say) leaves
     the row in the list rather than landing it anywhere else."""
-    resolve = _seeded({"seg:bitfs-pipe": 60})
-    candidates, rejected = candidates_for(payload(), "DentoriousRed",
-                                          resolve_segment=resolve)
+    place = _seeded({"seg:bitfs-pipe": 60})
+    candidates, rejected = candidates_for(payload(), "DentoriousRed", place=place)
     assert [row["text"] for row in rejected if row["reason"] == "segments"] == [
         "Bowser in the Sky Course — 0'48\"00"]
     assert sum(1 for c in candidates if c.entity_key.startswith("segment:")) == 1
+
+
+def test_a_linked_subsection_lands_on_its_segment_as_standard():
+    """His question, 2026-08-23: "If an entry is a subsection AND we've
+    successfully linked an actual subsection segment that we've recorded to
+    that library entry, then when we import, it should import correctly. Is
+    this the case?" It was not; now the placer answers for a piece with a
+    link, and the piece lands on that segment under the strategy the link
+    names (a subsection's community timing is its piece's Standard)."""
+    def place(target, item, kind):
+        if kind == "subsection" and item["name"] == "Volcano entry":
+            return ("segment:42", "rta", "Standard")
+        return None
+    candidates, rejected = candidates_for(payload(), "GTM", place=place)
+    pieces = [c for c in candidates if c.entity_key == "segment:42"]
+    assert [(c.strat_tag, c.time_cs, c.timer_mode) for c in pieces] == [
+        ("Standard", 806, "rta")]
+    # The UNLINKED piece of the same target still drops, named.
+    assert [row["text"] for row in rejected if row["reason"] == "subsections"] == [
+        "Hot-Foot-It into the Volcano — Inside the volcano — 0'08\"53"]
+
+
+def test_a_placed_castle_movement_lands_under_the_sheets_own_approach_name():
+    """A movement the placer can put somewhere (a link, or the name-match an
+    entity-less target gets unasked) lands there; with no strategy from the
+    placer, the sheet's own approach name is the strategy."""
+    def place(target, item, kind):
+        if kind == "approach" and target["label"] == "Lakitu skip":
+            return ("segment:3", "rta", None)
+        return None
+    candidates, rejected = candidates_for(payload(), "GTM", place=place)
+    lakitu = [c for c in candidates if c.entity_key == "segment:3"]
+    assert [(c.strat_tag, c.time_cs, c.timer_mode) for c in lakitu] == [
+        ("JD -> Speedkick ending", 553, "rta")]
+    assert not any(row["text"].startswith("Lakitu skip") for row in rejected)
+    assert sum(1 for row in rejected if row["reason"] == "no_entity") == 22
 
 
 def test_every_bowser_target_on_the_sheet_has_a_seed_key():
