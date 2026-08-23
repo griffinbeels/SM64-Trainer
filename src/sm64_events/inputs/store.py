@@ -24,7 +24,7 @@ import struct
 from datetime import datetime, timezone
 
 from sm64_events.inputs.frame import InputFrame
-from sm64_events.inputs.runs import collapse
+from sm64_events.inputs.runs import collapse, same_state
 
 _HEADER = struct.Struct("<II")        # first frame number | run count
 # v1: start_frame u32 | run_length u16 | buttons u16 | stick_x s8 | stick_y s8
@@ -39,25 +39,15 @@ FORMAT = 2                            # what new chunks are written as
 _MAX_RUN = 0xFFFF
 
 
-def _same_run(frame: InputFrame, previous: InputFrame) -> bool:
-    """Two frames that store identically. Mario's own state counts: an action
-    change with the pad unmoved is exactly the transition the timeline's
-    action row exists to show, so it has to break the run."""
-    return (frame.buttons == previous.buttons
-            and frame.stick_x == previous.stick_x
-            and frame.stick_y == previous.stick_y
-            and frame.action == previous.action
-            and frame.yaw == previous.yaw
-            and frame.speed == previous.speed)
-
-
 def encode_runs(frames: list[tuple[int, InputFrame]]) -> bytes:
     """Collapse consecutive frames with identical state into runs.
 
     `pressed` is not stored: it is derivable from consecutive frames, and a
     second copy of one fact is a second thing that can disagree.
     """
-    runs = collapse(frames, _same_run, max_length=_MAX_RUN)
+    # Mario's own state counts: an action change with the pad unmoved is
+    # exactly the transition the action row exists to show, so it breaks a run.
+    runs = collapse(frames, same_state, max_length=_MAX_RUN)
     out = bytearray(_HEADER.pack(runs[0].start if runs else 0, len(runs)))
     for start_number, length, frame in runs:
         out += _RUN_V2.pack(start_number, length, frame.buttons,

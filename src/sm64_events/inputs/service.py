@@ -161,11 +161,16 @@ class InputsService:
         payload = {"id": template.id, "name": template.name,
                    "origin": template.origin}
         try:
-            payload["runs"] = runs_of(template.frames())
+            frames = template.frames()
         except Exception as error:
             # A hand-edited document that stopped loading. Say so on the
             # surface rather than drawing nothing and letting him wonder
             # which of the two runs is missing.
-            payload["runs"] = []
-            payload["error"] = str(error)
+            payload.update(runs=[], actions=[], error=str(error))
+            return payload
+        # The SAME shape as the attempt's own track, Mario included: the
+        # comparison he asked for is "against the exact example, including
+        # all mario data", so the template carries everything the run does.
+        payload["runs"] = runs_of(frames)
+        payload["actions"] = actions_of(frames)
         return payload

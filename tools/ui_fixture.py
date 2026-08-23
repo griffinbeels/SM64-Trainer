@@ -199,8 +199,6 @@ def seed_inputs(database, template: bool = True) -> None:
     from sm64_events.inputs.document import encode
     from sm64_events.inputs.frame import InputFrame
     from sm64_events.inputs.service import entity_key_of
-    from sm64_events.inputs.templates import TemplateStore
-
     from sm64_events.memory import addresses as _A
 
     def track(base: int, shift: int = 0):
@@ -252,7 +250,7 @@ def seed_inputs(database, template: bool = True) -> None:
     marked = attempts[-1]
     kind, key = entity_key_of(marked)
     base = marked.anchor_frame if marked.anchor_frame else 1000
-    TemplateStore(database._conn, database._lock).save(
+    database.input_templates.save(
         kind=kind, entity_key=key, strat_tag=marked.strat_tag,
         name="my best run", origin=f"attempt:{marked.id}",
         document=encode(track(base, 0), target="star",

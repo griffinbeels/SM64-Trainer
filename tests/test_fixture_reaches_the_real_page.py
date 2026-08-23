@@ -1186,3 +1186,19 @@ def test_the_inspector_reaches_a_frame_with_a_real_reading(page):
     assert any(value and value != "--" for value in values), (
         "every stick value read '--' -- the inspector is parked on a frame "
         "with the stick centred, so the panel's populated layout is unmeasured")
+
+
+def test_the_drawer_draws_the_TEMPLATE_S_MARIO_behind_yours(page):
+    """His ruling 2026-08-22: the comparison includes "all mario data". The
+    template's action row, its speed line and its facing dial all render, or
+    the sweep measures a drawer that compares the pad alone."""
+    reach(page, "input-timeline")
+    assert count(page, ".input-lane.is-actions.is-template") == 1, (
+        "no template action row -- the fixture's template document carries "
+        "no Mario rows, or the row is not drawn")
+    assert count(page, ".action-span.is-template") >= 3
+    assert count(page, ".speed-line.is-template") == 1
+    labels = page.evaluate(
+        "Array.from(document.querySelectorAll('.controller-panel-label'))"
+        ".map((el) => el.textContent.trim())")
+    assert "Template faces" in labels, labels

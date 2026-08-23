@@ -1,16 +1,16 @@
 # src/sm64_events/inputs/document.py
 """The portable form of an input track: a text file a person can also WRITE.
 
-    # sm64-inputs v1
+    # sm64-inputs v2
     target:   star WF 1
     strategy: 10 coin
     version:  us
     fps:      30
     origin:   attempt 40213
     --
-    0-3       -        +58,+61
-    4         A        +02,+79
-    5-60      A        -49,+55
+    0-3       -        +58,+61   walking        -8192   12.5
+    4         A        +02,+79   jump           -8192   12.5
+    5-60      A        -49,+55   dive           -8000   31.25
     61-64     -        gap
 
 **A template is a document, not a flag on an attempt** (his ruling,
@@ -18,6 +18,16 @@
 another player sent him, or one he typed out by hand, with nothing downstream
 caring which — and it is why hand-authoring is a format decision rather than a
 sequencer to build.
+
+**It carries Mario, not only the pad** (his ruling, 2026-08-22: *"someone
+records a PERFECT INPUT EXAMPLE, with every piece of information about Mario
+that we need, as well as their controller data… I need to be able to compare
+my gameplay against the exact example, including all mario data"*). Each row
+is the pad, then what Mario was doing while it was held: his action as its
+decomp word (or a hex id this project has no word for), his yaw in the game's
+own units, his speed. A row may stop after the pad -- that is what a v1
+document and a hand-authored row both look like -- and then Mario reads as
+"not captured", which is the honest value for a body nobody recorded.
 
 Frames are numbered from the start of the TRACK, always from zero, so two
 documents lie on one axis without either knowing when it was played.
@@ -32,14 +42,18 @@ every input, which is the one thing this whole feature exists to get right.
 """
 import math
 import re
+import struct
 from typing import NamedTuple
 
 from sm64_events.core.timefmt import GAME_FPS as FPS
 from sm64_events.inputs.frame import InputFrame
-from sm64_events.inputs.runs import capture_axis, collapse
+from sm64_events.inputs.runs import capture_axis, collapse, same_state
 from sm64_events.memory import addresses as A
 
-MAGIC = "# sm64-inputs v1"
+FORMAT = 2
+MAGIC = f"# sm64-inputs v{FORMAT}"
+_MAGICS = {"# sm64-inputs v1": 1, MAGIC: 2}
+_FLOAT32 = struct.Struct("<f")
 _BY_NAME = {name: bit for bit, name in A.BUTTON_BITS}
 _OCTANTS = {"R": 0, "UR": 45, "U": 90, "UL": 135,
             "L": 180, "DL": 225, "D": 270, "DR": 315}
@@ -101,16 +115,42 @@ def _parse_buttons(word: str) -> int:
     return mask
 
 
-def _same_row(frame: InputFrame, previous: InputFrame) -> bool:
-    """Two frames that WRITE identically. Only the pad is written, so a yaw
-    or speed moving under a held stick must not split a row in two."""
-    return (frame.buttons == previous.buttons
-            and frame.stick_x == previous.stick_x
-            and frame.stick_y == previous.stick_y)
-
-
 def _span_word(start: int, end: int) -> str:
     return f"{start}" if start == end else f"{start}-{end}"
+
+
+def _speed_word(speed: float) -> str:
+    """The SHORTEST decimal that reads back as the same float32.
+
+    A captured speed is a float32 out of RAM; Python's repr of it is exact but
+    reads as `28.12345695495605`, which nobody can check by eye. Six-ish
+    digits almost always round-trip and are tried first; the loop stops at
+    the first that does, so the file is exact AND legible.
+    """
+    for digits in range(1, 10):
+        word = f"{speed:.{digits}g}"
+        if _FLOAT32.unpack(_FLOAT32.pack(float(word)))[0] == speed:
+            return word
+    return repr(speed)
+
+
+def _parse_mario(words: list[str], line: str) -> tuple[int, int, float]:
+    action = A.action_from_word(words[0])
+    if action is None:
+        raise DocumentError(f"unknown action {words[0]!r} in the row {line!r}")
+    try:
+        yaw = int(words[1])
+        # Snapped through float32 on the way in: a speed IS a float32 out of
+        # RAM, so a decoded document compares equal to the capture it came
+        # from rather than differing in digits no frame ever held.
+        speed = _FLOAT32.unpack(_FLOAT32.pack(float(words[2])))[0]
+    except (ValueError, OverflowError):
+        raise DocumentError(f"cannot read Mario's yaw or speed in the row "
+                            f"{line!r}") from None
+    if not -0x8000 <= yaw <= 0x7FFF:
+        raise DocumentError(f"yaw {yaw} is outside the game's s16 in the row "
+                            f"{line!r}")
+    return action, yaw, speed
 
 
 def encode(frames: list[tuple[int, InputFrame]], *, target: str,
@@ -123,21 +163,24 @@ def encode(frames: list[tuple[int, InputFrame]], *, target: str,
              f"origin:   {origin}",
              "--"]
     next_expected = 0
-    for run in collapse(capture_axis(frames), _same_row):
+    for run in collapse(capture_axis(frames), same_state):
         if run.start > next_expected:                # the hole itself
             lines.append(
                 f"{_span_word(next_expected, run.start - 1):<10}{'-':<9}gap")
+        frame = run.frame
         names = "+".join(
-            name for bit, name in A.BUTTON_BITS if run.frame.buttons & bit)
+            name for bit, name in A.BUTTON_BITS if frame.buttons & bit)
         lines.append(f"{_span_word(run.start, run.end - 1):<10}"
-                     f"{names or '-':<9}{_stick_word(run.frame)}")
+                     f"{names or '-':<9}{_stick_word(frame):<10}"
+                     f"{A.action_word(frame.action):<14} {frame.yaw:>6}   "
+                     f"{_speed_word(frame.speed)}")
         next_expected = run.end
     return "\n".join(lines) + "\n"
 
 
 def decode(text: str) -> Document:
     lines = [line.rstrip() for line in text.splitlines()]
-    if not lines or lines[0].strip() != MAGIC:
+    if not lines or lines[0].strip() not in _MAGICS:
         raise DocumentError(f"missing the {MAGIC!r} header line")
     if "--" not in lines:
         raise DocumentError("missing the '--' header separator")
@@ -163,9 +206,9 @@ def decode(text: str) -> Document:
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         parts = line.split()
-        if len(parts) != 3:
+        if len(parts) not in (3, 6):
             raise DocumentError(f"cannot read the row {line!r}")
-        span, buttons_word, stick_word = parts
+        span, buttons_word, stick_word = parts[:3]
         matched = _RANGE.match(span)
         if matched is None:
             raise DocumentError(f"cannot read the frame span {span!r}")
@@ -175,8 +218,11 @@ def decode(text: str) -> Document:
             continue
         buttons = _parse_buttons(buttons_word)
         stick_x, stick_y = _parse_stick(stick_word)
+        action, yaw, speed = (_parse_mario(parts[3:], line)
+                              if len(parts) == 6 else (0, 0, 0.0))
         for number in range(start, end + 1):
-            frames.append((number, InputFrame(buttons, 0, stick_x, stick_y)))
+            frames.append((number, InputFrame(buttons, 0, stick_x, stick_y,
+                                              action, yaw, speed)))
     strategy = meta.get("strategy")
     return Document(target=meta["target"],
                     strategy=None if strategy in (None, "-") else strategy,

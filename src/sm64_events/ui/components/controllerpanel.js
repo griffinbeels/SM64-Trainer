@@ -54,10 +54,15 @@ export function stickPhrase(stickX, stickY, deadZone = 8, stickMax = 64) {
 //
 // It is a DIAL rather than a box: a facing is an angle with no magnitude, so a
 // square would imply a reach that does not exist.
+//
+// `yaw: null` is a frame with NO capture -- the dial draws its ring and no
+// needle, and reads "--", because 0 degrees is a real bearing and a frame
+// nobody recorded must not claim it.
 export function FacingDial({ yaw, angleUnits = 0x10000, size = 108,
                              speed = null, label = null }) {
-  const degrees = ((yaw % angleUnits) + angleUnits) % angleUnits
-    * 360 / angleUnits;
+  const known = yaw !== null && yaw !== undefined;
+  const degrees = known
+    ? ((yaw % angleUnits) + angleUnits) % angleUnits * 360 / angleUnits : 0;
   // Screen space: 0 units is +x (east) and the angle grows anticlockwise in
   // the game's own convention, which is what the stick box already draws.
   const radians = degrees * Math.PI / 180;
@@ -72,7 +77,7 @@ export function FacingDial({ yaw, angleUnits = 0x10000, size = 108,
     <div class="controller-panel-body">
       <svg class="stick-box facing-dial" viewBox=${`0 0 ${BOX} ${BOX}`}
            width=${size} height=${size}
-           aria-label=${`Facing ${compass} degrees`}>
+           aria-label=${known ? `Facing ${compass} degrees` : "Facing unknown"}>
         <circle cx=${BOX / 2} cy=${BOX / 2} r=${BOX / 2 - 3}
                 class="facing-ring" />
         ${[0, 90, 180, 270].map((tick) => {
@@ -84,16 +89,18 @@ export function FacingDial({ yaw, angleUnits = 0x10000, size = 108,
             y2=${BOX / 2 - Math.sin(at) * (BOX / 2 - 3)}
             class="facing-tick" />`;
         })}
-        <line x1=${BOX / 2} y1=${BOX / 2} x2=${tipX} y2=${tipY}
-              class="facing-needle" />
-        <circle cx=${tipX} cy=${tipY} r=${DOT / 2} class="facing-head" />
+        ${known && html`
+          <line x1=${BOX / 2} y1=${BOX / 2} x2=${tipX} y2=${tipY}
+                class="facing-needle" />
+          <circle cx=${tipX} cy=${tipY} r=${DOT / 2} class="facing-head" />`}
         <circle cx=${BOX / 2} cy=${BOX / 2} r="2.5" class="facing-hub" />
       </svg>
       <div class="stick-values">
-        <span class="stick-value">${compass}°</span>
-        ${speed !== null && html`<span class="stick-value is-speed"
+        <span class=${`stick-value ${known ? "" : "is-centred"}`}>
+          ${known ? `${compass}°` : "--"}</span>
+        ${speed !== null && html`<span class=${`stick-value is-speed ${known ? "" : "is-centred"}`}
             title="Mario's forward speed on this frame">
-          ${Math.round(speed * 10) / 10}${" "}spd</span>`}
+          ${known ? `${Math.round(speed * 10) / 10} spd` : "--"}</span>`}
       </div>
     </div>
   </div>`;

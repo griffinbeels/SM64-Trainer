@@ -2,6 +2,7 @@ import pytest
 
 from sm64_events.inputs.document import DocumentError, decode, encode
 from sm64_events.inputs.frame import InputFrame
+from sm64_events.memory import addresses as A
 
 
 def frames(spec):
@@ -143,11 +144,88 @@ def test_a_track_across_a_counter_restart_writes_rows_on_the_capture_axis():
     assert [number for number, _ in decode(text).frames] == [0, 1, 2, 3]
 
 
-def test_a_facing_turning_under_a_held_stick_does_not_split_the_row():
-    """The document writes only the pad, so two frames that differ only in
-    what it does not write are one row."""
-    rows = [(0, InputFrame(0x8000, 0, 10, 10, 0, 100)),
-            (1, InputFrame(0x8000, 0, 10, 10, 0, 200))]
-    body = encode(rows, target="star WF 1", strategy=None, version="us",
-                  origin="test").split("--\n", 1)[1]
-    assert body.strip().splitlines() == ["0-1       A        +10,+10"]
+# --- format v2: Mario rides in the document (2026-08-22) --------------------
+# His ruling: "someone records a PERFECT INPUT EXAMPLE, with every piece of
+# information about Mario that we need, as well as their controller data...
+# I need to be able to compare my gameplay against the exact example,
+# including all mario data".
+
+def mario_rows(*specs):
+    """spec: (number, action, yaw, speed) under a held A and a fixed stick."""
+    return [(number, InputFrame(0x8000, 0, 10, 10, action, yaw, speed))
+            for number, action, yaw, speed in specs]
+
+
+def a_v2_document(rows):
+    return encode(rows, target="star WF 1", strategy=None, version="us",
+                  origin="test")
+
+
+def test_marios_action_yaw_and_speed_round_trip():
+    rows = mario_rows((0, A.ACT_DIVE, -1234, 31.25), (1, A.ACT_DIVE, -1234, 31.25))
+    got = decode(a_v2_document(rows)).frames
+    assert [(number, frame.action, frame.yaw, frame.speed)
+            for number, frame in got] == [(0, A.ACT_DIVE, -1234, 31.25),
+                                          (1, A.ACT_DIVE, -1234, 31.25)]
+
+
+def test_a_known_action_writes_as_its_decomp_word_not_a_number():
+    text = a_v2_document(mario_rows((0, A.ACT_DIVE, 0, 0.0)))
+    assert " dive " in text
+    assert "0x" not in text
+
+
+def test_an_action_this_project_has_no_word_for_writes_as_its_hex_id():
+    """A group name is not reversible, so an unknown action keeps its id."""
+    text = a_v2_document(mario_rows((0, 0x0300088C, 0, 0.0)))
+    assert "0x0300088C" in text
+    assert decode(text).frames[0][1].action == 0x0300088C
+
+
+def test_a_captured_speed_survives_as_the_same_float32():
+    """RAM holds float32; the document writes the SHORTEST decimal that reads
+    back as exactly that value, and the reader snaps through float32 so the
+    two compare equal rather than differing in digits no frame ever held."""
+    import struct
+    awkward = struct.unpack("<f", struct.pack("<f", 28.123456))[0]
+    text = a_v2_document(mario_rows((0, A.ACT_DIVE, 0, awkward)))
+    assert "28.123455" in text                 # not 28.12345504760742
+    assert decode(text).frames[0][1].speed == awkward
+
+
+def test_a_facing_turning_under_a_held_stick_is_its_own_row():
+    """Mario is written, so a yaw change is a real difference between rows."""
+    text = a_v2_document(mario_rows((0, 0, 100, 0.0), (1, 0, 200, 0.0)))
+    body = text.split("--\n", 1)[1].strip().splitlines()
+    assert len(body) == 2
+
+
+def test_a_v1_document_still_loads_with_mario_not_captured():
+    text = ("# sm64-inputs v1\ntarget: star WF 1\nversion: us\nfps: 30\n"
+            "origin: old\n--\n0-3  A  +10,+10\n")
+    frame = decode(text).frames[0][1]
+    assert (frame.buttons, frame.action, frame.yaw, frame.speed) == (0x8000, 0, 0, 0.0)
+
+
+def test_a_hand_authored_row_may_stop_after_the_pad():
+    text = a_v2_document([]) + "0-3       A        UR/full\n"
+    frames = decode(text).frames
+    assert len(frames) == 4 and frames[0][1].action == 0
+
+
+def test_an_unknown_action_word_is_refused_with_the_row():
+    text = a_v2_document([]) + "0  A  neutral  moonwalk  0  0\n"
+    with pytest.raises(DocumentError, match="moonwalk"):
+        decode(text)
+
+
+def test_a_yaw_outside_the_games_s16_is_refused():
+    text = a_v2_document([]) + "0  A  neutral  dive  70000  0\n"
+    with pytest.raises(DocumentError, match="s16"):
+        decode(text)
+
+
+def test_a_row_with_the_wrong_number_of_words_is_refused():
+    text = a_v2_document([]) + "0  A  neutral  dive  0\n"
+    with pytest.raises(DocumentError, match="cannot read the row"):
+        decode(text)

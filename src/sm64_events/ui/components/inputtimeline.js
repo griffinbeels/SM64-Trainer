@@ -86,10 +86,19 @@ function stepPath(runs, valueOf, scale) {
 // what he asked for is "where there are opportunities to go faster", which is
 // a comparison within one run. A fixed ceiling would flatten a whole slow
 // segment into a line at the bottom and hide exactly that.
-function speedPath(runs) {
+//
+// With a template behind it, BOTH curves share the faster track's peak: two
+// curves on two scales would put the slower run's top at the same height as
+// the faster run's, which is the opposite of the comparison he asked for.
+function speedPeak(...tracks) {
   let peak = 0;
-  for (const run of runs) peak = Math.max(peak, Math.abs(run.speed));
-  if (peak <= 0) peak = 1;
+  for (const runs of tracks) {
+    for (const run of runs || []) peak = Math.max(peak, Math.abs(run.speed));
+  }
+  return peak > 0 ? peak : 1;
+}
+
+function speedPath(runs, peak) {
   return stepPath(runs, (run) => Math.abs(run.speed),
     (speed) => SPEED_HEIGHT - (speed / peak) * (SPEED_HEIGHT - 2));
 }
@@ -115,6 +124,27 @@ function spanLabel(start, length) {
   return length === 1
     ? timeLabel(start)
     : `${timeLabel(start)}–${timeLabel(start + length - 1)}`;
+}
+
+// One row of Mario's actions. The template's is the same row, dimmed and
+// beneath yours rather than behind it: two labelled spans stacked in one
+// lane would read as one unreadable label, where two lanes read as "he was
+// diving here and you were still running".
+function ActionRow({ name, spans, percent, seek, ghost = false }) {
+  return html`<div class=${`input-lane is-actions ${ghost ? "is-template" : ""}`}>
+    <span class="input-lane-name">${name}</span>
+    <div class="input-lane-track">
+      ${spans.map((span) => html`
+        <button class=${`action-span group-${span.group} ${ghost ? "is-template" : ""}`}
+                key=${span.start}
+                style=${`left:${percent(span.start)};width:${percent(span.length)}`}
+                onclick=${(event) => { event.stopPropagation(); seek(span.start); }}
+                title=${`${ghost ? "Template — " : ""}${span.label} — ${spanLabel(span.start, span.length)} (${span.length}f)`}
+                aria-label=${`${ghost ? "Template " : ""}${span.label} from ${spanLabel(span.start, span.length)}`}>
+          <span class="action-span-name">${span.label}</span>
+        </button>`)}
+    </div>
+  </div>`;
 }
 
 export function InputTimeline({ attemptId, video, compact = false }) {
@@ -196,7 +226,10 @@ export function InputTimeline({ attemptId, video, compact = false }) {
 
   const here = frameAt(data.runs, frame);
   const nowDoing = actionAt(data.actions, frame);
-  const there = data.template ? frameAt(data.template.runs, frame) : null;
+  const template = data.template && !data.template.error ? data.template : null;
+  const there = template ? frameAt(template.runs, frame) : null;
+  const thereDoing = template ? actionAt(template.actions, frame) : null;
+  const peak = speedPeak(data.runs, template ? template.runs : []);
   const percent = (value) => `${(value / total) * 100}%`;
 
   // ONE lane per button, with the template's bars drawn BEHIND yours inside
@@ -277,27 +310,20 @@ export function InputTimeline({ attemptId, video, compact = false }) {
         </div>
       </div>
       ${(data.actions || []).length > 0 && html`
-        <div class="input-lane is-actions">
-          <span class="input-lane-name">Mario</span>
-          <div class="input-lane-track">
-            ${data.actions.map((span) => html`
-              <button class=${`action-span group-${span.group}`}
-                      key=${span.start}
-                      style=${`left:${percent(span.start)};width:${percent(span.length)}`}
-                      onclick=${(event) => { event.stopPropagation(); seek(span.start); }}
-                      title=${`${span.label} — ${spanLabel(span.start, span.length)} (${span.length}f)`}
-                      aria-label=${`${span.label} from ${spanLabel(span.start, span.length)}`}>
-                <span class="action-span-name">${span.label}</span>
-              </button>`)}
-          </div>
-        </div>`}
+        <${ActionRow} name="Mario" spans=${data.actions} percent=${percent} seek=${seek} />`}
+      ${template && (template.actions || []).length > 0 && html`
+        <${ActionRow} name="Template" spans=${template.actions} percent=${percent}
+            seek=${seek} ghost=${true} />`}
       <div class="input-lane is-speed">
         <span class="input-lane-name">Speed</span>
         <div class="input-lane-track">
           <svg viewBox=${`0 0 ${total} ${SPEED_HEIGHT}`} height=${SPEED_HEIGHT}
                preserveAspectRatio="none" aria-hidden="true">
+            ${template && html`
+              <polyline class="speed-line is-template" vector-effect="non-scaling-stroke"
+                        points=${speedPath(template.runs, peak)} />`}
             <polyline class="speed-line" vector-effect="non-scaling-stroke"
-                      points=${speedPath(data.runs)} />
+                      points=${speedPath(data.runs, peak)} />
           </svg>
         </div>
       </div>
@@ -313,13 +339,16 @@ export function InputTimeline({ attemptId, video, compact = false }) {
       <${ControllerPanel} frame=${here} buttons=${data.buttons}
           stickMax=${data.stick_max} deadZone=${data.dead_zone}
           label=${data.template ? "You pressed" : "Pressing"} />
-      <${FacingDial} yaw=${here ? here.yaw : 0}
+      <${FacingDial} yaw=${here ? here.yaw : null}
           angleUnits=${data.angle_units} speed=${here ? here.speed : 0}
           label="Mario faces" />
-      ${data.template && !data.template.error && html`
+      ${template && html`
         <${ControllerPanel} frame=${there} buttons=${data.buttons}
             stickMax=${data.stick_max} deadZone=${data.dead_zone}
-            label=${data.template.name} />`}
+            label=${template.name} />
+        <${FacingDial} yaw=${there ? there.yaw : null}
+            angleUnits=${data.angle_units} speed=${there ? there.speed : 0}
+            label="Template faces" />`}
       <div class="input-inspector-read">
         ${here
           ? html`<span>Stick ${stickPhrase(here.stick_x, here.stick_y,
@@ -327,6 +356,9 @@ export function InputTimeline({ attemptId, video, compact = false }) {
           : html`<span class="is-error">No capture on this frame</span>`}
         ${nowDoing && html`<span class="input-inspector-action">
           ${nowDoing.label}</span>`}
+        ${thereDoing && html`<span class="input-inspector-action is-template"
+            title="What the template was doing on this frame">
+          template: ${thereDoing.label}</span>`}
       </div>
     </footer>
   </div>`;

@@ -536,17 +536,21 @@ delete the one you do not want instead of cropping it.
 An [[input track]] written out as text you can send someone, and edit by hand.
 Export writes one, import reads one, and a [[template track]] is always one —
 which is what lets a template come from an [[attempt]] you marked, a file
-another player sent you, or one you typed out yourself.
+another player sent you, or one you typed out yourself. Each row carries the
+pad and what Mario was doing while you held it — his action, which way he
+faced, how fast he went — so the document is the whole example and not the
+controller alone; a row you type by hand may stop after the pad.
 
 - **Lives** — the document format (`src/sm64_events/inputs/document.py`)
 
 ### Template track
 
 The [[input track]] the trainer draws behind your own, so you can see where the
-two differ. You mark the [[attempt]] that felt right and it becomes the
-template for that [[target]] on that [[strategy]]. The trainer shows both and
-names neither as the reason — it reports what each was doing on a [[frame]],
-and you read the gap.
+two differ — its stick and buttons behind yours, its Mario row beneath yours,
+its speed on the same scale as yours, its facing beside yours. You mark the
+[[attempt]] that felt right and it becomes the template for that [[target]] on
+that [[strategy]]. The trainer shows both and names neither as the reason — it
+reports what each was doing on a [[frame]], and you read the gap.
 
 - **Lives** — the template store (`src/sm64_events/inputs/templates.py`)
 

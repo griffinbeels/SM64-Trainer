@@ -41,6 +41,18 @@ class Run(NamedTuple):
         return self.start + self.length
 
 
+def same_state(frame: InputFrame, previous: InputFrame) -> bool:
+    """Two frames that carry the same captured state -- the pad AND Mario.
+    `pressed` is left out: it is a derived flag, not state. What the chunk
+    store and the document both mean by "the same frame"."""
+    return (frame.buttons == previous.buttons
+            and frame.stick_x == previous.stick_x
+            and frame.stick_y == previous.stick_y
+            and frame.action == previous.action
+            and frame.yaw == previous.yaw
+            and frame.speed == previous.speed)
+
+
 def collapse(frames: list[tuple[int, InputFrame]], same: Same = operator.eq,
              max_length: int | None = None) -> list[Run]:
     """Fold consecutive, `same` frames into runs; a skipped number starts one.

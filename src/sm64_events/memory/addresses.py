@@ -688,15 +688,44 @@ def _build_action_names() -> dict[int, str]:
     Derived rather than hand-listed, so a new constant is named the moment it
     is added and a renamed one cannot leave a stale label behind.
     """
+    return {value: word.replace("_", " ")
+            for value, word in _build_action_words().items()}
+
+
+def _build_action_words() -> dict[int, str]:
+    """The same table as ONE WORD per action -- `dive_slide`, never `dive
+    slide` -- which is what a whitespace-split document row can carry."""
     out: dict[int, str] = {}
     for key, value in list(globals().items()):
         if not key.startswith("ACT_") or not isinstance(value, int):
             continue
         if key in ("ACT_ID_MASK", "ACT_GROUP_MASK"):
             continue
-        pretty = key[len("ACT_"):].replace("_", " ").lower()
-        out.setdefault(value, pretty)
+        out.setdefault(value, key[len("ACT_"):].lower())
     return out
+
+
+def action_word(action: int) -> str:
+    """An action as ONE word that `action_from_word` turns back into the same
+    id: its decomp name where this file knows it, else its hex id. Unlike
+    `action_label` this never answers with the group, because a group is not
+    reversible and a document row has to survive a round trip exactly."""
+    if not action:
+        return "-"
+    word = _ACTION_WORDS.get(action)
+    return word if word is not None else f"0x{action:08X}"
+
+
+def action_from_word(word: str) -> int | None:
+    """Inverse of `action_word`; None for a word this file cannot read."""
+    if word == "-":
+        return 0
+    if word.startswith("0x"):
+        try:
+            return int(word, 16)
+        except ValueError:
+            return None
+    return _ACTION_IDS.get(word)
 
 # The frame each reading action's OWN handler actually creates the dialog
 # box -- keyed off MARIO_ACTION_STATE, not off entering the action. THE FIX
@@ -1449,4 +1478,6 @@ BUTTON_VALID_MASK = 0xFF3F
 # frame lands at 50% and reads the PREVIOUS frame's input on 100% of frames,
 # one frame late, invisibly. Do not "simplify" this to 0.5.
 CONTROLLER_SETTLE_PHASE = 0.62
+_ACTION_WORDS = _build_action_words()
+_ACTION_IDS = {word: value for value, word in _ACTION_WORDS.items()}
 _ACTION_NAMES = _build_action_names()

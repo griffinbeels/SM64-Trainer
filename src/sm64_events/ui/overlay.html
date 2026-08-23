@@ -117,7 +117,7 @@ window.showState = (state, options) => {
   // The FACING layer draws Mario's own dial and nothing else; every other
   // layer draws the pad. Same canvas either way -- the layers have to stack.
   render(settings.layer === "facing"
-    ? h(FacingDial, { yaw: state ? state[3] : 0, size,
+    ? h(FacingDial, { yaw: state ? state[3] : null, size,
                       angleUnits: settings.angleUnits || 0x10000 })
     : h(ControllerPanel, {
         frame, buttons: table, stickMax, deadZone, size,

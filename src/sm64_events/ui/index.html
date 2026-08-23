@@ -4708,6 +4708,12 @@
   .action-span.group-automatic { background: #b58f5a; }
   .action-span.group-object { background: #b5705a; }
   .speed-line { fill: none; stroke: #e3c27c; stroke-width: 1.6; }
+  .speed-line.is-template { stroke-width: 1.1; opacity: .6; stroke-dasharray: 3 2; }
+  /* The template's action row wears the same colours at lower weight: the
+     same visual language as the ghost bars and the dashed stick, so one eye
+     reads "template" across every lane. */
+  .action-span.is-template { opacity: .55; }
+  .input-inspector-action.is-template { opacity: .7; }
 
   .facing-panel .facing-ring {
     fill: #081420; stroke: #33506c; stroke-width: 2;

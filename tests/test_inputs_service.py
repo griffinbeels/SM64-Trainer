@@ -224,3 +224,21 @@ def test_the_timeline_sends_the_angle_units_so_the_browser_does_no_maths(rig):
     payload = service.timeline(7)
     assert payload["angle_units"] == A.ANGLE_UNITS
     assert isinstance(payload["actions"], list)
+
+
+def test_the_template_carries_marios_rows_like_the_attempt_does(rig):
+    """His ruling 2026-08-22: "compare my gameplay against the exact example,
+    including all mario data". A template made from an attempt keeps the
+    action, facing and speed, and the payload sends them in the run's shape."""
+    service, templates, _attempt = rig
+    rows = [(0, InputFrame(0x8000, 0, 10, 10, A.ACT_DIVE, -1234, 31.25)),
+            (1, InputFrame(0x8000, 0, 10, 10, A.ACT_DIVE, -1200, 30.0))]
+    templates.save(kind="star", entity_key="24-1", strat_tag="10 coin",
+                   name="exact example", origin="import:exact",
+                   document=encode(rows, target="star 24 1",
+                                   strategy="10 coin", version="us",
+                                   origin="x"))
+    template = service.timeline(7)["template"]
+    assert [each["yaw"] for each in template["runs"]] == [-1234, -1200]
+    assert [each["speed"] for each in template["runs"]] == [31.25, 30.0]
+    assert [each["label"] for each in template["actions"]] == ["dive"]
