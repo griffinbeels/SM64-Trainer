@@ -4740,6 +4740,11 @@
     background: #14261d; color: #9fd8bb; font-size: .68rem; font-weight: 700;
   }
 
+  /* Step buttons are held (ui/holdrepeat.js): no text selection or touch
+     zoom on a long press. */
+  .replay-transport button, .input-timeline-actions button {
+    touch-action: manipulation; user-select: none; -webkit-user-select: none;
+  }
   .input-playhead {
     position: absolute; top: 0; bottom: 0; width: 0;
     border-left: 1px solid #f4f7fb; pointer-events: none;

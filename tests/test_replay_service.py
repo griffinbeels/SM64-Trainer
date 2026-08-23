@@ -87,8 +87,11 @@ def test_view_pads_span_and_returns_clip_url(tmp_path):
     # The anchor sits pre_pad into the clip, MEASURED from the clip's own
     # first frame -- the input track starts at the anchor, so this is what
     # lets the two share one axis (live report 2026-08-22: every input
-    # landed three seconds early).
-    assert res["anchor_offset_s"] == 3.0
+    # landed three seconds early) -- PLUS the display lag: the picture of
+    # a frame appears one game frame after its wall time (measured from his
+    # nine Forward-1 screenshots the same day).
+    from sm64_events.replay.service import DISPLAY_LAG_FRAMES
+    assert res["anchor_offset_s"] == 3.0 + DISPLAY_LAG_FRAMES / 30
 
 
 def test_the_anchor_offset_follows_the_clip_s_REAL_start_not_the_pad(tmp_path):
@@ -102,7 +105,8 @@ def test_the_anchor_offset_follows_the_clip_s_REAL_start_not_the_pad(tmp_path):
                               start_utc=start + timedelta(seconds=2))
     svc = make_service(tmp_path, [attempt()])
     svc.extractor = LateExtractor()
-    assert svc.view(42)["anchor_offset_s"] == 1.0
+    from sm64_events.replay.service import DISPLAY_LAG_FRAMES
+    assert svc.view(42)["anchor_offset_s"] == 1.0 + DISPLAY_LAG_FRAMES / 30
 
 
 def test_available_attempt_ids_saved_or_buffer_covered(tmp_path):
@@ -224,7 +228,8 @@ def test_view_fallback_tolerates_legacy_saved_file_without_sidecar(tmp_path):
     assert res["duration_s"] is None
     assert res["truncated"] is False
     assert res["fps"] == 60             # falls back to current config
-    assert res["anchor_offset_s"] == 3.0  # and to the pad, with no start_utc
+    from sm64_events.replay.service import DISPLAY_LAG_FRAMES
+    assert res["anchor_offset_s"] == 3.0 + DISPLAY_LAG_FRAMES / 30  # the pad, with no start_utc
 
 
 def test_view_prefers_scratch_cache_and_reports_saved_path(tmp_path):

@@ -20,6 +20,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { fmtIgtShort } from "../format.js";
+import { holdRepeat } from "../holdrepeat.js";
 import { ControllerPanel, FacingDial, stickPhrase } from "./controllerpanel.js";
 
 const html = htm.bind(h);
@@ -54,10 +55,15 @@ export function actionAt(spans, frame) {
   return null;
 }
 
+// The buttons SM64 play is made of. These lanes ALWAYS draw, pressed or
+// not, so the rows sit in the same place on every attempt and an unused C
+// button is visibly empty rather than absent (his report, 2026-08-22: "our
+// list of inputs is missing C-up for some reason. C-Left, C-Right, C-Down,
+// C-Up should be captured clearly"). Start, the D-pad, L and R appear only
+// when pressed -- fourteen lanes would bury the seven that carry a run.
+export const CORE_BUTTONS = ["A", "B", "Z", "Cup", "Cdown", "Cleft", "Cright"];
+
 export function lanesOf(runs, table) {
-  // One lane per button that appears anywhere in the track. A lane nobody
-  // pressed is a row of nothing, and drawing fourteen of them would bury the
-  // three that carry the run.
   return (table || []).map(([bit, name]) => {
     const bars = [];
     for (const run of runs) {
@@ -67,7 +73,7 @@ export function lanesOf(runs, table) {
       else bars.push({ start: run.start, length: run.length });
     }
     return { bit, name, bars };
-  }).filter((lane) => lane.bars.length > 0);
+  }).filter((lane) => lane.bars.length > 0 || CORE_BUTTONS.includes(lane.name));
 }
 
 // A step line: one value held across each run, drawn as a horizontal segment
@@ -169,6 +175,8 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   // playhead measured against it could be dragged over the words "Stick"
   // and "Mario" (his report, 2026-08-22).
   const trackColumn = useRef(null);
+  const frameRef = useRef(0);
+  frameRef.current = frame;
 
   useEffect(() => {
     let alive = true;
@@ -240,6 +248,10 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       video.currentTime = timeAtFrame(clamped, anchorOffsetS, data.fps);
     }
   };
+  // A held step button fires from a timer, so it cannot read `frame` out
+  // of this render's closure -- it would step from the same stale frame
+  // fifteen times a second. The ref always holds the latest.
+  const seekBy = (delta) => seek(frameRef.current + delta);
   const seekFromPointer = (event) => {
     const box = trackColumn.current;
     if (!box) return;
@@ -290,10 +302,10 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         <h4>${timeLabel(total)}${" "}·${" "}${total} frames${" "}·${" "}${data.fps} fps</h4>
       </div>
       <div class="input-timeline-actions">
-        <button class="icon-button" onclick=${() => seek(frame - 1)}
-            title="Previous frame" aria-label="Previous frame">−1f</button>
-        <button class="icon-button" onclick=${() => seek(frame + 1)}
-            title="Next frame" aria-label="Next frame">+1f</button>
+        <button class="icon-button" ...${holdRepeat(() => seekBy(-1))}
+            title="Previous frame; hold to keep going" aria-label="Previous frame">−1f</button>
+        <button class="icon-button" ...${holdRepeat(() => seekBy(1))}
+            title="Next frame; hold to keep going" aria-label="Next frame">+1f</button>
       </div>
     </header>
 

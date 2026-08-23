@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { stepGameFrame, jumpToStart } from "../frame.js";
+import { holdRepeat } from "../holdrepeat.js";
 import { Icon } from "./icons.js";
 import { InlineState } from "./states.js";
 
@@ -142,14 +143,16 @@ export function ReplayPlayer({ attemptId, onCompare, onVideoEl, onView }) {
       <button onclick=${toStart} title="Jump to the beginning">
         <${Icon} name="restart" size=${15} /> Start
       </button>
-      <button onclick=${() => step(-1)} title="Pause and move back one game frame">
+      <button ...${holdRepeat(() => step(-1))}
+              title="Pause and move back one game frame; hold to keep going">
         <${Icon} name="stepBack" size=${15} /> Back 1
       </button>
       <button class="primary-transport" onclick=${togglePlay} title="Play or pause">
         <${Icon} name=${playing ? "pause" : "play"} size=${16} />
         ${playing ? "Pause" : "Play"}
       </button>
-      <button onclick=${() => step(1)} title="Pause and move forward one game frame">
+      <button ...${holdRepeat(() => step(1))}
+              title="Pause and move forward one game frame; hold to keep going">
         <${Icon} name="stepForward" size=${15} /> Forward 1
       </button>
       <span class="replay-frame-note">1 frame = 1/${state.game_fps || 30} s</span>

@@ -44,6 +44,19 @@ def saved_attempt_ids(root: Path) -> set[int]:
     return ids
 
 
+# How many game frames LATER than its wall time a frame's picture appears in
+# the footage. MEASURED 2026-08-22 from nine consecutive Forward-1 presses
+# with Usamune's own frame counter and stick display on screen: lining the
+# game's stick readings up against the track's by VALUE (the game never showed
+# U67 L69 -- that was a frame the capture skipped -- and the track held it at
+# frame 56) gave track frame = counter + 28 on every sample, while the
+# wall-clock offset alone put the inspector at counter + 29: one frame ahead
+# of the picture, constantly. The capture also jitters by one frame either
+# way (his counter read 26, 27, 27, 29, 30, 31, 32, 33, 33) and does not
+# drift; that part is in the footage and cannot be corrected from the clip.
+DISPLAY_LAG_FRAMES = 1
+
+
 def _parse_utc(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
@@ -272,23 +285,30 @@ class ReplayService:
                 "saved_path": str(saved) if saved is not None else None}
 
     def _anchor_offset(self, a, meta: dict) -> float:
-        """How far into the clip the attempt's anchor sits, in seconds.
+        """Where in the clip the anchor frame's PICTURE is on screen, in
+        seconds -- what a consumer drawing the input track over the footage
+        shifts by.
 
-        The clip is cut `pre_pad_s` BEFORE the anchor on the wall clock,
-        while the input track starts AT the anchor on the frame counter; a
-        consumer drawing the two on one axis has to shift by this, or every
-        input lands three seconds early (live report 2026-08-22: "the input
-        reader shows a totally different angle and shows me pressing A/B").
-        Measured from the clip's own recorded first frame where the sidecar
-        has it; a sidecar written before that field existed falls back to
-        the pad setting, which is exact unless the ring had evicted the
-        lead-in.
+        Two parts. The wall-clock part: the clip is cut `pre_pad_s` BEFORE
+        the anchor while the input track starts AT it, so without the shift
+        every input lands three seconds early (live report 2026-08-22: "the
+        input reader shows a totally different angle and shows me pressing
+        A/B"). Measured from the clip's own recorded first frame where the
+        sidecar has it; a sidecar written before that field existed falls
+        back to the pad setting, which is exact unless the ring had evicted
+        the lead-in.
+
+        The display-lag part, `DISPLAY_LAG_FRAMES`: the screen shows the
+        frame the game finished a frame ago, so the picture of frame N sits
+        one frame later in the footage than N's wall time. See the constant.
         """
         start = meta.get("start_utc")
         if start is None:
-            return float(self.pre_pad_s)
-        offset = (_parse_utc(a.started_utc) - _parse_utc(start)).total_seconds()
-        return max(0.0, offset)
+            wall = float(self.pre_pad_s)
+        else:
+            wall = max(0.0, (_parse_utc(a.started_utc)
+                             - _parse_utc(start)).total_seconds())
+        return wall + DISPLAY_LAG_FRAMES / GAME_FPS
 
     def _wait_for_tail(self, end_utc: datetime) -> None:
         """Bounded wait: a click right after the event can outrace the last
