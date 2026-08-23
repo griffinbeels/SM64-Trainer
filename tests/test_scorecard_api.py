@@ -6,6 +6,7 @@ top: reading/writing the KV, assembling `you`/`goal`/`fold` from the real
 db + standards, and the coverage/pending flags the UI reads.
 """
 from import_fixture import make_client
+from sm64_events.library.export_column import sheet_time
 from sm64_events.ranks.classify import display_cs
 
 
@@ -269,3 +270,88 @@ def test_a_star_approach_with_no_matched_strategy_stays_blank_through_the_real_p
         place = sheet_row_placer(svc, None)
         lines = column_lines(rows, payload, lambda *a: 4370, place=place)
         assert lines == [""]
+
+
+# --- CSV export ------------------------------------------------------------
+
+def test_export_csv_headers_content_type_and_disposition(tmp_path):
+    with make_client(tmp_path) as (client, _db, _svc):
+        response = client.get("/api/scorecard/export.csv")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "text/csv; charset=utf-8"
+        assert response.headers["content-disposition"] == \
+            'attachment; filename="scorecard.csv"'
+        # RFC 4180 line endings -- every line, not just some (a mixed file
+        # is the shape a naive text-mode write would produce).
+        body = response.content
+        assert b"\n" not in body.replace(b"\r\n", b"")
+        lines = response.text.split("\r\n")
+        assert lines[0] == "Course,Star,Record,Goal,You,Delta"
+
+
+def test_export_csv_prints_a_known_row_and_its_signed_delta(tmp_path):
+    with make_client(tmp_path) as (client, _db, _svc):
+        client.post("/api/import/manual", json={
+            "entity_key": "star:1:0", "strat_tag": "Standard", "time_cs": 886})
+        client.put("/api/scorecard/goal",
+                   json={"kind": "division", "tier": "Gold", "division": "I"})
+
+        card = client.get("/api/scorecard").json()
+        row = next(r for r in card["rows"] if r["course_id"] == 1)
+        tile = next(t for t in row["tiles"] if t["key"] == "star:1:0")
+        assert tile["you_cs"] is not None and tile["goal_cs"] is not None, (
+            "Gold I must grade star:1:0 in the bundled seed, or this test "
+            "proves nothing about the You/Delta columns")
+
+        lines = client.get("/api/scorecard/export.csv").text.split("\r\n")
+        matching = [line for line in lines
+                   if line.startswith(f"{row['label']},{tile['label']},")]
+        assert len(matching) == 1, lines
+        cells = matching[0].split(",")
+        assert cells[4] == sheet_time(tile["you_cs"])          # You
+        sign = "-" if tile["delta_cs"] < 0 else "+"
+        assert cells[5] == f"{sign}{sheet_time(abs(tile['delta_cs']))}"  # Delta
+
+
+def test_export_csv_carries_a_stage_rta_row_per_course_and_one_upstairs_row(tmp_path):
+    with make_client(tmp_path) as (client, _db, _svc):
+        card = client.get("/api/scorecard").json()
+        lines = [line for line in
+                client.get("/api/scorecard/export.csv").text.split("\r\n")
+                if line]
+
+        expected = 1                                            # header
+        for row in card["rows"]:
+            expected += len(row["tiles"])
+            if row["course_id"] is not None:
+                expected += 1                                    # Stage RTA
+        expected += 1                                             # Upstairs RTA
+        assert len(lines) == expected
+
+        course_row = next(r for r in card["rows"] if r["course_id"] == 1)
+        assert f"{course_row['label']},Stage RTA," in "\n".join(lines)
+        assert any(line.startswith(",Upstairs RTA,") for line in lines)
+
+
+def test_export_csv_serves_broadcast_only_with_no_record_column(tmp_path):
+    """No `service.ranks` -> no ladder to grade on, same as `GET
+    /api/scorecard` -- the export must still answer rather than 500."""
+    from sm64_events.server.app import create_app
+    from sm64_events.server.broadcaster import Broadcaster
+    from sm64_events.server.poller import Poller
+    from sm64_events.storage.db import Database
+    from sm64_events.tracking.service import TrackerService
+    from fastapi.testclient import TestClient
+    from import_fixture import OfflineMemory
+
+    db = Database(tmp_path / "t.db")
+    broadcaster = Broadcaster()
+    service = TrackerService(db, broadcaster)          # ranks=None
+    poller = Poller(OfflineMemory(), [], service)
+    app = create_app(poller, broadcaster, service=service,
+                     adoptions_path=tmp_path / "library_adoptions.json",
+                     mode_path=tmp_path / "tracker_mode.json")
+    with TestClient(app) as client:
+        response = client.get("/api/scorecard/export.csv")
+        assert response.status_code == 200
+        assert response.text.split("\r\n")[0] == "Course,Star,Record,Goal,You,Delta"

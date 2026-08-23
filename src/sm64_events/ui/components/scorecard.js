@@ -8,11 +8,15 @@
 // tests/test_ui_scorecard.py drives them under node -- same pattern as
 // entitysection.js/caps.js.
 //
-// Export buttons and the runner goal are later tasks (5 and 6): this file
-// renders nothing for the former and, for a runner goal already persisted
-// server-side with no resolver yet, the "arrives with the leaderboard merge"
-// note the controller asked for rather than a blank or misleading coverage
-// line.
+// The runner goal is Task 6's: for a runner goal already persisted
+// server-side with no resolver yet, this renders the "arrives with the
+// leaderboard merge" note rather than a blank or misleading coverage line.
+//
+// Both Copy buttons (Task 5) COPY to the clipboard rather than downloading
+// -- the desktop WebView2 shell's download behaviour is unverified, and a
+// button that does nothing there is the dead-control shape this project
+// treats as a bug (`.claude/rules/import.md`). `GET /api/scorecard/export
+// .csv` stays reachable by URL from a browser regardless.
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
@@ -132,6 +136,69 @@ function ScoreRow({ t, row, hasGoal }) {
   </div>`;
 }
 
+// One button, one job: fetch/format the text via `onCopy`, hand it to the
+// clipboard, and flash "Copied ✓" for ~1.5s -- the same idiom
+// routes.js's plain `Copy JSON` button lacks (it has no feedback at all),
+// generalised here since two buttons on one card need to look alike.
+// `onCopy` returns the text to copy, or throws/rejects on failure; the
+// caller (ScorecardExports) is what turns a rejection into the inline
+// error line, so this component never needs to know the shape of a
+// server error.
+const COPIED_FLASH_MS = 1500;
+
+function CopyButton({ className, label, onCopy, onError }) {
+  const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function handleClick() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const text = await onCopy();
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), COPIED_FLASH_MS);
+    } catch (err) {
+      onError(err.message || String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return html`<button class=${`scorecard-copy-btn ${className}`}
+      onclick=${handleClick} disabled=${busy}>
+    ${copied ? "Copied ✓" : label}
+  </button>`;
+}
+
+async function fetchCsvText() {
+  const response = await fetch("/api/scorecard/export.csv");
+  if (response.ok) return response.text();
+  let detail = null;
+  try { detail = (await response.json()).detail; } catch { /* non-JSON body */ }
+  throw new Error(detail || `export.csv: ${response.status}`);
+}
+
+// The column door's own 503 ("could not read the sheet: …") is shown
+// INLINE beside the buttons, never a toast -- the same "put the reason
+// where the click lands" rule `.claude/rules/acceptance.md` states for a
+// disabled control applies to a button whose action just failed. The CSV
+// door reads the cached snapshot rather than fetching live, so it is far
+// less likely to fail, but a network hiccup on the fetch itself still
+// lands in the same slot rather than going nowhere.
+function ScorecardExports() {
+  const [error, setError] = useState(null);
+
+  return html`<div class="scorecard-exports">
+    <${CopyButton} className="scorecard-copy-column" label="Copy sheet column"
+        onCopy=${async () => (await getJSON("/api/scorecard/column")).lines.join("\n")}
+        onError=${setError} />
+    <${CopyButton} className="scorecard-copy-csv" label="Copy scorecard CSV"
+        onCopy=${fetchCsvText} onError=${setError} />
+    ${error ? html`<${InlineState} kind="error">${error}<//>` : ""}
+  </div>`;
+}
+
 function ScorecardHead({ goal, goalPending, coverage, onGoalChange }) {
   return html`<div class="scorecard-head">
     <h3>Scorecard</h3>
@@ -142,6 +209,7 @@ function ScorecardHead({ goal, goalPending, coverage, onGoalChange }) {
       : goal && coverage.covered < coverage.tiles
         ? html`<p class="meta scorecard-note">goal covers ${coverage.covered}/${coverage.tiles}</p>`
         : ""}
+    <${ScorecardExports} />
   </div>`;
 }
 

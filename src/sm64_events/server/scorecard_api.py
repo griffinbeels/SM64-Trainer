@@ -23,13 +23,16 @@ that door reads a runner's column IN as PBs, this one writes YOUR PBs OUT as
 a column (`library/export_column.py`), formatted the way the sheet itself
 wants a time typed, ready to paste back in next to everyone else's.
 """
+import csv
+import io
 import logging
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from sm64_events.library.export_column import column_lines
+from sm64_events.library.examples import sheet_best
+from sm64_events.library.export_column import column_lines, sheet_time
 from sm64_events.library.sheet import read_rows
 from sm64_events.library.source import fetch
 from sm64_events.library.store import build_and_stamp
@@ -90,6 +93,98 @@ def _column_resolve(service):
                 return None
         return display_cs(pb["frames"])
     return resolve
+
+
+_CSV_HEADER = ["Course", "Star", "Record", "Goal", "You", "Delta"]
+
+
+def _csv_time(cs: int | None) -> str:
+    return sheet_time(cs) if cs is not None else ""
+
+
+def _csv_signed_time(delta_cs: int | None) -> str:
+    """`sheet_time` carries no sign -- a Delta column needs one, so this
+    prepends it rather than teaching the sheet's own notation about a
+    concept the sheet itself never prints."""
+    if delta_cs is None:
+        return ""
+    sign = "-" if delta_cs < 0 else "+"
+    return f"{sign}{sheet_time(abs(delta_cs))}"
+
+
+def _record_lookup(library, adoptions, service):
+    """entity_key -> the fastest centiseconds anybody has recorded on the
+    Ultimate Sheet for it, across every strategy -- `library/examples.py::
+    sheet_best`'s own three-door walk, the SAME one `ranks_api.py`'s "Sheet
+    Best" standards row reads. Reads the library's CACHED snapshot, never a
+    live fetch (`/column` above is the one door that has to match the sheet
+    you are about to paste into; a CSV export does not), so this costs no
+    network call. Answers `None` for every entity when there is no library
+    or no standards to grade on (a broadcast-only instance)."""
+    if library is None or service.ranks is None:
+        return lambda entity_key: None
+    rows = adoptions.rows() if adoptions is not None else {}
+    payload = library.payload
+    has_jp_ladder = service.ranks.has_jp_ladder
+
+    def lookup(entity_key: str) -> int | None:
+        best = sheet_best(payload, rows, entity_key, has_jp_ladder)
+        if not best:
+            return None
+        return min(entry["time_cs"] for entry in best.values())
+    return lookup
+
+
+def _record_sum(tiles: list[dict], record_of) -> int | None:
+    """The Stage-RTA/Upstairs-RTA Record cell: the sum of every UNFOLDED
+    tile's own Record, over exactly the tiles that carry one. Record is
+    sheet-derived and, like a tile's own Record cell, does not wait on
+    whether You/Goal are also present -- so this is an independent sum, not
+    a second read of `row["sum"]`'s you/goal-gated `counted` set. `None`
+    when the row's tiles carry no Record at all, never a sum that silently
+    drops one."""
+    values = [record_of(tile["key"]) for tile in tiles if not tile["folded"]]
+    values = [value for value in values if value is not None]
+    return sum(values) if values else None
+
+
+def _csv_tile_row(course_label: str, tile: dict, record_cs: int | None) -> list[str]:
+    return [course_label, tile["label"], _csv_time(record_cs),
+            _csv_time(tile["goal_cs"]), _csv_time(tile["you_cs"]),
+            _csv_signed_time(tile["delta_cs"])]
+
+
+def _csv_sum_row(course_label: str, star_label: str, tiles: list[dict],
+                 sum_obj: dict, record_of) -> list[str]:
+    counted = sum_obj["counted"] > 0
+    return [course_label, star_label, _csv_time(_record_sum(tiles, record_of)),
+            _csv_time(sum_obj["goal_cs"] if counted else None),
+            _csv_time(sum_obj["you_cs"] if counted else None),
+            _csv_signed_time(sum_obj["delta_cs"])]
+
+
+def _csv_rows(card: dict, record_of) -> list[list[str]]:
+    """The whole export, in card order: every tile row, a `Stage RTA` sum
+    row closing each COURSE row (never the Secret row -- it is not a stage),
+    then one `Upstairs RTA` row summing the entire card, mirroring the
+    Ultimate Sheet template's own layout (`docs/api.md`'s own row for this
+    route)."""
+    rows = [_CSV_HEADER]
+    for row in card["rows"]:
+        for tile in row["tiles"]:
+            rows.append(_csv_tile_row(row["label"], tile, record_of(tile["key"])))
+        if row["course_id"] is not None:
+            rows.append(_csv_sum_row(row["label"], "Stage RTA", row["tiles"],
+                                     row["sum"], record_of))
+    all_tiles = [tile for row in card["rows"] for tile in row["tiles"]]
+    rows.append(_csv_sum_row("", "Upstairs RTA", all_tiles, card["total"], record_of))
+    return rows
+
+
+def _csv_bytes(rows: list[list[str]]) -> bytes:
+    buf = io.StringIO()
+    csv.writer(buf, lineterminator="\r\n").writerows(rows)   # RFC 4180 CRLF
+    return buf.getvalue().encode("utf-8")
 
 
 def create_scorecard_router(service, library=None, adoptions=None,
@@ -162,8 +257,10 @@ def create_scorecard_router(service, library=None, adoptions=None,
                 fold[course_id] = exit_star
         return fold
 
-    @router.get("")
-    async def get_scorecard():
+    def current_card():
+        """`(card, goal_value, goal_pending)` -- the one door both `GET
+        /api/scorecard` and the CSV export build from, so a downloaded row
+        can never disagree with the card the browser is looking at."""
         keys = card_keys(resolve_seed)
         you = your_times(keys)
         goal_value = service.db.get_state(_GOAL_KEY, None)
@@ -183,6 +280,11 @@ def create_scorecard_router(service, library=None, adoptions=None,
 
         card = build_card(you=you, goal=goal_map, fold=fold,
                           resolve_seed=resolve_seed)
+        return card, goal_value, goal_pending
+
+    @router.get("")
+    async def get_scorecard():
+        card, goal_value, goal_pending = current_card()
         tiles = [tile for row in card["rows"] for tile in row["tiles"]]
         coverage = {"covered": sum(1 for t in tiles if t["goal_cs"] is not None),
                     "tiles": len(tiles)}
@@ -235,5 +337,18 @@ def create_scorecard_router(service, library=None, adoptions=None,
         return {"lines": lines, "sheet_revision": payload.get("sheet_revision"),
                 "mapped": sum(1 for line in lines if line),
                 "total_rows": len(lines)}
+
+    @router.get("/export.csv")
+    async def export_csv():
+        """The card itself, flattened to the template sheet's own
+        Course,Star,Record,Goal,You,Delta layout -- one browser-reachable
+        URL (`docs/api.md`), never a download the desktop shell's WebView2
+        has to support; the card's own Copy buttons fetch this and copy the
+        text instead of navigating here."""
+        card, _goal_value, _goal_pending = current_card()
+        body = _csv_bytes(_csv_rows(card, _record_lookup(library, adoptions, service)))
+        return Response(content=body, media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition":
+                                 'attachment; filename="scorecard.csv"'})
 
     return router

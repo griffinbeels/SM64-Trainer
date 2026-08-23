@@ -153,6 +153,117 @@ def test_the_card_reaches_a_real_goal_covers_line_when_partial():
         assert note == f"goal covers {coverage['covered']}/{coverage['tiles']}"
 
 
+# --- the two Copy buttons (Task 5) --------------------------------------
+
+def _stub_workbook():
+    """A tiny two-target sheet, same shape as `test_scorecard_api.py`'s own
+    `_bob_workbook` -- kept local so this file's fixture setup does not
+    reach into a sibling test module's private helper."""
+    from library_fixture import GREY, build_workbook
+    from sm64_events.library import workbook as wb
+
+    cells = {
+        (1, 1): {"text": "Xcam IGT !"}, (1, 2): {"text": "Sheet Best"},
+        (1, 3): {"text": "Player"}, (1, 4): {"text": "Ideal Run"},
+        (1, 5): {"text": "Fill Rate"},
+        (2, 1): {"text": "1. Bob-omb Battlefield"},
+        (3, 1): {"text": "[1] Big Bob-omb on the Summit", "bold": True},
+        (3, 2): {"text": "43.63"},
+        (4, 1): {"text": "[1|2] Warp fadeout", "rgb": GREY},
+        (4, 2): {"text": "15.90"},
+    }
+    return build_workbook({wb.SHEET_MAIN: cells,
+                           wb.SHEET_LOG: {(1, 1): {"text": "46238.5"}}})
+
+
+# Replaces ONLY `writeText`, per the brief -- `navigator.clipboard` itself is
+# real (127.0.0.1 is a secure context in Chromium), so this leaves every
+# other clipboard method alone and proves the shim actually installed by
+# returning `true` rather than letting a missing `navigator.clipboard`
+# fail silently.
+_INSTALL_CLIPBOARD_SHIM = """(() => {
+  window.__scorecardCopied = [];
+  navigator.clipboard.writeText = (text) => {
+    window.__scorecardCopied.push(text);
+    return Promise.resolve();
+  };
+  return true;
+})()"""
+
+
+def test_copy_sheet_column_writes_every_line_to_the_clipboard(monkeypatch):
+    monkeypatch.setattr("sm64_events.server.scorecard_api.fetch", _stub_workbook)
+    with serve_ui() as base:
+        column = json.loads(urllib.request.urlopen(
+            f"{base}/api/scorecard/column", timeout=10).read())
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            # The head (and its buttons) only renders once `GET
+            # /api/scorecard` resolves -- `.scorecard-card` alone mounts
+            # immediately with just a loading state, so waiting on it is not
+            # enough and races the card's own data fetch.
+            page.wait_for(".rank-page .scorecard-copy-column")
+
+            assert page.evaluate(_INSTALL_CLIPBOARD_SHIM) is True
+            page.evaluate(
+                "document.querySelector('.scorecard-copy-column').click()")
+            page.wait_ms(400)
+            # A SEPARATE evaluate call, after the wait -- reading the
+            # captured text in the same call as the click would race the
+            # button's own async fetch-then-copy chain.
+            copied = page.evaluate("window.__scorecardCopied")
+
+        assert len(copied) == 1
+        assert len(copied[0].split("\n")) == column["total_rows"]
+
+
+def test_copy_sheet_column_shows_the_doors_own_sentence_inline_on_a_503(monkeypatch):
+    """Mirrors `test_scorecard_api.py`'s own 503 wording check -- the
+    button must show the SAME sentence, inline, never a toast."""
+    def boom(*_args, **_kwargs):
+        raise OSError("no route to host")
+
+    monkeypatch.setattr("sm64_events.server.scorecard_api.fetch", boom)
+    with serve_ui() as base:
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-copy-column")
+
+            page.evaluate(
+                "document.querySelector('.scorecard-copy-column').click()")
+            page.wait_for(".rank-page .scorecard-exports .inline-state.error")
+            message = page.evaluate(
+                "document.querySelector('.rank-page .scorecard-exports "
+                ".inline-state.error').textContent")
+
+    assert "could not read the sheet" in message
+
+
+def test_copy_scorecard_csv_writes_the_real_csv_text_to_the_clipboard():
+    with serve_ui() as base:
+        expected = urllib.request.urlopen(
+            f"{base}/api/scorecard/export.csv", timeout=10).read().decode("utf-8")
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-copy-csv")
+
+            assert page.evaluate(_INSTALL_CLIPBOARD_SHIM) is True
+            page.evaluate(
+                "document.querySelector('.scorecard-copy-csv').click()")
+            page.wait_ms(400)
+            copied = page.evaluate("window.__scorecardCopied")
+
+        assert copied == [expected]
+
+
 def _fmt_seconds_like_js(seconds: float) -> str:
     """The Python mirror of format.js::fmtSeconds -- used only to compute the
     EXPECTED text for the render assertion above, never as a second
