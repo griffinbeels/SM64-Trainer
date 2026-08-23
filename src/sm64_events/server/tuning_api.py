@@ -141,10 +141,11 @@ def _row_unit(row_body: str) -> str | None:
 
 
 def _css_literal(formatted_number: str, unit: str) -> str:
-    """Mirrors `logTuningVars`' own three-way switch EXACTLY ("x"-unit rows
-    written bare, "%"-unit rows written as a bare `fr` value, everything else
-    a "px" suffix) -- there is no fourth unit among today's rows on either
-    side. "%" rows are the practice-log card's three SHARE tunables
+    """Mirrors `logTuningVars`' own switch EXACTLY ("x"-unit rows written
+    bare, "%"-unit rows written as a bare `fr` value, "ms"-unit rows with an
+    "ms" suffix -- the practice log's other-strategy fade, 2026-08-23, the
+    first duration the registry carries -- and everything else a "px"
+    suffix). "%" rows are the practice-log card's three SHARE tunables
     (identityPercent/ranksPercent/pbPercent, spec practice-log-entity-cards):
     written as `fr` rather than a literal percentage so three shares that
     don't sum to 100 still normalize instead of needing clamping/normalizing
@@ -160,6 +161,8 @@ def _css_literal(formatted_number: str, unit: str) -> str:
         return formatted_number
     if unit == "%":
         return f"{formatted_number}fr"
+    if unit == "ms":
+        return f"{formatted_number}ms"
     return f"{formatted_number}px"
 
 

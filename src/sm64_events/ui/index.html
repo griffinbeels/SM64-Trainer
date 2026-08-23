@@ -1083,6 +1083,23 @@
   .std-sub-name{display:flex;align-items:center;justify-content:center;font-size:10px;white-space:nowrap}
   .std-sub-indent{padding-left:14px;box-sizing:border-box}
   @media (prefers-reduced-motion: reduce){.std-tier-chevron{transition:none}}
+  /* SHEET BEST -- the fastest time on the Ultimate Sheet, under the ladder
+     rather than in it. No cap art and no rank hue, because it grades nothing;
+     a hairline above the row says "past the top" without inventing a tier.
+     The runner sits under the time so the column keeps its numeric rhythm and
+     a long name (`Multiple [3]`, `FrostxBytex`) wraps downward instead of
+     widening a column shared with eight ladder rows. */
+  /* The one-line answer to "why is Standard the same as Overall" -- prose,
+     under the toolbar and above the table, where the question is asked. Quiet
+     by design: it explains a state rather than reporting a problem, so it
+     reads like the panel's own subtitle and not like a warning. */
+  .std-overall-note{margin:0 0 6px;font-size:11px;line-height:1.4;color:#8b95a1}
+  .std-overall-note b{color:#cdd3da;font-weight:600}
+  .stdtable tr.std-sheet-best td{border-top:2px solid #2c3440;background:#0f1319}
+  .std-sheet-best-name{font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#8b95a1}
+  .std-sheet-best-cell{line-height:1.25}
+  .std-sheet-best-runner{display:block;font-size:10px;color:#6f7883;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .stdtable td a{color:#6cb6ff;text-decoration:none}
   .stdtable td a:hover{text-decoration:underline}
   .stdtable th a{color:#cdd3da}
@@ -3268,7 +3285,14 @@
   .attempt-actions {
     width: 210px; text-align: right; white-space: nowrap;
   }
-  .attempt-actions button { min-height: 30px; padding: .25rem .45rem; font-size: .76rem; }
+  /* `vertical-align: middle`, because the cell lays its buttons out INLINE
+     and inline-blocks sit on the text baseline by default -- the replay
+     button's SVG, "Save as PB"'s text and the ×'s glyph each put that
+     baseline at a different height, so the three 30px boxes landed at
+     +0 / +1 / +3 px (measured 2026-08-23; his report: "the X button is
+     slightly lower than the others"). Middle-aligning every button puts
+     their centres on one line whatever each one contains. */
+  .attempt-actions button { min-height: 30px; padding: .25rem .45rem; font-size: .76rem; vertical-align: middle; }
   .attempt-actions .icon-button { width: 31px; padding-inline: 0; }
   /* An imported row has no replay; the blank keeps its buttons in column. */
   .attempt-actions .attempt-no-replay { display: inline-block; visibility: hidden; }
@@ -5865,6 +5889,19 @@
     margin-left: var(--log-pb-offset, 0px);
     white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 700;
   }
+  /* The empty state names the strategy IN FULL, and the track GROWS to fit
+     it, pushing the strategy picker left (his call, 2026-08-22: "the text for
+     'no PB - Single J...' should expand horizontally so that the full
+     strategy name is displayed. It should push the strategy selector to the
+     left when expanding"). The first version clamped the name at 8ch
+     instead, because a longer tag overflowed LEFT into the picker -- and the
+     reason it overflowed is worth knowing before anyone re-adds a clamp: the
+     `min-width` floor above REPLACES the tag's automatic minimum size, so a
+     `minmax(auto, …)` track read that floor as the tag's minimum and never
+     grew past it. The pb track is `minmax(max-content, …)` now (the two
+     one-line grids below), which keeps the floor for short tags -- every row
+     still reads the same 100px and the pickers still line up -- and lets a
+     long name widen its own row's track. */
   /* Book mark (Task 7, spec 2026-08-07-library-page) sits BESIDE the fold
      button now, sharing its "fold" grid-area through this wrapper rather
      than claiming a fifth named area of its own -- see practicelog.js's own
@@ -5921,6 +5958,19 @@
     background: rgba(0, 0, 0, var(--log-body-tint, 0.16));
   }
   .log-card-body .attempt-table tr { height: var(--log-row-height, 40px); }
+  /* A row on a strategy OTHER than the one being practised is dimmed, so
+     the rows that belong to what you are doing are the ones that read
+     (his call, 2026-08-23: "slightly dim the row, so that it's very clear
+     that it's for a different strategy"). How much, and how long the fade
+     takes when the header's strategy changes, are logtuning.js rows
+     (otherStratDim / otherStratFade) -- judged by feel, so tuned rather
+     than guessed. ONE `transition` on the row and nowhere else: a second
+     declaration on `.other-strat` would REPLACE this one while the class
+     is on, and the fade would run in one direction only. A cleared row
+     keeps its own stronger dim (`.cleared`, above) whatever its strategy. */
+  .attempt-table tr { transition: opacity var(--log-other-strat-fade, 240ms) ease; }
+  .attempt-table tr.other-strat:not(.cleared) { opacity: var(--log-other-strat-dim, 0.5); }
+  @media (prefers-reduced-motion: reduce) { .attempt-table tr { transition: none; } }
   /* A STAR'S PIECES, inside its own card (round 22, 2026-08-08): "the
      subsection should appear WITHIN the star's practice log entry as a
      sub-entry... indented a bit so it's clear that it's owned by the parent
@@ -6646,7 +6696,7 @@
     grid-template-columns:
       minmax(var(--log-identity-floor, 220px), var(--log-identity-percent, 20fr))
       minmax(0, var(--log-ranks-percent, 70fr))
-      minmax(auto, var(--log-pb-percent, 8fr))
+      minmax(max-content, var(--log-pb-percent, 8fr))
       auto;
     grid-template-areas: "identity ranks pb fold";
   }
@@ -6821,7 +6871,7 @@
   .log-list-card.log-layout-oneline .log-card.log-card-ranks-in-body:not(.is-unassigned) .log-card-head {
     grid-template-columns:
       minmax(var(--log-identity-floor, 220px), 90fr)
-      minmax(auto, var(--log-pb-percent, 8fr))
+      minmax(max-content, var(--log-pb-percent, 8fr))
       auto;
     grid-template-areas: "identity pb fold";
   }

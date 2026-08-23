@@ -214,7 +214,7 @@ def test_reds_family_suffix_agrees():
     (JS); disagreeing would mean a strategy named " (Pipe)" server-side that
     the client never recognises as the Pipe family, or a card suffix that
     doesn't match any strategy the server will actually grade against."""
-    from sm64_events.tracking.views import PIPE_FAMILY_SUFFIX, STAR_FAMILY_SUFFIX
+    from sm64_events.tracking.activestrat import PIPE_FAMILY_SUFFIX, STAR_FAMILY_SUFFIX
 
     js = run_node(
         f"import {{ STAR_FAMILY_SUFFIX, PIPE_FAMILY_SUFFIX, familyLabel }} "

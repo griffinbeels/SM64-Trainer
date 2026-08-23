@@ -413,7 +413,7 @@ regression the relaxation exists to prevent, and making the parent
 unconditional is what actually closes it.
 
 **Scope, stated precisely**: only the three `seg:reds->pipe:*` definitions
-can ever land in `reds_pipe_with_a_nesting_star` (`_reds_pipe_segments`
+can ever land in `reds_pipe_with_a_nesting_star` (`activestrat.reds_pipe_segments`
 matches by `seed_key.startswith("seg:reds->pipe:")`), so the 100-coin
 star's own engine and the legacy pipe trio (`seed_key.endswith("-pipe")`,
 a disjoint set, confirmed against the live db: `{71,72,73}` vs `{5,6,7}`)

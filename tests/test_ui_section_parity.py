@@ -34,6 +34,8 @@ ATTEMPTLOG_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
                  / "ui" / "components" / "attemptlog.js")
 PRACTICELOG_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
                   / "ui" / "components" / "practicelog.js")
+RANKPAGE_JS = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
+               / "ui" / "components" / "rankpage.js")
 VIEWS_PY = (Path(__file__).resolve().parents[1] / "src" / "sm64_events"
             / "tracking" / "views.py")
 
@@ -117,7 +119,7 @@ def test_one_switchable_rank_banner_is_rendered_for_both_kinds():
     assert '>Strategy</button>' in body
     assert '>Overall</button>' in body
     assert "shownBanner" in body and "rankModeButtons" in body
-    assert "swapKey=${hasSeparateRank ? rankMode : null}" in body
+    assert "swapKey=${strategySwapKey(sec.last_strat, rankMode, hasSeparateRank)}" in body
 
 
 def test_both_section_builders_emit_entity_rank():
@@ -255,3 +257,74 @@ def test_the_log_card_never_regrows_its_own_analysis_or_drawer():
         "LogCard calls the shared analysis card or drawer itself -- both "
         "are page-level surfaces, following the FOCUSED entity rather than "
         "whichever card is open")
+
+
+def test_both_section_builders_emit_the_per_strategy_pb():
+    """Rule 11, applied to the PB the card actually draws (2026-08-20).
+
+    `pb_by_strat` is what `PbTag` reads; `pb` stays the entity-wide number for
+    anything that wants a best-across-strategies answer. A star section
+    growing one without its segment twin is the asymmetry this file exists to
+    catch, and it would show up as segment cards silently reading "no PB"
+    forever -- a shape nothing else here would go red for, since the key is
+    OPTIONAL client-side (`sectionPbByStrat` defaults it) precisely so an
+    older payload degrades instead of throwing."""
+    source = VIEWS_PY.read_text(encoding="utf-8")
+    assert source.count('"pb_by_strat"') >= 2, (
+        "both the star and the segment section must ship pb_by_strat")
+
+
+def test_both_section_kinds_resolve_the_pb_action_server_side():
+    """The action column is ONE resolved field for both kinds, from one
+    resolver -- `_attempt_json` is shared, so this is really a guard against
+    someone re-deriving it per kind later. Asserted on the shipped keys rather
+    than on the call, because a second call site would satisfy "is pb_action
+    called" while still being a second door."""
+    source = strip_comments(VIEWS_PY.read_text(encoding="utf-8"))
+    assert source.count('"pb_action"') == 1, \
+        "pb_action is stamped in exactly one place (_attempt_json)"
+    assert source.count('"pb_blocked"') == 1
+    assert source.count("pb_action(a, active_strat") == 1
+
+
+def test_the_rank_tabs_entity_summary_marks_the_pb_its_own_heading_shows():
+    """Since 2026-08-20 `is_current_pb` means "owns its own STRATEGY's PB", so
+    an entity practised on two strategies has TWO rows carrying it.
+
+    That is right on the practice log, where the whole card is scoped to one
+    strategy, and wrong on the Rank tab's entity summary, whose heading shows a
+    single entity-wide `PB <time>`: the table underneath would mark two rows
+    "PB", one of them slower than the heading. Two related values contradicting
+    each other reads as a visual error whatever the arithmetic says -- his
+    2026-07-25 ruling, and the reason this is checked rather than left to
+    whoever next opens the file.
+
+    The summary therefore matches on `pb.attempt_id`, which the payload already
+    carries. Pinned here rather than left to a render because no gate reaches
+    that panel at all: it is behind a click on the Rank tab's breakdown list,
+    and a render for it is owed."""
+    source = strip_comments(RANKPAGE_JS.read_text(encoding="utf-8"))
+    # Sliced by hand: `EntityDetail` is a module-local function, not an export,
+    # so `_exported_body` cannot find it -- and its "did it get renamed?"
+    # failure would read as this guard being stale rather than as the wrong
+    # lookup being used.
+    start = source.index("function EntityDetail")
+    end = source.find("\nfunction ", start + 1)
+    detail = source[start:end if end != -1 else len(source)]
+    assert "entity-detail-head" in detail, "sliced the wrong function"
+    assert "is_current_pb" not in detail, (
+        "the Rank tab's entity summary is back on `is_current_pb`, which is "
+        "per-STRATEGY -- it will mark two rows PB while its own heading shows "
+        "one entity-wide time. Match on pb.attempt_id instead.")
+    # The assertion has to name the CELL, not just the field. Mutation-proved:
+    # blanking the `<td>` outright left an earlier version green, because the
+    # row's own `class=` still mentioned `pb.attempt_id` -- so "the field is
+    # referenced somewhere" passed while nothing was drawn.
+    marks = [line for line in detail.splitlines()
+             if '"PB"' in line and "pb.attempt_id" in line]
+    assert marks, (
+        "no cell in the summary prints PB against the heading's own row, so "
+        "either the mark was deleted or it is matching on something else")
+    assert "class=${pb && attempt.id === pb.attempt_id" in detail, (
+        "the highlighted ROW and the PB cell must agree about which row is "
+        "the PB -- one of them is matching on a different fact")

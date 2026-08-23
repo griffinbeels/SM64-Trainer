@@ -39,7 +39,7 @@
 //           where good actually was).
 //   min/max/step  the control's range, deliberately wider than anything
 //           sensible.
-//   unit    "px" | "x" | "%" | "" — display only. "x" is a 0..1
+//   unit    "px" | "x" | "%" | "ms" | "" — display only. "x" is a 0..1
 //           fraction/multiplier. "%" is a normalized SHARE of the row's own
 //           width, not a literal CSS percentage -- logTuningVars writes it as
 //           a bare `fr` value (see its own comment), so three shares that
@@ -165,6 +165,16 @@ export const TUNABLES = {
     group: "Open state", label: "Attempt row height", value: 40,
     min: 24, max: 96, step: 2, unit: "px",
     why: "Minimum height of one attempt row. A row's own content can still grow past this; it never shrinks below it.",
+  },
+  otherStratDim: {
+    group: "Open state", label: "Other-strategy row brightness", value: 0.5,
+    min: 0.1, max: 1, step: 0.02, unit: "x",
+    why: "How bright a row on a strategy OTHER than the selected one draws (1 = not dimmed at all). Those rows show no delta and no PB button; the dim is what makes that read as 'not mine right now' rather than as a gap.",
+  },
+  otherStratFade: {
+    group: "Open state", label: "Other-strategy fade", value: 240,
+    min: 0, max: 1200, step: 20, unit: "ms",
+    why: "How long a row takes to dim or brighten when the header's strategy changes — both directions, one duration.",
   },
 
   // ---- Density: the log list itself ----------------------------------------
@@ -620,6 +630,7 @@ export function logTuningVars(values = DEFAULTS) {
     const value = merged[key];
     const literal = row.unit === "x" ? String(value)
       : row.unit === "%" ? `${value}fr`
+      : row.unit === "ms" ? `${value}ms`
       : `${value}px`;
     return [cssVarName(key), literal];
   }));

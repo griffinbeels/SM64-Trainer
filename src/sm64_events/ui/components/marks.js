@@ -76,7 +76,13 @@ export const CAVEATS = {
   unattributed: {
     glyph: "?",
     short: "Unattributed",
-    sentence: "Not attributed to a strategy, so no rank can claim it (set a new PB to rank it)",
+    // The remedy changed with the PB gate (2026-08-20): you can no longer
+    // "set a new PB" out of this state without first saying which strategy
+    // the run was, because a PB is only saveable under the strategy being
+    // practised. Tagging the run is now BOTH the fix and the thing that
+    // brings the PB back, since `set_attempt_strat` retags the pb row with
+    // it -- so the sentence names the one action that works.
+    sentence: "Not attributed to a strategy, so no rank can claim it (set this run's strategy to rank it)",
     suppressFloor: true,
   },
 };

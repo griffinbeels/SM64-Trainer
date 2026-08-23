@@ -287,6 +287,10 @@ def test_route_view_has_step_ranks_and_average(tmp_path):
     aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
     db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE id=?", (aid,))
     db._conn.commit()
+    # The strategy must also be ACTIVE to save: a PB is banked under the one
+    # being practised (2026-08-20, tracking/caveats.py::pb_action). Set below
+    # too, after the standards load, which is where the rank lookup wants it.
+    asyncio.run(svc.set_strat(2, 2, "fast"))
     asyncio.run(svc.save_pb(aid, "igt"))
 
     # load rank standards with thresholds for star:2:2

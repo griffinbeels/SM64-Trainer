@@ -159,3 +159,4 @@ def test_no_pb_means_no_caveat():
     is legitimately None for anything never practised."""
     assert caveats_for(None, replace(BASE, timed_at="grab")) == []
     assert caveat_for(None, replace(BASE, timed_at="grab")) is None
+
