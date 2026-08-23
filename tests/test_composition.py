@@ -178,9 +178,13 @@ def _stubbed_main(monkeypatch):
             return 1
 
         # build() wires the input timeline on every layout, so the stub
-        # carries the two stores it asks for -- unreachable here, never read.
+        # carries the stores and journal readers it asks for -- unreachable
+        # here, never read (events_between/landmark_names feed the timeline's
+        # moment markers, round 32 item 3).
         inputs = None
         input_templates = None
+        events_between = None
+        landmark_names = None
 
         def attempts(self):
             return []
@@ -234,9 +238,13 @@ def test_build_wires_replay_endpoints(monkeypatch, tmp_path):
             return 1
 
         # build() wires the input timeline on every layout, so the stub
-        # carries the two stores it asks for -- unreachable here, never read.
+        # carries the stores and journal readers it asks for -- unreachable
+        # here, never read (events_between/landmark_names feed the timeline's
+        # moment markers, round 32 item 3).
         inputs = None
         input_templates = None
+        events_between = None
+        landmark_names = None
 
         def attempts(self):
             return []

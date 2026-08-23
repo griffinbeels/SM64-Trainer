@@ -1204,6 +1204,22 @@ def test_the_drawer_draws_the_TEMPLATE_S_MARIO_behind_yours(page):
     assert "Template faces" in labels, labels
 
 
+def test_the_drawer_reaches_a_MOMENT_on_the_track(page):
+    """Round 32 item 3: the journal's moments joined onto the track. The
+    fixture publishes one pole grab inside every attempt's captured span;
+    without it the moments row never renders and the sweep measures a drawer
+    with no such row -- the same "clean page nobody is looking at" failure
+    this file exists to catch. The tick reads the recorder's own sentence."""
+    reach(page, "input-timeline")
+    assert count(page, ".input-lane.is-moments") == 1, (
+        "no moments row -- the fixture's attempt window holds no journal "
+        "moment inside its track, or the row is not drawn")
+    labels = page.evaluate(
+        "Array.from(document.querySelectorAll('.moment-mark'))"
+        ".map((el) => el.getAttribute('title'))")
+    assert any(label.startswith("Grab a pole in ") for label in labels), labels
+
+
 def test_the_playhead_travels_over_the_tracks_and_never_the_labels(page):
     """His report 2026-08-22: "I can drag the frame start position to the
     left of the row labels... Frame 0 should start AFTER the labels". The

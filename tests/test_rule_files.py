@@ -264,7 +264,10 @@ CORPUS_CLAIMS = [
      r"The (\d+) castle movements get", ("movements",)),
     ("db.py: reconcile note", "src/sm64_events/storage/db.py",
      r"SEED the (\d+) castle movements", ("movements",)),
-    ("api.py: sole-route table", "src/sm64_events/server/api.py",
+    # moved with the step predicate to eventlabel.py (round 32 item 3: the
+    # input timeline's markers share the recorder's rule, so the rule and its
+    # evidence live beside the sentences)
+    ("eventlabel.py: sole-route table", "src/sm64_events/tracking/eventlabel.py",
      r"against all (\d+) definitions in", ("segments",)),
     ("api.py: timeline coverage", "src/sm64_events/server/api.py",
      r"what the (\d+) seeded", ("segments",)),

@@ -40,6 +40,34 @@ def run(expression: str):
     return json.loads(result.stdout)
 
 
+def run_function(name: str, expression: str):
+    code = strip_comments(TIMELINE.read_text(encoding="utf-8"))
+    match = re.search(rf"^export function {name}\(.*?^\}}\s*$", code,
+                      re.M | re.S)
+    assert match, f"no top-level `export function {name}(...)` in inputtimeline.js"
+    script = (match.group(0).replace("export ", "", 1)
+              + f"\nconsole.log(JSON.stringify({expression}));")
+    result = subprocess.run(["node", "--input-type=module", "-"],
+                            input=script, capture_output=True, text=True,
+                            encoding="utf-8", timeout=60)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout) if result.stdout.strip() != "undefined" \
+        else None
+
+
+MARKERS = '[{"frame": 10, "label": "a"}, {"frame": 40, "label": "b"}]'
+
+
+def test_the_inspector_reads_the_last_moment_at_or_before_the_frame():
+    assert run_function("momentAt", f"momentAt({MARKERS}, 40)")["label"] == "b"
+    assert run_function("momentAt", f"momentAt({MARKERS}, 39)")["label"] == "a"
+
+
+def test_before_the_first_moment_there_is_nothing_to_read():
+    assert run_function("momentAt", f"momentAt({MARKERS}, 9)") is None
+    assert run_function("momentAt", "momentAt([], 5)") is None
+
+
 def test_six_seconds_into_a_three_second_lead_in_is_frame_ninety():
     assert run("frameAtTime(6.0, 3.0, 30, 598)") == 90
 

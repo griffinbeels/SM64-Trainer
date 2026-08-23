@@ -73,6 +73,30 @@ def test_both_kinds_of_attempt_answer_an_entity_key():
         ("segment", "12")
 
 
+def test_the_timeline_carries_the_journals_moments_when_wired(rig):
+    """Round 32 item 3: the moments ride the payload as `markers`, through
+    the recorder's own sentence. A service wired without a journal reader
+    (older callers, tests) simply carries none."""
+    from sm64_events.storage.db import EventRow
+    service, _templates, attempt = rig
+    assert service.timeline(7)["markers"] == []
+    attempt.anchor_frame = 100
+
+    def events(started_utc, ended_utc):
+        assert (started_utc, ended_utc) == (attempt.started_utc,
+                                            attempt.ended_utc)
+        return [EventRow(id=1, session_id=1, seq=1, type="moment_reached",
+                         frame=105, wall_time_utc=started_utc,
+                         payload={"kind": "pole_grab", "level": 9,
+                                  "ordinal": 1})]
+
+    service._events = events
+    service._landmark_names = lambda: {}
+    [marker] = service.timeline(7)["markers"]
+    assert marker == {"frame": 5, "type": "moment_reached",
+                      "label": "Grab a pole in Bob-omb Battlefield"}
+
+
 def test_the_timeline_carries_the_runs_and_the_span(rig):
     service, _templates, _attempt = rig
     payload = service.timeline(7)

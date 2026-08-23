@@ -512,7 +512,9 @@ in the middle of a track continues that axis rather than restarting it, and a
 ### Input timeline
 
 The surface that draws an [[input track]] as one lane per button over
-[[frame]]s, with the [[template track]] behind it. It reports what each
+[[frame]]s, with the [[template track]] behind it, and every [[moment]] the
+[[journal]] holds inside the [[attempt]] as a tick on the same axis, wearing
+the same sentence the [[segment recorder]] gives it. It reports what each
 track was doing on a [[frame]] and names nothing as the reason — you read
 the gap yourself. It opens inside an [[attempt]]'s own row, beside that
 [[attempt]]'s clip, and follows the clip's clock rather than keeping one.

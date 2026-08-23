@@ -328,6 +328,23 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
             await service.publish(Event(
                 type="practice_reset", frame=1000 + index * 1000,
                 timestamp_utc=now, payload={"igt_frames_before": 0}))
+            # ONE MOMENT INSIDE EVERY TRACK, so the input timeline's moment
+            # row has a marker to draw: a pole grab 30 frames after the
+            # anchor, inside the 63 frames `seed_inputs` captures from it.
+            # No seeded definition starts or ends on a pole in this level,
+            # so it records nothing and changes no other card.
+            await service.publish(Event(
+                type="moment_reached", frame=1030 + index * 1000,
+                timestamp_utc=now,
+                payload=_place_time({"kind": "pole_grab", "ordinal": 1,
+                                     "landmark": {
+                                         "key": f"{level}:1:bhvPole:640,0,1280",
+                                         "kind_key": "kind:bhvPole",
+                                         "home": [0, 0, 0],
+                                         "pos": [640, 0, 1280],
+                                         "placed": False, "nameable": True},
+                                     "level": level,
+                                     "area": 1, "action": 0x00000841}, 31)))
             # TWO DOORS PER RUN, when asked -- the start triggers
             # `_subsection_definition` uses (`moment_reached door_open`,
             # ordinals 1 and 2). Without these the seeded subsections exist as
@@ -367,6 +384,19 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
         await service.publish(Event(
             type="practice_reset", frame=4000, timestamp_utc=now,
             payload={"igt_frames_before": 0}))
+        # The same pole grab inside THIS track too: it is the newest attempt,
+        # so it is the one the drawer story opens.
+        await service.publish(Event(
+            type="moment_reached", frame=4030, timestamp_utc=now,
+            payload=_place_time({"kind": "pole_grab", "ordinal": 1,
+                                 "landmark": {
+                                     "key": f"{level}:1:bhvPole:640,0,1280",
+                                     "kind_key": "kind:bhvPole",
+                                     "home": [0, 0, 0],
+                                     "pos": [640, 0, 1280],
+                                     "placed": False, "nameable": True},
+                                 "level": level,
+                                 "area": 1, "action": 0x00000841}, 31)))
         await service.publish(Event(
             type="star_collected", frame=4350, timestamp_utc=now,
             payload={"course_id": course_id, "star_id": star_id,
@@ -1308,7 +1338,8 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     # the failure mode ui-core.md warns about.
     from sm64_events.inputs.service import InputsService
     inputs = InputsService(database.inputs, database.input_templates,
-                           database.attempts)
+                           database.attempts, events=database.events_between,
+                           landmark_names=database.landmark_names)
     app = create_app(poller, broadcaster, service=service, compare=compare,
                      inputs=inputs,
                      adoptions_path=Path(compare_cache_scratch.name)

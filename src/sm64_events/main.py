@@ -409,7 +409,9 @@ def build():
     inputs = None
     if db is not None:
         inputs = InputsService(db.inputs, db.input_templates, db.attempts,
-                               version=layout.version)
+                               version=layout.version,
+                               events=db.events_between,
+                               landmark_names=db.landmark_names)
     return create_app(poller, broadcaster, service=service, replay=replay,
                       inputs=inputs,
                       updater=updater, compare=compare, compilation=compilation,

@@ -14,6 +14,7 @@ cannot be written needs no parity test to keep it honest.
 """
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.inputs.frame import InputFrame
+from sm64_events.inputs.markers import markers_of
 from sm64_events.inputs.runs import Run, capture_axis, collapse
 from sm64_events.inputs.templates import TemplateStore
 from sm64_events.inputs.track import (document_for_attempt, target_of,
@@ -86,14 +87,19 @@ def actions_of(frames: list[tuple[int, InputFrame]]) -> list[dict]:
 class InputsService:
     """`attempts` is a callable returning the projected attempts; `version`
     is the ROM version being read, which is what an exported document
-    records."""
+    records. `events(started_utc, ended_utc)` reads the journal rows inside
+    a span and `landmark_names()` the catalogue they are named through --
+    the two things the moment markers need; without them a timeline simply
+    carries none."""
 
     def __init__(self, store, templates: TemplateStore, attempts,
-                 version: str = "us"):
+                 version: str = "us", events=None, landmark_names=None):
         self.store = store
         self.templates = templates
         self._attempts = attempts
         self._version = version
+        self._events = events
+        self._landmark_names = landmark_names
 
     def attempt(self, attempt_id: int):
         for attempt in self._attempts():
@@ -146,6 +152,7 @@ class InputsService:
             "frames": axis[-1][0] + 1 if axis else 0,
             "runs": runs_of(frames),
             "actions": actions_of(frames),
+            "markers": self._markers(attempt, frames),
             "angle_units": A.ANGLE_UNITS,
             "buttons": [[bit, name] for bit, name in A.BUTTON_BITS],
             "stick_max": A.STICK_MAX,
@@ -153,6 +160,15 @@ class InputsService:
             "template": self._template_payload(
                 self.templates.active_for(kind, key, attempt.strat_tag)),
         }
+
+    def _markers(self, attempt, frames) -> list[dict]:
+        """The journal's moments inside the attempt, on the track's axis --
+        the recorder's own rows and sentences (`inputs/markers.py`)."""
+        if self._events is None or not frames:
+            return []
+        rows = self._events(attempt.started_utc, attempt.ended_utc)
+        names = self._landmark_names() if self._landmark_names else {}
+        return markers_of(rows, frames, names)
 
     @staticmethod
     def _template_payload(template) -> dict | None:

@@ -54,6 +54,17 @@ export function actionAt(spans, frame) {
   return null;
 }
 
+// The last moment at or before `frame`: what he had most recently done to
+// the world when the playhead sits here. Markers are sorted by frame.
+export function momentAt(markers, frame) {
+  let found = null;
+  for (const marker of markers || []) {
+    if (marker.frame > frame) break;
+    found = marker;
+  }
+  return found;
+}
+
 // The buttons SM64 play is made of. These lanes ALWAYS draw, pressed or
 // not, so the rows sit in the same place on every attempt and an unused C
 // button is visibly empty rather than absent (his report, 2026-08-22: "our
@@ -148,6 +159,35 @@ function ActionRow({ name, spans, percent, seek, ghost = false }) {
                 aria-label=${`${ghost ? "Template " : ""}${span.label} from ${spanLabel(span.start, span.length)}`}>
           <span class="action-span-name">${span.label}</span>
         </button>`)}
+    </div>
+  </div>`;
+}
+
+// The journal's MOMENTS on the same axis -- a pole grabbed, a bob-omb picked
+// up, a switch pressed, the star itself -- each a tick at the frame it
+// happened, with the recorder's own sentence beside it. Nothing here is
+// captured; it is the journal joined onto the track by frame (server side,
+// inputs/markers.py), so this row and the segment recorder can never name
+// one thing two ways. A label gets the room up to the next tick and no more,
+// so two moments a few frames apart read as two ticks rather than one
+// smeared word; the tooltip carries the whole sentence.
+function MomentRow({ markers, total, percent, seek }) {
+  return html`<div class="input-lane is-moments">
+    <span class="input-lane-name">Moments</span>
+    <div class="input-lane-track">
+      ${markers.map((marker, index) => {
+        const next = index + 1 < markers.length ? markers[index + 1].frame : total;
+        const room = Math.max(next - marker.frame, 1);
+        return html`
+          <button class=${`moment-mark type-${marker.type}`} key=${`${marker.frame}-${index}`}
+                  style=${`left:${percent(marker.frame)};width:${percent(room)}`}
+                  onclick=${(event) => { event.stopPropagation(); seek(marker.frame); }}
+                  title=${`${marker.label} — ${timeLabel(marker.frame)}`}
+                  aria-label=${`${marker.label} at ${timeLabel(marker.frame)}`}>
+            <span class="moment-mark-tick"></span>
+            <span class="moment-mark-name">${marker.label}</span>
+          </button>`;
+      })}
     </div>
   </div>`;
 }
@@ -255,6 +295,8 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
 
   const here = frameAt(data.runs, frame);
   const nowDoing = actionAt(data.actions, frame);
+  const markers = data.markers || [];
+  const lastMoment = momentAt(markers, frame);
   const template = data.template && !data.template.error ? data.template : null;
   const there = template ? frameAt(template.runs, frame) : null;
   const thereDoing = template ? actionAt(template.actions, frame) : null;
@@ -336,6 +378,8 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       ${template && (template.actions || []).length > 0 && html`
         <${ActionRow} name="Template" spans=${template.actions} percent=${percent}
             seek=${seek} ghost=${true} />`}
+      ${markers.length > 0 && html`
+        <${MomentRow} markers=${markers} total=${total} percent=${percent} seek=${seek} />`}
       <div class="input-lane is-speed">
         <span class="input-lane-name">Speed</span>
         <div class="input-lane-track">
@@ -381,6 +425,9 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         ${thereDoing && html`<span class="input-inspector-action is-template"
             title="What the template was doing on this frame">
           template: ${thereDoing.label}</span>`}
+        ${lastMoment && html`<span class="input-inspector-moment"
+            title="The last moment before this frame">
+          ${lastMoment.label}${" "}<span class="meta">at ${timeLabel(lastMoment.frame)}</span></span>`}
       </div>
     </footer>
   </div>`;

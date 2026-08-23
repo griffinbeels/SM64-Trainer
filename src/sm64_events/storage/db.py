@@ -638,6 +638,12 @@ MIGRATIONS = [
     """
     ALTER TABLE input_chunks ADD COLUMN format INTEGER NOT NULL DEFAULT 1;
     """,
+    # v30 -- the journal by wall clock, for the input timeline's moment
+    # markers: an attempt's rows are the ones inside its started/ended span
+    # (`events_between`), and the journal was only ever indexed by id.
+    """
+    CREATE INDEX idx_events_wall ON events (wall_time_utc);
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -841,6 +847,18 @@ class Database:
                 rows = self._conn.execute(
                     "SELECT * FROM events WHERE id > ? ORDER BY id",
                     (after_id,)).fetchall()
+            return [EventRow(r["id"], r["session_id"], r["seq"], r["type"],
+                             r["frame"], r["wall_time_utc"], json.loads(r["payload"]))
+                    for r in rows]
+
+    def events_between(self, started_utc: str, ended_utc: str) -> list[EventRow]:
+        """The journal rows inside a wall-clock span, inclusive at both ends,
+        oldest first. An attempt's own span is bounded by two of its rows'
+        times, so inclusive is what returns the row that closed it."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM events WHERE wall_time_utc >= ? AND wall_time_utc <= ?"
+                " ORDER BY id", (started_utc, ended_utc)).fetchall()
             return [EventRow(r["id"], r["session_id"], r["seq"], r["type"],
                              r["frame"], r["wall_time_utc"], json.loads(r["payload"]))
                     for r in rows]

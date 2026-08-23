@@ -124,7 +124,7 @@ def test_every_type_the_recorder_can_draw_stamps_a_time():
     """The JOIN, and the reason this file is not three separate assertions: a
     new place-change detector added later is exactly the shape that would
     reintroduce a blank cell, and it lands in this set the moment it is wired."""
-    from sm64_events.server.api import _TIMELINE_STEP_TYPES
+    from sm64_events.tracking.eventlabel import STEP_TYPES as _TIMELINE_STEP_TYPES
     missing = _TIMELINE_STEP_TYPES - TIMED_TYPES
     assert not missing, (
         f"{sorted(missing)} can be drawn by the recorder and stamps no time, "

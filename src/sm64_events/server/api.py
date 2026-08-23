@@ -22,7 +22,8 @@ from sm64_events.stats.registry import (registry_meta, selection_id,
                                         selection_order)
 from sm64_events.tracking import topology
 from sm64_events.tracking.backtest import backtest
-from sm64_events.tracking.eventlabel import (entrance_landmark, label_event,
+from sm64_events.tracking.eventlabel import (entrance_landmark, is_step,
+                                             label_event,
                                              label_level_entry,
                                              level_entry_rows)
 from sm64_events.tracking.lint import lint_definition
@@ -370,83 +371,6 @@ def _http(e: Exception) -> HTTPException:
     return HTTPException(503, str(e))  # RuntimeError: degraded mode
 
 
-# GET /api/segments/timeline's default "steps" view membership rule: a type
-# clears the bar if it is ever a SEEDED segment definition's ONLY route in or
-# out -- the definition has no other trigger clause that could record it, so
-# excluding the type would make that definition unrecordable through the
-# default view. "Sole" is a PER-DEFINITION property, not a raw use-count: a
-# type that backs several definitions but always as one of several
-# OR-alternative start/end clauses is not sole for any of them, because the
-# alternative already covers it.
-#
-# Measured directly against all 84 definitions in src/sm64_events/data/
-# defaults.seed.json (2026-07-28; re-derived independently twice after an
-# earlier pass miscounted by reading only each definition's FIRST start/end
-# clause and missing OR-alternatives -- attempt_anchor is never first, so
-# that method undercounted it as 0/1 instead of the 7 real uses below):
-#
-#   trigger type     sole START for     sole END for
-#   area_enter       1 (BitS Entry)     4 (BoB/BBH/SL -> Basement,
-#                                           Bowser 2 -> Upstairs)
-#   attempt_anchor   0                  0  -- all 7 uses (LBLJ, the 3 pipe
-#                                           entries, Bowser 1/2/3) are the
-#                                           SECOND start clause behind a
-#                                           level_enter; every one of those
-#                                           definitions is already reachable
-#                                           by entering the level normally,
-#                                           so attempt_anchor is an F1-retry
-#                                           echo, never the only way in
-#   spawned          1 (Lakitu Skip)    0
-#
-# level_changed/star_collected/warp_entered/key_grabbed (the base four) cover
-# 63/65 starts and 61/65 ends (~95%) on their own and are never excluded
-# regardless of this table -- they are the foundation this rule sits on top
-# of, not a case it decides.
-#
-# area_changed clears the bar (5 sole uses) despite dominating raw volume
-# (1,678 of 18,656 real events, 2026-07-28) and is unconditionally included --
-# every area_changed row is a real castle-region crossing.
-#
-# spawned also clears the bar (Lakitu Skip's only start), but the raw type is
-# 1,164 events, almost all ordinary respawns after a death or reset that no
-# definition needs. Lakitu Skip's clause (`{"type": "spawned", "level": 16}`)
-# does not itself distinguish them, but every spawned event also carries a
-# `kind` the matcher doesn't check (detectors/spawn.py): "intro" (edge out of
-# the file-select cutscene) or "spawn" (an ordinary respawn-in). Measured
-# against the real journal (2026-07-28): of 1,164 spawned events, 28 are
-# kind="intro" and 1,136 are kind="spawn"; of the 27 kind="intro" spawns at
-# level 16 -- exactly what Lakitu Skip's clause matches -- ALL 27 are
-# kind="intro", never an ordinary respawn. So the default view includes a
-# spawned row only when kind == "intro" (`_is_default_timeline_row` below),
-# not the raw type -- narrower than the type-level criterion strictly asks
-# for, but it is what the criterion's own need actually is.
-#
-# attempt_anchor (practice_reset/state_loaded) and game_reset (0 sole uses
-# each) stay excluded, reachable only via `view=all`.
-#
-# Property this rule protects: no seeded definition in defaults.seed.json is
-# unrecordable from the default view. tests/test_api.py derives the
-# sole-route table above straight from the seed file (never hard-codes it)
-# and fails in EITHER direction: a future corpus edit that makes an excluded
-# type sole-route without this file being updated, or this file including a
-# type the corpus doesn't back.
-_TIMELINE_STEP_TYPES = frozenset(
-    {"level_changed", "star_collected", "warp_entered", "key_grabbed",
-     "area_changed", "moment_reached"})
-
-
-def _is_default_timeline_row(row) -> bool:
-    """Default (`view=steps`) membership predicate -- see the comment above
-    _TIMELINE_STEP_TYPES for the sole-route criterion this encodes. Every
-    type in _TIMELINE_STEP_TYPES qualifies unconditionally; `spawned` only
-    qualifies when payload `kind == "intro"` (a fresh-file spawn) -- the
-    narrow subset Lakitu Skip's clause actually needs. An ordinary respawn
-    (`kind == "spawn"`) stays out even though the raw type clears the bar."""
-    if row.type in _TIMELINE_STEP_TYPES:
-        return True
-    return row.type == "spawned" and row.payload.get("kind") == "intro"
-
-
 def create_api_router(service) -> APIRouter:
     router = APIRouter(prefix="/api")
     # The timeline's label memo — one per router, so tests building several
@@ -625,14 +549,14 @@ def create_api_router(service) -> APIRouter:
         data.
 
         `view` picks which of eventlabel.LABELLABLE_TYPES's 9 types show:
-        "steps" (default, see `_TIMELINE_STEP_TYPES`/`_is_default_timeline_
-        row` above for the full sole-route rationale) is level_changed/
+        "steps" (default, see `eventlabel.STEP_TYPES`/`is_step` for the
+        full sole-route rationale) is level_changed/
         star_collected/warp_entered/key_grabbed (~95% of what the 84 seeded
         definitions' start/end clauses actually use) PLUS area_changed (5
         seeded definitions have no other route in/out) PLUS spawned rows
         where kind == "intro" (Lakitu Skip's only start, narrowed to the
         fresh-file-spawn subset it actually needs -- see the comment above
-        _TIMELINE_STEP_TYPES). "all" adds the rest -- practice_reset/
+        eventlabel.STEP_TYPES). "all" adds the rest -- practice_reset/
         state_loaded (the attempt_anchor pair), spawned rows with kind ==
         "spawn", and game_reset -- no seeded definition needs any of those as
         its ONLY route in or out. 422 on an unrecognised `view`, matching
@@ -757,7 +681,7 @@ def create_api_router(service) -> APIRouter:
                     and row.payload.get("to") != row.payload.get("level")):
                 landmark = entrance_landmark(row.payload)
             if (view == "steps" and entry_level is None
-                    and not _is_default_timeline_row(row)):
+                    and not is_step(row)):
                 continue
             key = (row.session_id, label)
             repeat = repeats[key] = repeats.get(key, 0) + 1

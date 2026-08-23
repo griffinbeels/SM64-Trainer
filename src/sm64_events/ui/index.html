@@ -4717,6 +4717,26 @@
   .action-span.group-cutscene { background: #8a7bbd; }
   .action-span.group-automatic { background: #b58f5a; }
   .action-span.group-object { background: #b5705a; }
+  /* The moments row: one tick per journal moment, its sentence given the
+     room up to the next tick. The tick is the fact; the name is a courtesy
+     that gives way first. Same button reset as the bars, same reason. */
+  .input-lane.is-moments .input-lane-track { height: 20px; background: #14101c; }
+  .moment-mark {
+    position: absolute; top: 0; bottom: 0; min-width: 2px; padding: 0;
+    display: flex; align-items: center; gap: .2rem;
+    min-height: 0; height: auto; border: 0; border-radius: 0;
+    background: transparent; overflow: hidden; cursor: pointer;
+    font-size: .6rem; line-height: 1; color: #d9c6f0; text-align: left;
+  }
+  .moment-mark-tick {
+    flex: none; width: 2px; align-self: stretch; background: #c9a6ff;
+    border-radius: 1px;
+  }
+  .moment-mark.type-star_collected .moment-mark-tick { background: var(--gold); }
+  .moment-mark-name { white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+  .moment-mark:hover, .moment-mark:focus-visible { filter: brightness(1.25); }
+  .input-inspector-moment { color: #d9c6f0; }
+  .input-inspector-moment .meta { color: #8fa3b6; }
   .speed-line { fill: none; stroke: #e3c27c; stroke-width: 1.6; }
   .speed-line.is-template { stroke-width: 1.1; opacity: .6; stroke-dasharray: 3 2; }
   /* The template's action row wears the same colours at lower weight: the
