@@ -891,6 +891,10 @@ class Database:
         with self._lock:
             self._conn.execute("DELETE FROM events WHERE session_id=?",
                                (session_id,))
+            # Its captured input goes with it: a chunk outliving its session
+            # is a few hundred KB an hour that no attempt can ever resolve.
+            self._conn.execute("DELETE FROM input_chunks WHERE session_id=?",
+                               (session_id,))
             self._conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
             self._conn.commit()
 
@@ -1458,6 +1462,7 @@ class Database:
         with self._lock:
             self._conn.execute("DELETE FROM events")
             self._conn.execute("DELETE FROM pbs")
+            self._conn.execute("DELETE FROM input_chunks")
             self._conn.execute("DELETE FROM sessions WHERE id<>?",
                                (keep_session_id,))
             self._conn.commit()

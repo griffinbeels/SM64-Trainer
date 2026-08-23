@@ -177,3 +177,43 @@ def test_a_stored_chunk_records_which_format_it_used(store):
     inputs.append(session, [(0, InputFrame(0x8000, 0, 1, 2, 7, 9))], AT, LATER)
     got = inputs.frames_between(AT, LATER)
     assert got[0][1].action == 7 and got[0][1].yaw == 9
+
+
+# --- what survives a restart, and what a deletion takes with it (2026-08-23) --
+# His question: "when I save a PB / save a replay, it ALSO stores that
+# replay's input file right? So that, if I closed the program and came back,
+# I would expect to still be able to inspect the replays for anything I've
+# played before". Captured input lives in the journal's own database for
+# EVERY attempt -- saved or not -- and is never evicted; only deleting the
+# session, or wiping all history, removes it.
+
+def test_captured_input_survives_closing_and_reopening_the_database(tmp_path):
+    from sm64_events.storage.db import Database
+    path = tmp_path / "t.db"
+    first = Database(path)
+    first.inputs.append(first.insert_session(AT),
+                        [(100, InputFrame(0x8000, 0, 40, 0))], AT, LATER)
+    first.close()
+    again = Database(path)
+    assert [(number, frame.buttons)
+            for number, frame in again.inputs.frames_between(AT, LATER)] == [(100, 0x8000)]
+
+
+def test_deleting_a_session_takes_its_captured_input_with_it(tmp_path):
+    from sm64_events.storage.db import Database
+    db = Database(tmp_path / "t.db")
+    doomed = db.insert_session(AT)
+    kept = db.insert_session(LATER)
+    db.inputs.append(doomed, [(100, InputFrame(0x8000, 0, 0, 0))], AT, AT)
+    db.inputs.append(kept, [(200, InputFrame(0x4000, 0, 0, 0))], LATER, LATER)
+    db.delete_session(doomed)
+    assert [frame.buttons for _n, frame in db.inputs.frames_between(AT, LATER)] == [0x4000]
+
+
+def test_wiping_all_history_wipes_the_captured_input_too(tmp_path):
+    from sm64_events.storage.db import Database
+    db = Database(tmp_path / "t.db")
+    session = db.insert_session(AT)
+    db.inputs.append(session, [(100, InputFrame(0x8000, 0, 0, 0))], AT, AT)
+    db.wipe_all_history(keep_session_id=session)
+    assert db.inputs.frames_between(AT, LATER) == []
