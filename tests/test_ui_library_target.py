@@ -12,6 +12,7 @@ strategy (`FIXTURE_STRAT = "TJ Owlless"`) matches the entity's SECOND section
 by Mario cutoff rather than its first -- so "auto-expand follows the active
 strategy" is a real assertion here, not a tautology that would also pass for
 "opens the first section"."""
+import json
 import shutil
 import sys
 import time
@@ -41,6 +42,25 @@ EXPAND_DIVISIONS = (
     "Array.from(document.querySelectorAll("
     "'.library-section.open .library-division-head')).forEach((head) => "
     "head.getAttribute('aria-expanded') === 'true' || head.click())")
+
+
+def set_native_value(page, selector, value):
+    """The controlled-input trick test_ui_leaderboard.py's own copy of this
+    helper explains: a plain `.value = x` bypasses Preact's own value
+    tracking, so the framework never sees the change and the filter never
+    runs. This file's own `test_search_filters_across_sections` gets away
+    with the plain assignment on the ladder-mode structural filter; the
+    Leaderboard-mode empty-state and you-row tests below (L5/L6, final
+    review) did not run reliably under a full-file run without it."""
+    page.evaluate(f"""
+      (() => {{
+        const box = document.querySelector({json.dumps(selector)});
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype, 'value').set;
+        setter.call(box, {json.dumps(value)});
+        box.dispatchEvent(new Event('input', {{bubbles: true}}));
+      }})()
+    """)
 
 
 @pytest.fixture(scope="module")
@@ -800,6 +820,294 @@ def test_the_wiki_mark_sits_beside_the_name_and_its_art_loads(library_page):
     assert facts["opensNewTab"] and facts["titled"], facts
 
 
+# ---- Leaderboard mode (task 1, spec 2026-08-20-ranked-leaderboard) -------
+
+def _leaderboard_rows(page):
+    return page.evaluate("""
+      Array.from(document.querySelectorAll(
+        '.library-section.open .library-leaderboard-row')).map((row) => ({
+          position: row.querySelector('.library-leaderboard-position').textContent.trim(),
+          isYou: row.classList.contains('is-you'),
+          name: (row.querySelector('.library-example-runner, .library-plain-runner')
+            || {}).textContent || '',
+        }))
+    """)
+
+
+def test_ladder_is_the_default_mode_and_its_markup_is_untouched(library_page):
+    pressed = library_page.evaluate(
+        "document.querySelector('.library-section.open .library-mode-seg"
+        "[aria-pressed=\"true\"]').textContent.trim()")
+    assert pressed == "Ladder", pressed
+    assert library_page.evaluate(
+        "document.querySelectorAll('.library-section.open .library-toc-row').length") > 0
+    assert library_page.evaluate(
+        "document.querySelectorAll('.library-section.open .library-leaderboard').length") == 0
+
+
+def test_ladder_mode_bands_are_direct_grid_children_with_the_bodys_own_gap(library_page):
+    """Fix round 1: the ternary that switches between Ladder and Leaderboard
+    markup originally wrapped the TOC table and every `.library-band` in a
+    plain `<div class="library-ladder-view">` so each branch was one node.
+    `.library-section-body` is `display: grid; gap: .6rem`, and that wrapper
+    collapsed the table and every band into ONE grid item -- the gap the
+    grid provides between them was silently gone (measured against the
+    pre-task baseline: TOC-to-first-band 15.98px -> 6.39px, every inter-band
+    gap 9.59px -> 5.59px). Fixed with a Preact `Fragment` (no DOM node)
+    instead of a div, so this asserts the MECHANISM directly -- no wrapper
+    between the body and its bands -- and the geometry it buys, against the
+    body's own computed row-gap rather than a hardcoded pixel value (which
+    would go stale the day `.6rem` changes for an unrelated reason)."""
+    result = library_page.evaluate("""
+      (() => {
+        const body = document.querySelector('.library-section.open .library-section-body');
+        const toc = body.querySelector('.library-toc');
+        const bands = Array.from(body.querySelectorAll('.library-band'));
+        const rowGap = parseFloat(getComputedStyle(body).rowGap);
+        const gapBetween = (a, b) => b.getBoundingClientRect().top
+          - a.getBoundingClientRect().bottom;
+        const interBandGaps = [];
+        for (let i = 1; i < bands.length; i += 1) {
+          interBandGaps.push(gapBetween(bands[i - 1], bands[i]));
+        }
+        return {
+          tocIsDirectChild: toc.parentElement === body,
+          bandsAreDirectChildren: bands.every((band) => band.parentElement === body),
+          tocToFirstBand: gapBetween(toc, bands[0]),
+          rowGap, interBandGaps,
+        };
+      })()
+    """)
+    assert result["tocIsDirectChild"], result
+    assert result["bandsAreDirectChildren"], result
+    assert len(result["interBandGaps"]) > 1, result
+    # Every band-to-band gap matches the grid's OWN row-gap within a pixel of
+    # subpixel rounding -- the CSS grid gap applies uniformly between direct
+    # siblings, so this is the assertion with no magic number in it.
+    for gap in result["interBandGaps"]:
+        assert abs(gap - result["rowGap"]) < 1, result
+    # The TOC-to-first-band gap carries a fixed extra offset from the table's
+    # own box even at baseline (measured 15.98px against a 9.6px row-gap --
+    # NOT a wrapper artifact, since it was identical before this task). The
+    # wrapper bug collapsed it to 6.39px; this floor sits clearly between the
+    # broken and healthy values without hardcoding the healthy one exactly.
+    assert result["tocToFirstBand"] > 12, result
+
+
+def test_a_plain_ladder_row_does_not_grow_when_its_runner_becomes_a_button(library_page):
+    """Fix wave (final review, H1). The test above measures TOC-to-band
+    GAPS with divisions COLLAPSED -- `.library-plain-entry`/`.library-
+    example-meta` (the rows Task 5's runner-click door lives inside) only
+    exist once a subdivision is expanded, so that test never rendered them
+    and could not have caught this. Task 5 turned a runner's name from a
+    `<span>` into a `<button class="library-runner-link">` and the reset
+    missed `min-height`/`display`, so the global `button` rule's
+    `min-height: 34px; display: inline-flex` grew every plain row ~17px --
+    measured pre-fix: `.library-plain-entry` 41.75px, `.library-plain-runner`
+    (the button itself) 34px, `.library-example-meta` 48.38px; fixed:
+    24.75px / 17px / 40.38px. Plain rows are the DENSE ones (a band holds
+    dozens), so this is a silent geometry change to the whole ladder --
+    thresholds sit at the midpoint between broken and healthy, same style as
+    the gap test above."""
+    library_page.evaluate(EXPAND_DIVISIONS)
+    library_page.wait_for(".library-section.open .library-plain-entry", timeout_ms=10000)
+    result = library_page.evaluate("""
+      (() => {
+        const entry = document.querySelector('.library-section.open .library-plain-entry');
+        const runner = entry.querySelector('.library-plain-runner');
+        const meta = document.querySelector('.library-section.open .library-example-meta');
+        return {
+          entryHeight: entry.getBoundingClientRect().height,
+          runnerHeight: runner.getBoundingClientRect().height,
+          runnerIsButton: runner.tagName === 'BUTTON',
+          metaHeight: meta ? meta.getBoundingClientRect().height : null,
+        };
+      })()
+    """)
+    assert result["runnerIsButton"], (
+        "no `.library-plain-runner` button found -- this test needs the "
+        "runner-click door wired (onOpenRunner), not a plain <span>")
+    assert result["entryHeight"] < 30, result
+    assert result["runnerHeight"] < 22, result
+    if result["metaHeight"] is not None:
+        assert result["metaHeight"] < 44, result
+
+
+def test_leaderboard_mode_numbers_every_entry_fastest_first(library_page):
+    library_page.evaluate("""
+      Array.from(document.querySelectorAll('.library-section.open .library-mode-seg'))
+        .find((seg) => seg.textContent.trim() === 'Leaderboard').click()
+    """)
+    library_page.wait_for(".library-section.open .library-leaderboard-row", timeout_ms=10000)
+    # switching mode fully replaces the section body -- the ladder's own
+    # markup (bandsOf, the TOC, the band anchors) unmounts rather than
+    # merely hiding, exactly as Ladder mode's own markup is untouched above.
+    assert library_page.evaluate(
+        "document.querySelectorAll('.library-section.open .library-toc-row').length") == 0
+    rows = _leaderboard_rows(library_page)
+    assert len(rows) > 1, rows
+    assert rows[0]["position"] == "#1", rows
+    # competition ranking: positions never run backwards, and start at 1 --
+    # the arithmetic itself (ties, the skip past a tie) is node-proved in
+    # test_library_model_js.py; this proves the page actually renders what
+    # leaderboardOf returns, in the order it returns it.
+    positions = [int(r["position"].lstrip("#")) for r in rows]
+    assert positions == sorted(positions), rows
+    assert positions[0] == 1, rows
+
+
+def test_leaderboard_mode_empty_search_blames_the_search_not_the_board(library_page):
+    """Fix wave (final review, L6). `shown.length === 0` used to render the
+    same "No community times recorded here yet" sentence whether the board
+    itself was empty OR a live search simply matched nothing -- reading as a
+    broken search rather than an honest empty state. `leaderboard.length`
+    (the count BEFORE the query filters it) is what tells the two apart.
+
+    Opens "Owl strat w/o speed preservation" explicitly (never the
+    auto-opened section) because L5's own fix (above) keeps a you-row on
+    screen through ANY query -- on a section carrying a saved PB, `shown`
+    can never reach zero at all, which would make this test unable to reach
+    the state it exists to check. This section carries no PB (probed live:
+    0 you-rows), so a query matching nothing genuinely empties it."""
+    opened = library_page.evaluate("""
+      (() => {
+        const heads = Array.from(document.querySelectorAll('.library-section-head'));
+        const head = heads.find((b) =>
+          b.querySelector('.library-section-name').textContent
+            === 'Owl strat w/o speed preservation');
+        if (!head) return false;
+        if (!head.closest('.library-section').classList.contains('open')) head.click();
+        return true;
+      })()
+    """)
+    assert opened, "could not find the Owl strat section to open"
+    library_page.evaluate("""
+      Array.from(document.querySelectorAll('.library-section.open .library-mode-seg'))
+        .find((seg) => seg.textContent.trim() === 'Leaderboard').click()
+    """)
+    library_page.wait_for(".library-section.open .library-leaderboard-row", timeout_ms=10000)
+    assert library_page.evaluate(
+        "document.querySelectorAll("
+        "'.library-section.open .library-leaderboard-row.is-you').length") == 0, (
+        "this section now carries a you-row -- pick a different PB-less "
+        "section, since L5's fix means this test cannot reach an empty "
+        "`shown` list otherwise")
+    set_native_value(library_page, ".library-target-search",
+                     "NoRunnerCouldEverBeNamedThis999")
+    # Wait for the CONTROL the assertion reads, not a fixed sleep
+    # (ui-core.md's own rule) -- a fixed 200ms flaked under a full-file run
+    # with many browsers already open.
+    library_page.wait_for(".library-section.open .library-leaderboard-empty",
+                          timeout_ms=5000)
+    try:
+        text = library_page.evaluate(
+            "document.querySelector('.library-section.open .library-leaderboard-empty')"
+            "?.textContent || ''")
+        assert "search" in text.lower(), (
+            f"an empty search result did not blame the search: {text!r}")
+        assert "community times" not in text.lower(), (
+            f"an empty search result still read like an empty board: {text!r}")
+    finally:
+        set_native_value(library_page, ".library-target-search", "")
+        library_page.wait_ms(200)
+
+
+def test_leaderboard_mode_inserts_and_marks_the_readers_own_pb_row(library_page):
+    library_page.evaluate("""
+      Array.from(document.querySelectorAll('.library-section.open .library-mode-seg'))
+        .find((seg) => seg.textContent.trim() === 'Leaderboard').click()
+    """)
+    library_page.wait_for(".library-section.open .library-leaderboard-row", timeout_ms=10000)
+    rows = _leaderboard_rows(library_page)
+    you_rows = [r for r in rows if r["isYou"]]
+    # the fixture's active strategy on this section carries a saved PB
+    # (ui_fixture.py's `with_pb=True` default) -- exactly one synthetic
+    # row is inserted, never zero and never more than one.
+    assert len(you_rows) == 1, rows
+    marker = library_page.evaluate(
+        "document.querySelector('.library-section.open "
+        ".library-leaderboard-row.is-you .library-toc-you').textContent")
+    assert "you" in marker.lower(), marker
+
+
+def test_leaderboard_mode_never_filters_out_your_own_row(library_page):
+    """Fix wave (final review, L5). leaderboard.js (the Rank tab's own
+    board) explicitly never filters the reader's row out ("a search that hid
+    the one row he came here to find would defeat the jump control") --
+    LeaderboardList used to answer the SAME gesture oppositely, filtering
+    the synthetic you-row through an ordinary text match on the literal
+    string "You". One rule, both boards: search for a real OTHER runner's
+    name (guaranteed not to contain "you") and the reader's own row must
+    still be on screen."""
+    library_page.evaluate("""
+      Array.from(document.querySelectorAll('.library-section.open .library-mode-seg'))
+        .find((seg) => seg.textContent.trim() === 'Leaderboard').click()
+    """)
+    library_page.wait_for(".library-section.open .library-leaderboard-row", timeout_ms=10000)
+    before = _leaderboard_rows(library_page)
+    assert any(row["isYou"] for row in before), "no you-row on this section to begin with"
+    target = next(row["name"] for row in before
+                  if not row["isYou"] and len(row["name"]) >= 4)
+    assert "you" not in target.lower(), (
+        f"picked {target!r} as the search target, which itself contains "
+        "'you' -- pick a different real runner so this test proves the "
+        "IDENTITY rule, not a coincidental text match")
+    try:
+        set_native_value(library_page, ".library-target-search", target[:4])
+        library_page.wait_ms(300)
+        after = _leaderboard_rows(library_page)
+        assert len(after) < len(before), (
+            f"the search did not narrow the list ({len(before)} -> {len(after)})")
+        assert any(row["isYou"] for row in after), (
+            "the reader's own row disappeared under a search that did not "
+            "match it -- it must never be filtered out")
+    finally:
+        set_native_value(library_page, ".library-target-search", "")
+        library_page.wait_ms(200)
+
+
+def test_leaderboard_mode_filters_by_the_pages_own_version_switch(library_page):
+    """Team-lead ruling on this task: `leaderboardOf` itself does NO version
+    filtering (node-proved in test_library_model_js.py) -- the CALLER
+    filters, and this is where a caller exists to prove it. Same section the
+    JP-toggle ladder test above already uses, because it is the one section
+    on this target carrying real per-version times (`ladder_jp`)."""
+    opened = library_page.evaluate("""
+      (() => {
+        const heads = Array.from(document.querySelectorAll('.library-section-head'));
+        const head = heads.find((b) =>
+          b.querySelector('.library-section-name').textContent
+            === 'Owl strat w/o speed preservation');
+        if (!head) return false;
+        if (!head.closest('.library-section').classList.contains('open')) head.click();
+        return true;
+      })()
+    """)
+    assert opened, "could not find the Owl strat section to open"
+    library_page.evaluate("""
+      Array.from(document.querySelectorAll('.library-section.open .library-mode-seg'))
+        .find((seg) => seg.textContent.trim() === 'Leaderboard').click()
+    """)
+    library_page.wait_for(".library-section.open .library-leaderboard-row", timeout_ms=10000)
+
+    def row_count():
+        return library_page.evaluate(
+            "document.querySelectorAll("
+            "'.library-section.open .library-leaderboard-row').length")
+
+    before = row_count()
+    assert before > 0, "no leaderboard rows on the JP-carrying section"
+    library_page.wait_for(".version-switch", timeout_ms=10000)
+    library_page.evaluate("""
+      Array.from(document.querySelectorAll('.version-switch-seg'))
+        .find((seg) => seg.textContent.trim() === 'JP').click()
+    """)
+    library_page.wait_for(".library-section.open .library-leaderboard-row", timeout_ms=10000)
+    after = row_count()
+    assert after > 0 and after != before, (
+        f"leaderboard mode did not follow the page's version switch: {before} -> {after}")
+
+
 def test_a_movement_with_no_wiki_page_draws_no_mark(library_server):
     """A door-to-door lobby movement has no Ukikipedia page (the wiki's own
     "Castle Movement" redirects to Lakitu Skip), so the mark is absent, not
@@ -828,3 +1136,61 @@ def test_a_movement_with_no_wiki_page_draws_no_mark(library_server):
         page.wait_for(".library-target .library-target-titleline h3", timeout_ms=10000)
         assert page.evaluate(
             "document.querySelectorAll('.library-target .wiki-mark').length") == 0
+
+
+# ---- Round 1 of the ranked leaderboard, fifth read (2026-08-23): a
+# leaderboard row is one condensed line, the video folded beneath it ------
+
+def _open_leaderboard_mode(page):
+    page.evaluate("""Array.from(document.querySelectorAll(
+      '.library-section.open .library-mode-seg')).find((b) => b.textContent.trim() === 'Leaderboard').click()""")
+    page.wait_for(".library-section.open .library-leaderboard-row", timeout_ms=10000)
+    page.wait_ms(200)
+
+
+def test_leaderboard_rows_are_condensed_lines_with_the_video_folded(library_page):
+    """"Each row should be the rank achieved, the runner, the time, and then
+    a button for opening the video. The videos should be collapsed by
+    default, so the leaderboard display is very condensed by default."
+    No video card in the list; every row under ~44px; a ▶ only where the
+    entry has a video; pressing it folds the Library's own media block open
+    beneath that row and pressing again folds it shut."""
+    _open_leaderboard_mode(library_page)
+    shape = library_page.evaluate("""
+      JSON.stringify((() => {
+        const rows = Array.from(document.querySelectorAll('.library-section.open .library-leaderboard-row'));
+        return {rows: rows.length,
+          cards: document.querySelectorAll('.library-section.open .library-example').length,
+          tallest: Math.max(...rows.map((r) => r.getBoundingClientRect().height)),
+          plays: rows.filter((r) => r.querySelector('.library-leaderboard-play')).length,
+          caps: rows.filter((r) => r.querySelector('.library-leaderboard-tier .hat')).length,
+          times: rows.filter((r) => r.querySelector('.library-leaderboard-time')).length};
+      })())""")
+    import json as _json
+    shape = _json.loads(shape)
+    assert shape["rows"] > 10 and shape["cards"] == 0, shape
+    assert shape["tallest"] < 48, f"a closed leaderboard row is not condensed: {shape}"
+    assert 0 < shape["plays"] < shape["rows"], shape
+    assert shape["times"] == shape["rows"] and shape["caps"] > 0, shape
+    library_page.evaluate(
+        "document.querySelector('.library-section.open .library-leaderboard-play').click()")
+    library_page.wait_ms(700)
+    opened = _json.loads(library_page.evaluate("""
+      JSON.stringify((() => {
+        const btn = document.querySelector('.library-section.open .library-leaderboard-play');
+        const fold = btn.closest('.library-leaderboard-row').querySelector('.library-leaderboard-disclose');
+        return {expanded: btn.getAttribute('aria-expanded'), h: fold.getBoundingClientRect().height,
+          media: !!fold.querySelector('.library-example-media')};
+      })())"""))
+    assert opened["expanded"] == "true" and opened["media"] and opened["h"] > 100, opened
+    library_page.evaluate(
+        "document.querySelector('.library-section.open .library-leaderboard-play').click()")
+    library_page.wait_ms(700)
+    closed = _json.loads(library_page.evaluate("""
+      JSON.stringify((() => {
+        const btn = document.querySelector('.library-section.open .library-leaderboard-play');
+        const fold = btn.closest('.library-leaderboard-row').querySelector('.library-leaderboard-disclose');
+        return {expanded: btn.getAttribute('aria-expanded'), h: fold.getBoundingClientRect().height};
+      })())"""))
+    assert closed["expanded"] == "false" and closed["h"] == 0, closed
+

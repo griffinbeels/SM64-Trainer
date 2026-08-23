@@ -6,10 +6,10 @@ A render test, per this project's own rule: unit tests plus `node --check`
 once shipped an invisible feature, and every claim below is about the real
 DOM a browser builds.
 
-task-7-caveats.md point 1 is why these tests exist at all: `openLibrary`
+This task's ruling is why these tests exist at all: `openLibrary`
 (app.js) had ZERO callers anywhere in `ui/` before this task, so the
 `focusStrat`/`focusTier` deep-link effect in `librarytarget.js` (Task 4) had
-never run in a real session. task-7-caveats.md point 3 is why the tests below
+never run in a real session. The same ruling is why the tests below
 drive the MOUNTED page rather than navigating by `.entity-back`: every test in
 `tests/test_ui_library_target.py` remounts `LibraryTarget` on every
 navigation, so none of them exercise props changing while the component stays
@@ -247,7 +247,7 @@ def test_a_time_link_lands_scrolled_to_the_entrys_band(practice_page):
 
 
 # ---- fix round: the deep link is consumed ONCE, not re-applied on every
-# `rows` change (task-7-caveats.md point 2, "the heart of this task") -------
+# `rows` change ("the heart of this task") -----------------------------
 
 def test_a_manual_section_pick_survives_a_repeat_of_the_same_deep_link(practice_page):
     """`focusStrat`/`focusTier` ride `entry.rows`, and `approaches`

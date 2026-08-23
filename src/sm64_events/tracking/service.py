@@ -26,6 +26,7 @@ from sm64_events.core.modes import ModeConfig, effective_version
 from sm64_events.core.paths import bundled_defaults_seed
 from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, node_label, star_name
+from sm64_events.ranks import scopes
 from sm64_events.ranks.classify import RANK_MODES
 from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
@@ -1520,26 +1521,43 @@ class TrackerService:
 
     # ---- MARELO: rank exclusions + celebration watermarks -------------------
     def rank_excluded(self) -> set[str]:
-        """Entity keys the user has opted out of ranking entirely -- they
-        leave the numerator AND denominator of every scope. ui_state KV
-        `rank_excluded`, not the standards store: this is user preference,
-        and rank_standards.json is community data the bundled-seed reconcile
-        overwrites on upgrade, which would silently discard the opt-out."""
+        """Entity keys kept out of ranking entirely -- they leave the
+        numerator AND denominator of every scope. Two KVs on top of a
+        default (`ranks/scopes.py::default_excluded`: every segment outside
+        the Bowser-fight / 100-coin-exit categories, his fifth-read ruling):
+        `rank_excluded` holds what he explicitly excluded, `rank_included`
+        what he explicitly included back from the default. ui_state KVs,
+        not the standards store: this is user preference, and
+        rank_standards.json is community data the bundled-seed reconcile
+        overwrites on upgrade, which would silently discard the choice."""
         if self.db is None:
             return set()
-        return set(self.db.get_state("rank_excluded", []))
+        return scopes.effective_excluded(
+            scopes.default_excluded(self.db.segment_defs()),
+            self.db.get_state("rank_included", []),
+            self.db.get_state("rank_excluded", []))
 
     async def set_rank_excluded(self, entity_key: str, excluded: bool) -> None:
         """Broadcast-only like set_rank_mode/set_icon -- a display/scoring
-        preference, never journaled."""
+        preference, never journaled. Writes the ONE set that overrides the
+        default for this key: including a default-excluded segment lands in
+        `rank_included`, excluding a default-included entity in
+        `rank_excluded`; the opposite move just clears the override."""
         if self.db is None:
             raise RuntimeError("tracking database unavailable")
-        current = self.rank_excluded()
+        default = entity_key in scopes.default_excluded(self.db.segment_defs())
+        explicit_excluded = set(self.db.get_state("rank_excluded", []))
+        explicit_included = set(self.db.get_state("rank_included", []))
         if excluded:
-            current.add(entity_key)
+            explicit_included.discard(entity_key)
+            if not default:
+                explicit_excluded.add(entity_key)
         else:
-            current.discard(entity_key)
-        self.db.set_state("rank_excluded", sorted(current))
+            explicit_excluded.discard(entity_key)
+            if default:
+                explicit_included.add(entity_key)
+        self.db.set_state("rank_excluded", sorted(explicit_excluded))
+        self.db.set_state("rank_included", sorted(explicit_included))
         await self.broadcaster.publish(Event(
             type="marelo_changed", frame=0, timestamp_utc=_now(),
             payload={"entity": entity_key, "excluded": excluded}))

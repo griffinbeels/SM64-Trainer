@@ -525,6 +525,64 @@ and a row reshuffling four times in a tenth of a second is the flicker.
   an element that is always rendered (the rank banner folds its basis line
   into the progress track's tooltip).
 
+## A `<button>` carries the global rule with it (2026-08-21)
+
+`index.html`'s global `button` rule sets **`min-height: 34px; display:
+inline-flex`**. Every element that becomes a button inherits both, and neither
+is undone by the usual text-reset (`appearance: none; background: none; border:
+none; padding: 0; font: inherit`).
+
+**The measured cost.** The ranked-leaderboard branch turned a runner's name from
+a `<span>` into a `<button>` so the name could open that runner's page — inside
+the Library's *existing* ladder list, which the same branch was forbidden to
+change. `.library-plain-entry` went **24.75px → 41.75px** and
+`.library-example-meta` **40.38px → 48.38px**. A band holds dozens of plain
+rows, so the ladder grew about 70% taller in silence. `min-height: 0; display:
+inline` restored it exactly; the sibling `.library-example-plus` had carried
+`min-height: 0` since it was written.
+
+**Nothing caught it.** The responsive sweep hunts defects, not growth, and the
+ladder's own geometry test measures TOC→band gaps with divisions COLLAPSED. It
+took a whole-branch review measuring a baseline worktree to find.
+
+**It is now guarded**, by `tests/test_ui_button_flex.py::
+test_a_button_reset_to_inline_text_states_its_min_height` — beside the
+`justify-content` guard, because both enforce halves of the same global rule.
+The discriminator is the FULL text reset (background AND border AND all
+padding gone), which is what "this should flow as text" looks like in
+declarations. Deliberately narrow, and the exemptions are the point: a rule
+declaring its own `display` has taken control of its box (`.std-tier-btn`); one
+keeping background, border or padding is a chip-shaped control that wants the
+34px (`.version-switch-seg`, `.library-mode-seg`); and a PARTIAL padding reset
+leaves the element box-shaped (`.candx`, `.vidbtn`).
+
+Those last two sit just outside the guard and have **not** been judged by
+rendering — they strip background and border but keep horizontal padding, so
+they inherit the 34px and may carry the same latent bug. Widening the guard to
+cover them before judging them would trade one that fires reliably for one that
+gets switched off.
+
+## "Unchanged" is a measurement, not a claim (2026-08-21)
+
+Twice on one branch a surface that was supposed to stay untouched changed, and
+both times the implementer's report asserted it had not. One wrote
+"pixel-identical to before this task" about a page it had never rendered before
+its own change; the regression was a wrapper element collapsing a grid's gaps,
+15.98px → 6.39px between every band.
+
+**The method that actually settles it**: build a worktree at the pre-change
+commit, render the same selector in both, and diff real
+`getBoundingClientRect()` numbers — not a contact sheet against a memory of
+what the page used to look like.
+
+**The trap that makes the comparison lie**: this repo is installed editable, so
+importing `sm64_events` from a worktree can resolve to the MAIN checkout and
+both runs are then served the SAME code. The first attempt at this comparison
+reported identical numbers for exactly that reason. Give the baseline worktree
+its own venv, run with `PYTHONPATH="$PWD/src" .venv/Scripts/python.exe`, and
+**print `module.__file__` to prove which tree answered** before believing any
+before/after.
+
 ## Responsiveness — the law, and the three tests that hold it
 
 **Component-internal layout gates on `@container` against its own pane.

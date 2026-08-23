@@ -55,8 +55,8 @@ def empty_page():
 
 
 def test_the_tab_is_reachable_from_the_sidebar(practiced_page):
-    """It exists, sits in the Play group (task-3-caveats.md point 2 -- not
-    inside the group already named "Library"), and switching to it actually
+    """It exists, sits in the Play group (not inside the group already named
+    "Library"), and switching to it actually
     changes the page rather than being a dead nav entry."""
     found = practiced_page.evaluate(
         "return !!document.querySelector('.nav-item[title=\"Library\"]')")

@@ -53,6 +53,7 @@ RANKS_JS = UI / "components" / "ranks.js"
 STATMENU_JS = UI / "components" / "statmenu.js"
 REDSFAMILY_JS = UI / "redsfamily.js"
 MARKS_JS = UI / "components" / "marks.js"
+LIBRARYTARGET_JS = UI / "components" / "librarytarget.js"
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node not on PATH")
@@ -533,6 +534,120 @@ def test_display_centiseconds_agree():
         "different rank than the server grades it.")
 
 
+# --- 11. the Ultimate Sheet's version-mode entry filter ---------------------
+
+def test_visible_entries_agrees_with_sections_version_filter():
+    """library/ratings.py::_visible_entries mirrors librarytarget.js's
+    visibleEntriesFor (final whole-branch review, L1) -- the SAME "should
+    this row filter by version at all" rule feeding two different
+    consumers: ratings.py grades a leaderboard runner's SCORE off it,
+    Section decides what actually PAINTS on the target page. Drift here
+    means a runner's rating counts an entry the target page itself never
+    shows in that version, or the reverse -- and it had already drifted
+    once (visibleEntriesFor used to be inlined in Section with no test able
+    to see either side), which is the exact rot this row exists to catch.
+
+    Cases cover both halves of the "is this row even versioned" gate
+    (`_visible_entries`'s own docstring): entries mixing two tags, entries
+    all carrying the SAME single tag with no ladder_jp (must NOT filter --
+    the 52-approach case that motivated the gate), a ladder_jp present with
+    only one tag among the entries (must filter anyway), untagged entries
+    (always shown), and an empty entry list."""
+    from sm64_events.library.ratings import _visible_entries
+
+    # (entries as (runner, version-tag), has_ladder_jp, requested version)
+    CASES = [
+        ([("a", "us"), ("b", "jp")], False, "us"),
+        ([("a", "us"), ("b", "jp")], False, "jp"),
+        ([("a", "us"), ("b", "us")], False, "us"),   # one tag, no ladder_jp: NOT versioned
+        ([("a", "us"), ("b", "us")], False, "jp"),   # same -- still shown under jp
+        ([("a", "us"), ("b", None)], True, "jp"),    # ladder_jp forces filtering with one tag
+        ([("a", None), ("b", None)], False, "us"),   # untagged always shows
+        ([], False, "us"),
+    ]
+
+    def item_for(entries, has_ladder_jp):
+        return {"entries": [{"runner": runner, "time_cs": 100, "version": tag}
+                            for runner, tag in entries],
+                "ladder_jp": {"Mario": 100} if has_ladder_jp else None}
+
+    python = [[entry["runner"] for entry in _visible_entries(item_for(entries, jp), version)]
+              for entries, jp, version in CASES]
+
+    js_cases = [{"item": item_for(entries, jp), "version": version}
+                for entries, jp, version in CASES]
+    js = run_node(
+        f"{function_declaration(LIBRARYTARGET_JS, 'visibleEntriesFor')}\n"
+        f"const cases = {json.dumps(js_cases)};\n"
+        "console.log(JSON.stringify(cases.map(({item, version}) => "
+        "visibleEntriesFor(item, version).map((entry) => entry.runner))));")
+    disagreements = [(case, py, node)
+                     for case, py, node in zip(CASES, python, js) if py != node]
+    assert not disagreements, (
+        "library/ratings.py::_visible_entries and librarytarget.js::"
+        f"visibleEntriesFor disagree on (case, python, js): {disagreements}. "
+        "A runner's board rating and what the target page actually shows "
+        "for a version would count different entries.")
+
+
+# --- 12. the competition-tie rule (1-2-2-4) ---------------------------------
+
+def test_the_boards_tie_numbering_agrees_with_leaderboard_modes():
+    """board.py::_ranked (MARELO-descending, the [[Rank board]]) and
+    librarymodel.js::leaderboardOf (time_cs-ascending, [[Leaderboard mode]])
+    each implement 1-2-2-4 competition ranking over a DIFFERENT sort key --
+    not a one-door violation (`.claude/rules/library.md`'s own row on when a
+    duplicate is a real decision), but docs/glossary.md's `Rank board` entry
+    ASSERTS the two number identically ("numbered the same way Leaderboard
+    mode numbers its own list"), and nothing tested that claim (final
+    whole-branch review, L7).
+
+    `time_cs = -marelo` is a strictly monotonic, tie-preserving map between
+    the two keys -- ascending time_cs is exactly descending marelo, and two
+    equal marelos become two equal time_cs -- so feeding the SAME generated
+    values through both, relabeled per schema, asks the identical ranking
+    question of each real implementation. `_ranked`'s None-marelo branch (an
+    empty scope) has no leaderboardOf analogue -- a sheet entry always has a
+    real time -- so it is out of scope for this comparison, not skipped by
+    omission."""
+    import random
+
+    from sm64_events.library.board import _ranked
+
+    rng = random.Random(20260820)
+    # A small value pool forces real ties; id preserves each row's identity
+    # through both functions' own independent sorts.
+    pool = [round(rng.uniform(0, 100), 2) for _ in range(12)]
+    marelos = [rng.choice(pool) for _ in range(80)]
+
+    python_rows = _ranked([{"marelo": marelo, "id": index}
+                           for index, marelo in enumerate(marelos)])
+    python_positions = [None] * len(marelos)
+    for row in python_rows:
+        python_positions[row["id"]] = row["position"]
+
+    js_entries = [{"time_cs": -marelo, "id": index}
+                 for index, marelo in enumerate(marelos)]
+    js_rows = run_node(
+        f"import {{ leaderboardOf }} from {LIBRARYMODEL_JS.as_uri()!r};\n"
+        f"const entries = {json.dumps(js_entries)};\n"
+        "console.log(JSON.stringify(leaderboardOf({}, entries)"
+        ".map((row) => ({ id: row.entry.id, position: row.position }))));")
+    js_positions = [None] * len(marelos)
+    for row in js_rows:
+        js_positions[row["id"]] = row["position"]
+
+    disagreements = [(index, marelos[index], python_positions[index], js_positions[index])
+                     for index in range(len(marelos))
+                     if python_positions[index] != js_positions[index]]
+    assert not disagreements, (
+        "board.py::_ranked and librarymodel.js::leaderboardOf disagree on "
+        f"{len(disagreements)}/{len(marelos)} generated rows (index, marelo, "
+        f"python position, js position): {disagreements[:5]}. The glossary's "
+        "own claim that the two boards number ties the same way would be "
+        "false.")
+
+
 # --- the guards themselves --------------------------------------------------
 
 def test_the_guards_can_still_fail():
@@ -542,6 +657,7 @@ def test_the_guards_can_still_fail():
     assert "keyOf" in declaration(STATMENU_JS, "keyOf")
     assert "unattributed" in declaration(MARKS_JS, "CAVEATS")
     assert "Math.floor" in function_declaration(STANDARDS_JS, "displayCs")
+    assert "ladder_jp" in function_declaration(LIBRARYTARGET_JS, "visibleEntriesFor")
 
     commented = UI / "sample.js"          # never read; suffix drives the strip
     text = ("// const keyOf = (s) => s.key + ':OLD';\n"

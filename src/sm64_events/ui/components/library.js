@@ -1,9 +1,9 @@
 // src/sm64_events/ui/components/library.js — the Library tab.
 //
 // Mounted permanently (app.js, the same `display:none` trick Compare uses),
-// not remounted per tab switch: "on first activation" (task-3-brief.md step
-// 2) only means something if the component has a memory of having already
-// done it, and a persistent mount is what lets `intent` from elsewhere in the
+// not remounted per tab switch: "on first activation" only means something
+// if the component has a memory of having already done it, and a persistent
+// mount is what lets `intent` from elsewhere in the
 // app (Task 5's own job) arrive on an ALREADY-open tab and still navigate.
 //
 // Three things this component owns: browsing (course grid -> a group's
@@ -56,8 +56,8 @@ function statusLine(status, error) {
 }
 
 // All three /api/library/refresh outcomes render inline -- applied, not
-// newer, and the 503 a failed fetch raises (task-3-caveats.md point 4: "All
-// three outcomes must render"). `state` is null (nothing to say yet),
+// newer, and the 503 a failed fetch raises ("all three outcomes must
+// render"). `state` is null (nothing to say yet),
 // "loading", the refresh response body, or {error} from a caught throw.
 function RefreshMessage({ state }) {
   if (!state || state === "loading") return null;
@@ -68,8 +68,8 @@ function RefreshMessage({ state }) {
   return html`<p class="library-refresh-msg">Already up to date — ${state.reason}</p>`;
 }
 
-// A Twitch link failing must not sink the batch (task-6-brief.md step 1):
-// every tray item still gets its own import attempt, and this renders what
+// A Twitch link failing must not sink the batch: every tray item still gets
+// its own import attempt, and this renders what
 // came back for the ones that didn't land. `result` is null before the
 // first Study click. TWO independent lines, either or both -- a batch can
 // both fail partially AND span more than one entity:
@@ -138,7 +138,8 @@ function pollImportJob(jobId) {
 /**
  * t            the tracker store
  * active       true while the Library tab is the one on screen
- * intent       null, or {kind:"target", entity, strat?, tier?} / {kind:
+ * intent       null, or {kind:"target", entity, strat?, tier?, division?,
+ *              entryUrl?, runner?, timeCs?, you?} / {kind:
  *              "compare", attemptId?, entity, strat} — a caller elsewhere in
  *              the app asking the Library to open on something specific
  *              (openLibrary in app.js). "target" routes straight to that
@@ -159,8 +160,15 @@ function pollImportJob(jobId) {
  *              (`{attemptId?, entity, strat}` — Compare's existing prop
  *              shape, unchanged by this task). Used for the "compare" intent
  *              above and by `studyInCompare` below, once its imports land.
+ * openRunner   (name) => void — app.js's own runnerpage.js door (task 5),
+ *              switching to the Rank tab on that runner's page. Threaded
+ *              straight to `LibraryTarget`'s `onOpenRunner`, which is the
+ *              player-click door: a runner's name inside a target page's
+ *              entry rows (ExampleCard/PlainEntry) or its leaderboard-mode
+ *              rows. Never opened by this file itself — this is only where
+ *              the outside door is received and handed down.
  */
-export function Library({ t, active, intent, clearIntent, enterCompare }) {
+export function Library({ t, active, intent, clearIntent, enterCompare, openRunner }) {
   const [index, setIndex] = useState(null);
   const [status, setStatus] = useState(null);
   // FINAL REVIEW FIX (medium: two fetches fail into a permanent spinner). A
@@ -258,6 +266,15 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
                    // auto-open and the entry card to blink ride the intent.
                    focusDivision: focus.division || null,
                    focusEntryUrl: focus.entryUrl || null,
+                   // 2026-08-22 (round 1 of the leaderboard): the [[Runner
+                   // page]] lands on ONE runner's entry -- the one the
+                   // breakdown graded, named by runner + its time_cs.
+                   focusRunner: focus.runner || null,
+                   focusTimeCs: focus.timeCs ?? null,
+                   // 2026-08-23 (his own Rank tab's doors): land on the
+                   // reader's OWN standing -- the subdivision his PB sits
+                   // in on the section he is graded on.
+                   focusYou: !!focus.you,
                    // 2026-08-14: a LINKED entity resolves to the target its
                    // rows are adopted onto (server-side, same door), and
                    // `focus_row_key` names the piece the link points at --
@@ -288,9 +305,9 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
   // numeric index into the index we already fetched (librarynav.js's own
   // contract). A Castle Movement / stage RTA target has no entity to look up
   // by, but it still needs its FULL shape (approaches/subsections as real
-  // arrays, not `GET /api/library`'s own summary counts) -- exactly the door
-  // task-3-caveats.md point 4 left for this task: `GET
-  // /api/library/target/{index}`, which library_api.py already spreads as
+  // arrays, not `GET /api/library`'s own summary counts) -- exactly the
+  // door `GET /api/library/target/{index}` gives, which library_api.py
+  // already spreads as
   // `{index, ...target}`, the same full shape `/api/library/entity/{key}`'s
   // own `targets` array carries. One shape either door produces is what lets
   // librarytarget.js stay ignorant of which door it came through.
@@ -349,7 +366,9 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
       autoOpenedRef.current = true;
       openEntity(intent.entity, { strat: intent.strat, tier: intent.tier,
                                   division: intent.division,
-                                  entryUrl: intent.entryUrl });
+                                  entryUrl: intent.entryUrl,
+                                  runner: intent.runner, timeCs: intent.timeCs,
+                                  you: !!intent.you });
     } else if (intent.kind === "compare") {
       // FINAL REVIEW FIX (broad review finding #7, never landed until now):
       // this is a straight PASS-THROUGH into Compare -- the Library's own
@@ -371,8 +390,8 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
 
   // First activation with no intent in hand: land on whatever was last
   // practiced (librarymodel.js::lastPracticed), same as a bookmark that
-  // follows the player. `null` is the empty-log case (task-3-caveats.md
-  // point 3, no attempts recorded anywhere yet) and stays on the course
+  // follows the player. `null` is the empty-log case (no attempts recorded
+  // anywhere yet) and stays on the course
   // grid, same as `stage`'s own initial value -- there is nothing to open.
   useEffect(() => {
     if (!active || autoOpenedRef.current) return;
@@ -392,8 +411,8 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
   }
 
   // Task 6, step 1: import every tray item -- EACH under its OWN
-  // `entity_key` (`trayToImport` reads it off the item, task-6-caveats.md
-  // point 6), never a single entity handed in from outside, because the
+  // `entity_key` (`trayToImport` reads it off the item), never a single
+  // entity handed in from outside, because the
   // tray is ordinary cross-entity state (librarytray.js's own header). One
   // item failing (a dead link, a private video) must not sink the batch, so
   // every item still gets its own POST + poll + optional trim PUT even after
@@ -432,8 +451,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
         // Non-null `edit` only: an untrimmed tray item must inherit whatever
         // trim the comparison already has saved (server-side dedupe on
         // `source_ref` within (entity_key, strat) reuses the existing row),
-        // never blank it out. task-6-caveats.md point 2 -- do not
-        // "simplify" this condition away.
+        // never blank it out. Do not "simplify" this condition away.
         if (status.comparison && edit) {
           await send("PUT", `/api/compare/videos/${status.comparison.id}`, edit);
         }
@@ -457,9 +475,9 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
       // FIX ROUND 1, CRITICAL: land on the first item's (entity, strat) AND
       // actually OPEN what imported there -- `enterCompare`'s `openIds` is
       // the door compare.js's own `openComp` already opens saved
-      // comparisons through (task-6-caveats.md point 3's "call the existing
-      // door", now applied to the fix too). Before this fix Study routed to
-      // the right pane and opened nothing in it.
+      // comparisons through ("call the existing door", now applied to the
+      // fix too). Before this fix Study routed to the right pane and
+      // opened nothing in it.
       const primary = succeeded[0];
       const openIds = succeeded
         .filter((s) => s.entity_key === primary.entity_key && s.strat === primary.strat
@@ -519,11 +537,14 @@ export function Library({ t, active, intent, clearIntent, enterCompare }) {
           </button>
           <${LibraryTarget} t=${t} targets=${entry ? entry.rows : []}
               version=${version} gradingVersion=${effectiveVersion}
-              onAdd=${addToTray} trayKeys=${trayKeys}
+              onAdd=${addToTray} trayKeys=${trayKeys} onOpenRunner=${openRunner}
               focusStrat=${entry ? entry.focusStrat : null}
               focusTier=${entry ? entry.focusTier : null}
               focusDivision=${entry ? entry.focusDivision : null}
               focusEntryUrl=${entry ? entry.focusEntryUrl : null}
+              focusRunner=${entry ? entry.focusRunner : null}
+              focusTimeCs=${entry ? entry.focusTimeCs : null}
+              focusYou=${entry ? entry.focusYou : false}
               focusRow=${entry ? entry.focusRow : null}
               fallbackLabel=${entry ? entry.fallbackLabel : null}
               onRelink=${reloadRows}

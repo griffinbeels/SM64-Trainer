@@ -85,6 +85,19 @@ def shipped_python() -> tuple[Path, ...]:
     return tuple(sorted(SRC.rglob("*.py")))
 
 
+def library_zone() -> tuple[Path, ...]:
+    """The library module tree and the API that serves it -- everywhere a
+    sheet entry's time could plausibly be graded. Narrower than
+    `python_sources()` on purpose: `scoring.best_ladder` is legitimately
+    called from `tracking/marelo.py`, `ranks/scopes.py`, `tracking/views.py`
+    and `server/ranks_api.py` to grade a USER's own attempts, which has
+    nothing to do with a sheet entry and would be permanent false positives
+    at repo scope. Nothing in this zone calls either ingredient today, so the
+    row starts with zero existing owners to add."""
+    return tuple(sorted([*(SRC / "library").rglob("*.py"),
+                         SRC / "server" / "library_api.py"]))
+
+
 def strategy_name_zone() -> tuple[Path, ...]:
     """The modules that could plausibly COMPOSE a strategy name — the ranks
     store, the tracking layer that stamps one onto an attempt, the API that
@@ -101,6 +114,23 @@ def strategy_name_zone() -> tuple[Path, ...]:
     return tuple(sorted([
         *(SRC / "ranks").rglob("*.py"), *(SRC / "tracking").rglob("*.py"),
         *(SRC / "server").rglob("*.py"), *(REPO / "tools").rglob("*.py")]))
+
+
+def entity_breakdown_zone() -> tuple[Path, ...]:
+    """The two consumers that widen a plain SCORE into a display breakdown
+    for one entity -- the user's own MARELO scope (`_score_scope`) and a
+    community runner's (`board.py`) -- plus the owner, `tracking/marelo.py`.
+
+    Narrower than `python_sources()` on purpose: `scoring.division_for` and
+    `scopes.gain_for` are legitimately called elsewhere for THEIR OWN
+    reasons that have nothing to do with grading one entity against its own
+    ladder -- `ranks/scopes.py::aggregate` calls `division_for` for the
+    SCOPE's own tier (no single ladder involved), and `gain_for` is defined
+    there. Scanning those files for the same tokens would be a permanent
+    false positive, not a guard."""
+    return tuple(sorted([
+        SRC / "server" / "ranks_api.py", SRC / "library" / "board.py",
+        SRC / "tracking" / "marelo.py"]))
 
 
 INVARIANTS = (
@@ -410,6 +440,46 @@ INVARIANTS = (
             "(2026-08-01): a fourth dance action added to the registry would "
             "have reached the detector and not the probe that validates it, "
             "and the probe would have gone on reporting GATE PASSED.",
+    ),
+    SingleSource(
+        concept="a sheet entry's time graded against a standards ladder",
+        owners=frozenset({"ratings.py"}),
+        tokens=("best_ladder", "progress_for_time"),
+        files=library_zone(),
+        why="library/ratings.py -- the runner-rating twin of "
+            "tracking/marelo.py::entity_scores -- grades a community "
+            "runner's sheet time on `scoring.best_ladder(ranks_store."
+            "ladders(...))` fed to `scoring.progress_for_time`, never the "
+            "library's own fitted `item['ladder']` (task-2 brief, "
+            "2026-08-20): the fitted and vetted-standards ladders differ on "
+            "every matched approach in the shipped snapshot, so grading on "
+            "the sheet's own curve produces a number that LOOKS like MARELO "
+            "and cannot be compared to the user's. A second library file "
+            "calling either function directly is building a competing "
+            "grading path beside ratings.py -- 'is rate_runners() called' "
+            "would pass while that second path sat right beside it.",
+    ),
+    SingleSource(
+        concept="the entity breakdown shape (tier/division/next_tier/"
+                "next_division/gain from one score against one ladder)",
+        owners=frozenset({"marelo.py"}),
+        tokens=("division_for", "gain_for"),
+        files=entity_breakdown_zone(),
+        why="tracking/marelo.py::classify_entity -- extracted from "
+            "server/ranks_api.py::_score_scope during Task 3's review "
+            "round (2026-08-20), which caught it as a genuine second "
+            "hand-written copy of this composition sitting beside "
+            "library/board.py's own. `scopes.aggregate` only sees SCORES, "
+            "not ladders, and grades tier/division/gain against the FULL "
+            "rank table -- a ragged ladder (one missing a tier) still "
+            "crosses that tier's score range, so a full-table lookup can "
+            "name a tier the ladder does not define. Both the user's own "
+            "MARELO breakdown and a community runner's must recompute this "
+            "per-entity against the entity's OWN ladder identically, or the "
+            "two numbers can silently disagree on screen for the same "
+            "entity. 'Is classify_entity() called' would pass while a "
+            "second file quietly re-derived tier/division from "
+            "`scoring.division_for`/`scopes.gain_for` directly beside it.",
     ),
 )
 
