@@ -89,11 +89,11 @@ _BY_NAME = {story.name: story for story in STORIES}
 # not opened yet, so there is nothing for either of these to collide with.
 
 def test_the_bowser_reds_pipe_pairing_renders_its_family_naming():
-    """`pipe_star_entity`/`pipe_segment_id` (views.py's `_reds_pipe_segments`)
+    """`pipe_star_entity`/`pipe_segment_id` (activestrat.py's `reds_pipe_segments`)
     drive the "(Pipe)"/"(Star)" suffixed naming a Bowser Reds star and its
     paired `seg:reds->pipe:<abbrev>` segment borrow from each other
     (redsfamily.js::familyLabel) -- and until now no fixture ever loaded the
-    corpus segment this needs (`_reds_pipe_segments` matches by `seed_key`,
+    corpus segment this needs (`reds_pipe_segments` matches by `seed_key`,
     which only a real reconcile stamps) or armed it, so this naming path had
     only ever been verified by reading source, never by a render.
 
@@ -149,7 +149,7 @@ def test_the_bowser_reds_pipe_pairing_renders_its_family_naming():
             f"no log card reads \"…(Pipe)\" after targeting the reds->pipe "
             f"segment -- names were {names!r}. Either it never armed (check "
             "ui_fixture.py's enter_level) or views.py's pipe_star_entity "
-            "stopped resolving it (tracking-storage.md's _reds_pipe_segments)")
+            "stopped resolving it (pb-strategy.md's reds_pipe_segments)")
 
         # Task 7 fix round 1's own precondition: the ACTIVE card is a PAIRED
         # segment (`pipe_star_entity` set), the one shape whose book mark must
