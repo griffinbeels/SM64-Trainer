@@ -854,8 +854,8 @@ from a time run on a strategy other than the column it was drawn on.
 **A time may only be BANKED under the strategy being practised.**
 `tracking/pbaction.py::pb_action(attempt, active_strat, owns_strat_pb)` is the
 one resolver behind both the button and the API (`TrackerService.pb_action`
-asks it of the database for the commands), with an illegal QUANTITY outranking
-the strategy gate. Both of its ingredients have one door of their own:
+asks it of the database for the commands); the strategy gate is stated before
+an illegal quantity (2026-08-22), since a foreign row draws nothing at all. Both of its ingredients have one door of their own:
 "which strategy is active" is `tracking/activestrat.py::ActiveStrats`, asked
 with identity (a star, a segment, an attempt) by the session view, the
 selector's medals, the route candidates AND the commands — until 2026-08-22

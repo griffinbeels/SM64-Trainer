@@ -335,13 +335,15 @@ for the PB commands, so the card and the API cannot disagree about it.
 
 Why a [[practice log]] row's Save/Undo button is not there: the row belongs to
 a [[strategy]] other than the [[active strategy]], or you have selected no
-[[strategy]] at all. The row prints the reason as a chip where the button was.
+[[strategy]] at all. The row shows no button and no time comparison at all —
+nothing of the [[active strategy]]'s applies to it — and the server refuses
+the save for the same stated reason.
 
 - **Not** — a [[caveat mark]]. A [[caveat mark]] says the time is not the
-  quantity it looks like; this chip says the row is fine and simply not yours
-  to act on right now.
+  quantity it looks like and draws a mark; a gated row is fine and simply
+  not yours to act on right now, and draws nothing.
 - **Lives** — the resolver (`src/sm64_events/tracking/pbaction.py`)
-  → the chip in the [[practice log]]'s action column
+  → the absent button in the [[practice log]]'s action column
 
 ### Route
 

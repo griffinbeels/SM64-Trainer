@@ -2200,15 +2200,21 @@ def test_the_view_and_the_server_agree_about_what_is_saveable(tmp_path):
     view = build_session_view(db, svc, clock="igt")
     rows = [r for sec in view["stars"] for r in sec["attempts"]]
     assert [r["pb_action"] for r in rows] == [None]
+    # With no strategy picked the STRATEGY reason is the one stated
+    # (2026-08-22: a row outside the active strategy draws nothing at all,
+    # so that is the reason a reader needs first) ...
     assert [r["pb_blocked"] for r in rows] == [
-        {"reason": "grab_timed", "strat": None}]
-    # ... and the QUANTITY outranks the strategy gate: putting the strategy
-    # in play does not make a grab-timed row saveable.
+        {"reason": "no_active_strat", "strat": None}]
+    # ... and putting the strategy in play does not make a grab-timed row
+    # saveable: the quantity reason surfaces the moment the row is the
+    # active strategy's.
     asyncio.run(svc.set_strat(2, 2, "Standard"))
     asyncio.run(svc.set_attempt_strat(rows[0]["id"], "Standard"))
     again = [r for sec in build_session_view(db, svc, clock="igt")["stars"]
              for r in sec["attempts"]]
-    assert [r["pb_blocked"]["reason"] for r in again] == ["grab_timed"]
+    assert [r["pb_action"] for r in again] == [None]
+    assert [r["pb_blocked"] for r in again] == [
+        {"reason": "grab_timed", "strat": None}]
 
 
 def test_the_practice_log_row_carries_its_own_mark(tmp_path):

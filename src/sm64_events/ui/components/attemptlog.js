@@ -21,7 +21,7 @@ import { RankIcon } from "./rankicon.js";
 import { StratPicker } from "./stratpicker.js";
 import { Icon } from "./icons.js";
 import { EmptyState } from "./emptystate.js";
-import { caveatOf, cardBadge, gateChip, pbGateOf } from "./marks.js";
+import { caveatOf, cardBadge } from "./marks.js";
 
 const html = htm.bind(h);
 
@@ -146,12 +146,15 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // The server's own resolved answer for this row's action column: "save" |
   // "undo" | null, and when null, why. Never re-derived here -- save_pb and
   // undo_pb refuse on the SAME resolver (tracking/pbaction.py), and a button
-  // that offers what the server rejects is the drift one door prevents. Two
-  // shapes of "why": a caveat key (the TIME is not a legal quantity), drawn
-  // as the disabled button it always was, and a STRATEGY gate, drawn as a
-  // chip that says which strategy would accept it (marks.js::gateChip).
+  // that offers what the server rejects is the drift one door prevents. Of
+  // the two shapes of "why", only a caveat key (the TIME is not a legal
+  // quantity) draws anything: the disabled button it always was. A STRATEGY
+  // reason draws NOTHING -- the row belongs to another strategy, or no
+  // strategy is picked, and his ruling (2026-08-22) is that the button is
+  // simply absent: "the button / text just shouldn't be there & should be
+  // hidden entirely for a strategy that isn't the one selected". The
+  // printed "<strat> only" chip of 2026-08-20 is gone with it.
   const blockedPb = caveatOf(a.pb_blocked && a.pb_blocked.reason);
-  const pbGate = pbGateOf(a.pb_blocked);
   // The mark on the TIME, not on the save button: this row's number is not
   // the quantity it looks like ("if you've been practicing all wrong, you
   // should know", 2026-08-02). Same key vocabulary, same badge, one door —
@@ -194,11 +197,11 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
           title="View replay" aria-label="View replay">
         <${Icon} name=${showReplay ? "chevron" : "play"} size=${16} /></button>
       ${/* THE action column, a straight cascade over the server's own
-           resolved answer (tracking/pbaction.py). Four states and no
+           resolved answer (tracking/pbaction.py). Three drawn states and no
            client-side precedence: undo, save, "the time is not a legal
-           quantity", "the row is not this strategy's". A failure, a cleared
-           row, an attempt with no entity, and a card with NO strategy picked
-           all resolve to nothing at all (the last by his 2026-08-22 ruling:
+           quantity". Everything else -- a failure, a cleared row, an attempt
+           with no entity, a row on another strategy, a card with no strategy
+           picked -- draws nothing (the last two by his 2026-08-22 ruling:
            hide the button until the action is valid again). */""}
       ${a.pb_action === "undo"
         ? html` <button onclick=${undoPb}
@@ -221,9 +224,6 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
             <span class="save-pb-wide">Save as PB</span>
             <span class="save-pb-narrow">Save PB</span>
             ${cardBadge(blockedPb)}</button>`
-        // The row is fine and belongs to another strategy; retagging it with
-        // the picker one cell to the left re-enables the button.
-        : pbGate ? html` ${gateChip(pbGate)}`
         : ""}
       ${a.cleared
         ? html` <button onclick=${restore}>undo</button>`

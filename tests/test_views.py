@@ -2992,18 +2992,20 @@ def test_a_strategy_with_no_pb_of_its_own_reports_none(tmp_path):
     assert sec["pb_by_strat"]["igt"] is None          # this strategy does not
 
 
-def test_a_row_measures_against_its_OWN_strategys_pb(tmp_path):
-    """The delta column must not move when the header dropdown does: a
-    Standard row is never measured against a 3x LJ best. Each row's delta is
-    0 here because each is its own strategy's PB."""
+def test_only_the_active_strategys_rows_carry_a_delta(tmp_path):
+    """A row is measured only when it belongs to the ACTIVE strategy, against
+    that strategy's own PB; a row on any other strategy shows no comparison at
+    all (2026-08-22: "The 0.00s makes no sense, because it cannot logically be
+    compared to the current strategy"). Each active row's delta is 0 here
+    because each is its own strategy's PB."""
     db, svc = make(tmp_path)
     _two_strats(db, svc)
-    for active in ("Standard", "3x LJ"):
+    for active, other in (("Standard", "3x LJ"), ("3x LJ", "Standard")):
         asyncio.run(svc.set_strat(2, 2, active))
         [sec] = build_session_view(db, svc, clock="igt")["stars"]
         deltas = {r["strat_tag"]: r["pb_delta_frames"]
                   for r in sec["attempts"] if r["outcome"] == "success"}
-        assert deltas == {"Standard": 0, "3x LJ": 0}, active
+        assert deltas == {active: 0, other: None}, active
 
 
 def test_each_strategys_pb_row_owns_its_own_undo(tmp_path):
@@ -3020,9 +3022,10 @@ def test_each_strategys_pb_row_owns_its_own_undo(tmp_path):
 
 
 def test_the_action_column_offers_only_the_active_strategys_rows(tmp_path):
-    """Undo on the active strategy's own PB, a printed reason on every other
-    row -- one rule for the whole column. The chip names the strategy, so it
-    can say "3x LJ only" rather than "only"."""
+    """Undo on the active strategy's own PB, a stated reason on every other
+    row -- one rule for the whole column. The browser draws nothing for a
+    strategy reason (2026-08-22); the payload still names it, so the API's
+    refusal and the absent button have one stated cause."""
     db, svc = make(tmp_path)
     fast, slow = _two_strats(db, svc)
     asyncio.run(svc.set_strat(2, 2, "3x LJ"))

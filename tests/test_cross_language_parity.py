@@ -272,42 +272,6 @@ def test_caveat_keys_agree():
         "nobody would look for it.")
 
 
-def test_pb_gate_keys_agree():
-    """The same seam one step over: `caveats.pb_action` can refuse the PB
-    button for a STRATEGY reason rather than a caveat one, and
-    `marks.js::PB_GATES` is what turns that key into the chip printed where
-    the button was. A key only Python knows renders as an EMPTY action cell --
-    no button, no explanation, nothing to hover -- which is the exact failure
-    the printed chip exists to prevent, wearing the fix's own clothes.
-
-    Deliberately separate from CAVEATS rather than folded into it: a caveat
-    says a saved time does not mean what the rank beside it implies, while
-    these say the row is fine and simply is not what you are practising. One
-    vocabulary for two questions is how a badge starts appearing on rows that
-    have nothing wrong with them."""
-    from sm64_events.tracking.pbaction import PB_GATE_REASONS
-
-    js = run_node(
-        declaration(MARKS_JS, "PB_GATES") + "\n"
-        "console.log(JSON.stringify({\n"
-        "  keys: Object.keys(PB_GATES),\n"
-        "  incomplete: Object.entries(PB_GATES).filter(([, g]) =>\n"
-        "    typeof g.tail !== 'function'\n"
-        "    || typeof g.sentence !== 'function'\n"
-        "    || !g.sentence('3x LJ')).map(([k]) => k),\n"
-        "}));")
-    assert sorted(js["keys"]) == sorted(PB_GATE_REASONS), (
-        "the PB-gate vocabulary disagrees across languages.\n"
-        f"  tracking/pbaction.py PB_GATE_REASONS: {sorted(PB_GATE_REASONS)}\n"
-        f"  ui/components/marks.js PB_GATES:     {sorted(js['keys'])}\n"
-        "A key only Python knows leaves the action cell blank; a key only JS "
-        "knows is wording nothing can ever show.")
-    assert not js["incomplete"], (
-        f"PB_GATES entries that do not produce text: {js['incomplete']}. Both "
-        "`text` and `sentence` are functions because one of the two names a "
-        "strategy, and an empty chip is the blank cell again.")
-
-
 # --- 7. the Library page's own rank/frame-rate copies ----------------------
 
 LIBRARYMODEL_JS = UI / "components" / "librarymodel.js"

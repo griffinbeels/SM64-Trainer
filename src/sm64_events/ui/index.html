@@ -283,24 +283,6 @@
   .attempt-actions button.pb-blocked .caveat-chip {
     cursor: not-allowed; margin-left: .3rem;
   }
-  /* The row belongs to ANOTHER strategy, so there is no action to offer and
-     no button to dim -- a chip that PRINTS the reason takes the button's
-     place. Printed rather than left on a tooltip: an explanation that only
-     arrives on hover never arrives (2026-08-02, a control disabled for a real
-     reason that was reported as broken because nobody hovers a dead button).
-     Sized off the button it replaces so the actions column does not reflow as
-     the active strategy changes, and quiet -- it is a state, not a warning. */
-  .attempt-actions .pb-gate {
-    display: inline-flex; align-items: center; white-space: nowrap;
-    margin-left: .3rem; padding: 3px 8px; border-radius: 6px;
-    border: 1px dashed #2c3440; color: #7d8794;
-    font-size: 11px; letter-spacing: .2px; gap: .28em;
-  }
-  /* The NAME prints in full -- same ruling as the header's PB tag
-     (2026-08-22): a name you cannot read is a chip that says nothing. The
-     cell is a table cell, so a long name widens the actions column and the
-     row's other columns give way. */
-  .attempt-actions .pb-gate .pb-gate-strat { color: #98a2ae; }
   /* The mark beside a practice-log row's TIME keeps the glyph and drops the
      word at EVERY width, unlike the objective card's chip which only drops it
      under 793px. Two reasons, and the first is measured: at 1500px the two-

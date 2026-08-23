@@ -367,11 +367,10 @@ def _seed_target(base: str, course_id: int = FIXTURE_COURSE,
     # times. Retagged rather than run under a second strategy because the
     # attempt's tag is stamped at CLOSE time from the then-active strategy,
     # so a retag is the only way to make an EXISTING row foreign.
-    # NOT the PB row and NOT a caveated one: an illegal QUANTITY outranks the
-    # strategy gate (tracking/pbaction.py), so retagging the fixture's deliberate
-    # grab-timed row would draw the grab-timed button and leave the chip
-    # unrendered again -- which is exactly what the first version of this did,
-    # and the contact sheet is what caught it.
+    # NOT the PB row and NOT a caveated one: the fixture's deliberate
+    # grab-timed row is the one that draws the disabled grab-timed button, and
+    # a foreign row draws nothing at all (2026-08-22), so retagging that one
+    # would take the button off the page instead of adding the empty shape.
     foreign = next((row for row in rows[1:] if not row.get("caveat")), None)
     if foreign:
         post(f"/api/attempts/{foreign['id']}/strat",

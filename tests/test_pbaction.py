@@ -49,15 +49,19 @@ def test_every_gate_reason_can_be_drawn():
     assert reasons == set(PB_GATE_REASONS)
 
 
-def test_an_illegal_quantity_outranks_the_strategy_gate():
-    """Retagging a grab-timed row does not make its number legal, so the
-    caveat reason has to survive putting the strategy in play -- otherwise
-    the fix for one bug ("save it under the right strategy") silently reopens
-    the other ("these fake PBs just shouldn't be allowed", 2026-08-02)."""
+def test_the_strategy_gate_is_stated_before_an_illegal_quantity():
+    """A row of another strategy draws NOTHING (2026-08-22), the disabled
+    grab-timed button included, so the strategy reason is the one stated for
+    it. The quantity reason is not lost: the same row, once it is the active
+    strategy's, is still refused -- retagging a grab-timed row never makes
+    its number legal ("these fake PBs just shouldn't be allowed",
+    2026-08-02)."""
     grabbed = replace(BASE, timed_at="grab")
-    assert pb_action(grabbed, "Standard", False) == (
-        None, {"reason": "grab_timed", "strat": None})
     assert pb_action(grabbed, "3x LJ", False) == (
+        None, {"reason": "foreign_strat", "strat": "3x LJ"})
+    assert pb_action(grabbed, None, False) == (
+        None, {"reason": "no_active_strat", "strat": None})
+    assert pb_action(grabbed, "Standard", False) == (
         None, {"reason": "grab_timed", "strat": None})
 
 

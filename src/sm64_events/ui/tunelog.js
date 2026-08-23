@@ -88,12 +88,11 @@ const OPEN_ATTEMPTS = [
   mkAttempt({ outcome: "death", outcome_detail: "fell", igt: "0'14\"02" }),
   mkAttempt({ outcome: "success", igt: "0'25\"77", igt_frames: 773, pb_delta_frames: 100 }),
   mkAttempt({ outcome: "success", igt: "0'23\"90", igt_frames: 717, pb_delta_frames: 44 }),
-  // A row belonging to ANOTHER strategy: no Save button, a printed chip in its
-  // place (2026-08-20). Here because it is the widest thing the actions column
-  // can hold and the only one whose width follows a NAME -- a card cannot be
-  // tuned against a control this page never draws. `pb_delta_frames` is null
-  // on purpose: a row measures against its OWN strategy's PB, and this
-  // strategy holds none.
+  // A row belonging to ANOTHER strategy: no Save button and no delta (his
+  // 2026-08-22 ruling -- nothing of the active strategy's applies to it), so
+  // the actions cell holds only the replay and × controls. Kept on the page
+  // because the card's row heights are tuned against every row shape,
+  // including the one with the emptiest actions cell.
   mkAttempt({ outcome: "success", igt: "0'26\"05", igt_frames: 782,
     strat_tag: "Cannonless", pb_delta_frames: null, pb_action: null,
     pb_blocked: { reason: "foreign_strat", strat: "Standard" } }),

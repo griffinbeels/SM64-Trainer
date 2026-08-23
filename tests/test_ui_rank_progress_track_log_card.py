@@ -194,17 +194,26 @@ ACTION_CELLS = """
     // which is how the first version of this read zero success rows and
     // reported the fixture broken when it was fine.
     const success = rows.filter((tr) => tr.querySelector('.attempt-result.good'));
+    const active = (tr) => {
+      const card = tr.closest('.log-card');
+      const head = card.querySelector('.log-card-strat-picker select');
+      const row = tr.querySelector('.attempt-strategy select');
+      return head && row && head.value === row.value;
+    };
+    const hasAction = (tr) => !!cell(tr).querySelector('button:not(.icon-button)');
     return {
       rows: rows.length,
       successRows: success.length,
-      // A success row must offer something or explain itself. An EMPTY
-      // actions cell (just the replay button) is the shape a fixture takes
-      // when it stops shipping the field the column is drawn from.
-      mute: success.filter((tr) => !cell(tr).querySelector(
-        'button:not(.icon-button), .pb-gate')).length,
+      // A success row on the card's ACTIVE strategy must offer an action
+      // (Save or Undo); one on another strategy must offer NONE (2026-08-22).
+      // An EMPTY actions cell on an active-strategy row is the shape a
+      // fixture takes when it stops shipping the field the column is drawn
+      // from.
+      mute: success.filter((tr) => active(tr) && !hasAction(tr)).length,
+      leaking: success.filter((tr) => !active(tr) && hasAction(tr)).length,
+      foreign: success.filter((tr) => !active(tr)).length,
       saves: document.querySelectorAll('.log-card .attempt-actions button.pb-glow, '
         + '.log-card .attempt-actions button:not(.icon-button)').length,
-      gates: document.querySelectorAll('.log-card .attempt-actions .pb-gate').length,
       pbTags: [...new Set(Array.from(document.querySelectorAll('.log-card .pbtag'))
         .map((t) => t.textContent.trim()))],
     };
@@ -221,18 +230,21 @@ def test_the_tuning_fixture_draws_a_real_actions_column(tunelog_demo):
     goes red: no assertion in this suite reads that column, by the standing
     rule that no test may pin a tuning page's CONTENTS.
 
-    So this pins COHERENCE, not contents: every success row either offers an
-    action or prints why it cannot, and both halves of the new column -- a
-    live button and a strategy gate chip -- appear at least once."""
+    So this pins COHERENCE, not contents: every success row on the card's
+    active strategy offers an action, every success row on another strategy
+    offers none (his 2026-08-22 ruling), and the page holds at least one of
+    each so both row shapes are tuned against."""
     state = tunelog_demo.evaluate(ACTION_CELLS)
     assert state["successRows"] >= 3, state
     assert state["mute"] == 0, (
-        "success rows with an empty actions cell -- tunelog.js is not shipping "
-        "pb_action/pb_blocked", state)
-    assert state["gates"] >= 1, (
-        "no strategy-gate chip anywhere on the tuning page: its widest, "
-        "name-driven control cannot be tuned against a page that never draws "
-        "it", state)
+        "active-strategy success rows with an empty actions cell -- tunelog.js "
+        "is not shipping pb_action/pb_blocked", state)
+    assert state["leaking"] == 0, (
+        "a row on another strategy offers a PB action", state)
+    assert state["foreign"] >= 1, (
+        "no other-strategy row anywhere on the tuning page: the emptiest "
+        "actions cell cannot be tuned against a page that never draws it",
+        state)
 
 
 def test_the_tuning_fixture_draws_every_pb_tag_state(tunelog_demo):

@@ -180,16 +180,19 @@ def _pb_row_json(row, attempt_by_id, igt_seen):
 
 def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
                   pbs_by_strat=None, active_strat=None):
-    # The PB this row is MEASURED against is its own strategy's, never the
-    # entity-wide one and never the active strategy's (2026-08-15: "we
-    # maintain different PBs per strategy, and they should all be maintained
-    # separately"). Two consequences, both wanted: the delta column does not
-    # move when the header dropdown changes, and a Standard row is never
-    # measured against a 3x LJ best. A row with no strat_tag belongs to no
-    # ladder, so it has no PB to be compared with and shows no delta. The
-    # unassigned list passes no map at all: its rows have no entity.
+    # A row is MEASURED only when it belongs to the ACTIVE strategy, and then
+    # against that strategy's own PB -- never the entity-wide one. A row on
+    # any other strategy shows no delta at all (his ruling, 2026-08-22: "the
+    # other-strategy entries should not have a time comparison. The 0.00s
+    # makes no sense, because it cannot logically be compared to the current
+    # strategy"). The first version measured every row against its OWN
+    # strategy's PB so the column would not move with the dropdown; it did
+    # not move, and a Leftside row under a Rightside heading read 0.00s for
+    # being Leftside's own PB, which is the comparison he rejected. A row
+    # with no strat_tag belongs to no ladder and shows nothing either; the
+    # unassigned list passes no map at all, since its rows have no entity.
     pb = None
-    if pbs_by_strat is not None and a.strat_tag:
+    if pbs_by_strat is not None and a.strat_tag and a.strat_tag == active_strat:
         pb = pbs_by_strat.get(
             ("segment", a.segment_id, clock, a.strat_tag)
             if a.segment_id is not None
