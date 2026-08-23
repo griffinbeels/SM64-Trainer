@@ -74,11 +74,16 @@ def test_the_sheet_door_lands_a_runners_column_from_the_snapshot(tmp_path):
             "runner": "DentoriousRed", "refresh": False}).json()
         assert payload["found"] == 14
         assert payload["imported"] == 14
-        # One row per KIND dropped, the same `{line, text, reason}` shape
-        # every door answers with; a kind with nothing dropped has no row.
+        # One row per dropped ENTRY, named, in the same `{line, text, reason}`
+        # shape every door answers with -- he reviews these by name (round 3).
+        # `line` 0: a sheet cell has no line to point at.
         assert payload["rejected"] == [
-            {"line": 0, "text": "1 no_entity", "reason": "no_entity"},
-            {"line": 0, "text": "2 segments", "reason": "segments"}]
+            {"line": 0, "reason": "segments",
+             "text": "Bowser in the Fire Sea Course — No pole glitch — 0'39\"43"},
+            {"line": 0, "reason": "segments",
+             "text": "Bowser in the Sky Course — 0'48\"00"},
+            {"line": 0, "reason": "no_entity",
+             "text": "CCM wooden door - Enter BitDW (LBLJ) — 0'09\"23"}]
         assert payload["sheet_revision"]
         assert all(row["imported_from"] == "sheet:DentoriousRed"
                    for row in db.pbs())

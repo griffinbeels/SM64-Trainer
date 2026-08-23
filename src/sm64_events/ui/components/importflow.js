@@ -30,8 +30,22 @@ export const REASONS = {
   segments: "rows mapped to a movement, which needs one of yours",
 };
 
-// How many rejected rows are drawn before "…and N more".
-const REJECTS_SHOWN = 12;
+// Every rejected row is drawn, under the sentence for its reason. There was a
+// cap of 12 with an "…and N more" until round 3 (2026-08-23): a sheet column
+// drops 30-odd rows, and those are exactly the ones he reviews ("show all the
+// things that failed as a list"). The list scrolls past its own height.
+export function groupRejects(rejected) {
+  const groups = [];
+  for (const row of rejected) {
+    let group = groups.find((candidate) => candidate.reason === row.reason);
+    if (!group) {
+      group = { reason: row.reason, rows: [] };
+      groups.push(group);
+    }
+    group.rows.push(row);
+  }
+  return groups;
+}
 
 function plural(count, noun) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -135,17 +149,19 @@ export function ImportOutcome({ flow, noun = "time", rowNoun = "line" }) {
     ${rejected.length > 0 && html`<div class="importdoor-rejects">
       <p class="settings-note is-bad">${plural(rejected.length, rowNoun)}${" "}
         could not be used:</p>
-      <ul>
-        ${rejected.slice(0, REJECTS_SHOWN).map((row, index) => html`<li
-            key=${`${row.line}-${index}`}>
-          ${row.line > 0 && html`<span class="importdoor-lineno">${
-            row.line}</span>`}
-          <code>${row.text}</code>
-          <span class="meta">${REASONS[row.reason] || row.reason}</span>
-        </li>`)}
-      </ul>
-      ${rejected.length > REJECTS_SHOWN && html`<p class="settings-note">…and${
-        " "}${rejected.length - REJECTS_SHOWN} more.</p>`}
+      ${groupRejects(rejected).map((group) => html`<div
+          class="importdoor-reject-group" key=${group.reason}>
+        <p class="meta importdoor-reject-reason">${
+          REASONS[group.reason] || group.reason} (${group.rows.length})</p>
+        <ul>
+          ${group.rows.map((row, index) => html`<li
+              key=${`${row.line}-${index}`}>
+            ${row.line > 0 && html`<span class="importdoor-lineno">${
+              row.line}</span>`}
+            <code>${row.text}</code>
+          </li>`)}
+        </ul>
+      </div>`)}
     </div>`}
     ${phase === "error" && html`<p class="settings-note is-bad">${error}</p>`}
     ${/* The undo for the gesture just made. A delete route with nothing

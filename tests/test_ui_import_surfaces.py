@@ -7,9 +7,10 @@ mutation-proved by pointing their mount at nothing and watching them go red.
 Deliberately NOT tested here: the live sheet download. It is 7 MB over the
 network and belongs to a document nobody here controls — the failure path is
 covered by `tests/test_import_api.py`, which fakes the three ways a fetch can
-fail, and the snapshot path is covered there end to end. The LINK door's fetch
-is replaced in the SERVER instead (the fixture runs in-process), so what is
-driven there is the panel rather than Google.
+fail, and the snapshot path is covered there end to end. Both doors' fetches
+are replaced in the SERVER instead (the fixture runs in-process) — the link
+door's `_fetch_bytes`, the sheet door's `LibraryStore.refresh` — so what is
+driven here is the panel rather than Google.
 """
 import sys
 from pathlib import Path
@@ -250,6 +251,72 @@ def test_the_sheet_picker_fills_from_the_bundled_snapshot(tmp_path):
                 "448 names with no filter box is the shape he ruled against")
             assert menu["hasDentorious"], (
                 "the runner this feature was built for is not in the list")
+
+
+def test_the_sheet_door_lists_every_dropped_row_by_name_under_its_reason(
+        tmp_path, monkeypatch):
+    """Round 3 (2026-08-23): "it makes more sense to just show all the things
+    that failed as a list". The tally it replaced said "3 rows can't be used"
+    and then "23 no_entity" -- counting KINDS where the sentence promised ROWS.
+
+    The live download is replaced in the SERVER (the fixture runs in-process),
+    so the door reads the bundled snapshot and what is driven is the panel.
+    DentoriousRed drops 3 rows in 2 reasons; the texts are the ones
+    `tests/test_import_runner.py` pins."""
+    from sm64_events.library.store import LibraryStore
+    monkeypatch.setattr(LibraryStore, "refresh",
+                        lambda self, fetch_fn, overrides=None: {})
+
+    with serve_ui(tmp_path / "sheetdoor.db") as base:
+        with driver.get_driver().launch(headless=True) as page:
+            page.goto(base)
+            assert wait(page, ".practice-page")
+            settle(page, 1500)
+            assert page.evaluate(OPEN_SETTINGS)
+            assert wait(page, ".importsection")
+            open_door(page, "Ultimate Sheet")
+            assert wait(page, ".importsheet .search-select-trigger")
+            settle(page, 500)
+            page.evaluate("document.querySelector("
+                          "'.importsheet .search-select-trigger').click()")
+            assert wait(page, ".importsheet .search-menu")
+            settle(page)
+            assert page.evaluate("""
+              (() => {
+                const pick = [...document.querySelectorAll(
+                  '.importsheet .search-menu-option')]
+                  .find((o) => o.textContent.trim() === 'DentoriousRed');
+                if (pick) pick.click();
+                return !!pick;
+              })()
+            """), "DentoriousRed is not in the runner list"
+            settle(page, 300)
+            page.evaluate(
+                "document.querySelector('.importsheet .primary-button').click()")
+            assert wait(page, ".importsheet .importdoor-rejects")
+            settle(page, 500)
+            drawn = page.evaluate("""
+              (() => {
+                const box = document.querySelector('.importsheet .importdoor-rejects');
+                return {
+                  heading: box.querySelector('.settings-note').textContent.trim(),
+                  groups: [...box.querySelectorAll('.importdoor-reject-group')].map(
+                    (g) => ({reason: g.querySelector('.importdoor-reject-reason')
+                                        .textContent.trim(),
+                             rows: [...g.querySelectorAll('li code')]
+                                     .map((c) => c.textContent)})),
+                };
+              })()
+            """)
+            assert drawn["heading"].startswith("3 rows"), drawn
+            assert [g["reason"] for g in drawn["groups"]] == [
+                "rows mapped to a movement, which needs one of yours (2)",
+                "rows the trainer has no target for (1)"], drawn
+            assert drawn["groups"][0]["rows"] == [
+                "Bowser in the Fire Sea Course — No pole glitch — 0'39\"43",
+                "Bowser in the Sky Course — 0'48\"00"], drawn
+            assert drawn["groups"][1]["rows"] == [
+                "CCM wooden door - Enter BitDW (LBLJ) — 0'09\"23"], drawn
 
 
 def test_a_sheet_link_reads_previews_and_names_the_rows_that_did_not_land(

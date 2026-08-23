@@ -1018,10 +1018,14 @@
      these are importdoor-* classes rather than one door's name. */
   .importdoor-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:6px}
   .importdoor-undo{display:inline-flex;align-items:center;justify-content:flex-start;gap:5px;margin-top:2px}
-  /* The lines it could not read. He has to be able to FIND them, so each
-     keeps its own number and its own text rather than being counted away. */
-  .importdoor-rejects ul{list-style:none;margin:4px 0 0;padding:0;
-    max-height:180px;overflow-y:auto}
+  /* The rows it could not use, every one of them, grouped under the sentence
+     for its reason. He has to be able to REVIEW them (a sheet column drops
+     30-odd), so each keeps its own text rather than being counted away; the
+     whole list scrolls past its own height rather than the drawer growing. */
+  .importdoor-rejects{max-height:320px;overflow-y:auto}
+  .importdoor-reject-group{margin-top:6px}
+  .importdoor-reject-reason{margin:0}
+  .importdoor-rejects ul{list-style:none;margin:2px 0 0;padding:0 0 0 10px}
   .importdoor-rejects li{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;
     padding:2px 0;font-size:12px}
   .importdoor-rejects code{color:#e6e9ee;white-space:pre-wrap;word-break:break-word}

@@ -64,17 +64,6 @@ def _rows(unresolved) -> list[dict]:
     return [asdict(item) for item in unresolved]
 
 
-def _tally_rows(dropped: dict) -> list[dict]:
-    """The same shape from a COUNT per kind.
-
-    The Ultimate Sheet reader counts its drops rather than naming rows
-    (`library/import_runner.py`), so each kind becomes one row and `line` 0
-    says there is no line to point at. Inventing a row apiece would be
-    reporting detail that path does not have."""
-    return [{"line": 0, "text": f"{count} {kind}", "reason": kind}
-            for kind, count in sorted(dropped.items()) if count]
-
-
 @contextmanager
 def _service_refusals():
     """The service's two refusals as HTTP answers: a candidate it cannot file
@@ -207,7 +196,7 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
                      "runner's column to take")
         payload = build(data, _now_iso(), overrides)
         candidates, dropped = candidates_for(payload, body.runner)
-        return await finish(LINK_SOURCE, candidates, _tally_rows(dropped),
+        return await finish(LINK_SOURCE, candidates, dropped,
                             body.dry_run, shape="ultimate")
 
     @router.delete("/{source:path}")
@@ -247,8 +236,8 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
                     raise HTTPException(
                         503, f"could not read the sheet: {err}") from err
             candidates, dropped = candidates_for(library.payload, body.runner)
-            return await finish(f"sheet:{body.runner}", candidates,
-                                _tally_rows(dropped), dry_run=False,
+            return await finish(f"sheet:{body.runner}", candidates, dropped,
+                                dry_run=False,
                                 sheet_revision=library.revision)
 
     return router
