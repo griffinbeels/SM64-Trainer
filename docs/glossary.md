@@ -737,7 +737,10 @@ draws, pointed at their [[runner rating]] instead of yours, and the same
 breakdown table with its last three columns widened for comparison: their
 time, your time, and the gap between the two — it keeps [[rank]] on each
 entity the same as your own tab's. No control on it can change anything —
-no excluding an entity, no repointing an icon.
+no excluding an entity, no repointing an icon. Its one door out: a lit
+coverage tile, or an entity's name in the breakdown, opens the [[Library
+tab]] on that entity landed on this [[runner]]'s own [[sheet entry]] for
+it, and the [[Rank tab]] afterwards returns to the same page.
 
 - **Lives** — the page
   (`src/sm64_events/ui/components/runnerpage.js`), reached from

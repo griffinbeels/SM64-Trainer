@@ -590,8 +590,14 @@ function runnerGapTitle(entity) {
 // their time, your time and the gap between the two. One table, one named
 // difference, never a second implementation of the shell around it: both
 // variants share everything except these last columns and the Ignore
-// control.
-export function Breakdown({ data, routeOrder, onToggle, variant = "yours" }) {
+// control. `onOpenEntity(entity)` (runner variant only, 2026-08-22): the
+// entity's NAME becomes a door onto that runner's entry in the Library for
+// every row the runner has a time on -- his first read: "click the name of
+// any of the entities and be brought immediately to the library page for
+// that entity, focused specifically on this player's entry". A row with no
+// time has no entry to land on and stays plain text.
+export function Breakdown({ data, routeOrder, onToggle, variant = "yours",
+                            onOpenEntity = null }) {
   const isRunner = variant === "runner";
   const [byGain, setByGain] = useState(!routeOrder);
   const rows = byGain
@@ -619,7 +625,11 @@ export function Breakdown({ data, routeOrder, onToggle, variant = "yours" }) {
       ${rows.map((entity) => html`<tr class=${[
           entity.score == null ? "unpracticed" : "",
           entity.excluded ? "is-excluded" : ""].filter(Boolean).join(" ")}>
-        <td class="rank-cell-name">${entity.label}</td>
+        <td class="rank-cell-name">${onOpenEntity && entity.time_cs != null
+          ? html`<button type="button" class="rank-entity-link"
+              title=${`Open ${data.runner}'s entry for this in the Library`}
+              onclick=${() => onOpenEntity(entity)}>${entity.label}</button>`
+          : entity.label}</td>
         <td>${entity.tier
           ? html`<${RankIcon} tier=${entity.tier} division=${entity.division} size=${30} />`
           : "–"}</td>
@@ -701,29 +711,34 @@ export function ScopeChips({ activeScopeId, onPick, refreshKey, source = "/api/m
 // what makes a coverage row readable as "these, not those" at a glance
 // (round 8). Never two components that happen to look alike — the split
 // rank banners were exactly that mistake one card over.
-// `onToggle` is optional like `onEdit`: omitting it renders a STATIC tile
-// (`.is-static` -- no `aria-expanded`, no focus stop, no pointer cursor, no
-// hover), never a tile whose click silently does nothing. Presence of the
-// callback is the one gate; `CoverageStrip`'s `readOnly` is what omits it.
-function EntityTile({ t, entity, size = 42, open, onToggle, onEdit }) {
+// A tile's click is ONE of two things, or nothing: `onToggle` expands the
+// detail panel under the strip (your own Rank tab; carries `aria-expanded`),
+// `onOpen` is a DOOR elsewhere (the [[Runner page]]'s tiles open that
+// runner's entry in the Library; no aria-expanded, the title names the
+// destination). Omitting both renders a STATIC tile (`.is-static` -- no
+// focus stop, no pointer cursor, no hover), never a tile whose click
+// silently does nothing. `onEdit` (the ✎) is optional the same way.
+function EntityTile({ t, entity, size = 42, open, onToggle, onOpen, onEdit }) {
   const fallbackSlot = fallbackSlotForEntityKey(entity.key);
   const iconSrc = entityIconSrc(t, entity.key);
   const practiced = entity.score != null;
+  const onClick = onToggle || onOpen || null;
   // Enter/Space on the ✎ must not also fire the tile's own click.
   const editKey = (keyEvent) => {
     if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
     keyEvent.preventDefault(); keyEvent.stopPropagation(); onEdit();
   };
   return html`<button type="button"
-      class="entity-tile ${open ? "is-open" : ""} ${practiced ? "" : "is-unpracticed"} ${onToggle ? "" : "is-static"}"
+      class="entity-tile ${open ? "is-open" : ""} ${practiced ? "" : "is-unpracticed"} ${onClick ? "" : "is-static"}"
       style=${`--tile-size:${size}px;`
         + (practiced ? `--tier-tint:${rankColor(entity.tier)}` : "")}
-      onclick=${onToggle || null}
+      onclick=${onClick}
       aria-expanded=${onToggle ? (open ? "true" : "false") : null}
-      tabindex=${onToggle ? null : "-1"}
-      title=${practiced
+      tabindex=${onClick ? null : "-1"}
+      title=${(practiced
         ? `${entity.label} — ${capName(entity.tier)} ${divisionDigit(entity.division)} · ${fmtPoints(entity.score)} pts`
-        : `${entity.label} — not practiced yet`}>
+        : `${entity.label} — not practiced yet`)
+        + (onOpen ? " · open their entry in the Library" : "")}>
     <img class="entity-tile-icon ${isGenericArt(iconSrc) ? "" : "courseicon"}" src=${iconSrc}
          onerror=${(event) => fallbackToGenericStar(event, fallbackSlot)}
          alt="" draggable="false" />
@@ -840,17 +855,21 @@ const COVERAGE_TILE_PX = 42;
 // unpracticed entry that panel is just "Practice this", which is the
 // obvious next move from a dim tile.
 //
-// `readOnly` (the [[Runner page]], runnerpage.js): tiles draw but do
-// nothing -- no ✎ (repointing someone else's icon is not a thing to offer)
-// and no click into `EntityDetail`, which reads `t.view`, the VIEWING user's
-// own attempts and PB; on a runner's page that panel printed the runner's
-// score beside the viewer's PB with nothing saying whose was whose
-// (reproduced live, task 5 review). The breakdown below already answers
-// that comparison with both times labelled. A tile with no `onToggle`
-// renders as `.is-static` (no cursor, no hover, no focus stop) so it never
-// LOOKS clickable -- acceptance.md's dead-control rule. The icon picker is
-// still instantiated (rules of hooks); it just never opens.
-export function CoverageStrip({ t, data, caption, readOnly = false }) {
+// `readOnly` (the [[Runner page]], runnerpage.js): no ✎ (repointing
+// someone else's icon is not a thing to offer) and no click into
+// `EntityDetail`, which reads `t.view`, the VIEWING user's own attempts and
+// PB; on a runner's page that panel printed the runner's score beside the
+// viewer's PB with nothing saying whose was whose (reproduced live, task 5
+// review). The icon picker is still instantiated (rules of hooks); it just
+// never opens.
+//
+// `onOpenEntity(entity)` (2026-08-22, his first read of the runner page: "I
+// should be able to click on any of the icons within the Coverage list and
+// jump straight to their Library entry for that specific time"): a DOOR
+// for a tile the runner has a time on -- `entity.time_cs != null` -- which
+// is a different click from the detail panel and stands on its own. A tile
+// with no time has no entry to land on and stays `.is-static`.
+export function CoverageStrip({ t, data, caption, readOnly = false, onOpenEntity = null }) {
   const [openKey, setOpenKey] = useState(null);
   // ONE icon picker for the whole strip, hoisted out of the tiles for the
   // same reason the banner hoists its own: a click inside the modal must
@@ -867,6 +886,8 @@ export function CoverageStrip({ t, data, caption, readOnly = false }) {
         entity=${entity} size=${COVERAGE_TILE_PX} open=${entity.key === openKey}
         onToggle=${readOnly ? undefined
           : () => setOpenKey(entity.key === openKey ? null : entity.key)}
+        onOpen=${onOpenEntity && entity.time_cs != null
+          ? () => onOpenEntity(entity) : undefined}
         onEdit=${readOnly ? undefined
           : () => setPicking(iconIdentityForKey(entity.key))} />`)}
     </div>

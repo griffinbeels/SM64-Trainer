@@ -275,7 +275,8 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd,
     </div>`;
   }
 
-  return html`<div class="library-example" data-video=${entry.video}>
+  return html`<div class="library-example" data-video=${entry.video}
+      data-runner=${entry.runner} data-time-cs=${entry.time_cs}>
     <div class="library-example-media ${canEmbed ? "is-clickable" : ""}"
         onclick=${canEmbed && playing ? () => setPlaying(false) : null}
         title=${canEmbed ? (playing ? "Close" : "Play inline") : ""}>
@@ -324,7 +325,7 @@ function RunnerName({ entry, className, onOpenRunner }) {
 // subdivision), never a video card. No "+" -- the tray imports videos, and a
 // row with nothing to import must not offer the gesture.
 function PlainEntry({ entry, tier, division, onOpenRunner }) {
-  return html`<span class="library-plain-entry">
+  return html`<span class="library-plain-entry" data-runner=${entry.runner} data-time-cs=${entry.time_cs}>
     ${tier ? html`<span class="rank-icon-slot" style="--icon-size: 15px">
       <${RankIcon} tier=${tier} division=${division} size=${15} /></span>` : ""}
     <${RunnerName} entry=${entry} className="library-plain-runner" onOpenRunner=${onOpenRunner} />
@@ -953,6 +954,7 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
 export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us",
                                onAdd, trayKeys, focusStrat, focusTier,
                                focusDivision = null, focusEntryUrl = null,
+                               focusRunner = null, focusTimeCs = null,
                                focusRow = null,
                                fallbackLabel = null, onRelink = () => {},
                                resolveEntityLabel = null, onOpenRunner = null }) {
@@ -1226,10 +1228,33 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
   const [focusMark, setFocusMark] = useState(null);
   const rootRef = useRef(null);
   useEffect(() => {
-    if (!focusStrat) return undefined;
-    const focusId = `${pageIdentity}::${focusStrat}::${focusTier || ""}`
-      + `::${focusDivision || ""}::${focusEntryUrl || ""}`;
+    if (!focusStrat && !focusRunner) return undefined;
+    const focusId = `${pageIdentity}::${focusStrat || ""}::${focusTier || ""}`
+      + `::${focusDivision || ""}::${focusEntryUrl || ""}`
+      + `::${focusRunner || ""}::${focusTimeCs ?? ""}`;
     if (consumedFocusRef.current === focusId) return undefined;
+    // A RUNNER focus (2026-08-22, the [[Runner page]]'s door): the entry is
+    // the one the breakdown GRADED -- the runner's best visible time on this
+    // entity -- named by runner + time_cs rather than by strategy. The
+    // approach that holds it is found here, not trusted from the caller:
+    // `visibleEntriesFor` is the same mode filter `ratings.py` grades by,
+    // and the exact time wins; if the mode filter hides it (a JP-only entry
+    // viewed in US mode), the runner's fastest VISIBLE time stands in.
+    let runnerEntry = null;
+    if (focusRunner) {
+      for (const approach of approaches) {
+        for (const entry of visibleEntriesFor(approach, version)) {
+          if (entry.runner !== focusRunner) continue;
+          const exact = entry.time_cs === focusTimeCs;
+          if (!runnerEntry || exact || (!runnerEntry.exact
+                && entry.time_cs < runnerEntry.entry.time_cs)) {
+            runnerEntry = { approach, entry, exact };
+          }
+          if (exact) break;
+        }
+        if (runnerEntry && runnerEntry.exact) break;
+      }
+    }
     // `approaches.find` here still resolves by NAME alone and can still land
     // on the first of two sibling sections that share one `matched_strategy`
     // (the 100-coin case, caveat 4) — that is not this fix's bug to close:
@@ -1237,7 +1262,7 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
     // design ("your rank on a strategy is the same fact wherever it
     // appears"), so a strategy-named link has no third piece of information
     // to disambiguate WHICH sibling with, and landing on either is correct.
-    const hit = approaches.find((approach) =>
+    const hit = runnerEntry ? runnerEntry.approach : approaches.find((approach) =>
       approach.matched_strategy === focusStrat || approach.name === focusStrat);
     if (!hit) return undefined;  // approaches not loaded yet -- stay
                                   // unconsumed, try again next render
@@ -1253,16 +1278,15 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
     // intent's tier/division survive only as the fallback when the URL
     // matches no entry (a vetted-only example, a JP-filtered one).
     let mark = null;
-    if (focusEntryUrl) {
-      const entry = (hit.entries || []).find(
-        (one) => one.video === focusEntryUrl);
-      if (entry) {
-        const ladder = hit.ladder || {};
-        const tier = bandFor(ladder, entry.time_cs);
-        mark = { approachId: approachIdentity(hit), tier,
-                 division: divisionWithin(ladderCsOf(ladder), tier, entry.time_cs),
-                 entryUrl: focusEntryUrl };
-      }
+    const landedEntry = runnerEntry ? runnerEntry.entry
+      : focusEntryUrl ? (hit.entries || []).find((one) => one.video === focusEntryUrl)
+      : null;
+    if (landedEntry) {
+      const ladder = hit.ladder || {};
+      const tier = bandFor(ladder, landedEntry.time_cs);
+      mark = { approachId: approachIdentity(hit), tier,
+               division: divisionWithin(ladderCsOf(ladder), tier, landedEntry.time_cs),
+               entryUrl: focusEntryUrl || null };
     }
     if (!mark && focusTier && focusDivision) {
       mark = { approachId: approachIdentity(hit), tier: focusTier,
@@ -1285,17 +1309,21 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
     // band scroll above has already landed somewhere honest.
     const helloTimer = setTimeout(() => {
       const root = rootRef.current;
-      const card = root && focusEntryUrl
-        ? root.querySelector(`[data-video="${CSS.escape(focusEntryUrl)}"]`)
-        : null;
+      const card = !root ? null
+        : landedEntry && runnerEntry
+          ? root.querySelector(`[data-runner="${CSS.escape(landedEntry.runner)}"]`
+              + `[data-time-cs="${landedEntry.time_cs}"]`)
+          : focusEntryUrl
+            ? root.querySelector(`[data-video="${CSS.escape(focusEntryUrl)}"]`)
+            : null;
       if (!card) return;
       card.scrollIntoView({ block: "center", behavior: "smooth" });
       card.classList.add("library-arrival");
       setTimeout(() => card.classList.remove("library-arrival"), 2200);
     }, 550);
     return () => { clearTimeout(timer); clearTimeout(helloTimer); };
-  }, [focusStrat, focusTier, focusDivision, focusEntryUrl, approaches,
-      pageIdentity]);
+  }, [focusStrat, focusTier, focusDivision, focusEntryUrl, focusRunner,
+      focusTimeCs, approaches, pageIdentity, version]);
 
   const iconSrc = entityKey ? entityIconSrc(t, entityKey) : genericStarSrc();
   const activeStratInfo = activeStrat ? stratByName[activeStrat] : null;

@@ -210,7 +210,11 @@ function App() {
   // and a runner's name inside the Library (a DIFFERENT tab) -- and the
   // second door has to reach across tabs the same way `libraryIntent` does.
   // `setTab` below clears it on any navigation away from "Rank", so a stale
-  // pick can never survive into a later, ordinary visit to the Rank tab.
+  // pick can never survive into a later, ordinary visit to the Rank tab --
+  // with ONE exception (2026-08-22): a trip into the Library taken through
+  // the runner page's own door (a tile or an entity name, carrying that
+  // runner's entry) keeps the page, so the Rank tab brings him back to the
+  // runner he left, not to the board.
   const [openRunnerName, setOpenRunnerName] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -220,8 +224,8 @@ function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [moreOpen]);
-  const setTab = (name) => {
-    if (name !== "Rank") setOpenRunnerName(null);
+  const setTab = (name, { keepRunner = false } = {}) => {
+    if (name !== "Rank" && !keepRunner) setOpenRunnerName(null);
     setTabState(name); setMoreOpen(false);
   };
   // The Library's own door onto a runner's page (task 5) -- sets the tab
@@ -234,7 +238,10 @@ function App() {
   // now the PUBLIC one every outside caller keeps using, and it means
   // something different: see below.
   const enterCompare = (intent) => { setCompareIntent(intent); setTab("Compare"); };
-  const openLibrary = (intent) => { setLibraryIntent(intent); setTab("Library"); };
+  const openLibrary = (intent) => {
+    setLibraryIntent(intent);
+    setTab("Library", { keepRunner: !!intent.runner });
+  };
   // Task 6: Compare's own nav entry is gone (the Library absorbed it), so
   // every caller that used to open the Compare tab directly -- today that is
   // only attemptlog.js's per-attempt "Compare" button, threaded down
@@ -279,7 +286,7 @@ function App() {
           : tab === "Run" ? html`<div class="view-pane"><${Run} t=${t} /></div>`
           : tab === "Rank" ? html`<div class="view-pane">${openRunnerName
               ? html`<${RunnerPage} t=${t} runnerName=${openRunnerName}
-                  onClose=${() => setOpenRunnerName(null)} />`
+                  onClose=${() => setOpenRunnerName(null)} openLibrary=${openLibrary} />`
               : html`<${RankPage} t=${t} onOpenRunner=${setOpenRunnerName} />`}</div>`
           : tab === "Live feed" ? html`<div class="view-pane"><${Feed} t=${t} /></div>`
           : null}

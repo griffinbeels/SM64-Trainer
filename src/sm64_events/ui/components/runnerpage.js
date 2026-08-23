@@ -8,7 +8,11 @@
 // history curve (the sheet holds one time per row, no series to plot) and no
 // Leaderboard card (that is where you arrived FROM). Read-only throughout:
 // CoverageStrip is `readOnly` (no ✎, no detail panel) and Breakdown's
-// `variant="runner"` carries no Ignore button.
+// `variant="runner"` carries no Ignore button. Its one outward door (his
+// first read, 2026-08-22): a lit coverage tile or an entity's name in the
+// breakdown opens the Library on that entity, landed on THIS runner's
+// graded entry -- `openLibrary`'s `{kind:"target", entity, runner, timeCs}`
+// intent, the same door the standards table's time links use.
 import { h, Fragment } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
@@ -21,7 +25,7 @@ import { Breakdown, CoverageStrip, ScopeChips } from "./rankpage.js";
 
 const html = htm.bind(h);
 
-export function RunnerPage({ t, runnerName, onClose }) {
+export function RunnerPage({ t, runnerName, onClose, openLibrary = () => {} }) {
   const [scopeId, setScopeId] = useState(null);
   const [scopesErr, setScopesErr] = useState(null);
   const [data, setData] = useState(null);
@@ -56,6 +60,8 @@ export function RunnerPage({ t, runnerName, onClose }) {
       title=${`Loading ${runnerName}'s ranks`} message=${scopesErr ? scopesErr.message : undefined} />`;
 
   const routeOrder = scopeId.startsWith("route:");
+  const openEntity = (entity) => openLibrary({
+    kind: "target", entity: entity.key, runner: runnerName, timeCs: entity.time_cs });
 
   return html`<div class="rank-page runner-page">
     <button type="button" class="entity-back" onclick=${onClose}>
@@ -87,12 +93,15 @@ export function RunnerPage({ t, runnerName, onClose }) {
         : html`<${Fragment}>
             <div class="practice-card">
               <div class="rank-factor">Coverage <${CoverageStrip} t=${t} data=${data} readOnly
+                onOpenEntity=${openEntity}
                 caption=${`${data.practiced} of ${data.n} rated `
                   + `${data.n === 1 ? "entry" : "entries"} ${runnerName} has practiced — `
-                  + "dim tiles are the ones they have not run yet."} /></div>
+                  + "dim tiles are the ones they have not run yet; a lit tile opens "
+                  + "their entry in the Library."} /></div>
             </div>
             <div class="practice-card">
-              <${Breakdown} key=${scopeId} data=${data} routeOrder=${routeOrder} variant="runner" />
+              <${Breakdown} key=${scopeId} data=${data} routeOrder=${routeOrder} variant="runner"
+                onOpenEntity=${openEntity} />
             </div>
           <//>`}
   </div>`;

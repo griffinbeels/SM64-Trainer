@@ -107,9 +107,12 @@ def assert_reads_as_the_runner_page(page, expected_name):
 
 def assert_no_editing_controls_on_the_runner_page(page):
     """Read-only, contract-mandated: no Ignore/Include control, no ✎ icon-
-    repoint affordance, anywhere on the runner page."""
+    repoint affordance, anywhere on the runner page. The entity-name DOORS
+    (`.rank-entity-link`, round 1) are buttons too, but they change nothing
+    -- they navigate -- so the count excludes exactly that class."""
     ignore_buttons = page.evaluate(
-        "document.querySelectorAll('.runner-page .rank-breakdown tbody button').length")
+        "document.querySelectorAll('.runner-page .rank-breakdown tbody "
+        "button:not(.rank-entity-link)').length")
     assert ignore_buttons == 0, (
         f"found {ignore_buttons} button(s) in the runner page's breakdown rows "
         "-- the runner variant must carry no Ignore/Include control")
@@ -152,13 +155,18 @@ def test_back_returns_to_the_leaderboard(rank_page):
     assert rank_page.count(".runner-page") == 0, "the runner page never closed"
 
 
-# ---- Fix round 1: the coverage tile must not mix two people's numbers -----
-# CoverageStrip's EntityDetail panel reads t.view -- the VIEWING user's own
-# attempts/PB -- never the runner's. A lit tile on the runner page must not
-# open it: EntityDetail would print the runner's MARELO beside the reader's
-# own PB with nothing saying whose was whose (reviewer's live repro,
-# darkdog47: "9575 pts · PB 0'11\"43", where 9575 is the runner's score and
-# 11"43 is the reviewer's own PB).
+# ---- The runner page's own door into the Library (round 1, 2026-08-22) ----
+# His first read: "I should be able to click on any of the icons within the
+# Coverage list and jump straight to their Library entry for that specific
+# time", and "click the name of any of the entities and be brought
+# immediately to the library page for that entity, focused specifically on
+# this player's entry". Both fire the SAME intent ({kind:"target", entity,
+# runner, timeCs}); the Library's arrival effect finds the approach holding
+# that runner's time and blinks the exact entry (`.library-arrival`, now
+# carrying `data-runner`/`data-time-cs` on plain rows too, since most entries
+# have no video). A tile the runner never ran has no entry to land on and
+# stays the dead control fix round 1 made it -- that half of the contract is
+# unchanged and still guarded below.
 
 def click_a_lit_tile(page, scope_selector):
     """Click the first PRACTICED (non-`.is-unpracticed`) coverage tile inside
@@ -194,32 +202,76 @@ def force_pseudo_state(page, selector, classes):
     cdp.send("CSS.forcePseudoState", {"nodeId": node, "forcedPseudoClasses": classes})
 
 
-def test_clicking_a_lit_coverage_tile_opens_nothing_on_the_runner_page(rank_page):
-    click_a_runner_row(rank_page)
-    rank_page.wait_for(".runner-page", timeout_ms=8000)
+
+ARRIVAL = """
+  (() => {
+    const hit = document.querySelector('.library-page .library-arrival');
+    return JSON.stringify(hit ? {runner: hit.dataset.runner, timeCs: hit.dataset.timeCs,
+      openDivision: !!hit.closest('.library-division-body')} : null);
+  })()
+"""
+
+
+def assert_landed_on_the_runners_entry(page, runner):
+    page.wait_for(".library-target", timeout_ms=8000)
+    page.wait_ms(900)           # the arrival blink lands ~550ms after the section opens
+    landed = json.loads(page.evaluate(ARRIVAL))
+    assert landed and landed["runner"] == runner, (
+        f"the Library did not land on {runner}'s entry: {landed}")
+    assert landed["openDivision"], "the entry's own DivisionGroup is not open"
+
+
+def test_a_lit_coverage_tile_on_the_runner_page_opens_their_library_entry(rank_page):
+    runner = click_a_runner_row(rank_page)
+    rank_page.wait_for(".runner-page .entity-tile", timeout_ms=8000)
     rank_page.wait_ms(200)
     found = click_a_lit_tile(rank_page, ".runner-page")
     assert found, "no practiced coverage tile on the runner page to click"
     rank_page.wait_ms(200)
+    # Still never EntityDetail -- that panel reads the VIEWING user's own
+    # attempts/PB, not the runner's (fix round 1's live repro, darkdog47:
+    # 9575 pts beside PB 0'11"43, two people's numbers with no label).
     assert rank_page.count(".runner-page .entity-detail") == 0, (
-        "clicking a coverage tile on the runner page opened EntityDetail -- "
-        "that panel reads the VIEWING USER's own attempts/PB, not the "
-        "runner's, and must never open here")
-    # Dead-control contract: the tile must not look clickable either. Every
-    # tile on the runner page carries `.is-static` (CoverageStrip passes no
-    # `onToggle` there), so the plain `.entity-tile` selector below always
-    # lands on a static one -- a separate `.is-static` class-COUNT check is
-    # redundant with the affordance checks that follow and was dropped (fix
-    # wave, final review, H2).
-    TILE = ".runner-page .entity-tile"
+        "a runner-page coverage tile opened EntityDetail instead of the Library")
+    assert_landed_on_the_runners_entry(rank_page, runner)
+    # And the Rank tab brings him BACK to the runner he left, not to the
+    # board: a trip through the page's own door must not lose the page.
+    rank_page.evaluate(CLICK_RANK_TAB)
+    rank_page.wait_ms(200)
+    assert rank_page.count(".runner-page") == 1, (
+        "returning from the Library lost the runner page")
+
+
+def test_an_entity_name_in_the_runner_breakdown_opens_their_library_entry(rank_page):
+    runner = click_a_runner_row(rank_page)
+    rank_page.wait_for(".runner-page .rank-entity-link", timeout_ms=8000)
+    rank_page.evaluate("document.querySelector('.runner-page .rank-entity-link').click()")
+    assert_landed_on_the_runners_entry(rank_page, runner)
+
+
+def test_an_unpracticed_tile_on_the_runner_page_stays_a_dead_control(rank_page):
+    click_a_runner_row(rank_page)
+    rank_page.wait_for(".runner-page .entity-tile", timeout_ms=8000)
+    rank_page.wait_ms(200)
+    counts = json.loads(rank_page.evaluate("""
+      JSON.stringify({
+        unpracticed: document.querySelectorAll('.runner-page .entity-tile.is-unpracticed').length,
+        unpracticedStatic: document.querySelectorAll('.runner-page .entity-tile.is-unpracticed.is-static').length,
+        litStatic: document.querySelectorAll('.runner-page .entity-tile:not(.is-unpracticed).is-static').length,
+      })"""))
+    assert counts["unpracticed"] >= 1, (
+        "the leader has run everything -- no unpracticed tile to judge; pick a "
+        "runner with a gap")
+    assert counts["unpracticedStatic"] == counts["unpracticed"], (
+        "an unpracticed tile on the runner page is clickable, with no entry to land on")
+    assert counts["litStatic"] == 0, "a practiced tile on the runner page is not a door"
+    # Dead-control contract (fix round 1, final review H2): a static tile
+    # must not LOOK clickable -- no pointer, and nothing moves on hover or
+    # keyboard focus, or the global `button:hover`/`:focus-visible` rules
+    # have beaten `.entity-tile.is-static` again.
+    TILE = ".runner-page .entity-tile.is-static"
     cursor = rank_page.evaluate(f"getComputedStyle(document.querySelector({TILE!r})).cursor")
-    assert cursor == "default", f"a runner-page coverage tile still shows cursor: {cursor!r}"
-    # H2 (final review): `cursor` was the ONLY property the shipped rule
-    # overrode, so the global `button:hover`/`:focus-visible` rules -- higher
-    # specificity than `.entity-tile` -- still repainted background/border on
-    # hover and outlined it on focus, wiping the one thing the tile carries
-    # (its tier tint) and announcing a dead control as clickable. Force both
-    # states and require NOTHING to move.
+    assert cursor == "default", f"a static coverage tile still shows cursor: {cursor!r}"
     rest = rank_page.evaluate(f"""
       (() => {{
         const s = getComputedStyle(document.querySelector({TILE!r}));
@@ -236,6 +288,34 @@ def test_clicking_a_lit_coverage_tile_opens_nothing_on_the_runner_page(rank_page
     assert hovered == rest, (
         f"a static coverage tile changed on hover/focus: {rest} -> {hovered} "
         "-- a dead control must show no affordance at all")
+
+
+STRIP_FITS = """
+  (() => {
+    const strip = document.querySelector(%s + ' .rank-coverage-strip');
+    const s = getComputedStyle(strip);
+    return JSON.stringify({scroll: strip.scrollHeight, client: strip.clientHeight,
+      overflow: s.overflowY, tiles: strip.querySelectorAll('.entity-tile').length});
+  })()
+"""
+
+
+def assert_every_tile_is_visible(page, scope_selector):
+    """His second item: "tall enough so that we can see every single star /
+    segment at the same time. I shouldn't have to scroll." -- the strip's
+    scroll height equals its visible height, and nothing clips it."""
+    fit = json.loads(page.evaluate(STRIP_FITS % json.dumps(scope_selector)))
+    assert fit["tiles"] > 40, f"fixture strip too small to prove anything: {fit}"
+    assert fit["overflow"] not in ("auto", "scroll"), f"the strip scrolls: {fit}"
+    assert fit["scroll"] == fit["client"], f"the strip clips its own tiles: {fit}"
+
+
+def test_the_coverage_strip_shows_every_tile_without_scrolling(rank_page):
+    assert_every_tile_is_visible(rank_page, ".rank-page")       # his own tab
+    click_a_runner_row(rank_page)
+    rank_page.wait_for(".runner-page .entity-tile", timeout_ms=8000)
+    rank_page.wait_ms(200)
+    assert_every_tile_is_visible(rank_page, ".runner-page")
 
 
 def test_clicking_a_lit_coverage_tile_still_opens_the_panel_on_your_own_tab(rank_page):

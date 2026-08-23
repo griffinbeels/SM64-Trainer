@@ -1189,8 +1189,11 @@ def test_the_runner_page_story_reaches_a_real_runner(page):
         "Array.from(document.querySelectorAll('.runner-page .rank-breakdown th'))"
         ".map(e => e.textContent.trim())")
     assert "Their time" in headers and "Gap" in headers, headers
+    # `.rank-entity-link` is the entity name's door into the Library (round
+    # 1) -- a button that navigates, not one that edits -- so it is excluded.
     ignore_buttons = page.evaluate(
-        "document.querySelectorAll('.runner-page .rank-breakdown tbody button').length")
+        "document.querySelectorAll('.runner-page .rank-breakdown tbody "
+        "button:not(.rank-entity-link)').length")
     assert ignore_buttons == 0, (
         f"found {ignore_buttons} button(s) in the runner page's breakdown -- "
         "read-only means no Ignore/Include control")

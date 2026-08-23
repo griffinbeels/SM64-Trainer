@@ -740,6 +740,18 @@
   .library-runner-link:hover, .library-runner-link:focus-visible {
     color: var(--gold); text-decoration: underline;
   }
+  /* The runner page's breakdown: an entity's name is the door onto that
+     runner's Library entry (rankpage.js `Breakdown`, runner variant). Same
+     text reset as the runner link above, for the same reason -- the global
+     `button` rule would otherwise grow every table row. */
+  .rank-entity-link {
+    appearance: none; background: none; border: none; padding: 0; margin: 0;
+    font: inherit; color: inherit; text-align: left; cursor: pointer;
+    min-height: 0; display: inline;
+  }
+  .rank-entity-link:hover, .rank-entity-link:focus-visible {
+    color: var(--gold); text-decoration: underline;
+  }
   .library-example-time {
     font-variant-numeric: tabular-nums; color: #dfe7ef; font-weight: 600;
   }
@@ -2763,9 +2775,11 @@
     outline: none;
   }
   /* The whole scope in one strip — 24 entries for a 16 Star route, 120+ for
-     a full run. The cap plus scroll is what stops a long route pushing the
-     chart and the breakdown off the screen; four rows fit before it engages. */
-  .rank-coverage-strip { max-height: 216px; overflow-y: auto; }
+     a full run — and ALL of it visible: this carried `max-height: 216px;
+     overflow-y: auto` until 2026-08-22, and his first read of a 117-tile
+     strip was "I shouldn't have to scroll" (acceptance.md: scrolling is a
+     symptom). The card grows instead; the chart and breakdown sit below it.
+     `.rank-coverage-strip` therefore has no rule of its own any more. */
   .rank-coverage { margin: 4px 0 3px; }
   .entity-tile-icon { width: 100%; height: 100%; object-fit: contain; }
   .entity-tile-icon.courseicon { width: 90%; height: 90%; }
