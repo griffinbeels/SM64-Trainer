@@ -25,10 +25,14 @@ _SEED_PREFIX = "seed:"
 # A `"seed:"`-prefixed key is a MOVEMENT: the caller resolves the seed_key
 # (the part after the prefix) to a real `segment:<id>` key via
 # `db.segment_defs()` through `resolve_seed`, which also names the label --
-# there is no star/course table to derive a movement's name from. Every other
-# entry is a real entity key already; its label here is what `build_card`
-# would derive for it anyway (`star_name`), kept alongside so `SECRET_ROW`
-# reads correctly standing alone.
+# there is no star/course table to derive a movement's name from. Every
+# other entry is a real entity key already, labelled here -- and THIS is the
+# label that reaches the tile; `_secret_entries` passes it straight through
+# rather than re-deriving it. The two PSS stars use `star_name` (they have
+# distinct in-game names); the six single-star courses (18, 20-24) use the
+# COURSE name deliberately, NOT `star_name` -- their one star is named
+# "8 Red Coins" in-game for all six, which would collapse the row to six
+# identical tiles.
 SECRET_ROW: list[tuple[str, str]] = [
     ("star:19:0", star_name(19, 0)),
     ("star:19:1", star_name(19, 1)),

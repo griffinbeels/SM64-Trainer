@@ -56,6 +56,26 @@ def test_secret_row_pinned_against_the_template():
     assert clocks["star:19:0"] == "igt"
 
 
+def test_single_star_secret_tiles_use_the_course_name_not_star_name():
+    """star_name(course_id, 0) returns "8 Red Coins" for every one of these
+    six courses -- each is the ONLY star on its course, and that's its
+    in-game name -- so deriving these six Secret-row labels that way would
+    collapse all six tiles to the same text. SECRET_ROW instead pins each to
+    its COURSE name, which is what actually reaches the tile (`_secret_entries`
+    passes SECRET_ROW's own stored label straight through for a non-movement
+    entry; it does not re-derive via star_name at build_card time). Pinned
+    here because no other test in this suite checks these six labels'
+    literal text."""
+    secret_row = scorecard.build_card(you={}, goal={}, fold={}, resolve_seed=_resolve)["rows"][-1]
+    labels = {tile["key"]: tile["label"] for tile in secret_row["tiles"]}
+    assert labels["star:18:0"] == "Bowser in the Sky"
+    assert labels["star:20:0"] == "Cavern of the Metal Cap"
+    assert labels["star:21:0"] == "Tower of the Wing Cap"
+    assert labels["star:22:0"] == "Vanish Cap Under the Moat"
+    assert labels["star:23:0"] == "Wing Mario Over the Rainbow"
+    assert labels["star:24:0"] == "The Secret Aquarium"
+
+
 def test_movement_label_comes_from_resolve_seed_not_a_hardcoded_string():
     """The controller ruling: resolve_seed OWNS the movement's label (it has
     the real segment record); this module's own SECRET_ROW string is only a
