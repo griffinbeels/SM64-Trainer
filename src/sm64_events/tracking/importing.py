@@ -1,8 +1,8 @@
 """Deciding which brought-in times become personal bests.
 
 An IMPORTED TIME is a personal best the trainer never watched him set — typed
-by hand, lifted off a runner's Ultimate Sheet column, pasted, read out of a
-LiveSplit file or a linked sheet. Every source produces the same
+by hand, lifted off a runner's Ultimate Sheet column, or read out of a linked
+sheet. Every source produces the same
 `ImportCandidate` and lands through the same rule here, so a sixth source is
 a parser rather than a feature. What lands is a real attempt row (see
 `IMPORT_EVENT`) carrying its personal best.
@@ -74,11 +74,11 @@ def decide(candidates, current_frames: Callable) -> ImportPlan:
             continue
         if not candidate.strat_tag:
             # A time with NO strategy still lands, and is counted so it is
-            # never silent. It was refused until the paste door existed, when
+            # never silent. It was refused until typed names existed, when
             # every source (the sheet, the card's own picker) always had one —
             # but most people writing down a gold write the star and the time
             # and nothing else, and refusing those would reject the bulk of a
-            # real paste. The store already allows it: such a row shows as a
+            # real sheet. The store already allows it: such a row shows as a
             # personal best and never GRADES, because `current_pbs_by_strat`
             # cannot attribute it, and `tracking/caveats.py`'s `unattributed`
             # mark is what says so where the click lands.

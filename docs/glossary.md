@@ -319,9 +319,9 @@ with the time you pressed Save, holding the [[personal best]] it brought — so 
 can clear it, undo it, or move it to another [[strategy]] exactly as you would
 a played one. The one thing it cannot offer is a replay.
 
-It remembers the source that brought it — you typed it, you pasted it, you
-named your column in the [[Ultimate Sheet]], you handed over a LiveSplit
-splits file, or you linked your own spreadsheet — and the [[game version]]
+It remembers the source that brought it — you typed it, you named your
+column in the [[Ultimate Sheet]], or you linked your own spreadsheet — and the
+[[game version]]
 that set it, so a JP time grades on the JP [[ladder]] while you play US. The
 trainer draws neither fact: nothing marks an imported time on any screen.
 
@@ -339,25 +339,12 @@ rather than importing what it understood and staying quiet about the rest.
 The words a source calls a [[target]] by, and the reason no import needs a
 format of its own. The trainer answers to the game's own [[star]] names, the
 abbreviations a [[runner]] types (`BoB 1`, `WF 100c`), the [[Ultimate Sheet]]'s
-labels, and the names of the [[segment]]s you built — so a block you already
-wrote resolves without editing, and a name the trainer does not know comes back
+labels, and the names of the [[segment]]s you built — so a sheet you already
+keep resolves without editing, and a name the trainer does not know comes back
 to you rather than vanishing.
 
 - **Lives** — the name resolver
   (`src/sm64_events/tracking/import_names.py`)
-
-### Split gold
-
-The fastest a LiveSplit split has ever been — your best-ever time for one
-stretch of a [[run]]. The name carries "split" because this trainer already
-gives one of its own [[tier]]s the name Gold, and the two mean nothing alike.
-
-A split gold measures [[real time]], so importing one records it against a
-[[segment]] you built and never against a [[star]], whose [[personal best]]s
-the trainer times on the Usamune clock.
-
-- **Lives** — the splits reader
-  (`src/sm64_events/tracking/livesplit.py`)
 
 ### Strategy
 

@@ -60,10 +60,10 @@ def test_an_unreachable_centisecond_rounds_up_never_down():
 
 
 def test_a_time_with_no_strategy_LANDS_and_is_counted():
-    """Refused until the paste door existed, when every source always had a
-    strategy. Most people writing down a gold write the star and the time and
-    nothing else, and refusing those would reject the bulk of a real paste —
-    so it lands, and the count is what keeps it from being silent."""
+    """Refused until typed names existed, when every source always had a
+    strategy. Most people writing down a best write the star and the time and
+    nothing else, and refusing those would reject the bulk of a real personal
+    sheet — so it lands, and the count is what keeps it from being silent."""
     plan = decide([_candidate(886, strat="")], lambda ek, strat, mode: None)
     assert [frames for _, frames in plan.landing] == [266]
     assert plan.summary["without_strategy"] == 1

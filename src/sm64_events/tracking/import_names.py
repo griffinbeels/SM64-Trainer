@@ -1,14 +1,14 @@
 """Turning typed text into a target and a time.
 
 The sheet door works because the Ultimate Sheet already speaks our vocabulary.
-Every OTHER source — a pasted block, a LiveSplit file, somebody's own xcam
+Every OTHER source — somebody's own xcam
 spreadsheet — arrives as names a person wrote, so something has to answer
 "which star is `BoB 1`?" before `tracking/importing.py` can decide anything.
 
 THE FORMAT IS THE COMMUNITY'S, NOT A NEW ONE. The names this answers to are the
 ones already in play: the game's own star names, the abbreviations every runner
-types (`BoB 1`, `WF 100c`), the Ultimate Sheet's target labels, and — for a
-LiveSplit file — the names of the segments the player built here. Inventing a
+types (`BoB 1`, `WF 100c`), the Ultimate Sheet's target labels, and the names
+of the segments the player built here. Inventing a
 new identifier scheme would mean everyone reformatting data they already have,
 which is the opposite of the point.
 
@@ -175,7 +175,7 @@ def segment_catalog(rows, catalog: Catalog | None = None) -> Catalog:
     Segment ids are local to one database, which is why the sheet's segment
     rows are dropped — but these ids came from THIS database, so they mean
     exactly what they say. That is the whole difference, and it is what lets a
-    LiveSplit file land its golds on movements the player actually built."""
+    sheet of his own land times on movements the player actually built."""
     catalog = catalog or Catalog()
     for row in rows or []:
         name = row.get("name") if isinstance(row, dict) else getattr(row, "name", "")
@@ -210,7 +210,7 @@ def resolve_target(text: str, catalog: Catalog) -> str | None:
 
 
 def parse_block(text: str, catalog: Catalog, timer_mode_for=None):
-    """`([ImportCandidate, ...], [Unresolved, ...])` for a pasted block.
+    """`([ImportCandidate, ...], [Unresolved, ...])` for a block of lines.
 
     One time per line. The TIME is found by parsing fields rather than by
     counting them, so `BoB 1  0:23.57  Standard` and `Blast Away the Wall,

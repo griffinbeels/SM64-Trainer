@@ -1,10 +1,10 @@
 // src/sm64_events/ui/components/importflow.js — what every import door shares.
 //
-// A door is an INPUT — a textarea, a file picker, a URL field, a name picker —
+// A door is an INPUT — a name picker, a URL field —
 // and everything after the input is the same for all of them: preview, import,
 // one sentence saying what happened, the rows that could not be read, and an
-// undo. Four doors each carried their own copy of that, which meant a wording
-// change was four edits and a fifth door was a fifth copy. It lives here once.
+// undo. Each door used to carry its own copy of that, which meant a wording
+// change was several edits and a new door was another copy. It lives here once.
 //
 // `useImportFlow` is the state machine; `ImportButton` and `ImportOutcome`
 // draw it. A door renders its input, the button and the outcome, and is done.
@@ -25,8 +25,6 @@ export const REASONS = {
   no_time: "no time on this line",
   no_target: "a time with nothing to file it under",
   unknown_target: "this name matched no star or segment",
-  not_a_segment: "this names a star — a gold is a real-time split, so it can "
-    + "only land on a segment",
   no_entity: "rows the trainer has no target for",
   subsections: "rows timing part of a star rather than the star",
   segments: "rows mapped to a movement, which needs one of yours",

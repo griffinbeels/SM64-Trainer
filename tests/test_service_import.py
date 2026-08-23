@@ -160,19 +160,19 @@ def test_removing_an_import_restores_what_it_superseded(tmp_path):
 
 
 def test_a_segment_of_yours_lands_on_the_rta_clock(tmp_path):
-    """A LiveSplit gold is a SEGMENT time, and a segment id resolved by name
+    """A segment named in his own sheet is a SEGMENT time, and an id resolved by name
     against this database means exactly what it says — which is the whole
     difference from the sheet's segment rows."""
     db, svc = make(tmp_path)
     mine = db.segment_defs()[0]["id"]
-    summary = asyncio.run(svc.import_times("livesplit", [ImportCandidate(
+    summary = asyncio.run(svc.import_times("link", [ImportCandidate(
         entity_key=f"segment:{mine}", strat_tag="Standard", time_cs=1200,
         timer_mode="rta")]))
     assert summary["imported"] == 1
     row = db.current_pb(None, None, "rta", segment_id=mine,
                         strat_tag="Standard")
     assert row["frames"] == 360
-    assert row["imported_from"] == "livesplit"
+    assert row["imported_from"] == "link"
     (attempt,) = imported_attempts(db)
     assert row["attempt_id"] == attempt.id
     assert attempt.segment_id == mine

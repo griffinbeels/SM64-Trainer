@@ -44,9 +44,9 @@ def import_a_star(svc):
         entity_key="star:1:0", strat_tag="Standard", time_cs=IMPORTED_CS)]))
 
 
-def import_a_segment_gold(db, svc):
+def import_a_segment_time(db, svc):
     segment_id = db.segment_defs()[0]["id"]
-    asyncio.run(svc.import_times("livesplit", [ImportCandidate(
+    asyncio.run(svc.import_times("link", [ImportCandidate(
         entity_key=f"segment:{segment_id}", strat_tag="Standard",
         time_cs=1200, timer_mode="rta")]))
     return segment_id
@@ -89,10 +89,10 @@ def test_the_picker_ranks_a_star_he_has_only_imported(tmp_path):
     assert build_entity_ranks(db, svc)["star:1:0"]["rank"] == "Mario"
 
 
-def test_an_imported_gold_is_a_segment_section_with_one_row(tmp_path):
-    """Rule 11: a LiveSplit gold earns a card exactly as a sheet time does."""
+def test_an_imported_segment_time_is_a_section_with_one_row(tmp_path):
+    """Rule 11: an imported segment time earns a card exactly as a star time does."""
     db, svc = make(tmp_path)
-    segment_id = import_a_segment_gold(db, svc)
+    segment_id = import_a_segment_time(db, svc)
     view = build_session_view(db, svc, "igt", scope="lifetime")
     section = next(s for s in view["segments"] if s["segment_id"] == segment_id)
     assert section["pb"]["rta"]["frames"] == 360

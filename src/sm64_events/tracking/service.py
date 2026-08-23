@@ -1960,7 +1960,7 @@ class TrackerService:
         """Land a batch of brought-in times, each as an attempt with a PB.
 
         Every import door arrives here — typed by hand, a runner's Ultimate
-        Sheet column, a pasted block, LiveSplit golds, a linked sheet. The
+        Sheet column, a linked sheet. The
         improvement rule lives in `tracking/importing.py` and is pure; this
         owns only the parts that touch the world.
 
@@ -2039,8 +2039,8 @@ class TrackerService:
     def preview_import(self, candidates) -> dict:
         """What `import_times` WOULD do with this batch, without doing it.
 
-        A pasted block is where a silent misread is expensive — a few hundred
-        lines, most of them resolving, a handful not — so the paste door shows
+        A linked sheet is where a silent misread is expensive — a few hundred
+        rows, most of them resolving, a handful not — so the link door shows
         this before it writes anything."""
         return dict(self._plan_import(candidates).summary)
 
@@ -2049,8 +2049,9 @@ class TrackerService:
         """Refuse a candidate this database cannot honestly file.
 
         A STAR always can be. A SEGMENT can only when the id is one of THIS
-        database's own — which is the whole difference between a LiveSplit
-        gold (matched by name against segments the player built here) and the
+        database's own — which is the whole difference between a segment
+        named in his own sheet (matched by name against segments he built
+        here) and the
         Ultimate Sheet's six segment-mapped targets, whose ids came from
         whichever machine scraped them. A foreign id is worse than a missing
         one: it may well EXIST here and name a different movement, so the time

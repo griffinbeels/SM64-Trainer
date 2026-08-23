@@ -5,7 +5,9 @@ Its own router rather than another block in `server/api.py`, for the reason
 snapshot, and mounting it beside them is cheaper than threading the sheet into
 the general API router.
 
-FIVE DOORS, ONE BACK ROOM. Every door is the same three steps:
+THREE DOORS, ONE BACK ROOM (five until round 2, 2026-08-22 -- the paste and
+LiveSplit doors are a backlog task; commit d70721b9 last carries them).
+Every door is the same three steps:
 
   1. READ its source into `ImportCandidate`s, plus the rows it could not use;
   2. PREVIEW or LAND them through `TrackerService` (one planner for both, so
@@ -21,12 +23,11 @@ while the import itself reads a fresh fetch.
 """
 import logging
 import urllib.request
-import xml.etree.ElementTree as ElementTree
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
@@ -35,14 +36,12 @@ from sm64_events.library.build import build
 from sm64_events.library.import_runner import candidates_for
 from sm64_events.library.source import FETCH_TIMEOUT_S, fetch
 from sm64_events.server.ranks_api import absorb_after_regrade
-from sm64_events.tracking import import_names, livesplit
+from sm64_events.tracking import import_names
 from sm64_events.tracking.importing import ImportCandidate
 
 _log = logging.getLogger("sm64.import")
 
 MANUAL_SOURCE = "manual"
-PASTE_SOURCE = "paste"
-LIVESPLIT_SOURCE = "livesplit"
 LINK_SOURCE = "link"
 
 
@@ -110,14 +109,6 @@ class LinkImportBody(BaseModel):
     dry_run: bool = False
 
 
-class PasteImportBody(BaseModel):
-    text: str
-    # Read the block and report what it would do WITHOUT writing anything.
-    # A block of a few hundred lines is exactly where a silent misread is
-    # expensive, so the preview is the default the UI uses.
-    dry_run: bool = False
-
-
 def create_import_router(service, library=None, overrides=None) -> APIRouter:
     """`library` is the `LibraryStore`; omit it and the sheet door is simply
     not mounted, the same way the library router drops its adopt routes on a
@@ -174,51 +165,15 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
             time_cs=body.time_cs, game_version=body.game_version)
         return await finish(MANUAL_SOURCE, [candidate], [], dry_run=False)
 
-    @router.post("/paste")
-    async def import_paste(body: PasteImportBody):
-        """A block of times, in whatever the player already has them written
-        in."""
-        candidates, unresolved = import_names.parse_block(
-            body.text, build_catalog(), timer_mode_for=timer_mode_for)
-        return await finish(PASTE_SOURCE, candidates, _rows(unresolved),
-                            body.dry_run)
-
-    @router.post("/livesplit")
-    async def import_livesplit(request: Request,
-                               dry_run: bool = False,
-                               strategy: str = ""):
-        """A LiveSplit `.lss`, posted as the RAW request body.
-
-        Raw bytes rather than a multipart form for the reason
-        `server/compare_api.py`'s upload already gives: multipart would add
-        `python-multipart` to what the frozen exe ships, for one field.
-
-        Its golds are REAL-TIME stretches of the run, so they land on
-        segments the player built here, matched by name — never on a star,
-        whose bests are Usamune IGT."""
-        data = await request.body()
-        if not data:
-            raise HTTPException(422, "no splits file in the request body")
-        try:
-            candidates, unresolved = livesplit.candidates_for(
-                data, build_catalog(), strategy=strategy or None)
-        except ElementTree.ParseError as err:
-            # "Nothing landed" and "that was not a splits file" look identical
-            # from the outside, and only one is worth acting on.
-            raise HTTPException(
-                422, f"that does not read as a LiveSplit splits file: {err}"
-            ) from err
-        return await finish(LIVESPLIT_SOURCE, candidates, _rows(unresolved),
-                            dry_run)
-
     @router.post("/link")
     async def import_link(body: LinkImportBody):
         """Import from a link to somebody's own spreadsheet.
 
         The workbook says which shape it is: a copy of the Ultimate Sheet is
         read by the real reader and a named runner's column extracted; any
-        other grid becomes lines and goes through the paste parser, so a
-        personal `star | time | strat` sheet needs no format of its own.
+        other grid becomes lines and goes through the block parser
+        (`tracking/import_names.py`), so a personal `star | time | strat`
+        sheet needs no format of its own.
 
         Only Google Sheets links are fetched — the SERVER does the fetching,
         so "any URL" would mean "any URL reachable from this machine"."""

@@ -43,8 +43,8 @@ WAIT = """
 })()
 """
 
-# The four doors live behind one chip row now, and nothing is open by default:
-# four stacked panels pushed Display and Sessions most of a drawer away.
+# The doors live behind one chip row, and nothing is open by default: as
+# stacked panels they pushed Display and Sessions most of a drawer away.
 OPEN_DOOR = """
 (() => {
   const chip = [...document.querySelectorAll('.importsection-doors .chip')]
@@ -252,151 +252,6 @@ def test_the_sheet_picker_fills_from_the_bundled_snapshot(tmp_path):
                 "the runner this feature was built for is not in the list")
 
 
-PASTE_BLOCK = (
-    "# my golds\\n"
-    "BoB 1\\t0:23.57\\n"
-    "WF 6, 8.86, LJ\\n"
-    "Sneaky Chungus Skip\\t12.00\\n")
-
-TYPE_BLOCK = """
-(() => {
-  const box = document.querySelector('.importpaste-box');
-  if (!box) return false;
-  const setter = Object.getOwnPropertyDescriptor(
-    window.HTMLTextAreaElement.prototype, 'value').set;
-  setter.call(box, "BLOCK");
-  box.dispatchEvent(new Event('input', {bubbles: true}));
-  return true;
-})()
-"""
-
-
-def test_the_paste_door_previews_without_writing_anything(tmp_path):
-    """A few hundred lines is where a silent misread is expensive, so the
-    panel says what WOULD land before it lands any of it — and the preview
-    runs the same planner the button then performs."""
-    with serve_ui(tmp_path / "paste.db") as base:
-        with driver.get_driver().launch(headless=True) as page:
-            page.goto(base)
-            assert wait(page, ".practice-page")
-            settle(page, 1500)
-            assert page.evaluate(OPEN_SETTINGS)
-            assert wait(page, ".importsection")
-            open_door(page, "Paste a list")
-            assert wait(page, ".importpaste"), "no paste panel in the drawer"
-            settle(page, 500)
-            assert page.evaluate(TYPE_BLOCK.replace("BLOCK", PASTE_BLOCK))
-            settle(page, 300)
-
-            before = _star_pb_count(base)
-            page.evaluate(
-                "document.querySelector('.importpaste .primary-button').click()")
-            settle(page, 1500)
-            state = page.evaluate("""
-              (() => {
-                const s = document.querySelector('.importpaste');
-                return {button: s.querySelector('.primary-button').textContent.trim(),
-                        rejects: s.querySelectorAll('.importdoor-rejects li').length};
-              })()
-            """)
-            assert state["button"].startswith("Import"), state
-            assert state["rejects"] == 1, state
-            assert _star_pb_count(base) == before, (
-                "checking a block WROTE something — the preview is the whole "
-                "reason to trust the button")
-
-
-def test_a_line_it_could_not_read_keeps_its_number_and_its_text(tmp_path):
-    """He has to be able to FIND the line to fix it. A count would not do."""
-    with serve_ui(tmp_path / "pasterejects.db") as base:
-        with driver.get_driver().launch(headless=True) as page:
-            page.goto(base)
-            assert wait(page, ".practice-page")
-            settle(page, 1500)
-            assert page.evaluate(OPEN_SETTINGS)
-            assert wait(page, ".importsection")
-            open_door(page, "Paste a list")
-            assert wait(page, ".importpaste")
-            settle(page, 500)
-            page.evaluate(TYPE_BLOCK.replace("BLOCK", PASTE_BLOCK))
-            settle(page, 300)
-            page.evaluate(
-                "document.querySelector('.importpaste .primary-button').click()")
-            settle(page, 1500)
-            row = page.evaluate("""
-              (() => {
-                const li = document.querySelector('.importdoor-rejects li');
-                if (!li) return null;
-                return {number: li.querySelector('.importdoor-lineno').textContent,
-                        text: li.querySelector('code').textContent,
-                        reason: li.querySelector('.meta').textContent};
-              })()
-            """)
-            assert row, "the rejected line is not drawn at all"
-            assert row["number"] == "4", row
-            assert "Sneaky Chungus Skip" in row["text"], row
-            assert row["reason"].strip(), "no reason given for the rejection"
-
-
-def test_a_livesplit_file_previews_and_names_what_did_not_land(tmp_path):
-    """The file picker is the one control script cannot set, so this is the
-    only way to reach the feature at all — and it exists because a gold is a
-    real-time split, which is why a star among them has to be named back."""
-    splits = tmp_path / "sample.lss"
-    with serve_ui(tmp_path / "livesplit.db") as base:
-        import json
-        import urllib.request
-        with urllib.request.urlopen(f"{base}/api/segments") as reply:
-            rows = json.loads(reply.read())
-        names = [row["name"] for row in
-                 (rows if isinstance(rows, list)
-                  else rows.get("segments", []))][:2]
-        segments = "".join(
-            f"<Segment><Name>{name}</Name><BestSegmentTime>"
-            f"<RealTime>00:00:{10 + index:02d}.5000000</RealTime>"
-            "</BestSegmentTime></Segment>"
-            for index, name in enumerate(names))
-        splits.write_text(
-            '<?xml version="1.0" encoding="UTF-8"?><Run version="1.7.0">'
-            f"<Segments>{segments}"
-            "<Segment><Name>BoB 1</Name><BestSegmentTime>"
-            "<RealTime>00:00:23.5700000</RealTime></BestSegmentTime>"
-            "</Segment></Segments></Run>", encoding="utf-8")
-
-        with driver.get_driver().launch(headless=True) as page:
-            page.goto(base)
-            assert wait(page, ".practice-page")
-            settle(page, 1500)
-            assert page.evaluate(OPEN_SETTINGS)
-            assert wait(page, ".importsection")
-            open_door(page, "LiveSplit file")
-            assert wait(page, ".importlivesplit"), "no LiveSplit panel"
-            settle(page, 500)
-            before = _segment_pb_count(base)
-
-            page.set_input_files(".importlivesplit-file", str(splits))
-            settle(page, 1500)
-            state = page.evaluate("""
-              (() => {
-                const s = document.querySelector('.importlivesplit');
-                return {button: (s.querySelector('.primary-button')||{}).textContent,
-                        rejects: [...s.querySelectorAll('.importdoor-rejects li')]
-                          .map((li) => li.querySelector('code').textContent)};
-              })()
-            """)
-            assert state["button"].strip() == "Import 2", state
-            assert state["rejects"] == ["BoB 1"], state
-            assert _segment_pb_count(base) == before, (
-                "picking a file WROTE something — it must preview first")
-
-            page.evaluate("document.querySelector("
-                          "'.importlivesplit .primary-button').click()")
-            settle(page, 1500)
-            assert _segment_pb_count(base) == before + 2, (
-                "the golds did not reach the practice log — a segment best "
-                "with no attempt behind it has to earn a card, same as a star")
-
-
 def test_a_sheet_link_reads_previews_and_names_the_rows_that_did_not_land(
         tmp_path, monkeypatch):
     """The fetch is replaced in the SERVER (the fixture runs in-process), so
@@ -480,9 +335,10 @@ def _star_pb_count(base):
 
 def test_the_import_section_sits_above_display_and_stays_one_section(tmp_path):
     """A one-off setup gesture a new arrival makes on their first day must not
-    be below every tuning link in the drawer — and the four doors must stay
-    ONE section, because as four they pushed Display and Sessions most of a
-    drawer away. A control you have to scroll to hunt for gets redesigned."""
+    be below every tuning link in the drawer — and the doors must stay ONE
+    section, because as stacked panels they pushed Display and Sessions most
+    of a drawer away. A control you have to scroll to hunt for gets
+    redesigned."""
     with serve_ui(tmp_path / "importplace.db") as base:
         with driver.get_driver().launch(headless=True) as page:
             page.goto(base)
@@ -512,8 +368,11 @@ def test_the_import_section_sits_above_display_and_stays_one_section(tmp_path):
                 "the import section sank below Display and its tuning links")
             assert order["sections"] == 1, (
                 f"the doors have gone back to separate sections: {order}")
-            assert order["doors"] == 4, (
-                f"a door is missing from the chip row: {order}")
+            # TWO doors since round 2 (2026-08-22): "Paste a list" and
+            # "LiveSplit file" were removed — "too difficult to get quite
+            # right... we'll spend too much time getting distracted here."
+            assert order["doors"] == 2, (
+                f"the chip row does not hold exactly the two doors: {order}")
             assert order["openDoors"] == 0, (
                 "a door is open before anything was picked — the resting "
                 "state has to be one heading and one row of chips, or the "

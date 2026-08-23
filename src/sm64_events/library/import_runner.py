@@ -19,7 +19,7 @@ Three kinds of row are dropped, and each matters:
     `segment:6` against the seeding order of the machine that scraped it. A
     FOREIGN id is worse than a missing one: it very likely exists here too and
     names a different movement, so the time would land silently on the wrong
-    thing rather than failing. (A LiveSplit gold is the opposite case and does
+    thing rather than failing. (A segment named in his own sheet is the opposite case and does
     land: `tracking/import_names.py` matches it by NAME against segments the
     player built here, so the id it produces is this database's own.) Segments
     are RTA-only besides, while every sheet approach time is an IGT star time.

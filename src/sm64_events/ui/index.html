@@ -1014,13 +1014,6 @@
      share one row and WRAP at a narrow drawer -- the name search is 448 rows
      long, so it must never be the thing that gets squeezed. */
   .importsheet-row .search-select{flex:1 1 200px;min-width:0}
-  /* Pasting a block of times. The box is the control, so it gets the room:
-     six rows is enough to see a paste took, without the drawer's other
-     sections being pushed out of reach. */
-  .importpaste-box{width:100%;box-sizing:border-box;margin-top:6px;resize:vertical;
-    min-height:96px;background:#0d1117;border:1px solid #30363d;border-radius:6px;
-    color:#e6e9ee;padding:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-    font-size:12px;line-height:1.5;white-space:pre;overflow:auto}
   /* Everything after a door's input is ONE component (importflow.js), so
      these are importdoor-* classes rather than one door's name. */
   .importdoor-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:6px}
@@ -1034,10 +1027,7 @@
   .importdoor-rejects code{color:#e6e9ee;white-space:pre-wrap;word-break:break-word}
   .importdoor-lineno{color:var(--text-dim,#8b98a6);font-variant-numeric:tabular-nums;
     min-width:2ch;text-align:right}
-  /* The file picker keeps the browser's own control: it is the one widget
-     every OS already draws a familiar dialog for, and a styled stand-in would
-     buy nothing but a second thing to keep working. */
-  /* FOUR doors, ONE section. Stacked as four sections they pushed Display and
+  /* The doors, ONE section. Stacked as separate sections they pushed Display and
      Sessions most of a drawer away, and a control you have to scroll to hunt
      for gets redesigned rather than scrolled to. Nothing is open by default,
      so the resting state is a heading and a row of chips. */
@@ -1049,11 +1039,6 @@
   .importlink-url{flex:1 1 220px;min-width:0;box-sizing:border-box;
     background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6e9ee;
     padding:4px 8px;font-size:12px}
-  .importlivesplit-file{flex:1 1 200px;min-width:0;color:var(--text-dim,#8b98a6);
-    font-size:12px}
-  .importlivesplit-file::file-selector-button{margin-right:8px;padding:3px 10px;
-    border-radius:6px;border:1px solid #30363d;background:#101f31;color:#e6e9ee;
-    font:inherit;cursor:pointer}
   .settings-note.is-ok{color:var(--good,#5bc97a)}
   .settings-note.is-bad{color:var(--bad,#e2686b)}
   .stdcell{display:inline-flex;align-items:center;gap:4px}

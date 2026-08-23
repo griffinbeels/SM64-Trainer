@@ -73,13 +73,12 @@ you can click to jump straight to an attempt — or open its replay.
 a pipe entry, a Bowser fight, a castle movement) and it becomes a first-class
 practice target with the same history, PBs, ranks and replays a star gets.
 
-**Bring your times with you.** Practised for years before finding this? Five
+**Bring your times with you.** Practised for years before finding this? Three
 ways in, all in Settings except the first: type a time straight onto any star's
-card; pick your name if you have a column on the Ultimate Sheet; paste a block
-of times in whatever form you already have them (`BoB 1  0:23.57`, tabs or
-commas, the sheet's own names all work); hand it your LiveSplit splits file and
-it takes the golds onto the segments you have built; or paste a link to your own
-spreadsheet and it reads that. A time only lands when it beats the best you
+card; pick your name if you have a column on the Ultimate Sheet; or paste a link
+to your own spreadsheet and it reads that — a copy of the Ultimate Sheet, or any
+grid of `star | time | strategy` in the names runners already use (`BoB 1`,
+`WF 100c`, the sheet's own labels). A time only lands when it beats the best you
 already hold for that star and strategy, so importing twice costs nothing. Each
 one becomes a real row in that star's practice log — clear it, undo it, move
 it to another strategy like any run — and every import can be undone in one

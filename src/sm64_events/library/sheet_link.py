@@ -11,12 +11,12 @@ So there are two shapes and the workbook itself says which:
     `library/sheet.py`, and a named runner's column extracted exactly as the
     bundled snapshot's is.
   * ANY OTHER GRID. Every tab's rows become lines and go through the same
-    parser a pasted block does, so a personal sheet of `star | time | strat`
+    parser (`tracking/import_names.py`), so a personal sheet of `star | time | strat`
     needs no format of its own and nothing new to learn.
 
-The second path is why this is small rather than a second importer: the paste
-door already answers "which star is this text naming", so a spreadsheet is just
-a paste somebody has not copied yet.
+The second path is why this is small rather than a second importer: the name
+resolver already answers "which star is this text naming", so a spreadsheet is
+just lines somebody has not typed.
 
 ONLY GOOGLE SHEETS LINKS ARE ACCEPTED, and that is a real restriction rather
 than a convenience. The server fetches whatever URL it is handed, so an
@@ -77,7 +77,7 @@ def is_ultimate_shaped(data: bytes) -> bool:
 
 
 def grid_blocks(data: bytes):
-    """`[(tab name, text)]` — every tab as lines the paste parser can read.
+    """`[(tab name, text)]` — every tab as lines the block parser can read.
 
     Each line is the row's non-empty cells joined by TABS, and the list is
     padded so line N of the block is row N of the sheet: an unreadable row has

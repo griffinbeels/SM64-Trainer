@@ -1,9 +1,14 @@
-// src/sm64_events/ui/components/importsection.js — one section, four doors.
+// src/sm64_events/ui/components/importsection.js — one section, two doors.
 //
-// The four import panels were four `.settings-section`s stacked, which pushed
+// The import panels were separate `.settings-section`s stacked, which pushed
 // Display and Sessions most of a drawer away — and a control somebody has to
 // scroll to hunt for gets redesigned rather than scrolled to. So: one heading,
-// a row naming the four ways in, and only the chosen one drawn.
+// a row naming the ways in, and only the chosen one drawn.
+//
+// TWO doors since round 2 (2026-08-22). "Paste a list" and "LiveSplit file"
+// were built and then removed — "too difficult to get quite right... we'll
+// spend too much time getting distracted here" — and live as a backlog task;
+// commit d70721b9 is the last one that carries them.
 //
 // NOTHING IS CHOSEN BY DEFAULT, on purpose. Importing is a first-day gesture
 // and this section is passed over on every other day, so its resting state is
@@ -14,19 +19,14 @@ import { h } from "preact";
 import { useState } from "preact/hooks";
 import htm from "htm";
 import { ImportSheet } from "./importsheet.js";
-import { ImportPaste } from "./importpaste.js";
-import { ImportLiveSplit } from "./importlivesplit.js";
 import { ImportLink } from "./importlink.js";
 
 const html = htm.bind(h);
 
-// Order is how likely each is to be the answer, not how they were built: most
-// people asking this question are on the sheet, and the ones who are not
-// mostly have their times written down somewhere.
+// Order is how likely each is to be the answer: most people asking this
+// question are on the sheet.
 const DOORS = [
   ["sheet", "Ultimate Sheet", ImportSheet],
-  ["paste", "Paste a list", ImportPaste],
-  ["livesplit", "LiveSplit file", ImportLiveSplit],
   ["link", "My own sheet", ImportLink],
 ];
 
