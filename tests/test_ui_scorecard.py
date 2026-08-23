@@ -65,6 +65,23 @@ def test_fmt_gap_cs_signs_a_positive_gap_too():
     assert call("fmtGapCs", 100) == "+1.00"
 
 
+def test_goal_groups_is_no_goal_then_divisions_then_runners_with_no_runners_fetched_yet():
+    """Before the picker's first open, `runners` is null -- the Runners
+    group renders (so SearchMenu can find it) but carries no options."""
+    groups = call("goalGroups", None)
+    assert [group["label"] for group in groups] == ["", "Divisions", "Runners"]
+    assert groups[0]["options"] == [{"value": "", "label": "No goal"}]
+    assert len(groups[1]["options"]) == 40                    # divisionOptions()
+    assert groups[2]["options"] == []
+
+
+def test_goal_groups_encodes_a_fetched_runner_as_runner_colon_name():
+    groups = call("goalGroups", ["808sAndBailey", "Suigi"])
+    runners = groups[2]["options"]
+    assert runners == [{"value": "runner:808sAndBailey", "label": "808sAndBailey"},
+                       {"value": "runner:Suigi", "label": "Suigi"}]
+
+
 # --- the rendered card -------------------------------------------------
 
 sys.path.insert(0, str(REPO / "tools"))
@@ -151,6 +168,80 @@ def test_the_card_reaches_a_real_goal_covers_line_when_partial():
                 "document.querySelector('.rank-page .scorecard-card "
                 ".scorecard-note').textContent.trim()")
         assert note == f"goal covers {coverage['covered']}/{coverage['tiles']}"
+
+
+def _real_runner_reaching(seeded_keys: set[str]) -> str:
+    """A real Ultimate Sheet runner off the bundled snapshot with a sheet
+    time on at least one of the fixture's own seeded (you_cs) entities --
+    the exact overlap `tileView` needs to draw a colored tile rather than
+    dim -- restricted to an alphanumeric name so the CSS attribute selector
+    driving the picker below needs no escaping."""
+    import re
+
+    from sm64_events.core.paths import bundled_sheet_library
+    from sm64_events.library.ratings import runner_times
+    from sm64_events.library.store import LibraryStore
+
+    store = LibraryStore(bundled_path=bundled_sheet_library())
+    store.load()
+    times = runner_times(store.payload, {}, version="us")
+    return next(name for name, by_entity in times.items()
+               if re.fullmatch(r"[A-Za-z0-9_]+", name)
+               and seeded_keys & by_entity.keys())
+
+
+def test_the_picker_gains_a_runners_group_and_picking_one_colors_tiles():
+    """The Runners group is empty until the picker's first open (the lazy
+    fetch this task adds) and carries real names once it has opened; picking
+    one grades the card exactly like a division goal does -- real colored
+    tiles and a real coverage note, not just a value round-trip."""
+    with serve_ui() as base:
+        # The entities the fixture itself has a PB on -- a runner goal must
+        # land on one of THESE exact keys to draw anything but dim, the same
+        # way a too-hard division goal (test above) would.
+        seeded_keys = {tile["key"] for row in _get_scorecard(base)["rows"]
+                      for tile in row["tiles"] if tile["you_cs"] is not None}
+        assert seeded_keys, "the fixture seeded no PBs -- nothing to grade against"
+        runner = _real_runner_reaching(seeded_keys)
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .search-select-trigger")
+
+            # Before the open: no Runners options have landed. (Divisions
+            # are present immediately -- they cost no fetch.)
+            pre_open = page.evaluate(
+                "document.querySelectorAll('.rank-page .scorecard-card "
+                ".search-menu-option').length")
+            assert pre_open == 0, "the menu must not be open yet"
+
+            page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".search-select-trigger').click()")
+            # Lazy fetch: wait for THIS runner's option to actually land
+            # rather than assuming a fixed delay covers the round trip.
+            page.wait_for(
+                ".rank-page .scorecard-card "
+                f'.search-menu-option[data-value="runner:{runner}"]')
+
+            group_heads = page.evaluate(
+                "Array.from(document.querySelectorAll('.rank-page "
+                ".scorecard-card .search-menu-group-head'))"
+                ".map((el) => el.textContent)")
+            assert "Runners" in group_heads
+
+            page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                f'.search-menu-option[data-value="runner:{runner}"]\').click()')
+            page.wait_for(".rank-page .scorecard-card .score-tile.good, "
+                          ".rank-page .scorecard-card .score-tile.bad")
+
+        card = _get_scorecard(base)
+        assert card["goal"] == {"kind": "runner", "runner": runner}
+        coverage = card["goal_coverage"]
+        assert 0 < coverage["covered"] < coverage["tiles"]
 
 
 # --- the two Copy buttons (Task 5) --------------------------------------

@@ -5,10 +5,11 @@ rows; router behavior is `tests/test_scorecard_api.py`.
 Its own router rather than a block in `ranks_api.py` for the same reason
 `import_api.py` split off: that file is already +170 lines for the
 leaderboard branch, and this needs a different pair of injected pieces
-(the tracker service for PBs and standards; `library`/`adoptions` are
-accepted now and stay unused until Task 6 wires the runner goal's
-resolver, so a fetch order the leaderboard branch settles does not gate
-this one).
+(the tracker service for PBs and standards; `library`/`adoptions` also
+back a runner goal -- `library.ratings.runner_times`, the SAME reader
+`library/board.py`'s leaderboard grades runners with, read straight off the
+CACHED snapshot like the column export's record row below, never a live
+fetch).
 
 One persisted choice drives the whole card -- the ui_state KV
 `"scorecard_goal"`, `{"kind":"division","tier":...,"division":...}` |
@@ -33,6 +34,7 @@ from pydantic import BaseModel
 
 from sm64_events.library.examples import sheet_best
 from sm64_events.library.export_column import column_lines, sheet_time
+from sm64_events.library.ratings import runner_times
 from sm64_events.library.sheet import read_rows
 from sm64_events.library.source import fetch
 from sm64_events.library.store import build_and_stamp
@@ -231,6 +233,20 @@ def create_scorecard_router(service, library=None, adoptions=None,
                 goal[key] = cs
         return goal
 
+    def runner_goal_map(runner: str, version: str) -> dict[str, int]:
+        """Every entity key `runner` has a sheet time for -> that time,
+        already centiseconds -- straight off `library.ratings.runner_times`,
+        the exact shape `_tile`'s `goal.get(key)` lookup wants (a key the
+        card never asks about costs nothing to carry). Absent, never zero,
+        the same rule the reader itself follows: a runner with no time on an
+        entity is simply not a key here, which is what keeps `goal_coverage`
+        honest about how much of the card this goal actually reaches."""
+        if library is None:
+            return {}
+        adopted_rows = adoptions.rows() if adoptions is not None else {}
+        return runner_times(library.payload, adopted_rows,
+                            version=version).get(runner, {})
+
     def fold_choices(goal_value: dict | None) -> dict[int, int | None]:
         """Per course, the exit star BOTH sums skip: your own 100c PB's
         variant first, else the variant owning the goal tier's 100c cutoff,
@@ -258,9 +274,9 @@ def create_scorecard_router(service, library=None, adoptions=None,
         return fold
 
     def current_card():
-        """`(card, goal_value, goal_pending)` -- the one door both `GET
-        /api/scorecard` and the CSV export build from, so a downloaded row
-        can never disagree with the card the browser is looking at."""
+        """`(card, goal_value)` -- the one door both `GET /api/scorecard`
+        and the CSV export build from, so a downloaded row can never
+        disagree with the card the browser is looking at."""
         keys = card_keys(resolve_seed)
         you = your_times(keys)
         goal_value = service.db.get_state(_GOAL_KEY, None)
@@ -268,30 +284,26 @@ def create_scorecard_router(service, library=None, adoptions=None,
 
         goal_map: dict[str, int] = {}
         fold: dict[int, int | None] = {}
-        # A runner goal is accepted (PUT below) but has no resolver until
-        # Task 6 -- served as an empty goal map, flagged so the UI can say
-        # "goal set, not yet computed" rather than "no goal".
-        goal_pending = bool(goal_value) and goal_value.get("kind") == "runner"
         if ranks is not None:
             if goal_value and goal_value.get("kind") == "division":
                 goal_map = division_goal_map(keys, goal_value["tier"],
                                              goal_value["division"])
+            elif goal_value and goal_value.get("kind") == "runner":
+                goal_map = runner_goal_map(goal_value["runner"],
+                                           ranks.grading_version)
             fold = fold_choices(goal_value)
 
         card = build_card(you=you, goal=goal_map, fold=fold,
                           resolve_seed=resolve_seed)
-        return card, goal_value, goal_pending
+        return card, goal_value
 
     @router.get("")
     async def get_scorecard():
-        card, goal_value, goal_pending = current_card()
+        card, goal_value = current_card()
         tiles = [tile for row in card["rows"] for tile in row["tiles"]]
         coverage = {"covered": sum(1 for t in tiles if t["goal_cs"] is not None),
                     "tiles": len(tiles)}
-        payload = {**card, "goal": goal_value, "goal_coverage": coverage}
-        if goal_pending:
-            payload["goal_pending"] = True
-        return payload
+        return {**card, "goal": goal_value, "goal_coverage": coverage}
 
     @router.put("/goal")
     async def set_goal(body: GoalBody | None = Body(default=None)):
@@ -345,7 +357,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
         URL (`docs/api.md`), never a download the desktop shell's WebView2
         has to support; the card's own Copy buttons fetch this and copy the
         text instead of navigating here."""
-        card, _goal_value, _goal_pending = current_card()
+        card, _goal_value = current_card()
         body = _csv_bytes(_csv_rows(card, _record_lookup(library, adoptions, service)))
         return Response(content=body, media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition":

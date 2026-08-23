@@ -101,11 +101,25 @@ export function SearchMenu({ title, groups, onPick, onClose, busy = false,
  * picking the current value just closes.
  */
 export function SearchSelect({ value, valueLabel, title, groups, onChange,
-                               buttonClass = "quiet-button search-select-trigger" }) {
+                               buttonClass = "quiet-button search-select-trigger",
+                               onOpen = null }) {
   const [open, setOpen] = useState(false);
+  // `onOpen` is a lazy-load hook, not a mount fetch: the scorecard's Runners
+  // group (448 names) would otherwise download every time the Rank tab
+  // mounts, whether or not anyone ever opens the picker. Fired on every
+  // transition INTO open (never on close, never while already open) --
+  // idempotent for a caller that caches what it fetched, same shape as
+  // `useUiLog`'s own dedupe.
+  function toggle() {
+    setOpen((wasOpen) => {
+      const nowOpen = !wasOpen;
+      if (nowOpen && onOpen) onOpen();
+      return nowOpen;
+    });
+  }
   return html`<div class="search-select">
     <button type="button" class=${buttonClass} aria-expanded=${open}
-        onclick=${() => setOpen((prev) => !prev)}>
+        onclick=${toggle}>
       <span class="search-select-value">${valueLabel}</span>
       <${Icon} name="chevron" size=${13} />
     </button>

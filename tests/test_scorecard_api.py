@@ -75,17 +75,49 @@ def test_no_goal_serves_your_times_uncolored(tmp_path):
         assert tile["delta_cs"] is None
 
 
-def test_a_runner_goal_is_accepted_but_pending_until_task_6(tmp_path):
+def test_a_runner_goal_with_no_sheet_times_grades_nothing(tmp_path):
+    """A runner nobody on the sheet is named -- the goal is accepted and
+    resolves to an empty map, same as a division goal with no matching
+    ladder anywhere. No `goal_pending` any more (task 6): the resolver is
+    wired, so there is nothing left to be pending on."""
     with make_client(tmp_path) as (client, _db, _svc):
-        response = client.put("/api/scorecard/goal",
-                              json={"kind": "runner", "runner": "Suigi"})
+        response = client.put("/api/scorecard/goal", json={
+            "kind": "runner", "runner": "NobodyOnTheSheetIsNamedThis12345"})
         assert response.status_code == 200
 
         card = client.get("/api/scorecard").json()
-        assert card["goal"] == {"kind": "runner", "runner": "Suigi"}
-        assert card["goal_pending"] is True
+        assert card["goal"] == {"kind": "runner",
+                                "runner": "NobodyOnTheSheetIsNamedThis12345"}
+        assert "goal_pending" not in card
         assert not any(tile["goal_cs"] for row in card["rows"] for tile in row["tiles"])
         assert card["goal_coverage"]["covered"] == 0
+
+
+def test_a_runner_goal_resolves_against_the_sheet(tmp_path):
+    """A real runner off the bundled Ultimate Sheet snapshot -- their sheet
+    times become goal_cs on the entities they have one for, never on every
+    tile (`library/ratings.py::runner_times`'s own absent-never-zero rule)."""
+    from sm64_events.core.paths import bundled_sheet_library
+    from sm64_events.library.ratings import runner_times
+    from sm64_events.library.store import LibraryStore
+
+    store = LibraryStore(bundled_path=bundled_sheet_library())
+    store.load()
+    times = runner_times(store.payload, {}, version="us")
+    runner = next(name for name, by_entity in times.items()
+                  if any(key.startswith("star:") for key in by_entity))
+
+    with make_client(tmp_path) as (client, _db, _svc):
+        response = client.put("/api/scorecard/goal",
+                              json={"kind": "runner", "runner": runner})
+        assert response.status_code == 200
+
+        card = client.get("/api/scorecard").json()
+        assert card["goal"] == {"kind": "runner", "runner": runner}
+        assert "goal_pending" not in card
+        tiles = [tile for row in card["rows"] for tile in row["tiles"]]
+        assert any(tile["goal_cs"] is not None for tile in tiles)
+        assert 0 < card["goal_coverage"]["covered"] < card["goal_coverage"]["tiles"]
 
 
 def test_a_runner_goal_needs_a_name(tmp_path):

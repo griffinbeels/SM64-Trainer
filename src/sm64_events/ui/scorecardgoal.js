@@ -46,6 +46,22 @@ export function divisionOptions() {
   return options;
 }
 
+// The goal picker's whole group list: "No goal" first, then every division,
+// then whatever sheet runners the caller has fetched (possibly none yet --
+// `ui/components/scorecard.js`'s own header comment says why the Runners
+// group is fetched LAZILY, on the picker's first open, rather than eagerly
+// with everything else). `runner:<name>` is the SAME encoding
+// `goalToValue`/`valueToGoal` (scorecard.js) round-trip a runner goal
+// through -- one value shape, never re-derived at the two ends.
+export function goalGroups(runners) {
+  return [
+    { label: "", options: [{ value: "", label: "No goal" }] },
+    { label: "Divisions", options: divisionOptions() },
+    { label: "Runners", options: (runners || []).map(
+        (name) => ({ value: `runner:${name}`, label: name })) },
+  ];
+}
+
 // A tile or Sigma gap in signed decimal seconds -- "-4.37"/"+0.40". Reuses
 // attemptlog.js::delta's ± convention (a rendered sign, never a bare
 // negative-number string) but always signed (delta's own blank-at-zero case

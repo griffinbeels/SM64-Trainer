@@ -8,9 +8,11 @@
 // tests/test_ui_scorecard.py drives them under node -- same pattern as
 // entitysection.js/caps.js.
 //
-// The runner goal is Task 6's: for a runner goal already persisted
-// server-side with no resolver yet, this renders the "arrives with the
-// leaderboard merge" note rather than a blank or misleading coverage line.
+// The runner goal's Runners group in the picker is fetched LAZILY, on the
+// picker's first open (`GET /api/library/runners`, 448 names) rather than
+// on this card's own mount -- the card lives on the Rank tab and mounts
+// every time that tab does, so an eager fetch would download the whole
+// roster on every visit whether or not anyone ever opens the goal picker.
 //
 // Both Copy buttons (Task 5) COPY to the clipboard rather than downloading
 // -- the desktop WebView2 shell's download behaviour is unverified, and a
@@ -18,11 +20,11 @@
 // treats as a bug (`.claude/rules/import.md`). `GET /api/scorecard/export
 // .csv` stays reachable by URL from a browser regardless.
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { fmtSeconds } from "../format.js";
-import { divisionOptions, fmtGapCs } from "../scorecardgoal.js";
+import { divisionOptions, fmtGapCs, goalGroups } from "../scorecardgoal.js";
 import { capName, divisionDigit } from "./caps.js";
 import { entityIconSrc } from "./entityicons.js";
 import { SearchSelect } from "./searchselect.js";
@@ -33,7 +35,7 @@ const html = htm.bind(h);
 // Re-exported at this path too -- ui/scorecardgoal.js's own header comment
 // says why the pure logic lives in a separate, genuinely import-free file
 // rather than here.
-export { divisionOptions, fmtGapCs };
+export { divisionOptions, fmtGapCs, goalGroups };
 
 function goalToValue(goal) {
   if (!goal) return "";
@@ -60,14 +62,9 @@ function valueToGoal(value) {
   return null;
 }
 
-// "No goal" first, then every division. The Runners group is Task 6's --
-// PUT /api/scorecard/goal already accepts a runner goal (goal_pending
-// below), this picker just cannot mint one yet. Built once at module load:
-// divisionOptions() is deterministic and import-free.
-const GOAL_GROUPS = [
-  { label: "", options: [{ value: "", label: "No goal" }] },
-  { label: "Divisions", options: divisionOptions() },
-];
+// The picker's group list -- `goalGroups`, imported above -- lives in
+// scorecardgoal.js so it stays node-testable the same way divisionOptions()
+// already is; this file just calls it with whatever runners it has.
 
 // A tile's own class + printed text. `hasGoal` is the CARD's goal, not the
 // tile's own goal_cs -- a tile whose ladder cannot grade the chosen goal
@@ -199,16 +196,14 @@ function ScorecardExports() {
   </div>`;
 }
 
-function ScorecardHead({ goal, goalPending, coverage, onGoalChange }) {
+function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange }) {
   return html`<div class="scorecard-head">
     <h3>Scorecard</h3>
     <${SearchSelect} value=${goalToValue(goal)} valueLabel=${goalToLabel(goal)}
-        title="Pick a goal" groups=${GOAL_GROUPS} onChange=${onGoalChange} />
-    ${goalPending
-      ? html`<p class="meta scorecard-note">runner goals arrive with the leaderboard merge</p>`
-      : goal && coverage.covered < coverage.tiles
-        ? html`<p class="meta scorecard-note">goal covers ${coverage.covered}/${coverage.tiles}</p>`
-        : ""}
+        title="Pick a goal" groups=${groups} onOpen=${onOpen} onChange=${onGoalChange} />
+    ${goal && coverage.covered < coverage.tiles
+      ? html`<p class="meta scorecard-note">goal covers ${coverage.covered}/${coverage.tiles}</p>`
+      : ""}
     <${ScorecardExports} />
   </div>`;
 }
@@ -216,6 +211,9 @@ function ScorecardHead({ goal, goalPending, coverage, onGoalChange }) {
 export function Scorecard({ t }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
+  // null = not fetched yet (the Runners group is lazy, see the header
+  // comment); [] once fetched even if the sheet somehow named nobody.
+  const [runners, setRunners] = useState(null);
 
   // Fetches on mount and on t.mareloRev, the Rank tab's own staleness key
   // (RankPage's own useEffect does the same -- an attempt or a PB save must
@@ -226,6 +224,15 @@ export function Scorecard({ t }) {
       .catch((err) => alive && setError(err));
     return () => { alive = false; };
   }, [t.mareloRev]);
+
+  function loadRunnersOnce() {
+    if (runners != null) return;
+    getJSON("/api/library/runners")
+      .then((body) => setRunners(body.runners || []))
+      .catch(() => setRunners([]));
+  }
+
+  const groups = useMemo(() => goalGroups(runners), [runners]);
 
   async function onGoalChange(value) {
     try {
@@ -239,7 +246,8 @@ export function Scorecard({ t }) {
       ? html`<${InlineState} kind="error">${error.message}<//>`
       : !data
         ? html`<${InlineState}>Loading your scorecard…<//>`
-        : html`<${ScorecardHead} goal=${data.goal} goalPending=${!!data.goal_pending}
+        : html`<${ScorecardHead} goal=${data.goal} groups=${groups}
+              onOpen=${loadRunnersOnce}
               coverage=${data.goal_coverage} onGoalChange=${onGoalChange} />
             <div class="score-rows">
               ${data.rows.map((row) => html`<${ScoreRow} key=${row.course_id ?? "secret"}
