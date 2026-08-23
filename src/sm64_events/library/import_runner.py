@@ -15,26 +15,35 @@ Three kinds of row are dropped, and each matters:
   * Rows whose target carries no entity key map to nothing the player can
     practice — the sheet's castle-movement rows, mostly, which
     `library/mapping.py` has not yet paired with the movements we seed.
-  * Rows mapped to a SEGMENT. Six of the snapshot's 252 targets carry one, and
-    a segment id is LOCAL to each player's database — the mapper resolved
-    `segment:6` against the seeding order of the machine that scraped it. A
-    FOREIGN id is worse than a missing one: it very likely exists here too and
-    names a different movement, so the time would land silently on the wrong
-    thing rather than failing. (A segment named in his own sheet is the opposite case and does
-    land: `tracking/import_names.py` matches it by NAME against segments the
-    player built here, so the id it produces is this database's own.) Segments
-    are RTA-only besides, while every sheet approach time is an IGT star time.
-    Importing a movement FROM THE SHEET needs the row assigned to a segment
-    the user actually built, which is `library/adoptions.py`'s job.
+  * Rows mapped to a SEGMENT that the caller cannot vouch for. Six of the
+    snapshot's 252 targets carry one — the three Bowser stages' "Course" (the
+    stage's No Reds card, a pipe-entry movement) and "Battle" (Bowser 1/2/3)
+    — and a bare segment id is LOCAL to each player's database: the mapper
+    resolved `segment:6` against the seeding order of the machine that
+    scraped it, and a FOREIGN id may well exist here naming a different
+    movement. So the reader never trusts the number. The CALLER hands it
+    `resolve_segment`, which turns the sheet's key into this database's own
+    row for the same seeded movement through its seed_key
+    (`library/mapping.py::segment_seed_key`) and names the clock that row is
+    timed on; a row it cannot place stays in the list. His ruling
+    (2026-08-23): *"'Bowser in the Fire Sea Course' and 'Bowser in the Sky
+    Course' and 'Bowser in the Dark World Course' are just the No Reds
+    options for each bowser course. Bowser in the Dark World Battle == Bowser
+    1 ... These should also be allowed to be imported, as they're obviously
+    valid."* Until then every one of the eight such rows a runner like GTM
+    carries was dropped. (A segment named in his OWN sheet is a different
+    path and always did land: `tracking/import_names.py` matches it by NAME
+    against segments built here.)
 
 Every dropped entry comes back as ONE NAMED ROW — the target, the approach or
 piece where it adds anything, and the sheet's own time — in the same
 `{line, text, reason}` shape every door answers with (`line` 0: a sheet cell
 has no line to point at). They were COUNTED by kind until round 3
 (2026-08-23), which hid exactly what he asked to see: *"it makes more sense to
-just show all the things that failed as a list"* — a runner like GTM drops 33
-rows to 29 landed, and the list is what lets him review them and say what
-each should have mapped to.
+just show all the things that failed as a list"* — a runner like GTM dropped
+33 rows to 29 landed that day (25 to 37 once his Bowser correction landed),
+and the list is what lets him review them and say what each should have
+mapped to.
 
 Pure — takes a payload, returns candidates. The caller decides where the
 payload came from, which is what lets the picker fill from the bundled
@@ -43,11 +52,11 @@ snapshot while the import itself reads a fresh fetch.
 from sm64_events.tracking.importing import ImportCandidate
 
 # Sheet approach times are STAR times measured the way Usamune measures them.
-# Segments are RTA-only and are not reachable through this door.
+# A resolved segment lands on whatever clock the resolver names for it.
 TIMER_MODE = "igt"
 
-# What this door can land. A segment key is deliberately not here — see the
-# module docstring.
+# What this door lands without anyone vouching. A segment key needs the
+# caller's `resolve_segment` — see the module docstring.
 IMPORTABLE_KIND = "star:"
 
 # The three reasons a sheet row is dropped. `ui/components/importflow.js`
@@ -85,14 +94,28 @@ def _dropped(target: dict, detail: str | None, time_cs: int, reason: str) -> dic
     return {"line": 0, "text": " — ".join(parts), "reason": reason}
 
 
-def candidates_for(payload: dict, runner: str):
+def candidates_for(payload: dict, runner: str, resolve_segment=None):
     """`([ImportCandidate, ...], [{line: 0, text, reason}, ...])` — what lands,
-    and one named row per entry that could not."""
+    and one named row per entry that could not.
+
+    `resolve_segment(sheet_entity_key) -> (local_entity_key, timer_mode) |
+    None` is how the caller vouches for a segment-mapped target; without it
+    (or when it answers None) those rows are dropped, named."""
     candidates = []
     rejected = []
     for target in payload.get("targets") or []:
         entity_key = target.get("entity_key")
         version = target.get("version")
+        timer_mode = TIMER_MODE
+        if entity_key and not entity_key.startswith(IMPORTABLE_KIND):
+            placed = resolve_segment(entity_key) if resolve_segment else None
+            if placed:
+                entity_key, timer_mode = placed
+            else:
+                entity_key = None
+                drop_reason = SEGMENT
+        else:
+            drop_reason = NO_ENTITY
         for piece in target.get("subsections") or []:
             for entry in piece.get("entries") or []:
                 if entry.get("runner") == runner:
@@ -107,14 +130,11 @@ def candidates_for(payload: dict, runner: str):
                     continue
                 if not entity_key:
                     rejected.append(_dropped(
-                        target, approach.get("name"), entry["time_cs"], NO_ENTITY))
-                    continue
-                if not entity_key.startswith(IMPORTABLE_KIND):
-                    rejected.append(_dropped(
-                        target, approach.get("name"), entry["time_cs"], SEGMENT))
+                        target, approach.get("name"), entry["time_cs"],
+                        drop_reason))
                     continue
                 candidates.append(ImportCandidate(
                     entity_key=entity_key, strat_tag=strategy,
                     time_cs=int(entry["time_cs"]), game_version=version,
-                    timer_mode=TIMER_MODE))
+                    timer_mode=timer_mode))
     return candidates, rejected

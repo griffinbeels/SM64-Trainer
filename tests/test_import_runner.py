@@ -37,14 +37,69 @@ def test_dentoriousred_maps_to_fourteen_times_over_ten_stars():
     ]
 
 
-def test_a_segment_row_is_never_imported():
-    """Six of the snapshot's targets map to a segment, and a segment id is
-    LOCAL to each database -- landing one would attribute a time to whatever
-    that id happens to name here. They are also RTA-only while every sheet
-    approach time is an IGT star time."""
+def test_a_segment_row_drops_unless_the_caller_can_vouch_for_the_id():
+    """Six of the snapshot's targets map to a segment, and a bare segment id
+    is LOCAL to each database -- landing one blind would attribute a time to
+    whatever that id happens to name here. With no resolver the reader drops
+    them, named."""
     candidates, rejected = candidates_for(payload(), "DentoriousRed")
     assert sum(1 for row in rejected if row["reason"] == "segments") == 2
     assert not any(c.entity_key.startswith("segment:") for c in candidates)
+
+
+def _seeded(local_ids):
+    """A resolver the way the router builds one: the sheet's segment key ->
+    THIS database's id for the same seeded movement, on the segment's clock."""
+    from sm64_events.library.mapping import segment_seed_key
+
+    def resolve(entity_key):
+        local = local_ids.get(segment_seed_key(entity_key))
+        return (f"segment:{local}", "rta") if local is not None else None
+    return resolve
+
+
+def test_the_bowser_rows_land_on_the_seeded_movement_by_seed_key():
+    """His correction, 2026-08-23: "Bowser in the Fire Sea Course ... are just
+    the No Reds options for each bowser course. Bowser in the Dark World
+    Battle == Bowser 1 ... These should also be allowed to be imported."
+    The sheet's `segment:6` means the BitFS pipe entry; the resolver says
+    which id THAT is here -- 60 in this fixture, not 6 -- and the time lands
+    on it, RTA, with the vetted strategy the adopt layer already paired."""
+    resolve = _seeded({"seg:bitfs-pipe": 60, "seg:bits-pipe": 70})
+    candidates, rejected = candidates_for(payload(), "DentoriousRed",
+                                          resolve_segment=resolve)
+    bowser = [c for c in candidates if c.entity_key.startswith("segment:")]
+    assert {(c.entity_key, c.strat_tag, c.time_cs, c.timer_mode) for c in bowser} == {
+        ("segment:60", "Zero Cycle", 3943, "rta"),
+        ("segment:70", "Bowser in the Sky Course", 4800, "rta"),
+    }
+    assert not any(row["reason"] == "segments" for row in rejected)
+    assert len(candidates) == 16
+
+
+def test_a_bowser_row_whose_movement_this_database_lacks_still_drops():
+    """A resolver that cannot place the key (he deleted Bowser 2, say) leaves
+    the row in the list rather than landing it anywhere else."""
+    resolve = _seeded({"seg:bitfs-pipe": 60})
+    candidates, rejected = candidates_for(payload(), "DentoriousRed",
+                                          resolve_segment=resolve)
+    assert [row["text"] for row in rejected if row["reason"] == "segments"] == [
+        "Bowser in the Sky Course — 0'48\"00"]
+    assert sum(1 for c in candidates if c.entity_key.startswith("segment:")) == 1
+
+
+def test_every_bowser_target_on_the_sheet_has_a_seed_key():
+    """All six segment-mapped targets resolve to one of the seeded Bowser
+    movements -- a seventh would be a mapping change that owes a row here."""
+    from sm64_events.library.mapping import segment_seed_key
+    keys = {t["entity_key"] for t in payload()["targets"]
+            if (t.get("entity_key") or "").startswith("segment:")}
+    assert len(keys) == 6
+    assert {segment_seed_key(key) for key in keys} == {
+        "seg:bitdw-pipe", "seg:bitfs-pipe", "seg:bits-pipe",
+        "seg:bowser-1", "seg:bowser-2", "seg:bowser-3"}
+    assert segment_seed_key("segment:999") is None
+    assert segment_seed_key("star:1:0") is None
 
 
 def test_a_jp_target_and_a_subsection_piece_are_named_in_their_rows():

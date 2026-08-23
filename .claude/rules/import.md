@@ -30,7 +30,7 @@ differently.
 | Door | Reads | Lands on |
 |---|---|---|
 | By hand, on a star's card | one time, the card's own strategy | that star, IGT |
-| A runner's Ultimate Sheet column | the live sheet | stars, IGT |
+| A runner's Ultimate Sheet column | the live sheet | stars (IGT) and the six seeded Bowser movements (RTA) |
 | A link to your own spreadsheet | an Ultimate copy, or any grid of star / time / strategy | stars and your own segments |
 
 **Two doors were built and REMOVED in round 2 (2026-08-22)** — a pasted block
@@ -55,18 +55,30 @@ already in play — the game's own star names, the abbreviations runners type,
 the sheet's target labels, and the segments built here. Precedence is add-order
 and star names go in FIRST, so nothing later can redirect a real one.
 
-**Your own segments can be imported onto; somebody else's id cannot.** A
+**Your own segments can be imported onto; a bare foreign id cannot.** A
 segment id resolved by NAME against this database is exactly what it says,
 while the Ultimate Sheet's segment rows carry ids from whichever machine
 scraped them — and a foreign id is worse than a missing one, because it very
-likely exists here too and names a different movement. Segments are RTA-only,
-so a segment candidate on the IGT clock is refused rather than re-clocked.
+likely exists here too and names a different movement. So the sheet's six
+Bowser rows (each stage's "Course" = its No Reds pipe-entry card, "Battle" =
+Bowser 1/2/3) reach this database through their **seed_key**
+(`library/mapping.py::BOWSER_SEGMENT_SEED_KEYS` → `segment_seed_key`;
+`server/import_api.py::sheet_segment_resolver` looks the key up in
+`db.segment_defs()` at import time), landing on whatever id THIS database
+holds for the same seeded movement, on that row's clock. His ruling
+(2026-08-23): *"'Bowser in the Fire Sea Course' … are just the No Reds options
+for each bowser course. Bowser in the Dark World Battle == Bowser 1 … These
+should also be allowed to be imported, as they're obviously valid."* A
+movement he deleted resolves to nothing and the row stays in the list.
+Segments are RTA-only, so a segment candidate on the IGT clock is refused
+rather than re-clocked — the resolver names the clock, the reader never
+assumes it.
 
 | To change... | Edit |
 |---|---|
 | Which brought-in times actually land | `tracking/importing.py` — pure (`ImportCandidate` + `decide`), no db, no clock; the caller supplies the lookup. THE rule is IMPROVEMENT: a candidate lands only when it BEATS the current best for that target and strategy, which is what makes the button safe to press twice. Two details are load-bearing and each has a test that goes red without it — **per STRATEGY** (`db.current_pb(..., strat_tag=)`; omit that argument and the comparison is against the strategy-blind DISPLAY best, wrongly rejecting a first time on a strategy he has never run) and **counting what THIS batch already landed** (rows insert in order and the latest wins, so a batch holding one target twice would otherwise leave the SLOWER row current — the exact regression the rule exists to prevent). Conversion goes through `core/timefmt.frame_at_or_after`, never restated: only 30 of every 100 centisecond values are displayable, and rounding UP is the conservative direction |
 | The command that writes them, and what a landed time IS | `TrackerService.import_times` / `remove_imported`. **Each landed time is ONE journaled `time_imported` event and the PROJECTOR makes the attempt row from it** (`projection.Projector._imported_attempt`, handled FIRST in `feed` so it closes no open run, moves no target and counts as no grab): a success with no anchor, started = ended = the Save, the number on the clock the source measures, `timed_by: "imported"`, `timed_at: "xcam"` for a star so it wears no caveat — his ruling 2026-08-22: *"It should show the new entry in the practice log as an entry row. This is because it then affords us all of the functionality of a practice log entry row (deleting, undoing, etc)"*. This REVERSED the v1 rule ("no attempt is created, it would break replay"): journaling the import and deriving the row keeps replay idempotent AND gives him the row. `publish` returns the journal id so the PB row links to the attempt exactly as `save_pb`'s does — which is what makes the row's own × erase its PB through `clear_attempt`, and `_reproject`'s orphan sweep collect it if the event is ever erased. Removal ERASES the journal rows and replays rather than marking — *"marking them as 'removed' is still worthless. Just completely erase them"* (2026-08-02); safe where a played attempt's events are not, because an import row is read without state and cutting it rewrites no neighbour. Migration v28 deletes the attempt-less pb rows v27 wrote for a few days on this branch |
-| A runner's Ultimate Sheet column | `library/import_runner.py::candidates_for(payload, runner)` — pure, so it runs against the bundled snapshot with no network. Every drop comes back as a NAMED row in the shared reject shape, never a count (round 3, 2026-08-23). Detail, the three drops and the measured fixture numbers: `.claude/rules/library.md` |
+| A runner's Ultimate Sheet column | `library/import_runner.py::candidates_for(payload, runner, resolve_segment)` — pure, so it runs against the bundled snapshot with no network; `resolve_segment` is how the caller vouches for a segment-mapped target (above). Every drop comes back as a NAMED row in the shared reject shape, never a count (round 3, 2026-08-23). Detail, the three drops and the measured fixture numbers: `.claude/rules/library.md` |
 | A block of lines, and the format itself (what a linked grid becomes) | `tracking/import_names.py::parse_block`. ONE time per line, the target before it and the strategy after; tabs, runs of spaces, commas and pipes all separate, so a spreadsheet row, a hand-aligned line and a CSV read the same with no format flag. The LAST parseable field is the time, or `BoB 1 0:23.57` loses its own slot to the shorthand. Blank lines and `#` comments are punctuation; everything else that fails comes back with its number, its text and a reason |
 | A link to somebody's own sheet | `library/sheet_link.py` — the WORKBOOK decides: `is_ultimate_shaped` (by the main tab, so a personal COPY is read by the real reader) else `candidates_from_grid`, which turns every tab into lines for the block parser. Rows keep the sheet's own numbering and are stamped `Times!5:` — "row 5 of Times" is advice somebody can follow. **Only `docs.google.com` is fetched**, refused before any request: the SERVER does the fetching, so any-URL means any URL reachable from this machine |
 | The REST surface | `server/import_api.py` — every door is READ its source into candidates, then one `finish(source, candidates, rejected, dry_run, **extra)`: preview or land through the service, absorb the rank move, answer in the one shape every door shares (`{source, ...summary, rejected: [{line, text, reason}], dry_run}`). A sixth door is a reader and one `finish` call. `_rows` turns `Unresolved`s into that shape; the sheet reader already answers in it (`line` 0 = a sheet cell has no line to point at). **`absorb_after_regrade` lives in `finish`, not in the service** (`tracking/` must not import `server/`), so any NEW caller of `import_times` owes that call too — without it the next rank fetch reads the climb as earned and fires a full-screen celebration for something he did not just do. Detail: `.claude/rules/server.md` |

@@ -2049,13 +2049,14 @@ class TrackerService:
         """Refuse a candidate this database cannot honestly file.
 
         A STAR always can be. A SEGMENT can only when the id is one of THIS
-        database's own — which is the whole difference between a segment
-        named in his own sheet (matched by name against segments he built
-        here) and the
-        Ultimate Sheet's six segment-mapped targets, whose ids came from
-        whichever machine scraped them. A foreign id is worse than a missing
-        one: it may well EXIST here and name a different movement, so the time
-        would land silently on the wrong thing.
+        database's own. A segment named in his own sheet is matched by name
+        against segments he built here, and the Ultimate Sheet's six Bowser
+        rows reach their seeded movement through its seed_key
+        (`server/import_api.py::sheet_segment_resolver`) — both arrive here
+        carrying a local id. What this guard refuses is a bare id from
+        somewhere else, which is worse than a missing one: it may well EXIST
+        here and name a different movement, so the time would land silently
+        on the wrong thing.
 
         Segments are RTA-only, the same rule `save_pb` enforces, so a segment
         candidate carrying the IGT clock is refused rather than quietly

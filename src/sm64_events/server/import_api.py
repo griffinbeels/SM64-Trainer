@@ -34,6 +34,7 @@ from pydantic import BaseModel
 from sm64_events.library import sheet_link
 from sm64_events.library.build import build
 from sm64_events.library.import_runner import candidates_for
+from sm64_events.library.mapping import segment_seed_key
 from sm64_events.library.source import FETCH_TIMEOUT_S, fetch
 from sm64_events.server.ranks_api import absorb_after_regrade
 from sm64_events.tracking import import_names
@@ -146,6 +147,30 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
             return ranks.clock_for(entity_key)
         return "rta" if entity_key.startswith("segment:") else "igt"
 
+    def sheet_segment_resolver():
+        """How the Ultimate Sheet's six Bowser rows reach THIS database.
+
+        The sheet's `segment:6` is the BitFS pipe entry -- the stage's No
+        Reds card -- on the machine that scraped it. What it is HERE is
+        whichever `segment_defs` row carries the same seed_key, on that
+        row's own clock. A movement he deleted resolves to nothing and the
+        row stays in the could-not-use list. Built per request: the ids are
+        read off the database at the moment of the import, not at mount."""
+        database = getattr(service, "db", None)
+        if database is None:
+            return None
+        local_ids = {definition["seed_key"]: definition["id"]
+                     for definition in database.segment_defs()
+                     if definition.get("seed_key")}
+
+        def resolve(entity_key: str):
+            local = local_ids.get(segment_seed_key(entity_key))
+            if local is None:
+                return None
+            local_key = f"segment:{local}"
+            return local_key, timer_mode_for(local_key)
+        return resolve
+
     @router.post("/manual")
     async def import_manual(body: ManualImportBody):
         """One time he typed on a star's card."""
@@ -195,7 +220,8 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
                 422, "that is a copy of the Ultimate Sheet — say which "
                      "runner's column to take")
         payload = build(data, _now_iso(), overrides)
-        candidates, dropped = candidates_for(payload, body.runner)
+        candidates, dropped = candidates_for(
+            payload, body.runner, resolve_segment=sheet_segment_resolver())
         return await finish(LINK_SOURCE, candidates, dropped,
                             body.dry_run, shape="ultimate")
 
@@ -235,7 +261,9 @@ def create_import_router(service, library=None, overrides=None) -> APIRouter:
                     _log.warning("sheet refresh failed: %r", err)
                     raise HTTPException(
                         503, f"could not read the sheet: {err}") from err
-            candidates, dropped = candidates_for(library.payload, body.runner)
+            candidates, dropped = candidates_for(
+                library.payload, body.runner,
+                resolve_segment=sheet_segment_resolver())
             return await finish(f"sheet:{body.runner}", candidates, dropped,
                                 dry_run=False,
                                 sheet_revision=library.revision)

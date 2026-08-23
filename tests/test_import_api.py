@@ -68,25 +68,52 @@ def test_importing_the_same_time_twice_is_free(tmp_path):
 
 def test_the_sheet_door_lands_a_runners_column_from_the_snapshot(tmp_path):
     """`refresh: false` reads the bundled snapshot, so this needs no network.
-    Measured 2026-08-20: DentoriousRed resolves to 14 star times."""
+    Measured 2026-08-20: DentoriousRed resolves to 14 star times; since round
+    3 (2026-08-23) the two Bowser rows land too, on the seeded movements."""
     with make_client(tmp_path) as (client, db, _svc):
         payload = client.post("/api/import/sheet", json={
             "runner": "DentoriousRed", "refresh": False}).json()
-        assert payload["found"] == 14
-        assert payload["imported"] == 14
+        assert payload["found"] == 16
+        assert payload["imported"] == 16
         # One row per dropped ENTRY, named, in the same `{line, text, reason}`
         # shape every door answers with -- he reviews these by name (round 3).
         # `line` 0: a sheet cell has no line to point at.
         assert payload["rejected"] == [
-            {"line": 0, "reason": "segments",
-             "text": "Bowser in the Fire Sea Course — No pole glitch — 0'39\"43"},
-            {"line": 0, "reason": "segments",
-             "text": "Bowser in the Sky Course — 0'48\"00"},
             {"line": 0, "reason": "no_entity",
              "text": "CCM wooden door - Enter BitDW (LBLJ) — 0'09\"23"}]
         assert payload["sheet_revision"]
         assert all(row["imported_from"] == "sheet:DentoriousRed"
                    for row in db.pbs())
+        # The Bowser rows: the BitFS pipe entry (the stage's No Reds card)
+        # and the BitS one, on the segment's own RTA clock, 39.43s -> frames.
+        by_seed = {d["seed_key"]: d["id"] for d in db.segment_defs()}
+        bitfs = db.current_pb(None, None, "rta",
+                              segment_id=by_seed["seg:bitfs-pipe"],
+                              strat_tag="Zero Cycle")
+        assert bitfs and bitfs["frames"] == 1183
+        assert db.current_pb(None, None, "rta",
+                             segment_id=by_seed["seg:bits-pipe"])
+
+
+def test_a_bowser_row_lands_on_this_databases_row_for_the_movement(tmp_path):
+    """The sheet says `segment:6`; what lands on is whichever id THIS
+    database holds for `seg:bitfs-pipe`. Re-seeding the movement under a new
+    id must move the import with it -- the number is never trusted."""
+    with make_client(tmp_path) as (client, db, _svc):
+        old = {d["seed_key"]: d for d in db.segment_defs()}["seg:bitfs-pipe"]
+        db.delete_segment_def(old["id"])
+        fresh_id = db.insert_segment_def(
+            old["name"], old["start_triggers"], old["end_triggers"],
+            old["guards"], "2026-08-23T00:00:00Z", seed_key="seg:bitfs-pipe")
+        assert fresh_id != old["id"]
+
+        payload = client.post("/api/import/sheet", json={
+            "runner": "DentoriousRed", "refresh": False}).json()
+        assert not any(row["reason"] == "segments" for row in payload["rejected"])
+        landed = db.current_pb(None, None, "rta", segment_id=fresh_id,
+                               strat_tag="Zero Cycle")
+        assert landed and landed["frames"] == 1183
+        assert db.current_pb(None, None, "rta", segment_id=old["id"]) is None
 
 
 @pytest.mark.parametrize("failure", [

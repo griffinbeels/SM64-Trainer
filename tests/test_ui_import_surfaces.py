@@ -261,8 +261,9 @@ def test_the_sheet_door_lists_every_dropped_row_by_name_under_its_reason(
 
     The live download is replaced in the SERVER (the fixture runs in-process),
     so the door reads the bundled snapshot and what is driven is the panel.
-    DentoriousRed drops 3 rows in 2 reasons; the texts are the ones
-    `tests/test_import_runner.py` pins."""
+    GTM is the runner he reported on: 33 dropped rows before his Bowser
+    correction landed, 25 after it (the 8 Bowser rows now import onto the
+    seeded movements), in two reasons."""
     from sm64_events.library.store import LibraryStore
     monkeypatch.setattr(LibraryStore, "refresh",
                         lambda self, fetch_fn, overrides=None: {})
@@ -285,12 +286,13 @@ def test_the_sheet_door_lists_every_dropped_row_by_name_under_its_reason(
               (() => {
                 const pick = [...document.querySelectorAll(
                   '.importsheet .search-menu-option')]
-                  .find((o) => o.textContent.trim() === 'DentoriousRed');
+                  .find((o) => o.textContent.trim() === 'GTM');
                 if (pick) pick.click();
                 return !!pick;
               })()
-            """), "DentoriousRed is not in the runner list"
+            """), "GTM is not in the runner list"
             settle(page, 300)
+            segment_pbs_before = _segment_pb_count(base)
             page.evaluate(
                 "document.querySelector('.importsheet .primary-button').click()")
             assert wait(page, ".importsheet .importdoor-rejects")
@@ -308,15 +310,23 @@ def test_the_sheet_door_lists_every_dropped_row_by_name_under_its_reason(
                 };
               })()
             """)
-            assert drawn["heading"].startswith("3 rows"), drawn
+            assert drawn["heading"].startswith("25 rows"), drawn
             assert [g["reason"] for g in drawn["groups"]] == [
-                "rows mapped to a movement, which needs one of yours (2)",
-                "rows the trainer has no target for (1)"], drawn
+                "rows timing part of a star rather than the star (2)",
+                "rows the trainer has no target for (23)"], drawn
             assert drawn["groups"][0]["rows"] == [
-                "Bowser in the Fire Sea Course — No pole glitch — 0'39\"43",
-                "Bowser in the Sky Course — 0'48\"00"], drawn
-            assert drawn["groups"][1]["rows"] == [
-                "CCM wooden door - Enter BitDW (LBLJ) — 0'09\"23"], drawn
+                "Hot-Foot-It into the Volcano — Inside the volcano — 0'08\"53",
+                "Hot-Foot-It into the Volcano — Volcano entry — 0'08\"06"], drawn
+            assert len(drawn["groups"][1]["rows"]) == 23, drawn
+            assert drawn["groups"][1]["rows"][0] == \
+                "Lakitu skip — JD -> Speedkick ending — 0'05\"53", drawn
+            # His Bowser correction: the seeded movements took their rows --
+            # none sits in the list, and the segment PBs on the page grew by
+            # the five GTM has times for (BitFS/BitS No Reds, Bowser 1/2/3;
+            # he has no BitDW Course row).
+            assert not any("Bowser" in row for g in drawn["groups"]
+                           for row in g["rows"]), drawn
+            assert _segment_pb_count(base) == segment_pbs_before + 5
 
 
 def test_a_sheet_link_reads_previews_and_names_the_rows_that_did_not_land(
