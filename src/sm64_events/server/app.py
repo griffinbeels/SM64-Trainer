@@ -438,6 +438,12 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         app.include_router(create_import_router(
             service, library=library, overrides=library_overrides,
             adoptions=adoptions))
+        # The goal-vs-you scorecard needs the tracker service for PBs and
+        # standards, plus (unused until Task 6's runner goal) the same
+        # library/adoptions pair import threads above.
+        from sm64_events.server.scorecard_api import create_scorecard_router
+        app.include_router(create_scorecard_router(
+            service, library=library, adoptions=adoptions))
     if replay is not None:
         from sm64_events.server.replay_api import create_replay_router
         app.include_router(create_replay_router(replay))
