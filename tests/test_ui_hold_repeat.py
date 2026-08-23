@@ -1,6 +1,13 @@
 """Press-and-hold stepping (ui/holdrepeat.js): one step on the press, a
-steady run while held, nothing after release. Driven in node with fake
-timers so the schedule is a fact rather than a feel."""
+steady run while held, nothing after release, and playback resumed if it
+was playing. Driven in node with fake timers so the schedule is a fact
+rather than a feel.
+
+The hold's state lives on the ELEMENT: his live report 2026-08-23 ("it
+accidentally triggers the Hold action prematurely, and if I release the
+button press, it doesn't STOP") was a press landing in one render's
+handlers and the release in the next render's, which had nothing to clear.
+"""
 import json
 import subprocess
 from pathlib import Path
@@ -29,8 +36,11 @@ const advance = (ms) => {
   }
   now = end;
 };
-let steps = 0;
-const h = holdRepeat(() => { steps += 1; }, fake);
+let steps = 0; let resumed = 0;
+const button = {};                       // the element the hold state lives on
+const press = { button: 0, currentTarget: button, pointerId: 1 };
+const release = { currentTarget: button };
+const fresh = (opts) => holdRepeat(() => { steps += 1; }, { timers: fake, ...(opts || {}) });
 const out = {};
 %s
 console.log(JSON.stringify(out));
@@ -48,19 +58,21 @@ def run(body: str):
 
 def test_a_tap_is_exactly_one_step():
     got = run("""
-      h.onpointerdown({button: 0}); advance(100); h.onpointerup();
+      const h = fresh();
+      h.onpointerdown(press); advance(100); h.onpointerup(release);
       advance(5000); out.steps = steps;
     """)
     assert got["steps"] == 1
 
 
-def test_a_hold_steps_once_then_runs_at_the_interval():
+def test_a_hold_steps_once_then_runs_at_the_interval_until_release():
     got = run("""
-      h.onpointerdown({button: 0});
+      const h = fresh();
+      h.onpointerdown(press);
       out.afterPress = steps;
       advance(HOLD_DELAY_MS - 1); out.beforeRun = steps;
       advance(1 + HOLD_INTERVAL_MS * 10); out.afterRun = steps;
-      h.onpointerup(); advance(5000); out.afterRelease = steps;
+      h.onpointerup(release); advance(5000); out.afterRelease = steps;
     """)
     assert got["afterPress"] == 1
     assert got["beforeRun"] == 1
@@ -68,18 +80,46 @@ def test_a_hold_steps_once_then_runs_at_the_interval():
     assert got["afterRelease"] == 11
 
 
-def test_leaving_the_button_stops_the_run_like_releasing_it():
+def test_a_release_through_a_LATER_render_s_handlers_still_stops_the_run():
+    """The component re-renders on every step, so the release almost always
+    arrives at handlers created after the press. The state is on the
+    element, so they find it."""
     got = run("""
-      h.onpointerdown({button: 0}); advance(HOLD_DELAY_MS + HOLD_INTERVAL_MS * 3);
-      h.onpointerleave(); advance(5000); out.steps = steps;
+      fresh().onpointerdown(press);
+      advance(HOLD_DELAY_MS + HOLD_INTERVAL_MS * 3);
+      fresh().onpointerup(release);            // a different closure
+      advance(5000); out.steps = steps;
     """)
     assert got["steps"] == 4
 
 
+def test_a_tap_released_through_a_later_render_never_starts_the_run():
+    got = run("""
+      fresh().onpointerdown(press); advance(50);
+      fresh().onpointerup(release);
+      advance(5000); out.steps = steps;
+    """)
+    assert got["steps"] == 1
+
+
+def test_the_release_resumes_what_the_press_was_told_to():
+    got = run("""
+      const h = fresh({ onPress: () => () => { resumed += 1; } });
+      h.onpointerdown(press); advance(HOLD_DELAY_MS + HOLD_INTERVAL_MS * 2);
+      out.duringHold = resumed;
+      h.onpointerup(release); out.afterRelease = resumed;
+      h.onlostpointercapture(release); out.afterCaptureLoss = resumed;
+    """)
+    assert got["duringHold"] == 0
+    assert got["afterRelease"] == 1
+    assert got["afterCaptureLoss"] == 1        # once, not once per event
+
+
 def test_a_keyboard_activation_steps_once_and_a_mouse_click_does_not_double():
     got = run("""
+      const h = fresh();
       h.onclick({detail: 0}); out.keyboard = steps;
-      h.onpointerdown({button: 0}); h.onpointerup(); h.onclick({detail: 1});
+      h.onpointerdown(press); h.onpointerup(release); h.onclick({detail: 1});
       out.mouse = steps;
     """)
     assert got["keyboard"] == 1
@@ -87,5 +127,5 @@ def test_a_keyboard_activation_steps_once_and_a_mouse_click_does_not_double():
 
 
 def test_a_right_button_press_does_nothing():
-    got = run("h.onpointerdown({button: 2}); advance(5000); out.steps = steps;")
+    got = run("fresh().onpointerdown({button: 2, currentTarget: button}); advance(5000); out.steps = steps;")
     assert got["steps"] == 0

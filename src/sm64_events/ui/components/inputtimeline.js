@@ -20,7 +20,6 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { fmtIgtShort } from "../format.js";
-import { holdRepeat } from "../holdrepeat.js";
 import { ControllerPanel, FacingDial, stickPhrase } from "./controllerpanel.js";
 
 const html = htm.bind(h);
@@ -175,8 +174,6 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   // playhead measured against it could be dragged over the words "Stick"
   // and "Mario" (his report, 2026-08-22).
   const trackColumn = useRef(null);
-  const frameRef = useRef(0);
-  frameRef.current = frame;
 
   useEffect(() => {
     let alive = true;
@@ -248,10 +245,6 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       video.currentTime = timeAtFrame(clamped, anchorOffsetS, data.fps);
     }
   };
-  // A held step button fires from a timer, so it cannot read `frame` out
-  // of this render's closure -- it would step from the same stale frame
-  // fifteen times a second. The ref always holds the latest.
-  const seekBy = (delta) => seek(frameRef.current + delta);
   const seekFromPointer = (event) => {
     const box = trackColumn.current;
     if (!box) return;
@@ -300,12 +293,6 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       <div>
         <span class="eyebrow">Inputs</span>
         <h4>${timeLabel(total)}${" "}·${" "}${total} frames${" "}·${" "}${data.fps} fps</h4>
-      </div>
-      <div class="input-timeline-actions">
-        <button class="icon-button" ...${holdRepeat(() => seekBy(-1))}
-            title="Previous frame; hold to keep going" aria-label="Previous frame">−1f</button>
-        <button class="icon-button" ...${holdRepeat(() => seekBy(1))}
-            title="Next frame; hold to keep going" aria-label="Next frame">+1f</button>
       </div>
     </header>
 

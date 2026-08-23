@@ -92,6 +92,18 @@ export function ReplayPlayer({ attemptId, onCompare, onVideoEl, onView }) {
   function step(dir) {
     stepGameFrame(videoEl.current, dir, state.game_fps || 30);
   }
+  // A press remembers whether the clip was playing; the release hands that
+  // back, so a hold mid-playback scrubs and then plays on, while a step on
+  // a paused clip stays on the frame it reached.
+  function stepHold(dir) {
+    return holdRepeat(() => step(dir), {
+      onPress: () => {
+        const video = videoEl.current;
+        if (!video || video.paused) return null;
+        return () => { video.play().catch(() => {}); };
+      },
+    });
+  }
   function toStart() {
     jumpToStart(videoEl.current, 0);
   }
@@ -143,16 +155,16 @@ export function ReplayPlayer({ attemptId, onCompare, onVideoEl, onView }) {
       <button onclick=${toStart} title="Jump to the beginning">
         <${Icon} name="restart" size=${15} /> Start
       </button>
-      <button ...${holdRepeat(() => step(-1))}
-              title="Pause and move back one game frame; hold to keep going">
+      <button ...${stepHold(-1)}
+              title="Move back one game frame; hold to keep going">
         <${Icon} name="stepBack" size=${15} /> Back 1
       </button>
       <button class="primary-transport" onclick=${togglePlay} title="Play or pause">
         <${Icon} name=${playing ? "pause" : "play"} size=${16} />
         ${playing ? "Pause" : "Play"}
       </button>
-      <button ...${holdRepeat(() => step(1))}
-              title="Pause and move forward one game frame; hold to keep going">
+      <button ...${stepHold(1)}
+              title="Move forward one game frame; hold to keep going">
         <${Icon} name="stepForward" size=${15} /> Forward 1
       </button>
       <span class="replay-frame-note">1 frame = 1/${state.game_fps || 30} s</span>
