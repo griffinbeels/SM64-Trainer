@@ -92,15 +92,17 @@ def _row_entity(target: dict, item: dict, kind: str, adopted_rows: dict
     return None
 
 
-def runner_times(payload: dict, adopted_rows: dict, *, version: str = "us"
-                 ) -> dict[str, dict[str, int]]:
-    """{runner: {entity_key: best time_cs}}.
+def best_entries(payload: dict, adopted_rows: dict, *, version: str = "us"
+                 ) -> dict[str, dict[str, dict]]:
+    """{runner: {entity_key: the sheet entry that set their best time}}.
 
     A runner's time for an entity is the MINIMUM `time_cs` over every
     approach and subsection, on every target, that maps to it -- several
     targets per entity is normal, each "+ 100c" row is the same star a
-    different way (`library/store.py::LibraryStore.for_entity`)."""
-    times: dict[str, dict[str, int]] = {}
+    different way (`library/store.py::LibraryStore.for_entity`). The whole
+    entry is kept, not just the number, because the [[Runner page]] plays
+    that entry's video beside the time (round 1, third read)."""
+    best: dict[str, dict[str, dict]] = {}
     for target in payload["targets"]:
         for kind in ("approaches", "subsections"):
             for item in target[kind]:
@@ -111,20 +113,30 @@ def runner_times(payload: dict, adopted_rows: dict, *, version: str = "us"
                     runner = entry.get("runner")
                     if not runner:
                         continue
-                    time_cs = entry["time_cs"]
-                    by_entity = times.setdefault(runner, {})
-                    if entity_key not in by_entity or time_cs < by_entity[entity_key]:
-                        by_entity[entity_key] = time_cs
-    return times
+                    by_entity = best.setdefault(runner, {})
+                    if (entity_key not in by_entity
+                            or entry["time_cs"] < by_entity[entity_key]["time_cs"]):
+                        by_entity[entity_key] = entry
+    return best
+
+
+def runner_times(payload: dict, adopted_rows: dict, *, version: str = "us"
+                 ) -> dict[str, dict[str, int]]:
+    """{runner: {entity_key: best time_cs}} -- `best_entries` reduced to the
+    number, the shape `rate_runners` grades and the tests pin."""
+    return {runner: {key: entry["time_cs"] for key, entry in by_entity.items()}
+            for runner, by_entity in best_entries(payload, adopted_rows, version=version).items()}
 
 
 @dataclass(frozen=True)
 class RatedRunners:
     """Every runner on the sheet, rated. `times` is {runner: {entity_key:
-    best time_cs}}; `scores` is {runner: {entity_key: 0..100}}, the input
+    best time_cs}}; `videos` is the same map's entry video (or None);
+    `scores` is {runner: {entity_key: 0..100}}, the input
     `ranks/scopes.py::aggregate` takes one runner at a time. A runner whose
     entities all lack a standards ladder is absent from `scores`."""
     times: dict[str, dict[str, int]]
+    videos: dict[str, dict[str, str | None]]
     scores: dict[str, dict[str, float]]
 
 
@@ -134,7 +146,11 @@ def rate_runners(payload: dict, ranks_store, adopted_rows: dict, *,
     entity with no ladder in `ranks_store` (a target the sheet reaches that
     carries no rank standards) is omitted the same as an entity the runner
     never ran."""
-    times = runner_times(payload, adopted_rows, version=version)
+    best = best_entries(payload, adopted_rows, version=version)
+    times = {runner: {key: entry["time_cs"] for key, entry in by_entity.items()}
+             for runner, by_entity in best.items()}
+    videos = {runner: {key: entry.get("video") or None for key, entry in by_entity.items()}
+              for runner, by_entity in best.items()}
     entity_keys = {entity_key for by_entity in times.values()
                    for entity_key in by_entity}
     ladders = {entity_key: scoring.best_ladder(ranks_store.ladders(entity_key, version))
@@ -151,4 +167,4 @@ def rate_runners(payload: dict, ranks_store, adopted_rows: dict, *,
                 runner_scores_map[entity_key] = score
         if runner_scores_map:
             scores[runner] = runner_scores_map
-    return RatedRunners(times=times, scores=scores)
+    return RatedRunners(times=times, videos=videos, scores=scores)

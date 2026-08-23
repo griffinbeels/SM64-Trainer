@@ -121,19 +121,27 @@ def test_the_basis_line_names_pb(page):
     assert "PB" in text, f"the basis line never says PB: {text!r}"
 
 
-def test_excluding_an_entity_explains_the_discrepancy_it_causes(page):
-    """Fix wave (final review, M2). The board always resolves its scope with
-    `excluded=set()` -- correct, and already tested -- but that turns
-    EXCLUSIONS into a second, silent cause of "your number here and on the
-    Rank tab differ": the note used to fire only on a rank_mode mismatch, so
-    excluding an entity in pb mode showed two different numbers one card
-    apart with nothing explaining why. Drives the REAL control (the
-    Breakdown table's own Ignore button), not the API directly, so this
-    exercises the same prop wiring a user's click actually goes through."""
-    before = page.evaluate(
-        "document.querySelector('.leaderboard-basis').textContent")
-    assert "excluded" not in before.lower(), (
-        f"the board already mentions an exclusion before any were made: {before!r}")
+YOU_COVERAGE = """
+  (() => {
+    const you = document.querySelector('.leaderboard-row.is-you .leaderboard-coverage');
+    return you ? you.textContent.trim() : null;
+  })()
+"""
+
+
+def test_excluding_an_entity_narrows_the_board_like_your_own_tab(page):
+    """Round 1, third read (2026-08-23), reversing the design-session rule
+    and fix wave M2's note: "if I have personally excluded certain segments
+    ... it should also be excluded for all of the fake leaderboards & their
+    pages as well." So excluding an entity shrinks the board's denominator
+    -- your own row's `practiced/n` drops by one on the next fetch -- and
+    the basis line no longer has a discrepancy to explain. Drives the REAL
+    control (the Breakdown table's own Ignore button), not the API."""
+    before = page.evaluate(YOU_COVERAGE)
+    assert before and "/" in before, before
+    n_before = int(before.split("/")[1])
+    assert "excluded" not in page.evaluate(
+        "document.querySelector('.leaderboard-basis').textContent").lower()
     clicked = page.evaluate("""
       (() => {
         const btn = Array.from(document.querySelectorAll('.rank-breakdown button.chip'))
@@ -145,11 +153,11 @@ def test_excluding_an_entity_explains_the_discrepancy_it_causes(page):
     """)
     assert clicked, "no practiced entity with an Ignore button on the Rank tab"
     try:
+        page.wait_for(".leaderboard-row.is-you", timeout_ms=8000)
         page.wait_ms(400)
-        during = page.evaluate(
-            "document.querySelector('.leaderboard-basis').textContent")
-        assert "excluded" in during.lower(), (
-            f"excluding an entity did not add a reason to the basis line: {during!r}")
+        during = page.evaluate(YOU_COVERAGE)
+        assert int(during.split("/")[1]) == n_before - 1, (
+            f"excluding an entity did not narrow the board: {before!r} -> {during!r}")
     finally:
         # Restore -- a driven test that edits the real exclusion set must
         # not leave it edited for the next test in this module-scoped page
@@ -164,11 +172,10 @@ def test_excluding_an_entity_explains_the_discrepancy_it_causes(page):
           })()
         """)
         assert restored, "could not find the Include button to undo the exclusion"
+        page.wait_for(".leaderboard-row.is-you", timeout_ms=8000)
         page.wait_ms(400)
-        after = page.evaluate(
-            "document.querySelector('.leaderboard-basis').textContent")
-        assert "excluded" not in after.lower(), (
-            f"the exclusion note survived un-excluding the entity: {after!r}")
+        after = page.evaluate(YOU_COVERAGE)
+        assert int(after.split("/")[1]) == n_before, f"the exclusion survived undo: {after!r}"
 
 
 def test_the_omitted_count_is_stated_not_a_footnote(page):

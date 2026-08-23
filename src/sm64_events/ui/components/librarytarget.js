@@ -208,8 +208,15 @@ function assocFor(row, standings, resolveLabel) {
 // button. The version pill this card used to wear is GONE (round 1 item 4
 // superseded it: the section's mode now filters entries, so every visible
 // run is the mode's own version).
-function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd, onOpenRunner }) {
-  const [playing, setPlaying] = useState(false);
+// The media half of an entry -- thumb/branded tile -> inline embed on
+// click, native <video> for a file, an honest "watch on <site>" for the
+// unembeddable -- lifted out of `ExampleCard` (round 1, third read,
+// 2026-08-23) so the [[Runner page]]'s breakdown can play the SAME entry
+// the SAME way beneath its row: one YouTube/Twitch/bsky/file path, never a
+// second player that drifts. `autoplay` starts in the playing state -- the
+// caller's own press (the practice-log-style ▶) was the gesture.
+export function ExampleMedia({ entry, autoplay = false }) {
+  const [playing, setPlaying] = useState(autoplay);
   // Bluesky's embed host takes a DID, and most sheet links carry a handle --
   // resolved with ONE public-API fetch on the first click (videoSource's own
   // bsky comment has the measurement). Failure degrades to the link-out door.
@@ -224,7 +231,7 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd,
     && (embedSrc || (src.kind === "bsky" && !bskyFailed)));
   const label = `${entry.runner} — ${fmtSeconds(entry.time_cs / 100)}`;
 
-  function startPlaying() {
+  function resolveBsky() {
     if (src.kind === "bsky" && !src.embed && !bskyEmbed && !bskyFailed) {
       fetch("https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle"
             + `?handle=${enc(src.actor)}`)
@@ -235,6 +242,11 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd,
         })
         .catch(() => setBskyFailed(true));
     }
+  }
+  useEffect(() => { if (autoplay) resolveBsky(); }, []);
+
+  function startPlaying() {
+    resolveBsky();
     setPlaying(true);
   }
 
@@ -275,17 +287,21 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd,
     </div>`;
   }
 
+  return html`<div class="library-example-media ${canEmbed ? "is-clickable" : ""}"
+      onclick=${canEmbed && playing ? () => setPlaying(false) : null}
+      title=${canEmbed ? (playing ? "Close" : "Play inline") : ""}>
+    ${media()}
+    ${src.kind !== "youtube" && src.kind !== "file" && src.kind !== "image"
+      ? html`<a class="library-example-external" href=${entry.video}
+          target="_blank" rel="noopener" title=${`open on ${src.site}`}>
+          <${Icon} name="upload" size=${13} /></a>` : null}
+  </div>`;
+}
+
+function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd, onOpenRunner }) {
   return html`<div class="library-example" data-video=${entry.video}
       data-runner=${entry.runner} data-time-cs=${entry.time_cs}>
-    <div class="library-example-media ${canEmbed ? "is-clickable" : ""}"
-        onclick=${canEmbed && playing ? () => setPlaying(false) : null}
-        title=${canEmbed ? (playing ? "Close" : "Play inline") : ""}>
-      ${media()}
-      ${src.kind !== "youtube" && src.kind !== "file" && src.kind !== "image"
-        ? html`<a class="library-example-external" href=${entry.video}
-            target="_blank" rel="noopener" title=${`open on ${src.site}`}>
-            <${Icon} name="upload" size=${13} /></a>` : null}
-    </div>
+    <${ExampleMedia} entry=${entry} />
     <div class="library-example-meta">
       <span class="rank-icon-slot library-example-tier" style="--icon-size: 20px">
         ${tier ? html`<${RankIcon} tier=${tier} division=${division} size=${20} />` : "–"}</span>

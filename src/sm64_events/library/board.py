@@ -24,9 +24,10 @@ vetted store instead, the same dict `set_threshold`/`create_strategy`/
 `clear_jp`/`reset_entity` all mutate -- proved in `tests/test_library_board.py`
 by editing one threshold and asserting the board's numbers change.
 
-Known gap, same shape `ranks/standards.py::_reconcile` already tolerates: a
-ROUTE-based scope's memoized rows can go stale if the route's own steps are
-edited without any of the four inputs moving. Noted, not guessed at."""
+The per-scope row memo below keys on the resolved groups as well as the
+scope id, so an exclusion toggle or a route edit -- neither of which moves
+the four inputs -- reaches the board on the next fetch without re-rating
+anyone."""
 import hashlib
 import json
 
@@ -82,9 +83,10 @@ class RatedSheet:
 
     def __init__(self, rated: ratings.RatedRunners, ranks_store):
         self.times = rated.times
+        self.videos = rated.videos
         self.scores = rated.scores
         self._ranks_store = ranks_store
-        self._rows_by_scope: dict[str, tuple[list[dict], int]] = {}
+        self._rows_by_scope: dict[tuple, tuple[list[dict], int]] = {}
 
     def _scope_rows(self, scope_id: str, groups: list[dict]
                     ) -> tuple[list[dict], int]:
@@ -97,8 +99,14 @@ class RatedSheet:
         hides most of the sheet without a count reads as "this is everyone".
         A runner with no time ANYWHERE is not in `scores` at all and so is
         counted in neither. On `overall` the count is always 0, since every
-        rankable entity is its own group there."""
-        if scope_id not in self._rows_by_scope:
+        rankable entity is its own group there.
+
+        Memoized on the scope id AND the resolved groups: the same scope id
+        covers different entities after the user excludes one (his
+        exclusions shape every board since round 1's third read) or edits a
+        route's steps, and neither moves any of the cache's four inputs."""
+        memo_key = (scope_id, json.dumps(groups, sort_keys=True))
+        if memo_key not in self._rows_by_scope:
             rows, omitted = [], 0
             for runner, by_entity in self.scores.items():
                 agg = scopes.aggregate(by_entity, groups)
@@ -106,8 +114,8 @@ class RatedSheet:
                     rows.append(_row(agg, runner=runner, you=False))
                 else:
                     omitted += 1
-            self._rows_by_scope[scope_id] = (rows, omitted)
-        return self._rows_by_scope[scope_id]
+            self._rows_by_scope[memo_key] = (rows, omitted)
+        return self._rows_by_scope[memo_key]
 
     def leaderboard(self, scope_id: str, groups: list[dict], *,
                     you_aggregate: dict) -> tuple[list[dict], int]:
@@ -148,13 +156,18 @@ class RatedSheet:
         `CoverageStrip` render either source unchanged. `None` when the
         sheet has never heard of this runner.
 
-        `excluded` is always False: the caller resolved `groups` with no
-        exclusion filter, because the user's exclusions shape the scope for
-        HIM and must not shrink the denominator every runner is judged on."""
+        `excluded` is always False: since round 1's third read (2026-08-23)
+        the caller resolves `groups` WITH the user's exclusion set -- "if I
+        have personally excluded certain segments... it should also be
+        excluded for all of the fake leaderboards & their pages" -- so an
+        excluded entity is simply not here. `video` is the URL of the sheet
+        entry that set the runner's time, or None; the runner page plays it
+        beneath the row."""
         runner_scores = self.scores.get(runner_name)
         if runner_scores is None:
             return None
         runner_times = self.times.get(runner_name, {})
+        runner_videos = self.videos.get(runner_name, {})
         agg = scopes.aggregate(runner_scores, groups)
         ladders = marelo_bridge.entity_ladders(
             self._ranks_store, [entity["key"] for entity in agg["entities"]])
@@ -174,6 +187,7 @@ class RatedSheet:
                 "next_division": graded["next_division"],
                 "gain": graded["gain"], "excluded": False,
                 "time_cs": runner_times.get(key),
+                "video": runner_videos.get(key),
                 "you": {"score": you_scores.get(key),
                         "time_cs": you_times.get(key),
                         "tier": you_graded["tier"],

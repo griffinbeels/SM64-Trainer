@@ -20,6 +20,7 @@ import { entityIconSrc, fallbackSlotForEntityKey,
          fallbackToGenericStar, isGenericArt } from "./entityicons.js";
 import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
 import { Leaderboard } from "./leaderboard.js";
+import { ExampleMedia } from "./librarytarget.js";
 
 const html = htm.bind(h);
 
@@ -602,6 +603,63 @@ function runnerGapTitle(entity) {
 // 2026-08-22; until then biggest-gain-first was the default off a route).
 // The toggle to biggest gain stays. Every row leads with the entity's own
 // art (`EntityArt`), on both variants: "make it easier to parse quickly".
+// One breakdown row -- and, on the runner variant, the player beneath it.
+// The last column is the practice log's own ▶ (`icon-button`, play/chevron,
+// attemptlog.js) for every entity the runner's graded entry has a video for;
+// pressing it opens a `replay-row` under the entry with the Library card's
+// own `ExampleMedia`, so a runner's run can be inspected from the Rank tab
+// without leaving it (his third read, 2026-08-23: "like the exact one in
+// the practice log... like how we do it with the replay system"). The
+// entity's art sits INSIDE the name's door, so the icon is as clickable as
+// the name ("The course icon should be clickable as well").
+function BreakdownRow({ t, data, entity, isRunner, onToggle, onOpenEntity }) {
+  const [showVideo, setShowVideo] = useState(false);
+  const art = html`<${EntityArt} t=${t} entityKey=${entity.key} className="rank-row-icon" />`;
+  const hasDoor = onOpenEntity && entity.time_cs != null;
+  const row = html`<tr class=${[
+      entity.score == null ? "unpracticed" : "",
+      entity.excluded ? "is-excluded" : ""].filter(Boolean).join(" ")}>
+    <td class="rank-cell-name">
+      ${hasDoor
+        ? html`<button type="button" class="rank-entity-link textlink"
+            title=${`Open ${data.runner}'s entry for this in the Library`}
+            onclick=${() => onOpenEntity(entity)}>${art}${entity.label}</button>`
+        : html`<span>${art}${entity.label}</span>`}</td>
+    <td>${entity.tier
+      ? html`<${RankIcon} tier=${entity.tier} division=${entity.division} size=${30} />`
+      : "–"}</td>
+    ${isRunner
+      ? html`<td class="meta rank-cell-points">${runnerTimeLabel(entity.time_cs)}</td>
+          <td class="meta rank-cell-points">${runnerTimeLabel(entity.you.time_cs)}</td>
+          <td class="meta rank-cell-gain" title=${runnerGapTitle(entity)}>${runnerGapLabel(entity)}</td>
+          <td class="rank-cell-play">${entity.video
+            ? html`<button type="button" class="icon-button rank-row-play"
+                onclick=${() => setShowVideo(!showVideo)}
+                title=${showVideo ? "Close the video" : `Watch ${data.runner}'s run`}
+                aria-label=${showVideo ? "Close the video" : `Watch ${data.runner}'s run`}
+                aria-expanded=${showVideo ? "true" : "false"}>
+                <${Icon} name=${showVideo ? "chevron" : "play"} size=${16} /></button>`
+            : null}</td>`
+      : html`<td class="meta rank-cell-points">${fmtPoints(entity.score)}</td>
+          <td class="meta rank-cell-next">${nextRankLabel(entity)}</td>
+          <td class="meta rank-cell-gain" title=${gainTitle(entity)}>+${toPoints(entity.gain)}</td>
+          <td><button type="button" class="chip"
+            onclick=${() => onToggle(entity.key, !entity.excluded)}
+            title=${entity.excluded
+              ? "Include this in every rating again"
+              : "Exclude this from every rating"}>
+            ${entity.excluded ? "Include" : "Ignore"}</button></td>`}
+  </tr>`;
+  const videoRow = showVideo
+    ? html`<tr class="replay-row rank-video-row"><td colspan="6">
+        <div class="rank-video-box">
+          <${ExampleMedia} entry=${{ video: entity.video, runner: data.runner,
+                                      time_cs: entity.time_cs }} autoplay />
+        </div></td></tr>`
+    : null;
+  return [row, videoRow];
+}
+
 export function Breakdown({ t, data, routeOrder, onToggle, variant = "yours",
                             onOpenEntity = null }) {
   const isRunner = variant === "runner";
@@ -621,40 +679,17 @@ export function Breakdown({ t, data, routeOrder, onToggle, variant = "yours",
         ${isRunner
           ? html`<th class="rank-cell-points">Their time</th>
               <th class="rank-cell-points">Your time</th>
-              <th class="rank-cell-gain">Gap</th>`
+              <th class="rank-cell-gain">Gap</th>
+              <th></th>`
           : html`<th class="rank-cell-points">Score (pts)</th>
               <th>Next rank</th>
               <th class="rank-cell-gain">Gain (pts)</th>
               <th></th>`}
       </tr></thead>
       <tbody>
-      ${rows.map((entity) => html`<tr class=${[
-          entity.score == null ? "unpracticed" : "",
-          entity.excluded ? "is-excluded" : ""].filter(Boolean).join(" ")}>
-        <td class="rank-cell-name">
-          <${EntityArt} t=${t} entityKey=${entity.key} className="rank-row-icon" />
-          ${onOpenEntity && entity.time_cs != null
-            ? html`<button type="button" class="rank-entity-link textlink"
-                title=${`Open ${data.runner}'s entry for this in the Library`}
-                onclick=${() => onOpenEntity(entity)}>${entity.label}</button>`
-            : html`<span>${entity.label}</span>`}</td>
-        <td>${entity.tier
-          ? html`<${RankIcon} tier=${entity.tier} division=${entity.division} size=${30} />`
-          : "–"}</td>
-        ${isRunner
-          ? html`<td class="meta rank-cell-points">${runnerTimeLabel(entity.time_cs)}</td>
-              <td class="meta rank-cell-points">${runnerTimeLabel(entity.you.time_cs)}</td>
-              <td class="meta rank-cell-gain" title=${runnerGapTitle(entity)}>${runnerGapLabel(entity)}</td>`
-          : html`<td class="meta rank-cell-points">${fmtPoints(entity.score)}</td>
-              <td class="meta rank-cell-next">${nextRankLabel(entity)}</td>
-              <td class="meta rank-cell-gain" title=${gainTitle(entity)}>+${toPoints(entity.gain)}</td>
-              <td><button type="button" class="chip"
-                onclick=${() => onToggle(entity.key, !entity.excluded)}
-                title=${entity.excluded
-                  ? "Include this in every rating again"
-                  : "Exclude this from every rating"}>
-                ${entity.excluded ? "Include" : "Ignore"}</button></td>`}
-      </tr>`)}
+      ${rows.map((entity) => html`<${BreakdownRow} key=${entity.key} t=${t} data=${data}
+          entity=${entity} isRunner=${isRunner} onToggle=${onToggle}
+          onOpenEntity=${onOpenEntity} />`)}
       </tbody>
     </table>
   </div>`;
@@ -1099,8 +1134,7 @@ export function RankPage({ t, onOpenRunner = () => {} }) {
           onToggle=${toggleExcluded} />
       </div>
       <div class="practice-card">
-        <${Leaderboard} key=${scopeId} t=${t} scopeId=${scopeId} onOpenRunner=${onOpenRunner}
-          hasExcluded=${data.entities.some((entity) => entity.excluded)} />
+        <${Leaderboard} key=${scopeId} t=${t} scopeId=${scopeId} onOpenRunner=${onOpenRunner} />
       </div>`}
   </div>`;
 }

@@ -3167,6 +3167,16 @@
     width: 26px; height: 26px; object-fit: contain; vertical-align: middle; margin-right: 8px;
   }
   .rank-row-icon.courseicon { width: 24px; height: 24px; margin: 0 9px 0 1px; }
+  /* The runner breakdown's ▶ column and the player it opens beneath the row
+     (his third read, 2026-08-23). The ▶ is the practice log's own
+     `.icon-button`; the row under it is the practice log's own `.replay-row`
+     wearing the Library card's media block. Capped like the Library's own
+     flat list (`.library-leaderboard-row .library-example`, 420px): an
+     uncapped 16/9 box across a full table row is a screenful of video. */
+  .rank-cell-play { width: 34px; padding-inline: 4px; }
+  .rank-cell-play .icon-button { width: 31px; min-width: 31px; min-height: 31px; padding-inline: 0; }
+  .rank-video-box { max-width: 480px; }
+  .rank-video-box .library-example-media { border-radius: 6px; overflow: hidden; }
   .rank-table tr.unpracticed .rank-cell-name { opacity: .55; }
   /* Excluded dims the WHOLE row (it counts nowhere); unpracticed dims only the
      name (gain_for's docstring: it should still read as a quest, not dead

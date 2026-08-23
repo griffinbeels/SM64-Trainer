@@ -206,7 +206,13 @@ def test_scope_rows_memoize_on_the_sheet_and_die_with_it():
     sheet = cache.current(library, {}, ranks, version="us")
     you = scopes.aggregate({}, GROUPS)
     sheet.leaderboard("overall", GROUPS, you_aggregate=you)
-    assert "overall" in sheet._rows_by_scope
+    assert len(sheet._rows_by_scope) == 1
+    # The memo keys on the RESOLVED groups, not the scope id alone: the
+    # same scope narrowed by an exclusion (round 1, third read) is a
+    # different board and must not reuse the wider one's rows.
+    narrower = [{"need": 1, "candidates": []}]
+    sheet.leaderboard("overall", narrower, you_aggregate=you)
+    assert len(sheet._rows_by_scope) == 2
     library.revision = "rev2"
     rebuilt = cache.current(library, {}, ranks, version="us")
     assert rebuilt is not sheet and rebuilt._rows_by_scope == {}
@@ -251,6 +257,22 @@ def test_runner_breakdown_widens_entities_with_the_users_own_numbers():
                              "tier": entity["you"]["tier"],
                              "division": entity["you"]["division"]}
     assert entity["you"]["tier"] is not None    # 50.0 grades somewhere
+
+
+def test_runner_breakdown_carries_the_video_of_the_entry_that_set_the_time():
+    """Round 1, third read: the runner page plays the entry beneath the row,
+    so the breakdown ships the VIDEO of the entry that set the runner's
+    graded time -- the fastest one, never a slower run's video."""
+    slow = {**_entry("Speedy", 4500), "video": "https://youtu.be/slow"}
+    fast = {**_entry("Speedy", 4000), "video": "https://youtu.be/fast"}
+    sheet = _sheet([slow, fast])
+    breakdown = sheet.runner_breakdown(
+        "Speedy", GROUPS, you_scores={}, you_times={}, label_of=lambda key: key)
+    entity = breakdown["entities"][0]
+    assert entity["time_cs"] == 4000 and entity["video"] == "https://youtu.be/fast"
+    assert _sheet([_entry("Speedy", 4000)]).runner_breakdown(
+        "Speedy", GROUPS, you_scores={}, you_times={},
+        label_of=lambda key: key)["entities"][0]["video"] is None
 
 
 def test_runner_breakdown_of_an_unknown_runner_is_none():

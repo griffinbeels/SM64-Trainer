@@ -1193,7 +1193,7 @@ def test_the_runner_page_story_reaches_a_real_runner(page):
     # 1) -- a button that navigates, not one that edits -- so it is excluded.
     ignore_buttons = page.evaluate(
         "document.querySelectorAll('.runner-page .rank-breakdown tbody "
-        "button:not(.rank-entity-link)').length")
+        "button:not(.rank-entity-link):not(.rank-row-play)').length")
     assert ignore_buttons == 0, (
         f"found {ignore_buttons} button(s) in the runner page's breakdown -- "
         "read-only means no Ignore/Include control")

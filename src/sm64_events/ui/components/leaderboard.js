@@ -31,22 +31,19 @@ function runnerName(row) {
   return row.you ? "You" : row.runner;
 }
 
-// The basis line is unconditional -- always PB, every entity, whatever the
-// Rank tab is showing -- and only APPENDS the reason(s) the two numbers can
-// differ. Two independent causes, and a mismatch from either must be read as
-// intended rather than discovered: the board ignores the user's rank mode,
-// and it ignores his exclusions.
-function basisNote(board, hasExcluded) {
-  const reasons = [];
-  if (board.rank_mode !== "pb") {
-    reasons.push(`it's graded on ${MODE_LABEL[board.rank_mode] || board.rank_mode} right now`);
-  }
-  if (hasExcluded) reasons.push("you've excluded an entity from this scope");
+// The basis line is unconditional -- always PB, whatever the Rank tab is
+// showing -- and only APPENDS the one reason the two numbers can differ: the
+// board ignores the user's rank mode. (It used to name a second reason, his
+// exclusions; since round 1's third read the board is shaped by them exactly
+// as his own tab is, so there is no discrepancy left to explain.)
+function basisNote(board) {
+  const mismatch = board.rank_mode !== "pb"
+    ? ` That can differ from what your Rank tab shows — it's graded on ${
+      MODE_LABEL[board.rank_mode] || board.rank_mode} right now.`
+    : "";
   return "Ranked by PB — every runner's number is their lifetime best time on "
-    + "the Ultimate Sheet, graded the same way your own practice PB is."
-    + (reasons.length
-      ? ` That can differ from what your Rank tab shows — ${reasons.join(", and ")}.`
-      : "");
+    + "the Ultimate Sheet, graded the same way your own practice PB is, over "
+    + "the same entities your own rating covers." + mismatch;
 }
 
 // The drop is never silent: a board that hides most of the sheet without a
@@ -89,7 +86,7 @@ function LeaderboardRow({ row, youRowRef, onOpenRunner }) {
   </div>`;
 }
 
-export function Leaderboard({ t, scopeId, onOpenRunner = () => {}, hasExcluded = false }) {
+export function Leaderboard({ t, scopeId, onOpenRunner = () => {} }) {
   const [board, setBoard] = useState(null);
   const [error, setError] = useState(null);
   const [query, setQuery] = useState("");
@@ -140,7 +137,7 @@ export function Leaderboard({ t, scopeId, onOpenRunner = () => {}, hasExcluded =
       <button type="button" class="chip leaderboard-jump" onclick=${jumpToYou}>
         Jump to you</button>
     </div>
-    <p class="meta leaderboard-basis">${basisNote(board, hasExcluded)}</p>
+    <p class="meta leaderboard-basis">${basisNote(board)}</p>
     <p class="meta leaderboard-omitted">${omittedNote(board.omitted)}</p>
     <div class="leaderboard-body">
       ${rows.map((row) => html`<${LeaderboardRow} key=${row.you ? "you" : row.runner}

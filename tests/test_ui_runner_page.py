@@ -109,10 +109,12 @@ def assert_no_editing_controls_on_the_runner_page(page):
     """Read-only, contract-mandated: no Ignore/Include control, no ✎ icon-
     repoint affordance, anywhere on the runner page. The entity-name DOORS
     (`.rank-entity-link`, round 1) are buttons too, but they change nothing
-    -- they navigate -- so the count excludes exactly that class."""
+    -- they navigate -- so the count excludes exactly that class, and the
+    ▶ that reveals a video beneath the row (`.rank-row-play`, third read)
+    for the same reason: revealing is not editing."""
     ignore_buttons = page.evaluate(
         "document.querySelectorAll('.runner-page .rank-breakdown tbody "
-        "button:not(.rank-entity-link)').length")
+        "button:not(.rank-entity-link):not(.rank-row-play)').length")
     assert ignore_buttons == 0, (
         f"found {ignore_buttons} button(s) in the runner page's breakdown rows "
         "-- the runner variant must carry no Ignore/Include control")
@@ -457,3 +459,60 @@ def test_both_breakdowns_lead_with_art_and_open_in_route_order(rank_page):
     rank_page.wait_for(".runner-page .rank-entity-link", timeout_ms=8000)
     assert_every_row_leads_with_its_art(rank_page, ".runner-page")
     assert_breakdown_opens_in_served_order(rank_page, ".runner-page")
+
+
+# ---- Round 1, third read (2026-08-23): the art is part of the door, and a
+# row with a video plays it beneath itself ---------------------------------
+
+def test_the_entity_art_sits_inside_the_doors_hit_target(rank_page):
+    """"The course icon should be clickable as well. It should bring me to
+    the exact same position as if I clicked the link normally" -- one
+    button holds both, so there is no second click path to keep in sync."""
+    click_a_runner_row(rank_page)
+    rank_page.wait_for(".runner-page .rank-entity-link", timeout_ms=8000)
+    assert rank_page.evaluate(
+        "!!document.querySelector('.runner-page .rank-entity-link .rank-row-icon')"), (
+        "the entity's art is outside the name's door")
+
+
+PLAY_COLUMN = """
+  JSON.stringify((() => {
+    const rows = Array.from(document.querySelectorAll('.runner-page .rank-table tbody tr:not(.rank-video-row)'));
+    return {rows: rows.length, plays: rows.filter((row) => row.querySelector('.rank-row-play')).length,
+      headers: document.querySelectorAll('.runner-page .rank-table th').length};
+  })())
+"""
+EXPANDED = """
+  JSON.stringify((() => {
+    const btn = document.querySelector('.runner-page .rank-row-play');
+    const videoRow = btn.closest('tr').nextElementSibling;
+    const isVideoRow = !!(videoRow && videoRow.classList.contains('rank-video-row'));
+    return {isVideoRow, expanded: btn.getAttribute('aria-expanded'),
+      player: !!(isVideoRow && videoRow.querySelector('.library-example-media iframe, .library-example-media video, .library-example-media a')),
+      openRows: document.querySelectorAll('.runner-page .rank-video-row').length};
+  })())
+"""
+
+
+def test_a_row_with_a_video_plays_it_beneath_itself(rank_page):
+    """"click on a Play button (like the exact one in the practice log)
+    within each row... the furthest right column (if the video exists)...
+    the video should appear directly underneath the entry in the row, like
+    an expandable dropdown". Same ▶/chevron `icon-button` and the same
+    `replay-row` the practice log uses; the player is the Library card's
+    own `ExampleMedia`, never a second embed path."""
+    click_a_runner_row(rank_page)
+    rank_page.wait_for(".runner-page .rank-row-play", timeout_ms=8000)
+    column = json.loads(rank_page.evaluate(PLAY_COLUMN))
+    assert 0 < column["plays"] < column["rows"], (
+        f"expected some rows with a video and some without: {column}")
+    assert column["headers"] == 6, column
+    rank_page.evaluate("document.querySelector('.runner-page .rank-row-play').click()")
+    rank_page.wait_ms(400)
+    opened = json.loads(rank_page.evaluate(EXPANDED))
+    assert opened["isVideoRow"] and opened["player"] and opened["openRows"] == 1, opened
+    assert opened["expanded"] == "true", opened
+    rank_page.evaluate("document.querySelector('.runner-page .rank-row-play').click()")
+    rank_page.wait_ms(200)
+    assert rank_page.count(".runner-page .rank-video-row") == 0, "the video row did not close"
+

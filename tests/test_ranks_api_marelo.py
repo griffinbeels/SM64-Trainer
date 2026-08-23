@@ -516,15 +516,30 @@ def test_leaderboard_basis_is_pb_even_under_avg_mode(client):
     client.put("/api/ranks/mode", json={"mode": "pb"})
 
 
-def test_leaderboard_ignores_the_users_exclusions(client):
-    """Exclusion shapes the scope for HIM; it must not shrink the denominator
-    every runner on the board is judged on (star:9:2 is the seeded ladder
-    every fixture in this file relies on being present)."""
+def test_leaderboard_applies_the_users_exclusions(client):
+    """Round 1, third read (2026-08-23), reversing the design-session rule
+    that a runner's denominator must not shrink by the user's choices: "if
+    I have personally excluded certain segments... it should also be
+    excluded for all of the fake leaderboards & their pages as well". So an
+    exclusion narrows the board's `n` exactly as it narrows his own, and
+    the entity leaves every runner's breakdown -- on the very next fetch,
+    with none of the cache's four inputs having moved (the per-scope row
+    memo keys on the resolved groups). star:9:2 is the seeded ladder every
+    fixture in this file relies on being present, so it is restored."""
     before = client.get("/api/leaderboard?scope=overall").json()
+    runner = next(row["runner"] for row in before["rows"] if row["runner"])
+    assert "star:9:2" in {entity["key"] for entity in
+                          client.get(f"/api/leaderboard/runner/{runner}?scope=overall").json()["entities"]}
     client.post("/api/marelo/exclude", json={"entity": "star:9:2", "excluded": True})
-    after = client.get("/api/leaderboard?scope=overall").json()
-    assert after["n"] == before["n"]
-    client.post("/api/marelo/exclude", json={"entity": "star:9:2", "excluded": False})
+    try:
+        after = client.get("/api/leaderboard?scope=overall").json()
+        assert after["n"] == before["n"] - 1
+        keys = {entity["key"] for entity in
+                client.get(f"/api/leaderboard/runner/{runner}?scope=overall").json()["entities"]}
+        assert "star:9:2" not in keys
+    finally:
+        client.post("/api/marelo/exclude", json={"entity": "star:9:2", "excluded": False})
+    assert client.get("/api/leaderboard?scope=overall").json()["n"] == before["n"]
 
 
 def test_leaderboard_omitted_counts_a_runner_scored_elsewhere_but_not_here(client):

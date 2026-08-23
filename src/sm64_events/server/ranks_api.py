@@ -636,10 +636,13 @@ def create_ranks_router(service, library=None, adoptions=None,
             raise HTTPException(503, "rank standards unavailable")
 
     def _scope_groups(scope_id: str) -> list[dict]:
-        """Scope membership with NO exclusion filter: the user's exclusions
-        shape the scope for him, and must not shrink the denominator every
-        runner is judged on."""
-        return _groups(service, scope_id, excluded=set())
+        """Scope membership WITH the user's own exclusion set -- the same
+        resolution his own `/api/marelo` grades on. Until round 1's third
+        read (2026-08-23) this passed `excluded=set()` so a runner's
+        denominator could not shrink by his choices; his ruling reversed
+        it: "it should also be excluded for all of the fake leaderboards &
+        their pages as well"."""
+        return _groups(service, scope_id)
 
     @router.get("/leaderboard")
     def leaderboard(scope: str | None = None):

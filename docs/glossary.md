@@ -692,9 +692,10 @@ simply absent from their rating, the same rule your own [[MARELO]] follows.
 Every [[runner]] who has practiced something in a [[scope]], plus you,
 ordered by [[MARELO]] and numbered the same way [[Leaderboard mode]]
 numbers its own list: a tie shares a position and the next skips ahead by
-the tie's size. The board drops a [[runner]] with nothing practiced in this
-[[scope]] and always keeps your own row, even at zero — but it COUNTS the
-drop rather than staying silent about it: it states how many it left off, so
+the tie's size. The board covers the entities your own rating covers — exclude an
+entity from your own rating and the board drops it too. It drops a [[runner]] with nothing
+practiced in this [[scope]] and always keeps your own row, even at zero —
+but it COUNTS the drop rather than staying silent about it: it states how many it left off, so
 the board can never read as "this is everyone" when it is not. Opening one
 [[runner]]'s row lands on their [[Runner page]], which widens every entity
 with your own score and time on it, so the two read side by side.
@@ -738,9 +739,12 @@ breakdown table with its last three columns widened for comparison: their
 time, your time, and the gap between the two — it keeps [[rank]] on each
 entity the same as your own tab's. No control on it can change anything —
 no excluding an entity, no repointing an icon. Its one door out: a lit
-coverage tile, or an entity's name in the breakdown, opens the [[Library
-tab]] on that entity landed on this [[runner]]'s own [[sheet entry]] for
-it, and the [[Rank tab]] afterwards returns to the same page.
+coverage tile, or an entity's name (icon included) in the breakdown, opens
+the [[Library tab]] on that entity landed on this [[runner]]'s own [[sheet
+entry]] for it, and the [[Rank tab]] afterwards returns to the same page.
+A row whose entry has a video carries a play control that opens that video
+right beneath the row. Exclude an entity from your own rating and this page drops it too — it
+covers the same entities your [[Rank tab]] does.
 
 - **Lives** — the page
   (`src/sm64_events/ui/components/runnerpage.js`), reached from
