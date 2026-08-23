@@ -373,3 +373,87 @@ def test_the_syntheticyou_row_never_offers_a_runner_link(library_page):
       })()
     """)
     assert not you_is_a_link, "the synthetic You row rendered as a clickable runner link"
+
+# ---- Round 1, second read (2026-08-22): links look like links, every row
+# leads with its art, and the breakdown opens in route order --------------
+
+LINK_LOOK = """
+  (() => {
+    const link = document.querySelector(%s);
+    const plain = document.querySelector(%s);
+    const ls = getComputedStyle(link), ps = getComputedStyle(plain);
+    return JSON.stringify({linkColor: ls.color, plainColor: ps.color,
+      decoration: ls.textDecorationLine, cursor: ls.cursor});
+  })()
+"""
+
+
+def assert_reads_as_a_link(page, link_selector, plain_selector):
+    """His ruling: "Anything that's a link should be obvious that it's a
+    link" -- at REST, not only on hover: a colour the surrounding text does
+    not have, an underline, and a pointer."""
+    look = json.loads(page.evaluate(LINK_LOOK % (json.dumps(link_selector), json.dumps(plain_selector))))
+    assert look["linkColor"] != look["plainColor"], f"the link wears the plain text colour: {look}"
+    assert "underline" in look["decoration"], f"the link is not underlined at rest: {look}"
+    assert look["cursor"] == "pointer", look
+
+
+def test_every_text_door_reads_as_a_link_at_rest(rank_page, library_page):
+    click_a_runner_row(rank_page)
+    rank_page.wait_for(".runner-page .rank-entity-link", timeout_ms=8000)
+    assert_reads_as_a_link(rank_page, ".runner-page .rank-entity-link",
+                           ".runner-page .rank-cell-points")
+    library_page.wait_for(".library-target .library-runner-link", timeout_ms=8000)
+    assert_reads_as_a_link(library_page, ".library-target .library-runner-link",
+                           ".library-target .library-plain-time")
+
+
+ROW_ART = """
+  JSON.stringify((() => {
+    const rows = Array.from(document.querySelectorAll(%s + ' .rank-table tbody tr'));
+    return {rows: rows.length,
+      withArt: rows.filter((row) => {
+        const art = row.querySelector('.rank-cell-name .rank-row-icon');
+        return art && art.getAttribute('src') && art.getBoundingClientRect().width > 0;
+      }).length};
+  })())
+"""
+
+
+def assert_every_row_leads_with_its_art(page, scope_selector):
+    """"to the left of all the names, we should include their star/segment
+    icons" -- on both the runner page and his own tab, since both render
+    through the one `Breakdown`."""
+    art = json.loads(page.evaluate(ROW_ART % json.dumps(scope_selector)))
+    assert art["rows"] > 10, art
+    assert art["withArt"] == art["rows"], f"rows without a painted icon: {art}"
+
+
+SERVED_ORDER = """
+  fetch('/api/marelo?scope=overall').then((r) => r.json())
+    .then((body) => JSON.stringify(body.entities.map((e) => e.label)))
+"""
+DRAWN_ORDER = """
+  JSON.stringify(Array.from(document.querySelectorAll(%s + ' .rank-table tbody tr .rank-cell-name'))
+    .map((cell) => cell.textContent.trim()))
+"""
+
+
+def assert_breakdown_opens_in_served_order(page, scope_selector):
+    """"Default sort should be Route Order" -- the rows open exactly as the
+    server ordered them (route order on a route, scope order on Overall),
+    and the toggle names that state."""
+    label = page.evaluate(f"document.querySelector({scope_selector!r} + ' .rank-breakdown-head .chip').textContent")
+    assert label == "Sort: route order", label
+    served = json.loads(page.evaluate(SERVED_ORDER))
+    drawn = json.loads(page.evaluate(DRAWN_ORDER % json.dumps(scope_selector)))
+    assert drawn[:20] == served[:20], f"drawn {drawn[:5]}... vs served {served[:5]}..."
+
+
+def test_both_breakdowns_lead_with_art_and_open_in_route_order(rank_page):
+    assert_every_row_leads_with_its_art(rank_page, ".rank-page")
+    assert_breakdown_opens_in_served_order(rank_page, ".rank-page")
+    click_a_runner_row(rank_page)
+    rank_page.wait_for(".runner-page .rank-entity-link", timeout_ms=8000)
+    assert_every_row_leads_with_its_art(rank_page, ".runner-page")
+    assert_breakdown_opens_in_served_order(rank_page, ".runner-page")

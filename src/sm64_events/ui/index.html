@@ -723,34 +723,29 @@
      already carry keep applying with no second copy of them here. Button
      chrome reset to plain text, styled up only on hover/focus -- the same
      "looks clickable only once it is" law the leaderboard row above follows. */
-  .library-runner-link {
+  /* ONE look for every text that is a DOOR -- a runner's name in the
+     Library (`.library-runner-link`), an entity's name in the runner page's
+     breakdown (`.rank-entity-link`), whatever comes next: the `.textlink`
+     class, which both wear. His ruling, 2026-08-22: "Anything that's a link
+     should be obvious that it's a link" -- so it is underlined and in the
+     palette's link blue AT REST, not only on hover, the same convention the
+     page's own `<a>`s follow; hover and keyboard focus turn it gold. It is a
+     <button> reset to flowing text: the global `button` rule sets
+     `min-height: 34px; display: inline-flex`, and a reset that left either
+     alone grew every row the name lives in ~17px (measured 2026-08-21:
+     `.library-plain-entry` 41.75px -> 24.75px once `min-height: 0; display:
+     inline` landed -- a band holds dozens of plain rows, so that was a
+     silent geometry change to the whole ladder). `.library-example-plus`
+     carries the same `min-height: 0` for the same reason. */
+  .textlink {
     appearance: none; background: none; border: none; padding: 0; margin: 0;
-    font: inherit; color: inherit; text-align: left; cursor: pointer;
-    /* Fix wave (final review, H1): the global `button` rule sets
-       `min-height: 34px; display: inline-flex`, and this reset never
-       overrode either -- so a plain-text runner name that became a button
-       grew the row it lives in ~17px (measured: `.library-plain-entry`
-       41.75px -> 24.75px, `.library-example-meta` 48.38px -> 40.38px). Plain
-       rows are the dense ones (a band holds dozens), so that reads as a
-       silent geometry change to the whole ladder. `min-height: 0` is the
-       same override `.library-example-plus` already carries next to this
-       rule; `display: inline` puts it back to flowing as text. */
+    font: inherit; text-align: left; cursor: pointer;
     min-height: 0; display: inline;
+    color: var(--blue); text-decoration: underline; text-underline-offset: 2px;
+    text-decoration-color: color-mix(in srgb, var(--blue) 55%, transparent);
   }
-  .library-runner-link:hover, .library-runner-link:focus-visible {
-    color: var(--gold); text-decoration: underline;
-  }
-  /* The runner page's breakdown: an entity's name is the door onto that
-     runner's Library entry (rankpage.js `Breakdown`, runner variant). Same
-     text reset as the runner link above, for the same reason -- the global
-     `button` rule would otherwise grow every table row. */
-  .rank-entity-link {
-    appearance: none; background: none; border: none; padding: 0; margin: 0;
-    font: inherit; color: inherit; text-align: left; cursor: pointer;
-    min-height: 0; display: inline;
-  }
-  .rank-entity-link:hover, .rank-entity-link:focus-visible {
-    color: var(--gold); text-decoration: underline;
+  .textlink:hover, .textlink:focus-visible {
+    color: var(--gold); text-decoration-color: var(--gold);
   }
   .library-example-time {
     font-variant-numeric: tabular-nums; color: #dfe7ef; font-weight: 600;
@@ -3162,6 +3157,16 @@
     text-align: left; font-size: 11px; font-weight: 600; color: var(--muted);
     white-space: nowrap;
   }
+  /* Every breakdown row leads with the entity's own art (his second read,
+     2026-08-22: "to the left of all the names... their star/segment icons").
+     Same art the coverage tile draws, at the tile's 60% -- big enough to
+     read at a glance, small enough that the 30px rank cap beside it still
+     sets the row height. Inline, never flex: a `<td>` turned flex container
+     stops being a table cell and the column layout goes with it. */
+  .rank-row-icon {
+    width: 26px; height: 26px; object-fit: contain; vertical-align: middle; margin-right: 8px;
+  }
+  .rank-row-icon.courseicon { width: 24px; height: 24px; margin: 0 9px 0 1px; }
   .rank-table tr.unpracticed .rank-cell-name { opacity: .55; }
   /* Excluded dims the WHOLE row (it counts nowhere); unpracticed dims only the
      name (gain_for's docstring: it should still read as a quest, not dead

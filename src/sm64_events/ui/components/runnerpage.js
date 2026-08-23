@@ -100,7 +100,7 @@ export function RunnerPage({ t, runnerName, onClose, openLibrary = () => {} }) {
                   + "their entry in the Library."} /></div>
             </div>
             <div class="practice-card">
-              <${Breakdown} key=${scopeId} data=${data} routeOrder=${routeOrder} variant="runner"
+              <${Breakdown} key=${scopeId} t=${t} data=${data} routeOrder=${routeOrder} variant="runner"
                 onOpenEntity=${openEntity} />
             </div>
           <//>`}

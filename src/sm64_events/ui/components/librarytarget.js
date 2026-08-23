@@ -315,7 +315,7 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd,
 // the global `button` rule would otherwise grow every row it sits in.
 function RunnerName({ entry, className, onOpenRunner }) {
   if (!onOpenRunner || entry._isYou) return html`<span class=${className}>${entry.runner}</span>`;
-  return html`<button type="button" class="${className} library-runner-link"
+  return html`<button type="button" class="${className} library-runner-link textlink"
       title=${`View ${entry.runner}'s ratings`}
       onclick=${(clickEvent) => { clickEvent.stopPropagation(); onOpenRunner(entry.runner); }}
       >${entry.runner}</button>`;

@@ -596,10 +596,16 @@ function runnerGapTitle(entity) {
 // any of the entities and be brought immediately to the library page for
 // that entity, focused specifically on this player's entry". A row with no
 // time has no entry to land on and stays plain text.
-export function Breakdown({ data, routeOrder, onToggle, variant = "yours",
+//
+// Rows open in the SERVED order -- route order on a route, scope order
+// otherwise ("Default sort should be Route Order", his second read,
+// 2026-08-22; until then biggest-gain-first was the default off a route).
+// The toggle to biggest gain stays. Every row leads with the entity's own
+// art (`EntityArt`), on both variants: "make it easier to parse quickly".
+export function Breakdown({ t, data, routeOrder, onToggle, variant = "yours",
                             onOpenEntity = null }) {
   const isRunner = variant === "runner";
-  const [byGain, setByGain] = useState(!routeOrder);
+  const [byGain, setByGain] = useState(false);
   const rows = byGain
     ? [...data.entities].sort((entityA, entityB) => entityB.gain - entityA.gain)
     : data.entities;
@@ -625,11 +631,13 @@ export function Breakdown({ data, routeOrder, onToggle, variant = "yours",
       ${rows.map((entity) => html`<tr class=${[
           entity.score == null ? "unpracticed" : "",
           entity.excluded ? "is-excluded" : ""].filter(Boolean).join(" ")}>
-        <td class="rank-cell-name">${onOpenEntity && entity.time_cs != null
-          ? html`<button type="button" class="rank-entity-link"
-              title=${`Open ${data.runner}'s entry for this in the Library`}
-              onclick=${() => onOpenEntity(entity)}>${entity.label}</button>`
-          : entity.label}</td>
+        <td class="rank-cell-name">
+          <${EntityArt} t=${t} entityKey=${entity.key} className="rank-row-icon" />
+          ${onOpenEntity && entity.time_cs != null
+            ? html`<button type="button" class="rank-entity-link textlink"
+                title=${`Open ${data.runner}'s entry for this in the Library`}
+                onclick=${() => onOpenEntity(entity)}>${entity.label}</button>`
+            : html`<span>${entity.label}</span>`}</td>
         <td>${entity.tier
           ? html`<${RankIcon} tier=${entity.tier} division=${entity.division} size=${30} />`
           : "–"}</td>
@@ -718,9 +726,20 @@ export function ScopeChips({ activeScopeId, onPick, refreshKey, source = "/api/m
 // destination). Omitting both renders a STATIC tile (`.is-static` -- no
 // focus stop, no pointer cursor, no hover), never a tile whose click
 // silently does nothing. `onEdit` (the ✎) is optional the same way.
+// The one way this file draws an entity's ART -- the coverage tile and
+// (since 2026-08-22, his second read: "to the left of all the names, we
+// should include their star/segment icons... reuse them") every breakdown
+// row. `entityIconSrc` is the SAME call the practice selector's cells make,
+// with the same generic-star fallback, so a segment or a repointed star can
+// never look different here than there.
+function EntityArt({ t, entityKey, className = "" }) {
+  const iconSrc = entityIconSrc(t, entityKey);
+  return html`<img class="${className} ${isGenericArt(iconSrc) ? "" : "courseicon"}" src=${iconSrc}
+       onerror=${(event) => fallbackToGenericStar(event, fallbackSlotForEntityKey(entityKey))}
+       alt="" draggable="false" />`;
+}
+
 function EntityTile({ t, entity, size = 42, open, onToggle, onOpen, onEdit }) {
-  const fallbackSlot = fallbackSlotForEntityKey(entity.key);
-  const iconSrc = entityIconSrc(t, entity.key);
   const practiced = entity.score != null;
   const onClick = onToggle || onOpen || null;
   // Enter/Space on the ✎ must not also fire the tile's own click.
@@ -739,9 +758,7 @@ function EntityTile({ t, entity, size = 42, open, onToggle, onOpen, onEdit }) {
         ? `${entity.label} — ${capName(entity.tier)} ${divisionDigit(entity.division)} · ${fmtPoints(entity.score)} pts`
         : `${entity.label} — not practiced yet`)
         + (onOpen ? " · open their entry in the Library" : "")}>
-    <img class="entity-tile-icon ${isGenericArt(iconSrc) ? "" : "courseicon"}" src=${iconSrc}
-         onerror=${(event) => fallbackToGenericStar(event, fallbackSlot)}
-         alt="" draggable="false" />
+    <${EntityArt} t=${t} entityKey=${entity.key} className="entity-tile-icon" />
     ${onEdit ? html`<span class="editicon tile-editicon" role="button"
           tabindex="0" title=${`Choose icon for ${entity.label}…`}
           aria-label=${`Choose icon for ${entity.label}`}
@@ -1078,7 +1095,7 @@ export function RankPage({ t, onOpenRunner = () => {} }) {
           editing this route or ignoring an entry rewrites the curve.</p>
       </div>
       <div class="practice-card">
-        <${Breakdown} key=${scopeId} data=${data} routeOrder=${routeOrder}
+        <${Breakdown} key=${scopeId} t=${t} data=${data} routeOrder=${routeOrder}
           onToggle=${toggleExcluded} />
       </div>
       <div class="practice-card">
