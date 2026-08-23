@@ -897,8 +897,12 @@ def _check_player1_controller(ctx) -> Verdict:
         if deflected is not None and held is not None:
             return Verdict(
                 "verified", value=candidate,
-                measured=f"stick {deflected[0]:+d},{deflected[1]:+d}"
-                         f" (magnitude {deflected[2]:.1f})",
+                # A DICT, like every other gate's `measured` -- the wire model
+                # (`server/sync_api.py::VerdictBody.measured: dict | None`)
+                # 422'd the string this first shipped as, so the dashboard
+                # missed the one verdict his live run produced (2026-08-23).
+                measured={"stick_x": deflected[0], "stick_y": deflected[1],
+                          "magnitude": round(deflected[2], 1)},
                 evidence=f"the stick left the dead zone and buttons"
                          f" {button_names(held) or ('none',)} were held, with"
                          f" the dead-zone and magnitude relation holding on"
