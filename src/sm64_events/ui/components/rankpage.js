@@ -630,14 +630,21 @@ function BreakdownRow({ t, data, entity, isRunner, onToggle, onOpenEntity,
       aria-expanded=${showVideo ? "true" : "false"}>
       <${Icon} name=${showVideo ? "chevron" : "play"} size=${16} /></button>`;
   const art = html`<${EntityArt} t=${t} entityKey=${entity.key} className="rank-row-icon" />`;
-  const hasDoor = onOpenEntity && entity.time_cs != null;
+  // A runner's row is a door only where they have a time (an entry to land
+  // on); his own row is always one -- the Library page exists for every
+  // entity, and lands on his PB's subdivision where he has one.
+  const hasDoor = onOpenEntity && (isRunner ? entity.time_cs != null : true);
   const row = html`<tr class=${[
       entity.score == null ? "unpracticed" : "",
       entity.excluded ? "is-excluded" : ""].filter(Boolean).join(" ")}>
     <td class="rank-cell-name">
       ${hasDoor
         ? html`<button type="button" class="rank-entity-link textlink"
-            title=${`Open ${data.runner}'s entry for this in the Library`}
+            title=${isRunner
+              ? `Open ${data.runner}'s entry for this in the Library`
+              : entity.pb_attempt_id != null
+                ? "Open your PB's entry in the Library"
+                : "Open this in the Library"}
             onclick=${() => onOpenEntity(entity)}>${art}${entity.label}</button>`
         : html`<span>${art}${entity.label}</span>`}</td>
     <td>${entity.tier
@@ -969,7 +976,10 @@ export function CoverageStrip({ t, data, caption, readOnly = false, onOpenEntity
 // the "Rank" nav slot (never both, and never a cycle: runnerpage.js imports
 // this file's Breakdown/CoverageStrip/ScopeChips, so this file cannot import
 // runnerpage.js back).
-export function RankPage({ t, onOpenRunner = () => {} }) {
+// `openLibrary` (2026-08-23): the door from his OWN breakdown's entity names
+// -- "yes" to the fork left open since the first read -- opening the Library
+// on that entity and landing on his own PB's subdivision.
+export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null }) {
   const [scopes, setScopes] = useState(null);
   const [scopesErr, setScopesErr] = useState(null);
   const [scopeId, setScopeId] = useState(null);
@@ -1152,7 +1162,10 @@ export function RankPage({ t, onOpenRunner = () => {} }) {
       </div>
       <div class="practice-card">
         <${Breakdown} key=${scopeId} t=${t} data=${data} routeOrder=${routeOrder}
-          onToggle=${toggleExcluded} replayable=${replayable} />
+          onToggle=${toggleExcluded} replayable=${replayable}
+          onOpenEntity=${openLibrary
+            ? (entity) => openLibrary({ kind: "target", entity: entity.key, you: true })
+            : null} />
       </div>`}
   </div>`;
 }

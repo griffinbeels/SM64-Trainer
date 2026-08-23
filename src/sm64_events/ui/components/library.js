@@ -139,7 +139,7 @@ function pollImportJob(jobId) {
  * t            the tracker store
  * active       true while the Library tab is the one on screen
  * intent       null, or {kind:"target", entity, strat?, tier?, division?,
- *              entryUrl?, runner?, timeCs?} / {kind:
+ *              entryUrl?, runner?, timeCs?, you?} / {kind:
  *              "compare", attemptId?, entity, strat} — a caller elsewhere in
  *              the app asking the Library to open on something specific
  *              (openLibrary in app.js). "target" routes straight to that
@@ -271,6 +271,10 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
                    // breakdown graded, named by runner + its time_cs.
                    focusRunner: focus.runner || null,
                    focusTimeCs: focus.timeCs ?? null,
+                   // 2026-08-23 (his own Rank tab's doors): land on the
+                   // reader's OWN standing -- the subdivision his PB sits
+                   // in on the section he is graded on.
+                   focusYou: !!focus.you,
                    // 2026-08-14: a LINKED entity resolves to the target its
                    // rows are adopted onto (server-side, same door), and
                    // `focus_row_key` names the piece the link points at --
@@ -363,7 +367,8 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
       openEntity(intent.entity, { strat: intent.strat, tier: intent.tier,
                                   division: intent.division,
                                   entryUrl: intent.entryUrl,
-                                  runner: intent.runner, timeCs: intent.timeCs });
+                                  runner: intent.runner, timeCs: intent.timeCs,
+                                  you: !!intent.you });
     } else if (intent.kind === "compare") {
       // FINAL REVIEW FIX (broad review finding #7, never landed until now):
       // this is a straight PASS-THROUGH into Compare -- the Library's own
@@ -539,6 +544,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
               focusEntryUrl=${entry ? entry.focusEntryUrl : null}
               focusRunner=${entry ? entry.focusRunner : null}
               focusTimeCs=${entry ? entry.focusTimeCs : null}
+              focusYou=${entry ? entry.focusYou : false}
               focusRow=${entry ? entry.focusRow : null}
               fallbackLabel=${entry ? entry.fallbackLabel : null}
               onRelink=${reloadRows}

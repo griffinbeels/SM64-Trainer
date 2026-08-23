@@ -395,7 +395,7 @@ function DivisionGroup({ approach, band, division, query, isYou, trayKeys,
   }
   const withVideo = visible.filter((entry) => entry.video);
   const plain = visible.filter((entry) => !entry.video);
-  return html`<div class="library-division ${effectiveOpen ? "open" : ""}">
+  return html`<div class="library-division ${effectiveOpen ? "open" : ""} ${isYou ? "is-you" : ""}">
     <button type="button" class="library-division-head" aria-expanded=${effectiveOpen}
         onclick=${() => setOpen((prev) => !prev)}>
       <span class="library-division-label">
@@ -781,7 +781,7 @@ function visibleEntriesFor(item, version) {
 
 function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey, onAdd,
                    linkCtx, door = null, focusMark = null, version = "us",
-                   gradingVersion = "us", onOpenRunner }) {
+                   gradingVersion = "us", onOpenRunner, focusYou = false }) {
   const hasJp = !!approach.ladder_jp;
   const ladder = (hasJp && version === "jp" ? approach.ladder_jp : approach.ladder) || {};
   const visibleEntries = useMemo(() => visibleEntriesFor(approach, version),
@@ -828,6 +828,30 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
   // recomputed, so this can place YOUR row at the position it actually
   // earns among the community's without a second fetch.
   const [mode, setMode] = useState("ladder");
+  // His own Rank tab's door (2026-08-23, "doors to the Library, landing on
+  // your own PB's entry"): when the page arrived with `focusYou` and THIS
+  // is the open section, the subdivision his standing sits in auto-opens
+  // (same `autoOpen` a standards-table deep link uses) and, once its fold
+  // has mounted, the ◀ you group scrolls into view and blinks -- the same
+  // `.library-arrival` an entry gets. One landing per page: the ref stands
+  // down when `focusYou` drops, so a later arrival lands again.
+  const landOnYou = !!(focusYou && open && standing && standing.rank);
+  const sectionRef = useRef(null);
+  const landedRef = useRef(false);
+  useEffect(() => {
+    if (!focusYou) { landedRef.current = false; return undefined; }
+    if (!landOnYou || landedRef.current) return undefined;
+    landedRef.current = true;
+    const timer = setTimeout(() => {
+      const group = sectionRef.current
+        && sectionRef.current.querySelector(".library-division.is-you");
+      if (!group) return;
+      group.scrollIntoView({ block: "center", behavior: "smooth" });
+      group.classList.add("library-arrival");
+      setTimeout(() => group.classList.remove("library-arrival"), 2200);
+    }, 550);
+    return () => clearTimeout(timer);
+  }, [focusYou, landOnYou]);
   const standingPbCs = stratInfo ? (stratInfo.pb_cs ?? null)
     : (assoc ? assoc.pbCs : null);
   const leaderboardEntries = useMemo(() => (standingPbCs == null
@@ -840,7 +864,7 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
 
   return html`<div class=${`library-section ${open ? "open" : ""}`
         + (approach._piece ? " library-piece-section" : "")}
-      data-mario=${marioKey}
+      data-mario=${marioKey} ref=${sectionRef}
       id=${sectionAnchorId(approach)}>
     <button type="button" class="library-section-head" onclick=${onOpen}
         aria-expanded=${open}>
@@ -941,7 +965,9 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
                 key=${`${bandAnchorId(approach, band.tier)}-${division.numeral}`}
                 approach=${approach} band=${band} division=${division} query=${query}
                 autoOpen=${!!(focusMark && focusMark.tier === band.tier
-                              && focusMark.division === division.numeral)}
+                              && focusMark.division === division.numeral)
+                           || (landOnYou && standing.rank === band.tier
+                               && standing.division === division.numeral)}
                 isYou=${!!(standing && standing.rank === band.tier
                            && standing.division === division.numeral)}
                 trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
@@ -984,7 +1010,7 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
                                onAdd, trayKeys, focusStrat, focusTier,
                                focusDivision = null, focusEntryUrl = null,
                                focusRunner = null, focusTimeCs = null,
-                               focusRow = null,
+                               focusYou = false, focusRow = null,
                                fallbackLabel = null, onRelink = () => {},
                                resolveEntityLabel = null, onOpenRunner = null }) {
   const [query, setQuery] = useState("");
@@ -1423,7 +1449,7 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
           stratInfo=${approach.matched_strategy ? stratByName[approach.matched_strategy] : null}
           trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
           linkCtx=${linkCtx} version=${version} gradingVersion=${gradingVersion}
-          onOpenRunner=${onOpenRunner} />`)}
+          onOpenRunner=${onOpenRunner} focusYou=${focusYou} />`)}
     <${PiecesList} pieces=${pieces} query=${query}
         expanded=${expanded}
         onOpen=${(identity) => setExpanded((prev) =>

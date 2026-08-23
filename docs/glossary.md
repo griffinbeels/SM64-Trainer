@@ -736,7 +736,9 @@ pill]], the [[scope]] control, and your [[rank]]s across everything.
 One community [[runner]]'s own standing, read-only, reached by clicking
 their name on a [[Rank board]] row or beside one of their times on the
 [[Library tab]] — one screen either way, never two that draw it differently.
-The same [[scope]] chips and the same coverage strip your own [[Rank tab]]
+Your own [[Rank tab]]'s breakdown has the same door: an entity's name opens the
+[[Library tab]] on that entity and lands on the subdivision your own
+[[personal best]] sits in. The same [[scope]] chips and the same coverage strip your own [[Rank tab]]
 draws, pointed at their [[runner rating]] instead of yours, and the same
 breakdown table with its last three columns widened for comparison: their
 time, your time, and the gap between the two — it keeps [[rank]] on each

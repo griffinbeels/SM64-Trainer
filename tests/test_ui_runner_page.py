@@ -681,3 +681,37 @@ def test_his_own_pb_with_a_replay_gets_the_same_play_button(server):
                           ".rank-page .rank-video-row .replay-state") == 1, (
             "pressing ▶ on his own row did not mount the practice log's player beneath it")
 
+
+# ---- The fork closed (2026-08-23): his OWN tab's entity names are doors too,
+# landing on his PB's subdivision -------------------------------------------
+
+def test_his_own_breakdown_names_open_the_library_on_his_pb_subdivision(closed_rank_page):
+    """"should the entity names on your own Rank tab be doors to the Library,
+    landing on your own PB's entry" -- yes. Every own row is a door (the
+    Library page exists for every entity); a row with a PB lands on the
+    subdivision his standing sits in, opened and blinking, on the section he
+    is graded on."""
+    page = closed_rank_page
+    page.wait_for(".rank-page .rank-table tbody tr", timeout_ms=15000)
+    page.wait_ms(300)
+    doors = json.loads(page.evaluate("""
+      JSON.stringify((() => {
+        const links = Array.from(document.querySelectorAll('.rank-page .rank-entity-link'));
+        return {links: links.length,
+          rows: document.querySelectorAll('.rank-page .rank-table tbody tr:not(.rank-video-row)').length,
+          pb: links.filter((l) => l.title.includes("PB")).length};
+      })())"""))
+    assert doors["links"] == doors["rows"] > 0, doors
+    assert doors["pb"] >= 1, "the fixture seeded no PB row to land from"
+    page.evaluate("""Array.from(document.querySelectorAll('.rank-page .rank-entity-link'))
+      .find((l) => l.title.includes("PB")).click()""")
+    page.wait_for(".library-target", timeout_ms=8000)
+    page.wait_ms(1100)
+    landed = json.loads(page.evaluate("""
+      JSON.stringify((() => {
+        const group = document.querySelector('.library-page .library-section.open .library-division.is-you');
+        return {found: !!group, open: !!(group && group.classList.contains('open')),
+          blink: !!(group && group.classList.contains('library-arrival'))};
+      })())"""))
+    assert landed == {"found": True, "open": True, "blink": True}, landed
+

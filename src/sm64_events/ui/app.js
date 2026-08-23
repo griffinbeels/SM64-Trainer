@@ -287,7 +287,8 @@ function App() {
           : tab === "Rank" ? html`<div class="view-pane">${openRunnerName
               ? html`<${RunnerPage} t=${t} runnerName=${openRunnerName}
                   onClose=${() => setOpenRunnerName(null)} openLibrary=${openLibrary} />`
-              : html`<${RankPage} t=${t} onOpenRunner=${setOpenRunnerName} />`}</div>`
+              : html`<${RankPage} t=${t} onOpenRunner=${setOpenRunnerName}
+                  openLibrary=${openLibrary} />`}</div>`
           : tab === "Live feed" ? html`<div class="view-pane"><${Feed} t=${t} /></div>`
           : null}
       </div>
