@@ -618,8 +618,9 @@ def test_segments_outside_bowser_and_hundred_coin_are_ignored_by_default(closed_
     """"by default all segments should be ignored by default (other than
     the Bowser stages / 100C stars)... The user can go in and manually
     include those later". On his own tab an ignored entity is the inert row
-    with an Include button; the fixture's own armed segment (BitFS Pipe
-    Entry, a legacy trick with no category) must be one of them."""
+    with an Include button; the tricks are among them and the three Bowser
+    course entries (sixth read: "just the Bowser Course entries (i.e., No
+    Reds)... should be part of the default ranking") are not."""
     page = closed_rank_page
     page.wait_for(".rank-page .rank-table tbody tr", timeout_ms=15000)
     state = json.loads(page.evaluate("""
@@ -631,7 +632,8 @@ def test_segments_outside_bowser_and_hundred_coin_are_ignored_by_default(closed_
           .some((b) => b.textContent.trim() === 'Include')).length;
         return {excluded, includeButtons};
       })())"""))
-    assert any("Pipe Entry" in name for name in state["excluded"]), state
+    assert any(name in ("LBLJ", "MIPS Clip", "Lakitu Skip") for name in state["excluded"]), state
+    assert not any("Pipe Entry" in name for name in state["excluded"]), state
     assert state["includeButtons"] == len(state["excluded"]) > 0, state
 
 

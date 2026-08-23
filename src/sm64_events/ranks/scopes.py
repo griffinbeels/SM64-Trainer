@@ -37,12 +37,28 @@ UNPRACTICED_TARGET_TIER = scoring.tier_from_score(_UNPRACTICED_TARGET)
 # A star is never default-excluded.
 RANKED_SEGMENT_CATEGORIES = frozenset({"Bowser Fights", "100 Coin Exit"})
 
+# The one exemption keyed on IDENTITY rather than category: the three Bowser
+# COURSE entries -- the "No Reds" run from the castle into the pipe. They sit
+# in the seed as `Castle Movement` beside the reds-inclusive `seg:reds->pipe:*`
+# runs, and a category cannot tell the two apart; his sixth read, on seeing
+# them dimmed: "these should not be ignored in any route, because those are
+# just the Bowser Course entries (i.e., No Reds). These are actually very
+# important and should be part of the default ranking."
+RANKED_SEGMENT_SEED_KEYS = frozenset({"seg:bitdw-pipe", "seg:bitfs-pipe", "seg:bits-pipe"})
+
+
+def ranks_by_default(definition: dict) -> bool:
+    """Whether one segment definition counts toward ranking before the user
+    has said anything about it."""
+    return (definition.get("category") in RANKED_SEGMENT_CATEGORIES
+            or definition.get("seed_key") in RANKED_SEGMENT_SEED_KEYS)
+
 
 def default_excluded(segment_defs: Iterable[dict]) -> set[str]:
     """Entity keys excluded from ranking unless the user includes them --
-    every segment definition outside `RANKED_SEGMENT_CATEGORIES`."""
+    every segment definition that does not `ranks_by_default`."""
     return {f"segment:{definition['id']}" for definition in segment_defs
-            if definition.get("category") not in RANKED_SEGMENT_CATEGORIES}
+            if not ranks_by_default(definition)}
 
 
 def effective_excluded(default: set[str], included: Iterable[str],
