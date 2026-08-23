@@ -119,7 +119,7 @@ def test_one_switchable_rank_banner_is_rendered_for_both_kinds():
     assert '>Strategy</button>' in body
     assert '>Overall</button>' in body
     assert "shownBanner" in body and "rankModeButtons" in body
-    assert "swapKey=${hasSeparateRank ? rankMode : null}" in body
+    assert "swapKey=${strategySwapKey(sec.last_strat, rankMode, hasSeparateRank)}" in body
 
 
 def test_both_section_builders_emit_entity_rank():

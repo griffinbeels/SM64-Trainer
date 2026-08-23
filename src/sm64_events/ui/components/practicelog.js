@@ -312,6 +312,29 @@ export function isCardOpen(overrides, topKey, key, childKeys = []) {
   return key === topKey || childKeys.includes(topKey);
 }
 
+// What counts as "a different measurement to EXCHANGE to" on the card's
+// banner -- the key `useRouteSwap` squashes, pops and lerps across. Two
+// gestures change it: the Strategy/Overall button (when the two are separate
+// ladders) and the active STRATEGY itself while the Strategy view is up. His
+// ruling, 2026-08-23: "When we swap between strategies, it shouldn't animate
+// the full ranked bar filling up. It should use the MARELO type transition
+// animation, where the cap squishes down, and pops back up with the new
+// rank. The bar position should simply lerp to the new position rather than
+// restarting. The reason is because it incorrectly right now gives a false
+// sense of progression, whereas it should feel more like a transition." That
+// supersedes the 2026-07-27 "if we change strats... that new strategy should
+// repeat the animation process" replay, which is what the fill-from-Capless-5
+// was. Null while no strategy is picked, so the FIRST pick still climbs from
+// the floor (that half of the 2026-07-27 ruling stands: a rank shown for the
+// first time is earned) -- routeswap.js runs no exchange from a null key, and
+// rankclimb.js does not snap for one. In the Overall view the strategy is
+// not part of the key: the entity's rank does not depend on it.
+export function strategySwapKey(activeStrat, rankMode, hasSeparateRank) {
+  if (!activeStrat) return null;
+  if (rankMode === "overall" && hasSeparateRank) return "overall";
+  return `strategy:${activeStrat}`;
+}
+
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, pick, selected, onSelect, forceOpen,
                           open, onSetOpen, openLibrary = null,
@@ -484,9 +507,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   const ranksBlock = html`<div class="log-card-ranks">
       <${RankBanner} label=${rankModeButtons} banner=${shownBanner}
           atFloor=${ranksAreAtFloor(sec)}
-          replayKey=${rankMode === "strategy" ? (sec.last_strat || "") : null}
           identity=${rankIdentity(ek, shownIdentity, sec, t)}
-          swapKey=${hasSeparateRank ? rankMode : null}
+          swapKey=${strategySwapKey(sec.last_strat, rankMode, hasSeparateRank)}
           showNext=${active} iconSize=${rankIconSize}
           nextStepMode=${nextStepMode} />
     </div>`;

@@ -243,9 +243,12 @@ function renderState(level, bar, beats, atMs, tune, reveal = 1, line = "rest") {
  * server already grades. `identity` is what the caller considers "the same
  * measurement": when it changes, the hook SNAPS instead of climbing.
  * `exchangeKey` is the stronger version of that boundary for a caller that
- * draws its own old-to-new exchange. When it changes, snapping wins even if
- * `replayKey` also changed: the exchange animation owns that gesture, and a
- * second climb from the floor would falsely read as a rank being earned.
+ * draws its own old-to-new exchange (routeswap.js). When it changes from one
+ * key to ANOTHER, snapping wins: the exchange animation owns that gesture,
+ * and a climb from the floor underneath it would falsely read as a rank
+ * being earned. A change from NO key to a key is not an exchange -- the
+ * swap hook runs none from null either -- so the first rank a banner ever
+ * shows still climbs from the floor.
  *
  * That gate is what stops a false celebration. Switching the active strategy
  * re-grades the banner on a different ladder, changing the rank mode
@@ -260,8 +263,7 @@ function renderState(level, bar, beats, atMs, tune, reveal = 1, line = "rest") {
  * site so no surface ever builds icon props itself.
  */
 export function useRankClimb(rank, identity = null,
-                             { lane = null, order = 0, replayKey = null,
-                               exchangeKey = null,
+                             { lane = null, order = 0, exchangeKey = null,
                                tune: tuneOverride = null } = {}) {
   // Level and fill are kept APART from here down. `rankPosition(..., 0)` is
   // exactly the level, and asking for it with a fill of 1 (which ranks.js
@@ -319,7 +321,6 @@ export function useRankClimb(rank, identity = null,
   // Cleared only when the loop ENDS -- never in the effect cleanup, which
   // runs before every re-entry and so cannot tell "interrupted" from "done".
   const climbingToRef = useRef(null);
-  const replayKeyRef = useRef(replayKey);
   const exchangeKeyRef = useRef(exchangeKey);
   useEffect(() => {
     if (!lane) return undefined;
@@ -361,7 +362,8 @@ export function useRankClimb(rank, identity = null,
     // cap squash and text). Record this before the null-target return too, so
     // ranked -> sentinel -> ranked cannot lose the boundary and replay a
     // floor climb on the way back.
-    const exchangeChanged = exchangeKeyRef.current !== exchangeKey;
+    const exchangeChanged = exchangeKeyRef.current != null
+      && exchangeKeyRef.current !== exchangeKey;
     exchangeKeyRef.current = exchangeKey;
 
     setClimbing(climbToken.current, false);
@@ -399,15 +401,12 @@ export function useRankClimb(rank, identity = null,
     // animate all the way to the achieved rank"). Neither is a page load.
     // "any time we select a strategy for the first time, its rank standard
     // banner should always start from capless 5, and then animate to whatever
-    // the first entry is… if we change strats… that new strategy should
-    // repeat the animation process" (user, 2026-07-27). A strategy's rank is
-    // a measurement being SHOWN for the first time, so it is earned in the
-    // same sense a first-ever rank is -- it just happens to already have a
-    // number behind it. Only the STRATEGY banner passes a replayKey: the
-    // star's own rank does not depend on which strategy is selected, so it
-    // must sit still through the switch.
-    const replayed = replayKeyRef.current !== replayKey;
-    replayKeyRef.current = replayKey;
+    // the first entry is" (user, 2026-07-27). The second half of that
+    // ruling -- "if we change strats… that new strategy should repeat the
+    // animation process", which a `replayKey` used to implement here -- was
+    // reversed on 2026-08-23: a strategy SWAP is an exchange (the caller's
+    // `exchangeKey`, drawn by routeswap.js), because a floor climb on a
+    // swap "incorrectly gives a false sense of progression".
     // Has THIS measurement -- this lane, this banner slot, this identity --
     // already been shown to be at least `target` by some OTHER mounted
     // instance (the objective card, if this is the log card's copy, or vice
@@ -425,8 +424,7 @@ export function useRankClimb(rank, identity = null,
       laneWitnessed.set(laneKey, target);
     }
     const earnedFirstRank = target > 0
-      && ((from == null && (!isFirstRun || arrivedLateRef.current) && !alreadyWitnessed)
-          || (replayed && !isFirstRun));
+      && from == null && (!isFirstRun || arrivedLateRef.current) && !alreadyWitnessed;
     // A climb already heading for THIS target keeps going, whatever the
     // identity says. Picking a strategy changes a card's identity but not the
     // star's own rank, and snapping there cut the animation off at the exact
@@ -663,7 +661,7 @@ export function useRankClimb(rank, identity = null,
       // not keep its sibling waiting for a slot it will never use.
       if (lane && laneEnds.get(lane) === laneEndsAt) laneEnds.delete(lane);
     };
-  }, [target, identity, lane, order, replayKey, exchangeKey, tuneOverride]);
+  }, [target, identity, lane, order, exchangeKey, tuneOverride]);
 
   // `atTarget` answers "is what you are looking at the rank you just handed
   // me", and it is resolved HERE rather than inside the loop for one reason:

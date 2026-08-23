@@ -330,11 +330,13 @@ def test_one_rank_banner_with_both_mode_buttons_renders(page):
 def test_rank_mode_button_runs_the_shared_swap_and_remembers_the_entity(page):
     """A mode pick is only an exchange, never a second earned-rank climb.
 
-    Strategy alone carries a climb `replayKey`, so changing to Overall changes
-    that key at the same moment as the rank. That used to outrank the ordinary
-    identity guard and start a full Capless-5 climb underneath MARELO's short
-    exchange. Once the exchange finished, the floor climb became visible and
-    made a measurement swap feel like another rank-up.
+    Strategy used to carry a climb `replayKey`, so changing to Overall changed
+    that key at the same moment as the rank. That outranked the ordinary
+    identity guard and started a full Capless-5 climb underneath MARELO's
+    short exchange; once the exchange finished, the floor climb became
+    visible and made a measurement swap feel like another rank-up. The replay
+    is gone altogether since 2026-08-23 (a strategy swap is an exchange too),
+    and this still pins that the exchange never runs a climb underneath.
     """
     page.evaluate(
         "Array.from(document.querySelectorAll("
