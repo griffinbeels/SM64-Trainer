@@ -51,9 +51,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pymem  # noqa: E402
 
+from sm64_events.memory.layout import layout_for  # noqa: E402
 from sm64_events.memory.pj64 import Pj64Memory, iter_committed_regions  # noqa: E402
 
-GLOBAL_TIMER = 0x8032D5D4
+# The one door for RAM addresses (tests/test_single_source.py): the sweep
+# phase-classifies against gGlobalTimer wherever THIS ROM's layout says it is.
+GLOBAL_TIMER = layout_for("us").global_timer
 RATE_LO, RATE_HI = 20.0, 130.0        # counters worth classifying, per second
 SWEEP_GAP_S = 1.0
 ROUNDS = 3

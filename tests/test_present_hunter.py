@@ -84,7 +84,7 @@ class FakeHostMemory:
 
 
 def hunter_over(memory, sim) -> PresentHunter:
-    return PresentHunter(memory, timer_address=0x8032D5D4,
+    return PresentHunter(memory, timer_address=0xF00D,
                          sleep=sim.sleep, clock=sim.clock)
 
 

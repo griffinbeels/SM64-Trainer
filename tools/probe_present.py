@@ -49,12 +49,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from sm64_events.memory.layout import layout_for  # noqa: E402
 from sm64_events.memory.pj64 import Pj64Memory  # noqa: E402
 
-GLOBAL_TIMER = 0x8032D5D4
-S_NUM_VBLANKS = 0x8032D580
-S_CURR_FB_NUM = 0x8032D5D8
-FRAME_BUFFER_INDEX = 0x8032D5DC
+# The one door for RAM addresses (tests/test_single_source.py): the probe
+# classifies against gGlobalTimer wherever THIS ROM's layout says it is.
+GLOBAL_TIMER = layout_for("us").global_timer
+# The display-side globals sit in gGlobalTimer's own data block (STROOP's
+# MappingUS.map), so each is a fixed offset from the layout's anchor -- and
+# that block shifts AS ONE across ROM versions (memory/layout.py: the
+# 0x8032 block moves uniformly), so the offsets hold wherever the anchor is.
+S_NUM_VBLANKS = GLOBAL_TIMER - 0x54        # sNumVblanks   (US 0x8032D580)
+S_CURR_FB_NUM = GLOBAL_TIMER + 0x04        # sCurrFBNum    (US 0x8032D5D8)
+FRAME_BUFFER_INDEX = GLOBAL_TIMER + 0x08   # frameBufferIndex (US 0x8032D5DC)
 
 SAMPLE_HZ = 250
 SECONDS = 20.0
