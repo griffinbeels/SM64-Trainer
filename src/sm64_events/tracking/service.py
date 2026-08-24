@@ -31,6 +31,7 @@ from sm64_events.ranks.classify import RANK_MODES
 from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking import importing, practicable
+from sm64_events.tracking.views import current_pbs_by_strat
 from sm64_events.tracking.activestrat import ActiveStrats
 from sm64_events.tracking.defaults import remember_deletion, resolve_steps
 from sm64_events.tracking.hundred_coin import classify
@@ -793,7 +794,12 @@ class TrackerService:
         star version deliberately: the practice UI drives both through one
         picker (ui/components/stratpicker.js)."""
         db = self._require_db()
-        if all(d.id != segment_id for d in self._segment_defs):
+        # The DB, not self._segment_defs: the cache lags a row created outside
+        # the service's own CRUD (a reconcile, a test's direct insert), and the
+        # import path already judges importability against the live table —
+        # round 4's auto-fill made the two sources meet (a re-seeded Bowser
+        # movement's fresh id was importable yet "not found" here).
+        if all(d["id"] != segment_id for d in db.segment_defs()):
             raise LookupError(f"segment {segment_id} not found")
         await self.publish(Event(type="strat_set", frame=0,
                                  timestamp_utc=_now(),
@@ -2060,7 +2066,61 @@ class TrackerService:
                          attempt_id=attempt_id, saved_utc=_iso(now),
                          imported_from=source,
                          game_version=candidate.game_version)
+        if plan.landing:
+            await self._select_freshly_earned_strats(
+                {landed.entity_key for landed, _ in plan.landing})
         return {"source": source, **plan.summary}
+
+    async def _select_freshly_earned_strats(self, entity_keys) -> None:
+        """An import fills an EMPTY hand: every entity the batch landed on
+        that has NO active strategy gets its fastest current PB's strategy
+        selected (round 4, 2026-08-24: "we should also automatically select
+        the fastest strategy for each star / segment that we've successfully
+        completed... If there are multiple entries for a given star/segment
+        using different strategies, whichever's fastest becomes selected").
+
+        An entity with an active strategy keeps it — explicit user choices
+        take priority (his standing ruling), and a seeded movement's
+        default_strat means it never reads as empty here. Fastest is judged
+        over per-strategy CURRENT PBs (views.current_pbs_by_strat, THE one
+        resolver) on the entity's own clock — stars igt, segments rta — so a
+        slower imported strategy never displaces a faster one already on
+        file. The fill goes through set_strat/set_strat_segment, so it is a
+        journaled strat_set like any hand pick: replay keeps it, and the
+        lifetime kind="all" wipe (which hard-deletes the journal) takes it
+        away with everything else — "if I clear all practice data, naturally,
+        all of these strategy selections should also be wiped out". Undoing
+        the import (DELETE /api/import/{source}) deliberately does NOT unset
+        it: a selection is configuration, and unselecting could not restore
+        whatever hand state preceded the batch anyway."""
+        db = self._require_db()
+        active = ActiveStrats.from_db(db, self.strat_by_star,
+                                      self.strat_by_segment)
+        by_strat = current_pbs_by_strat(db.pbs())
+
+        def fastest(match):
+            rows = [row for key, row in by_strat.items() if match(key)]
+            if not rows:
+                return None
+            return min(rows, key=lambda row: (row["frames"],
+                                              row["strat_tag"]))["strat_tag"]
+
+        for entity in sorted(entity_keys):
+            course_id, star_id, segment_id = _import_identity(entity)
+            if segment_id is not None:
+                if active.for_segment(segment_id):
+                    continue
+                pick = fastest(lambda key: key[0] == "segment"
+                               and key[1] == segment_id and key[2] == "rta")
+                if pick:
+                    await self.set_strat_segment(segment_id, pick)
+            else:
+                if active.for_star(course_id, star_id):
+                    continue
+                pick = fastest(lambda key: key[0] == course_id
+                               and key[1] == star_id and key[2] == "igt")
+                if pick:
+                    await self.set_strat(course_id, star_id, pick)
 
     def _plan_import(self, candidates):
         """Check every candidate, then decide what lands. Writes nothing.

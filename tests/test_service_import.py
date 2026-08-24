@@ -204,3 +204,75 @@ def test_anything_that_is_neither_is_refused(tmp_path):
     _, svc = make(tmp_path)
     with pytest.raises(ValueError, match="only stars and your own segments"):
         asyncio.run(svc.import_times("manual", [candidate(key="area:6:1")]))
+
+
+# -- round 4 (2026-08-24): an import fills an EMPTY hand ---------------------
+# "After importing and successfully categorizing an entry, we should also
+# automatically select the fastest strategy for each star / segment that
+# we've successfully completed... If there are multiple entries for a given
+# star/segment using different strategies, whichever's fastest becomes
+# selected." An entity that already HAS an active strategy keeps it —
+# explicit user choices take priority (his standing ruling, 2026-08-08).
+
+from sm64_events.tracking.activestrat import ActiveStrats
+
+
+def _active(db, svc):
+    return ActiveStrats.from_db(db, svc.strat_by_star, svc.strat_by_segment)
+
+
+def _default_less_segment(db):
+    return next(d["id"] for d in db.segment_defs() if not d["default_strat"])
+
+
+def test_an_import_selects_the_fastest_strategy_for_an_empty_hand(tmp_path):
+    db, svc = make(tmp_path)
+    seg = _default_less_segment(db)
+    asyncio.run(svc.import_times("sheet:someone", [
+        ImportCandidate(entity_key=f"segment:{seg}", strat_tag="Normal File",
+                        time_cs=4200, timer_mode="rta"),
+        ImportCandidate(entity_key=f"segment:{seg}", strat_tag="No 120",
+                        time_cs=3836, timer_mode="rta")]))
+    assert _active(db, svc).for_segment(seg) == "No 120"
+
+
+def test_an_import_never_displaces_an_explicit_pick(tmp_path):
+    db, svc = make(tmp_path)
+    seg = _default_less_segment(db)
+    asyncio.run(svc.set_strat_segment(seg, "My Pick"))
+    asyncio.run(svc.import_times("sheet:someone", [ImportCandidate(
+        entity_key=f"segment:{seg}", strat_tag="No 120",
+        time_cs=3836, timer_mode="rta")]))
+    assert _active(db, svc).for_segment(seg) == "My Pick"
+
+
+def test_a_star_gets_the_same_fill_as_a_segment(tmp_path):
+    """Rule 11 parity: the star side goes through the same fill."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.import_times("manual", [
+        candidate(cs=2000, strat="Slow Way"),
+        candidate(cs=1500, strat="Fast Way")]))
+    assert _active(db, svc).for_star(1, 0) == "Fast Way"
+
+
+def test_the_fill_survives_replay(tmp_path):
+    """The selection is a journaled strat_set, so a reproject keeps it."""
+    db, svc = make(tmp_path)
+    asyncio.run(svc.import_times("manual", [candidate(strat="Fast Way")]))
+    asyncio.run(svc._reproject())
+    assert _active(db, svc).for_star(1, 0) == "Fast Way"
+
+
+def test_clear_all_practice_data_wipes_the_filled_selection(tmp_path):
+    """Round 4 item 3: "if I clear all practice data, naturally, all of
+    these strategy selections should also be wiped out." The lifetime
+    kind=all wipe hard-deletes the journal, strat_set rows included."""
+    db, svc = make(tmp_path)
+    seg = _default_less_segment(db)
+    asyncio.run(svc.import_times("sheet:someone", [ImportCandidate(
+        entity_key=f"segment:{seg}", strat_tag="No 120",
+        time_cs=3836, timer_mode="rta")]))
+    assert _active(db, svc).for_segment(seg) == "No 120"
+    asyncio.run(svc.wipe_data("all", scope="lifetime"))
+    assert _active(db, svc).for_segment(seg) is None
+    assert _active(db, svc).for_star(1, 0) is None
