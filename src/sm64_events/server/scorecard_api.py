@@ -13,11 +13,17 @@ fetch).
 
 One persisted choice drives the whole card -- the ui_state KV
 `"scorecard_goal"`, `{"kind":"division","tier":...,"division":...}` |
-`{"kind":"runner","runner":...}` | `None` -- server-side so the browser and
-the desktop GUI read the same goal (`.claude/rules/import.md`'s reasoning
-for why an imported time lands server-side applies here too: two clients,
-one KV). `GET /api/scorecard` re-derives the whole card from it on every
-request; nothing about the card itself is stored.
+`{"kind":"runner","runner":...}` | `{"kind":"custom","name":...}` | `None` --
+server-side so the browser and the desktop GUI read the same goal
+(`.claude/rules/import.md`'s reasoning for why an imported time lands
+server-side applies here too: two clients, one KV). `GET /api/scorecard`
+re-derives the whole card from it on every request; nothing about the card
+itself is stored. A **custom** goal is the one kind that carries its own
+data: hand-typed per-entity times a player saved under a name, in a second
+KV (`"scorecard_custom_goals"`, `{name: {entity_key: goal_cs}}`) that
+`_GOAL_KEY` only ever points at by name -- so picking a saved custom goal is
+the same one-line write as picking a division, and every OTHER saved custom
+goal survives switching away from it.
 
 `GET /api/scorecard/column` is the reverse of `POST /api/import/sheet` --
 that door reads a runner's column IN as PBs, this one writes YOUR PBs OUT as
@@ -45,6 +51,11 @@ from sm64_events.server.import_api import sheet_row_placer
 
 _log = logging.getLogger("sm64.scorecard")
 _GOAL_KEY = "scorecard_goal"
+# Named hand-authored goals -- {name: {entity_key: goal_cs}}. A division or
+# runner goal RESOLVES per entity every request; a custom one is typed once
+# (round-tripped through the card's own live edit, never re-derived) and
+# simply looked up here, which is why it needs no resolver of its own below.
+_CUSTOM_KEY = "scorecard_custom_goals"
 _VALID_TIERS = [tier for tier in RANK_NAMES if tier != "Iron"]
 
 
@@ -53,6 +64,13 @@ class GoalBody(BaseModel):
     tier: str | None = None
     division: str | None = None
     runner: str | None = None
+    # `custom` only. `name` identifies the saved goal; `times` is present
+    # only on a SAVE (create or overwrite) -- selecting an already-saved
+    # custom goal from the picker sends `name` alone and the server looks up
+    # what was saved last time, the same way a division/runner goal is never
+    # re-sent by the picker either.
+    name: str | None = None
+    times: dict[str, int] | None = None
 
 
 def _fetch_column_source(overrides):
@@ -247,6 +265,17 @@ def create_scorecard_router(service, library=None, adoptions=None,
         return runner_times(library.payload, adopted_rows,
                             version=version).get(runner, {})
 
+    def custom_goal_store() -> dict[str, dict[str, int]]:
+        return service.db.get_state(_CUSTOM_KEY, {})
+
+    def custom_goal_map(keys: list[str], name: str) -> dict[str, int]:
+        """A saved custom goal's own times, filtered to keys the card still
+        carries -- a stale key (its segment definition since deleted) drops
+        silently, same as every other "no goal on this tile" case, rather
+        than surfacing a key `_tile` would never look up anyway."""
+        saved = custom_goal_store().get(name, {})
+        return {key: cs for key, cs in saved.items() if key in keys}
+
     def fold_choices(goal_value: dict | None) -> dict[int, int | None]:
         """Per course, the exit star BOTH sums skip: your own 100c PB's
         variant first, else the variant owning the goal tier's 100c cutoff,
@@ -284,6 +313,12 @@ def create_scorecard_router(service, library=None, adoptions=None,
 
         goal_map: dict[str, int] = {}
         fold: dict[int, int | None] = {}
+        # A custom goal is typed data with no ladder lookup at all, so it
+        # resolves independent of `ranks` -- a broadcast-only instance can
+        # still grade against a hand-picked target even though it can never
+        # grade against a division or a runner.
+        if goal_value and goal_value.get("kind") == "custom":
+            goal_map = custom_goal_map(keys, goal_value["name"])
         if ranks is not None:
             if goal_value and goal_value.get("kind") == "division":
                 goal_map = division_goal_map(keys, goal_value["tier"],
@@ -303,14 +338,29 @@ def create_scorecard_router(service, library=None, adoptions=None,
         tiles = [tile for row in card["rows"] for tile in row["tiles"]]
         coverage = {"covered": sum(1 for t in tiles if t["goal_cs"] is not None),
                     "tiles": len(tiles)}
-        return {**card, "goal": goal_value, "goal_coverage": coverage}
+        # Every saved custom goal's NAME, so the picker can list them all
+        # (grouped ahead of Divisions) without a second round trip -- the
+        # active one, if any, is already carried in `goal` above.
+        custom_names = sorted(custom_goal_store().keys())
+        return {**card, "goal": goal_value, "goal_coverage": coverage,
+                "custom_goals": custom_names}
 
     @router.put("/goal")
     async def set_goal(body: GoalBody | None = Body(default=None)):
         """No broadcast: the goal picker is the only writer, and the card
         refetches on `t.mareloRev` like the rest of the Rank tab -- there is
         no second client watching this KV live the way the recorder's row
-        list needs a push."""
+        list needs a push.
+
+        `kind: "custom"` is two operations behind one shape, same distinction
+        `PUT /api/ranks/standards` already draws between writing a value and
+        selecting an existing one: `times` present SAVES (creating a new name
+        or overwriting one already used -- the store is a plain dict keyed by
+        name, so "overwrite" needs no separate branch, just a second write to
+        the same key), `times` absent SELECTS a goal the picker already knows
+        about, 404 if that name was never saved. Either way the KV ends up
+        naming just the goal (`{"kind":"custom","name":...}`) -- the actual
+        times live in `_CUSTOM_KEY`, not duplicated into `_GOAL_KEY`."""
         if body is None:
             service.db.set_state(_GOAL_KEY, None)
             return {"goal": None}
@@ -323,6 +373,17 @@ def create_scorecard_router(service, library=None, adoptions=None,
             if not body.runner:
                 raise HTTPException(422, "runner goal needs a runner name")
             value = {"kind": "runner", "runner": body.runner}
+        elif body.kind == "custom":
+            name = (body.name or "").strip()
+            if not name:
+                raise HTTPException(422, "a custom goal needs a name")
+            store = custom_goal_store()
+            if body.times is not None:
+                store[name] = body.times
+                service.db.set_state(_CUSTOM_KEY, store)
+            elif name not in store:
+                raise HTTPException(404, f"no saved custom goal named {name!r}")
+            value = {"kind": "custom", "name": name}
         else:
             raise HTTPException(422, f"unknown goal kind {body.kind!r}")
         service.db.set_state(_GOAL_KEY, value)

@@ -126,6 +126,115 @@ def test_a_runner_goal_needs_a_name(tmp_path):
         assert response.status_code == 422
 
 
+def test_a_custom_goal_saves_and_resolves(tmp_path):
+    with make_client(tmp_path) as (client, _db, _svc):
+        response = client.put("/api/scorecard/goal", json={
+            "kind": "custom", "name": "Sub 90 Attempt",
+            "times": {"star:1:0": 886, "star:1:1": 1500}})
+        assert response.status_code == 200
+        assert response.json()["goal"] == {"kind": "custom", "name": "Sub 90 Attempt"}
+
+        card = client.get("/api/scorecard").json()
+        assert card["goal"] == {"kind": "custom", "name": "Sub 90 Attempt"}
+        assert card["custom_goals"] == ["Sub 90 Attempt"]
+        row = next(r for r in card["rows"] if r["course_id"] == 1)
+        tiles = {tile["key"]: tile for tile in row["tiles"]}
+        assert tiles["star:1:0"]["goal_cs"] == 886
+        assert tiles["star:1:1"]["goal_cs"] == 1500
+        assert tiles["star:1:2"]["goal_cs"] is None
+
+
+def test_a_custom_goal_needs_a_name(tmp_path):
+    with make_client(tmp_path) as (client, _db, _svc):
+        response = client.put("/api/scorecard/goal", json={
+            "kind": "custom", "times": {"star:1:0": 886}})
+        assert response.status_code == 422
+
+
+def test_picking_a_custom_goal_that_was_never_saved_is_refused(tmp_path):
+    with make_client(tmp_path) as (client, _db, _svc):
+        response = client.put("/api/scorecard/goal",
+                              json={"kind": "custom", "name": "Never Saved"})
+        assert response.status_code == 404
+
+
+def test_reselecting_a_saved_custom_goal_needs_no_times(tmp_path):
+    """The picker sends `{kind,name}` alone to RE-SELECT a goal it already
+    knows about -- the same shape a division/runner pick already uses -- and
+    the server must still resolve it from what was saved earlier."""
+    with make_client(tmp_path) as (client, _db, _svc):
+        client.put("/api/scorecard/goal", json={
+            "kind": "custom", "name": "Sub 90 Attempt", "times": {"star:1:0": 886}})
+        client.put("/api/scorecard/goal", json={"kind": "division", "tier": "Gold", "division": "I"})
+
+        response = client.put("/api/scorecard/goal",
+                              json={"kind": "custom", "name": "Sub 90 Attempt"})
+        assert response.status_code == 200
+
+        card = client.get("/api/scorecard").json()
+        row = next(r for r in card["rows"] if r["course_id"] == 1)
+        tile = next(t for t in row["tiles"] if t["key"] == "star:1:0")
+        assert tile["goal_cs"] == 886
+
+
+def test_saving_under_an_existing_name_overwrites_it(tmp_path):
+    """His rule verbatim: 'If I modify a saved comparison, it should just
+    overwrite it.'"""
+    with make_client(tmp_path) as (client, _db, _svc):
+        client.put("/api/scorecard/goal", json={
+            "kind": "custom", "name": "Sub 90 Attempt", "times": {"star:1:0": 886}})
+        client.put("/api/scorecard/goal", json={
+            "kind": "custom", "name": "Sub 90 Attempt",
+            "times": {"star:1:0": 700, "star:1:1": 1200}})
+
+        card = client.get("/api/scorecard").json()
+        assert card["custom_goals"] == ["Sub 90 Attempt"]   # still ONE entry
+        row = next(r for r in card["rows"] if r["course_id"] == 1)
+        tiles = {tile["key"]: tile for tile in row["tiles"]}
+        assert tiles["star:1:0"]["goal_cs"] == 700           # overwritten
+        assert tiles["star:1:1"]["goal_cs"] == 1200           # newly added
+
+
+def test_custom_goals_survive_switching_the_active_goal_away(tmp_path):
+    with make_client(tmp_path) as (client, _db, _svc):
+        client.put("/api/scorecard/goal", json={
+            "kind": "custom", "name": "Sub 90 Attempt", "times": {"star:1:0": 886}})
+        client.put("/api/scorecard/goal",
+                   json={"kind": "division", "tier": "Gold", "division": "I"})
+
+        card = client.get("/api/scorecard").json()
+        assert card["goal"] == {"kind": "division", "tier": "Gold", "division": "I"}
+        assert card["custom_goals"] == ["Sub 90 Attempt"]
+
+
+def test_a_custom_goal_resolves_with_no_ranks(tmp_path):
+    """A custom goal is hand-typed data with no ladder lookup -- it must
+    still grade on a broadcast-only instance, unlike a division or runner
+    goal (which need `service.ranks`)."""
+    from sm64_events.server.app import create_app
+    from sm64_events.server.broadcaster import Broadcaster
+    from sm64_events.server.poller import Poller
+    from sm64_events.storage.db import Database
+    from sm64_events.tracking.service import TrackerService
+    from fastapi.testclient import TestClient
+    from import_fixture import OfflineMemory
+
+    db = Database(tmp_path / "t.db")
+    broadcaster = Broadcaster()
+    service = TrackerService(db, broadcaster)          # ranks=None
+    poller = Poller(OfflineMemory(), [], service)
+    app = create_app(poller, broadcaster, service=service,
+                     adoptions_path=tmp_path / "library_adoptions.json",
+                     mode_path=tmp_path / "tracker_mode.json")
+    with TestClient(app) as client:
+        client.put("/api/scorecard/goal", json={
+            "kind": "custom", "name": "Sub 90 Attempt", "times": {"star:1:0": 886}})
+        card = client.get("/api/scorecard").json()
+        row = next(r for r in card["rows"] if r["course_id"] == 1)
+        tile = next(t for t in row["tiles"] if t["key"] == "star:1:0")
+        assert tile["goal_cs"] == 886
+
+
 def test_your_100c_pbs_variant_folds_its_exit_star(tmp_path):
     """A course whose 100c PB was saved under a labelled exit-star variant
     folds that star out of both sums -- the same star the variant's own

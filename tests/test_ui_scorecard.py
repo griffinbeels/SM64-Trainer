@@ -82,6 +82,88 @@ def test_goal_groups_encodes_a_fetched_runner_as_runner_colon_name():
                        {"value": "runner:Suigi", "label": "Suigi"}]
 
 
+def test_goal_groups_omits_the_custom_group_entirely_with_no_saved_names():
+    """No empty 'Custom' heading ever shown -- unlike Runners (which stays
+    present so SearchMenu has a drop target for the lazy fetch), a saved
+    custom goal either exists or the group has nothing to add."""
+    groups = call("goalGroups", None, [])
+    assert [group["label"] for group in groups] == ["", "Divisions", "Runners"]
+
+
+def test_goal_groups_puts_custom_names_at_the_top_after_no_goal():
+    groups = call("goalGroups", None, ["Sub 90 Attempt", "PSS Skip Route"])
+    assert [group["label"] for group in groups] == ["", "Custom", "Divisions", "Runners"]
+    assert groups[1]["options"] == [
+        {"value": "custom:Sub 90 Attempt", "label": "Sub 90 Attempt"},
+        {"value": "custom:PSS Skip Route", "label": "PSS Skip Route"}]
+
+
+def test_parse_gap_time_reads_the_displayed_notation_back():
+    assert call("parseGapTime", "1'21\"32") == 8132
+    assert call("parseGapTime", "23\"00") == 2300           # no minutes, matches fmtSeconds
+    assert call("parseGapTime", "0'05\"5") == 550            # single-digit centis = tenths
+
+
+def test_parse_gap_time_rejects_garbage_and_empty():
+    assert call("parseGapTime", "") is None
+    assert call("parseGapTime", "not a time") is None
+    assert call("parseGapTime", "1:21.32") is None            # wrong punctuation
+
+
+def test_apply_goal_overrides_recomputes_the_touched_tile_and_its_row_sum():
+    payload = {
+        "rows": [{
+            "course_id": 1, "label": "Bob-omb Battlefield",
+            "tiles": [
+                {"key": "star:1:0", "label": "A", "you_cs": 900, "goal_cs": 1000,
+                 "delta_cs": -100, "folded": False},
+                {"key": "star:1:1", "label": "B", "you_cs": 1200, "goal_cs": None,
+                 "delta_cs": None, "folded": False},
+            ],
+            "sum": {"you_cs": 900, "goal_cs": 1000, "delta_cs": -100,
+                    "counted": 1, "total": 2},
+        }],
+        "total": {"you_cs": 900, "goal_cs": 1000, "delta_cs": -100,
+                  "counted": 1, "total": 2},
+        "goal_coverage": {"covered": 1, "tiles": 2},
+    }
+    result = call("applyGoalOverrides", payload, {"star:1:1": 1100})
+    tile = result["rows"][0]["tiles"][1]
+    assert tile["goal_cs"] == 1100
+    assert tile["delta_cs"] == 100                            # 1200 - 1100
+    assert result["rows"][0]["sum"] == {
+        "you_cs": 2100, "goal_cs": 2100, "delta_cs": 0, "counted": 2, "total": 2}
+    assert result["total"] == result["rows"][0]["sum"]
+    assert result["goal_coverage"] == {"covered": 2, "tiles": 2}
+
+
+def test_apply_goal_overrides_is_a_no_op_with_nothing_pending():
+    payload = {"rows": [], "total": {"you_cs": 0, "goal_cs": 0, "delta_cs": None,
+                                     "counted": 0, "total": 0},
+               "goal_coverage": {"covered": 0, "tiles": 0}}
+    assert call("applyGoalOverrides", payload, {}) == payload
+
+
+def test_apply_goal_overrides_skips_a_folded_tile_in_the_sum():
+    payload = {
+        "rows": [{
+            "course_id": 1, "label": "X",
+            "tiles": [{"key": "star:1:6", "label": "100c", "you_cs": 5000,
+                       "goal_cs": None, "delta_cs": None, "folded": True}],
+            "sum": {"you_cs": 0, "goal_cs": 0, "delta_cs": None, "counted": 0, "total": 1},
+        }],
+        "total": {"you_cs": 0, "goal_cs": 0, "delta_cs": None, "counted": 0, "total": 1},
+        "goal_coverage": {"covered": 0, "tiles": 1},
+    }
+    result = call("applyGoalOverrides", payload, {"star:1:6": 4800})
+    tile = result["rows"][0]["tiles"][0]
+    assert tile["goal_cs"] == 4800 and tile["delta_cs"] == 200
+    # Still excluded from the Sigma -- folded means "draws with real numbers,
+    # never joins the sum", override or not.
+    assert result["rows"][0]["sum"]["counted"] == 0
+    assert result["rows"][0]["sum"]["delta_cs"] is None
+
+
 # --- the rendered card -------------------------------------------------
 
 sys.path.insert(0, str(REPO / "tools"))
@@ -242,6 +324,227 @@ def test_the_picker_gains_a_runners_group_and_picking_one_colors_tiles():
         assert card["goal"] == {"kind": "runner", "runner": runner}
         coverage = card["goal_coverage"]
         assert 0 < coverage["covered"] < coverage["tiles"]
+
+
+# --- the goal picker stays inside the card (feedback round 8) -----------
+
+def test_the_goal_picker_opens_without_widening_the_page():
+    """His report, verbatim: 'when I press the dropdown, it goes
+    offscreen... it shouldn't mess with the width of the page at all.'
+
+    `document.documentElement.scrollWidth` is the WRONG instrument for this:
+    `.app-main` clips horizontally (`overflow-x: hidden`, index.html), so an
+    overflowing popup is invisibly cut off rather than growing the page's
+    own scrollable width -- measured directly, scrollWidth read the exact
+    same value before and after opening the picker whether or not the
+    `align=\"right\"` fix was even in the tree, which is a vacuous guard
+    wearing a real-looking assertion. The actual claim is geometric: does
+    the menu's own right edge stay inside `.app-main`'s clip boundary. The
+    trigger sits at the far right of a wide card (`.scorecard-head`'s own
+    `margin-right: auto`) -- exactly the shape that ran the panel past that
+    boundary before the fix (measured: 11px over at 1500px width)."""
+    with serve_ui() as base:
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .search-select-trigger")
+
+            page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".search-select-trigger').click()")
+            page.wait_for(".rank-page .scorecard-card .search-menu")
+            page.wait_ms(100)
+            geometry = page.evaluate(
+                "(() => {"
+                "  const appMain = document.querySelector('.app-main').getBoundingClientRect();"
+                "  const menu = document.querySelector('.rank-page .scorecard-card "
+                ".search-menu').getBoundingClientRect();"
+                "  return {appMainRight: appMain.right, menuRight: menu.right};"
+                "})()")
+
+        assert geometry["menuRight"] <= geometry["appMainRight"] + 1, (
+            f"the goal picker's right edge ({geometry['menuRight']}) runs past "
+            f".app-main's own clip boundary ({geometry['appMainRight']}) -- "
+            "it will be cut off by overflow-x: hidden, not merely off the "
+            "viewport")
+
+
+# --- expand a row, edit a goal, save a named custom goal (round 8) ------
+
+def _first_seeded_tile(payload: dict) -> tuple[str, str, str]:
+    """(row label, tile label, entity key) of the first tile the FIXTURE
+    itself has a PB on -- so an edited goal has a real `you_cs` to compare
+    against and can actually recolor, not just round-trip a number."""
+    for row in payload["rows"]:
+        for tile in row["tiles"]:
+            if tile["you_cs"] is not None:
+                return row["label"], tile["label"], tile["key"]
+    raise AssertionError("the fixture seeded no PBs at all -- nothing to edit against")
+
+
+def _expand_row_and_edit_goal(page, row_label: str, tile_label: str, typed: str) -> None:
+    """Click the named row open, click that star's Goal cell into edit mode,
+    type `typed`, and commit with Enter -- entirely through the real
+    controls, never by writing state directly."""
+    row_label_js = json.dumps(row_label)
+    tile_label_js = json.dumps(tile_label)
+    typed_js = json.dumps(typed)
+    page.evaluate(
+        "(() => {"
+        f"  const rowLabel = {row_label_js};"
+        "  const row = Array.from(document.querySelectorAll("
+        "    '.rank-page .scorecard-card .score-row'))"
+        "    .find((r) => r.querySelector('.score-row-name').textContent === rowLabel);"
+        "  row.querySelector('.score-row-label').click();"
+        "})()")
+    page.wait_for(".rank-page .scorecard-card .score-detail-table")
+    page.evaluate(
+        "(() => {"
+        f"  const rowLabel = {row_label_js}, starLabel = {tile_label_js};"
+        "  const row = Array.from(document.querySelectorAll("
+        "    '.rank-page .scorecard-card .score-row'))"
+        "    .find((r) => r.querySelector('.score-row-name').textContent === rowLabel);"
+        "  const tr = Array.from(row.querySelectorAll('.score-detail-table tbody tr'))"
+        "    .find((tr) => tr.children[0].textContent.trim().startsWith(starLabel));"
+        "  tr.querySelector('.score-detail-goal-btn').click();"
+        "})()")
+    page.wait_for(".rank-page .scorecard-card .score-detail-input")
+    # The input and the Enter commit are dispatched in SEPARATE evaluate()
+    # calls, with a tick between: Preact's `commit` closure captures `draft`
+    # from the render current at COMMIT time, and firing both events in one
+    # synchronous script hands the keydown handler the PRE-input closure
+    # (`.claude/rules/ui-core.md`'s own documented trap -- reading/dispatching
+    # in the same tick sees the pre-render state).
+    page.evaluate(
+        "(() => {"
+        "  const input = document.querySelector('.rank-page .scorecard-card "
+        ".score-detail-input');"
+        "  const setter = Object.getOwnPropertyDescriptor("
+        "    window.HTMLInputElement.prototype, 'value').set;"
+        f"  setter.call(input, {typed_js});"
+        "  input.dispatchEvent(new Event('input', {bubbles: true}));"
+        "})()")
+    page.wait_ms(120)
+    page.evaluate(
+        "document.querySelector('.rank-page .scorecard-card "
+        ".score-detail-input').dispatchEvent("
+        "  new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}))")
+
+
+def test_expanding_a_row_shows_every_star_goal_you_and_delta():
+    with serve_ui() as base:
+        _put_division_goal(base, "Bronze", "V")
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-row-label")
+
+            page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".score-row-label').click()")
+            page.wait_for(".rank-page .scorecard-card .score-detail-table")
+
+            headers = page.evaluate(
+                "Array.from(document.querySelectorAll('.rank-page .scorecard-card "
+                ".score-detail-table th')).map((el) => el.textContent)")
+            row_count = page.evaluate(
+                "document.querySelectorAll('.rank-page .scorecard-card "
+                ".score-detail-table tbody tr').length")
+        assert headers == ["Star", "Goal", "You", "Δ"]
+        assert row_count == 7      # a course row: stars 0-5 + the 100c star
+
+
+def test_editing_a_goal_time_recomputes_the_tile_and_row_sum_before_saving():
+    """His rule: 'This should automatically adjust my goal time comparison +
+    my stage rta comparison' -- BEFORE any save, purely client-side."""
+    with serve_ui() as base:
+        row_label, tile_label, tile_key = _first_seeded_tile(_get_scorecard(base))
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-row-label")
+
+            # A generous, easily-beaten goal (5 minutes) so the edited tile
+            # grades GOOD regardless of which real PB the fixture happened
+            # to seed -- the content under test is "did it recolor at all",
+            # not which colour a specific PB earns.
+            _expand_row_and_edit_goal(page, row_label, tile_label, "5'00\"00")
+            page.wait_for(".rank-page .scorecard-card .scorecard-savebar")
+
+            savebar_text = page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".scorecard-savebar .meta').textContent")
+            colored = page.count(
+                ".rank-page .scorecard-card .score-tile.good, "
+                ".rank-page .scorecard-card .score-tile.bad")
+            # The API was never called -- this is still an unsaved edit.
+            unsaved_goal = _get_scorecard(base)["goal"]
+
+        assert "1" in savebar_text
+        assert colored >= 1, "editing a goal must recolor its tile immediately, unsaved"
+        assert unsaved_goal is None, "an unsaved edit must not have reached the server"
+
+
+def test_saving_a_custom_goal_persists_it_and_lists_it_first_in_the_picker():
+    with serve_ui() as base:
+        row_label, tile_label, _tile_key = _first_seeded_tile(_get_scorecard(base))
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-row-label")
+
+            _expand_row_and_edit_goal(page, row_label, tile_label, "5'00\"00")
+            page.wait_for(".rank-page .scorecard-card .scorecard-savebar")
+
+            page.evaluate(
+                "(() => {"
+                "  const input = document.querySelector('.rank-page .scorecard-card "
+                ".scorecard-savebar-input');"
+                "  const setter = Object.getOwnPropertyDescriptor("
+                "    window.HTMLInputElement.prototype, 'value').set;"
+                "  setter.call(input, 'My Sub 5 Attempt');"
+                "  input.dispatchEvent(new Event('input', {bubbles: true}));"
+                "})()")
+            page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".scorecard-savebar button:not([disabled])').click()")
+            saved = page.evaluate(
+                "(async () => {"
+                "  const start = Date.now();"
+                "  while (Date.now() - start < 5000) {"
+                "    if (!document.querySelector('.rank-page .scorecard-card "
+                ".scorecard-savebar')) return true;"
+                "    await new Promise((resolve) => setTimeout(resolve, 40));"
+                "  }"
+                "  return false;"
+                "})()")
+            assert saved, "the save bar never cleared -- the save did not complete"
+
+            trigger_label = page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".search-select-value').textContent")
+
+            page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".search-select-trigger').click()")
+            page.wait_for(".rank-page .scorecard-card .search-menu-group-head")
+            group_heads = page.evaluate(
+                "Array.from(document.querySelectorAll('.rank-page .scorecard-card "
+                ".search-menu-group-head')).map((el) => el.textContent)")
+
+        assert trigger_label == "My Sub 5 Attempt"
+        # Custom sits right after "No goal" -- ahead of Divisions/Runners.
+        assert group_heads[0] == "Custom"
+
+        card = _get_scorecard(base)
+        assert card["goal"] == {"kind": "custom", "name": "My Sub 5 Attempt"}
+        assert card["custom_goals"] == ["My Sub 5 Attempt"]
 
 
 # --- the two Copy buttons (Task 5) --------------------------------------

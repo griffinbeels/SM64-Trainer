@@ -33,7 +33,8 @@ const FILTER_FLOOR = 8;
  * where the click landed).
  */
 export function SearchMenu({ title, groups, onPick, onClose, busy = false,
-                             error = null, emptyNote = "Nothing to pick." }) {
+                             error = null, emptyNote = "Nothing to pick.",
+                             align = "left" }) {
   const [filter, setFilter] = useState("");
   const inputRef = useRef(null);
   const menuRef = useRef(null);
@@ -66,7 +67,8 @@ export function SearchMenu({ title, groups, onPick, onClose, busy = false,
       options: group.options.filter((option) =>
         !needle || option.label.toLowerCase().includes(needle)) }))
     .filter((group) => group.options.length);
-  return html`<div class="search-menu" ref=${menuRef}
+  return html`<div class="search-menu ${align === "right" ? "search-menu-right" : ""}"
+      ref=${menuRef}
       onkeydown=${(keyEvent) => { if (keyEvent.key === "Escape") onClose(); }}>
     <div class="search-menu-head">
       <span>${title}</span>
@@ -99,10 +101,21 @@ export function SearchMenu({ title, groups, onPick, onClose, busy = false,
  * label, the menu overlaid beneath while open (nothing on the page moves —
  * the 2026-07-26 overlay ruling). Picking closes and reports the value;
  * picking the current value just closes.
+ *
+ * `align="right"` anchors the menu's RIGHT edge under the trigger instead of
+ * its left, opening leftward -- for a trigger a caller has pushed toward the
+ * right of a wide container (`.search-menu`'s default `left: 0` anchor,
+ * unchanged, is right for every trigger that sits nearer its container's
+ * left/centre, which is every OTHER call site today). Without it, the
+ * scorecard's goal picker -- pinned to the far right of `.scorecard-head`
+ * by that row's own `margin-right: auto` -- opened a 240px+ panel that ran
+ * straight off the right edge of the page, widening the document's own
+ * scrollable area (his report: "when I press the dropdown, it goes
+ * offscreen... it shouldn't mess with the width of the page at all").
  */
 export function SearchSelect({ value, valueLabel, title, groups, onChange,
                                buttonClass = "quiet-button search-select-trigger",
-                               onOpen = null }) {
+                               onOpen = null, align = "left" }) {
   const [open, setOpen] = useState(false);
   // `onOpen` is a lazy-load hook, not a mount fetch: the scorecard's Runners
   // group (448 names) would otherwise download every time the Rank tab
@@ -123,7 +136,7 @@ export function SearchSelect({ value, valueLabel, title, groups, onChange,
       <span class="search-select-value">${valueLabel}</span>
       <${Icon} name="chevron" size=${13} />
     </button>
-    ${open ? html`<${SearchMenu} title=${title} groups=${groups}
+    ${open ? html`<${SearchMenu} title=${title} groups=${groups} align=${align}
         onPick=${(picked) => {
           setOpen(false);
           if (picked !== value) onChange(picked);

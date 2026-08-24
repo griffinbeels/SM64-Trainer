@@ -457,10 +457,20 @@
   .search-menu {
     position: absolute; top: calc(100% + 6px); left: 0; z-index: 60;
     display: grid; gap: .45rem; padding: .55rem .65rem; min-width: 240px;
+    max-width: min(320px, 90vw);
     border: 1px solid var(--border-soft); border-radius: 8px;
     background: rgba(7,18,30,.97);
     box-shadow: 0 10px 28px rgba(0,0,0,.5);
   }
+  /* `align="right"` (searchselect.js): the trigger's own right edge anchors
+     the menu instead of its left, so it opens LEFTWARD -- for a trigger a
+     caller pinned to the right of a wide container (the scorecard's goal
+     picker, pushed there by `.scorecard-head`'s own `margin-right: auto`).
+     Left-anchoring a right-pinned trigger ran the panel off the page's own
+     right edge and widened the document's scrollable width; this and the
+     `max-width` above (never wider than 320px, or 90% of a narrow
+     viewport) are what keep it inside the card at every width. */
+  .search-menu-right { left: auto; right: 0; }
   .search-menu-head {
     display: flex; align-items: center; justify-content: space-between;
     gap: .6rem; font-weight: 700; font-size: .82rem;
@@ -7266,15 +7276,88 @@
   .scorecard-exports { display: flex; align-items: center; flex-wrap: wrap;
     gap: 8px; flex-basis: 100%; }
   .scorecard-exports .inline-state { flex-basis: 100%; }
+  /* The "unsaved custom edits" bar (round 8): a name field + Save/Discard,
+     shown only while `pendingOverrides` is non-empty. A gold-tinted border
+     rather than a plain card, so an edit in progress reads as a distinct
+     state from the rest of the card -- the same visual weight a "you have
+     something to confirm" banner gets everywhere else in this app. */
+  .scorecard-savebar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+    padding: 8px 10px; border: 1px solid var(--gold-soft); border-radius: 8px;
+    background: rgba(240,189,50,.08);
+  }
+  .scorecard-savebar-input {
+    flex: 1 1 160px; min-width: 120px;
+    background: rgba(3,10,18,.8); border: 1px solid var(--border-soft);
+    border-radius: 6px; color: inherit; padding: 4px 8px; font: inherit;
+  }
+  .scorecard-savebar .inline-state { flex-basis: 100%; }
   .score-rows { display: grid; gap: 6px; }
   .score-row {
     display: grid; grid-template-columns: minmax(84px, 130px) 1fr auto;
     align-items: center; gap: 10px;
   }
+  /* The row label is now the expand/collapse control (round 8) -- a real
+     <button>, not a styled span, so it is reachable and announced the same
+     way every other disclosure control in this app is. The chevron and the
+     name are SEPARATE children because ellipsis has to land on the text
+     alone; a flex container with a fixed-width icon child inside it cannot
+     ellipsize as a single box. */
   .score-row-label {
-    font-size: .85rem; color: var(--muted);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    display: flex; align-items: center; gap: 4px; min-width: 0;
+    background: transparent; border: none; padding: 0; margin: 0;
+    font: inherit; font-size: .85rem; color: var(--muted); cursor: pointer;
   }
+  .score-row.is-expanded .score-row-label { color: var(--text); }
+  .score-row-chevron { flex: 0 0 auto; font-size: .68rem; color: var(--muted); }
+  .score-row-name {
+    min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* Spans the row's own three tracks -- the detail panel is a FOURTH grid
+     child, placed on the row's next implicit row by the same
+     `grid-template-columns` the collapsed row uses, so nothing about the
+     row's own layout has to change to make room for it. */
+  .score-row-detail {
+    grid-column: 1 / -1;
+    display: grid; gap: 8px; margin-top: 4px; padding: 10px 12px;
+    background: rgba(255,255,255,.03); border: 1px solid var(--border-soft);
+    border-radius: 8px;
+  }
+  .score-detail-target {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .score-detail-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  .score-detail-table th {
+    text-align: left; font-weight: 600; color: var(--muted); font-size: .72rem;
+    padding: 2px 8px 4px; border-bottom: 1px solid var(--border-soft);
+  }
+  .score-detail-table th:not(:first-child), .score-detail-table td:not(:first-child) {
+    text-align: right;
+  }
+  .score-detail-table td {
+    padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,.04);
+    font-variant-numeric: tabular-nums;
+  }
+  .score-detail-table tr:last-child td { border-bottom: none; }
+  .score-detail-table td.good { color: var(--green); }
+  .score-detail-table td.bad { color: var(--coral); }
+  .score-detail-folded td { opacity: .6; }
+  /* The editable Goal cell: a dashed-border button reading as "click to
+     set", swapping in place for a text input on click -- never a second
+     element pushing the row taller, since the table's own row height must
+     stay put whether a cell is a button or an input. */
+  .score-detail-goal-btn {
+    background: transparent; border: 1px dashed var(--border-soft);
+    border-radius: 5px; color: inherit; padding: 2px 8px; cursor: pointer;
+    font: inherit; font-variant-numeric: tabular-nums;
+  }
+  .score-detail-goal-btn:hover { border-color: var(--gold-soft); color: var(--gold-soft); }
+  .score-detail-input {
+    width: 90px; background: rgba(3,10,18,.8); border: 1px solid var(--border-soft);
+    border-radius: 5px; color: inherit; padding: 2px 6px; font: inherit;
+    font-variant-numeric: tabular-nums; text-align: right;
+  }
+  .score-detail-input.is-invalid { border-color: var(--coral); }
   .score-row-tiles { display: flex; gap: 4px; flex-wrap: wrap; }
   /* Tiles never shrink to fit the row -- the CoverageStrip squish lesson
      (.claude/rules/ui-core.md: a route's worth of tiles otherwise shrinking

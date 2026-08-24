@@ -19,12 +19,25 @@
 // button that does nothing there is the dead-control shape this project
 // treats as a bug (`.claude/rules/import.md`). `GET /api/scorecard/export
 // .csv` stays reachable by URL from a browser regardless.
+//
+// A row expands (`ScoreRow`'s own `expanded` state, lifted here so several
+// rows can be open at once) into a per-star Star/Goal/You/Δ table
+// (`ScoreRowDetail`/`ScoreDetailRow`) -- the Ultimate Sheet template's own
+// shape, his own screenshot of it. A star's Goal cell is editable in place;
+// edits live ONLY in `pendingOverrides` (entity_key -> goal_cs) until saved,
+// recomputed client-side through `applyGoalOverrides` -- no server round
+// trip per keystroke -- and saved under a NAME through
+// `PUT /api/scorecard/goal {kind:"custom", name, times}`, which both
+// creates/overwrites the named goal and makes it the active one in a single
+// write. Saved names surface at the TOP of the picker (`goalGroups`'s own
+// "Custom" group, scorecardgoal.js) via the payload's own `custom_goals`.
 import { h } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { fmtSeconds } from "../format.js";
-import { divisionOptions, fmtGapCs, goalGroups } from "../scorecardgoal.js";
+import { applyGoalOverrides, divisionOptions, fmtGapCs, goalGroups,
+         parseGapTime } from "../scorecardgoal.js";
 import { capName, divisionDigit } from "./caps.js";
 import { entityIconSrc } from "./entityicons.js";
 import { SearchSelect } from "./searchselect.js";
@@ -35,12 +48,13 @@ const html = htm.bind(h);
 // Re-exported at this path too -- ui/scorecardgoal.js's own header comment
 // says why the pure logic lives in a separate, genuinely import-free file
 // rather than here.
-export { divisionOptions, fmtGapCs, goalGroups };
+export { applyGoalOverrides, divisionOptions, fmtGapCs, goalGroups, parseGapTime };
 
 function goalToValue(goal) {
   if (!goal) return "";
   if (goal.kind === "division") return `division:${goal.tier}:${goal.division}`;
   if (goal.kind === "runner") return `runner:${goal.runner}`;
+  if (goal.kind === "custom") return `custom:${goal.name}`;
   return "";
 }
 
@@ -48,9 +62,14 @@ function goalToLabel(goal) {
   if (!goal) return "No goal";
   if (goal.kind === "division") return `${capName(goal.tier)} ${divisionDigit(goal.division)}`;
   if (goal.kind === "runner") return goal.runner;
+  if (goal.kind === "custom") return goal.name;
   return "No goal";
 }
 
+// Re-selecting an EXISTING custom goal (picked from the dropdown) carries no
+// `times` -- the server already has them (`_CUSTOM_KEY`); `times` is added
+// separately, only at SAVE time (see `saveCustomGoal` below), which is the
+// one call site allowed to turn a picker value into a body carrying data.
 function valueToGoal(value) {
   if (!value) return null;
   const [kind, ...rest] = value.split(":");
@@ -59,6 +78,7 @@ function valueToGoal(value) {
     return { kind: "division", tier, division };
   }
   if (kind === "runner") return { kind: "runner", runner: rest.join(":") };
+  if (kind === "custom") return { kind: "custom", name: rest.join(":") };
   return null;
 }
 
@@ -122,14 +142,90 @@ function SumChip({ sum, large = false }) {
   </div>`;
 }
 
-function ScoreRow({ t, row, hasGoal }) {
-  return html`<div class="score-row">
-    <span class="score-row-label" title=${row.label}>${row.label}</span>
+// The expanded breakdown: every tile in the row as Star / Goal / You / Δ,
+// the shape of the community's own Ultimate Sheet template (round 8, his
+// screenshot from it), plus the row's own Sigma restated as "Stage RTA
+// target" -- the row's collapsed chip already IS that number, named here so
+// clicking in for detail also answers "what am I actually chasing on this
+// stage" without having to reread the collapsed row above it.
+function ScoreRowDetail({ row, onGoalOverride }) {
+  return html`<div class="score-row-detail">
+    <div class="score-detail-target">
+      <span class="meta">Stage RTA target</span>
+      <${SumChip} sum=${row.sum} />
+    </div>
+    <table class="score-detail-table">
+      <thead><tr><th>Star</th><th>Goal</th><th>You</th><th>Δ</th></tr></thead>
+      <tbody>
+        ${row.tiles.map((tile) => html`<${ScoreDetailRow} key=${tile.key}
+            tile=${tile} onGoalOverride=${onGoalOverride} />`)}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+// One star's editable Goal cell. Click/tap turns it into a text input
+// pre-filled with the CURRENT goal in the exact notation it is displayed in
+// (`fmtSeconds`) -- his rule is "replace the time entry", so what he types
+// over is byte-for-byte what he is looking at, never a different unit or a
+// three-box split. Enter or blur commits; Escape cancels with no write.
+function ScoreDetailRow({ tile, onGoalOverride }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [invalid, setInvalid] = useState(false);
+
+  function startEdit() {
+    setDraft(tile.goal_cs != null ? fmtSeconds(tile.goal_cs / 100) : "");
+    setInvalid(false);
+    setEditing(true);
+  }
+  function commit() {
+    const parsed = parseGapTime(draft);
+    if (parsed === null) { setInvalid(true); return; }
+    onGoalOverride(tile.key, parsed);
+    setEditing(false);
+  }
+  function cancel() { setEditing(false); setInvalid(false); }
+
+  return html`<tr class=${tile.folded ? "score-detail-folded" : ""}>
+    <td>${tile.label}${tile.folded
+      ? html`<span class="meta">${" "}(not in Σ)</span>` : ""}</td>
+    <td class="score-detail-goal">
+      ${editing
+        ? html`<input class="score-detail-input ${invalid ? "is-invalid" : ""}"
+              value=${draft} placeholder="0'00&quot;00" autoFocus
+              oninput=${(inputEvent) => { setDraft(inputEvent.target.value); setInvalid(false); }}
+              onkeydown=${(keyEvent) => {
+                if (keyEvent.key === "Enter") commit();
+                if (keyEvent.key === "Escape") cancel();
+              }}
+              onblur=${commit} />`
+        : html`<button type="button" class="score-detail-goal-btn" onclick=${startEdit}>
+              ${tile.goal_cs != null ? fmtSeconds(tile.goal_cs / 100) : "set a time…"}
+            </button>`}
+    </td>
+    <td>${tile.you_cs != null ? fmtSeconds(tile.you_cs / 100) : "—"}</td>
+    <td class=${tile.delta_cs != null ? (tile.delta_cs <= 0 ? "good" : "bad") : ""}>
+      ${tile.delta_cs != null ? fmtGapCs(tile.delta_cs) : "—"}
+    </td>
+  </tr>`;
+}
+
+function ScoreRow({ t, row, hasGoal, expanded, onToggle, onGoalOverride }) {
+  const rowKey = row.course_id ?? "secret";
+  return html`<div class="score-row ${expanded ? "is-expanded" : ""}">
+    <button type="button" class="score-row-label" title=${row.label}
+        aria-expanded=${expanded} onclick=${() => onToggle(rowKey)}>
+      <span class="score-row-chevron">${expanded ? "▾" : "▸"}</span>
+      <span class="score-row-name">${row.label}</span>
+    </button>
     <div class="score-row-tiles">
       ${row.tiles.map((tile) => html`<${ScoreTile} key=${tile.key} t=${t}
           tile=${tile} hasGoal=${hasGoal} />`)}
     </div>
     <${SumChip} sum=${row.sum} />
+    ${expanded
+      ? html`<${ScoreRowDetail} row=${row} onGoalOverride=${onGoalOverride} />` : ""}
   </div>`;
 }
 
@@ -196,11 +292,39 @@ function ScorecardExports() {
   </div>`;
 }
 
+// Appears only while there are unsaved goal edits -- his flow, verbatim:
+// "This should automatically adjust my goal time comparison... I should
+// then be able to SAVE my custom comparison with a given name." The name
+// field defaults to the ACTIVE goal's own name when it is already a custom
+// one, so re-editing and re-saving under the SAME name is the natural path
+// -- "If I modify a saved comparison, it should just overwrite it" needs no
+// separate control, since the store is a plain dict keyed by name and
+// saving under an unchanged name IS the overwrite. Discard is a pure local
+// reset (nothing has been written to the server yet), matching the
+// "abandonable with no side effects" rule every other multi-step control in
+// this app follows.
+function ScorecardSaveBar({ pendingCount, initialName, busy, error, onSave, onDiscard }) {
+  const [name, setName] = useState(initialName);
+  useEffect(() => setName(initialName), [initialName]);
+  return html`<div class="scorecard-savebar">
+    <span class="meta">${pendingCount} custom ${pendingCount === 1 ? "time" : "times"} edited</span>
+    <input class="scorecard-savebar-input" value=${name}
+        placeholder="Name this goal…"
+        oninput=${(inputEvent) => setName(inputEvent.target.value)} />
+    <button type="button" class="quiet-button" disabled=${busy || !name.trim()}
+        onclick=${() => onSave(name.trim())}>Save goal</button>
+    <button type="button" class="quiet-button" disabled=${busy}
+        onclick=${onDiscard}>Discard</button>
+    ${error ? html`<${InlineState} kind="error">${error}<//>` : ""}
+  </div>`;
+}
+
 function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange }) {
   return html`<div class="scorecard-head">
     <h3>Scorecard</h3>
     <${SearchSelect} value=${goalToValue(goal)} valueLabel=${goalToLabel(goal)}
-        title="Pick a goal" groups=${groups} onOpen=${onOpen} onChange=${onGoalChange} />
+        title="Pick a goal" groups=${groups} onOpen=${onOpen} onChange=${onGoalChange}
+        align="right" />
     ${goal && coverage.covered < coverage.tiles
       ? html`<p class="meta scorecard-note">goal covers ${coverage.covered}/${coverage.tiles}</p>`
       : ""}
@@ -214,6 +338,14 @@ export function Scorecard({ t }) {
   // null = not fetched yet (the Runners group is lazy, see the header
   // comment); [] once fetched even if the sheet somehow named nobody.
   const [runners, setRunners] = useState(null);
+  // Which rows are expanded -- a plain Set of `row.course_id ?? "secret"`,
+  // several open at once (no accordion constraint asked for).
+  const [expandedRows, setExpandedRows] = useState(() => new Set());
+  // entity_key -> goal_cs, UNSAVED. Lives here (not per-row) because a save
+  // can gather edits made across several rows before he ever presses Save.
+  const [pendingOverrides, setPendingOverrides] = useState({});
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveError, setSaveError] = useState(null);
 
   // Fetches on mount and on t.mareloRev, the Rank tab's own staleness key
   // (RankPage's own useEffect does the same -- an attempt or a PB save must
@@ -232,14 +364,76 @@ export function Scorecard({ t }) {
       .catch(() => setRunners([]));
   }
 
-  const groups = useMemo(() => goalGroups(runners), [runners]);
+  const groups = useMemo(() => goalGroups(runners, data && data.custom_goals),
+    [runners, data && data.custom_goals]);
+
+  // The payload actually RENDERED -- the server's own resolved goal with any
+  // unsaved edits laid on top, recomputed live (scorecardgoal.js's own
+  // header comment on `applyGoalOverrides` has the "no server round trip
+  // per keystroke" reasoning). A no-op object identity when there is
+  // nothing pending, so this costs nothing on every other render.
+  const displayData = useMemo(
+    () => (data ? applyGoalOverrides(data, pendingOverrides) : null),
+    [data, pendingOverrides]);
+  // Editing even ONE star without a base goal set still means "I am
+  // comparing against something now" -- coloring should not wait for a
+  // saved goal to exist.
+  const hasGoal = !!(data && data.goal) || Object.keys(pendingOverrides).length > 0;
+
+  function toggleRow(rowKey) {
+    setExpandedRows((current) => {
+      const next = new Set(current);
+      if (next.has(rowKey)) next.delete(rowKey); else next.add(rowKey);
+      return next;
+    });
+  }
+
+  function handleGoalOverride(entityKey, goalCs) {
+    setPendingOverrides((current) => ({ ...current, [entityKey]: goalCs }));
+  }
+
+  function discardOverrides() {
+    setPendingOverrides({});
+    setSaveError(null);
+  }
 
   async function onGoalChange(value) {
+    // Picking a different base goal makes any unsaved edit ambiguous (it
+    // was relative to whatever was active a moment ago) -- discard rather
+    // than silently carry it onto a goal it was never made against.
+    setPendingOverrides({});
+    setSaveError(null);
     try {
       await send("PUT", "/api/scorecard/goal", valueToGoal(value));
       setData(await getJSON("/api/scorecard"));
     } catch (err) { setError(err); }
   }
+
+  async function saveCustomGoal(name) {
+    if (!name || !displayData) return;
+    setSaveBusy(true);
+    setSaveError(null);
+    try {
+      // The FULL currently-displayed times, not just the touched keys -- a
+      // save carries every star's existing target forward, so the ones he
+      // never opened keep whatever the base goal already gave them.
+      const times = {};
+      for (const row of displayData.rows) {
+        for (const tile of row.tiles) {
+          if (tile.goal_cs != null) times[tile.key] = tile.goal_cs;
+        }
+      }
+      await send("PUT", "/api/scorecard/goal", { kind: "custom", name, times });
+      setPendingOverrides({});
+      setData(await getJSON("/api/scorecard"));
+    } catch (err) {
+      setSaveError(err.message || String(err));
+    } finally {
+      setSaveBusy(false);
+    }
+  }
+
+  const pendingCount = Object.keys(pendingOverrides).length;
 
   return html`<div class="practice-card scorecard-card">
     ${error
@@ -249,13 +443,21 @@ export function Scorecard({ t }) {
         : html`<${ScorecardHead} goal=${data.goal} groups=${groups}
               onOpen=${loadRunnersOnce}
               coverage=${data.goal_coverage} onGoalChange=${onGoalChange} />
+            ${pendingCount > 0
+              ? html`<${ScorecardSaveBar} pendingCount=${pendingCount}
+                    initialName=${data.goal && data.goal.kind === "custom" ? data.goal.name : ""}
+                    busy=${saveBusy} error=${saveError}
+                    onSave=${saveCustomGoal} onDiscard=${discardOverrides} />`
+              : ""}
             <div class="score-rows">
-              ${data.rows.map((row) => html`<${ScoreRow} key=${row.course_id ?? "secret"}
-                  t=${t} row=${row} hasGoal=${!!data.goal} />`)}
+              ${displayData.rows.map((row) => html`<${ScoreRow} key=${row.course_id ?? "secret"}
+                  t=${t} row=${row} hasGoal=${hasGoal}
+                  expanded=${expandedRows.has(row.course_id ?? "secret")}
+                  onToggle=${toggleRow} onGoalOverride=${handleGoalOverride} />`)}
             </div>
             <div class="score-foot">
               <span class="score-foot-label">Upstairs RTA</span>
-              <${SumChip} sum=${data.total} large=${true} />
+              <${SumChip} sum=${displayData.total} large=${true} />
             </div>`}
   </div>`;
 }

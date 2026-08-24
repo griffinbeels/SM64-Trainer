@@ -46,20 +46,96 @@ export function divisionOptions() {
   return options;
 }
 
-// The goal picker's whole group list: "No goal" first, then every division,
+// The goal picker's whole group list: "No goal" first, then whatever named
+// goals the player has SAVED (round 8, his own words: "Custom comparisons
+// should show up at the top of the goal dropdown selector" -- immediately
+// after "No goal", since that IS the top of the list), then every division,
 // then whatever sheet runners the caller has fetched (possibly none yet --
 // `ui/components/scorecard.js`'s own header comment says why the Runners
 // group is fetched LAZILY, on the picker's first open, rather than eagerly
-// with everything else). `runner:<name>` is the SAME encoding
-// `goalToValue`/`valueToGoal` (scorecard.js) round-trip a runner goal
-// through -- one value shape, never re-derived at the two ends.
-export function goalGroups(runners) {
-  return [
-    { label: "", options: [{ value: "", label: "No goal" }] },
-    { label: "Divisions", options: divisionOptions() },
-    { label: "Runners", options: (runners || []).map(
-        (name) => ({ value: `runner:${name}`, label: name })) },
-  ];
+// with everything else).
+//
+// Unlike Runners, an EMPTY Custom group is omitted entirely rather than
+// rendered with nothing under it -- Runners has to stay present as the drop
+// target for its own lazy fetch; a saved-goal list either has entries or it
+// does not, and a heading over nothing is a defect, not a placeholder.
+//
+// `runner:<name>`/`custom:<name>` are the SAME encoding `goalToValue`/
+// `valueToGoal` (scorecard.js) round-trip a goal through -- one value shape
+// per kind, never re-derived at the two ends.
+export function goalGroups(runners, customNames) {
+  const groups = [{ label: "", options: [{ value: "", label: "No goal" }] }];
+  if (customNames && customNames.length) {
+    groups.push({ label: "Custom", options: customNames.map(
+        (name) => ({ value: `custom:${name}`, label: name })) });
+  }
+  groups.push({ label: "Divisions", options: divisionOptions() });
+  groups.push({ label: "Runners", options: (runners || []).map(
+      (name) => ({ value: `runner:${name}`, label: name })) });
+  return groups;
+}
+
+// "1'21\"32" / "23\"00" (no minutes, matching fmtSeconds' own display
+// convention -- what he SEES is exactly what he can type back) -> displayed
+// centiseconds, or null when unparseable. Unlike timeline.js's own
+// `parseTimeInput` (which converts to FRAMES, because a marker sits on a
+// real 30fps grab), a goal time is centisecond-precision standard data --
+// the same unit `you_cs`/`goal_cs` already carry -- so there is no frame
+// quantization to round through here.
+export function parseGapTime(text) {
+  const trimmed = String(text ?? "").trim();
+  if (trimmed === "") return null;
+  const match = trimmed.match(/^(?:(\d+)')?(\d{1,2})"(\d{1,2})$/);
+  if (!match) return null;
+  const minutes = match[1] ? Number(match[1]) : 0;
+  const seconds = Number(match[2]);
+  const centisText = match[3];
+  const centis = centisText.length === 1 ? Number(centisText) * 10 : Number(centisText);
+  return (minutes * 60 + seconds) * 100 + centis;
+}
+
+// A tile's own delta, recomputed from its (possibly overridden) goal --
+// mirrors `ranks/scorecard.py::_tile`'s one-line rule exactly (a display
+// centisecond gap, you minus goal, present only when both sides are).
+function _recomputeTile(tile, overrides) {
+  if (!(tile.key in overrides)) return tile;
+  const goal_cs = overrides[tile.key];
+  const delta_cs = tile.you_cs != null ? tile.you_cs - goal_cs : null;
+  return { ...tile, goal_cs, delta_cs };
+}
+
+// A row's (or the card's) Sigma over a tile LIST -- mirrors
+// `ranks/scorecard.py::_sum_tiles` exactly: only unfolded tiles with both
+// sides present count, `total` is the tile count regardless.
+function _recomputeSum(tiles) {
+  const counted = tiles.filter((tile) =>
+    !tile.folded && tile.you_cs != null && tile.goal_cs != null);
+  const you_cs = counted.reduce((total, tile) => total + tile.you_cs, 0);
+  const goal_cs = counted.reduce((total, tile) => total + tile.goal_cs, 0);
+  return { you_cs, goal_cs, delta_cs: counted.length ? you_cs - goal_cs : null,
+           counted: counted.length, total: tiles.length };
+}
+
+// Live client-side recompute for an UNSAVED goal edit -- his own words,
+// "This should automatically adjust my goal time comparison + my stage rta
+// comparison" as he types, with no server round trip per keystroke. Applies
+// `overrides` (entity_key -> goal_cs) on top of the server's own resolved
+// payload and re-derives every touched tile's delta plus every row's (and
+// the card's) Sigma and goal_coverage, using the SAME arithmetic the server
+// builder uses -- `_recomputeTile`/`_recomputeSum` above are that
+// arithmetic's one JS copy, a real decision (this has to run on every
+// keystroke, so it cannot be a server fetch) rather than an oversight,
+// mirrored line-for-line against `ranks/scorecard.py`.
+export function applyGoalOverrides(payload, overrides) {
+  if (!overrides || Object.keys(overrides).length === 0) return payload;
+  const rows = payload.rows.map((row) => {
+    const tiles = row.tiles.map((tile) => _recomputeTile(tile, overrides));
+    return { ...row, tiles, sum: _recomputeSum(tiles) };
+  });
+  const allTiles = rows.flatMap((row) => row.tiles);
+  const goal_coverage = { covered: allTiles.filter((tile) => tile.goal_cs != null).length,
+                          tiles: allTiles.length };
+  return { ...payload, rows, total: _recomputeSum(allTiles), goal_coverage };
 }
 
 // A tile or Sigma gap in signed decimal seconds -- "-4.37"/"+0.40". Reuses
