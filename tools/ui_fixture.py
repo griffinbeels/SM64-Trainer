@@ -1278,7 +1278,14 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     app = create_app(poller, broadcaster, service=service, compare=compare,
                      adoptions_path=Path(compare_cache_scratch.name)
                      / "library_adoptions.json",
-                     mode_path=Path(compare_cache_scratch.name) / "tracker_mode.json")
+                     mode_path=Path(compare_cache_scratch.name) / "tracker_mode.json",
+                     # Scratch for the same reason as adoptions_path: the
+                     # default local sheet snapshot is the real dev data dir,
+                     # and a live refresh writes a newer snapshot there, so a
+                     # sweep would measure a page built from whatever the
+                     # sheet said last night rather than the bundled data.
+                     library_path=Path(compare_cache_scratch.name)
+                     / "sheet_library.json.gz")
 
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(

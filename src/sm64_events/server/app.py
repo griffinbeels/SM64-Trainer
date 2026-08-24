@@ -250,7 +250,15 @@ def _quiet_connection_resets(loop, context) -> None:
 def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, updater=None, compare=None,
                compilation=None, db_retry=None, debug_hooks: bool = False,
-               adoptions_path=None, mode_path=None) -> FastAPI:
+               adoptions_path=None, mode_path=None,
+               library_path=None) -> FastAPI:
+    # `library_path` overrides where the LOCAL sheet snapshot lives -- tests
+    # pass a scratch path so the library resolves to the BUNDLED snapshot;
+    # None (production) resolves to core.paths.sheet_library_path(). Same
+    # reason as `adoptions_path` one line up: the default is the REAL dev
+    # data dir, and a live "refresh" writes data/sheet_library.json.gz right
+    # where the import tests would read it -- his 2026-08-23 23:13 live
+    # import moved the sheet under two green tests exactly that way.
     # `mode_path` overrides where the game version setting persists
     # (server/mode_api.py) -- tests pass a scratch file; None (production)
     # resolves to core.paths.mode_settings_path().
@@ -385,7 +393,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     from sm64_events.library.audit import load_overrides
     from sm64_events.library.store import LibraryStore
     from sm64_events.server.library_api import create_library_router
-    library = LibraryStore(sheet_library_path(), bundled_sheet_library())
+    library = LibraryStore(library_path or sheet_library_path(),
+                           bundled_sheet_library())
     library.load()
     app.state.library = library
     # The human's own audit corrections (tools/audit_library.py) -- a
