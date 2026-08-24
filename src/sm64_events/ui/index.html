@@ -470,7 +470,13 @@
      right edge and widened the document's scrollable width; this and the
      `max-width` above (never wider than 320px, or 90% of a narrow
      viewport) are what keep it inside the card at every width. */
-  .search-menu-right { left: auto; right: 0; }
+  /* Compound selector, not source order: `.search-menu` and
+     `.search-menu-right` are equal-specificity (0,1,0) classes applied
+     TOGETHER on the same element, so this only overrode `left` because it
+     happened to be declared later in the file -- any later same-specificity
+     rule touching `left` would have silently won instead. Bumping to
+     `.search-menu.search-menu-right` (0,2,0) makes it win structurally. */
+  .search-menu.search-menu-right { left: auto; right: 0; }
   .search-menu-head {
     display: flex; align-items: center; justify-content: space-between;
     gap: .6rem; font-weight: 700; font-size: .82rem;
@@ -7352,12 +7358,21 @@
     font: inherit; font-variant-numeric: tabular-nums;
   }
   .score-detail-goal-btn:hover { border-color: var(--gold-soft); color: var(--gold-soft); }
+  /* Wraps the input so an invalid draft's hint (below) stacks under it
+     without disturbing the input's own width or alignment -- the row only
+     grows taller in this one state, never on the ordinary button<->input
+     swap the comment above already protects. */
+  .score-detail-editing { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
   .score-detail-input {
     width: 90px; background: rgba(3,10,18,.8); border: 1px solid var(--border-soft);
     border-radius: 5px; color: inherit; padding: 2px 6px; font: inherit;
     font-variant-numeric: tabular-nums; text-align: right;
   }
   .score-detail-input.is-invalid { border-color: var(--coral); }
+  /* Where the click landed: the way out of an unparseable draft sits right
+     under the box that rejected it, never a toast (`.claude/rules/
+     acceptance.md`'s "put the reason where the click lands" rule). */
+  .score-detail-hint { font-size: .68rem; color: var(--coral); }
   .score-row-tiles { display: flex; gap: 4px; flex-wrap: wrap; }
   /* Tiles never shrink to fit the row -- the CoverageStrip squish lesson
      (.claude/rules/ui-core.md: a route's worth of tiles otherwise shrinking

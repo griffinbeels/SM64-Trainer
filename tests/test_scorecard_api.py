@@ -276,6 +276,60 @@ def test_scorecard_serves_broadcast_only_with_an_empty_goal_map(tmp_path):
         assert card["goal_coverage"]["covered"] == 0
 
 
+def test_all_three_db_touching_routes_answer_503_not_500_with_no_database(tmp_path):
+    """`service.db is None` is the codebase's own definition of genuinely
+    BROADCAST-ONLY (`tracking/service.py`'s header docstring) -- a real
+    state: a second instance that lost the db lock. Every route that reads
+    `service.db` must answer 503, never crash with an opaque 500, whether it
+    reads it directly (`set_goal`) or through `current_card()` (the other
+    two)."""
+    from sm64_events.server.app import create_app
+    from sm64_events.server.broadcaster import Broadcaster
+    from sm64_events.server.poller import Poller
+    from sm64_events.tracking.service import TrackerService
+    from fastapi.testclient import TestClient
+    from import_fixture import OfflineMemory
+
+    broadcaster = Broadcaster()
+    service = TrackerService(None, broadcaster)         # db=None, ranks=None
+    poller = Poller(OfflineMemory(), [], service)
+    app = create_app(poller, broadcaster, service=service,
+                     adoptions_path=tmp_path / "library_adoptions.json",
+                     mode_path=tmp_path / "tracker_mode.json")
+    with TestClient(app) as client:
+        get_response = client.get("/api/scorecard")
+        assert get_response.status_code == 503
+        assert get_response.json()["detail"]
+
+        put_response = client.put("/api/scorecard/goal", json={
+            "kind": "division", "tier": "Gold", "division": "I"})
+        assert put_response.status_code == 503
+        assert put_response.json()["detail"]
+
+        csv_response = client.get("/api/scorecard/export.csv")
+        assert csv_response.status_code == 503
+        assert csv_response.json()["detail"]
+
+
+def test_a_non_dict_goal_kv_serves_the_no_goal_card(tmp_path):
+    """A KV that is not the shape this store ever writes (corrupt, or from a
+    schema this code has never seen) must read as absent rather than 500
+    every route that touches it."""
+    with make_client(tmp_path) as (client, db, _svc):
+        db.set_state("scorecard_goal", "not a dict")
+        card = client.get("/api/scorecard").json()
+        assert card["goal"] is None
+        assert card["goal_coverage"]["covered"] == 0
+
+
+def test_a_non_dict_custom_goal_store_serves_the_no_goal_card(tmp_path):
+    with make_client(tmp_path) as (client, db, _svc):
+        db.set_state("scorecard_custom_goals", ["not", "a", "dict"])
+        card = client.get("/api/scorecard").json()
+        assert card["goal"] is None
+        assert card["custom_goals"] == []
+
+
 def _bob_workbook():
     """One target (Big Bob-omb on the Summit, opens at row 3) plus its grey
     subsection (row 4) -- row 2 is the section header, which `read_rows`

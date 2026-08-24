@@ -703,6 +703,12 @@ def test_scorecard_goal_override_recompute_agrees():
 
     expected_tiles = [expected_tile(tile) for tile in base_tiles]
     expected_sum = _sum_tiles(expected_tiles)
+    # `GET /api/scorecard`'s own coverage formula (`scorecard_api.py::
+    # get_scorecard`), computed here over the SAME expected tiles -- the
+    # live-edit recompute must agree with the server on which tiles now
+    # carry a goal, not just on the tiles' own contents.
+    expected_coverage = {"covered": sum(1 for t in expected_tiles if t["goal_cs"] is not None),
+                         "tiles": len(expected_tiles)}
 
     payload = {
         "rows": [{"course_id": 1, "label": "Test Row", "tiles": base_tiles,
@@ -716,7 +722,8 @@ def test_scorecard_goal_override_recompute_agrees():
         f"const overrides = {json.dumps(overrides)};\n"
         "const result = applyGoalOverrides(payload, overrides);\n"
         "console.log(JSON.stringify({tiles: result.rows[0].tiles, "
-        "sum: result.rows[0].sum, total: result.total}));")
+        "sum: result.rows[0].sum, total: result.total, "
+        "goal_coverage: result.goal_coverage}));")
 
     assert js["tiles"] == expected_tiles, (
         "ranks/scorecard.py::_tile and scorecardgoal.js's live recompute "
@@ -729,6 +736,39 @@ def test_scorecard_goal_override_recompute_agrees():
     assert js["total"] == expected_sum, (
         "a single-row payload's card TOTAL must equal that row's own Sigma "
         f"on both sides -- python: {expected_sum}, js: {js['total']}")
+    assert js["goal_coverage"] == expected_coverage, (
+        "scorecard_api.py::get_scorecard's coverage formula and "
+        "scorecardgoal.js's live recompute disagree on goal_coverage.\n"
+        f"  python: {expected_coverage}\n  js:     {js['goal_coverage']}")
+
+
+# --- 14. the attainable-centisecond rule -------------------------------------
+# Only 30 of every 100 centisecond values are displayable, and a HAND-TYPED
+# time has a 70% chance of naming one that is not. The server rounds up on
+# save; the field has to show the same answer before saving, or it hands back a
+# different number than the one entered. Two implementations, one rule.
+
+def test_attainable_centiseconds_agree():
+    from sm64_events.core.timefmt import attainable_cs
+
+    # Every centisecond value through the first two seconds (where the 30-of-100
+    # pattern repeats in full), plus real times across the range.
+    values = list(range(0, 200)) + [
+        886, 1000, 1501, 1503, 2613, 4450, 6300, 6600, 9996, 12345]
+    js = run_node(
+        f"import {{ attainableCs }} from {FORMAT_JS.as_uri()!r};\n"
+        f"const values = {json.dumps(values)};\n"
+        "console.log(JSON.stringify(values.map(attainableCs)));")
+    python = [attainable_cs(cs) for cs in values]
+    disagreements = [(cs, py, node)
+                     for cs, py, node in zip(values, python, js)
+                     if py != node]
+    assert not disagreements, (
+        "core/timefmt.py::attainable_cs and ui/format.js::attainableCs "
+        f"disagree at (cs, python, js): {disagreements}. A hand-entry field "
+        "that snaps differently from the server hands the user back a time "
+        "they did not type — and JS `/` is float division where Python `//` "
+        "is not, which is exactly the drift these two are one edit away from.")
 
 
 # --- the guards themselves --------------------------------------------------
@@ -763,32 +803,3 @@ def test_the_guards_can_still_fail():
                           for (ladder, time), py, node in
                           zip(fake_cases, fake_python, fake_js) if py != node]
     assert fake_disagreements == [({"Bronze": 100}, 50, "Silver", "Bronze")]
-
-
-# --- 5. the attainable-centisecond rule -------------------------------------
-# Only 30 of every 100 centisecond values are displayable, and a HAND-TYPED
-# time has a 70% chance of naming one that is not. The server rounds up on
-# save; the field has to show the same answer before saving, or it hands back a
-# different number than the one entered. Two implementations, one rule.
-
-def test_attainable_centiseconds_agree():
-    from sm64_events.core.timefmt import attainable_cs
-
-    # Every centisecond value through the first two seconds (where the 30-of-100
-    # pattern repeats in full), plus real times across the range.
-    values = list(range(0, 200)) + [
-        886, 1000, 1501, 1503, 2613, 4450, 6300, 6600, 9996, 12345]
-    js = run_node(
-        f"import {{ attainableCs }} from {FORMAT_JS.as_uri()!r};\n"
-        f"const values = {json.dumps(values)};\n"
-        "console.log(JSON.stringify(values.map(attainableCs)));")
-    python = [attainable_cs(cs) for cs in values]
-    disagreements = [(cs, py, node)
-                     for cs, py, node in zip(values, python, js)
-                     if py != node]
-    assert not disagreements, (
-        "core/timefmt.py::attainable_cs and ui/format.js::attainableCs "
-        f"disagree at (cs, python, js): {disagreements}. A hand-entry field "
-        "that snaps differently from the server hands the user back a time "
-        "they did not type — and JS `/` is float division where Python `//` "
-        "is not, which is exactly the drift these two are one edit away from.")

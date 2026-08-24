@@ -24,7 +24,15 @@ authority `server/import_api.py::sheet_row_placer` vouches import rows with
 
 Both branches end at `resolve(entity_key, strat_tag, timer_mode, version) ->
 cs | None` -- the caller's PB lookup, including the game_version check (a PB
-set on the other ROM must not print under an explicitly-versioned row)."""
+set on the other ROM must not print under an explicitly-versioned row).
+
+The round trip is ONE-WAY, deliberately: a star approach `import_runner.py`
+lands under the SHEET's own name -- no vetted `matched_strategy`, and
+`place` has nothing to place either, since a star target already carries its
+own entity key and never reaches the placer's Bowser/name-match paths --
+exports BLANK here. This door only ever resolves a strategy it can look up a
+PB under, and a name borrowed straight from the sheet's own approach label is
+not a strategy this database has ever heard of."""
 from sm64_events.library.sheet import base_name
 
 

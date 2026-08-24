@@ -87,8 +87,8 @@ def _fetch_column_source(overrides):
 
 
 def _column_resolve(service):
-    """Your current PB, strategy-blind lookup narrowed to one strategy --
-    `centiseconds | None`, `None` when there is no PB, or when there is one
+    """Your current PB on ONE named strategy -- `centiseconds | None`,
+    `None` when there is no PB on that strategy, or when there is one
     but it was set on the other ROM (`row.version` is only ever non-None on
     a row the sheet itself declares a version for; an unversioned row never
     checks)."""
@@ -207,6 +207,13 @@ def _csv_bytes(rows: list[list[str]]) -> bytes:
     return buf.getvalue().encode("utf-8")
 
 
+def _csv_body(card: dict, library, adoptions, service) -> bytes:
+    """Off the event loop -- `_csv_rows` walks `_record_lookup` once per
+    tile (measured 80-86ms over the full card), the same reason `get_column`
+    below threadpools its own sheet walk."""
+    return _csv_bytes(_csv_rows(card, _record_lookup(library, adoptions, service)))
+
+
 def create_scorecard_router(service, library=None, adoptions=None,
                             overrides=None) -> APIRouter:
     """`library`/`adoptions` back the column export below; the goal card
@@ -215,6 +222,18 @@ def create_scorecard_router(service, library=None, adoptions=None,
     refresh applies them, so a re-fetched sheet does not reintroduce a
     mistake the audit already fixed."""
     router = APIRouter(prefix="/api/scorecard", tags=["scorecard"])
+
+    def _require_db():
+        """`service.db` is `None` on a genuinely BROADCAST-ONLY instance --
+        one that lost the db lock -- and every route below reads it. Called
+        at the entry of every route that touches `service.db`, directly or
+        through `current_card()`, so a bare `AttributeError` never reaches
+        the client as an opaque 500 (`ranks_api.py:88`'s own shape). This is
+        a DIFFERENT degraded state from `service.ranks is None` (no live
+        standards), which the card still answers 200 for, empty goal map and
+        all -- only a missing DATABASE is unanswerable."""
+        if service.db is None:
+            raise HTTPException(503, "scorecard unavailable")
 
     def resolve_seed(seed_key: str):
         """A Secret-row movement's seed_key -> (segment:<id>, name), or None
@@ -266,7 +285,12 @@ def create_scorecard_router(service, library=None, adoptions=None,
                             version=version).get(runner, {})
 
     def custom_goal_store() -> dict[str, dict[str, int]]:
-        return service.db.get_state(_CUSTOM_KEY, {})
+        # A corrupt KV (wrong type, from a schema this store never wrote)
+        # reads as absent rather than 500ing every route that touches it --
+        # the same "treat garbage as no goal" rule `current_card()` applies
+        # to `_GOAL_KEY` below.
+        store = service.db.get_state(_CUSTOM_KEY, {})
+        return store if isinstance(store, dict) else {}
 
     def custom_goal_map(keys: list[str], name: str) -> dict[str, int]:
         """A saved custom goal's own times, filtered to keys the card still
@@ -277,10 +301,11 @@ def create_scorecard_router(service, library=None, adoptions=None,
         return {key: cs for key, cs in saved.items() if key in keys}
 
     def fold_choices(goal_value: dict | None) -> dict[int, int | None]:
-        """Per course, the exit star BOTH sums skip: your own 100c PB's
-        variant first, else the variant owning the goal tier's 100c cutoff,
-        else no fold. A PB with no strategy, or a strategy that names no
-        variant, falls through to the next rule rather than stopping."""
+        """Per course, the exit star BOTH sums skip: your most recently
+        saved 100c PB's variant first (latest-row-wins, same as sec.pb),
+        else the variant owning the goal tier's 100c cutoff, else no fold.
+        A PB with no strategy, or a strategy that names no variant, falls
+        through to the next rule rather than stopping."""
         fold = {}
         for course_id in range(1, 16):
             exit_star = None
@@ -306,9 +331,12 @@ def create_scorecard_router(service, library=None, adoptions=None,
         """`(card, goal_value)` -- the one door both `GET /api/scorecard`
         and the CSV export build from, so a downloaded row can never
         disagree with the card the browser is looking at."""
+        _require_db()
         keys = card_keys(resolve_seed)
         you = your_times(keys)
         goal_value = service.db.get_state(_GOAL_KEY, None)
+        if not isinstance(goal_value, dict):
+            goal_value = None                # a corrupt KV reads as no goal
         ranks = service.ranks
 
         goal_map: dict[str, int] = {}
@@ -361,6 +389,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
         about, 404 if that name was never saved. Either way the KV ends up
         naming just the goal (`{"kind":"custom","name":...}`) -- the actual
         times live in `_CUSTOM_KEY`, not duplicated into `_GOAL_KEY`."""
+        _require_db()
         if body is None:
             service.db.set_state(_GOAL_KEY, None)
             return {"goal": None}
@@ -397,6 +426,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
         fetch, never the cached snapshot: the row layout has to match the
         sheet you are about to paste into (same reasoning as `POST
         /api/import/sheet`'s own refresh)."""
+        _require_db()
         if library is None:
             raise HTTPException(503, "sheet library unavailable")
         try:
@@ -419,7 +449,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
         has to support; the card's own Copy buttons fetch this and copy the
         text instead of navigating here."""
         card, _goal_value = current_card()
-        body = _csv_bytes(_csv_rows(card, _record_lookup(library, adoptions, service)))
+        body = await run_in_threadpool(_csv_body, card, library, adoptions, service)
         return Response(content=body, media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition":
                                  'attachment; filename="scorecard.csv"'})

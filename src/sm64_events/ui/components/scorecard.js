@@ -132,8 +132,15 @@ function SumChip({ sum, large = false }) {
   const classes = ["score-sum", large ? "score-sum-total" : "",
                     hasDelta ? (behind ? "bad" : "good") : ""]
     .filter(Boolean).join(" ");
-  return html`<div class=${classes}
-      title=${`You ${fmtSeconds(sum.you_cs / 100)} · Goal ${fmtSeconds(sum.goal_cs / 100)}`}>
+  // `counted === 0` still carries `you_cs`/`goal_cs` of 0 (Python `sum([])`),
+  // which is not a real 0'00"00 on either side -- printing them unconditionally
+  // fabricates a comparison nothing backs, the exact "cannot logically be
+  // compared" shape `.claude/rules/acceptance.md` rules against. No comparable
+  // tile means an honest sentence about WHY, not two invented zeroes.
+  const title = hasDelta
+    ? `You ${fmtSeconds(sum.you_cs / 100)} · Goal ${fmtSeconds(sum.goal_cs / 100)}`
+    : `${sum.counted}/${sum.total} tiles comparable`;
+  return html`<div class=${classes} title=${title}>
     <span class="score-sum-glyph">${hasDelta ? (behind ? "✗" : "✓") : ""}</span>
     <span class="score-sum-value">${hasDelta
       ? fmtSeconds(Math.abs(sum.delta_cs) / 100) : "—"}</span>
@@ -179,27 +186,37 @@ function ScoreDetailRow({ tile, onGoalOverride }) {
     setInvalid(false);
     setEditing(true);
   }
+  function cancel() { setEditing(false); setInvalid(false); }
   function commit() {
+    // An EMPTY blur/Enter is "I changed my mind", not "I typed garbage" --
+    // cancelling (rather than flagging it invalid) is the only way out of
+    // edit mode a blur on an empty box ever had, and leaving it red and open
+    // is the un-dismissable-control shape `.claude/rules/acceptance.md`
+    // rules against.
+    if (!draft.trim()) { cancel(); return; }
     const parsed = parseGapTime(draft);
     if (parsed === null) { setInvalid(true); return; }
     onGoalOverride(tile.key, parsed);
     setEditing(false);
   }
-  function cancel() { setEditing(false); setInvalid(false); }
 
   return html`<tr class=${tile.folded ? "score-detail-folded" : ""}>
     <td>${tile.label}${tile.folded
       ? html`<span class="meta">${" "}(not in Σ)</span>` : ""}</td>
     <td class="score-detail-goal">
       ${editing
-        ? html`<input class="score-detail-input ${invalid ? "is-invalid" : ""}"
-              value=${draft} placeholder="0'00&quot;00" autoFocus
-              oninput=${(inputEvent) => { setDraft(inputEvent.target.value); setInvalid(false); }}
-              onkeydown=${(keyEvent) => {
-                if (keyEvent.key === "Enter") commit();
-                if (keyEvent.key === "Escape") cancel();
-              }}
-              onblur=${commit} />`
+        ? html`<div class="score-detail-editing">
+              <input class="score-detail-input ${invalid ? "is-invalid" : ""}"
+                  value=${draft} placeholder="0'00&quot;00" autoFocus
+                  oninput=${(inputEvent) => { setDraft(inputEvent.target.value); setInvalid(false); }}
+                  onkeydown=${(keyEvent) => {
+                    if (keyEvent.key === "Enter") commit();
+                    if (keyEvent.key === "Escape") cancel();
+                  }}
+                  onblur=${commit} />
+              ${invalid
+                ? html`<span class="score-detail-hint">type it like 51"83</span>` : ""}
+            </div>`
         : html`<button type="button" class="score-detail-goal-btn" onclick=${startEdit}>
               ${tile.goal_cs != null ? fmtSeconds(tile.goal_cs / 100) : "set a time…"}
             </button>`}
@@ -247,6 +264,13 @@ function CopyButton({ className, label, onCopy, onError }) {
     if (busy) return;
     setBusy(true);
     try {
+      // `routes.js:269`'s own `navigator.clipboard &&` guard, but this
+      // button owns an inline error slot (routes.js's plain Copy JSON does
+      // not), so a missing clipboard gets a plain sentence there instead of
+      // a silent no-op.
+      if (!navigator.clipboard) {
+        throw new Error("clipboard access is not available here");
+      }
       const text = await onCopy();
       await navigator.clipboard.writeText(text);
       setCopied(true);

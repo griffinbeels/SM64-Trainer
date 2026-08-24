@@ -383,13 +383,12 @@ def _first_seeded_tile(payload: dict) -> tuple[str, str, str]:
     raise AssertionError("the fixture seeded no PBs at all -- nothing to edit against")
 
 
-def _expand_row_and_edit_goal(page, row_label: str, tile_label: str, typed: str) -> None:
-    """Click the named row open, click that star's Goal cell into edit mode,
-    type `typed`, and commit with Enter -- entirely through the real
-    controls, never by writing state directly."""
+def _open_goal_editor(page, row_label: str, tile_label: str) -> None:
+    """Expand ROW_LABEL's row and click TILE_LABEL's Goal cell into edit
+    mode -- the shared first half of every scenario below, entirely through
+    the real controls, never by writing state directly."""
     row_label_js = json.dumps(row_label)
     tile_label_js = json.dumps(tile_label)
-    typed_js = json.dumps(typed)
     page.evaluate(
         "(() => {"
         f"  const rowLabel = {row_label_js};"
@@ -410,12 +409,12 @@ def _expand_row_and_edit_goal(page, row_label: str, tile_label: str, typed: str)
         "  tr.querySelector('.score-detail-goal-btn').click();"
         "})()")
     page.wait_for(".rank-page .scorecard-card .score-detail-input")
-    # The input and the Enter commit are dispatched in SEPARATE evaluate()
-    # calls, with a tick between: Preact's `commit` closure captures `draft`
-    # from the render current at COMMIT time, and firing both events in one
-    # synchronous script hands the keydown handler the PRE-input closure
-    # (`.claude/rules/ui-core.md`'s own documented trap -- reading/dispatching
-    # in the same tick sees the pre-render state).
+
+
+def _type_into_goal_editor(page, typed: str) -> None:
+    """Types into the already-open goal input, in its OWN `evaluate()` call
+    -- see the trap noted below."""
+    typed_js = json.dumps(typed)
     page.evaluate(
         "(() => {"
         "  const input = document.querySelector('.rank-page .scorecard-card "
@@ -426,6 +425,29 @@ def _expand_row_and_edit_goal(page, row_label: str, tile_label: str, typed: str)
         "  input.dispatchEvent(new Event('input', {bubbles: true}));"
         "})()")
     page.wait_ms(120)
+
+
+def _blur_goal_editor(page) -> None:
+    """Preact attaches `onblur` directly on the input node, so dispatching
+    the event straight at it fires the handler without needing the native
+    `blur` event's (non-bubbling) propagation."""
+    page.evaluate(
+        "document.querySelector('.rank-page .scorecard-card "
+        ".score-detail-input').dispatchEvent(new Event('blur', {bubbles: true}))")
+
+
+def _expand_row_and_edit_goal(page, row_label: str, tile_label: str, typed: str) -> None:
+    """Click the named row open, click that star's Goal cell into edit mode,
+    type `typed`, and commit with Enter -- entirely through the real
+    controls, never by writing state directly."""
+    _open_goal_editor(page, row_label, tile_label)
+    # The input and the Enter commit are dispatched in SEPARATE evaluate()
+    # calls, with a tick between: Preact's `commit` closure captures `draft`
+    # from the render current at COMMIT time, and firing both events in one
+    # synchronous script hands the keydown handler the PRE-input closure
+    # (`.claude/rules/ui-core.md`'s own documented trap -- reading/dispatching
+    # in the same tick sees the pre-render state).
+    _type_into_goal_editor(page, typed)
     page.evaluate(
         "document.querySelector('.rank-page .scorecard-card "
         ".score-detail-input').dispatchEvent("
@@ -454,6 +476,66 @@ def test_expanding_a_row_shows_every_star_goal_you_and_delta():
                 ".score-detail-table tbody tr').length")
         assert headers == ["Star", "Goal", "You", "Δ"]
         assert row_count == 7      # a course row: stars 0-5 + the 100c star
+
+
+def test_blurring_an_empty_goal_draft_cancels_edit_mode():
+    """His acceptance rule for a multi-step control: an EMPTY draft is 'I
+    changed my mind', not 'I typed garbage' -- blurring away from it must
+    close the editor cleanly, no red state and no input stuck open."""
+    with serve_ui() as base:
+        row_label, tile_label, _tile_key = _first_seeded_tile(_get_scorecard(base))
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-row-label")
+
+            # No goal is picked in this test, so the tile has no goal_cs and
+            # the editor opens with an already-empty draft -- exactly the
+            # case under test.
+            _open_goal_editor(page, row_label, tile_label)
+            _blur_goal_editor(page)
+            page.wait_ms(150)
+
+            closed = page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".score-detail-input') === null")
+
+        assert closed, "an empty-draft blur must close the editor, not leave it stuck open"
+
+
+def test_blurring_an_unparseable_goal_draft_shows_the_hint():
+    """A NON-empty draft that cannot parse stays open with the red invalid
+    state -- but the way out is now printed right under the box that
+    rejected it (`.claude/rules/acceptance.md`'s "put the reason where the
+    click lands" rule)."""
+    with serve_ui() as base:
+        row_label, tile_label, _tile_key = _first_seeded_tile(_get_scorecard(base))
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-row-label")
+
+            _open_goal_editor(page, row_label, tile_label)
+            _type_into_goal_editor(page, "not a time")
+            _blur_goal_editor(page)
+            page.wait_ms(150)
+
+            invalid = page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".score-detail-input.is-invalid') !== null")
+            hint = page.evaluate(
+                "(() => {"
+                "  const el = document.querySelector('.rank-page .scorecard-card "
+                ".score-detail-hint');"
+                "  return el ? el.textContent : null;"
+                "})()")
+
+        assert invalid, "an unparseable draft must keep the red invalid state on blur"
+        assert hint == 'type it like 51"83'
 
 
 def test_editing_a_goal_time_recomputes_the_tile_and_row_sum_before_saving():
