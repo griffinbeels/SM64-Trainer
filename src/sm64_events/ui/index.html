@@ -4724,10 +4724,20 @@
   .moment-mark {
     position: absolute; top: 0; bottom: 0; min-width: 2px; padding: 0;
     display: flex; align-items: center; gap: .2rem;
+    /* flex-start is LOAD-BEARING: the design system's own button rule
+       centres flex content, and this button spans from its moment to the
+       NEXT one -- centred, the tick drew mid-span, a third of the timeline
+       away from its own frame (his report 2026-08-23: "appears in the
+       center of the timeline, when it actually starts way earlier"). */
+    justify-content: flex-start;
     min-height: 0; height: auto; border: 0; border-radius: 0;
     background: transparent; overflow: hidden; cursor: pointer;
     font-size: .6rem; line-height: 1; color: #d9c6f0; text-align: left;
   }
+  /* The shell's button:hover paints a background over the button's whole
+     span, which reads as a mystery band from the moment to the next one.
+     The tick and the label brighten instead (the rule below). */
+  .moment-mark:hover, .moment-mark:focus-visible { background: transparent; }
   .moment-mark-tick {
     flex: none; width: 2px; align-self: stretch; background: #c9a6ff;
     border-radius: 1px;

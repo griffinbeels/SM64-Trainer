@@ -1218,6 +1218,24 @@ def test_the_drawer_reaches_a_MOMENT_on_the_track(page):
         "Array.from(document.querySelectorAll('.moment-mark'))"
         ".map((el) => el.getAttribute('title'))")
     assert any(label.startswith("Grab a pole in ") for label in labels), labels
+    # THE TICK, not the button. The button spans from its moment to the NEXT
+    # one, and the design system's own `button` rule centres flex content --
+    # so a guard measuring the button's left edge passed while the tick drew
+    # mid-span, a third of the timeline from its own frame (his report
+    # 2026-08-23). The fixture's pole grab is 30 frames into a 63-frame
+    # track: the tick must sit at 30/63 of the track, within a slot.
+    tick_at, button_at, track = page.evaluate(
+        "(() => { const tick = document.querySelector('.moment-mark-tick')"
+        ".getBoundingClientRect(); const button = document.querySelector("
+        "'.moment-mark').getBoundingClientRect(); const lane = document"
+        ".querySelector('.input-lane.is-moments .input-lane-track')"
+        ".getBoundingClientRect(); return [tick.left, button.left, lane]; })()")
+    expected = track["x"] + (30 / 63) * track["width"]
+    assert abs(tick_at - expected) < track["width"] / 63, (
+        f"the moment's TICK sits at {tick_at:.0f}, its frame is at "
+        f"{expected:.0f} -- the label is being centred in the button again")
+    assert abs(tick_at - button_at) < 4, (
+        "the tick is not at the button's own left edge")
 
 
 def test_the_playhead_travels_over_the_tracks_and_never_the_labels(page):
