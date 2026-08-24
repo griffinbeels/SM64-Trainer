@@ -137,6 +137,19 @@ class InputsService:
             origin=f"attempt:{attempt.id}",
             document=document_for_attempt(self.store, attempt, self._version))
 
+    def pad_lookup(self, start_utc: str,
+                   duration_s: float) -> dict[int, tuple[int, int, int]]:
+        """Every captured frame in a wall-clock span: raw game frame ->
+        (buttons, stick_x, stick_y) -- the pad as Usamune's display draws
+        it. The pixel refiner (replay/pixelmap.py) reads the display out of
+        the footage and fits the clip's frame map against this."""
+        from datetime import datetime, timedelta
+        start = datetime.fromisoformat(start_utc.replace("Z", "+00:00"))
+        end = (start + timedelta(seconds=duration_s)).isoformat()
+        return {number: (frame.buttons, frame.stick_x, frame.stick_y)
+                for number, frame in
+                self.store.frames_between(start.isoformat(), end)}
+
     def timeline(self, attempt_id: int) -> dict:
         attempt = self.attempt(attempt_id)
         frames = track_for_attempt(self.store, attempt)

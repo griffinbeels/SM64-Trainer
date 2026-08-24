@@ -97,6 +97,16 @@ def test_the_timeline_carries_the_journals_moments_when_wired(rig):
                       "label": "Grab a pole in Bob-omb Battlefield"}
 
 
+def test_pad_lookup_answers_the_span_by_raw_frame(rig):
+    """The pixel refiner's door: raw frame -> the pad Usamune's display
+    draws (buttons, stick), over a wall-clock span."""
+    service, _templates, _attempt = rig
+    pads = service.pad_lookup(AT, 30.0)
+    assert pads[100] == (0, -45, -45)
+    assert pads[113] == (0x8000, -45, -45)
+    assert len(pads) == 28
+
+
 def test_the_timeline_ships_the_axis_seams(rig):
     """`stretches` is how a clip's frame_map (raw counter values) lands on
     the zero-based axis in the browser: one (axis_start, raw_start, length)
