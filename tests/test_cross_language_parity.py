@@ -648,6 +648,89 @@ def test_the_boards_tie_numbering_agrees_with_leaderboard_modes():
         "false.")
 
 
+# --- 13. the scorecard's live goal-edit recompute ---------------------------
+
+SCORECARDGOAL_JS = UI / "scorecardgoal.js"
+
+
+def test_scorecard_goal_override_recompute_agrees():
+    """`ranks/scorecard.py::_tile`/`_sum_tiles` build a tile's delta and a
+    row's Sigma server-side; `ui/scorecardgoal.js::applyGoalOverrides` (via
+    its own `_recomputeTile`/`_recomputeSum`) is the DELIBERATE second copy
+    of that exact arithmetic -- it has to recompute LIVE, on every keystroke
+    while a goal is being edited (`ui/components/scorecard.js`'s own header
+    comment: "no server round trip per keystroke"), so it cannot be the one
+    door the server's builder already is. `scorecardgoal.js` is import-free
+    (only imports caps.js, itself import-free), so this drives it by DIRECT
+    IMPORT and calls its real, exported entry point -- the same one
+    scorecard.js calls on every edit -- never `_recomputeTile`/
+    `_recomputeSum` by an artificial calling convention of the test's own
+    invention.
+
+    Every tile is BUILT with the real Python `_tile()` (the exact shape the
+    server ships over the wire), covering the four cases: a NORMAL tile
+    ("A", overridden, both sides end up present), a tile with no `you_cs`
+    ("B", overridden, so the missing SIDE is what keeps it ungraded), a tile
+    with no `goal_cs` that receives NO override at all ("C" -- proving the
+    pass-through rule: a key the override map does not name must leave the
+    tile exactly as the server resolved it), and a FOLDED tile ("D",
+    overridden, both sides present but excluded from the Sigma regardless).
+    The expected tiles are built by calling `_tile()` AGAIN with the
+    overridden goal (or, for "C", by passing the original tile through
+    unchanged) -- never a hand-restated dict, which would be a third copy of
+    the same rule. Comparing tiles AND the row's/card's own Sigma: tile-level
+    agreement alone says nothing about whether the two sides sum the same
+    set (the folded tile is exactly the case that catches a difference
+    there)."""
+    from sm64_events.ranks.scorecard import _sum_tiles, _tile
+
+    you = {"A": 1000, "C": 1500, "D": 2000}   # "B" has no PB at all
+    base_tiles = [
+        _tile(you, {}, "A", "Star A", "igt", folded=False),
+        _tile(you, {}, "B", "Star B", "igt", folded=False),
+        _tile(you, {}, "C", "Star C", "igt", folded=False),
+        _tile(you, {}, "D", "Star D", "igt", folded=True),
+    ]
+    overrides = {"A": 800, "B": 500, "D": 1800}   # "C" deliberately untouched
+
+    def expected_tile(tile):
+        key = tile["key"]
+        if key not in overrides:
+            return tile
+        new_you = {key: you[key]} if key in you else {}
+        return _tile(new_you, {key: overrides[key]}, key,
+                    tile["label"], tile["clock"], tile["folded"])
+
+    expected_tiles = [expected_tile(tile) for tile in base_tiles]
+    expected_sum = _sum_tiles(expected_tiles)
+
+    payload = {
+        "rows": [{"course_id": 1, "label": "Test Row", "tiles": base_tiles,
+                 "sum": _sum_tiles(base_tiles)}],
+        "total": _sum_tiles(base_tiles),
+        "goal_coverage": {"covered": 0, "tiles": len(base_tiles)},
+    }
+    js = run_node(
+        f"import {{ applyGoalOverrides }} from {SCORECARDGOAL_JS.as_uri()!r};\n"
+        f"const payload = {json.dumps(payload)};\n"
+        f"const overrides = {json.dumps(overrides)};\n"
+        "const result = applyGoalOverrides(payload, overrides);\n"
+        "console.log(JSON.stringify({tiles: result.rows[0].tiles, "
+        "sum: result.rows[0].sum, total: result.total}));")
+
+    assert js["tiles"] == expected_tiles, (
+        "ranks/scorecard.py::_tile and scorecardgoal.js's live recompute "
+        f"disagree on the resulting tiles.\n  python: {expected_tiles}\n"
+        f"  js:     {js['tiles']}")
+    assert js["sum"] == expected_sum, (
+        "ranks/scorecard.py::_sum_tiles and scorecardgoal.js's live "
+        f"recompute disagree on the row Sigma.\n  python: {expected_sum}\n"
+        f"  js:     {js['sum']}")
+    assert js["total"] == expected_sum, (
+        "a single-row payload's card TOTAL must equal that row's own Sigma "
+        f"on both sides -- python: {expected_sum}, js: {js['total']}")
+
+
 # --- the guards themselves --------------------------------------------------
 
 def test_the_guards_can_still_fail():
