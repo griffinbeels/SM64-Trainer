@@ -84,6 +84,12 @@ practice log — clear it, undo it, move it to another strategy like any run —
 and every import can be undone in one click. Anything it could not use is
 listed back at you by name, under the reason, rather than quietly skipped.
 
+**Score yourself against a goal.** The Rank tab's scorecard lines every star
+and castle movement up as a tile against a goal you pick — a rank division,
+or any runner's own times — showing your gap tile by tile and a summed gap
+per course. Copy your own times back out as a sheet column ready to paste
+beside everyone else's, or as a full CSV.
+
 **Ranks.** Every attempt, banner and route step wears a rank badge, graded
 against community standards — **per strategy**, so a fast time on one strat
 never flatters another. A header picker switches what the badges grade: your

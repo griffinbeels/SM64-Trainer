@@ -492,6 +492,23 @@ top of a [[tier]] from its bottom at a glance.
   compared implementation-to-implementation by
   `tests/test_cross_language_parity.py`)
 
+### Goal
+
+The one persisted choice the [[Scorecard]] grades every tile against — a
+[[tier]] and [[division]] inside it, one [[runner]]'s own times, or a set of
+times you typed yourself and saved under a name. The trainer turns it into
+one time per tile and the [[Scorecard]] compares that time against your
+[[personal best]]. None of the three reaches every tile: a
+[[tier]]/[[division]] pick can leave the narrowest [[division]]s near the
+fastest [[tier]]s with nothing to grade against, a [[runner]] pick has
+nothing wherever that [[runner]] never recorded a time, and a hand-typed
+goal reaches only the tiles you typed a time for.
+
+- **Lives** — the goal resolvers (`src/sm64_events/server/scorecard_api.py`)
+  → the goal picker (`src/sm64_events/ui/scorecardgoal.js`), and, for typing
+  one tile's own time in place, the [[Scorecard]] card itself
+  (`src/sm64_events/ui/components/scorecard.js`)
+
 ### Scope
 
 Which slice of your history a rating covers — everything, one course, or one
@@ -615,8 +632,9 @@ still govern other sessions' [[attempt]]s.
 
 ### Exit star
 
-A [[star]] you collect to leave a course rather than as the goal — which makes
-its time comparable only with other [[attempt]]s that left the same way.
+A [[star]] you collect only to leave a course, not the one you set out for —
+which makes its time comparable only with other [[attempt]]s that left the
+same way.
 
 - **Lives** — the 100-coin rules
   (`src/sm64_events/tracking/hundred_coin.py`)
@@ -796,6 +814,19 @@ pill]], the [[scope]] control, and your [[rank]]s across everything.
 
 - **Lives** — the rank page
   (`src/sm64_events/ui/components/rankpage.js`)
+
+### Scorecard
+
+The [[Rank tab]] card that lays out every [[star]] as a tile — one row per
+course plus a Secret row — each printing the gap between your
+[[personal best]] and the current [[Goal]]. A row sums its own tiles into
+one gap and the whole card into one more, except a course's [[Exit star]]
+tile: it still prints its own numbers but sits out of every sum, because one
+[[in-game time]] clock covers both it and whichever [[100-coin star]] finish
+you (or the [[Goal]]) actually took.
+
+- **Lives** — the card builder (`src/sm64_events/ranks/scorecard.py`)
+  → the card (`src/sm64_events/ui/components/scorecard.js`)
 
 ### Runner page
 
