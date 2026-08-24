@@ -46,8 +46,10 @@ from sm64_events.library.source import fetch
 from sm64_events.library.store import build_and_stamp
 from sm64_events.core.timefmt import attainable_cs
 from sm64_events.ranks.classify import RANK_NAMES, display_cs
-from sm64_events.ranks.scorecard import build_card, card_keys, division_goal_cs
-from sm64_events.ranks.scoring import DIVISION_NUMERALS, best_ladder, best_ladder_owners
+from sm64_events.ranks.scorecard import (
+    build_card, card_keys, division_goal_cs, rows_for_course, rows_for_route,
+    template_rows)
+from sm64_events.ranks.scoring import DIVISION_NUMERALS, best_ladder
 from sm64_events.server.import_api import sheet_row_placer
 
 _log = logging.getLogger("sm64.scorecard")
@@ -157,14 +159,14 @@ def _record_lookup(library, adoptions, service):
 
 
 def _record_sum(tiles: list[dict], record_of) -> int | None:
-    """The Stage-RTA/Upstairs-RTA Record cell: the sum of every UNFOLDED
-    tile's own Record, over exactly the tiles that carry one. Record is
+    """The Stage-RTA/Upstairs-RTA Record cell: the sum of every tile's own
+    Record, over exactly the tiles that carry one. Record is
     sheet-derived and, like a tile's own Record cell, does not wait on
     whether You/Goal are also present -- so this is an independent sum, not
     a second read of `row["sum"]`'s you/goal-gated `counted` set. `None`
     when the row's tiles carry no Record at all, never a sum that silently
     drops one."""
-    values = [record_of(tile["key"]) for tile in tiles if not tile["folded"]]
+    values = [record_of(tile["key"]) for tile in tiles]
     values = [value for value in values if value is not None]
     return sum(values) if values else None
 
@@ -236,14 +238,28 @@ def create_scorecard_router(service, library=None, adoptions=None,
         if service.db is None:
             raise HTTPException(503, "scorecard unavailable")
 
-    def resolve_seed(seed_key: str):
-        """A Secret-row movement's seed_key -> (segment:<id>, name), or None
-        when no live definition carries it (the row drops, per
-        `ranks/scorecard.py`'s own contract)."""
-        for row in service.db.segment_defs():
-            if row.get("seed_key") == seed_key:
-                return f"segment:{row['id']}", row["name"]
-        return None
+    def scope_rows(scope_id: str) -> list[dict]:
+        """The scope's row spec, or a 404 for a scope that does not exist --
+        the same deliberate 404 `/api/marelo` gives a stale route id, so a
+        deleted route reads as GONE rather than silently becoming a
+        different card (round 6: "whatever is in the scope is what we
+        generate a scorecard for")."""
+        if scope_id == "overall":
+            return template_rows()
+        kind, _, rest = scope_id.partition(":")
+        if kind == "course" and rest.isdigit():
+            try:
+                return rows_for_course(int(rest))
+            except LookupError:
+                raise HTTPException(404, f"no scorecard for {scope_id!r}")
+        if kind == "route" and rest.isdigit():
+            route = next((row for row in service.db.routes()
+                          if row["id"] == int(rest)), None)
+            if route is not None:
+                labels = {row["id"]: row["name"]
+                          for row in service.db.segment_defs()}
+                return rows_for_route(route, segment_labels=labels)
+        raise HTTPException(404, f"unknown scope {scope_id!r}")
 
     def your_times(keys: list[str]) -> dict[str, int]:
         """Your strategy-blind current PB per key, on the entity's own
@@ -301,39 +317,14 @@ def create_scorecard_router(service, library=None, adoptions=None,
         saved = custom_goal_store().get(name, {})
         return {key: cs for key, cs in saved.items() if key in keys}
 
-    def fold_choices(goal_value: dict | None) -> dict[int, int | None]:
-        """Per course, the exit star BOTH sums skip: your most recently
-        saved 100c PB's variant first (latest-row-wins, same as sec.pb),
-        else the variant owning the goal tier's 100c cutoff, else no fold.
-        A PB with no strategy, or a strategy that names no variant, falls
-        through to the next rule rather than stopping."""
-        fold = {}
-        for course_id in range(1, 16):
-            exit_star = None
-            pb = service.db.current_pb(course_id, 6, "igt")
-            if pb is not None and pb.get("strat_tag"):
-                variant = service.ranks.variant_of(f"star:{course_id}:6",
-                                                    pb["strat_tag"])
-                if variant is not None:
-                    exit_star = variant[1]
-            if exit_star is None and goal_value and goal_value.get("kind") == "division":
-                ladder = service.ranks.ladders(f"star:{course_id}:6")
-                owners = best_ladder_owners(ladder).get(goal_value["tier"])
-                if owners:
-                    variant = service.ranks.variant_of(f"star:{course_id}:6",
-                                                        owners[0])
-                    if variant is not None:
-                        exit_star = variant[1]
-            if exit_star is not None:
-                fold[course_id] = exit_star
-        return fold
-
-    def current_card():
+    def current_card(scope_id: str = "overall"):
         """`(card, goal_value)` -- the one door both `GET /api/scorecard`
         and the CSV export build from, so a downloaded row can never
-        disagree with the card the browser is looking at."""
+        disagree with the card the browser is looking at. Scope-driven
+        since round 6: the rows are whatever `scope_id` contains."""
         _require_db()
-        keys = card_keys(resolve_seed)
+        rows_spec = scope_rows(scope_id)
+        keys = card_keys(rows_spec)
         you = your_times(keys)
         goal_value = service.db.get_state(_GOAL_KEY, None)
         if not isinstance(goal_value, dict):
@@ -341,7 +332,6 @@ def create_scorecard_router(service, library=None, adoptions=None,
         ranks = service.ranks
 
         goal_map: dict[str, int] = {}
-        fold: dict[int, int | None] = {}
         # A custom goal is typed data with no ladder lookup at all, so it
         # resolves independent of `ranks` -- a broadcast-only instance can
         # still grade against a hand-picked target even though it can never
@@ -355,15 +345,13 @@ def create_scorecard_router(service, library=None, adoptions=None,
             elif goal_value and goal_value.get("kind") == "runner":
                 goal_map = runner_goal_map(goal_value["runner"],
                                            ranks.grading_version)
-            fold = fold_choices(goal_value)
 
-        card = build_card(you=you, goal=goal_map, fold=fold,
-                          resolve_seed=resolve_seed)
+        card = build_card(rows_spec, you=you, goal=goal_map)
         return card, goal_value
 
     @router.get("")
-    async def get_scorecard():
-        card, goal_value = current_card()
+    async def get_scorecard(scope: str = "overall"):
+        card, goal_value = current_card(scope)
         tiles = [tile for row in card["rows"] for tile in row["tiles"]]
         coverage = {"covered": sum(1 for t in tiles if t["goal_cs"] is not None),
                     "tiles": len(tiles)}
@@ -371,8 +359,8 @@ def create_scorecard_router(service, library=None, adoptions=None,
         # (grouped ahead of Divisions) without a second round trip -- the
         # active one, if any, is already carried in `goal` above.
         custom_names = sorted(custom_goal_store().keys())
-        return {**card, "goal": goal_value, "goal_coverage": coverage,
-                "custom_goals": custom_names}
+        return {**card, "scope": scope, "goal": goal_value,
+                "goal_coverage": coverage, "custom_goals": custom_names}
 
     @router.put("/goal")
     async def set_goal(body: GoalBody | None = Body(default=None)):
@@ -452,13 +440,13 @@ def create_scorecard_router(service, library=None, adoptions=None,
                 "total_rows": len(lines)}
 
     @router.get("/export.csv")
-    async def export_csv():
+    async def export_csv(scope: str = "overall"):
         """The card itself, flattened to the template sheet's own
         Course,Star,Record,Goal,You,Delta layout -- one browser-reachable
         URL (`docs/api.md`), never a download the desktop shell's WebView2
         has to support; the card's own Copy buttons fetch this and copy the
         text instead of navigating here."""
-        card, _goal_value = current_card()
+        card, _goal_value = current_card(scope)
         body = await run_in_threadpool(_csv_body, card, library, adoptions, service)
         return Response(content=body, media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition":

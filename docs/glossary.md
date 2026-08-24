@@ -817,13 +817,17 @@ pill]], the [[scope]] control, and your [[rank]]s across everything.
 
 ### Scorecard
 
-The [[Rank tab]] card that lays out every [[star]] as a tile — one row per
-course plus a Secret row — each printing the gap between your
-[[personal best]] and the current [[Goal]]. A row sums its own tiles into
-one gap and the whole card into one more, except a course's [[Exit star]]
-tile: it still prints its own numbers but sits out of every sum, because one
-[[in-game time]] clock covers both it and whichever [[100-coin star]] finish
-you (or the [[Goal]]) actually took.
+The [[Rank tab]] card that lays out whatever the tab's selected [[Scope]]
+contains as tiles, each printing the gap between your [[personal best]] and
+the current [[Goal]]: the Overall [[Scope]] draws the community template's
+full 120-[[star]] card (one row per course plus a Secret row), a [[route]]-shaped
+[[Scope]] draws one row per step of that [[route]], and a course-shaped one
+draws that course's own row. A course's [[100-coin star]] is not its own
+tile — its tile combines it with a companion [[star]] (usually the course's
+red-coin [[star]]; five courses pair differently), because the 100-coin
+[[run]] collects that companion's objective on the way. A row sums its
+tiles into one gap, and the whole card into one more, counting only tiles
+both sides have a time for.
 
 - **Lives** — the card builder (`src/sm64_events/ranks/scorecard.py`)
   → the card (`src/sm64_events/ui/components/scorecard.js`)

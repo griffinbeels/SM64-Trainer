@@ -673,23 +673,23 @@ def test_scorecard_goal_override_recompute_agrees():
     ("B", overridden, so the missing SIDE is what keeps it ungraded), a tile
     with no `goal_cs` that receives NO override at all ("C" -- proving the
     pass-through rule: a key the override map does not name must leave the
-    tile exactly as the server resolved it), and a FOLDED tile ("D",
-    overridden, both sides present but excluded from the Sigma regardless).
+    tile exactly as the server resolved it), and a fully-covered tile ("D",
+    overridden, both sides present -- round 6 deleted the folded flag, so
+    D's job now is proving a both-sided override ENTERS both Sigmas).
     The expected tiles are built by calling `_tile()` AGAIN with the
     overridden goal (or, for "C", by passing the original tile through
     unchanged) -- never a hand-restated dict, which would be a third copy of
     the same rule. Comparing tiles AND the row's/card's own Sigma: tile-level
     agreement alone says nothing about whether the two sides sum the same
-    set (the folded tile is exactly the case that catches a difference
-    there)."""
+    set."""
     from sm64_events.ranks.scorecard import _sum_tiles, _tile
 
     you = {"A": 1000, "C": 1500, "D": 2000}   # "B" has no PB at all
     base_tiles = [
-        _tile(you, {}, "A", "Star A", "igt", folded=False),
-        _tile(you, {}, "B", "Star B", "igt", folded=False),
-        _tile(you, {}, "C", "Star C", "igt", folded=False),
-        _tile(you, {}, "D", "Star D", "igt", folded=True),
+        _tile(you, {}, "A", "Star A", "igt"),
+        _tile(you, {}, "B", "Star B", "igt"),
+        _tile(you, {}, "C", "Star C", "igt"),
+        _tile(you, {}, "D", "Star D", "igt"),
     ]
     overrides = {"A": 800, "B": 500, "D": 1800}   # "C" deliberately untouched
 
@@ -699,7 +699,7 @@ def test_scorecard_goal_override_recompute_agrees():
             return tile
         new_you = {key: you[key]} if key in you else {}
         return _tile(new_you, {key: overrides[key]}, key,
-                    tile["label"], tile["clock"], tile["folded"])
+                    tile["label"], tile["clock"])
 
     expected_tiles = [expected_tile(tile) for tile in base_tiles]
     expected_sum = _sum_tiles(expected_tiles)

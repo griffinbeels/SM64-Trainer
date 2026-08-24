@@ -1,74 +1,97 @@
 """ranks/scorecard.py -- the pure card builder.
 
-`resolve_seed`'s contract here is the CONTROLLER's amendment to the task
-brief's Step-1 sketch: `build_card` takes no `labels` parameter (it derives
-star labels itself via `star_name`/`COURSE_NAMES`), and `resolve_seed(seed_key)`
-returns `None` (deleted) or `(entity_key, label)` -- not a bare key -- so the
-two Secret-row movements' labels come from the caller (who owns the real
-segment record), not from a hardcoded string in this module."""
+Round 6 (2026-08-24) made composition scope-driven and cell-exact: the
+Overall card is `template_rows()` (his canonical 100c pairing applied -- the
+100-coin cell combined with its companion star, usually the reds star, five
+named exceptions), the Secret row is all stars (the Bowser goals moved onto
+the reds stars, "not the BITS entry for now"), and a route scope composes
+one row per route step-group through the same cell rule."""
 import json
 from pathlib import Path
 
+import pytest
+
+from sm64_events.memory.addresses import STAR_NAMES
 from sm64_events.ranks import scorecard, scoring
 
 SEED = Path(__file__).resolve().parents[1] / "src" / "sm64_events" / "data" / \
     "rank_standards.seed.json"
 
+# His pairing list, verbatim from round 6 -- course -> the star the 100c cell
+# is combined with. The builder derives the ten defaults by the "Red Coins"
+# name rule and the five exceptions from stored names; THIS table is the
+# independent copy his message is the source of, so a drift in either
+# direction goes red here.
+HIS_PAIRINGS = {
+    1: "Find the 8 Red Coins",            # BOB
+    2: "Red Coins on the Floating Isle",  # WF
+    3: "Red Coins on the Ship Afloat",    # JRB
+    4: "Big Penguin Race",                # CCM (exception)
+    5: "Seek the 8 Red Coins",            # BBH
+    6: "Elevate for 8 Red Coins",         # HMC
+    7: "Hot-Foot-It into the Volcano",    # LLL (exception)
+    8: "Pyramid Puzzle",                  # SSL (exception)
+    9: "Pole-Jumping for Red Coins",      # DDD
+    10: "Shell Shreddin' for Red Coins",  # SL
+    11: "Go to Town for Red Coins",       # WDW
+    12: "Scary 'Shrooms, Red Coins",      # TTM
+    13: "Wiggler's Red Coins",            # THI
+    14: "Stomp on the Thwomp",            # TTC (exception)
+    15: "The Big House in the Sky",       # RR (exception)
+}
 
-def _resolve(seed_key):
-    return {"seg:bitdw-pipe": ("segment:41", "Bowser in the Dark World"),
-            "seg:bitfs-pipe": ("segment:42", "Bowser in the Fire Sea")}.get(seed_key)
+
+def test_every_companion_matches_his_list_verbatim():
+    for course_id, star_label in HIS_PAIRINGS.items():
+        star_id = scorecard.hundred_coin_companion(course_id)
+        assert STAR_NAMES[course_id][star_id] == star_label, course_id
+
+
+def test_template_rows_have_six_cells_with_the_combined_100c_cell_in_place():
+    rows = scorecard.template_rows()
+    assert len(rows) == 16
+    for row in rows[:15]:
+        assert len(row["entries"]) == 6, row["label"]
+        course_id = row["course_id"]
+        companion = scorecard.hundred_coin_companion(course_id)
+        keys = [key for key, _label, _clock in row["entries"]]
+        # the combined cell sits at the companion's own template position,
+        # carries the 100c ENTITY, and the companion has no cell of its own
+        assert keys[min(companion, 5)] == f"star:{course_id}:6"
+        assert f"star:{course_id}:{companion}" not in keys
+    combined = dict(
+        (key, label) for key, label, _clock in rows[0]["entries"])
+    assert combined["star:1:6"] == "Find the 8 Red Coins + 100c"
+    ccm = dict((key, label) for key, label, _clock in rows[3]["entries"])
+    assert ccm["star:4:6"] == "Big Penguin Race + 100c"
 
 
 def test_card_keys_shape():
-    keys = scorecard.card_keys(_resolve)
-    assert len(keys) == 15 * 7 + 10
-    assert keys[:7] == [f"star:1:{s}" for s in range(7)]
+    keys = scorecard.card_keys(scorecard.template_rows())
+    assert len(keys) == 15 * 6 + 10
+    assert keys[:6] == ["star:1:0", "star:1:1", "star:1:2", "star:1:6",
+                        "star:1:4", "star:1:5"]
     assert keys[-10:] == ["star:19:0", "star:19:1", "star:24:0",
-                           "segment:41", "segment:42", "star:18:0",
+                           "star:16:0", "star:17:0", "star:18:0",
                            "star:21:0", "star:22:0", "star:20:0", "star:23:0"]
 
 
-def test_a_deleted_movement_drops_its_tile_rather_than_drawing_a_dead_one():
-    def resolve(seed_key):
-        return None if seed_key == "seg:bitdw-pipe" else _resolve(seed_key)
-
-    keys = scorecard.card_keys(resolve)
-    assert len(keys) == 15 * 7 + 9
-    assert "segment:41" not in keys
-    assert "segment:42" in keys
-
-    card = scorecard.build_card(you={}, goal={}, fold={}, resolve_seed=resolve)
-    secret_row = card["rows"][-1]
-    assert len(secret_row["tiles"]) == 9
-    assert secret_row["sum"]["total"] == 9
-
-
-def test_secret_row_pinned_against_the_template():
-    secret_row = scorecard.build_card(you={}, goal={}, fold={}, resolve_seed=_resolve)["rows"][-1]
-    assert secret_row["course_id"] is None
-    assert secret_row["label"] == "Secret"
-    assert [tile["key"] for tile in secret_row["tiles"]] == [
-        "star:19:0", "star:19:1", "star:24:0", "segment:41", "segment:42",
-        "star:18:0", "star:21:0", "star:22:0", "star:20:0", "star:23:0"]
-    clocks = {tile["key"]: tile["clock"] for tile in secret_row["tiles"]}
-    assert clocks["segment:41"] == "rta" and clocks["segment:42"] == "rta"
-    assert clocks["star:19:0"] == "igt"
-
-
-def test_single_star_secret_tiles_use_the_course_name_not_star_name():
-    """star_name(course_id, 0) returns "8 Red Coins" for every one of these
-    six courses -- each is the ONLY star on its course, and that's its
-    in-game name -- so deriving these six Secret-row labels that way would
-    collapse all six tiles to the same text. SECRET_ROW instead pins each to
-    its COURSE name, which is what actually reaches the tile (`_secret_entries`
-    passes SECRET_ROW's own stored label straight through for a non-movement
-    entry; it does not re-derive via star_name at build_card time). Pinned
-    here because no other test in this suite checks these six labels'
-    literal text."""
-    secret_row = scorecard.build_card(you={}, goal={}, fold={}, resolve_seed=_resolve)["rows"][-1]
-    labels = {tile["key"]: tile["label"] for tile in secret_row["tiles"]}
-    assert labels["star:18:0"] == "Bowser in the Sky"
+def test_secret_row_is_all_stars_with_the_bowser_reds():
+    """Round 6: "Bowser stages should also should have goals based on red
+    coins times, not the BITS entry for now" -- the two course-entry
+    MOVEMENTS left the Secret row; the three Bowser reds stars carry the
+    template's own labels."""
+    secret = scorecard.template_rows()[-1]
+    assert secret["course_id"] is None and secret["label"] == "Secret"
+    keys = [key for key, _label, _clock in secret["entries"]]
+    assert keys == ["star:19:0", "star:19:1", "star:24:0",
+                    "star:16:0", "star:17:0", "star:18:0",
+                    "star:21:0", "star:22:0", "star:20:0", "star:23:0"]
+    assert all(clock == "igt" for _key, _label, clock in secret["entries"])
+    labels = {key: label for key, label, _clock in secret["entries"]}
+    assert labels["star:16:0"] == "Bowser in the Dark World Red Coins"
+    assert labels["star:17:0"] == "Bowser in the Fire Sea Red Coins"
+    assert labels["star:18:0"] == "Bowser in the Sky Red Coins"
     assert labels["star:20:0"] == "Cavern of the Metal Cap"
     assert labels["star:21:0"] == "Tower of the Wing Cap"
     assert labels["star:22:0"] == "Vanish Cap Under the Moat"
@@ -76,53 +99,90 @@ def test_single_star_secret_tiles_use_the_course_name_not_star_name():
     assert labels["star:24:0"] == "The Secret Aquarium"
 
 
-def test_movement_label_comes_from_resolve_seed_not_a_hardcoded_string():
-    """The controller ruling: resolve_seed OWNS the movement's label (it has
-    the real segment record); this module's own SECRET_ROW string is only a
-    fallback for reading SECRET_ROW in isolation, never used once a resolver
-    is supplied."""
-    def resolve(seed_key):
-        return {"seg:bitdw-pipe": ("segment:41", "custom label from the caller")}.get(seed_key)
-
-    card = scorecard.build_card(you={}, goal={}, fold={}, resolve_seed=resolve)
-    secret_row = card["rows"][-1]
-    tile = next(t for t in secret_row["tiles"] if t["key"] == "segment:41")
-    assert tile["label"] == "custom label from the caller"
-
-
 def test_missing_side_leaves_both_sums():
     you = {"star:1:0": 4000, "star:1:1": 5000}
     goal = {"star:1:0": 4500}            # star:1:1 has no goal
-    card = scorecard.build_card(you=you, goal=goal, fold={}, resolve_seed=_resolve)
+    card = scorecard.build_card(scorecard.template_rows(), you=you, goal=goal)
     row = card["rows"][0]
     assert row["sum"] == {"you_cs": 4000, "goal_cs": 4500, "delta_cs": -500,
-                           "counted": 1, "total": 7}
-    tile0 = next(t for t in row["tiles"] if t["key"] == "star:1:0")
+                           "counted": 1, "total": 6}
     tile1 = next(t for t in row["tiles"] if t["key"] == "star:1:1")
-    assert tile0["delta_cs"] == -500
     assert tile1["you_cs"] == 5000 and tile1["goal_cs"] is None and tile1["delta_cs"] is None
 
 
-def test_fold_skips_the_same_star_on_both_sides():
-    you = {f"star:1:{s}": 1000 for s in range(7)}
-    goal = {f"star:1:{s}": 900 for s in range(7)}
-    card = scorecard.build_card(you=you, goal=goal, fold={1: 3}, resolve_seed=_resolve)
-    row = card["rows"][0]
-    assert row["sum"]["counted"] == 6
-    assert row["sum"]["you_cs"] == 6000 and row["sum"]["goal_cs"] == 5400
-    assert row["sum"]["total"] == 7
-    folded = [t for t in row["tiles"] if t["folded"]]
-    assert [t["key"] for t in folded] == ["star:1:3"]
-    assert folded[0]["you_cs"] == 1000   # the tile itself still draws
-
-
 def test_card_total_runs_the_same_sum_over_every_row():
-    you = {f"star:1:{s}": 1000 for s in range(7)}
-    goal = {f"star:1:{s}": 900 for s in range(7)}
-    card = scorecard.build_card(you=you, goal=goal, fold={}, resolve_seed=_resolve)
-    assert card["total"]["counted"] == 7
-    assert card["total"]["you_cs"] == 7000 and card["total"]["goal_cs"] == 6300
-    assert card["total"]["total"] == 15 * 7 + 10
+    keys = [key for key, _l, _c in scorecard.template_rows()[0]["entries"]]
+    you = {key: 1000 for key in keys}
+    goal = {key: 900 for key in keys}
+    card = scorecard.build_card(scorecard.template_rows(), you=you, goal=goal)
+    assert card["total"]["counted"] == 6
+    assert card["total"]["you_cs"] == 6000 and card["total"]["goal_cs"] == 5400
+    assert card["total"]["total"] == 15 * 6 + 10
+
+
+def _route(steps):
+    return {"steps": steps}
+
+
+def test_route_rows_apply_the_cell_rule_and_wear_the_course_name():
+    """A 120-star-style course visit holding both the 100c and its companion
+    merges them into ONE combined cell; the row wears the course's name."""
+    route = _route([{"need": 7, "candidates": [
+        {"type": "star", "course": 1, "star": star_id} for star_id in range(7)]}])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    assert len(rows) == 1
+    assert rows[0]["label"] == "Bob-omb Battlefield"
+    keys = [key for key, _l, _c in rows[0]["entries"]]
+    assert len(keys) == 6 and "star:1:3" not in keys and "star:1:6" in keys
+
+
+def test_route_rows_keep_a_companion_without_its_100c():
+    """16-star style: the reds star alone stays its own cell -- the merge
+    only fires when BOTH halves are in the row."""
+    route = _route([{"need": 1, "candidates": [
+        {"type": "star", "course": 1, "star": 3}]}])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    assert [key for key, _l, _c in rows[0]["entries"]] == ["star:1:3"]
+    assert rows[0]["entries"][0][1] == "Find the 8 Red Coins"
+
+
+def test_route_rows_carry_segments_with_their_own_names_and_clock():
+    route = _route([{"need": 1, "candidates": [
+        {"type": "segment", "segment_id": 41}]}])
+    rows = scorecard.rows_for_route(route, segment_labels={41: "LBLJ"})
+    assert rows[0]["label"] == "LBLJ"
+    assert rows[0]["entries"] == [("segment:41", "LBLJ", "rta")]
+
+
+def test_route_rows_drop_a_deleted_segments_cell_and_an_empty_step():
+    route = _route([{"need": 1, "candidates": [
+        {"type": "segment", "segment_id": 999}]}])
+    assert scorecard.rows_for_route(route, segment_labels={}) == []
+
+
+def test_route_rows_prefer_the_steps_own_label():
+    route = _route([{"label": "Lobby movement", "need": 1, "candidates": [
+        {"type": "segment", "segment_id": 41}]}])
+    rows = scorecard.rows_for_route(route, segment_labels={41: "LBLJ"})
+    assert rows[0]["label"] == "Lobby movement"
+
+
+def test_card_keys_deduplicates_a_route_that_revisits_an_entity():
+    route = _route([
+        {"need": 1, "candidates": [{"type": "star", "course": 1, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 1, "star": 0}]}])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    assert scorecard.card_keys(rows) == ["star:1:0"]
+
+
+def test_rows_for_course_serves_main_secret_and_refuses_the_castle():
+    assert len(scorecard.rows_for_course(4)) == 1
+    assert len(scorecard.rows_for_course(4)[0]["entries"]) == 6
+    bitdw = scorecard.rows_for_course(16)[0]
+    assert [key for key, _l, _c in bitdw["entries"]] == ["star:16:0"]
+    assert bitdw["label"] == "Bowser in the Dark World"
+    with pytest.raises(LookupError):
+        scorecard.rows_for_course(0)
 
 
 def test_division_goal_round_trips():

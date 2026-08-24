@@ -7347,7 +7347,6 @@
   .score-detail-table tr:last-child td { border-bottom: none; }
   .score-detail-table td.good { color: var(--green); }
   .score-detail-table td.bad { color: var(--coral); }
-  .score-detail-folded td { opacity: .6; }
   /* The editable Goal cell: a dashed-border button reading as "click to
      set", swapping in place for a text input on click -- never a second
      element pushing the row taller, since the table's own row height must
@@ -7406,9 +7405,6 @@
   .score-tile.good .score-tile-text { color: var(--green); }
   .score-tile.bad .score-tile-text { color: var(--coral); }
   .score-tile.dim .score-tile-text { color: var(--muted); opacity: .7; }
-  /* A faint ring, not a second colour -- a folded tile still draws with its
-     own real numbers (spec), it is only excluded from the Sigma below it. */
-  .score-tile.folded { box-shadow: inset 0 0 0 1px rgba(255,255,255,.28); }
   .score-sum {
     display: flex; align-items: center; gap: 4px; justify-self: end;
     font-size: .78rem; font-variant-numeric: tabular-nums; white-space: nowrap;

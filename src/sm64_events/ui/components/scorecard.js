@@ -100,14 +100,12 @@ function tileView(tile, hasGoal) {
 function tileTitle(tile) {
   const you = tile.you_cs != null ? fmtSeconds(tile.you_cs / 100) : "no time";
   const goal = tile.goal_cs != null ? fmtSeconds(tile.goal_cs / 100) : "no goal";
-  const base = `${tile.label} — You ${you} · Goal ${goal}`;
-  return tile.folded ? `${base} (not in Σ)` : base;
+  return `${tile.label} — You ${you} · Goal ${goal}`;
 }
 
 function ScoreTile({ t, tile, hasGoal }) {
   const { cls, text } = tileView(tile, hasGoal);
-  const classes = ["score-tile", cls, tile.folded ? "folded" : ""]
-    .filter(Boolean).join(" ");
+  const classes = ["score-tile", cls].filter(Boolean).join(" ");
   // The art rides a custom property, never a plain inline background --
   // `.score-tile::before` reads it so the text stays a real, always-on-top
   // sibling element instead of racing the pseudo-element's own paint order
@@ -206,9 +204,8 @@ function ScoreDetailRow({ tile, onGoalOverride }) {
     setEditing(false);
   }
 
-  return html`<tr class=${tile.folded ? "score-detail-folded" : ""}>
-    <td>${tile.label}${tile.folded
-      ? html`<span class="meta">${" "}(not in Σ)</span>` : ""}</td>
+  return html`<tr>
+    <td>${tile.label}</td>
     <td>${tile.you_cs != null ? fmtSeconds(tile.you_cs / 100) : "—"}</td>
     <td class="score-detail-goal">
       ${editing
@@ -294,8 +291,9 @@ function CopyButton({ className, label, onCopy, onError }) {
   </button>`;
 }
 
-async function fetchCsvText() {
-  const response = await fetch("/api/scorecard/export.csv");
+async function fetchCsvText(scopeId) {
+  const response = await fetch(
+    `/api/scorecard/export.csv?scope=${encodeURIComponent(scopeId)}`);
   if (response.ok) return response.text();
   let detail = null;
   try { detail = (await response.json()).detail; } catch { /* non-JSON body */ }
@@ -309,15 +307,18 @@ async function fetchCsvText() {
 // door reads the cached snapshot rather than fetching live, so it is far
 // less likely to fail, but a network hiccup on the fetch itself still
 // lands in the same slot rather than going nowhere.
-function ScorecardExports() {
+function ScorecardExports({ scopeId }) {
   const [error, setError] = useState(null);
 
+  // The sheet column deliberately takes NO scope: its whole contract is one
+  // line per live worksheet row of the community sheet, whatever the card
+  // above it is scoped to. The CSV is the CARD, so it follows the scope.
   return html`<div class="scorecard-exports">
     <${CopyButton} className="scorecard-copy-column" label="Copy sheet column"
         onCopy=${async () => (await getJSON("/api/scorecard/column")).lines.join("\n")}
         onError=${setError} />
     <${CopyButton} className="scorecard-copy-csv" label="Copy scorecard CSV"
-        onCopy=${fetchCsvText} onError=${setError} />
+        onCopy=${() => fetchCsvText(scopeId)} onError=${setError} />
     ${error ? html`<${InlineState} kind="error">${error}<//>` : ""}
   </div>`;
 }
@@ -349,7 +350,7 @@ function ScorecardSaveBar({ pendingCount, initialName, busy, error, onSave, onDi
   </div>`;
 }
 
-function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange }) {
+function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange, scopeId }) {
   return html`<div class="scorecard-head">
     <h3>Scorecard</h3>
     <${SearchSelect} value=${goalToValue(goal)} valueLabel=${goalToLabel(goal)}
@@ -358,11 +359,11 @@ function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange }) {
     ${goal && coverage.covered < coverage.tiles
       ? html`<p class="meta scorecard-note">goal covers ${coverage.covered}/${coverage.tiles}</p>`
       : ""}
-    <${ScorecardExports} />
+    <${ScorecardExports} scopeId=${scopeId} />
   </div>`;
 }
 
-export function Scorecard({ t }) {
+export function Scorecard({ t, scopeId = "overall" }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   // null = not fetched yet (the Runners group is lazy, see the header
@@ -382,10 +383,16 @@ export function Scorecard({ t }) {
   // not leave this card showing a stale gap while open during play).
   useEffect(() => {
     let alive = true;
-    getJSON("/api/scorecard").then((response) => alive && setData(response))
+    // A scope switch clears the OLD scope's card up front, the same rule
+    // RankPage's own fetch follows: a 404 on a stale route id must never
+    // leave the previous scope's rows under the new scope's label.
+    setError(null);
+    setData(null);
+    getJSON(`/api/scorecard?scope=${encodeURIComponent(scopeId)}`)
+      .then((response) => alive && setData(response))
       .catch((err) => alive && setError(err));
     return () => { alive = false; };
-  }, [t.mareloRev]);
+  }, [t.mareloRev, scopeId]);
 
   function loadRunnersOnce() {
     if (runners != null) return;
@@ -471,7 +478,7 @@ export function Scorecard({ t }) {
       : !data
         ? html`<${InlineState}>Loading your scorecard…<//>`
         : html`<${ScorecardHead} goal=${data.goal} groups=${groups}
-              onOpen=${loadRunnersOnce}
+              onOpen=${loadRunnersOnce} scopeId=${scopeId}
               coverage=${data.goal_coverage} onGoalChange=${onGoalChange} />
             ${pendingCount > 0
               ? html`<${ScorecardSaveBar} pendingCount=${pendingCount}

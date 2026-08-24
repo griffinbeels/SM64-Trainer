@@ -144,12 +144,16 @@ def test_apply_goal_overrides_is_a_no_op_with_nothing_pending():
     assert call("applyGoalOverrides", payload, {}) == payload
 
 
-def test_apply_goal_overrides_skips_a_folded_tile_in_the_sum():
+def test_apply_goal_overrides_reaches_a_previously_uncovered_tile():
+    """Round 6 deleted the folded-tile concept (the 100c cell is combined
+    with its companion structurally, so nothing is ever excluded from a sum
+    by flag any more): an override that gives a goal-less tile its first
+    goal pulls it INTO the recomputed sums."""
     payload = {
         "rows": [{
             "course_id": 1, "label": "X",
             "tiles": [{"key": "star:1:6", "label": "100c", "you_cs": 5000,
-                       "goal_cs": None, "delta_cs": None, "folded": True}],
+                       "goal_cs": None, "delta_cs": None}],
             "sum": {"you_cs": 0, "goal_cs": 0, "delta_cs": None, "counted": 0, "total": 1},
         }],
         "total": {"you_cs": 0, "goal_cs": 0, "delta_cs": None, "counted": 0, "total": 1},
@@ -158,10 +162,10 @@ def test_apply_goal_overrides_skips_a_folded_tile_in_the_sum():
     result = call("applyGoalOverrides", payload, {"star:1:6": 4800})
     tile = result["rows"][0]["tiles"][0]
     assert tile["goal_cs"] == 4800 and tile["delta_cs"] == 200
-    # Still excluded from the Sigma -- folded means "draws with real numbers,
-    # never joins the sum", override or not.
-    assert result["rows"][0]["sum"]["counted"] == 0
-    assert result["rows"][0]["sum"]["delta_cs"] is None
+    assert result["rows"][0]["sum"]["counted"] == 1
+    assert result["rows"][0]["sum"]["delta_cs"] == 200
+    assert result["total"]["counted"] == 1
+    assert result["goal_coverage"]["covered"] == 1
 
 
 # --- the rendered card -------------------------------------------------
@@ -476,7 +480,9 @@ def test_expanding_a_row_shows_every_star_goal_you_and_delta():
                 ".score-detail-table tbody tr').length")
         # Round 5 (2026-08-24): "the YOU column first, *then* the GOAL column".
         assert headers == ["Star", "You", "Goal", "Δ"]
-        assert row_count == 7      # a course row: stars 0-5 + the 100c star
+        # Round 6: six cells -- the 100c cell is combined with its companion
+        # star (his canonical pairing), so no course row has a seventh.
+        assert row_count == 6
 
 
 def test_blurring_an_empty_goal_draft_cancels_edit_mode():

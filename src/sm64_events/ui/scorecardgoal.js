@@ -105,11 +105,11 @@ function _recomputeTile(tile, overrides) {
 }
 
 // A row's (or the card's) Sigma over a tile LIST -- mirrors
-// `ranks/scorecard.py::_sum_tiles` exactly: only unfolded tiles with both
+// `ranks/scorecard.py::_sum_tiles` exactly: only tiles with both
 // sides present count, `total` is the tile count regardless.
 function _recomputeSum(tiles) {
   const counted = tiles.filter((tile) =>
-    !tile.folded && tile.you_cs != null && tile.goal_cs != null);
+    tile.you_cs != null && tile.goal_cs != null);
   const you_cs = counted.reduce((total, tile) => total + tile.you_cs, 0);
   const goal_cs = counted.reduce((total, tile) => total + tile.goal_cs, 0);
   return { you_cs, goal_cs, delta_cs: counted.length ? you_cs - goal_cs : null,

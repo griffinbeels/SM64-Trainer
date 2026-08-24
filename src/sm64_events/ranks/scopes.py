@@ -85,7 +85,11 @@ def rankable_entities(ladders_by_entity: dict[str, dict[str, dict[str, float]]],
             if scoring.best_ladder(ladders) and entity_key not in excluded_keys]
 
 
-def _candidate_key(candidate: dict) -> str | None:
+def candidate_key(candidate: dict) -> str | None:
+    """A route candidate's entity key -- PUBLIC since round 6 (2026-08-24):
+    `ranks/scorecard.py` composes route-scope rows from the same candidates
+    and must translate them identically or the scorecard and MARELO would
+    disagree about what a step contains."""
     if candidate.get("type") == "segment":
         return f"segment:{candidate['segment_id']}"
     if candidate.get("type") == "star":
@@ -122,7 +126,7 @@ def entity_groups(scope_id: str, *, rankable: Iterable[str],
         groups = []
         for step in route.get("steps", []):
             candidates = [candidate_key for candidate_key in
-                          (_candidate_key(candidate)
+                          (candidate_key(candidate)
                            for candidate in step.get("candidates", []))
                           if candidate_key in ranked]
             if not candidates:

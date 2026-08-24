@@ -235,10 +235,10 @@ def test_a_custom_goal_resolves_with_no_ranks(tmp_path):
         assert tile["goal_cs"] == 886
 
 
-def test_your_100c_pbs_variant_folds_its_exit_star(tmp_path):
-    """A course whose 100c PB was saved under a labelled exit-star variant
-    folds that star out of both sums -- the same star the variant's own
-    label names, read off `ranks.variant_of`."""
+def test_the_100c_cell_is_combined_and_carries_the_100c_pb(tmp_path):
+    """Round 6's cell rule end to end: BOB's row has SIX cells, no separate
+    reds cell, and the combined "Find the 8 Red Coins + 100c" cell is the
+    100c ENTITY -- a 100c PB lands on it."""
     with make_client(tmp_path) as (client, _db, _svc):
         client.post("/api/import/manual", json={
             "entity_key": "star:1:6", "strat_tag": "100c + Reds · Standard",
@@ -246,9 +246,45 @@ def test_your_100c_pbs_variant_folds_its_exit_star(tmp_path):
 
         card = client.get("/api/scorecard").json()
         row = next(r for r in card["rows"] if r["course_id"] == 1)
-        folded = {tile["key"]: tile["folded"] for tile in row["tiles"]}
-        assert folded["star:1:3"] is True
-        assert folded["star:1:0"] is False
+        assert len(row["tiles"]) == 6
+        keys = [tile["key"] for tile in row["tiles"]]
+        assert "star:1:3" not in keys
+        combined = next(t for t in row["tiles"] if t["key"] == "star:1:6")
+        assert combined["label"] == "Find the 8 Red Coins + 100c"
+        assert combined["you_cs"] is not None
+
+
+def test_the_card_follows_a_route_scope(tmp_path):
+    """Round 6: "whatever is in the scope is what we generate a scorecard
+    for". A seeded route's scorecard is that route's own rows, not the
+    120-star template; an unknown route 404s like /api/marelo."""
+    with make_client(tmp_path) as (client, db, _svc):
+        # This harness seeds no routes (reconcile_defaults is main.py's boot
+        # step, not the service's), so insert a small 16-star-style one: one
+        # BOB visit holding the reds star WITHOUT its 100c.
+        route_id = db.insert_route("Sixteen-ish", [
+            {"need": 2, "candidates": [
+                {"type": "star", "course": 1, "star": 0},
+                {"type": "star", "course": 1, "star": 3}]}],
+            "2026-08-24T00:00:00Z")
+        card = client.get(f"/api/scorecard?scope=route:{route_id}").json()
+        assert card["scope"] == f"route:{route_id}"
+        assert card_keys_of(card) == ["star:1:0", "star:1:3"]
+        assert card["rows"][0]["label"] == "Bob-omb Battlefield"
+
+        assert client.get("/api/scorecard?scope=route:99999").status_code == 404
+        assert client.get("/api/scorecard?scope=garbage").status_code == 404
+
+
+def test_the_card_follows_a_course_scope(tmp_path):
+    with make_client(tmp_path) as (client, _db, _svc):
+        card = client.get("/api/scorecard?scope=course:4").json()
+        assert [row["label"] for row in card["rows"]] == ["Cool, Cool Mountain"]
+        assert len(card["rows"][0]["tiles"]) == 6
+
+
+def card_keys_of(card):
+    return [tile["key"] for row in card["rows"] for tile in row["tiles"]]
 
 
 def test_scorecard_serves_broadcast_only_with_an_empty_goal_map(tmp_path):
