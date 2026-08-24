@@ -44,6 +44,7 @@ from sm64_events.library.ratings import runner_times
 from sm64_events.library.sheet import read_rows
 from sm64_events.library.source import fetch
 from sm64_events.library.store import build_and_stamp
+from sm64_events.core.timefmt import attainable_cs
 from sm64_events.ranks.classify import RANK_NAMES, display_cs
 from sm64_events.ranks.scorecard import build_card, card_keys, division_goal_cs
 from sm64_events.ranks.scoring import DIVISION_NUMERALS, best_ladder, best_ladder_owners
@@ -408,7 +409,16 @@ def create_scorecard_router(service, library=None, adoptions=None,
                 raise HTTPException(422, "a custom goal needs a name")
             store = custom_goal_store()
             if body.times is not None:
-                store[name] = body.times
+                # Snap every typed time onto the displayable set through THE
+                # existing door (core/timefmt.attainable_cs, the same rule the
+                # import's hand-entry field applies) -- only 30 of every 100
+                # centisecond values can appear on the timer, and the field
+                # already shows the snapped value, so storing the raw one
+                # would make a hand-posted payload disagree with every cell
+                # the UI draws (round 5, 2026-08-24: "leverage the existing
+                # time entry validation system").
+                store[name] = {key: attainable_cs(int(cs))
+                               for key, cs in body.times.items()}
                 service.db.set_state(_CUSTOM_KEY, store)
             elif name not in store:
                 raise HTTPException(404, f"no saved custom goal named {name!r}")

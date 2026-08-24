@@ -21,7 +21,7 @@
 // .csv` stays reachable by URL from a browser regardless.
 //
 // A row expands (`ScoreRow`'s own `expanded` state, lifted here so several
-// rows can be open at once) into a per-star Star/Goal/You/Δ table
+// rows can be open at once) into a per-star Star/You/Goal/Δ table
 // (`ScoreRowDetail`/`ScoreDetailRow`) -- the Ultimate Sheet template's own
 // shape, his own screenshot of it. A star's Goal cell is editable in place;
 // edits live ONLY in `pendingOverrides` (entity_key -> goal_cs) until saved,
@@ -35,7 +35,7 @@ import { h } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
-import { fmtSeconds } from "../format.js";
+import { attainableCs, fmtSeconds } from "../format.js";
 import { applyGoalOverrides, divisionOptions, fmtGapCs, goalGroups,
          parseGapTime } from "../scorecardgoal.js";
 import { capName, divisionDigit } from "./caps.js";
@@ -149,7 +149,8 @@ function SumChip({ sum, large = false }) {
   </div>`;
 }
 
-// The expanded breakdown: every tile in the row as Star / Goal / You / Δ,
+// The expanded breakdown: every tile in the row as Star / You / Goal / Δ (round 5:
+// "the YOU column first, *then* the GOAL column"),
 // the shape of the community's own Ultimate Sheet template (round 8, his
 // screenshot from it), plus the row's own Sigma restated as "Stage RTA
 // target" -- the row's collapsed chip already IS that number, named here so
@@ -162,7 +163,7 @@ function ScoreRowDetail({ row, onGoalOverride }) {
       <${SumChip} sum=${row.sum} />
     </div>
     <table class="score-detail-table">
-      <thead><tr><th>Star</th><th>Goal</th><th>You</th><th>Δ</th></tr></thead>
+      <thead><tr><th>Star</th><th>You</th><th>Goal</th><th>Δ</th></tr></thead>
       <tbody>
         ${row.tiles.map((tile) => html`<${ScoreDetailRow} key=${tile.key}
             tile=${tile} onGoalOverride=${onGoalOverride} />`)}
@@ -196,13 +197,19 @@ function ScoreDetailRow({ tile, onGoalOverride }) {
     if (!draft.trim()) { cancel(); return; }
     const parsed = parseGapTime(draft);
     if (parsed === null) { setInvalid(true); return; }
-    onGoalOverride(tile.key, parsed);
+    // The one snap the app already has (format.js::attainableCs, the
+    // import field's own door): only 30 of every 100 centisecond values can
+    // appear on the timer, so a typed goal rounds onto the displayable set
+    // and the cell shows the snapped value the moment the edit lands --
+    // never a number nobody typed (round 5).
+    onGoalOverride(tile.key, attainableCs(parsed));
     setEditing(false);
   }
 
   return html`<tr class=${tile.folded ? "score-detail-folded" : ""}>
     <td>${tile.label}${tile.folded
       ? html`<span class="meta">${" "}(not in Σ)</span>` : ""}</td>
+    <td>${tile.you_cs != null ? fmtSeconds(tile.you_cs / 100) : "—"}</td>
     <td class="score-detail-goal">
       ${editing
         ? html`<div class="score-detail-editing">
@@ -221,7 +228,6 @@ function ScoreDetailRow({ tile, onGoalOverride }) {
               ${tile.goal_cs != null ? fmtSeconds(tile.goal_cs / 100) : "set a time…"}
             </button>`}
     </td>
-    <td>${tile.you_cs != null ? fmtSeconds(tile.you_cs / 100) : "—"}</td>
     <td class=${tile.delta_cs != null ? (tile.delta_cs <= 0 ? "good" : "bad") : ""}>
       ${tile.delta_cs != null ? fmtGapCs(tile.delta_cs) : "—"}
     </td>

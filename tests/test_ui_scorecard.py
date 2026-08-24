@@ -474,7 +474,8 @@ def test_expanding_a_row_shows_every_star_goal_you_and_delta():
             row_count = page.evaluate(
                 "document.querySelectorAll('.rank-page .scorecard-card "
                 ".score-detail-table tbody tr').length")
-        assert headers == ["Star", "Goal", "You", "Δ"]
+        # Round 5 (2026-08-24): "the YOU column first, *then* the GOAL column".
+        assert headers == ["Star", "You", "Goal", "Δ"]
         assert row_count == 7      # a course row: stars 0-5 + the 100c star
 
 
@@ -751,3 +752,39 @@ def _fmt_seconds_like_js(seconds: float) -> str:
     centis = centis_total % 100
     body = f"{minutes}'{secs:02d}\"{centis:02d}"
     return body[2:] if body.startswith("0'") else body
+
+
+def test_a_typed_goal_snaps_onto_the_displayable_set_in_the_cell():
+    """Round 5 (2026-08-24): "leverage the existing time entry validation
+    system... it rounds to the nearest valid time (based on what's actually
+    possible in the frame data)". 51"01 is not a time the 30fps timer can
+    ever show; the existing door (format.js::attainableCs, the import
+    field's own) rounds it up to 51"03, and the cell shows the snapped
+    value the moment the edit commits -- never a number nobody typed."""
+    with serve_ui() as base:
+        row_label, tile_label, _tile_key = _first_seeded_tile(_get_scorecard(base))
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-row-label")
+
+            _expand_row_and_edit_goal(page, row_label, tile_label, "51\"01")
+            page.wait_ms(150)
+
+            row_label_js = json.dumps(row_label)
+            tile_label_js = json.dumps(tile_label)
+            cell = page.evaluate(
+                "(() => {"
+                f"  const rowLabel = {row_label_js}, starLabel = {tile_label_js};"
+                "  const row = Array.from(document.querySelectorAll("
+                "    '.rank-page .scorecard-card .score-row'))"
+                "    .find((r) => r.querySelector('.score-row-name').textContent === rowLabel);"
+                "  const tr = Array.from(row.querySelectorAll('.score-detail-table tbody tr'))"
+                "    .find((tr) => tr.children[0].textContent.trim().startsWith(starLabel));"
+                "  return tr.querySelector('.score-detail-goal-btn').textContent.trim();"
+                "})()")
+
+        assert cell == "51\"03", (
+            f"a typed 51\"01 must land as the snapped 51\"03, got {cell!r}")

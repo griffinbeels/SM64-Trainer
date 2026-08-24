@@ -550,3 +550,20 @@ def test_export_csv_serves_broadcast_only_with_no_record_column(tmp_path):
         response = client.get("/api/scorecard/export.csv")
         assert response.status_code == 200
         assert response.text.split("\r\n")[0] == "Course,Star,Record,Goal,You,Delta"
+
+
+def test_a_saved_custom_goal_snaps_every_time_onto_the_displayable_set(tmp_path):
+    """Round 5 (2026-08-24): the server snaps too (core/timefmt.attainable_cs,
+    the import's own door), so a hand-posted payload cannot store a
+    centisecond the timer can never show -- the field already displays the
+    snapped value, and the store must agree with every cell the UI draws."""
+    with make_client(tmp_path) as (client, _db, _svc):
+        response = client.put("/api/scorecard/goal", json={
+            "kind": "custom", "name": "snap check",
+            "times": {"star:1:0": 5101, "star:1:1": 5100}})
+        assert response.status_code == 200
+        card = client.get("/api/scorecard").json()
+        tiles = {tile["key"]: tile
+                 for row in card["rows"] for tile in row["tiles"]}
+        assert tiles["star:1:0"]["goal_cs"] == 5103   # 51"01 unattainable at 30fps
+        assert tiles["star:1:1"]["goal_cs"] == 5100   # already displayable: unmoved
