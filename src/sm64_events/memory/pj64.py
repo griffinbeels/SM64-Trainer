@@ -126,6 +126,38 @@ class Pj64Memory(RdramReader):
             return None
         return None
 
+    # -- host-side process memory (memory/present.py's hunt) -----------------
+    # The present counter lives in the emulator's OWN heap, outside the
+    # emulated RDRAM, so it is read by absolute process address. Same handle,
+    # same read-only discipline; every failure is a MemoryReadError so the
+    # hunter degrades instead of crashing a thread.
+
+    @property
+    def rdram_host_base(self) -> int | None:
+        """Where the emulated RDRAM sits in the process -- what a host-side
+        sweep excludes."""
+        return self._rdram_base
+
+    def host_regions(self) -> list[tuple[int, int]]:
+        """(base, size) of every readable committed region of the process."""
+        if self._pm is None:
+            raise MemoryReadError("not attached")
+        try:
+            return list(iter_committed_regions(self._pm.process_handle))
+        except OSError as err:
+            raise MemoryReadError(str(err)) from err
+
+    def read_host_bytes(self, address: int, size: int) -> bytes:
+        if self._pm is None:
+            raise MemoryReadError("not attached")
+        try:
+            return self._pm.read_bytes(address, size)
+        except pymem.exception.PymemError as err:
+            raise MemoryReadError(str(err)) from err
+
+    def read_host_u32(self, address: int) -> int:
+        return int.from_bytes(self.read_host_bytes(address, 4), "little")
+
     def detach(self) -> None:
         self._close()
 

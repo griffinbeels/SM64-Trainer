@@ -77,10 +77,11 @@ class FakeAvSink:
 
 def make_recorder(tmp_path, video, audio, found=WIN, fallback=None,
                   recorder_lock_factory=None, video_sink_factory=None,
-                  fallback_factory=None):
+                  fallback_factory=None, frame_clock=None):
     cfg = ReplayConfig(scratch_dir=tmp_path / "buf", attach_poll_s=0.01, fps=30)
     return ReplayRecorder(
         cfg=cfg,
+        frame_clock=frame_clock,
         window_finder=lambda title: found,
         video_factory=lambda win: video,
         audio_factory=lambda pid: audio,
@@ -451,3 +452,25 @@ def test_session_pause_forces_idle_and_outranks_input(tmp_path):
     assert rec.status()["idle"] is False
     rec._maybe_idle_pause()                 # clock refreshed on unpause
     assert rec.status()["idle"] is False
+def test_capture_tags_carry_the_frame_and_the_composition_time(tmp_path):
+    """The frame map's present series keys on WHEN the picture was composed
+    (WGC's SystemRelativeTime through the run's CaptureClock), never on when
+    our callback happened to run -- and the RAM frame rides beside it for
+    the v2 fallback (round 32 items 17 + 30)."""
+    from sm64_events.replay.frameclock import FrameClock
+    video, audio = FakeVideoSource(), SystemFakeAudioSource()
+    sink = FakeAvSink()
+    frame_clock = FrameClock()
+    frame_clock.mark(4242)
+    rec = make_recorder(tmp_path, video, audio, frame_clock=frame_clock,
+                        video_sink_factory=lambda cfg, on_seg, codec: sink)
+    rec.start()
+    assert wait_for(lambda: video.on_frame is not None)
+    push_frames(video, 2)                    # qpc ticks 0 and 1/30 s
+    assert wait_for(lambda: len(getattr(sink, "tags", [])) >= 2)
+    assert sink.tags[0] == (4242, T0.timestamp())
+    frame_tag, capture_ts = sink.tags[1]
+    assert frame_tag == 4242
+    # utc_of quantises to whole microseconds
+    assert abs(capture_ts - (T0.timestamp() + 1 / 30)) < 1e-5
+    rec.stop()

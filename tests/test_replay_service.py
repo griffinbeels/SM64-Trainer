@@ -121,9 +121,13 @@ def test_the_sidecar_carries_the_frame_map_and_a_save_keeps_it(tmp_path):
     assert fm[-1] == 7000 + 17 * 30 - 1 - DISPLAY_LAG_FRAMES
     ordered = [frame for frame in fm if frame is not None]
     assert ordered == sorted(ordered)
+    # ...and names the series that answered (edge marks only here), so the
+    # pixel scorer's verdict says which map version it scored.
+    assert res["frame_map_source"] == "edges"
     sidecar = _json.loads(
         (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
     assert sidecar["frame_map"] == fm
+    assert sidecar["frame_map_source"] == "edges"
     saved = svc.save(42)
     assert _json.loads(Path(saved["path"]).with_suffix(".json").read_text())[
         "frame_map"] == fm

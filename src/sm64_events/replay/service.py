@@ -280,11 +280,14 @@ class ReplayService:
                     # so a saved copy keeps it after the clock forgets. The
                     # display lag rides INSIDE the map; anchor_offset_s stays
                     # the fallback for a clip that has none.
-                    fm = self._frame_clock.frame_map(
+                    mapped = self._frame_clock.frame_map(
                         res.start_utc, res.duration_s, self.cfg.fps,
                         DISPLAY_LAG_FRAMES / GAME_FPS)
-                    if fm is not None:
-                        m["frame_map"] = fm
+                    if mapped is not None:
+                        # Which series answered rides beside the map so the
+                        # pixel scorer's verdict names what it scored
+                        # ("presents" = map v4, "feeds" = v2, "edges" = v1).
+                        m["frame_map"], m["frame_map_source"] = mapped
             meta.write_text(json.dumps(m))
             url, source = f"/api/replay/clips/{name}", "buffer"
         # fps = encoded rate (CFR); game_fps = SM64 logic rate — the
@@ -299,6 +302,7 @@ class ReplayService:
                 "source": source,
                 "anchor_offset_s": self._anchor_offset(a, m),
                 "frame_map": m.get("frame_map"),
+                "frame_map_source": m.get("frame_map_source"),
                 "saved_path": str(saved) if saved is not None else None}
 
     def _anchor_offset(self, a, meta: dict) -> float:

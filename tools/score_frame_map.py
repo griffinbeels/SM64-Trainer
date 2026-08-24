@@ -133,6 +133,12 @@ def main() -> int:
     display = icon_change_slots(frames)
     changes = map_button_changes(sidecar, Database(Path(args.db)),
                                  args.attempt)
+    # Which series built this map: "presents" = v4 (the hunted host present
+    # counter), "feeds" = v2 (capture tags through the feeder), "edges" = v1.
+    # A verdict means nothing without this line -- the same clip scores a
+    # different map depending on what the clock held at extraction.
+    source = sidecar.get("frame_map_source", "unknown (pre-source sidecar)")
+    print(f"map source: {source}")
     print(f"{len(frames)} slots; {len(display)} display icon-changes; "
           f"{len(changes)} map button-changes")
     if not changes or not len(display):

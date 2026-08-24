@@ -30,6 +30,7 @@ from sm64_events.detectors.warp import WarpDetector
 from sm64_events.core.snapshot import UnreadyReader, reader_for
 from sm64_events.memory.layout import LAYOUT_ROWS, layout_for
 from sm64_events.memory.pj64 import Pj64Memory
+from sm64_events.memory.present import PresentHunter
 from sm64_events.replay.audio import ProcessAudioSource, SystemAudioSource
 from sm64_events.replay.frameclock import FrameClock
 from sm64_events.replay.config import ReplayConfig, apply_settings_file
@@ -404,9 +405,14 @@ def build():
     if db is not None and layout.player1_controller is not None:
         input_writer = ChunkWriter(db.inputs, lambda: service.session_id)
         input_sampler = InputSampler(memory, layout, input_writer.add)
+    # PJ64's host-side present counter moves every session (heap), so it is
+    # hunted by signature in the background and watched on the poll tick --
+    # the frame clock's present series, map v4 (memory/present.py).
+    present_hunter = (PresentHunter(memory, layout.global_timer)
+                      if layout.global_timer is not None else None)
     poller = Poller(memory, detectors, service, on_frame=service.settle_frame,
                     reader=reader, input_sampler=input_sampler,
-                    frame_clock=frame_clock)
+                    frame_clock=frame_clock, present_hunter=present_hunter)
     updater = UpdateService(current_version=__version__)
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     if input_writer is not None:

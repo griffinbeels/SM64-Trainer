@@ -526,17 +526,38 @@ the gap yourself. It opens inside an [[attempt]]'s own row, beside that
 
 The list a clip carries naming which [[frame]] of the game each picture of
 that clip shows. The trainer stamps the wall time of every [[frame]] as you
-play and writes the map when it cuts a clip, so a [[frame]] the emulator
-held on screen twice maps twice and one it skipped never maps -- the
-duplicates and skips a single offset cannot describe. The [[input
-timeline]] and every [[overlay layer]] read the clip through its map; a
-clip cut before maps existed falls back to a fixed offset.
+play, watches the [[present counter]] whenever it holds one, and writes the
+map when it cuts a clip, so a [[frame]] the emulator held on screen twice
+maps twice and one it skipped never maps -- the duplicates and skips a
+single offset cannot describe. Each map names the series that built it:
+presents first (the screen's own updates), the tagged capture feed next, the
+[[frame]]-edge stamps last. The [[input timeline]] and every [[overlay
+layer]] read the clip through its map; a clip cut before maps existed falls
+back to a fixed offset.
 
 - **Lives** -- the frame clock (`src/sm64_events/replay/frameclock.py`)
   records the stamps; the map rides the clip's own metadata
   (`src/sm64_events/replay/service.py`)
 - **Not** -- the [[input track]]'s own axis. The track says what you DID on
   each [[frame]]; the map says which [[frame]] the footage SHOWS.
+
+### Present counter
+
+The count the emulator's video plugin keeps of pictures it has handed to
+the screen. It lives in the emulator program's own working memory rather
+than in the game's, lands at a different address every time the emulator
+starts, and the trainer hunts it down each time by how it behaves: one tick
+per [[frame]], drifting against the game's clock in streaks, exactly the
+way the footage drifts. Watching it tells the [[frame map]] when the screen ACTUALLY
+changed instead of guessing a fixed delay -- the drift lands between the
+ticks, where it belongs, rather than inside the map's answers.
+
+- **Lives** -- the hunter (`src/sm64_events/memory/present.py`); the
+  [[poller]] watches the found counter and the frame clock
+  (`src/sm64_events/replay/frameclock.py`) records its ticks
+- **Not** -- a [[memory layout]] row: those name fixed addresses inside the
+  game's memory, and this counter has no fixed address and sits outside it.
+  Reading it stays read-only, like every other read.
 
 ### Overlay layer
 

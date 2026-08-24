@@ -162,3 +162,129 @@ def test_the_rate_follows_the_sampler():
                      reader=CountingReader(sampler))
     assert round(1 / with_pad.interval) == 250
     assert round(1 / without.interval) == 60
+
+
+# --- the present watch (map v4: memory/present.py + frameclock presents) -----
+
+class FakeHunter:
+    def __init__(self, counts=None):
+        self.counts = list(counts or [])
+        self.at = -1
+        self.address = 0xBEEF if counts else None
+        self.ensured = 0
+        self.invalidated: list[str] = []
+
+    def read(self):
+        if self.address is None:
+            return None
+        self.at += 1
+        return self.counts[min(self.at, len(self.counts) - 1)]
+
+    def ensure_hunting(self):
+        self.ensured += 1
+
+    def invalidate(self, reason=""):
+        self.invalidated.append(reason)
+        self.address = None
+
+
+class PresentRecordingClock:
+    def __init__(self):
+        self.marks = []
+        self.presents = []
+
+    def mark(self, frame):
+        self.marks.append(frame)
+
+    def mark_present(self, count, timer):
+        self.presents.append((count, timer))
+
+
+def drive_presents(frames, counts):
+    sampler = ScriptedSampler(frames)
+    hunter = FakeHunter(counts)
+    clock = PresentRecordingClock()
+    poller = Poller(memory=None, detectors=[], broadcaster=NullBroadcaster(),
+                    hz=250, reader=CountingReader(sampler),
+                    input_sampler=sampler, frame_clock=clock,
+                    present_hunter=hunter)
+    for _ in frames:
+        asyncio.run(poller.tick())
+    return hunter, clock
+
+
+def test_present_ticks_reach_the_clock_except_the_unobserved_first():
+    """The first value after acquisition is mid-count (its edge was not
+    seen), so it establishes state without marking -- the same rule the
+    logic-edge stamp follows -- and every OBSERVED tick marks with the
+    game frame read on the same poll tick."""
+    frames = [100] * 8 + [101] * 8 + [102] * 8
+    counts = [700] * 12 + [701] * 6 + [702] * 6
+    _hunter, clock = drive_presents(frames, counts)
+    assert clock.presents == [(701, 101), (702, 102)]
+
+
+def test_a_frozen_present_counter_is_invalidated_by_the_watchdog():
+    """Heap reuse or a plugin restart leaves a dead address that reads a
+    constant. The game advancing PRESENT_FROZEN_FRAMES past the last tick
+    proves it dead -- a live counter ticks every frame."""
+    span = Poller.PRESENT_FROZEN_FRAMES + 3
+    frames = [frame for frame in range(100, 100 + span) for _ in range(2)]
+    counts = [700] * (span * 2)
+    hunter, clock = drive_presents(frames, counts)
+    assert hunter.invalidated, "watchdog never fired"
+    assert clock.presents == []
+
+
+def test_no_address_means_hunting_not_marking():
+    frames = [100] * 8 + [101] * 8
+    sampler = ScriptedSampler(frames)
+    hunter = FakeHunter()                       # no address yet
+    clock = PresentRecordingClock()
+    poller = Poller(memory=None, detectors=[], broadcaster=NullBroadcaster(),
+                    hz=250, reader=CountingReader(sampler),
+                    input_sampler=sampler, frame_clock=clock,
+                    present_hunter=hunter)
+    for _ in frames:
+        asyncio.run(poller.tick())
+    assert hunter.ensured >= 1                  # frames advanced: hunt asked
+    assert clock.presents == []
+
+
+def test_without_a_hunter_the_loop_is_exactly_as_it_was():
+    frames = [100] * 8 + [101] * 8
+    sampler = ScriptedSampler(frames)
+    reader = CountingReader(sampler)
+    poller = Poller(memory=None, detectors=[], broadcaster=NullBroadcaster(),
+                    hz=250, reader=reader, input_sampler=sampler)
+    for _ in frames:
+        asyncio.run(poller.tick())
+    assert reader.reads == 2
+
+
+def test_an_unreadable_address_also_trips_the_watchdog():
+    """After a full emulator restart the old heap address may be unmapped:
+    every read fails. That must invalidate (and re-hunt), not hang forever
+    with an address nothing can read."""
+    span = Poller.PRESENT_FROZEN_FRAMES + 3
+    frames = [frame for frame in range(100, 100 + span) for _ in range(2)]
+    hunter, clock = drive_presents(frames, [None] * (span * 2))
+    assert hunter.invalidated
+    assert clock.presents == []
+
+
+def test_a_console_reset_rebaselines_instead_of_invalidating():
+    """F1 drops the game clock backward while the emulator process -- and
+    the counter's heap -- survive. Throwing the address away would cost a
+    half-minute hunt after his commonest gesture; the watchdog re-baselines
+    on the backward jump and only a FORWARD outrun kills the address."""
+    frames = ([300] * 4                              # baseline at 300
+              + [100] * 4                            # F1: clock restarts
+              + [frame for frame in range(101, 201) for _ in range(2)])
+    counts = [700] * len(frames)                     # counter frozen anyway
+    hunter, _clock = drive_presents(frames, counts)
+    assert not hunter.invalidated, \
+        "a backward jump plus <120 frames of play must not invalidate"
+    longer = frames + [frame for frame in range(201, 240) for _ in range(2)]
+    hunter2, _clock2 = drive_presents(longer, [700] * len(longer))
+    assert hunter2.invalidated                       # forward outrun DOES

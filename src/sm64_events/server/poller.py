@@ -55,7 +55,7 @@ class Poller:
 
     def __init__(self, memory, detectors, broadcaster, hz: int | None = None,
                  reader=None, on_frame=None, input_sampler=None,
-                 frame_clock=None):
+                 frame_clock=None, present_hunter=None):
         self.memory = memory
         self.detectors = list(detectors)
         self.broadcaster = broadcaster
@@ -94,6 +94,15 @@ class Poller:
         # counter EDGE, so with a sampler the stamp is 250 Hz-precise; the
         # 60 Hz path marks at snapshot time, one poll coarser.
         self.frame_clock = frame_clock
+        # PJ64's host-side present counter (memory/present.py): hunted in
+        # the background while frames advance, then read every tick so the
+        # frame clock's PRESENT series (map v4) records each screen update
+        # with the game frame it shows. None on layouts with no timer, in
+        # tests, and on the offline harness -- the map falls back to v2.
+        self.present_hunter = present_hunter
+        self._present_count: int | None = None    # last counter value seen
+        self._present_timer_at: int | None = None  # game frame at that value
+        self._watch_timer_prev: int | None = None
         self.interval = 1.0 / hz
         self.reader = reader or SnapshotReader(memory)
         # Set when the reader can never read (core/snapshot.py::UnreadyReader
@@ -160,9 +169,65 @@ class Poller:
         return (self._snapshot_frame != frame_now
                 and self._ticks_in_frame >= self._settle_ticks)
 
-    async def tick(self) -> None:
-        if self.input_sampler is not None and not self._due_for_a_snapshot():
+    # The watchdog's threshold: the game running this many frames past the
+    # last observed tick proves the address dead (heap reused, plugin or
+    # process restarted) -- a live counter ticks every frame. Big enough
+    # that a lag spike or a console reset's black screen never trips it.
+    PRESENT_FROZEN_FRAMES = 120
+
+    def _watch_presents(self) -> None:
+        """One 250 Hz look at the host present counter (map v4).
+
+        Starts the background hunt whenever frames advance with no counter
+        in hand, records each observed tick into the frame clock's present
+        series -- except the FIRST value after (re)acquisition, whose edge
+        was not observed (the same rule the logic-edge stamp follows) --
+        and invalidates an address the game has outrun (no tick, or no
+        successful read, across PRESENT_FROZEN_FRAMES of play). A BACKWARD
+        timer jump is an F1 console reset: the emulator process -- and the
+        counter's heap -- survive it, so the watchdog re-baselines rather
+        than throwing a valid address away (a fresh hunt costs half a
+        minute of degraded maps, and resets are his commonest gesture).
+        """
+        hunter = self.present_hunter
+        timer = (self._frame_now if self.input_sampler is not None
+                 else self._last_timer)
+        if timer is not None and timer != self._watch_timer_prev:
+            self._watch_timer_prev = timer
+            if hunter.address is None:
+                hunter.ensure_hunting()
+        if hunter.address is None:
+            self._present_count = None
+            self._present_timer_at = None
             return
+        if self._present_timer_at is None:
+            self._present_timer_at = timer     # watchdog baseline from now
+        count = hunter.read()
+        if count is not None and count != self._present_count:
+            unobserved_edge = self._present_count is None
+            self._present_count = count
+            self._present_timer_at = timer
+            if not unobserved_edge and self.frame_clock is not None:
+                self.frame_clock.mark_present(count, timer)
+            return
+        if timer is None or self._present_timer_at is None:
+            return
+        if timer < self._present_timer_at:
+            self._present_timer_at = timer     # console reset: re-baseline
+        elif timer - self._present_timer_at > self.PRESENT_FROZEN_FRAMES:
+            hunter.invalidate("no present tick while the game ran")
+            self._present_count = None
+            self._present_timer_at = None
+
+    async def tick(self) -> None:
+        if self.input_sampler is not None:
+            due_for_a_snapshot = self._due_for_a_snapshot()
+            if self.present_hunter is not None:
+                self._watch_presents()
+            if not due_for_a_snapshot:
+                return
+        elif self.present_hunter is not None:
+            self._watch_presents()
         try:
             curr = self.reader.read()
             # Which frame this reading DESCRIBES comes from the snapshot's own
@@ -171,6 +236,15 @@ class Poller:
         except MemoryReadError:
             log.warning("lost emulator; detaching")
             self.memory.detach()
+            if self.present_hunter is not None:
+                # Keep the hunted address: a detach is usually an F1 console
+                # reset, which the emulator process -- and the counter's
+                # heap -- survive. If the process really died, the watchdog
+                # above invalidates within PRESENT_FROZEN_FRAMES of play.
+                # Only the first-value-skip state resets, so the reattach's
+                # first tick (edge unobserved across the gap) never marks.
+                self._present_count = None
+                self._present_timer_at = None
             self._prev = None
             self.latest = None
             await self.broadcaster.publish(_lifecycle_event("emulator_disconnected"))

@@ -501,12 +501,17 @@ class ReplayRecorder:
         # in-process CFR/dedup/encode machinery below is bypassed.
         sink = self._video_sink
         if sink is not None:
-            # Tag the picture AT CAPTURE with the RAM frame current right
-            # now: the frame map's per-picture binding (round 32 item 17,
-            # v2 -- the logic-time stamp alone left +-1 frame of present/
-            # feeder wobble, measured on his clip 741).
-            tag = (self._frame_clock.latest_frame()
-                   if self._frame_clock is not None else None)
+            # Tag the picture AT CAPTURE (round 32 items 17 + 30): the RAM
+            # frame current right now (map v2's key) and this picture's own
+            # composition time -- WGC's SystemRelativeTime through the run's
+            # CaptureClock, not the moment this callback happened to run --
+            # which is what the frame map's present series keys on (v4).
+            tag = None
+            if self._frame_clock is not None:
+                clock = self._clock
+                capture_ts = (clock.utc_of(ts_100ns).timestamp()
+                              if clock is not None else None)
+                tag = self._frame_clock.capture_tag(capture_ts)
             sink.submit(bgra, tag)
             return
         # M1: _last_frame and _last_index are written here only; WGC guarantees
