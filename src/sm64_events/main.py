@@ -321,7 +321,8 @@ def build():
                 # nvenc flashed a non-NVIDIA user's cursor, 2026-08-07).
                 video_sink_factory = (
                     lambda cfg, on_seg, codec, _f=_ffmpeg: FfmpegAvSink(
-                        cfg, on_seg, ffmpeg=_f, codec=codec))
+                        cfg, on_seg, ffmpeg=_f, codec=codec,
+                        frame_clock=frame_clock))
                 logging.getLogger("sm64.replay").info(
                     "replay backend: single ffmpeg A+V mux (%s)", _ffmpeg)
             except Exception:
@@ -336,7 +337,8 @@ def build():
             fallback_audio_factory=lambda pid: SystemAudioSource(
                 rate=replay_cfg.audio_rate, pid=pid),
             codec=codec,
-            video_sink_factory=video_sink_factory)
+            video_sink_factory=video_sink_factory,
+            frame_clock=frame_clock)
         replay = ReplayService(
             cfg=replay_cfg, recorder=recorder,
             extractor=ClipExtractor(cfg=replay_cfg, codec=codec),

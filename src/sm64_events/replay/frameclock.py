@@ -35,10 +35,13 @@ import time
 from collections import deque
 from datetime import datetime
 
+from sm64_events.core.timefmt import GAME_FPS
+
 # How long a pair is answerable. The ring's default retention is shorter;
 # generous here because 30 pairs/s costs ~50 bytes each.
 RETENTION_S = 1800.0
 _FPS_CEILING = 40                      # eviction sizing only, above real 30
+_FEED_CEILING = 70                     # the sink feeds at 60; headroom
 
 
 class FrameClock:
@@ -46,10 +49,32 @@ class FrameClock:
         self._now = now
         self._pairs: deque[tuple[float, int]] = deque(
             maxlen=int(retention_s * _FPS_CEILING))
+        # What the SINK'S FEEDER actually fed, tagged at CAPTURE with the RAM
+        # frame current at that instant -- the v2 series, preferred by
+        # frame_map. Scored on his clip 741 (2026-08-23): the edge series
+        # plus any constant lag left +-1 game frame of error in BOTH
+        # directions within one clip, because the picture's presentation and
+        # the feeder's staleness each wobble against the logic clock. Tagging
+        # at capture and recording at feed removes both terms: a stall's
+        # ffmpeg dup repeats the last fed frame, and so does this series.
+        self._feeds: deque[tuple[float, int]] = deque(
+            maxlen=int(retention_s * _FEED_CEILING))
 
     def mark(self, frame: int) -> None:
         """The game's frame counter just advanced to `frame`."""
         self._pairs.append((self._now(), frame))
+
+    def latest_frame(self) -> int | None:
+        """The frame the game is computing RIGHT NOW (the last marked edge)
+        -- what the capture callback tags each captured picture with."""
+        return self._pairs[-1][1] if self._pairs else None
+
+    def mark_feed(self, tag: int | None) -> None:
+        """The sink's feeder just fed a frame whose capture-time tag was
+        `tag`. An untagged frame (no sampler, clock cold) records nothing --
+        the map then falls back to the edge series for that stretch."""
+        if tag is not None:
+            self._feeds.append((self._now(), tag))
 
     def frame_map(self, start_utc: datetime, duration_s: float, fps: float,
                   lag_s: float) -> list[int | None] | None:
@@ -62,17 +87,37 @@ class FrameClock:
         gap), and a whole clip outside the marked span returns None so the
         sidecar simply carries no map and readers fall back to the offset.
         """
+        start = start_utc.timestamp()
+        count = max(1, round(duration_s * fps))
+        feeds = list(self._feeds)
+        if feeds and duration_s > 0 and feeds[0][0] <= start \
+                and feeds[-1][0] >= start:
+            # v2: what was actually FED. Slot k took the last frame fed at or
+            # before its own wall time (a feeder stall means ffmpeg dup'd
+            # exactly that frame); the tag is the RAM frame at capture, and
+            # the picture on screen then trails the logic by the pipeline
+            # depth -- the same DISPLAY_LAG constant, now applied per frame
+            # rather than per clock.
+            lag_frames = round(lag_s * GAME_FPS)
+            out: list[int | None] = []
+            at = 0
+            current: int | None = None
+            for index in range(count):
+                wall = start + (index + 0.5) / fps
+                while at < len(feeds) and feeds[at][0] <= wall:
+                    current = feeds[at][1]
+                    at += 1
+                out.append(None if current is None else current - lag_frames)
+            return out
         pairs = list(self._pairs)
         if not pairs or duration_s <= 0:
             return None
-        start = start_utc.timestamp()
-        count = max(1, round(duration_s * fps))
         if start + duration_s - lag_s < pairs[0][0] or \
                 start - lag_s > pairs[-1][0]:
             return None
-        out: list[int | None] = []
+        out = []
         at = 0
-        current: int | None = None
+        current = None
         for index in range(count):
             wall = start + (index + 0.5) / fps - lag_s
             while at < len(pairs) and pairs[at][0] <= wall:

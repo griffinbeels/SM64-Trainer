@@ -60,3 +60,42 @@ def test_slots_before_coverage_read_none_not_a_guess():
     clock = clock_at([(100.0, 1000), (100.0 + 1 / 30, 1001)])
     got = clock.frame_map(utc(99.9), 0.2, 30, lag_s=0.0)
     assert got[0] is None and got[-1] == 1001
+
+# --- v2: the fed-tag series (scored on his clip 741, 2026-08-23) -------------
+
+def test_feeds_beat_the_edge_series_and_carry_the_lag_in_frames():
+    clock = clock_at([(100.0 + n / 30, 1000 + n) for n in range(30)])
+    # The feeder fed a picture tagged 1005 at 100.5, then 1006 at 100.533...
+    for n in range(15):
+        wall = 100.0 + n / 60
+        clock._now = lambda t=wall: t
+        clock.mark_feed(1000 + n // 2)
+    got = clock.frame_map(utc(100.0), 0.2, 60, lag_s=1 / 30)
+    # Slot k takes the last feed at or before its midpoint, minus one frame
+    # of pipeline depth -- per-slot, not per-clock.
+    assert got == [999, 999, 1000, 1000, 1001, 1001, 1002, 1002, 1003, 1003,
+                   1004, 1004]
+
+
+def test_a_feeder_stall_holds_the_last_fed_tag_like_ffmpegs_dup_does():
+    clock = FrameClock(now=lambda: 0.0)
+    for wall, tag in [(100.0, 1000), (100.0 + 1 / 60, 1001),
+                      (100.0 + 10 / 60, 1002)]:      # a 9-slot stall
+        clock._now = lambda t=wall: t
+        clock.mark_feed(tag)
+    got = clock.frame_map(utc(100.0), 12 / 60, 60, lag_s=0.0)
+    assert got[0] == 1000 and got[1:10] == [1001] * 9 and got[10] == 1002
+
+
+def test_untagged_feeds_record_nothing_and_the_edge_series_answers():
+    clock = clock_at([(100.0 + n / 30, 1000 + n) for n in range(10)])
+    clock.mark_feed(None)
+    got = clock.frame_map(utc(100.0), 0.1, 60, lag_s=0.0)
+    assert got is not None and got[2] == 1001  # the v1 path, unchanged
+
+
+def test_latest_frame_is_the_last_marked_edge():
+    clock = clock_at([(100.0, 7), (100.1, 8)])
+    assert clock.latest_frame() == 8
+    assert FrameClock().latest_frame() is None
+

@@ -67,8 +67,10 @@ class FakeAvSink:
         self.started = True
     def stop(self):
         self.stopped = True
-    def submit(self, bgra):
+    def submit(self, bgra, tag=None):
         self.frames.append(bgra)
+        self.tags = getattr(self, "tags", [])
+        self.tags.append(tag)
     def submit_audio(self, pcm_bytes):
         self.audio.append(pcm_bytes)
 

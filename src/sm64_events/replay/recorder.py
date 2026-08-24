@@ -79,6 +79,7 @@ class ReplayRecorder:
                  clock_factory: Callable[[], CaptureClock] = CaptureClock.now,
                  codec: str | None = None,
                  video_sink_factory=None,
+                 frame_clock=None,
                  recorder_lock_factory=acquire_recorder_lock):
         self._cfg = cfg
         # machine-wide single-recorder guard (injectable for tests): only the
@@ -91,6 +92,9 @@ class ReplayRecorder:
         self._audio_factory = audio_factory
         self._fallback_audio_factory = fallback_audio_factory
         self._clock_factory = clock_factory
+        # The frame clock (replay/frameclock.py): _on_frame tags each
+        # captured picture with the RAM frame current at capture time.
+        self._frame_clock = frame_clock
         self._codec: str | None = codec
         # ffmpeg-subprocess video path: when set, frames bypass the in-process
         # writer entirely (sink.submit is a lock-free reference swap; pacing,
@@ -497,7 +501,13 @@ class ReplayRecorder:
         # in-process CFR/dedup/encode machinery below is bypassed.
         sink = self._video_sink
         if sink is not None:
-            sink.submit(bgra)
+            # Tag the picture AT CAPTURE with the RAM frame current right
+            # now: the frame map's per-picture binding (round 32 item 17,
+            # v2 -- the logic-time stamp alone left +-1 frame of present/
+            # feeder wobble, measured on his clip 741).
+            tag = (self._frame_clock.latest_frame()
+                   if self._frame_clock is not None else None)
+            sink.submit(bgra, tag)
             return
         # M1: _last_frame and _last_index are written here only; WGC guarantees
         # a single callback thread, so they need no lock — if that ever changes,

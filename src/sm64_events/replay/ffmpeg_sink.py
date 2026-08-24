@@ -215,6 +215,7 @@ class FfmpegAvSink:
     _HEALTHY_CHILD_S = 5.0
 
     def __init__(self, cfg, on_segment, ffmpeg: str = "ffmpeg",
+                 frame_clock=None,
                  codec: str = "h264_nvenc"):
         self._cfg = cfg
         self._on_segment = on_segment
@@ -241,17 +242,23 @@ class FfmpegAvSink:
         # audio named-pipe transport
         self._audio_q: queue.Queue = queue.Queue(maxsize=256)
         self._audio_dropped = 0
+        self._frame_clock = frame_clock
         self._pipe_name: str | None = None
         self._pipe_handle = None
         self._audio_thread: threading.Thread | None = None
 
     # -- capture-thread surface (lock-free) -----------------------------------
-    def submit(self, bgra: np.ndarray) -> None:
+    def submit(self, bgra: np.ndarray, tag: int | None = None) -> None:
+        """`tag` is the RAM game frame current when this picture was
+        CAPTURED (recorder._on_frame reads it off the frame clock). It rides
+        the reference swap so the feeder can record, per fed frame, which
+        game frame's picture went to the encoder -- the clip's frame map."""
         h, w = bgra.shape[:2]
         if (h & 1) or (w & 1):
             bgra = bgra[:h & ~1, :w & ~1]
-        self._latest = bgra if bgra.flags["C_CONTIGUOUS"] \
+        array = bgra if bgra.flags["C_CONTIGUOUS"] \
             else np.ascontiguousarray(bgra)
+        self._latest = (array, tag)
 
     def submit_audio(self, pcm_bytes: bytes) -> None:
         """Enqueue interleaved s16le stereo PCM for the audio pipe. Non-blocking
@@ -476,11 +483,12 @@ class FfmpegAvSink:
         last_report = _time.monotonic()
         try:
             while not self._stop.is_set():
-                frame = self._latest
-                if frame is None:
+                latest = self._latest
+                if latest is None:
                     _time.sleep(0.05)
                     next_t = _time.perf_counter()
                     continue
+                frame, tag = latest
                 h, w = frame.shape[:2]
                 if self._proc is None or (w, h) != self._dims:
                     if self._proc is not None:
@@ -512,6 +520,10 @@ class FfmpegAvSink:
                     continue
                 wms = (_time.perf_counter() - t0) * 1000
                 stall_max = max(stall_max, wms)
+                if self._frame_clock is not None:
+                    # AFTER the write: ffmpeg stamps at its read, which this
+                    # write just satisfied, so the two clocks agree here.
+                    self._frame_clock.mark_feed(tag)
                 self._fed += 1
                 fed_window += 1
                 now = _time.monotonic()
