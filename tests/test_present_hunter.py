@@ -21,6 +21,17 @@ RDRAM_BASE = 0x9000_0000
 WINNER_INDEX = 100        # the wobbling present counter
 MIRROR_INDEX = 200        # a 30/s lockstep mirror of the logic clock
 SLOW_INDEX = 300          # a 10/s counter -- sweep-filtered
+NEARLOCK_INDEX = 400      # 30/s, parity almost never moving -- share ~0.07
+
+
+def nearlock_count(frame: int) -> int:
+    """Rate 30/s with flip share ~0.07: advances (2,0) with a (1,1) pair
+    every 30 frames -- the shape of the five ~29/s heap mirrors the live
+    hunt met at share 0.03-0.04 (2026-08-25), which the wobble floor must
+    reject without help from the rate tiebreak."""
+    cycles, remainder = divmod(frame, 30)
+    full = [2, 0] * 14 + [1, 1]
+    return 3333 + cycles * 30 + sum(full[:remainder])
 
 
 def wobble_count(frame: int) -> int:
@@ -63,6 +74,8 @@ class FakeHostMemory:
             return 4000 + self._frame()
         if index == SLOW_INDEX:
             return 600 + int(self.sim.now * 10)
+        if index == NEARLOCK_INDEX:
+            return nearlock_count(self._frame())
         return (index * 2654435761) & 0xFFFFFFFF
 
     def host_regions(self):
@@ -170,3 +183,14 @@ def test_the_default_clock_is_real_time():
     # The injectables exist for tests; production runs on the real clock.
     hunter = PresentHunter(FakeHostMemory(SimClock()), timer_address=0)
     assert hunter._sleep is time.sleep and hunter._clock is time.perf_counter
+def test_a_near_locked_mirror_is_rejected_by_the_wobble_floor():
+    """The live hunt (2026-08-25) met five ~29/s heap counters whose phase
+    barely moved (share 0.03-0.04) beside the true counter's 0.33; the
+    floor must reject them on its own -- a session where such a mirror's
+    rate happens to sit closer to 30 would otherwise pick the mirror."""
+    sim = SimClock()
+    memory = FakeHostMemory(sim)
+    memory.winner_offset = -1            # world holds ONLY the near-lock
+    hunter = hunter_over(memory, sim)
+    run_hunt(hunter)
+    assert hunter.address is None

@@ -46,8 +46,14 @@ from sm64_events.memory.base import MemoryReadError
 log = logging.getLogger("sm64.present")
 
 # -- sweep -------------------------------------------------------------------
-SWEEP_CHUNK = 32 * 1024 * 1024   # bytes compared per paced read pair
-SWEEP_GAP_S = 0.35               # gap between a chunk's two reads
+SWEEP_CHUNK = 32 * 1024 * 1024   # largest single read
+# Chunks are paced in GROUPS up to this many bytes: read the group, sleep
+# once, re-read, diff. The unit MUST be the group, not the chunk -- a 32-bit
+# process holds hundreds of small regions (970 measured live, 2026-08-25),
+# and one sleep per chunk made the sweep 341 s of pure sleep while its first
+# log line waited at the end. Grouped: ~8 sleeps over 715 MB.
+SWEEP_GROUP = 96 * 1024 * 1024
+SWEEP_GAP_S = 0.35               # gap between a group's two read passes
 CONFIRM_GAP_S = 1.0
 CONFIRM_ROUNDS = 2
 MAX_REGION = 512 * 1024 * 1024   # the probe's cap; bigger is never the heap
@@ -59,7 +65,12 @@ CLASSIFY_S = 12.0
 CLASSIFY_HZ = 250
 MIN_TIMER_EDGES = 120            # fewer = the game barely ran; inconclusive
 VERDICT_RATE_LO, VERDICT_RATE_HI = 24.0, 36.0
-FLIP_SHARE_LO, FLIP_SHARE_HI = 0.03, 0.6
+# The wobble floor sits well above near-locked mirrors and well below the
+# true counter: measured live 2026-08-25, the counter read share 0.33 (0xED1F9D4,
+# same as the probe's 2026-08-23 run) while five ~29/s heap mirrors read
+# 0.03-0.04 -- the original 0.03 floor let them through and only the rate
+# tiebreak picked right. 0.10 keeps 3x margin to both sides.
+FLIP_SHARE_LO, FLIP_SHARE_HI = 0.10, 0.6
 
 COOLDOWN_S = 45.0                # after a failed hunt
 RETRY_AFTER_INVALIDATE_S = 5.0   # after the watchdog kills a stale find
@@ -87,6 +98,15 @@ class PresentHunter:
     @property
     def address(self) -> int | None:
         return self._address
+
+    def state(self) -> str:
+        """One word for /health: the found address as hex, "hunting" while
+        the background sweep runs, "idle" between attempts."""
+        if self._address is not None:
+            return hex(self._address)
+        if self._thread is not None and self._thread.is_alive():
+            return "hunting"
+        return "idle"
 
     def read(self) -> int | None:
         """The counter's current value -- the poller's 250 Hz read. None
@@ -161,14 +181,15 @@ class PresentHunter:
 
     def _sweep(self) -> list[int]:
         """Addresses of u32s that advanced at a display-ish rate across one
-        short gap, read in paced chunks so no single read stalls anything."""
+        short gap. Chunks are read in byte-budgeted GROUPS -- one sleep per
+        group -- and each chunk's accept band derives from its own MEASURED
+        elapsed time, so re-read overhead can never shift a real counter out
+        of band."""
         rdram = self._memory.rdram_host_base
         excluded = []
         if rdram is not None:
             excluded.append((rdram, rdram + 0x800000))
-        low = max(2, int(RATE_LO * SWEEP_GAP_S * 0.7))
-        high = int(RATE_HI * SWEEP_GAP_S * 1.3) + 1
-        found: list[int] = []
+        chunks: list[tuple[int, int]] = []
         for base, size in self._memory.host_regions():
             if size > MAX_REGION:
                 continue
@@ -176,16 +197,40 @@ class PresentHunter:
                    for ex_base, ex_end in excluded):
                 continue
             for offset in range(0, size, SWEEP_CHUNK):
-                chunk_base = base + offset
-                chunk_size = min(SWEEP_CHUNK, size - offset)
+                chunks.append((base + offset, min(SWEEP_CHUNK, size - offset)))
+        log.info("present sweep: %d chunks, %.0f MB, %.0f MB per pace group",
+                 len(chunks), sum(size for _base, size in chunks) / 1e6,
+                 SWEEP_GROUP / 1e6)
+        found: list[int] = []
+        at = 0
+        while at < len(chunks):
+            group: list[tuple[int, int]] = []
+            budget = 0
+            while at < len(chunks) and budget < SWEEP_GROUP:
+                group.append(chunks[at])
+                budget += chunks[at][1]
+                at += 1
+            first_pass: list[tuple[float, np.ndarray | None]] = []
+            for chunk_base, chunk_size in group:
                 try:
                     raw = self._memory.read_host_bytes(chunk_base, chunk_size)
-                    before = np.frombuffer(
-                        raw[:len(raw) & ~3], dtype=np.uint32).copy()
-                    self._sleep(SWEEP_GAP_S)
+                    array = np.frombuffer(raw[:len(raw) & ~3],
+                                          dtype=np.uint32).copy()
+                except MemoryReadError:
+                    array = None         # region shrank or turned unreadable
+                first_pass.append((self._clock(), array))
+            self._sleep(SWEEP_GAP_S)
+            for (chunk_base, chunk_size), (read_at, before) \
+                    in zip(group, first_pass):
+                if before is None:
+                    continue
+                try:
                     raw = self._memory.read_host_bytes(chunk_base, chunk_size)
                 except MemoryReadError:
-                    continue             # region shrank or turned unreadable
+                    continue
+                elapsed = max(self._clock() - read_at, SWEEP_GAP_S)
+                low = max(2, int(RATE_LO * elapsed * 0.7))
+                high = int(RATE_HI * elapsed * 1.3) + 1
                 after = np.frombuffer(raw[:len(raw) & ~3], dtype=np.uint32)
                 shared = min(len(before), len(after))
                 delta = (after[:shared].astype(np.int64)
