@@ -61,11 +61,21 @@ def decode_region(ffmpeg: str, clip: Path, region) -> np.ndarray:
 
 
 def icon_change_slots(frames: np.ndarray) -> np.ndarray:
-    """Slots where the icon strip's ink changed hard. Ink = strongly blue
-    (the A icon) or bright grey/white (Z, outlines) -- colours the scenery
-    under the strip rarely wears."""
+    """Slots where the icon strip's ink changed hard.
+
+    Ink = the A icon's HUE-NEUTRAL saturated blue (red ~= green), the Z
+    ball's neutral mid-grey, or bright white (outlines). The hue-neutral
+    clauses are what make this level-proof: WF's water is teal (green-red
+    ~= 31, measured on clip 1170's frames, 2026-08-25) and passed the
+    original bare blue rule on 86% of the region's pixels, so camera
+    motion over water buried the icons -- 195 "icon changes" in a 15 s
+    clip against the ~40 a clip really holds. The icon blue measured
+    (90, 89, 194): red and green within a few counts of each other."""
     red, green, blue = frames[..., 0], frames[..., 1], frames[..., 2]
-    ink = ((blue > 130) & (blue - red > 50)) | \
+    spread = frames.max(axis=-1) - frames.min(axis=-1)
+    darkest = frames.min(axis=-1)
+    ink = ((blue > 130) & (blue - red > 50) & (np.abs(red - green) < 25)) | \
+          ((spread < 15) & (darkest > 85)) | \
           ((red > 170) & (green > 170) & (blue > 170))
     signal = np.count_nonzero(ink, axis=(1, 2)).astype(int)
     return np.flatnonzero(np.abs(np.diff(signal)) > STEP_THRESHOLD) + 1

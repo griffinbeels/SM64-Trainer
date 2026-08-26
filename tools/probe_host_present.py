@@ -39,6 +39,21 @@ ANSWERED 2026-08-23, live during his session: the counter EXISTS.
     the sidecar map reads presents instead of logic edges -- the wobble
     is then IN the data instead of around it. Item 26's pixel reader
     stays parked for console capture, where no process memory exists.
+
+CORRECTED 2026-08-25, by the first SCORED clip: 0xED1F9D4 is an IMPOSTOR.
+Read at 1 kHz it ticks +3 every 100.0 ms -- a 10 Hz FPS-style accumulator,
+not a per-picture event -- which this probe's rate (30.00/s, an average)
+and phase-flip tests (its odd steps alternate parity in runs) could not
+see, and which quantised the shipped map to -1..-8 slots of press error
+against Usamune's own pixels. The discriminators are STEP SIZE and TICK
+GAP: a re-hunt on them found ~40 counters at exactly +1 per frame /
+33.4 ms median gap, in two tick-time families (offset-std 9-22 ms vs the
+logic edges) plus one edge-locked mirror (std 1 ms). Scored against
+footage (attempt 1630's A-icon), every +1/33 ms family beat the fake;
+memory/present.py's classifier now requires that signature and ranks by
+tick-time wander. Lesson recorded: a rate is an average, a phase share is
+a parity trick -- the SHAPE of a counter's individual ticks is the only
+signature that survives contact with an accumulator.
 """
 import ctypes
 import sys

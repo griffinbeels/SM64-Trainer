@@ -1,44 +1,47 @@
-"""The present-counter hunt: find the one host u32 with the probe's signature.
+"""The present-counter hunt: find the one host u32 with the REAL signature.
 
 The world here is simulated end to end -- a fake process memory whose words
-are functions of a simulated clock, so the REAL sweep/confirm/classify code
-runs its whole course in milliseconds. The signature candidates mirror what
-the live probe met (2026-08-23): the true present counter advances one tick
-per game frame with its phase wandering in runs (advance pattern 1,0,2 --
-flip share ~0.33), an emulation mirror advances in lockstep (+1 every
-frame -- flip share ~1.0, rejected), and everything else is static.
+are functions of a simulated clock, so the actual sweep/confirm/classify
+code runs its whole course in milliseconds. The candidates mirror what two
+LIVE hunts met (2026-08-25):
+
+- the TRUE per-present counter advances +1 per game frame, ~33 ms between
+  ticks, with its tick TIMES wandering against the logic clock's edges;
+- a LOCKED mirror carries the same +1/33 ms shape with zero wander -- it
+  is the edge series by another name, acceptable when nothing better
+  exists;
+- the FAKE that the first classifier selected in production: +3 every
+  100 ms, a 10 Hz FPS-style accumulator whose rate and phase look perfect
+  while it quantises the frame map to 100 ms. THE regression here is that
+  it must never win again.
 """
+import math
 import struct
 import time
 
 from sm64_events.memory.base import MemoryReadError
-from sm64_events.memory.present import (COOLDOWN_S, PresentHunter)
+from sm64_events.memory.present import COOLDOWN_S, PresentHunter
 
 REGION_BASE = 0x10000
 REGION_WORDS = 2048
 RDRAM_BASE = 0x9000_0000
 
-WINNER_INDEX = 100        # the wobbling present counter
-MIRROR_INDEX = 200        # a 30/s lockstep mirror of the logic clock
-SLOW_INDEX = 300          # a 10/s counter -- sweep-filtered
-NEARLOCK_INDEX = 400      # 30/s, parity almost never moving -- share ~0.07
+TRUE_INDEX = 100          # +1/33 ms, tick times wandering vs the edges
+LOCKED_INDEX = 200        # +1/33 ms, ticking exactly ON the edges
+FAKE_INDEX = 300          # +3 every 100 ms -- the production impostor
+SLOW_INDEX = 400          # a 10/s counter -- sweep-filtered
 
 
-def nearlock_count(frame: int) -> int:
-    """Rate 30/s with flip share ~0.07: advances (2,0) with a (1,1) pair
-    every 30 frames -- the shape of the five ~29/s heap mirrors the live
-    hunt met at share 0.03-0.04 (2026-08-25), which the wobble floor must
-    reject without help from the rate tiebreak."""
-    cycles, remainder = divmod(frame, 30)
-    full = [2, 0] * 14 + [1, 1]
-    return 3333 + cycles * 30 + sum(full[:remainder])
+def _true_tick_time(tick_index: int) -> float:
+    """Tick n lands past edge n by a wandering 2-14 ms offset."""
+    return tick_index / 30 + 0.008 + 0.006 * math.sin(tick_index / 15)
 
 
-def wobble_count(frame: int) -> int:
-    """Cumulative advance over the pattern (1, 0, 2): rate 30/s, phase
-    against the logic clock wandering in runs -- the probe's signature."""
-    cycles, remainder = divmod(frame, 3)
-    return 7777 + cycles * 3 + (0, 1, 1)[remainder]
+def true_present_count(now: float) -> int:
+    guess = int(now * 30) + 2
+    while guess >= 0 and _true_tick_time(guess) > now:
+        guess -= 1
+    return 7777 + guess + 1
 
 
 class SimClock:
@@ -62,20 +65,21 @@ class FakeHostMemory:
         self.sim = sim
         self.timer_runs = timer_runs
         self.hunt_starts = 0
-        self.winner_offset = WINNER_INDEX     # tests may move it
+        self.live_indices = {TRUE_INDEX, LOCKED_INDEX, FAKE_INDEX, SLOW_INDEX}
 
     def _frame(self) -> int:
         return int(self.sim.now * 30) if self.timer_runs else 0
 
     def _word(self, index: int) -> int:
-        if index == self.winner_offset:
-            return wobble_count(self._frame())
-        if index == MIRROR_INDEX:
-            return 4000 + self._frame()
-        if index == SLOW_INDEX:
-            return 600 + int(self.sim.now * 10)
-        if index == NEARLOCK_INDEX:
-            return nearlock_count(self._frame())
+        if index in self.live_indices:
+            if index == TRUE_INDEX:
+                return true_present_count(self.sim.now)
+            if index == LOCKED_INDEX:
+                return 4000 + self._frame()
+            if index == FAKE_INDEX:
+                return 600 + 3 * int(self.sim.now * 10)
+            if index == SLOW_INDEX:
+                return 90 + int(self.sim.now * 10)
         return (index * 2654435761) & 0xFFFFFFFF
 
     def host_regions(self):
@@ -110,31 +114,47 @@ def run_hunt(hunter) -> None:
         assert not thread.is_alive(), "hunt did not finish"
 
 
-def test_the_hunt_finds_the_wobbling_counter_and_only_it():
+def test_the_hunt_prefers_the_wandering_counter_over_the_locked_mirror():
     sim = SimClock()
     memory = FakeHostMemory(sim)
     hunter = hunter_over(memory, sim)
     run_hunt(hunter)
-    assert hunter.address == REGION_BASE + WINNER_INDEX * 4
-    # And reading it now returns the live value.
-    assert hunter.read() == wobble_count(int(sim.now * 30))
+    assert hunter.address == REGION_BASE + TRUE_INDEX * 4
+    assert hunter.read() == true_present_count(sim.now)
 
 
-def test_a_lockstep_mirror_alone_is_never_accepted():
+def test_the_ten_hz_accumulator_never_wins_again():
+    """The production regression (2026-08-25): 0xED1F9D4 ticked +3 every
+    100 ms, passed the rate and phase bands, and quantised every map it
+    touched to -1..-8 slots of press error. Step size and tick gap are
+    the discriminators no earlier classifier checked."""
     sim = SimClock()
     memory = FakeHostMemory(sim)
-    memory.winner_offset = -1            # world with no true counter
+    memory.live_indices = {FAKE_INDEX, SLOW_INDEX}
     hunter = hunter_over(memory, sim)
     run_hunt(hunter)
     assert hunter.address is None
 
 
-def test_a_counter_inside_rdram_is_out_of_bounds():
-    """gGlobalTimer itself ticks at 30/s; the sweep must never look at the
-    emulated RAM, or the map would key on the thing it wobbles against."""
+def test_a_locked_mirror_alone_is_accepted_as_the_edge_series_by_proxy():
+    """Zero wander means zero display information -- but also zero harm:
+    the map it yields equals the poller's own edge stamps. Scored against
+    footage (attempt 1630's A-icon) it tied the wandering families."""
     sim = SimClock()
     memory = FakeHostMemory(sim)
-    memory.winner_offset = -1
+    memory.live_indices = {LOCKED_INDEX, SLOW_INDEX}
+    hunter = hunter_over(memory, sim)
+    run_hunt(hunter)
+    assert hunter.address == REGION_BASE + LOCKED_INDEX * 4
+
+
+def test_a_counter_inside_rdram_is_out_of_bounds():
+    """gGlobalTimer itself advances once per frame; the sweep must never
+    look at the emulated RAM, or the map would key on the thing it
+    wobbles against."""
+    sim = SimClock()
+    memory = FakeHostMemory(sim)
+    memory.live_indices = {SLOW_INDEX}
     hunter = hunter_over(memory, sim)
     run_hunt(hunter)                     # read_host_bytes asserts on RDRAM
     assert hunter.address is None
@@ -183,14 +203,3 @@ def test_the_default_clock_is_real_time():
     # The injectables exist for tests; production runs on the real clock.
     hunter = PresentHunter(FakeHostMemory(SimClock()), timer_address=0)
     assert hunter._sleep is time.sleep and hunter._clock is time.perf_counter
-def test_a_near_locked_mirror_is_rejected_by_the_wobble_floor():
-    """The live hunt (2026-08-25) met five ~29/s heap counters whose phase
-    barely moved (share 0.03-0.04) beside the true counter's 0.33; the
-    floor must reject them on its own -- a session where such a mirror's
-    rate happens to sit closer to 30 would otherwise pick the mirror."""
-    sim = SimClock()
-    memory = FakeHostMemory(sim)
-    memory.winner_offset = -1            # world holds ONLY the near-lock
-    hunter = hunter_over(memory, sim)
-    run_hunt(hunter)
-    assert hunter.address is None

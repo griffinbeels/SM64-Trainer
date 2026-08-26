@@ -60,17 +60,31 @@ MAX_REGION = 512 * 1024 * 1024   # the probe's cap; bigger is never the heap
 RATE_LO, RATE_HI = 20.0, 45.0    # ticks/s worth keeping during sweep/confirm
 MAX_FINALISTS = 48
 
-# -- classify (the probe's measured verdict bands) ---------------------------
+# -- classify ----------------------------------------------------------------
+# The verdict bands were REBUILT 2026-08-25 after the first live find turned
+# out to be a fake: 0xED1F9D4 -- the address the probe blessed and the first
+# classifier selected -- ticks +3 every 100.0 ms (a 10 Hz FPS-style
+# accumulator), which passes every RATE and PHASE test while quantising the
+# frame map to 100 ms (the scored clip's -1..-8 slot press error). The
+# discriminators that actually separate a per-present counter from every
+# impostor are its STEP SIZE and its TICK GAP: one +1 per picture, ~33 ms
+# apart. Measured live the same day: ~40 heap counters carry that exact
+# signature (steps {1: all}, median gap 33.4 ms) while the fake reads
+# {3: all} at 100 ms and a 60 Hz mirror reads +2 steps.
+#
+# Among the true per-frame counters, rank by TICK-TIME WANDER against the
+# logic clock's own edges: a counter incremented beside gGlobalTimer has
+# offset-std ~1 ms (it IS the edge series by another name -- harmless but
+# informationless), while display-side families measured std 9-22 ms.
+# Scored against footage (attempt 1630's A-icon), every +1/33 ms family
+# beat the fake outright; picking the strongest wanderer keeps whatever
+# display information exists without ever doing worse than the edge series.
 CLASSIFY_S = 12.0
 CLASSIFY_HZ = 250
 MIN_TIMER_EDGES = 120            # fewer = the game barely ran; inconclusive
 VERDICT_RATE_LO, VERDICT_RATE_HI = 24.0, 36.0
-# The wobble floor sits well above near-locked mirrors and well below the
-# true counter: measured live 2026-08-25, the counter read share 0.33 (0xED1F9D4,
-# same as the probe's 2026-08-23 run) while five ~29/s heap mirrors read
-# 0.03-0.04 -- the original 0.03 floor let them through and only the rate
-# tiebreak picked right. 0.10 keeps 3x margin to both sides.
-FLIP_SHARE_LO, FLIP_SHARE_HI = 0.10, 0.6
+STEP_ONE_SHARE = 0.9             # nearly every advance must be exactly +1
+GAP_LO_S, GAP_HI_S = 0.025, 0.042   # median tick gap: one per game frame
 
 COOLDOWN_S = 45.0                # after a failed hunt
 RETRY_AFTER_INVALIDATE_S = 5.0   # after the watchdog kills a stale find
@@ -262,9 +276,10 @@ class PresentHunter:
         return kept
 
     def _classify(self, addresses: list[int]) -> int | None:
-        """The probe's verdict, verbatim: sample every finalist beside
-        gGlobalTimer, then keep the one whose rate sits at the game's and
-        whose phase-flip share lands in the measured wobble band."""
+        """Keep the finalist with the per-present signature -- +1 per tick,
+        one tick per game frame -- ranked by how much its tick TIMES wander
+        against the logic clock's own edges (see the constants block for
+        the live evidence, including the 10 Hz fake this replaced)."""
         samples: list[tuple[float, int, list[int]]] = []
         deadline = self._clock() + CLASSIFY_S
         while self._clock() < deadline:
@@ -280,28 +295,40 @@ class PresentHunter:
         if len(samples) < 2:
             return None
         span_s = samples[-1][0] - samples[0][0]
-        timer_edges = [index for index in range(1, len(samples))
-                       if samples[index][1] == samples[index - 1][1] + 1]
-        if len(timer_edges) < MIN_TIMER_EDGES:
+        edge_times = [samples[index][0] for index in range(1, len(samples))
+                      if samples[index][1] == samples[index - 1][1] + 1]
+        if len(edge_times) < MIN_TIMER_EDGES:
             log.info("present classify: only %d timer edges -- the game "
-                     "barely ran; inconclusive", len(timer_edges))
+                     "barely ran; inconclusive", len(edge_times))
             return None
+        edge_array = np.array(edge_times)
         best: tuple[float, int] | None = None
         for slot, address in enumerate(addresses):
-            first = samples[0][2][slot]
-            last = samples[-1][2][slot]
-            rate = (last - first) / span_s
-            if not (VERDICT_RATE_LO <= rate <= VERDICT_RATE_HI):
+            series = np.array([values[slot] for _t, _f, values in samples],
+                              dtype=np.int64)
+            times = np.array([tick for tick, _f, _v in samples])
+            changed = np.flatnonzero(np.diff(series) != 0) + 1
+            if len(changed) < 8:
                 continue
-            phases = [samples[index][2][slot] % 2 for index in timer_edges]
-            flips = sum(1 for earlier, later in zip(phases, phases[1:])
-                        if earlier != later)
-            share = flips / max(1, len(phases) - 1)
-            if not (FLIP_SHARE_LO <= share <= FLIP_SHARE_HI):
+            steps = np.diff(series)[changed - 1]
+            tick_times = times[changed]
+            gaps = np.diff(tick_times)
+            rate = float(series[-1] - series[0]) / span_s
+            one_share = float(np.mean(steps == 1))
+            median_gap = float(np.median(gaps))
+            if not (VERDICT_RATE_LO <= rate <= VERDICT_RATE_HI
+                    and one_share >= STEP_ONE_SHARE
+                    and GAP_LO_S <= median_gap <= GAP_HI_S):
                 continue
-            distance = abs(rate - 30.0)
-            if best is None or distance < best[0]:
-                best = (distance, address)
-            log.info("present classify: 0x%X rate %.2f/s flip share %.2f",
-                     address, rate, share)
+            # tick-time wander vs the logic edges: 0 = the edge series by
+            # another name (fine); bigger = display-side timing (better).
+            slots_before = np.searchsorted(edge_array, tick_times) - 1
+            valid = slots_before >= 0
+            offsets = tick_times[valid] - edge_array[slots_before[valid]]
+            wander_ms = float(np.std(offsets)) * 1000 if valid.any() else 0.0
+            log.info("present classify: 0x%X rate %.2f/s steps+1 %.0f%% "
+                     "gap %.1f ms wander %.1f ms", address, rate,
+                     one_share * 100, median_gap * 1000, wander_ms)
+            if best is None or wander_ms > best[0]:
+                best = (wander_ms, address)
         return best[1] if best is not None else None
