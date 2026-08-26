@@ -69,9 +69,19 @@ _PRESENT_CEILING = 40                  # presents tick once per game frame
 # corrects it -- and with presents a wrong value is a CONSTANT residual,
 # which is exactly the kind of error a constant can fix (v2's could not).
 PRESENT_LAG_FRAMES = 1
-# A tick is recorded when the 250 Hz poll OBSERVES the counter move, up to
-# one poll interval after the move itself: subtract the mean of that delay.
-PRESENT_OBS_LATENCY_S = 0.002
+# How far a recorded tick's time trails the moment the picture that present
+# produced is STAMPED for capture: the 250 Hz poll observes the counter move
+# up to 4 ms late, and the picture's own capture stamp (WGC composition
+# time) lands up to one 60 Hz refresh after the plugin's present call.
+# Subtracting the sum aligns the lookup with what the pixels actually show.
+# MEASURED END TO END 2026-08-25 on attempt 1952 (the first clip mapped from
+# a true per-frame counter, scored by A-icon template match): all 32 press+
+# release edges within {-2,-1,0} slots, centered at -1 slot = ~17 ms of map
+# lateness -- a CONSTANT, the kind this number exists to absorb. 0.019 =
+# 2 ms mean poll delay + ~17 ms present-to-stamp. Re-measure with the same
+# instrument if the capture architecture changes; the synthetic tests pass
+# their own world's value because their fake capture has no compose stage.
+PRESENT_TICK_TRAIL_S = 0.019
 # A present's picture holds the screen until the next present. Across a
 # derivation gap (a run the run rules dropped) hold at most this long,
 # then let the feed series answer -- a frozen answer seconds stale is a
@@ -91,7 +101,8 @@ _RUN_RATE_LO = 20.0        # a run ticking outside this rate band is not
 _RUN_RATE_HI = 40.0        # the present counter -- refuse it (false find)
 
 
-def derive_present_frames(ticks, min_lag_frames: int = PRESENT_LAG_FRAMES):
+def derive_present_frames(ticks, min_lag_frames: int = PRESENT_LAG_FRAMES,
+                          trail_s: float = PRESENT_TICK_TRAIL_S):
     """Per present tick, the game frame its picture shows.
 
     `ticks` is [(wall, count, timer_or_None)] in wall order -- the poller's
@@ -155,7 +166,7 @@ def derive_present_frames(ticks, min_lag_frames: int = PRESENT_LAG_FRAMES):
                     if last_sound_count is None \
                             or count_value > last_sound_count:
                         break
-                    derived.append((wall - PRESENT_OBS_LATENCY_S,
+                    derived.append((wall - trail_s,
                                     count_value + shift))
         run, known_deltas, delta_base = [], [], None
 
@@ -202,8 +213,12 @@ def _source_label(sources: set[str]) -> str:
 
 
 class FrameClock:
-    def __init__(self, retention_s: float = RETENTION_S, now=time.time):
+    def __init__(self, retention_s: float = RETENTION_S, now=time.time,
+                 present_trail_s: float = PRESENT_TICK_TRAIL_S):
         self._now = now
+        # Injectable so tests model their own world's capture physics; the
+        # shipped default carries the measured value (see the constant).
+        self._present_trail_s = present_trail_s
         self._pairs: deque[tuple[float, int]] = deque(
             maxlen=int(retention_s * _FPS_CEILING))
         # (feed wall time, capture-time RAM frame tag, capture composition
@@ -274,7 +289,7 @@ class FrameClock:
         ticks = [tick for tick in list(self._presents)
                  if start - PRESENT_CONTEXT_S <= tick[0]
                  <= start + duration_s + PRESENT_CONTEXT_S]
-        derived = derive_present_frames(ticks)
+        derived = derive_present_frames(ticks, trail_s=self._present_trail_s)
         derived_walls = [wall for wall, _frame in derived]
         edge_walls = [wall for wall, _frame in pairs]
 

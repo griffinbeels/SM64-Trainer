@@ -19,7 +19,7 @@ from sm64_events.replay.frameclock import (FrameClock, PRESENT_LAG_FRAMES,
 
 
 def clock_at(pairs):
-    clock = FrameClock(now=lambda: 0.0)
+    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002)
     for wall, frame in pairs:
         clock._now = lambda wall=wall: wall
         clock.mark(frame)
@@ -88,7 +88,7 @@ def test_feeds_beat_the_edge_series_and_carry_the_lag_in_frames():
 
 
 def test_a_feeder_stall_holds_the_last_fed_tag_like_ffmpegs_dup_does():
-    clock = FrameClock(now=lambda: 0.0)
+    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002)
     for wall, tag in [(100.0, 1000), (100.0 + 1 / 60, 1001),
                       (100.0 + 10 / 60, 1002)]:      # a 9-slot stall
         clock._now = lambda t=wall: t
@@ -171,7 +171,7 @@ def feed_clip(clock, start: float, slots: int):
 
 
 def test_presents_place_the_wobble_where_the_screen_put_it():
-    clock = FrameClock(now=lambda: 0.0)
+    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002)
     # Ten steady ticks, ten drifted past the next logic edge, ten steady:
     # a shift that appears mid-clip and heals, his second sighting's shape.
     phases = [0.005] * 10 + [0.036] * 10 + [0.005] * 10
@@ -205,7 +205,7 @@ def test_a_represent_train_never_fabricates_frames_past_the_frozen_clock():
     series must refuse those ticks rather than count new frames into
     existence. The last true picture holds for PRESENT_HOLD_S (the screen
     IS frozen), then the feed tags answer."""
-    clock = FrameClock(now=lambda: 0.0)
+    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002)
     truth = build_world(clock, [0.005] * 10)   # frames 999..1008, to 100.305
     # Forty-five more counter ticks (1.5 s) with the logic clock frozen at
     # 1009 -- the frame the game finished and never advanced past.
@@ -230,7 +230,7 @@ def test_a_represent_train_never_fabricates_frames_past_the_frozen_clock():
 
 
 def test_straddled_ticks_still_carry_their_count():
-    clock = FrameClock(now=lambda: 0.0)
+    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002)
     phases = [0.005] * 12
     truth = []
     for tick_index, phase in enumerate(phases):
@@ -250,7 +250,7 @@ def test_straddled_ticks_still_carry_their_count():
 
 
 def test_a_counter_reset_splits_the_run_and_recovers():
-    clock = FrameClock(now=lambda: 0.0)
+    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002)
     truth = build_world(clock, [0.005] * 10)
     # The plugin restarted: the counter starts over at 12, the world (and
     # the logic clock) march on.
@@ -273,7 +273,7 @@ def test_a_counter_reset_splits_the_run_and_recovers():
 def test_without_feeds_presents_answer_by_slot_wall_time():
     """The in-process encoder path has no feed series; presents still beat
     the edge series there, keyed on the slot's own wall time."""
-    clock = FrameClock(now=lambda: 0.0)
+    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002)
     truth = build_world(clock, [0.005] * 20)
     start, slots = 100.1, 12
     got, source = clock.frame_map(utc(start), slots / 60, 60, lag_s=0.0)
@@ -285,6 +285,7 @@ def test_without_feeds_presents_answer_by_slot_wall_time():
 
 def test_presents_that_cover_half_a_clip_yield_a_mixed_map():
     clock = clock_at([(100.0 + n / 30, 1000 + n) for n in range(30)])
+    clock._present_trail_s = 0.002       # this world has no compose stage
     # The hunt landed mid-clip: presents exist only from 100.5 on.
     for offset in range(15):
         wall = 100.5 + offset / 30 + 0.005
@@ -302,3 +303,12 @@ def test_derive_refuses_a_rate_that_is_not_a_present_counter():
     ticks = [(100.0 + offset / 300, COUNT0 + offset,
               world_timer(100.0 + offset / 300)) for offset in range(300)]
     assert derive_present_frames(ticks) == []
+
+
+def test_the_shipped_trail_stays_inside_its_physical_bounds():
+    """The law, not the value (a scored clip re-measures the value): the
+    trail can never be negative -- a tick observed before it happened --
+    and never longer than one poll interval plus one 60 Hz refresh plus
+    slack, because that is the whole chain it models."""
+    from sm64_events.replay.frameclock import PRESENT_TICK_TRAIL_S
+    assert 0.0 <= PRESENT_TICK_TRAIL_S <= 0.030
