@@ -19,7 +19,8 @@ from sm64_events.replay.frameclock import (FrameClock, PRESENT_LAG_FRAMES,
 
 
 def clock_at(pairs):
-    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002)
+    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002,
+                       map_wall_bias_s=0.0)
     for wall, frame in pairs:
         clock._now = lambda wall=wall: wall
         clock.mark(frame)
@@ -88,7 +89,8 @@ def test_feeds_beat_the_edge_series_and_carry_the_lag_in_frames():
 
 
 def test_a_feeder_stall_holds_the_last_fed_tag_like_ffmpegs_dup_does():
-    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002)
+    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002,
+                       map_wall_bias_s=0.0)
     for wall, tag in [(100.0, 1000), (100.0 + 1 / 60, 1001),
                       (100.0 + 10 / 60, 1002)]:      # a 9-slot stall
         clock._now = lambda t=wall: t
@@ -171,7 +173,8 @@ def feed_clip(clock, start: float, slots: int):
 
 
 def test_presents_place_the_wobble_where_the_screen_put_it():
-    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002)
+    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002,
+                       map_wall_bias_s=0.0)
     # Ten steady ticks, ten drifted past the next logic edge, ten steady:
     # a shift that appears mid-clip and heals, his second sighting's shape.
     phases = [0.005] * 10 + [0.036] * 10 + [0.005] * 10
@@ -205,7 +208,8 @@ def test_a_represent_train_never_fabricates_frames_past_the_frozen_clock():
     series must refuse those ticks rather than count new frames into
     existence. The last true picture holds for PRESENT_HOLD_S (the screen
     IS frozen), then the feed tags answer."""
-    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002)
+    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002,
+                       map_wall_bias_s=0.0)
     truth = build_world(clock, [0.005] * 10)   # frames 999..1008, to 100.305
     # Forty-five more counter ticks (1.5 s) with the logic clock frozen at
     # 1009 -- the frame the game finished and never advanced past.
@@ -230,7 +234,8 @@ def test_a_represent_train_never_fabricates_frames_past_the_frozen_clock():
 
 
 def test_straddled_ticks_still_carry_their_count():
-    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002)
+    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002,
+                       map_wall_bias_s=0.0)
     phases = [0.005] * 12
     truth = []
     for tick_index, phase in enumerate(phases):
@@ -250,7 +255,8 @@ def test_straddled_ticks_still_carry_their_count():
 
 
 def test_a_counter_reset_splits_the_run_and_recovers():
-    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002)
+    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002,
+                       map_wall_bias_s=0.0)
     truth = build_world(clock, [0.005] * 10)
     # The plugin restarted: the counter starts over at 12, the world (and
     # the logic clock) march on.
@@ -273,7 +279,8 @@ def test_a_counter_reset_splits_the_run_and_recovers():
 def test_without_feeds_presents_answer_by_slot_wall_time():
     """The in-process encoder path has no feed series; presents still beat
     the edge series there, keyed on the slot's own wall time."""
-    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002)
+    clock = FrameClock(now=lambda: 0.0, present_trail_s=0.002,
+                       map_wall_bias_s=0.0)
     truth = build_world(clock, [0.005] * 20)
     start, slots = 100.1, 12
     got, source = clock.frame_map(utc(start), slots / 60, 60, lag_s=0.0)
@@ -286,6 +293,7 @@ def test_without_feeds_presents_answer_by_slot_wall_time():
 def test_presents_that_cover_half_a_clip_yield_a_mixed_map():
     clock = clock_at([(100.0 + n / 30, 1000 + n) for n in range(30)])
     clock._present_trail_s = 0.002       # this world has no compose stage
+    clock._map_wall_bias_s = 0.0         # ...and no CFR half-slot
     # The hunt landed mid-clip: presents exist only from 100.5 on.
     for offset in range(15):
         wall = 100.5 + offset / 30 + 0.005
@@ -312,3 +320,57 @@ def test_the_shipped_trail_stays_inside_its_physical_bounds():
     slack, because that is the whole chain it models."""
     from sm64_events.replay.frameclock import PRESENT_TICK_TRAIL_S
     assert 0.0 <= PRESENT_TICK_TRAIL_S <= 0.030
+
+
+def test_the_wall_bias_shifts_every_series_exactly_one_slot():
+    """The measured half-slot (attempt 2147: feeds 10/10 at -1, presents
+    25/27 at -1) is absorbed at the ONE place slot walls are computed, so
+    a biased map answers slot k with what the unbiased map answered at
+    k+1 -- for every series."""
+    marks = [(100.0 + n / 30, 1000 + n) for n in range(30)]
+    plain = FrameClock(now=lambda: 0.0, present_trail_s=0.002,
+                       map_wall_bias_s=0.0)
+    biased = FrameClock(now=lambda: 0.0, present_trail_s=0.002,
+                        map_wall_bias_s=1 / 60)
+    for clock in (plain, biased):
+        for wall, frame in marks:
+            clock._now = lambda t=wall: t
+            clock.mark(frame)
+    got_plain, _source = plain.frame_map(utc(100.0), 0.4, 60, lag_s=0.0)
+    got_biased, _source = biased.frame_map(utc(100.0), 0.4, 60, lag_s=0.0)
+    assert got_biased[:-1] == got_plain[1:]
+
+
+def test_two_counters_with_different_phases_derive_the_same_map():
+    """The phase normalization (measured 2026-08-25: two sessions, two
+    family members, seventeen milliseconds of phase between them): with
+    the edge series to anchor on, WHICH counter the hunt picked must not
+    change a single derived time."""
+    edges = [(100.0 + n / 30, 1000 + n) for n in range(30)]
+    def ticks_at(phase, count0):
+        return [(100.0 + n / 30 + phase, count0 + n,
+                 world_timer(100.0 + n / 30 + phase)) for n in range(30)]
+    early = derive_present_frames(ticks_at(0.004, 5000), edge_pairs=edges)
+    late = derive_present_frames(ticks_at(0.021, 9000), edge_pairs=edges)
+    assert len(early) == len(late) == 30
+    for (wall_a, frame_a), (wall_b, frame_b) in zip(early, late):
+        assert frame_a == frame_b
+        assert abs(wall_a - wall_b) < 1e-9
+
+
+def test_normalized_ticks_keep_their_wander():
+    """Anchoring on the run MEDIAN removes the counter's phase, never the
+    per-tick deviation -- the display information presents exist for."""
+    edges = [(100.0 + n / 30, 1000 + n) for n in range(30)]
+    wander = [0.004 + (0.006 if 10 <= n < 20 else 0.0) for n in range(30)]
+    ticks = [(100.0 + n / 30 + wander[n], 5000 + n,
+              world_timer(100.0 + n / 30 + wander[n])) for n in range(30)]
+    derived = derive_present_frames(ticks, edge_pairs=edges)
+    gaps = [b[0] - a[0] for a, b in zip(derived, derived[1:])]
+    assert max(gaps) > 1 / 30 + 0.004      # the wander survived
+    assert min(gaps) < 1 / 30 - 0.004
+
+
+def test_the_shipped_bias_stays_inside_its_physical_bounds():
+    from sm64_events.replay.frameclock import MAP_WALL_BIAS_S
+    assert 0.0 <= MAP_WALL_BIAS_S <= 1 / 30

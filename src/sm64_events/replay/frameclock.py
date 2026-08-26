@@ -82,6 +82,15 @@ PRESENT_LAG_FRAMES = 1
 # instrument if the capture architecture changes; the synthetic tests pass
 # their own world's value because their fake capture has no compose stage.
 PRESENT_TICK_TRAIL_S = 0.019
+# The whole chain answers half a video slot LATE, uniformly: scored sharp
+# (A-icon template) on attempt 2147 (2026-08-25), the feed series put 10/10
+# button edges at exactly -1 slot and edge-normalized presents 25/27 at -1,
+# and his frame-stepped screenshots (attempt 2347) show the same off-by-one
+# at pause. One door absorbs it: every slot's lookup wall shifts forward by
+# one slot, so each slot answers with the series entry the screen actually
+# showed. Applies to all three series -- the constant is a property of the
+# encode chain (capture -> feed -> CFR slotting), not of any one series.
+MAP_WALL_BIAS_S = 1 / 60
 # A present's picture holds the screen until the next present. Across a
 # derivation gap (a run the run rules dropped) hold at most this long,
 # then let the feed series answer -- a frozen answer seconds stale is a
@@ -102,7 +111,8 @@ _RUN_RATE_HI = 40.0        # the present counter -- refuse it (false find)
 
 
 def derive_present_frames(ticks, min_lag_frames: int = PRESENT_LAG_FRAMES,
-                          trail_s: float = PRESENT_TICK_TRAIL_S):
+                          trail_s: float = PRESENT_TICK_TRAIL_S,
+                          edge_pairs=None):
     """Per present tick, the game frame its picture shows.
 
     `ticks` is [(wall, count, timer_or_None)] in wall order -- the poller's
@@ -114,6 +124,18 @@ def derive_present_frames(ticks, min_lag_frames: int = PRESENT_LAG_FRAMES,
     comes from its delta FLOOR (the smallest delta seen at least twice):
     at floor ticks the screen shows the frame the game finished
     `min_lag_frames` earlier, so shift = floor - min_lag_frames.
+
+    `edge_pairs` -- the poller's (wall, frame) edge series -- anchors each
+    run's PHASE: every hunted counter is a different variable incremented
+    at its own point in the frame pipeline, so tick times carry a
+    per-counter offset no global constant can absorb (measured 2026-08-25:
+    session 12's counter and session 13's both centered -1 slot, one at
+    trail 0.002 and one at 0.019 -- seventeen milliseconds of phase
+    between two members of the same family). Normalizing each run by the
+    MEDIAN of (tick wall - the same frame's edge wall) puts every counter
+    on the edge timeline while keeping the per-tick WANDER -- the display
+    information presents exist to carry. A run too short to normalize
+    (fewer than three edge matches) falls back to `trail_s`.
 
     A SUSTAINED delta change is a different regime (a load: logic frozen
     while presents keep ticking, or a counter reset) -- the run closes and
@@ -130,6 +152,16 @@ def derive_present_frames(ticks, min_lag_frames: int = PRESENT_LAG_FRAMES,
     known_deltas: list[tuple[int, int]] = []      # (count, delta) pairs
     delta_base: int | None = None
     outliers: list[tuple[tuple[float, int], int | None]] = []
+    edge_wall_of = {frame: wall for wall, frame in (edge_pairs or [])}
+
+    def run_phase(kept, shift):
+        """The run's tick-to-edge median offset, or None to use trail_s."""
+        offsets = [wall - edge_wall_of[count_value + shift]
+                   for wall, count_value in kept
+                   if count_value + shift in edge_wall_of]
+        if len(offsets) < 3:
+            return None
+        return sorted(offsets)[len(offsets) // 2]
 
     def close_run() -> None:
         nonlocal run, known_deltas, delta_base
@@ -162,12 +194,16 @@ def derive_present_frames(ticks, min_lag_frames: int = PRESENT_LAG_FRAMES,
                     if delta >= floor:
                         last_sound_count = count_value
                         break
+                kept = []
                 for wall, count_value in run:
                     if last_sound_count is None \
                             or count_value > last_sound_count:
                         break
-                    derived.append((wall - trail_s,
-                                    count_value + shift))
+                    kept.append((wall, count_value))
+                phase = run_phase(kept, shift)
+                anchor = phase if phase is not None else trail_s
+                for wall, count_value in kept:
+                    derived.append((wall - anchor, count_value + shift))
         run, known_deltas, delta_base = [], [], None
 
     previous: tuple[float, int] | None = None
@@ -214,11 +250,13 @@ def _source_label(sources: set[str]) -> str:
 
 class FrameClock:
     def __init__(self, retention_s: float = RETENTION_S, now=time.time,
-                 present_trail_s: float = PRESENT_TICK_TRAIL_S):
+                 present_trail_s: float = PRESENT_TICK_TRAIL_S,
+                 map_wall_bias_s: float = MAP_WALL_BIAS_S):
         self._now = now
         # Injectable so tests model their own world's capture physics; the
-        # shipped default carries the measured value (see the constant).
+        # shipped defaults carry the measured values (see the constants).
         self._present_trail_s = present_trail_s
+        self._map_wall_bias_s = map_wall_bias_s
         self._pairs: deque[tuple[float, int]] = deque(
             maxlen=int(retention_s * _FPS_CEILING))
         # (feed wall time, capture-time RAM frame tag, capture composition
@@ -289,7 +327,11 @@ class FrameClock:
         ticks = [tick for tick in list(self._presents)
                  if start - PRESENT_CONTEXT_S <= tick[0]
                  <= start + duration_s + PRESENT_CONTEXT_S]
-        derived = derive_present_frames(ticks, trail_s=self._present_trail_s)
+        window_pairs = [pair for pair in pairs
+                        if start - PRESENT_CONTEXT_S <= pair[0]
+                        <= start + duration_s + PRESENT_CONTEXT_S]
+        derived = derive_present_frames(ticks, trail_s=self._present_trail_s,
+                                        edge_pairs=window_pairs)
         derived_walls = [wall for wall, _frame in derived]
         edge_walls = [wall for wall, _frame in pairs]
 
@@ -312,7 +354,7 @@ class FrameClock:
             at = 0
             current: tuple[float, int | None, float | None] | None = None
             for index in range(slot_count):
-                wall = start + (index + 0.5) / fps
+                wall = start + (index + 0.5) / fps + self._map_wall_bias_s
                 while at < len(feeds) and feeds[at][0] <= wall:
                     current = feeds[at]
                     at += 1
@@ -341,7 +383,7 @@ class FrameClock:
                 or start - lag_s > pairs[-1][0]):
             return None
         for index in range(slot_count):
-            wall = start + (index + 0.5) / fps
+            wall = start + (index + 0.5) / fps + self._map_wall_bias_s
             frame = from_presents(wall)
             if frame is not None:
                 sources.add("presents")

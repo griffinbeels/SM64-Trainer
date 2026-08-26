@@ -117,8 +117,11 @@ def test_the_sidecar_carries_the_frame_map_and_a_save_keeps_it(tmp_path):
     # first marked frame's picture (None, honestly), and the last slot shows
     # the frame the game finished DISPLAY_LAG_FRAMES earlier.
     from sm64_events.replay.service import DISPLAY_LAG_FRAMES
+    # The wall bias (frameclock.MAP_WALL_BIAS_S, the measured half-slot the
+    # whole encode chain answers late by) shifts every slot's answer one
+    # slot earlier than the raw edge arithmetic would say.
     assert fm[0] is None and fm[2] == 7000
-    assert fm[-1] == 7000 + 17 * 30 - 1 - DISPLAY_LAG_FRAMES
+    assert fm[-1] == 7000 + 17 * 30 - 1 - DISPLAY_LAG_FRAMES + 1
     ordered = [frame for frame in fm if frame is not None]
     assert ordered == sorted(ordered)
     # ...and names the series that answered (edge marks only here), so the
