@@ -155,7 +155,19 @@ def derive_present_frames(ticks, min_lag_frames: int = PRESENT_LAG_FRAMES,
     edge_wall_of = {frame: wall for wall, frame in (edge_pairs or [])}
 
     def run_phase(kept, shift):
-        """The run's tick-to-edge median offset, or None to use trail_s."""
+        """The run's tick-to-edge median offset, or None to use trail_s.
+
+        This measures a tick against the LOGIC EDGE of the frame the tick's
+        picture shows, so it necessarily carries the display lag as well as
+        the counter's own pipeline offset -- and the caller subtracts only
+        the counter's half. Subtracting the whole thing places every
+        picture at the moment the game FINISHED it rather than the moment
+        the screen showed it, which is a map exactly `min_lag_frames`
+        ahead of the footage (measured 2026-08-26 on his BitFS clip: 2
+        slots ahead in 6 of 7 windows, by glyph-weighted fit of Usamune's
+        own stick digits -- and visible to him as the panel naming a frame
+        two or three ahead of the screen).
+        """
         offsets = [wall - edge_wall_of[count_value + shift]
                    for wall, count_value in kept
                    if count_value + shift in edge_wall_of]
@@ -201,7 +213,11 @@ def derive_present_frames(ticks, min_lag_frames: int = PRESENT_LAG_FRAMES,
                         break
                     kept.append((wall, count_value))
                 phase = run_phase(kept, shift)
-                anchor = phase if phase is not None else trail_s
+                # Keep the display lag the shift already assumed: the phase
+                # is (display lag + this counter's own offset), and only
+                # the counter's half is ours to remove. See run_phase.
+                anchor = (phase - min_lag_frames / GAME_FPS
+                          if phase is not None else trail_s)
                 for wall, count_value in kept:
                     derived.append((wall - anchor, count_value + shift))
         run, known_deltas, delta_base = [], [], None

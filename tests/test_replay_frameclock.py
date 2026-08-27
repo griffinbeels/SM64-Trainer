@@ -374,3 +374,41 @@ def test_normalized_ticks_keep_their_wander():
 def test_the_shipped_bias_stays_inside_its_physical_bounds():
     from sm64_events.replay.frameclock import MAP_WALL_BIAS_S
     assert 0.0 <= MAP_WALL_BIAS_S <= 1 / 30
+
+
+def test_a_normalized_run_lands_on_the_PICTURE_time_not_the_logic_time():
+    """The hole that shipped the 2026-08-26 defect: every present test
+    either had no edge series (so normalization never ran) or only
+    compared two counters against each other, so nothing asserted where a
+    normalized run lands in ABSOLUTE time. It landed on the game's own
+    logic edge -- the moment the frame was FINISHED -- which is one
+    display lag before the screen showed it, and made the panel name a
+    frame ahead of the picture beside it.
+
+    The world states the physics: frame f finishes at E(f); its picture
+    reaches the screen DISPLAY_LAG later; the counter ticks a further
+    per-counter offset after that. What the derivation must return is the
+    PICTURE time and the frame that picture shows.
+    """
+    from sm64_events.replay.frameclock import PRESENT_LAG_FRAMES
+    display_lag = PRESENT_LAG_FRAMES / 30
+    counter_offset = 0.012            # this counter's own pipeline place
+    edges = [(100.0 + n / 30, 1000 + n) for n in range(40)]
+    edge_wall = dict((frame, wall) for wall, frame in edges)
+
+    truth, ticks = [], []
+    for index in range(30):
+        shown = 1000 + index
+        picture_at = edge_wall[shown] + display_lag
+        tick_at = picture_at + counter_offset
+        logic_now = 1000 + int((tick_at - 100.0) * 30 + 1e-9)
+        truth.append((picture_at, shown))
+        ticks.append((tick_at, 7000 + index, logic_now))
+
+    derived = derive_present_frames(ticks, edge_pairs=edges)
+    assert len(derived) == len(truth)
+    for (got_wall, got_frame), (want_wall, want_frame) in zip(derived, truth):
+        assert got_frame == want_frame
+        assert abs(got_wall - want_wall) < 1e-9, (
+            "a normalized present must sit at the moment the SCREEN showed "
+            "the picture, never at the moment the game finished it")

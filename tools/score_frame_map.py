@@ -12,19 +12,26 @@ Reads the clip + sidecar from data/replay_buffer/clips/ (or --clip/--sidecar
 for a saved file) and the track straight from data/tracker.db. No server, no
 emulator.
 
-WHY BUTTON ICONS, not the stick digits (measured on clip 741, 2026-08-23):
-his stick moves nearly every frame, so digit changes saturate the axis (892
-changes over 979 slots) and any alignment matches trivially. Button icons
-appear and vanish ~40 times a clip -- sharp, sparse, unambiguous. The icon
-strip's location is measured for a 1600x1224 capture and scaled by width for
-other sizes; --region overrides it when the scaling guess is wrong (LOOK at
-a probe frame before trusting a verdict on a new capture size).
+TWO INSTRUMENTS, and the VERDICT is the first one (`glyph_offset`): fit
+Usamune's own STICK DIGITS. Its ink per slot is a rich per-frame value, so
+predicting it from the track at each candidate offset and keeping the best
+fit gives one signed number -- how many slots the map is out, 0 being the
+goal. The button-icon histogram below it survives as per-event detail.
 
-THE VERDICT this tool produced on 2026-08-23 (clip 741, map v1 -- the
-poller-edge stamp + constant lag): residuals spread over -3..+3 slots in
-BOTH directions within one clip, no drift. That measurement is what forced
-map v2 (capture-time tagging through the feeder, replay/frameclock.py) --
-a constant cannot fix a two-sided error.
+That is a REVERSAL, and the reason is worth keeping. Until 2026-08-26 this
+docstring argued the opposite: stick digits saturate (892 changes over 979
+slots) so digit CHANGES cannot align anything, while button icons are
+sparse and sharp. The first half is still true and the conclusion was
+still wrong -- saturation only rules out change-EVENTS, and the icons'
+region mask cannot tell icon ink from moving scenery (700 "icon changes"
+in a 28 s clip against the ~40 a clip holds), so the sparse instrument was
+the noisy one. It manufactured two-sided wobble; every verdict it gave
+before 2026-08-26 is suspect for that reason, including the "+-1 both
+ways" reading of clip 741 that argued a constant could not fix v1.
+
+Both regions are measured for a 1600x1224 capture and scaled by width;
+--region overrides the icon strip when the scaling guess is wrong (LOOK at
+a probe frame before trusting a verdict on a new capture size).
 """
 import argparse
 import json
@@ -108,6 +115,97 @@ def map_button_changes(sidecar: dict, db: Database, attempt_id: int) -> list[int
             and pads[k] != pads[k - 1]]
 
 
+# Usamune's STICK READOUT, measured on a 1600x1224 clip (2026-08-26) and
+# scaled by width like the icon strip: two lines, "U84" over "R70", drawn in
+# the same fiery HUD font. THE primary instrument -- see glyph_offset.
+DIGIT_REGION_AT_1600 = (60, 900, 420, 260)
+GLYPHS = list("0123456789UDLR")
+
+
+def glyph_composition(frame) -> np.ndarray:
+    """Which glyphs Usamune draws for this frame's stick, as counts.
+
+    An axis at rest draws a bare "0"; otherwise a direction letter and the
+    magnitude's digits -- so "U84" over "R70" is six glyphs and "U84" over
+    "0" is four.
+    """
+    row = np.zeros(len(GLYPHS))
+    for value, positive, negative in ((frame.stick_y, "U", "D"),
+                                      (frame.stick_x, "R", "L")):
+        value = int(value)
+        text = ("0" if value == 0
+                else (positive if value > 0 else negative) + str(abs(value)))
+        for character in text:
+            row[GLYPHS.index(character)] += 1
+    return row
+
+
+def glyph_offset(ffmpeg: str, clip: Path, region, frame_map, db: Database,
+                 attempt_id: int, span: int = 8):
+    """How many video slots the map is out, by fitting Usamune's own stick
+    digits -- the sharpest instrument this project has.
+
+    The stick moves nearly every frame, which makes digit CHANGES useless
+    for alignment (they saturate) and makes digit INK ideal for it: each
+    slot's lit-pixel count is a rich, per-frame value. Predict that count
+    from the track (a per-glyph ink weight, least-squares) at every
+    candidate offset and keep the best fit -- a wrong offset predicts the
+    wrong digits and fits worse. Returns (offset_in_slots, r2_by_offset).
+
+    Negative = the map runs AHEAD of the footage (it names a frame the
+    screen has not reached); positive = behind. Zero is the goal.
+
+    Why this replaced the button-icon histogram as the verdict: the icon
+    method's region mask counted moving scenery as icon ink (372 "icon
+    changes" in a 15 s clip against the ~40 a clip holds), which
+    manufactured two-sided wobble and made a clean constant look like
+    noise -- v2's historical "+-1 both ways" verdict is suspect for that
+    reason.
+    """
+    attempt = next((a for a in db.attempts() if a.id == attempt_id), None)
+    if attempt is None:
+        raise SystemExit(f"no attempt {attempt_id} in this db")
+    track = track_for_attempt(db.inputs, attempt)
+    seams = stretches(track)
+    by_axis = {axis: glyph_composition(frame)
+               for axis, frame in capture_axis(track)}
+    x, y, w, h = region
+    pixels = decode_region(ffmpeg, clip, region)
+    red, blue = pixels[..., 0], pixels[..., 2]
+    # The digits are SATURATED fire; the walls and floors behind them are
+    # not (a brown brick measured (121, 84, 42), a blue water tile (88,
+    # 119, 189)) -- both fail `red > 200`.
+    ink = ((red > 200) & (blue < 90) & (red - blue > 120)).sum(axis=(1, 2))
+    ink = ink.astype(float)
+
+    def row_at(slot):
+        if slot < 0 or slot >= len(frame_map):
+            return None
+        raw = frame_map[slot]
+        if raw is None:
+            return None
+        axis = axis_of(raw, seams)
+        return by_axis.get(axis) if axis is not None else None
+
+    scores = {}
+    for offset in range(-span, span + 1):
+        rows, targets = [], []
+        for slot in range(len(ink)):
+            row = row_at(slot + offset)
+            if row is not None:
+                rows.append(row)
+                targets.append(ink[slot])
+        if len(targets) < 200:
+            continue
+        design, target = np.array(rows), np.array(targets)
+        weights, *_ = np.linalg.lstsq(design, target, rcond=None)
+        residual = target - design @ weights
+        scores[offset] = 1 - float(residual.var() / target.var())
+    if not scores:
+        return None, {}
+    return max(scores, key=scores.get), scores
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--attempt", type=int, required=True)
@@ -139,6 +237,27 @@ def main() -> int:
         scale = width / 1600
         region = tuple(round(v * scale) for v in ICON_REGION_AT_1600)
 
+    frame_map = sidecar.get("frame_map")
+    if not frame_map:
+        raise SystemExit("this clip's sidecar carries no frame_map -- it was "
+                         "cut before the frame clock existed (or coverage "
+                         "was missing); there is nothing to score")
+    digit_region = tuple(round(v * (region[2] / ICON_REGION_AT_1600[2]))
+                         for v in DIGIT_REGION_AT_1600)
+    best, curve = glyph_offset(ffmpeg, clip, digit_region, frame_map,
+                               Database(Path(args.db)), args.attempt)
+    print(f"map source: {sidecar.get('frame_map_source', 'unknown')}")
+    if best is None:
+        print("stick digits unreadable in this clip -- no verdict")
+    else:
+        ordered = sorted(curve.values())
+        print(f"VERDICT: the map is {best:+d} slots "
+              f"({best / 2:+.1f} game frames) out; 0 is the goal. "
+              f"[negative = ahead of the footage]")
+        print(f"  fit {curve[best]:.4f} vs next best {ordered[-2]:.4f}; "
+              f"curve " + " ".join(f"{off:+d}:{curve[off]:.3f}"
+                                   for off in sorted(curve)))
+    print()
     frames = decode_region(ffmpeg, clip, region)
     display = icon_change_slots(frames)
     changes = map_button_changes(sidecar, Database(Path(args.db)),
@@ -147,8 +266,6 @@ def main() -> int:
     # counter), "feeds" = v2 (capture tags through the feeder), "edges" = v1.
     # A verdict means nothing without this line -- the same clip scores a
     # different map depending on what the clock held at extraction.
-    source = sidecar.get("frame_map_source", "unknown (pre-source sidecar)")
-    print(f"map source: {source}")
     print(f"{len(frames)} slots; {len(display)} display icon-changes; "
           f"{len(changes)} map button-changes")
     if not changes or not len(display):
