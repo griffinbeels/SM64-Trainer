@@ -610,3 +610,52 @@ def test_a_broken_aligner_never_costs_the_clip(tmp_path):
     svc.map_aligner = explode
     res = svc.view(42)
     assert res["frame_map"] is not None and res["frame_map"][2] == 7000
+
+
+def test_a_short_lead_in_is_not_a_warning_but_a_late_start_is(tmp_path):
+    """2026-08-28: "there's also this warning for 'starts mid attempt' --
+    but... I just reset as normal? What does this even mean?" `truncated`
+    only says the ring could not serve the whole PADDED span, which is
+    usually a shorter run-up with the attempt entirely present. The
+    question worth asking him is whether the clip starts after the ATTEMPT
+    did, and the timestamps answer that outright."""
+    class ShortLeadIn(FakeExtractor):
+        def extract(self, ring, start, end, out_path):
+            res = super().extract(ring, start, end, out_path)
+            return ClipResult(path=res.path, duration_s=res.duration_s - 1.5,
+                              truncated=True,
+                              start_utc=start + timedelta(seconds=1.5))
+
+    svc = make_service(tmp_path, [attempt()])
+    svc.extractor = ShortLeadIn()
+    res = svc.view(42)
+    assert res["truncated"] is True          # the ring really was short
+    assert res["starts_mid_attempt"] is False, (
+        "1.5 s off a 3 s lead-in leaves the whole attempt in the clip")
+    assert res["ends_early"] is False
+
+
+def test_a_clip_that_really_starts_after_the_anchor_says_so(tmp_path):
+    class Late(FakeExtractor):
+        def extract(self, ring, start, end, out_path):
+            res = super().extract(ring, start, end, out_path)
+            return ClipResult(path=res.path, duration_s=res.duration_s - 5,
+                              truncated=True,
+                              start_utc=start + timedelta(seconds=5))
+
+    svc = make_service(tmp_path / "late", [attempt()])
+    svc.extractor = Late()
+    assert svc.view(42)["starts_mid_attempt"] is True
+
+
+def test_a_clip_cut_off_before_the_finish_says_that_instead(tmp_path):
+    class Stops(FakeExtractor):
+        def extract(self, ring, start, end, out_path):
+            res = super().extract(ring, start, end, out_path)
+            return ClipResult(path=res.path, duration_s=6.0,
+                              truncated=True, start_utc=start)
+
+    svc = make_service(tmp_path / "stops", [attempt()])
+    svc.extractor = Stops()
+    res = svc.view(42)
+    assert res["starts_mid_attempt"] is False and res["ends_early"] is True

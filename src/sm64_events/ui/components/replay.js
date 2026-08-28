@@ -127,8 +127,11 @@ export function ReplayPlayer({ attemptId, onCompare, onVideoEl, onView }) {
 
   return html`<div class="replay-player">
     <div class="replay-status-row">
-      ${state.truncated && html`<span class="replay-notice warning">
+      ${state.starts_mid_attempt && html`<span class="replay-notice warning">
         <${Icon} name="clock" size=${14} /> Starts mid-attempt
+      </span>`}
+      ${state.ends_early && html`<span class="replay-notice warning">
+        <${Icon} name="clock" size=${14} /> Ends before the finish
       </span>`}
       ${state.source === "saved" && html`<span class="replay-notice">
         <${Icon} name="save" size=${14} /> Playing saved replay

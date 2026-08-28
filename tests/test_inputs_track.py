@@ -20,6 +20,7 @@ class FakeAttempt:
     ended_utc: str = LATER
     anchor_frame: int | None = None
     rta_frames: int | None = None
+    igt_frames: int | None = None
     segment_id: int | None = None
     course_id: int | None = None
     star_id: int | None = None
@@ -104,3 +105,77 @@ def test_the_track_runs_THROUGH_the_first_star_grab_frame(tmp_path):
 def test_an_attempt_with_no_grab_after_its_close_ends_at_the_close(store):
     got = track_for_attempt(store, FakeAttempt(anchor_frame=102, rta_frames=3))
     assert [number for number, _f in got] == [102, 103, 104, 105]
+
+
+def test_the_track_is_as_long_as_the_attempts_own_time(tmp_path):
+    """His report, 2026-08-28: the timeline read 13"50 where the row above
+    it read 13"56 -- "It should be IDENTICAL in length. The PB timing
+    should exactly match the input display."
+
+    The span used to run from OUR anchor, so its length was our RTA while
+    the row showed Usamune's IGT: two clocks that disagree by a frame or
+    two on nearly every run (measured over 90 of his successes -- exactly
+    one frame off the RTA on 82 of them, -1..+2 off the IGT). Usamune's
+    number is the graded one, so the track is cut to it.
+    """
+    db = Database(tmp_path / "t.db")
+    rollout = InputFrame(0xC000, 0, -45, 75, 0x010008A6)
+    grab = InputFrame(0xC000, 0, -45, 75, A.ACT_FALL_AFTER_STAR_GRAB)
+    db.inputs.append(db.insert_session(AT),
+                     [(90 + step, rollout) for step in range(30)]
+                     + [(120, grab)], AT, LATER)
+    # Usamune counted 22 frames; our own anchor-to-close delta says 20.
+    got = track_for_attempt(db.inputs, FakeAttempt(
+        anchor_frame=100, rta_frames=20, igt_frames=22))
+    numbers = [number for number, _f in got]
+    assert numbers[-1] == 120
+    assert got[-1][1].action == A.ACT_FALL_AFTER_STAR_GRAB
+    assert numbers[-1] - numbers[0] + 1 == 22, (
+        "the track must be exactly as long as the time on the row")
+
+
+def test_without_a_usamune_time_the_track_still_runs_from_the_anchor(store):
+    """A reset has no IGT of its own -- nothing to match, so the older rule
+    stands and the track starts where we saw the attempt begin."""
+    got = track_for_attempt(store, FakeAttempt(anchor_frame=102, rta_frames=3))
+    assert [number for number, _f in got] == [102, 103, 104, 105]
+
+
+def test_a_neighbouring_chunk_is_reachable_when_the_attempt_needs_it(tmp_path):
+    """A chunk is up to ten seconds of capture, so an attempt's own first or
+    last frames routinely sit in a chunk whose wall-clock window does not
+    overlap the attempt at all. His attempt 516 wanted one frame earlier
+    than the query returned and 2317 wanted 35 later; both existed."""
+    db = Database(tmp_path / "t.db")
+    session = db.insert_session(AT)
+    before = "2026-08-20T20:59:50+00:00"
+    db.inputs.append(session, [(90 + n, InputFrame(0, 0, 0, 0))
+                               for n in range(10)], before, before)
+    db.inputs.append(session, [(100 + n, InputFrame(0, 0, 0, 0))
+                               for n in range(10)], AT, LATER)
+    after = "2026-08-20T21:00:20+00:00"
+    db.inputs.append(session, [(110 + n, InputFrame(0, 0, 0, 0))
+                               for n in range(10)], after, after)
+    got = track_for_attempt(db.inputs, FakeAttempt(
+        anchor_frame=100, rta_frames=14, igt_frames=20))
+    numbers = [number for number, _f in got]
+    assert numbers[0] == 95 and numbers[-1] == 114, (
+        "the trim must be able to reach into the chunks on either side")
+    assert len(numbers) == 20
+
+
+def test_a_console_reset_inside_the_widened_window_is_not_crossed(tmp_path):
+    """The counter restarts on a console reset, so numbers repeat within a
+    session -- the widened search must never pull a frame from the other
+    side of one just because its number lands in range."""
+    db = Database(tmp_path / "t.db")
+    session = db.insert_session(AT)
+    before = "2026-08-20T20:59:50+00:00"
+    db.inputs.append(session, [(1000 + n, InputFrame(0, 0, 0, 0))
+                               for n in range(10)], before, before)
+    db.inputs.append(session, [(100 + n, InputFrame(0, 0, 0, 0))
+                               for n in range(20)], AT, LATER)
+    got = track_for_attempt(db.inputs, FakeAttempt(
+        anchor_frame=100, rta_frames=14, igt_frames=20))
+    numbers = [number for number, _f in got]
+    assert min(numbers) >= 100, "a pre-reset frame must never enter the track"

@@ -313,10 +313,47 @@ class ReplayService:
                 "truncated": m.get("truncated", False),
                 "fps": m.get("fps", self.cfg.fps), "game_fps": GAME_FPS,
                 "source": source,
+                **self._coverage_notices(a, m),
                 "anchor_offset_s": self._anchor_offset(a, m),
                 "frame_map": m.get("frame_map"),
                 "frame_map_source": m.get("frame_map_source"),
                 "saved_path": str(saved) if saved is not None else None}
+
+    # A frame and a half of slack: the clip's own first-frame stamp and the
+    # attempt's anchor are read off two clocks, so a hair of disagreement is
+    # normal and must not raise an alarm.
+    _COVERAGE_SLACK_S = 0.05
+
+    def _coverage_notices(self, a, meta: dict) -> dict:
+        """Whether the clip is missing any of the ATTEMPT, told apart from
+        the ordinary case of a short lead-in.
+
+        `truncated` only says the ring could not serve the whole PADDED
+        span, which is usually just less than the three seconds of run-up --
+        the attempt itself entirely present. Drawing "Starts mid-attempt"
+        off that flag put a warning on an ordinary reset and read as a
+        defect: "but... I just reset as normal? What does this even mean?
+        This seems wrong to me" (2026-08-28). The honest question is
+        whether the clip starts after the attempt did, and the timestamps
+        answer it outright.
+        """
+        start = meta.get("start_utc")
+        duration = meta.get("duration_s")
+        if start is None or duration is None:
+            # A sidecar from before start_utc existed cannot be asked; the
+            # coarse flag is all there is, and it is what shipped.
+            return {"starts_mid_attempt": bool(meta.get("truncated")),
+                    "ends_early": False}
+        clip_start = _parse_utc(start)
+        clip_end = clip_start + timedelta(seconds=duration)
+        began = _parse_utc(a.started_utc)
+        ended = _parse_utc(a.ended_utc) if a.ended_utc else None
+        return {
+            "starts_mid_attempt":
+                (clip_start - began).total_seconds() > self._COVERAGE_SLACK_S,
+            "ends_early": (ended is not None and (ended - clip_end)
+                           .total_seconds() > self._COVERAGE_SLACK_S),
+        }
 
     def _align_to_the_footage(self, meta: dict, clip: Path, attempt) -> None:
         """Shift the fresh map onto what the clip's own pixels show.
