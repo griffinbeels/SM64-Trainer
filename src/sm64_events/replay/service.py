@@ -131,6 +131,12 @@ class ReplayService:
     #: 2026-08-28 and what four rounds of live checks found wrong.
     map_aligner = None
 
+    #: Holds the map to ONE answer per distinct picture in the footage
+    #: (`replay/mapalign.py::quantised`). Injected like the aligner, and
+    #: independent of it: a clip whose display cannot be read still gets
+    #: this, because it needs nothing but the pictures.
+    map_quantiser = None
+
     def __init__(self, cfg: ReplayConfig, recorder, extractor, tracker,
                  revealer=None, frame_clock=None):
         self.cfg = cfg
@@ -355,6 +361,38 @@ class ReplayService:
                            .total_seconds() > self._COVERAGE_SLACK_S),
         }
 
+    def _hold_one_answer_per_picture(self, meta: dict, clip: Path) -> None:
+        """One timeline frame per PICTURE, however many video frames it
+        occupies.
+
+        A 30 fps game captured at 60 gives two video frames per picture,
+        and the capture's jitter makes it one or three often enough to
+        see -- measured on his clip 4374: 397 runs of two against 11 of
+        one and 13 longer. A map built from CLOCKS crosses those runs
+        wherever its boundaries fall half a frame off the pictures', so
+        stepping forward showed the same picture with a different pad
+        beside it. His ruling: "if there's duplicated frames, input
+        timeline should be identical for the sequential duplicated
+        frames." The runs supply the boundaries; the map still supplies
+        the advance, because a count-based map would drift by however
+        many game frames the capture missed.
+        """
+        if self.map_quantiser is None:
+            return
+        try:
+            held = self.map_quantiser(clip, meta["frame_map"])
+        except Exception:
+            log.exception("picture-run quantising failed; map left as built")
+            return
+        if held is None:
+            return
+        moved = sum(1 for was, now in zip(meta["frame_map"], held)
+                    if was != now)
+        meta["frame_map"] = held
+        meta["frame_map_quantised"] = True
+        log.info("frame map held to one answer per picture: %d slots moved",
+                 moved)
+
     def _align_to_the_footage(self, meta: dict, clip: Path, attempt) -> None:
         """Shift the fresh map onto what the clip's own pixels show.
 
@@ -367,6 +405,7 @@ class ReplayService:
         the file instead of by eye. No aligner, no display in the footage,
         or no clear winner: the map stands as built and says so.
         """
+        self._hold_one_answer_per_picture(meta, clip)
         if self.map_aligner is None:
             return
         try:

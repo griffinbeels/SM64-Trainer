@@ -143,3 +143,113 @@ def test_the_region_scales_with_the_capture():
     assert mapalign.region_for_width(1600) == mapalign.DIGIT_REGION_AT_1600
     half = mapalign.region_for_width(800)
     assert half == tuple(round(v / 2) for v in mapalign.DIGIT_REGION_AT_1600)
+
+
+# --- one answer per PICTURE (his ruling, 2026-08-28) -------------------------
+
+def grey_of(runs):
+    """A fake decoded clip: `runs` is a list of (brightness, length)."""
+    rows = []
+    for value, length in runs:
+        rows.extend([[value] * 40] * length)
+    return np.array(rows, dtype=np.uint8)
+
+
+def test_picture_runs_find_each_distinct_picture():
+    grey = grey_of([(0, 2), (60, 3), (120, 1), (200, 2)])
+    assert mapalign.picture_runs(grey) == [(0, 2), (2, 3), (5, 1), (6, 2)]
+
+
+def test_an_empty_clip_has_no_runs():
+    assert mapalign.picture_runs(np.zeros((0, 40), dtype=np.uint8)) == []
+
+
+def test_every_video_frame_of_one_picture_answers_the_same():
+    """His ruling: "if there's duplicated frames, input timeline should be
+    identical for the sequential duplicated frames." Measured on his clip
+    4374: 257 pictures carried two different timeline frames before this,
+    and none after."""
+    runs = [(0, 2), (2, 3), (5, 2)]
+    held = mapalign.quantised([10, 10, 11, 11, 12, 13, 13], runs)
+    for start, length in runs:
+        window = {held[slot] for slot in range(start, start + length)}
+        assert len(window) == 1, "a picture must carry exactly one answer"
+
+
+def test_the_map_still_supplies_the_advance_across_a_missed_frame():
+    """The runs give BOUNDARIES, never the count. Numbering pictures
+    consecutively would drift by every game frame the capture missed --
+    428 pictures for ~478 frames on his clip, so a counted map would end
+    fifty frames adrift."""
+    runs = [(0, 2), (2, 2), (4, 2)]
+    #                     the capture missed 101 entirely
+    held = mapalign.quantised([100, 100, 102, 102, 103, 103], runs)
+    assert held == [100, 100, 102, 102, 103, 103]
+
+
+def test_a_map_already_holding_per_picture_is_left_alone():
+    runs = [(0, 2), (2, 2)]
+    already = [7, 7, 8, 8]
+    assert mapalign.quantised(already, runs) == already
+
+
+def test_a_split_picture_takes_the_later_frame():
+    """A run whose slots disagree evenly is a boundary the clock put half a
+    frame off; the picture is the newer of the two, because the map is
+    catching up to it rather than running ahead of it."""
+    assert mapalign.quantised([4, 5], [(0, 2)]) == [5, 5]
+
+
+def test_slots_the_map_could_not_answer_stay_unanswered():
+    held = mapalign.quantised([None, None, 9, 9], [(0, 2), (2, 2)])
+    assert held[:2] == [None, None] and held[2:] == [9, 9]
+
+
+def test_consecutive_pictures_are_consecutive_frames():
+    """The second half of his ruling, found by stepping: holding the
+    boundaries alone left the map's own irregular advance untouched, so on
+    his clip 4441 three different pictures all read frame 7 and the next
+    jumped to 9 -- 230 pictures sharing a frame with the next, 225 skipping
+    one. After this: zero shared, 1,157 of 1,163 advancing by exactly one."""
+    runs = [(0, 2), (2, 2), (4, 2), (6, 2), (8, 2)]
+    held = mapalign.quantised([7, 7, 7, 7, 7, 7, 9, 9, 10, 10], runs)
+    seen = [held[start] for start, _length in runs]
+    assert all(later > earlier for earlier, later in zip(seen, seen[1:])), (
+        f"every picture must advance the frame: {seen}")
+
+
+def test_a_frame_the_capture_missed_is_still_a_step_of_two():
+    """Rising by MORE is allowed where the map says so -- the capture
+    really does miss frames (1,230 pictures for ~1,326 game frames on his
+    clip), and forcing a step of exactly one would end the clip ninety-six
+    frames adrift."""
+    runs = [(0, 2), (2, 2), (4, 2), (6, 2)]
+    held = mapalign.quantised([10, 10, 11, 11, 20, 20, 21, 21], runs)
+    seen = [held[start] for start, _length in runs]
+    assert seen[-1] - seen[0] >= 9, f"the map's own advance must survive: {seen}"
+
+
+def test_the_correction_moves_each_picture_as_little_as_the_rule_allows():
+    """A clip that already obeys the rule is left exactly as it is."""
+    runs = [(0, 2), (2, 2), (4, 2)]
+    already = [5, 5, 6, 6, 7, 7]
+    assert mapalign.quantised(already, runs) == already
+
+
+def test_rising_is_the_nearest_non_decreasing_series():
+    assert mapalign._rising([1.0, 2.0, 3.0]) == [1.0, 2.0, 3.0]
+    # a dip is pooled with its neighbours into their shared mean
+    assert mapalign._rising([1.0, 5.0, 3.0]) == [1.0, 4.0, 4.0]
+    assert mapalign._rising([]) == []
+
+
+def test_a_dip_splits_the_difference_rather_than_dragging_the_clip_up():
+    """WHY the correction is a least-squares fit and not a walk that just
+    bumps each picture past its predecessor. A map that dips -- 10 then 9
+    then 11 -- is evidence about all three pictures, so the answer sits
+    between them (9, 10, 11). Bumping alone would read the first value as
+    gospel and shove everything after it upward (10, 11, 12), moving every
+    later picture in the clip to satisfy one bad reading."""
+    runs = [(0, 2), (2, 2), (4, 2)]
+    held = mapalign.quantised([10, 10, 9, 9, 11, 11], runs)
+    assert [held[start] for start, _length in runs] == [9, 10, 11]

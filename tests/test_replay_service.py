@@ -659,3 +659,56 @@ def test_a_clip_cut_off_before_the_finish_says_that_instead(tmp_path):
     svc.extractor = Stops()
     res = svc.view(42)
     assert res["starts_mid_attempt"] is False and res["ends_early"] is True
+
+
+def test_a_fresh_clip_holds_one_answer_per_picture(tmp_path):
+    """His ruling, 2026-08-28: "if there's duplicated frames, input
+    timeline should be identical for the sequential duplicated frames."
+    The quantiser runs even when the ALIGNER refuses -- it needs nothing
+    but the pictures, and his clip 4374 is exactly that case (the level's
+    yellow floor swamped the digit region, so alignment had no verdict
+    while 257 pictures still carried two different frames)."""
+    import json as _json
+    from sm64_events.replay.frameclock import FrameClock
+
+    clock = FrameClock(now=lambda: 0.0)
+    base = (T0 - timedelta(seconds=3)).timestamp()
+    for n in range(17 * 30):
+        clock._now = lambda t=base + n / 30: t
+        clock.mark(7000 + n)
+    svc = make_service(tmp_path, [attempt()])
+    svc._frame_clock = clock
+    svc.map_aligner = lambda clip, frame_map, a: None      # refuses
+    seen = {}
+
+    def quantiser(clip, frame_map):
+        seen["slots"] = len(frame_map)
+        return [7000] * len(frame_map)                     # one flat answer
+
+    svc.map_quantiser = quantiser
+    res = svc.view(42)
+    assert seen["slots"] == 17 * 60
+    assert set(res["frame_map"]) == {7000}
+    sidecar = _json.loads(
+        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
+    assert sidecar["frame_map_quantised"] is True
+    assert sidecar["frame_map_aligned"] is False
+
+
+def test_a_broken_quantiser_never_costs_the_clip(tmp_path):
+    from sm64_events.replay.frameclock import FrameClock
+
+    clock = FrameClock(now=lambda: 0.0)
+    base = (T0 - timedelta(seconds=3)).timestamp()
+    for n in range(17 * 30):
+        clock._now = lambda t=base + n / 30: t
+        clock.mark(7000 + n)
+    svc = make_service(tmp_path / "broken", [attempt()])
+    svc._frame_clock = clock
+
+    def explode(clip, frame_map):
+        raise RuntimeError("ffmpeg went missing")
+
+    svc.map_quantiser = explode
+    res = svc.view(42)
+    assert res["frame_map"] is not None and res["frame_map"][2] == 7000

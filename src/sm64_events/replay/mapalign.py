@@ -41,6 +41,7 @@ clip with this same code, so the tool cannot drift from what extraction
 actually did.
 """
 import subprocess
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -193,6 +194,122 @@ def rows_for_map(frame_map, stick_of):
             cache[raw] = None if pad is None else glyph_row(pad[0], pad[1])
         rows.append(cache[raw])
     return rows
+
+
+# -- the picture runs, and quantising a map onto them ------------------------
+# A 30 fps game captured at 60 gives two video frames per picture, and the
+# capture's own jitter makes it one or three often enough to see: measured
+# on his clip 4374, 397 runs of 2 against 11 of one and 13 longer. His
+# ruling, 2026-08-28: "if there's duplicated frames, input timeline should
+# be identical for the sequential duplicated frames" -- a picture IS one
+# game frame, however many video frames it happens to occupy, so the map
+# must answer the same thing across all of them.
+#
+# Scaled small on purpose: the question is "did the picture change at all",
+# and a 160x120 grey copy answers it for a fraction of the decode.
+RUN_WIDTH, RUN_HEIGHT = 160, 120
+# Mean per-pixel difference above which two video frames are DIFFERENT
+# pictures. A re-encoded duplicate is not bit-identical, so this cannot be
+# zero; measured on his clips, true duplicates sit under 0.1 and consecutive
+# gameplay frames run 11 and up.
+RUN_CHANGE_THRESHOLD = 0.35
+
+
+def picture_runs(grey: np.ndarray) -> list[tuple[int, int]]:
+    """(first slot, length) per distinct picture, in order."""
+    if len(grey) == 0:
+        return []
+    changed = (np.abs(np.diff(grey.astype(np.int16), axis=0)).mean(axis=1)
+               >= RUN_CHANGE_THRESHOLD)
+    starts = [0] + [index + 1 for index, flag in enumerate(changed) if flag]
+    return [(start, end - start)
+            for start, end in zip(starts, starts[1:] + [len(grey)])]
+
+
+def decode_grey(ffmpeg: str, clip: Path) -> np.ndarray:
+    """Every video frame as a small grey image, for run detection."""
+    out = subprocess.run(
+        [ffmpeg, "-v", "error", "-i", str(clip),
+         "-vf", f"scale={RUN_WIDTH}:{RUN_HEIGHT}", "-f", "rawvideo",
+         "-pix_fmt", "gray", "pipe:1"], capture_output=True)
+    stride = RUN_WIDTH * RUN_HEIGHT
+    count = len(out.stdout) // stride
+    return np.frombuffer(out.stdout[:count * stride],
+                         dtype=np.uint8).reshape(count, stride)
+
+
+def _rising(values: list[float]) -> list[float]:
+    """Nearest non-decreasing series, least squares (pool adjacent violators).
+
+    The one piece of machinery this repair needs: it finds the closest
+    series to `values` that never goes down, so the correction moves each
+    picture as little as the constraint allows instead of dragging the
+    whole clip to fit its worst stretch.
+    """
+    stack: list[list[float]] = []           # [sum, count] per pooled block
+    for value in values:
+        block = [float(value), 1.0]
+        while stack and stack[-1][0] / stack[-1][1] > block[0] / block[1]:
+            previous = stack.pop()
+            block = [previous[0] + block[0], previous[1] + block[1]]
+        stack.append(block)
+    out: list[float] = []
+    for total, count in stack:
+        out.extend([total / count] * int(count))
+    return out
+
+
+def quantised(frame_map: list, runs: list[tuple[int, int]]) -> list:
+    """One answer per PICTURE, and a DIFFERENT one for the next picture.
+
+    Two rules, and the second is what his 2026-08-28 session found. The
+    first: the runs supply the boundaries, so every video frame showing one
+    picture answers the same -- "if there's duplicated frames, input
+    timeline should be identical for the sequential duplicated frames".
+
+    The second: consecutive PICTURES must be consecutive FRAMES. Holding
+    the boundaries alone left the map's own irregular advance untouched,
+    and on his clip 4441 that meant 230 pictures sharing a frame with the
+    next one and 225 skipping one -- three different pictures all labelled
+    frame 7, then a jump straight to 9. Stepping forward then showed a new
+    picture beside an unchanged panel, or a panel that moved two.
+
+    So each picture is pushed to the nearest series that RISES by at least
+    one per picture (`_rising` on value minus index), which is the smallest
+    correction satisfying the rule. Rising by MORE is allowed and left
+    alone where the map says so: the capture really does miss frames --
+    1,230 pictures for ~1,326 game frames on that clip -- and forcing a
+    step of exactly one would end it ninety-six frames adrift.
+    """
+    out = list(frame_map)
+    numbered: list[tuple[int, int, int]] = []      # (run index, start, length)
+    values: list[float] = []
+    for index, (start, length) in enumerate(runs):
+        window = [frame_map[slot] for slot in range(start, start + length)
+                  if slot < len(frame_map) and frame_map[slot] is not None]
+        if not window:
+            continue
+        counts = Counter(window)
+        best = max(counts.items(), key=lambda pair: (pair[1], pair[0]))[0]
+        numbered.append((index, start, length))
+        values.append(float(best))
+    if not numbered:
+        return out
+    # A series rising by >= 1 per picture is a NON-DECREASING series once
+    # each picture's own index is subtracted; put it back afterwards.
+    rising = _rising([value - order for order, value in enumerate(values)])
+    previous: int | None = None
+    for order, (_index, start, length) in enumerate(numbered):
+        frame = int(round(rising[order] + order))
+        # Rounding two neighbours a real frame apart can still land them on
+        # the same integer; the rule is about the integers, so hold it here
+        # as well (9 pictures of 1,163 on his clip 4441).
+        if previous is not None and frame <= previous:
+            frame = previous + 1
+        previous = frame
+        for slot in range(start, min(start + length, len(out))):
+            out[slot] = frame
+    return out
 
 
 def probe_width(ffmpeg: str, clip: Path) -> int:
