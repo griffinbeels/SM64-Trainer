@@ -221,16 +221,31 @@ def test_the_card_renders_tiles_colored_against_a_real_goal():
                 ".rank-page .scorecard-card .score-tile.bad")
             assert colored >= 1, "no colored tile against a real division goal"
 
-            sum_text = page.evaluate(
-                "document.querySelector('.rank-page .scorecard-card "
-                ".score-foot .score-sum-value').textContent.trim()")
+            # Round 7 deleted the card-wide Upstairs RTA foot ("for now"),
+            # so the summed numbers on screen are the ROW's own You and Goal
+            # cells -- both drawn, both labelled, no hover needed.
+            first_row = payload["rows"][0]
+            you_text, goal_text = page.evaluate(
+                "(() => {"
+                "  const row = document.querySelector('.rank-page .scorecard-card "
+                ".score-row');"
+                "  return [row.querySelector('.score-sum-you .score-sum-value')"
+                ".textContent.trim(),"
+                "          row.querySelector('.score-sum-goal .score-sum-value')"
+                ".textContent.trim()];"
+                "})()")
+            heads = page.evaluate(
+                "Array.from(document.querySelectorAll('.rank-page .scorecard-card "
+                ".score-sum-head')).map((el) => el.textContent.trim())")
+            assert page.count(".rank-page .scorecard-card .score-foot") == 0
 
-        total = payload["total"]
-        if total["counted"] > 0:
-            expected = _fmt_seconds_like_js(abs(total["delta_cs"]) / 100)
-            assert sum_text == expected, (sum_text, total)
+        assert heads == ["You", "Goal"]
+        row_sum = first_row["sum"]
+        if row_sum["counted"] > 0:
+            assert you_text == _fmt_seconds_like_js(row_sum["you_cs"] / 100)
+            assert goal_text == _fmt_seconds_like_js(row_sum["goal_cs"] / 100)
         else:
-            assert sum_text == "—"
+            assert you_text == "—" and goal_text == "—"
 
 
 def test_the_card_reaches_a_real_goal_covers_line_when_partial():
@@ -794,3 +809,64 @@ def test_a_typed_goal_snaps_onto_the_displayable_set_in_the_cell():
 
         assert cell == "51\"03", (
             f"a typed 51\"01 must land as the snapped 51\"03, got {cell!r}")
+
+
+def _create_route(base: str, name: str, steps: list) -> int:
+    """Create a route through the real endpoint, so a route SCOPE exists to
+    select -- `tools/ui_fixture.py` seeds none (reconcile_defaults is
+    main.py's boot step, not the service's)."""
+    body = json.dumps({"name": name, "steps": steps}).encode()
+    request = urllib.request.Request(
+        f"{base}/api/routes", data=body, method="POST",
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.loads(response.read())["id"]
+
+
+def test_expanding_one_row_expands_only_that_row():
+    """Round 7 item 1: "If I expand one of the rows in the scorecard, it
+    should only expand THAT row. It shouldn't expand all rows (like it
+    incorrectly does now)." The old expand key was `row.course_id ??
+    "secret"` and a ROUTE scope's rows ALL carry `course_id: null`, so every
+    row hashed to "secret" and toggled together.
+
+    Driven on a real ROUTE scope for exactly that reason: the Overall card
+    cannot show this bug at all (its 15 course rows carry distinct
+    course_ids and only the single Secret row is null), so a version of this
+    test written there passes with the bug fully restored -- measured by
+    mutation, not assumed."""
+    with serve_ui() as base:
+        route_id = _create_route(base, "Two visits", [
+            {"need": 1, "candidates": [{"type": "star", "course": 1, "star": 0}]},
+            {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}])
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-row-label")
+
+            # Pick the route scope through the page's own control -- the same
+            # select every other card on the Rank tab follows.
+            page.evaluate(
+                "(() => {"
+                "  const select = document.querySelector('.rank-page "
+                ".route-focus-control select');"
+                f"  select.value = 'route:{route_id}';"
+                "  select.dispatchEvent(new Event('change', {bubbles: true}));"
+                "})()")
+            page.wait_ms(400)
+            rows_now = page.count(".rank-page .scorecard-card .score-row")
+            assert rows_now == 2, f"the route scope should draw 2 rows, drew {rows_now}"
+
+            page.evaluate(
+                "document.querySelectorAll('.rank-page .scorecard-card "
+                ".score-row-label')[0].click()")
+            page.wait_for(".rank-page .scorecard-card .score-detail-table")
+            page.wait_ms(150)
+
+            expanded = page.count(".rank-page .scorecard-card .score-row.is-expanded")
+            tables = page.count(".rank-page .scorecard-card .score-detail-table")
+
+        assert expanded == 1, f"expanding one row expanded {expanded} rows"
+        assert tables == 1, f"{tables} detail tables drawn for one expanded row"

@@ -48,7 +48,7 @@ from sm64_events.core.timefmt import attainable_cs
 from sm64_events.ranks.classify import RANK_NAMES, display_cs
 from sm64_events.ranks.scorecard import (
     build_card, card_keys, division_goal_cs, rows_for_course, rows_for_route,
-    template_rows)
+    template_rows, without_keys)
 from sm64_events.ranks.scoring import DIVISION_NUMERALS, best_ladder
 from sm64_events.server.import_api import sheet_row_placer
 
@@ -323,7 +323,14 @@ def create_scorecard_router(service, library=None, adoptions=None,
         disagree with the card the browser is looking at. Scope-driven
         since round 6: the rows are whatever `scope_id` contains."""
         _require_db()
-        rows_spec = scope_rows(scope_id)
+        # The SAME exclusion set the scope's own RATING drops (`_score_scope`
+        # filters `service.rank_excluded()` over `scopes.default_excluded`) --
+        # round 7: "This should match the route include/ignores logic... those
+        # are already ignored in the route ranking list, so we should ignore
+        # them here as well." Read, never re-derived: a card grading a
+        # movement its own rank ignores would be scoring a different route
+        # than the number printed beside it.
+        rows_spec = without_keys(scope_rows(scope_id), service.rank_excluded())
         keys = card_keys(rows_spec)
         you = your_times(keys)
         goal_value = service.db.get_state(_GOAL_KEY, None)

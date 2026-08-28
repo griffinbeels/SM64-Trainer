@@ -7299,9 +7299,27 @@
   }
   .scorecard-savebar .inline-state { flex-basis: 100%; }
   .score-rows { display: grid; gap: 6px; }
-  .score-row {
-    display: grid; grid-template-columns: minmax(84px, 130px) 1fr auto;
+  /* FOUR tracks since round 7 -- the row's summed You and Goal each get
+     their own column so both are always drawn under a heading, where the
+     single gap chip used to sit alone with its two halves in a hover
+     ("there should be column labels, because otherwise it's not obvious
+     what each number means"). The two time columns share a fixed minimum so
+     every row's numbers line up under the headings even when one row's
+     value is far shorter than another's. `--score-time-col` is declared
+     once and read by both the heading row and every data row -- two
+     elements cannot drift apart about a width they are meant to share. */
+  .score-rows, .score-head-row, .score-row { --score-time-col: 74px; }
+  .score-row, .score-head-row {
+    display: grid;
+    grid-template-columns: minmax(84px, 130px) 1fr
+                           minmax(var(--score-time-col), auto)
+                           minmax(var(--score-time-col), auto);
     align-items: center; gap: 10px;
+  }
+  .score-head-row { padding: 2px 0 4px; }
+  .score-sum-head {
+    justify-self: end; font-size: .7rem; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--muted);
   }
   /* The row label is now the expand/collapse control (round 8) -- a real
      <button>, not a styled span, so it is reachable and announced the same
@@ -7413,20 +7431,26 @@
   .score-sum.good { color: var(--green); }
   .score-sum.bad { color: var(--coral); }
   .score-sum-coverage { color: var(--muted); font-size: .7rem; }
-  .score-foot {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 12px; padding-top: 8px; border-top: 1px solid var(--border-soft);
-  }
-  .score-foot-label { font-weight: 700; }
-  .score-foot .score-sum { font-size: 1.05rem; font-weight: 700; }
+  /* The expanded detail restates the row's pair inline rather than in the
+     row grid, so it carries its own little two-up box. */
+  .score-detail-target-sums { display: flex; align-items: center; gap: 6px; }
+  .score-detail-target-sums .score-sum { justify-self: auto; }
 
   /* Narrow: the label column no longer earns its own track -- it sits
      above the tile strip instead of squeezing it, which is what keeps the
      Secret row's ten tiles from ever needing to shrink or scroll. */
   @container (max-width: 620px) {
-    .score-row { grid-template-columns: 1fr auto; grid-template-areas: "label sum" "tiles tiles"; row-gap: 4px; }
+    .score-row, .score-head-row {
+      grid-template-columns: 1fr minmax(var(--score-time-col), auto)
+                                 minmax(var(--score-time-col), auto);
+      grid-template-areas: "label you goal" "tiles tiles tiles"; row-gap: 4px;
+    }
+    .score-head-row { grid-template-areas: "label you goal"; }
     .score-row-label { grid-area: label; }
-    .score-sum { grid-area: sum; }
+    .score-sum-you { grid-area: you; }
+    .score-sum-goal { grid-area: goal; }
+    .score-head-row .score-sum-head:nth-of-type(1) { grid-area: you; }
+    .score-head-row .score-sum-head:nth-of-type(2) { grid-area: goal; }
     .score-row-tiles { grid-area: tiles; }
   }
 

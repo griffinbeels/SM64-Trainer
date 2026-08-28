@@ -37,7 +37,7 @@ from sm64_events.ranks.scoring import (
     tier_band, time_for_score)
 
 __all__ = ["SECRET_ROW", "hundred_coin_companion", "template_rows",
-           "rows_for_course", "rows_for_route", "card_keys",
+           "rows_for_course", "rows_for_route", "without_keys", "card_keys",
            "division_goal_cs", "build_card"]
 
 _HUNDRED_COIN_SLOT = 6
@@ -191,6 +191,28 @@ def rows_for_route(route: dict, *, segment_labels: dict[int, str]) -> list[dict]
             else:
                 label = f"Step {index}"
         rows.append({"course_id": None, "label": label, "entries": merged})
+    return rows
+
+
+def without_keys(rows_spec: list[dict], excluded) -> list[dict]:
+    """`rows_spec` minus every entry whose key is excluded, dropping a row
+    the filter empties entirely.
+
+    Round 7 (2026-08-28): "By default, all segments should be ignored (other
+    than Bowser segments / bowser fights, and other than the 100c
+    segments)... This should match the route include/ignores logic -- that
+    is, those are already ignored in the route ranking list, so we should
+    ignore them here as well." The card must therefore read the SAME
+    exclusion set every scope's rating reads (`service.rank_excluded()` over
+    `scopes.default_excluded`), never a second rule of its own -- a
+    scorecard that graded a movement the route rating ignores would be
+    scoring a different route than the rank beside it."""
+    excluded_keys = set(excluded or ())
+    rows = []
+    for row in rows_spec:
+        entries = [entry for entry in row["entries"] if entry[0] not in excluded_keys]
+        if entries:
+            rows.append({**row, "entries": entries})
     return rows
 
 

@@ -287,6 +287,58 @@ def card_keys_of(card):
     return [tile["key"] for row in card["rows"] for tile in row["tiles"]]
 
 
+def test_the_card_ignores_the_same_segments_the_route_ranking_ignores(tmp_path):
+    """Round 7 item 3: "By default, all segments should be ignored (other
+    than Bowser segments / bowser fights, and other than the 100c
+    segments)... This should match the route include/ignores logic."
+
+    Driven through the REAL exclusion door on both sides: `Lakitu Skip` is
+    default-excluded (no ranked category, no Bowser-entry seed key) and a
+    Bowser course entry (`seg:bitdw-pipe`) is NOT, so a route step holding
+    both must draw the entry's cell and drop Lakitu Skip's -- exactly what
+    `/api/marelo` does with the same route."""
+    with make_client(tmp_path) as (client, db, svc):
+        by_name = {row["name"]: row for row in db.segment_defs()}
+        skip = by_name["Lakitu Skip"]["id"]
+        entry = next(row["id"] for row in db.segment_defs()
+                     if row.get("seed_key") == "seg:bitdw-pipe")
+        excluded = svc.rank_excluded()
+        assert f"segment:{skip}" in excluded, "fixture assumption: Skip is ignored"
+        assert f"segment:{entry}" not in excluded, "a Bowser entry ranks by default"
+
+        route_id = db.insert_route("Mixed", [
+            {"need": 2, "candidates": [
+                {"type": "segment", "segment_id": skip},
+                {"type": "segment", "segment_id": entry}]},
+            {"need": 1, "candidates": [
+                {"type": "segment", "segment_id": skip}]}],
+            "2026-08-28T00:00:00Z")
+
+        card = client.get(f"/api/scorecard?scope=route:{route_id}").json()
+        assert card_keys_of(card) == [f"segment:{entry}"]
+        assert len(card["rows"]) == 1, "the Skip-only step must draw no row"
+
+
+def test_an_explicit_include_puts_a_segment_back_on_the_card(tmp_path):
+    """The exclusion door is his to override — including a segment back into
+    ranking puts its cell back on the card, since the card reads that same
+    resolved set rather than the raw default."""
+    with make_client(tmp_path) as (client, db, svc):
+        skip = next(row["id"] for row in db.segment_defs()
+                    if row["name"] == "Lakitu Skip")
+        route_id = db.insert_route("Skip only", [
+            {"need": 1, "candidates": [
+                {"type": "segment", "segment_id": skip}]}],
+            "2026-08-28T00:00:00Z")
+        assert client.get(f"/api/scorecard?scope=route:{route_id}"
+                          ).json()["rows"] == []
+
+        client.post("/api/marelo/exclude",
+                    json={"entity": f"segment:{skip}", "excluded": False})
+        card = client.get(f"/api/scorecard?scope=route:{route_id}").json()
+        assert card_keys_of(card) == [f"segment:{skip}"]
+
+
 def test_scorecard_serves_broadcast_only_with_an_empty_goal_map(tmp_path):
     """`service.ranks` is None on a broadcast-only instance -- the card must
     still answer, just with nothing gradeable."""

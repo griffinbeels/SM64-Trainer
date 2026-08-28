@@ -175,6 +175,30 @@ def test_card_keys_deduplicates_a_route_that_revisits_an_entity():
     assert scorecard.card_keys(rows) == ["star:1:0"]
 
 
+def test_without_keys_drops_excluded_cells_and_the_rows_they_empty():
+    """Round 7 item 3: the card reads the same exclusion set the scope's own
+    rating drops, so a movement the route ranking ignores draws no cell --
+    and a step that was ONLY that movement draws no row at all."""
+    route = _route([
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": 41}]},
+        {"need": 2, "candidates": [
+            {"type": "star", "course": 1, "star": 0},
+            {"type": "segment", "segment_id": 42}]}])
+    rows = scorecard.rows_for_route(
+        route, segment_labels={41: "Lakitu Skip", 42: "LBLJ"})
+    assert len(rows) == 2
+
+    kept = scorecard.without_keys(rows, {"segment:41", "segment:42"})
+    assert len(kept) == 1, "a row emptied by the filter must not draw"
+    assert [key for key, _l, _c in kept[0]["entries"]] == ["star:1:0"]
+
+
+def test_without_keys_leaves_an_unexcluded_card_untouched():
+    rows = scorecard.template_rows()
+    assert scorecard.without_keys(rows, set()) == rows
+    assert scorecard.without_keys(rows, {"segment:999"}) == rows
+
+
 def test_rows_for_course_serves_main_secret_and_refuses_the_castle():
     assert len(scorecard.rows_for_course(4)) == 1
     assert len(scorecard.rows_for_course(4)[0]["entries"]) == 6

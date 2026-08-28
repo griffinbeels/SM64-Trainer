@@ -1,7 +1,10 @@
 // src/sm64_events/ui/components/scorecard.js — the Rank tab's scorecard: every
 // star of the 120-star layout plus two castle movements as a small tile
 // printing your gap to a goal, one row per course plus a Secret row, a Sigma
-// per row and one Upstairs RTA total (spec 2026-08-23-scorecard-design). The
+// per row, its You and Goal sums under labelled columns at the right edge
+// (round 7: "there should be column labels, because otherwise it's not
+// obvious what each number means"; the card-wide Upstairs RTA foot was
+// removed the same round, "for now"). The
 // community's template spreadsheet as a live, screenshot-able card.
 //
 // `divisionOptions()`/`fmtGapCs` are exported import-free (no Preact) so
@@ -118,47 +121,53 @@ function ScoreTile({ t, tile, hasGoal }) {
   </span>`;
 }
 
-// The row/foot Sigma. Row and tile gaps are printed differently on purpose:
-// a single tile's gap is at most a few seconds (fmtGapCs's decimal
-// notation), but a row sums up to ten tiles and can run past a minute, so
-// the Sigma prints via fmtSeconds' M'SS"CC notation instead -- the ✓/✗
-// glyph alone carries the sign, since fmtSeconds cannot take a negative
-// number.
-function SumChip({ sum, large = false }) {
+// The row's TWO right-hand cells: its summed You time and its summed Goal
+// time, one per labelled column (round 7 -- a single chip printing only the
+// gap left both numbers in a hover, and "it's not obvious what each number
+// means"). Row and tile times print differently on purpose: a tile's gap is
+// at most a few seconds (fmtGapCs's decimal notation), but a row sums up to
+// ten tiles and runs past a minute, so these print in fmtSeconds' M'SS"CC
+// notation. The GAP survives as colour on the You cell -- green at or under
+// the goal, coral over it -- since fmtSeconds cannot carry a sign.
+function SumCells({ sum }) {
   const hasDelta = sum.delta_cs != null;
   const behind = hasDelta && sum.delta_cs > 0;
-  const classes = ["score-sum", large ? "score-sum-total" : "",
-                    hasDelta ? (behind ? "bad" : "good") : ""]
-    .filter(Boolean).join(" ");
   // `counted === 0` still carries `you_cs`/`goal_cs` of 0 (Python `sum([])`),
   // which is not a real 0'00"00 on either side -- printing them unconditionally
   // fabricates a comparison nothing backs, the exact "cannot logically be
   // compared" shape `.claude/rules/acceptance.md` rules against. No comparable
-  // tile means an honest sentence about WHY, not two invented zeroes.
+  // tile means an em-dash on both sides, never two invented zeroes.
   const title = hasDelta
-    ? `You ${fmtSeconds(sum.you_cs / 100)} · Goal ${fmtSeconds(sum.goal_cs / 100)}`
+    ? `${sum.counted}/${sum.total} tiles comparable · ${
+        behind ? "behind by" : "ahead by"} ${fmtSeconds(Math.abs(sum.delta_cs) / 100)}`
     : `${sum.counted}/${sum.total} tiles comparable`;
-  return html`<div class=${classes} title=${title}>
-    <span class="score-sum-glyph">${hasDelta ? (behind ? "✗" : "✓") : ""}</span>
-    <span class="score-sum-value">${hasDelta
-      ? fmtSeconds(Math.abs(sum.delta_cs) / 100) : "—"}</span>
-    ${sum.counted < sum.total
-      ? html`<span class="score-sum-coverage">${sum.counted}/${sum.total}</span>` : ""}
-  </div>`;
+  return html`<div class=${`score-sum score-sum-you ${
+        hasDelta ? (behind ? "bad" : "good") : ""}`} title=${title}>
+      <span class="score-sum-value">${hasDelta
+        ? fmtSeconds(sum.you_cs / 100) : "—"}</span>
+      ${sum.counted < sum.total
+        ? html`<span class="score-sum-coverage">${sum.counted}/${sum.total}</span>` : ""}
+    </div>
+    <div class="score-sum score-sum-goal" title=${title}>
+      <span class="score-sum-value">${hasDelta
+        ? fmtSeconds(sum.goal_cs / 100) : "—"}</span>
+    </div>`;
 }
 
 // The expanded breakdown: every tile in the row as Star / You / Goal / Δ (round 5:
 // "the YOU column first, *then* the GOAL column"),
 // the shape of the community's own Ultimate Sheet template (round 8, his
 // screenshot from it), plus the row's own Sigma restated as "Stage RTA
-// target" -- the row's collapsed chip already IS that number, named here so
+// target" -- the row's collapsed cells already ARE those numbers, named here so
 // clicking in for detail also answers "what am I actually chasing on this
 // stage" without having to reread the collapsed row above it.
 function ScoreRowDetail({ row, onGoalOverride }) {
   return html`<div class="score-row-detail">
     <div class="score-detail-target">
       <span class="meta">Stage RTA target</span>
-      <${SumChip} sum=${row.sum} />
+      <div class="score-detail-target-sums">
+        <span class="meta">You</span><${SumCells} sum=${row.sum} />
+      </div>
     </div>
     <table class="score-detail-table">
       <thead><tr><th>Star</th><th>You</th><th>Goal</th><th>Δ</th></tr></thead>
@@ -231,8 +240,7 @@ function ScoreDetailRow({ tile, onGoalOverride }) {
   </tr>`;
 }
 
-function ScoreRow({ t, row, hasGoal, expanded, onToggle, onGoalOverride }) {
-  const rowKey = row.course_id ?? "secret";
+function ScoreRow({ t, row, rowKey, hasGoal, expanded, onToggle, onGoalOverride }) {
   return html`<div class="score-row ${expanded ? "is-expanded" : ""}">
     <button type="button" class="score-row-label" title=${row.label}
         aria-expanded=${expanded} onclick=${() => onToggle(rowKey)}>
@@ -243,7 +251,7 @@ function ScoreRow({ t, row, hasGoal, expanded, onToggle, onGoalOverride }) {
       ${row.tiles.map((tile) => html`<${ScoreTile} key=${tile.key} t=${t}
           tile=${tile} hasGoal=${hasGoal} />`)}
     </div>
-    <${SumChip} sum=${row.sum} />
+    <${SumCells} sum=${row.sum} />
     ${expanded
       ? html`<${ScoreRowDetail} row=${row} onGoalOverride=${onGoalOverride} />` : ""}
   </div>`;
@@ -486,15 +494,16 @@ export function Scorecard({ t, scopeId = "overall" }) {
                     busy=${saveBusy} error=${saveError}
                     onSave=${saveCustomGoal} onDiscard=${discardOverrides} />`
               : ""}
-            <div class="score-rows">
-              ${displayData.rows.map((row) => html`<${ScoreRow} key=${row.course_id ?? "secret"}
-                  t=${t} row=${row} hasGoal=${hasGoal}
-                  expanded=${expandedRows.has(row.course_id ?? "secret")}
-                  onToggle=${toggleRow} onGoalOverride=${handleGoalOverride} />`)}
+            <div class="score-head-row" aria-hidden="true">
+              <span></span><span></span>
+              <span class="score-sum-head">You</span>
+              <span class="score-sum-head">Goal</span>
             </div>
-            <div class="score-foot">
-              <span class="score-foot-label">Upstairs RTA</span>
-              <${SumChip} sum=${displayData.total} large=${true} />
+            <div class="score-rows">
+              ${displayData.rows.map((row, index) => html`<${ScoreRow} key=${index}
+                  t=${t} row=${row} rowKey=${index} hasGoal=${hasGoal}
+                  expanded=${expandedRows.has(index)}
+                  onToggle=${toggleRow} onGoalOverride=${handleGoalOverride} />`)}
             </div>`}
   </div>`;
 }
