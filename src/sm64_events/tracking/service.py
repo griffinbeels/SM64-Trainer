@@ -256,6 +256,19 @@ class TrackerService:
     # for the poller's on_frame heartbeat.
     on_attempt_boundary = None
 
+    #: Called the moment an attempt's INPUT TRACK is final -- it completed,
+    #: or the next one started. The chunk writer buffers ten seconds of play
+    #: before it writes (inputs/store.py::ChunkWriter.FLUSH_FRAMES), which is
+    #: right for crash loss and wrong for reading: a track he finished
+    #: SECONDS ago is still in memory, so the timeline drew a PB's inputs
+    #: 164 frames short of its own footage and clamped there ("it cuts off
+    #: too early and doesn't even include the end of the clip", 2026-08-28,
+    #: an 18"43 attempt reading 12"90). Same thread as the sampler's own
+    #: `add` (both run on the poll loop), so the flush cannot race it -- an
+    #: HTTP handler calling it could, which is why this is an event callback
+    #: and not a step in the timeline endpoint.
+    on_attempt_settled = None
+
     async def publish(self, event: Event) -> None:
         if event.type == "stage_changed":
             # The world NODE the player is standing in, stamped BEFORE the
@@ -281,6 +294,10 @@ class TrackerService:
         if (event.type in ("practice_reset", "state_loaded")
                 and self.on_attempt_boundary is not None):
             self.on_attempt_boundary()
+        if (event.type in ("attempt_completed", "practice_reset",
+                           "state_loaded")
+                and self.on_attempt_settled is not None):
+            self.on_attempt_settled()
         if event.type == "star_collected":
             self._grab_since_spawn = True
         elif event.type == "spawned":

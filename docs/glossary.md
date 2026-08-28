@@ -531,9 +531,13 @@ map when it cuts a clip, so a [[frame]] the emulator held on screen twice
 maps twice and one it skipped never maps -- the duplicates and skips a
 single offset cannot describe. Each map names the series that built it:
 presents first (the screen's own updates), the tagged capture feed next, the
-[[frame]]-edge stamps last. The [[input timeline]] and every [[overlay
-layer]] read the clip through its map; a clip cut before maps existed falls
-back to a fixed offset.
+[[frame]]-edge stamps last. **Then the trainer checks that answer against
+the clip itself**: with the game's own input display on, every picture
+shows the pad the game drew into it, so the trainer compares the map
+against what the pictures show and slides it onto them — and a clip whose
+display it cannot read keeps the answer the clocks gave, and says so. The [[input timeline]]
+and every [[overlay layer]] read the clip through its map; a clip cut
+before maps existed falls back to a fixed offset.
 
 - **Lives** -- the frame clock (`src/sm64_events/replay/frameclock.py`)
   records the stamps; the map rides the clip's own metadata

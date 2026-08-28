@@ -44,6 +44,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from sm64_events.core.paths import bundled_ffmpeg  # noqa: E402
+from sm64_events.replay import mapalign  # noqa: E402
 from sm64_events.inputs.runs import axis_of, capture_axis, stretches  # noqa: E402
 from sm64_events.inputs.track import track_for_attempt  # noqa: E402
 from sm64_events.storage.db import Database  # noqa: E402
@@ -115,35 +116,15 @@ def map_button_changes(sidecar: dict, db: Database, attempt_id: int) -> list[int
             and pads[k] != pads[k - 1]]
 
 
-# Usamune's STICK READOUT, measured on a 1600x1224 clip (2026-08-26) and
-# scaled by width like the icon strip: two lines, "U84" over "R70", drawn in
-# the same fiery HUD font. THE primary instrument -- see glyph_offset.
-DIGIT_REGION_AT_1600 = (60, 900, 420, 260)
-GLYPHS = list("0123456789UDLR")
-
-
-def glyph_composition(frame) -> np.ndarray:
-    """Which glyphs Usamune draws for this frame's stick, as counts.
-
-    An axis at rest draws a bare "0"; otherwise a direction letter and the
-    magnitude's digits -- so "U84" over "R70" is six glyphs and "U84" over
-    "0" is four.
-    """
-    row = np.zeros(len(GLYPHS))
-    for value, positive, negative in ((frame.stick_y, "U", "D"),
-                                      (frame.stick_x, "R", "L")):
-        value = int(value)
-        text = ("0" if value == 0
-                else (positive if value > 0 else negative) + str(abs(value)))
-        for character in text:
-            row[GLYPHS.index(character)] += 1
-    return row
-
-
 def glyph_offset(ffmpeg: str, clip: Path, region, frame_map, db: Database,
                  attempt_id: int, span: int = 8):
     """How many video slots the map is out, by fitting Usamune's own stick
     digits -- the sharpest instrument this project has.
+
+    SHARED with extraction since 2026-08-28: the measurement itself lives in
+    `replay/mapalign.py`, which `ReplayService.view()` runs on every fresh
+    clip, so this tool cannot drift from what the server actually did. What
+    stays here is only the reporting.
 
     The stick moves nearly every frame, which makes digit CHANGES useless
     for alignment (they saturate) and makes digit INK ideal for it: each
@@ -167,43 +148,14 @@ def glyph_offset(ffmpeg: str, clip: Path, region, frame_map, db: Database,
         raise SystemExit(f"no attempt {attempt_id} in this db")
     track = track_for_attempt(db.inputs, attempt)
     seams = stretches(track)
-    by_axis = {axis: glyph_composition(frame)
-               for axis, frame in capture_axis(track)}
-    x, y, w, h = region
-    pixels = decode_region(ffmpeg, clip, region)
-    red, blue = pixels[..., 0], pixels[..., 2]
-    # The digits are SATURATED fire; the walls and floors behind them are
-    # not (a brown brick measured (121, 84, 42), a blue water tile (88,
-    # 119, 189)) -- both fail `red > 200`.
-    ink = ((red > 200) & (blue < 90) & (red - blue > 120)).sum(axis=(1, 2))
-    ink = ink.astype(float)
+    pads = {axis: (frame.stick_x, frame.stick_y)
+            for axis, frame in capture_axis(track)}
 
-    def row_at(slot):
-        if slot < 0 or slot >= len(frame_map):
-            return None
-        raw = frame_map[slot]
-        if raw is None:
-            return None
+    def stick_of(raw):
         axis = axis_of(raw, seams)
-        return by_axis.get(axis) if axis is not None else None
+        return pads.get(axis) if axis is not None else None
 
-    scores = {}
-    for offset in range(-span, span + 1):
-        rows, targets = [], []
-        for slot in range(len(ink)):
-            row = row_at(slot + offset)
-            if row is not None:
-                rows.append(row)
-                targets.append(ink[slot])
-        if len(targets) < 200:
-            continue
-        design, target = np.array(rows), np.array(targets)
-        weights, *_ = np.linalg.lstsq(design, target, rcond=None)
-        residual = target - design @ weights
-        scores[offset] = 1 - float(residual.var() / target.var())
-    if not scores:
-        return None, {}
-    return max(scores, key=scores.get), scores
+    return mapalign.align_clip(clip, frame_map, stick_of, ffmpeg)
 
 
 def main() -> int:
@@ -242,21 +194,25 @@ def main() -> int:
         raise SystemExit("this clip's sidecar carries no frame_map -- it was "
                          "cut before the frame clock existed (or coverage "
                          "was missing); there is nothing to score")
-    digit_region = tuple(round(v * (region[2] / ICON_REGION_AT_1600[2]))
-                         for v in DIGIT_REGION_AT_1600)
-    best, curve = glyph_offset(ffmpeg, clip, digit_region, frame_map,
-                               Database(Path(args.db)), args.attempt)
+    found = glyph_offset(ffmpeg, clip, None, frame_map,
+                         Database(Path(args.db)), args.attempt)
     print(f"map source: {sidecar.get('frame_map_source', 'unknown')}")
-    if best is None:
-        print("stick digits unreadable in this clip -- no verdict")
+    if sidecar.get("frame_map_aligned"):
+        print(f"  extraction ALIGNED this clip's map to its own footage by "
+              f"{sidecar['frame_map_offset']:+d} slots "
+              f"(fit {sidecar.get('frame_map_fit')})")
+    elif "frame_map_aligned" in sidecar:
+        print("  extraction could NOT read the display in this clip -- the "
+              "map is the timing constants' own answer, uncorrected")
+    if found is None:
+        print("VERDICT: no verdict -- the stick digits are unreadable here "
+              "(Usamune's display off, or too little of the track covered)")
     else:
-        ordered = sorted(curve.values())
-        print(f"VERDICT: the map is {best:+d} slots "
-              f"({best / 2:+.1f} game frames) out; 0 is the goal. "
+        print(f"VERDICT: the map is {found.offset:+d} slots "
+              f"({found.offset / 2:+.1f} game frames) out; 0 is the goal. "
               f"[negative = ahead of the footage]")
-        print(f"  fit {curve[best]:.4f} vs next best {ordered[-2]:.4f}; "
-              f"curve " + " ".join(f"{off:+d}:{curve[off]:.3f}"
-                                   for off in sorted(curve)))
+        print(f"  fit {found.fit:.4f}, {found.margin:.4f} over the "
+              f"runner-up, {found.paired} slots paired")
     print()
     frames = decode_region(ffmpeg, clip, region)
     display = icon_change_slots(frames)

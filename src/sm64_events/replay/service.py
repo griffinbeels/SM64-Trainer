@@ -8,6 +8,7 @@ Anything else (e.g. codec failure on a corrupt segment) is a genuine 500 —
 extract.py already guarantees no partial file survives those.
 """
 import json
+import logging
 import re
 import shutil
 import time
@@ -16,8 +17,11 @@ from pathlib import Path
 
 from sm64_events.core.timefmt import GAME_FPS, format_igt
 from sm64_events.memory.addresses import course_name, star_name
+from sm64_events.replay import mapalign
 from sm64_events.replay.config import (ReplayConfig, save_settings,
                                        validate_settings)
+
+log = logging.getLogger("sm64.replay")
 
 _CLIP_NAME = "clip_attempt_{id}.mp4"
 # fullmatch pattern — rejects traversal, wrong extension, empty id
@@ -118,6 +122,14 @@ class ReplayService:
     delete files in Explorer without anything going stale — the next
     lookup just sees the filesystem truth.
     """
+
+    #: Measures a freshly cut clip's map against the game's OWN display and
+    #: returns a `replay/mapalign.py::Alignment` (or None for no verdict).
+    #: Injected by the composition root because it needs the input track,
+    #: which this zone must not reach into. None = clips keep the map the
+    #: timing constants produced, which is what every clip did until
+    #: 2026-08-28 and what four rounds of live checks found wrong.
+    map_aligner = None
 
     def __init__(self, cfg: ReplayConfig, recorder, extractor, tracker,
                  revealer=None, frame_clock=None):
@@ -288,6 +300,7 @@ class ReplayService:
                         # pixel scorer's verdict names what it scored
                         # ("presents" = map v4, "feeds" = v2, "edges" = v1).
                         m["frame_map"], m["frame_map_source"] = mapped
+                        self._align_to_the_footage(m, clip, a)
             meta.write_text(json.dumps(m))
             url, source = f"/api/replay/clips/{name}", "buffer"
         # fps = encoded rate (CFR); game_fps = SM64 logic rate — the
@@ -304,6 +317,36 @@ class ReplayService:
                 "frame_map": m.get("frame_map"),
                 "frame_map_source": m.get("frame_map_source"),
                 "saved_path": str(saved) if saved is not None else None}
+
+    def _align_to_the_footage(self, meta: dict, clip: Path, attempt) -> None:
+        """Shift the fresh map onto what the clip's own pixels show.
+
+        The timing constants upstream estimate a journey (game logic ->
+        plugin present -> capture -> encoded slot) whose length is not
+        ours to know; the clip knows it, because Usamune draws the pad
+        into every frame. So this measures rather than assumes, and
+        records BOTH numbers in the sidecar -- the offset applied and the
+        strength of the evidence -- so a later verdict is answerable from
+        the file instead of by eye. No aligner, no display in the footage,
+        or no clear winner: the map stands as built and says so.
+        """
+        if self.map_aligner is None:
+            return
+        try:
+            found = self.map_aligner(clip, meta["frame_map"], attempt)
+        except Exception:
+            log.exception("frame-map alignment failed; keeping the built map")
+            return
+        if found is None:
+            meta["frame_map_aligned"] = False
+            return
+        meta["frame_map"] = mapalign.shifted(meta["frame_map"], found.offset)
+        meta["frame_map_aligned"] = True
+        meta["frame_map_offset"] = found.offset
+        meta["frame_map_fit"] = round(found.fit, 4)
+        log.info("frame map aligned to the footage: %+d slots "
+                 "(fit %.3f, margin %.3f, %d slots paired)",
+                 found.offset, found.fit, found.margin, found.paired)
 
     def _anchor_offset(self, a, meta: dict) -> float:
         """Where in the clip the anchor frame's PICTURE is on screen, in

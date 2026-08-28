@@ -530,3 +530,83 @@ def test_save_segment_attempt_filename_contains_segment_name_and_rta(tmp_path):
     name = Path(res["path"]).name
     assert "lblj" in name
     assert "-rta" in name
+
+
+def test_a_fresh_clip_is_aligned_to_its_own_footage(tmp_path):
+    """Round 32, 2026-08-28. The timing constants estimate a journey nobody
+    can measure from RAM, and four rounds of setting them by hand each
+    landed somewhere else ("Totally desynced now, it's even worse than when
+    we started"). So extraction now asks the CLIP: the alignment it
+    measures is applied to the map and recorded beside it."""
+    import json as _json
+    from sm64_events.replay.frameclock import FrameClock
+    from sm64_events.replay.mapalign import Alignment
+
+    clock = FrameClock(now=lambda: 0.0)
+    base = (T0 - timedelta(seconds=3)).timestamp()
+    for n in range(17 * 30):
+        clock._now = lambda t=base + n / 30: t
+        clock.mark(7000 + n)
+    svc = make_service(tmp_path, [attempt()])
+    svc._frame_clock = clock
+    seen = {}
+
+    def aligner(clip, frame_map, a):
+        seen["clip"] = clip
+        seen["slots"] = len(frame_map)
+        return Alignment(offset=-3, fit=0.71, margin=0.04, paired=900)
+
+    svc.map_aligner = aligner
+    res = svc.view(42)
+    assert seen["slots"] == 17 * 60          # the built map, before the shift
+    assert res["frame_map"][3:] == [
+        frame for frame in svc.view(42)["frame_map"]][3:]
+    # The shift landed: slot k now answers with what slot k-3 held, and the
+    # first three slots refuse rather than inventing a frame.
+    assert res["frame_map"][:3] == [None, None, None]
+    sidecar = _json.loads(
+        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
+    assert sidecar["frame_map_aligned"] is True
+    assert sidecar["frame_map_offset"] == -3
+    assert sidecar["frame_map_fit"] == 0.71
+
+
+def test_an_unreadable_display_leaves_the_map_alone_and_says_so(tmp_path):
+    import json as _json
+    from sm64_events.replay.frameclock import FrameClock
+
+    clock = FrameClock(now=lambda: 0.0)
+    base = (T0 - timedelta(seconds=3)).timestamp()
+    for n in range(17 * 30):
+        clock._now = lambda t=base + n / 30: t
+        clock.mark(7000 + n)
+    svc = make_service(tmp_path, [attempt()])
+    svc._frame_clock = clock
+    svc.map_aligner = lambda clip, frame_map, a: None
+    res = svc.view(42)
+    assert res["frame_map"][2] == 7000        # untouched
+    sidecar = _json.loads(
+        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
+    assert sidecar["frame_map_aligned"] is False
+    assert "frame_map_offset" not in sidecar
+
+
+def test_a_broken_aligner_never_costs_the_clip(tmp_path):
+    """Alignment is a correction, not a dependency: whatever it does, the
+    clip and its map still reach him."""
+    from sm64_events.replay.frameclock import FrameClock
+
+    clock = FrameClock(now=lambda: 0.0)
+    base = (T0 - timedelta(seconds=3)).timestamp()
+    for n in range(17 * 30):
+        clock._now = lambda t=base + n / 30: t
+        clock.mark(7000 + n)
+    svc = make_service(tmp_path, [attempt()])
+    svc._frame_clock = clock
+
+    def explode(clip, frame_map, a):
+        raise RuntimeError("ffmpeg went missing")
+
+    svc.map_aligner = explode
+    res = svc.view(42)
+    assert res["frame_map"] is not None and res["frame_map"][2] == 7000

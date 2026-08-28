@@ -417,6 +417,28 @@ def build():
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     if input_writer is not None:
         poller.on_stop = input_writer.close
+        # A finished attempt's track must be READABLE the moment it
+        # finishes, not up to ten seconds later when the buffer fills.
+        service.on_attempt_settled = input_writer.close
+    if replay is not None and db is not None:
+        # THE clip's map is checked against the game's own display before it
+        # is written (replay/mapalign.py): the constants upstream estimate a
+        # journey nobody can measure from RAM, and the footage carries the
+        # answer. Wired here because it needs the input track, which the
+        # replay zone must not reach into.
+        from sm64_events.inputs.track import track_for_attempt
+        from sm64_events.replay.mapalign import align_clip
+
+        def _align_map_to_footage(clip, frame_map, attempt):
+            track = track_for_attempt(db.inputs, attempt)
+            if not track:
+                return None
+            pads = {number: (frame.stick_x, frame.stick_y)
+                    for number, frame in track}
+            return align_clip(clip, frame_map, pads.get,
+                              str(bundled_ffmpeg() or "ffmpeg"))
+
+        replay.map_aligner = _align_map_to_footage
     # Reading back what was captured needs no controller address, so the
     # timeline and the templates are wired on every layout that has a db.
     inputs = None
