@@ -559,11 +559,11 @@ def test_a_fresh_clip_is_aligned_to_its_own_footage(tmp_path):
     svc.map_aligner = aligner
     res = svc.view(42)
     assert seen["slots"] == 17 * 60          # the built map, before the shift
-    assert res["frame_map"][3:] == [
-        frame for frame in svc.view(42)["frame_map"]][3:]
-    # The shift landed: slot k now answers with what slot k-3 held, and the
-    # first three slots refuse rather than inventing a frame.
-    assert res["frame_map"][:3] == [None, None, None]
+    # The correction lands in the FRAME domain -- an odd slot shift would
+    # split pictures that quantising unified -- so -3 slots rounds to a
+    # constant of round(-3/2) = -2 game frames on every value.
+    assert res["frame_map"][2] == 7000 - 2
+    assert res["frame_map"][-1] == svc.view(42)["frame_map"][-1]
     sidecar = _json.loads(
         (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
     assert sidecar["frame_map_aligned"] is True
@@ -712,3 +712,53 @@ def test_a_broken_quantiser_never_costs_the_clip(tmp_path):
     svc.map_quantiser = explode
     res = svc.view(42)
     assert res["frame_map"] is not None and res["frame_map"][2] == 7000
+
+
+def test_unreadable_digits_inherit_the_learned_anchor(tmp_path):
+    """A clip whose digits cannot be read is corrected by the median the
+    OTHER clips measured, instead of going uncorrected -- the "calibrate
+    once" idea made continuous: he calibrates by playing."""
+    import json as _json
+    from sm64_events.replay.frameclock import FrameClock
+    from sm64_events.replay.mapalign import AnchorStats
+
+    clock = FrameClock(now=lambda: 0.0)
+    base = (T0 - timedelta(seconds=3)).timestamp()
+    for n in range(17 * 30):
+        clock._now = lambda t=base + n / 30: t
+        clock.mark(7000 + n)
+    svc = make_service(tmp_path, [attempt()])
+    svc._frame_clock = clock
+    svc.map_aligner = lambda clip, frame_map, a: None      # digits unreadable
+    stats = AnchorStats(tmp_path / "anchor.json")
+    for clip_id, measured in ((1, -2), (2, -2), (3, -2)):
+        stats.record(clip_id, measured, 0.5)
+    svc.anchor_stats = stats
+    res = svc.view(42)
+    assert res["frame_map"][2] == 7000 - 1     # -2 slots -> -1 frame, learned
+    sidecar = _json.loads(
+        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
+    assert sidecar["frame_map_aligned"] is False
+    assert sidecar["frame_map_learned"] is True
+    assert sidecar["frame_map_offset"] == -2
+
+
+def test_a_measured_clip_teaches_the_store(tmp_path):
+    from sm64_events.replay.frameclock import FrameClock
+    from sm64_events.replay.mapalign import Alignment, AnchorStats
+
+    clock = FrameClock(now=lambda: 0.0)
+    base = (T0 - timedelta(seconds=3)).timestamp()
+    for n in range(17 * 30):
+        clock._now = lambda t=base + n / 30: t
+        clock.mark(7000 + n)
+    svc = make_service(tmp_path / "m", [attempt()])
+    svc._frame_clock = clock
+    svc.map_aligner = lambda clip, frame_map, a: Alignment(
+        offset=-2, fit=0.5, margin=0.02, paired=900)
+    stats = AnchorStats(tmp_path / "m" / "anchor.json")
+    svc.anchor_stats = stats
+    svc.view(42)
+    import json as _json
+    rows = _json.loads((tmp_path / "m" / "anchor.json").read_text())
+    assert rows and rows[-1]["offset"] == -2

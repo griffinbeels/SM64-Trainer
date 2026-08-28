@@ -253,3 +253,73 @@ def test_a_dip_splits_the_difference_rather_than_dragging_the_clip_up():
     runs = [(0, 2), (2, 2), (4, 2)]
     held = mapalign.quantised([10, 10, 9, 9, 11, 11], runs)
     assert [held[start] for start, _length in runs] == [9, 10, 11]
+
+
+# --- the anchor: frame-domain correction + the learned store -----------------
+
+def test_frame_corrected_moves_values_and_never_splits_a_picture():
+    """A measured slot offset lands as ONE constant on every frame value:
+    round(offset / 2). Shifting slots by an odd amount instead would split
+    pictures the quantiser just unified."""
+    held = [10, 10, 11, 11, None, 12]
+    assert mapalign.frame_corrected(held, -2) == [9, 9, 10, 10, None, 11]
+    assert mapalign.frame_corrected(held, -3) == [8, 8, 9, 9, None, 10]
+    assert mapalign.frame_corrected(held, 1) == held      # half rounds to 0
+    assert mapalign.frame_corrected(held, 0) == held
+
+
+def test_the_margin_gate_ignores_the_neighbour_it_cannot_beat():
+    """Pinned against the REAL curve from his clip 4441 (2026-08-29): peak
+    at -2 with 0.0066 over its neighbour -1 and 0.0168 over the best
+    non-neighbour. On a quantised map the neighbour is near-equivalent BY
+    CONSTRUCTION, so it is the instrument's resolution, not a rival; the
+    neighbour-inclusive gate refused this exact curve and the clip ran a
+    frame ahead."""
+    curve_4441 = {-8: 0.1957, -7: 0.2319, -6: 0.2713, -5: 0.3154,
+                  -4: 0.3673, -3: 0.4183, -2: 0.4688, -1: 0.4622,
+                  0: 0.4520, 1: 0.3712, 2: 0.2981, 3: 0.2433, 4: 0.1936,
+                  5: 0.1488, 6: 0.1033, 7: 0.0665, 8: 0.0359}
+    verdict = mapalign.gate(curve_4441)
+    assert verdict is not None, "the real 4441 curve must pass"
+    best, margin = verdict
+    assert best == -2 and margin > mapalign.MIN_MARGIN
+
+
+def test_the_gate_still_refuses_a_flat_curve():
+    flat = {offset: 0.40 + 0.001 * (offset == -2) for offset in range(-8, 9)}
+    assert mapalign.gate(flat) is None
+
+
+def test_the_gate_still_refuses_a_weak_fit():
+    weak = {offset: 0.10 + 0.05 * (offset == -2) for offset in range(-8, 9)}
+    assert mapalign.gate(weak) is None
+
+
+def test_anchor_stats_learn_and_answer_the_median(tmp_path):
+    stats = mapalign.AnchorStats(tmp_path / "anchor.json")
+    assert stats.fallback_offset() is None, "no evidence, no answer"
+    stats.record(1, -2, 0.5)
+    stats.record(2, -2, 0.6)
+    assert stats.fallback_offset() is None, "two clips are not a calibration"
+    stats.record(3, -4, 0.4)
+    assert stats.fallback_offset() == -2
+    stats.record(3, -2, 0.7)          # re-measuring a clip replaces its row
+    assert stats.fallback_offset() == -2
+
+
+def test_anchor_stats_survive_a_corrupt_file(tmp_path):
+    path = tmp_path / "anchor.json"
+    path.write_text("{not json")
+    stats = mapalign.AnchorStats(path)
+    assert stats.fallback_offset() is None
+    stats.record(1, -2, 0.5)          # and recording over it heals it
+    assert (tmp_path / "anchor.json").exists()
+
+
+def test_anchor_stats_stay_bounded(tmp_path):
+    stats = mapalign.AnchorStats(tmp_path / "anchor.json")
+    for attempt in range(200):
+        stats.record(attempt, -2, 0.5)
+    import json as _json
+    rows = _json.loads((tmp_path / "anchor.json").read_text())
+    assert len(rows) == mapalign.AnchorStats.KEEP

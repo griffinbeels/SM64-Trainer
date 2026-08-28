@@ -448,6 +448,10 @@ def build():
             return quantised(frame_map, runs) if runs else None
 
         replay.map_quantiser = _hold_one_answer_per_picture
+        from sm64_events.replay.mapalign import AnchorStats
+        from sm64_events.core.paths import data_root
+        replay.anchor_stats = AnchorStats(
+            data_root() / "data" / "mapalign_anchor.json")
     # Reading back what was captured needs no controller address, so the
     # timeline and the templates are wired on every layout that has a db.
     inputs = None

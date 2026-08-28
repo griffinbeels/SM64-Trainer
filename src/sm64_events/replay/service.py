@@ -137,6 +137,12 @@ class ReplayService:
     #: this, because it needs nothing but the pictures.
     map_quantiser = None
 
+    #: `mapalign.AnchorStats` (or None): the per-clip measured anchors,
+    #: remembered so a clip whose digits cannot be read inherits the median
+    #: of the clips whose digits could. Injected by the composition root
+    #: with a real path under data/.
+    anchor_stats = None
+
     def __init__(self, cfg: ReplayConfig, recorder, extractor, tracker,
                  revealer=None, frame_clock=None):
         self.cfg = cfg
@@ -414,12 +420,29 @@ class ReplayService:
             log.exception("frame-map alignment failed; keeping the built map")
             return
         if found is None:
+            # Digits unreadable in THIS clip: inherit the anchor other clips
+            # measured (the stats store's median) rather than go uncorrected.
+            learned = (self.anchor_stats.fallback_offset()
+                       if self.anchor_stats is not None else None)
+            if learned:
+                meta["frame_map"] = mapalign.frame_corrected(
+                    meta["frame_map"], learned)
+                meta["frame_map_offset"] = learned
+                meta["frame_map_learned"] = True
+                log.info("frame map corrected by the LEARNED anchor: "
+                         "%+d slots (digits unreadable here)", learned)
             meta["frame_map_aligned"] = False
             return
-        meta["frame_map"] = mapalign.shifted(meta["frame_map"], found.offset)
+        # The correction is applied in the FRAME domain: an odd slot shift
+        # would split pictures that quantising just unified.
+        meta["frame_map"] = mapalign.frame_corrected(meta["frame_map"],
+                                                     found.offset)
         meta["frame_map_aligned"] = True
         meta["frame_map_offset"] = found.offset
         meta["frame_map_fit"] = round(found.fit, 4)
+        if self.anchor_stats is not None:
+            self.anchor_stats.record(getattr(attempt, "id", 0),
+                                     found.offset, found.fit)
         log.info("frame map aligned to the footage: %+d slots "
                  "(fit %.3f, margin %.3f, %d slots paired)",
                  found.offset, found.fit, found.margin, found.paired)

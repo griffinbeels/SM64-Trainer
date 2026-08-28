@@ -40,6 +40,7 @@ The instrument is shared, not copied: `tools/score_frame_map.py` scores a
 clip with this same code, so the tool cannot drift from what extraction
 actually did.
 """
+import json
 import subprocess
 from collections import Counter
 from dataclasses import dataclass
@@ -63,7 +64,15 @@ INK_MIN_WARMTH = 120                            # red - blue
 SEARCH_SLOTS = 8              # +-8 slots = +-4 game frames of search
 MIN_PAIRED_SLOTS = 200        # below this the fit is not evidence
 MIN_FIT = 0.35                # R2 floor -- an unlit region fits nothing
-MIN_MARGIN = 0.010            # the winner must beat the runner-up by this
+# The winner must beat the best offset OUTSIDE its own +-1 neighbourhood by
+# this. Against the immediate neighbour it proves nothing: on a map already
+# held to one answer per picture, +-1 slot differs only at picture
+# boundaries, so the two are near-equivalent BY CONSTRUCTION -- his clip
+# 4441 peaked cleanly at -2 (fit 0.469, next non-neighbour 0.452) and the
+# old neighbour-inclusive gate refused it on a 0.007 margin to -1, leaving
+# the whole clip running a frame ahead. The neighbour tie is the
+# instrument's resolution, not evidence against the peak.
+MIN_MARGIN = 0.010
 
 
 @dataclass(frozen=True)
@@ -154,15 +163,97 @@ def measure_offset(ink: np.ndarray, rows_by_slot,
         residual = target - design @ weights
         scores[offset] = 1 - float(np.var(residual) / np.var(target))
         paired_counts[offset] = len(target)
-    if len(scores) < 2:
+    verdict = gate(scores)
+    if verdict is None:
+        return None
+    best, margin = verdict
+    return Alignment(offset=best, fit=scores[best], margin=margin,
+                     paired=paired_counts[best])
+
+
+def gate(scores: dict) -> tuple[int, float] | None:
+    """(winning offset, margin) when the curve carries a real peak.
+
+    The margin is measured against the best offset OUTSIDE the winner's own
+    +-1 neighbourhood. On a map held to one answer per picture, offset k
+    and its neighbour differ only at picture boundaries, so they are
+    near-equivalent BY CONSTRUCTION and the neighbour tie is the
+    instrument's resolution, not evidence against the peak -- his clip 4441
+    peaked at -2 with 0.007 over -1 and 0.017 over the best non-neighbour,
+    and the neighbour-inclusive gate this replaced refused it, leaving the
+    whole clip a frame ahead.
+    """
+    if len(scores) < 4:
         return None
     best = max(scores, key=scores.get)
-    runner_up = max(value for offset, value in scores.items() if offset != best)
-    if scores[best] < MIN_FIT or scores[best] - runner_up < MIN_MARGIN:
+    rivals = [value for offset, value in scores.items()
+              if abs(offset - best) > 1]
+    if not rivals:
         return None
-    return Alignment(offset=best, fit=scores[best],
-                     margin=scores[best] - runner_up,
-                     paired=paired_counts[best])
+    margin = scores[best] - max(rivals)
+    if scores[best] < MIN_FIT or margin < MIN_MARGIN:
+        return None
+    return best, margin
+
+
+def frame_corrected(frame_map: list, slot_offset: int) -> list:
+    """The measured slot offset applied in the FRAME domain.
+
+    On a map already holding one answer per picture, shifting SLOTS by an
+    odd amount would split pictures again -- the very invariant quantising
+    exists for. The measurement means "the content is `slot_offset` slots
+    older/newer than claimed", which in frames is round(offset / 2): every
+    value moves by that constant and every picture keeps its one answer.
+    """
+    frames = round(slot_offset / 2)
+    if not frames:
+        return list(frame_map)
+    return [None if raw is None else raw + frames for raw in frame_map]
+
+
+class AnchorStats:
+    """Per-clip measured anchors, remembered so display-off clips inherit.
+
+    Every clip whose digits CAN be read appends its measured offset here;
+    a clip whose digits cannot be read is corrected by the MEDIAN of the
+    recent measurements instead of going uncorrected. The store is the
+    "calibrate once" idea made continuous: he calibrates by playing, the
+    constant converges, and a capture-pipeline change shows up as the
+    median moving. Bounded to the newest KEEP entries; a corrupt or
+    missing file reads as empty (never blocks a clip).
+    """
+
+    KEEP = 40
+    MIN_MEASUREMENTS = 3
+
+    def __init__(self, path: Path):
+        self._path = path
+
+    def _read(self) -> list:
+        try:
+            rows = json.loads(self._path.read_text())
+            return rows if isinstance(rows, list) else []
+        except (OSError, ValueError):
+            return []
+
+    def record(self, attempt_id: int, offset_slots: int, fit: float) -> None:
+        rows = self._read()
+        rows = [row for row in rows if row.get("attempt") != attempt_id]
+        rows.append({"attempt": attempt_id, "offset": int(offset_slots),
+                     "fit": round(float(fit), 4)})
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._path.write_text(json.dumps(rows[-self.KEEP:]))
+        except OSError:
+            pass                                  # stats must never block
+
+    def fallback_offset(self) -> int | None:
+        """The median measured offset, or None below MIN_MEASUREMENTS."""
+        offsets = sorted(row["offset"] for row in self._read()
+                         if isinstance(row.get("offset"), int))
+        if len(offsets) < self.MIN_MEASUREMENTS:
+            return None
+        return offsets[len(offsets) // 2]
 
 
 def shifted(frame_map: list, offset: int) -> list:
