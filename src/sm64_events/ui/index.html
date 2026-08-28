@@ -7308,15 +7308,45 @@
      value is far shorter than another's. `--score-time-col` is declared
      once and read by both the heading row and every data row -- two
      elements cannot drift apart about a width they are meant to share. */
-  .score-rows, .score-head-row, .score-row { --score-time-col: 74px; }
+  .score-rows, .score-head-row, .score-row {
+    --score-time-col: 74px; --score-remove-col: 20px;
+  }
   .score-row, .score-head-row {
     display: grid;
-    grid-template-columns: minmax(84px, 130px) 1fr
-                           minmax(var(--score-time-col), auto)
-                           minmax(var(--score-time-col), auto);
+    /* `minmax(0, 1fr)` for the tile strip, never a bare `1fr`: `1fr` is
+       `minmax(auto, 1fr)`, whose AUTO MINIMUM refuses to shrink below the
+       strip's own content -- so a row of ten tiles squeezed the two time
+       tracks below their contents and the You value overlapped the Goal
+       value by 2px (caught by the responsive sweep at 26 viewports, not by
+       eye). A zero minimum lets the strip give way instead; the time
+       columns keep the width their numbers need. */
+    grid-template-columns: minmax(84px, 130px) minmax(0, 1fr)
+                           minmax(var(--score-time-col), max-content)
+                           minmax(var(--score-time-col), max-content)
+                           var(--score-remove-col);
     align-items: center; gap: 10px;
   }
   .score-head-row { padding: 2px 0 4px; }
+  /* Round 8's per-row remove. A full text reset, so it declares its own
+     `min-height`/`display`/`justify-content` -- the global `button` rule
+     sets min-height:34px and inline-flex, which a bare reset does not undo
+     and which would grow every row by 9px (tests/test_ui_button_flex.py
+     guards both halves). RED at rest, his own word ("add a red X next to
+     each of the rows"), held at .6 opacity so it reads as red without
+     competing with the numbers beside it on a card he screenshots; full
+     strength on hover and focus. */
+  .score-row-remove {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 0; width: 20px; height: 20px; padding: 0; margin: 0;
+    background: none; border: none; border-radius: 5px;
+    font: inherit; font-size: .95rem; line-height: 1;
+    color: var(--coral); opacity: .6; cursor: pointer;
+    transition: opacity .12s ease, background .12s ease;
+  }
+  .score-row-remove:hover, .score-row-remove:focus-visible {
+    opacity: 1; background: rgba(255,111,97,.14);
+  }
+  .score-row-remove:disabled { cursor: default; opacity: .25; }
   .score-sum-head {
     justify-self: end; font-size: .7rem; text-transform: uppercase;
     letter-spacing: .04em; color: var(--muted);
@@ -7441,11 +7471,15 @@
      Secret row's ten tiles from ever needing to shrink or scroll. */
   @container (max-width: 620px) {
     .score-row, .score-head-row {
-      grid-template-columns: 1fr minmax(var(--score-time-col), auto)
-                                 minmax(var(--score-time-col), auto);
-      grid-template-areas: "label you goal" "tiles tiles tiles"; row-gap: 4px;
+      grid-template-columns: minmax(0, 1fr)
+                                 minmax(var(--score-time-col), max-content)
+                                 minmax(var(--score-time-col), max-content)
+                                 var(--score-remove-col);
+      grid-template-areas: "label you goal x" "tiles tiles tiles tiles";
+      row-gap: 4px;
     }
-    .score-head-row { grid-template-areas: "label you goal"; }
+    .score-head-row { grid-template-areas: "label you goal x"; }
+    .score-row-remove { grid-area: x; }
     .score-row-label { grid-area: label; }
     .score-sum-you { grid-area: you; }
     .score-sum-goal { grid-area: goal; }

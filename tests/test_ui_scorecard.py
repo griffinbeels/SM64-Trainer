@@ -870,3 +870,65 @@ def test_expanding_one_row_expands_only_that_row():
 
         assert expanded == 1, f"expanding one row expanded {expanded} rows"
         assert tables == 1, f"{tables} detail tables drawn for one expanded row"
+
+
+def test_the_row_x_removes_that_row_and_ignores_it_in_ranking():
+    """Round 8: "add a red X next to each of the rows in the scorecard. If
+    the user presses that red X, then it removes it from the scorecard
+    tracking."
+
+    Driven through the real button, and asserted on BOTH surfaces the one
+    exclusion door feeds: the row leaves the card, and `/api/marelo` for the
+    same scope stops carrying that entity. Two ignore lists that could
+    disagree is exactly what this makes impossible."""
+    with serve_ui() as base:
+        route_id = _create_route(base, "Removable", [
+            {"need": 1, "candidates": [{"type": "star", "course": 1, "star": 0}]},
+            {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}])
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-row-label")
+            page.evaluate(
+                "(() => {"
+                "  const select = document.querySelector('.rank-page "
+                ".route-focus-control select');"
+                f"  select.value = 'route:{route_id}';"
+                "  select.dispatchEvent(new Event('change', {bubbles: true}));"
+                "})()")
+            page.wait_ms(400)
+            assert page.count(".rank-page .scorecard-card .score-row") == 2
+
+            removed_label = page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".score-row .score-row-name').textContent.trim()")
+            page.evaluate(
+                "document.querySelectorAll('.rank-page .scorecard-card "
+                ".score-row-remove')[0].click()")
+            page.wait_ms(700)
+
+            rows_left = page.count(".rank-page .scorecard-card .score-row")
+            labels_left = page.evaluate(
+                "Array.from(document.querySelectorAll('.rank-page "
+                ".scorecard-card .score-row-name')).map((el) => "
+                "el.textContent.trim())")
+
+        assert rows_left == 1, f"the X left {rows_left} rows, expected 1"
+        assert removed_label not in labels_left
+
+        # The SAME exclusion the Rank tab writes -- so the scope's own
+        # RATING dropped it too, not just this card's view of it. `/api/marelo`
+        # keeps an excluded entity in `entities` as an inert row on purpose
+        # (`_append_excluded_rows`, so the breakdown can offer it back), so
+        # the honest check is the flag and the slot COUNT, not absence.
+        with urllib.request.urlopen(
+                f"{base}/api/marelo?scope=route%3A{route_id}", timeout=10) as response:
+            marelo = json.loads(response.read())
+        by_key = {entity["key"]: entity for entity in marelo["entities"]}
+        assert by_key["star:1:0"]["excluded"] is True
+        assert by_key["star:2:0"].get("excluded") is not True
+        assert marelo["n"] == 1, (
+            "the removed star must leave the rating's denominator, not just "
+            f"wear a flag: n={marelo['n']}")

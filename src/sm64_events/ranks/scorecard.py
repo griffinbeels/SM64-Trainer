@@ -181,15 +181,22 @@ def rows_for_route(route: dict, *, segment_labels: dict[int, str]) -> list[dict]
         if not entries:
             continue
         merged = _merge_hundred_coins(entries)
-        label = step.get("label")
-        if not label:
-            if courses and len(courses) == 1 and all(
-                    entry[0].startswith("star:") for entry in merged):
-                label = COURSE_NAMES[courses.pop()]
-            elif len(merged) == 1:
-                label = merged[0][1]
-            else:
-                label = f"Step {index}"
+        # A COURSE VISIT wears the course's own name, ahead of the step's
+        # authored label -- round 8 (2026-08-28): "We also don't need the
+        # 'DDD -- 3 stars' or 'WDW -- 7 stars' the '-- X stars' count. Just
+        # the name of the course." That suffix is real and stays where it
+        # belongs (`corpus_vocab._merge_label` writes it; the Run tab and the
+        # route builder both show it) -- the scorecard just does not want a
+        # count in a row whose own cells already are the count. Anything
+        # that is not one course's stars still prefers the step's label,
+        # which is what names a movement row ("→ WF", "Lakitu Skip").
+        one_course = (len(courses) == 1
+                      and all(entry[0].startswith("star:") for entry in merged))
+        if one_course:
+            label = COURSE_NAMES[courses.pop()]
+        else:
+            label = (step.get("label")
+                     or (merged[0][1] if len(merged) == 1 else f"Step {index}"))
         rows.append({"course_id": None, "label": label, "entries": merged})
     return rows
 

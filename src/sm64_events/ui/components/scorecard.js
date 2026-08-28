@@ -240,7 +240,17 @@ function ScoreDetailRow({ tile, onGoalOverride }) {
   </tr>`;
 }
 
-function ScoreRow({ t, row, rowKey, hasGoal, expanded, onToggle, onGoalOverride }) {
+function ScoreRow({ t, row, rowKey, hasGoal, expanded, removing,
+                    onToggle, onRemove, onGoalOverride }) {
+  // The remove control writes the SAME exclusion the Rank tab's own
+  // breakdown writes (`POST /api/marelo/exclude`), never a second
+  // scorecard-only ignore list -- round 7 settled that this card and the
+  // scope's rating must agree, and two ignore sets that can disagree is the
+  // divergence class this project bans. So the title says what the click
+  // actually does, rather than leaving the rating change to be discovered
+  // ("put the reason where the click lands").
+  const removeTitle = `Ignore ${row.label} — drops it from this card and`
+    + " from this scope's ranking (undo from the Rank tab's breakdown)";
   return html`<div class="score-row ${expanded ? "is-expanded" : ""}">
     <button type="button" class="score-row-label" title=${row.label}
         aria-expanded=${expanded} onclick=${() => onToggle(rowKey)}>
@@ -252,6 +262,17 @@ function ScoreRow({ t, row, rowKey, hasGoal, expanded, onToggle, onGoalOverride 
           tile=${tile} hasGoal=${hasGoal} />`)}
     </div>
     <${SumCells} sum=${row.sum} />
+    <!-- LAST in the DOM because it is the last COLUMN: this row is a plain
+         auto-placed grid, so DOM order IS column order, and putting the
+         button second (where it reads most naturally) shifted every later
+         cell one track right -- the tiles into the You track, You into
+         Goal's, and Goal into the 20px remove track, where it overflowed
+         and overlapped You by 2px. Caught by the responsive sweep at 26
+         viewports; the first fix attempt tuned the TRACKS instead and made
+         it 39, which is what measuring the actual rects settled. -->
+    <button type="button" class="score-row-remove" title=${removeTitle}
+        aria-label=${removeTitle} disabled=${removing}
+        onclick=${() => onRemove(row)}>×</button>
     ${expanded
       ? html`<${ScoreRowDetail} row=${row} onGoalOverride=${onGoalOverride} />` : ""}
   </div>`;
@@ -384,6 +405,7 @@ export function Scorecard({ t, scopeId = "overall" }) {
   // can gather edits made across several rows before he ever presses Save.
   const [pendingOverrides, setPendingOverrides] = useState({});
   const [saveBusy, setSaveBusy] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [saveError, setSaveError] = useState(null);
 
   // Fetches on mount and on t.mareloRev, the Rank tab's own staleness key
@@ -435,6 +457,28 @@ export function Scorecard({ t, scopeId = "overall" }) {
 
   function handleGoalOverride(entityKey, goalCs) {
     setPendingOverrides((current) => ({ ...current, [entityKey]: goalCs }));
+  }
+
+  async function removeRow(row) {
+    // SEQUENTIAL, never Promise.all: `set_rank_excluded` is a
+    // read-modify-write over one ui_state KV, so parallel writes race and
+    // all but the last are silently lost -- a row of ten cells would drop
+    // nine of its exclusions and look like it half-worked. A row is at most
+    // ten keys, and this is a once-in-a-while gesture.
+    setRemoving(true);
+    setError(null);
+    try {
+      for (const tile of row.tiles) {
+        await send("POST", "/api/marelo/exclude",
+                   { entity: tile.key, excluded: true });
+      }
+      setData(await getJSON(
+        `/api/scorecard?scope=${encodeURIComponent(scopeId)}`));
+    } catch (err) {
+      setError(err);
+    } finally {
+      setRemoving(false);
+    }
   }
 
   function discardOverrides() {
@@ -502,8 +546,9 @@ export function Scorecard({ t, scopeId = "overall" }) {
             <div class="score-rows">
               ${displayData.rows.map((row, index) => html`<${ScoreRow} key=${index}
                   t=${t} row=${row} rowKey=${index} hasGoal=${hasGoal}
-                  expanded=${expandedRows.has(index)}
-                  onToggle=${toggleRow} onGoalOverride=${handleGoalOverride} />`)}
+                  expanded=${expandedRows.has(index)} removing=${removing}
+                  onToggle=${toggleRow} onRemove=${removeRow}
+                  onGoalOverride=${handleGoalOverride} />`)}
             </div>`}
   </div>`;
 }

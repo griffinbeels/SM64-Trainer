@@ -160,6 +160,18 @@ def test_route_rows_drop_a_deleted_segments_cell_and_an_empty_step():
     assert scorecard.rows_for_route(route, segment_labels={}) == []
 
 
+def test_a_course_visit_drops_the_steps_own_star_count_label():
+    """Round 8: "We also don't need the 'DDD -- 3 stars' or 'WDW -- 7 stars'
+    the '-- X stars' count. Just the name of the course." The corpus really
+    does author that label (`corpus_vocab._merge_label`) and the Run tab
+    still shows it -- the scorecard prefers the course's own name."""
+    route = _route([{"label": "WF — 7 stars", "need": 2, "candidates": [
+        {"type": "star", "course": 2, "star": 0},
+        {"type": "star", "course": 2, "star": 1}]}])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    assert rows[0]["label"] == "Whomp's Fortress"
+
+
 def test_route_rows_prefer_the_steps_own_label():
     route = _route([{"label": "Lobby movement", "need": 1, "candidates": [
         {"type": "segment", "segment_id": 41}]}])
