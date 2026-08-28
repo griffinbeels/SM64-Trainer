@@ -48,6 +48,7 @@ from sm64_events.core.recorder_lock import acquire_recorder_lock
 from sm64_events.replay.clock import CaptureClock, qpc_100ns
 from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.encoder import SegmentWriter, pick_video_codec
+from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.ring import SegmentRing
 from sm64_events.replay.window import WindowInfo
 
@@ -95,6 +96,11 @@ class ReplayRecorder:
         # The frame clock (replay/frameclock.py): _on_frame tags each
         # captured picture with the RAM frame current at capture time.
         self._frame_clock = frame_clock
+        # The picture ledger (replay/ledger.py, item 40): one row per
+        # DISTINCT captured picture -- its composition time, the RAM frame,
+        # and every registered stamp. Extraction reads it back through
+        # ReplayService._map_from_ledger.
+        self.ledger = PictureLedger()
         self._codec: str | None = codec
         # ffmpeg-subprocess video path: when set, frames bypass the in-process
         # writer entirely (sink.submit is a lock-free reference swap; pacing,
@@ -512,6 +518,11 @@ class ReplayRecorder:
                 capture_ts = (clock.utc_of(ts_100ns).timestamp()
                               if clock is not None else None)
                 tag = self._frame_clock.capture_tag(capture_ts)
+            # The picture ledger notices each NEW picture among the grabs
+            # (item 40) -- before submit so the sample reads the buffer this
+            # callback was handed. observe() never raises.
+            if tag is not None:
+                self.ledger.observe(bgra, tag[1], tag[0])
             sink.submit(bgra, tag)
             return
         # M1: _last_frame and _last_index are written here only; WGC guarantees

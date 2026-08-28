@@ -474,3 +474,25 @@ def test_capture_tags_carry_the_frame_and_the_composition_time(tmp_path):
     # utc_of quantises to whole microseconds
     assert abs(capture_ts - (T0.timestamp() + 1 / 30)) < 1e-5
     rec.stop()
+
+
+def test_the_picture_ledger_rides_the_capture_path(tmp_path):
+    """Item 40: every grab passes the picture ledger; identical grabs of one
+    presented picture land ONE row, a changed picture lands the next."""
+    from sm64_events.replay.frameclock import FrameClock
+    video, audio = FakeVideoSource(), SystemFakeAudioSource()
+    sink = FakeAvSink()
+    frame_clock = FrameClock()
+    frame_clock.mark(4242)
+    rec = make_recorder(tmp_path, video, audio, frame_clock=frame_clock,
+                        video_sink_factory=lambda cfg, on_seg, codec: sink)
+    rec.start()
+    assert wait_for(lambda: video.on_frame is not None)
+    push_frames(video, 3)                    # the same zeros picture, thrice
+    changed = np.full((480, 640, 4), 200, dtype=np.uint8)
+    video.on_frame(changed, int(3 / 30 * 1e7))
+    assert wait_for(lambda: len(getattr(sink, "tags", [])) >= 4)
+    rows = rec.ledger.rows_between(0.0, 1e12)
+    assert [row["frame"] for row in rows] == [4242, 4242]
+    assert rows[1]["ts"] - rows[0]["ts"] > 0
+    rec.stop()

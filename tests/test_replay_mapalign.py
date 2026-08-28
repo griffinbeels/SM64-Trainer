@@ -323,3 +323,88 @@ def test_anchor_stats_stay_bounded(tmp_path):
     import json as _json
     rows = _json.loads((tmp_path / "anchor.json").read_text())
     assert len(rows) == mapalign.AnchorStats.KEEP
+
+
+# -- the ledger map: capture's own per-picture record becomes the map -------
+
+FPS = 60.0
+LEDGER_T0 = 1000.0
+
+
+def _ledger_world(count=10, skip_rows=(), frame_of=None, shift=0.0):
+    """`count` pictures, two slots each; one ledger row per picture composed
+    at its first slot's wall (+`shift`), frame 100+k unless `frame_of`."""
+    runs = [(2 * k, 2) for k in range(count)]
+    rows = [{"ts": LEDGER_T0 + (2 * k + 0.5) / FPS + shift,
+             "frame": (frame_of or (lambda i: 100 + i))(k)}
+            for k in range(count) if k not in skip_rows]
+    return runs, rows
+
+
+def test_ledger_map_gives_each_picture_its_own_recorded_frame():
+    runs, rows = _ledger_world()
+    out = mapalign.ledger_map(20, runs, rows, LEDGER_T0, FPS)
+    assert out == [100 + k for k in range(10) for _ in (0, 1)]
+
+
+def test_a_clock_bias_plus_jitter_self_calibrates_to_exact():
+    """The composition clock and the slot wall disagree by a systematic
+    amount nobody should tune (four hand-set constants each got it wrong):
+    the median of the nearest-row deltas measures it per clip, so the
+    tolerance budget is spent on jitter alone. Here bias 13 ms + jitter
+    6 ms pushes half the raw deltas past the tolerance; without the
+    median, the +2 step at picture 6 would be flattened to +1 by the
+    consecutive default."""
+    frames = lambda k: (100 + k) if k < 6 else (101 + k)
+    runs, rows = _ledger_world(frame_of=frames, shift=0.013)
+    for index, row in enumerate(rows):
+        row["ts"] += 0.006 if index % 2 == 0 else -0.006
+    out = mapalign.ledger_map(20, runs, rows, LEDGER_T0, FPS)
+    assert out == [frames(k) for k in range(10) for _ in (0, 1)]
+
+
+def test_a_bias_of_a_whole_picture_aliases_to_a_frame_shift():
+    """Beyond half a picture period the times alone cannot say which
+    picture a row belongs to -- a whole-period bias matches every run to
+    its neighbour, one frame low, with the consecutive structure intact.
+    That residue is exactly what the digit anchor measures and closes."""
+    runs, rows = _ledger_world(shift=1 / 30)
+    out = mapalign.ledger_map(20, runs, rows, LEDGER_T0, FPS)
+    assert out == [99 + k for k in range(10) for _ in (0, 1)]
+
+
+def test_a_picture_the_dedup_missed_takes_the_consecutive_default():
+    runs, rows = _ledger_world(skip_rows={5})
+    out = mapalign.ledger_map(20, runs, rows, LEDGER_T0, FPS)
+    assert out[10] == out[11] == 105
+    assert out == [100 + k for k in range(10) for _ in (0, 1)]
+
+
+def test_a_frame_the_capture_never_grabbed_keeps_the_advance():
+    """Rows carry the RAM frame, so a game frame no grab caught shows as a
+    +2 step between neighbouring pictures -- preserved, exactly like
+    quantised's rising-by-more rule."""
+    frames = {0: 100, 1: 101, 2: 103, 3: 104, 4: 105}
+    runs, rows = _ledger_world(count=5, frame_of=frames.get)
+    out = mapalign.ledger_map(10, runs, rows, LEDGER_T0, FPS)
+    assert out == [100, 100, 101, 101, 103, 103, 104, 104, 105, 105]
+
+
+def test_lag_frames_lands_ledger_maps_in_the_series_domain():
+    runs, rows = _ledger_world(count=5)
+    out = mapalign.ledger_map(10, runs, rows, LEDGER_T0, FPS, lag_frames=1)
+    assert out[0] == 99 and out[-1] == 103
+
+
+def test_too_few_rows_is_a_refusal_not_a_guess():
+    runs, rows = _ledger_world(count=10)
+    assert mapalign.ledger_map(20, runs, rows[:2], LEDGER_T0, FPS) is None
+    assert mapalign.ledger_map(20, runs, [], LEDGER_T0, FPS) is None
+    assert mapalign.ledger_map(20, [], rows, LEDGER_T0, FPS) is None
+
+
+def test_rows_without_a_frame_do_not_count_as_coverage():
+    runs, rows = _ledger_world(count=10)
+    for row in rows[4:]:
+        row["frame"] = None
+    assert mapalign.ledger_map(20, runs, rows, LEDGER_T0, FPS) is None

@@ -529,9 +529,10 @@ that clip shows. The trainer stamps the wall time of every [[frame]] as you
 play, watches the [[present counter]] whenever it holds one, and writes the
 map when it cuts a clip, so a [[frame]] the emulator held on screen twice
 maps twice and one it skipped never maps -- the duplicates and skips a
-single offset cannot describe. Each map names the series that built it:
-presents first (the screen's own updates), the tagged capture feed next, the
-[[frame]]-edge stamps last. **Then the trainer checks that answer against
+single offset cannot describe. Each map names what built it: the
+[[picture ledger]] first (capture's own record of each picture), then the
+timing series -- presents (the screen's own updates), the tagged capture
+feed, the [[frame]]-edge stamps. **Then the trainer checks that answer against
 the clip itself**: with the game's own input display on, every picture
 shows the pad the game drew into it, so the trainer compares the map
 against what the pictures show and slides it onto them — and a clip whose
@@ -544,6 +545,25 @@ before maps existed falls back to a fixed offset.
   (`src/sm64_events/replay/service.py`)
 - **Not** -- the [[input track]]'s own axis. The track says what you DID on
   each [[frame]]; the map says which [[frame]] the footage SHOWS.
+
+### Picture ledger
+
+The record the [[recorder]] keeps of every distinct picture it grabs from
+the emulator's window: when the picture appeared, the [[frame]] the game
+was computing, and every extra fact a wiring line registers. His spec:
+capture holds all the information, so each picture of the video carries it
+for any future analysis. At extraction the trainer matches the clip's
+pictures to these rows by time and the rows become the [[frame map]]
+directly -- one answer per picture by construction -- and the clip's own
+metadata keeps its slice of the rows after the recording buffer forgets
+the footage. Registering one more per-picture fact takes one line.
+
+- **Lives** -- `src/sm64_events/replay/ledger.py`; the [[recorder]] feeds it
+  (`src/sm64_events/replay/recorder.py`) and extraction reads it back
+  (`src/sm64_events/replay/service.py`)
+- **Not** -- the [[input track]]. The track records what you PRESSED, 250
+  reads a second; the ledger records what the screen SHOWED, one row per
+  picture.
 
 ### Present counter
 

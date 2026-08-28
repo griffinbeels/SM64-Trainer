@@ -143,6 +143,13 @@ class ReplayService:
     #: with a real path under data/.
     anchor_stats = None
 
+    #: Builds a frame map from the picture ledger's rows and the clip's own
+    #: picture runs (`replay/mapalign.py::ledger_map`), signature
+    #: (clip, rows, start_ts, duration_s, fps) -> list | None. Injected like
+    #: the quantiser (it needs ffmpeg to decode the runs). None, or a ledger
+    #: with no rows: the frame-clock series answer as before.
+    ledger_mapper = None
+
     def __init__(self, cfg: ReplayConfig, recorder, extractor, tracker,
                  revealer=None, frame_clock=None):
         self.cfg = cfg
@@ -297,21 +304,29 @@ class ReplayService:
             m = {"duration_s": res.duration_s, "truncated": res.truncated}
             if res.start_utc is not None:
                 m["start_utc"] = res.start_utc.isoformat()
-                if self._frame_clock is not None and res.duration_s:
+                if res.duration_s:
                     # WHICH game frame each video frame shows (round 32 item
                     # 17): built here, at the one moment the clip's span and
-                    # the clock's coverage overlap, and stored in the sidecar
-                    # so a saved copy keeps it after the clock forgets. The
-                    # display lag rides INSIDE the map; anchor_offset_s stays
+                    # capture's memory overlap, and stored in the sidecar so
+                    # a saved copy keeps it after capture forgets. The
+                    # picture ledger answers first (item 40: capture's own
+                    # per-picture record); the frame-clock series are the
+                    # fallback for clips from before it, and the display lag
+                    # rides INSIDE the map either way; anchor_offset_s stays
                     # the fallback for a clip that has none.
-                    mapped = self._frame_clock.frame_map(
-                        res.start_utc, res.duration_s, self.cfg.fps,
-                        DISPLAY_LAG_FRAMES / GAME_FPS)
-                    if mapped is not None:
-                        # Which series answered rides beside the map so the
-                        # pixel scorer's verdict names what it scored
-                        # ("presents" = map v4, "feeds" = v2, "edges" = v1).
-                        m["frame_map"], m["frame_map_source"] = mapped
+                    self._map_from_ledger(m, clip, res)
+                    if (m.get("frame_map") is None
+                            and self._frame_clock is not None):
+                        mapped = self._frame_clock.frame_map(
+                            res.start_utc, res.duration_s, self.cfg.fps,
+                            DISPLAY_LAG_FRAMES / GAME_FPS)
+                        if mapped is not None:
+                            # Which series answered rides beside the map so
+                            # the pixel scorer's verdict names what it
+                            # scored ("ledger" = the picture ledger,
+                            # "presents" = v4, "feeds" = v2, "edges" = v1).
+                            m["frame_map"], m["frame_map_source"] = mapped
+                    if m.get("frame_map") is not None:
                         self._align_to_the_footage(m, clip, a)
             meta.write_text(json.dumps(m))
             url, source = f"/api/replay/clips/{name}", "buffer"
@@ -367,6 +382,43 @@ class ReplayService:
                            .total_seconds() > self._COVERAGE_SLACK_S),
         }
 
+    def _map_from_ledger(self, meta: dict, clip: Path, res) -> None:
+        """The frame map from capture's own per-picture record (item 40).
+
+        His spec: "when we build the video, at every single frame of
+        gameplay, we have access to all the memory addresses and data
+        in-game that would allow us to embed each frame with extra
+        information that we can use to do any type of future analysis
+        with." The recorder's picture ledger stamped every distinct
+        picture at capture; here the clip's slice of those rows becomes
+        the sidecar's `picture_ledger` (the durable per-frame record,
+        extra stamps included) and, matched to the clip's picture runs,
+        the frame map itself -- already one answer per picture, so the
+        quantiser has nothing left to move. Any failure leaves the meta
+        untouched and the series path answers as before."""
+        ledger = getattr(self.recorder, "ledger", None)
+        if ledger is None or self.ledger_mapper is None:
+            return
+        start = res.start_utc.timestamp()
+        try:
+            rows = ledger.rows_between(start - 0.5,
+                                       start + res.duration_s + 0.5)
+            if not rows:
+                return
+            built = self.ledger_mapper(clip, rows, start, res.duration_s,
+                                       self.cfg.fps)
+        except Exception:
+            log.exception("picture-ledger mapping failed; the frame-clock "
+                          "series answer instead")
+            return
+        meta["picture_ledger"] = [
+            {**row, "ts": round(row["ts"] - start, 4)} for row in rows]
+        if built is None:
+            return
+        meta["frame_map"] = built
+        meta["frame_map_source"] = "ledger"
+        meta["frame_map_quantised"] = True
+
     def _hold_one_answer_per_picture(self, meta: dict, clip: Path) -> None:
         """One timeline frame per PICTURE, however many video frames it
         occupies.
@@ -383,8 +435,8 @@ class ReplayService:
         the advance, because a count-based map would drift by however
         many game frames the capture missed.
         """
-        if self.map_quantiser is None:
-            return
+        if self.map_quantiser is None or meta.get("frame_map_quantised"):
+            return                     # a ledger-built map already holds it
         try:
             held = self.map_quantiser(clip, meta["frame_map"])
         except Exception:

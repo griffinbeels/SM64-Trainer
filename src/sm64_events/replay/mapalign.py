@@ -42,6 +42,7 @@ actually did.
 """
 import json
 import subprocess
+from bisect import bisect_right
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -386,8 +387,16 @@ def quantised(frame_map: list, runs: list[tuple[int, int]]) -> list:
         values.append(float(best))
     if not numbered:
         return out
-    # A series rising by >= 1 per picture is a NON-DECREASING series once
-    # each picture's own index is subtracted; put it back afterwards.
+    _paint_rising(out, numbered, values)
+    return out
+
+
+def _paint_rising(out: list, numbered: list[tuple[int, int, int]],
+                  values: list[float]) -> None:
+    """Fit per-picture values to the rising law and paint their slots.
+
+    A series rising by >= 1 per picture is a NON-DECREASING series once
+    each picture's own index is subtracted; put it back afterwards."""
     rising = _rising([value - order for order, value in enumerate(values)])
     previous: int | None = None
     for order, (_index, start, length) in enumerate(numbered):
@@ -400,6 +409,85 @@ def quantised(frame_map: list, runs: list[tuple[int, int]]) -> list:
         previous = frame
         for slot in range(start, min(start + length, len(out))):
             out[slot] = frame
+
+
+# Beyond this a run has NO ledger row: half a picture period (pictures are
+# ~33 ms apart), which also guarantees no row can match two runs.
+LEDGER_MATCH_TOLERANCE_S = 0.017
+# Fewer matched runs than this and the ledger does not cover the clip.
+LEDGER_MIN_MATCHED = 3
+
+
+def ledger_map(slot_count: int, runs: list[tuple[int, int]],
+               rows: list[dict], start_ts: float, fps: float,
+               lag_frames: int = 0) -> list | None:
+    """The frame map built from the picture ledger: capture's own record
+    of when each distinct picture appeared and what frame the game was on.
+
+    Each encoded picture run is matched to the ledger row nearest its
+    first slot's wall time. The two clocks (composition time vs the feed
+    wall the slots live on) disagree by a small systematic amount that
+    four hand-set constants each got wrong -- so the bias is MEASURED per
+    clip as the median of the nearest-row deltas, never tuned. A run with
+    no row inside half a picture period was a change the capture-side
+    sample missed; it takes its left neighbour's value plus its picture
+    distance (the consecutive-pictures law as the default belief), and
+    the shared rising fit then holds the whole series to that law.
+    `lag_frames` is the same display constant the feed series subtracts,
+    so ledger maps and series maps land in one domain and the anchor
+    store's medians stay comparable. Too few matches: None, and the
+    series path answers instead.
+    """
+    stamped = sorted((row["ts"], row["frame"]) for row in rows
+                     if row.get("frame") is not None)
+    if not stamped or not runs:
+        return None
+    times = [ts for ts, _frame in stamped]
+    walls = [start_ts + (start + 0.5) / fps for start, _length in runs]
+
+    def nearest(wall: float) -> int | None:
+        at = bisect_right(times, wall)
+        best = None
+        for candidate in (at - 1, at):
+            if 0 <= candidate < len(times) and (
+                    best is None
+                    or abs(times[candidate] - wall) < abs(times[best] - wall)):
+                best = candidate
+        return best
+
+    deltas = [times[found] - wall for wall in walls
+              if (found := nearest(wall)) is not None]
+    if not deltas:
+        return None
+    bias = sorted(deltas)[len(deltas) // 2]
+
+    matched: dict[int, float] = {}
+    for index, wall in enumerate(walls):
+        found = nearest(wall + bias)
+        if found is not None and (
+                abs(times[found] - (wall + bias))
+                <= LEDGER_MATCH_TOLERANCE_S):
+            matched[index] = float(stamped[found][1] - lag_frames)
+    if len(matched) < max(LEDGER_MIN_MATCHED, len(runs) // 2):
+        return None
+
+    numbered: list[tuple[int, int, int]] = []
+    values: list[float] = []
+    previous_match: tuple[int, float] | None = None
+    for index, (start, length) in enumerate(runs):
+        value = matched.get(index)
+        if value is None:
+            if previous_match is None:
+                first = min(matched)
+                value = matched[first] - (first - index)
+            else:
+                value = previous_match[1] + (index - previous_match[0])
+        else:
+            previous_match = (index, value)
+        numbered.append((index, start, length))
+        values.append(value)
+    out: list = [None] * slot_count
+    _paint_rising(out, numbered, values)
     return out
 
 

@@ -101,6 +101,7 @@ def test_the_sidecar_carries_the_frame_map_and_a_save_keeps_it(tmp_path):
     service with no clock, or a clip the clock cannot cover, carries none
     -- the offset fallback stays what it was."""
     import json as _json
+
     from sm64_events.replay.frameclock import FrameClock
 
     clock = FrameClock(now=lambda: 0.0)
@@ -539,6 +540,7 @@ def test_a_fresh_clip_is_aligned_to_its_own_footage(tmp_path):
     we started"). So extraction now asks the CLIP: the alignment it
     measures is applied to the map and recorded beside it."""
     import json as _json
+
     from sm64_events.replay.frameclock import FrameClock
     from sm64_events.replay.mapalign import Alignment
 
@@ -573,6 +575,7 @@ def test_a_fresh_clip_is_aligned_to_its_own_footage(tmp_path):
 
 def test_an_unreadable_display_leaves_the_map_alone_and_says_so(tmp_path):
     import json as _json
+
     from sm64_events.replay.frameclock import FrameClock
 
     clock = FrameClock(now=lambda: 0.0)
@@ -669,6 +672,7 @@ def test_a_fresh_clip_holds_one_answer_per_picture(tmp_path):
     yellow floor swamped the digit region, so alignment had no verdict
     while 257 pictures still carried two different frames)."""
     import json as _json
+
     from sm64_events.replay.frameclock import FrameClock
 
     clock = FrameClock(now=lambda: 0.0)
@@ -719,6 +723,7 @@ def test_unreadable_digits_inherit_the_learned_anchor(tmp_path):
     OTHER clips measured, instead of going uncorrected -- the "calibrate
     once" idea made continuous: he calibrates by playing."""
     import json as _json
+
     from sm64_events.replay.frameclock import FrameClock
     from sm64_events.replay.mapalign import AnchorStats
 
@@ -762,3 +767,106 @@ def test_a_measured_clip_teaches_the_store(tmp_path):
     import json as _json
     rows = _json.loads((tmp_path / "m" / "anchor.json").read_text())
     assert rows and rows[-1]["offset"] == -2
+
+
+# -- the picture ledger path (round 32 item 40) -----------------------------
+
+class FakeLedger:
+    """Echoes rows inside whatever window the service asks about."""
+    def __init__(self, count=3):
+        self.count = count
+        self.asked = []
+    def rows_between(self, t0, t1):
+        self.asked.append((t0, t1))
+        return [{"ts": t0 + 0.5 + i / 30, "frame": 100 + i,
+                 "mario_action": 0x0880}
+                for i in range(self.count)]
+
+
+def test_a_clip_with_a_ledger_maps_from_it_and_the_sidecar_keeps_the_rows(
+        tmp_path):
+    """Item 40: capture's own per-picture record answers FIRST; the map it
+    builds is already one answer per picture, so the quantiser has nothing
+    to do; the aligner still closes identity on top; and the rows -- extra
+    stamps included -- persist in the sidecar for any future analysis."""
+    import json as _json
+
+    svc = make_service(tmp_path, [attempt()])
+    svc.recorder.ledger = FakeLedger()
+    quantiser_calls = []
+    svc.map_quantiser = lambda clip, fm: quantiser_calls.append(clip) or fm
+    aligned = {}
+
+    def mapper(clip, rows, start_ts, duration_s, fps):
+        aligned["rows"] = rows
+        aligned["fps"] = fps
+        return [200, 200, 201, 201]
+
+    svc.ledger_mapper = mapper
+    res = svc.view(42)
+    assert res["frame_map"] == [200, 200, 201, 201]
+    assert res["frame_map_source"] == "ledger"
+    assert quantiser_calls == []             # already one answer per picture
+    assert aligned["rows"][0]["frame"] == 100
+    sidecar = _json.loads(
+        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
+    # The durable per-frame record: composition times as offsets from the
+    # clip's own start, stamps riding along.
+    assert sidecar["frame_map_quantised"] is True
+    # The ask window starts 0.5 s before the clip, so the echoed rows land
+    # at the clip start exactly: offsets from the clip's own first frame.
+    assert [row["ts"] for row in sidecar["picture_ledger"]] == [
+        0.0, round(1 / 30, 4), round(2 / 30, 4)]
+    assert sidecar["picture_ledger"][0]["mario_action"] == 0x0880
+
+
+def test_a_ledger_refusal_falls_back_to_the_series_map(tmp_path):
+    """Too little coverage: ledger_map returns None, the frame-clock series
+    answer as before -- and the rows still persist, because they are the
+    record he asked for whether or not they carried the map."""
+    import json as _json
+
+    from sm64_events.replay.frameclock import FrameClock
+
+    clock = FrameClock(now=lambda: 0.0)
+    base = (T0 - timedelta(seconds=3)).timestamp()
+    for n in range(17 * 30):
+        clock._now = lambda t=base + n / 30: t
+        clock.mark(7000 + n)
+    svc = make_service(tmp_path, [attempt()])
+    svc._frame_clock = clock
+    svc.recorder.ledger = FakeLedger()
+    svc.ledger_mapper = lambda *a: None
+    res = svc.view(42)
+    assert res["frame_map_source"] == "edges"
+    sidecar = _json.loads(
+        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
+    assert len(sidecar["picture_ledger"]) == 3
+
+
+def test_a_broken_ledger_mapper_never_costs_the_clip(tmp_path):
+    from sm64_events.replay.frameclock import FrameClock
+
+    clock = FrameClock(now=lambda: 0.0)
+    base = (T0 - timedelta(seconds=3)).timestamp()
+    for n in range(17 * 30):
+        clock._now = lambda t=base + n / 30: t
+        clock.mark(7000 + n)
+    svc = make_service(tmp_path, [attempt()])
+    svc._frame_clock = clock
+    svc.recorder.ledger = FakeLedger()
+
+    def broken(*a):
+        raise RuntimeError("decode died")
+
+    svc.ledger_mapper = broken
+    res = svc.view(42)
+    assert res["clip_url"].endswith("clip_attempt_42.mp4")
+    assert res["frame_map_source"] == "edges"
+
+
+def test_no_ledger_on_the_recorder_changes_nothing(tmp_path):
+    svc = make_service(tmp_path, [attempt()])
+    svc.ledger_mapper = lambda *a: [1, 2]
+    res = svc.view(42)
+    assert res["frame_map"] is None

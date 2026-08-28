@@ -5,13 +5,19 @@ import logging
 import shutil
 import sys
 
-from sm64_events.core.logging_setup import configure_logging
-from sm64_events.core.paths import (bundled_ffmpeg, compare_cache_dir,
-                                    compilations_dir, db_path,
-                                    instance_lock_path, migrate_legacy_data_dir,
-                                    server_port)
 from sm64_events.compare.importer import VideoImporter
 from sm64_events.compare.service import CompareService
+from sm64_events.core.logging_setup import configure_logging
+from sm64_events.core.paths import (
+    bundled_ffmpeg,
+    compare_cache_dir,
+    compilations_dir,
+    db_path,
+    instance_lock_path,
+    migrate_legacy_data_dir,
+    server_port,
+)
+from sm64_events.core.snapshot import UnreadyReader, reader_for
 from sm64_events.core.updater import UpdateService
 from sm64_events.core.version import __version__
 from sm64_events.detectors.anchors import AnchorDetector
@@ -27,24 +33,23 @@ from sm64_events.detectors.spawn import SpawnDetector
 from sm64_events.detectors.stage import StageChangeDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
-from sm64_events.core.snapshot import UnreadyReader, reader_for
+from sm64_events.inputs.sampler import InputSampler
+from sm64_events.inputs.service import InputsService
+from sm64_events.inputs.store import ChunkWriter
 from sm64_events.memory.layout import LAYOUT_ROWS, layout_for
 from sm64_events.memory.pj64 import Pj64Memory
 from sm64_events.memory.present import PresentHunter
 from sm64_events.replay.audio import ProcessAudioSource, SystemAudioSource
-from sm64_events.replay.frameclock import FrameClock
+from sm64_events.replay.compilation import CompilationBuilder, CompilationService
 from sm64_events.replay.config import ReplayConfig, apply_settings_file
 from sm64_events.replay.extract import ClipExtractor
+from sm64_events.replay.frameclock import FrameClock
 from sm64_events.replay.recorder import ReplayRecorder
 from sm64_events.replay.service import ReplayService, saved_attempt_ids
-from sm64_events.replay.compilation import CompilationBuilder, CompilationService
 from sm64_events.replay.video import DwmSurfaceVideoSource
 from sm64_events.replay.window import find_window
 from sm64_events.server.app import create_app
 from sm64_events.server.broadcaster import Broadcaster
-from sm64_events.inputs.sampler import InputSampler
-from sm64_events.inputs.service import InputsService
-from sm64_events.inputs.store import ChunkWriter
 from sm64_events.server.poller import Poller
 from sm64_events.storage.db import Database
 from sm64_events.storage.instance_lock import acquire_instance_lock
@@ -249,8 +254,12 @@ def build():
             logging.getLogger("sm64.tracker").exception(
                 "database unavailable - running broadcast-only")
             db = None
+    from sm64_events.core.paths import (
+        bundled_rank_standards,
+        bundled_sheet_ladders,
+        rank_standards_path,
+    )
     from sm64_events.ranks.standards import RankStandards
-    from sm64_events.core.paths import rank_standards_path, bundled_rank_standards, bundled_sheet_ladders
     ranks = RankStandards(rank_standards_path(), bundled_rank_standards(),
                           bundled_sheet_ladders())
     ranks.load()
@@ -263,8 +272,8 @@ def build():
         # only guards a missing or non-JSON FILE: reconcile validates each row
         # itself and returns the ones it skipped, so a wrong-shaped row costs
         # that row instead of every row after it (spec 2026-07-24 §10).
-        from sm64_events.tracking.defaults import reconcile_defaults
         from sm64_events.core.paths import bundled_defaults_seed
+        from sm64_events.tracking.defaults import reconcile_defaults
         try:
             seed_path = bundled_defaults_seed()
             if seed_path is not None:
@@ -441,15 +450,35 @@ def build():
         replay.map_aligner = _align_map_to_footage
 
         def _hold_one_answer_per_picture(clip, frame_map):
-            from sm64_events.replay.mapalign import (decode_grey,
-                                                     picture_runs, quantised)
+            from sm64_events.replay.mapalign import decode_grey, picture_runs, quantised
             grey = decode_grey(str(bundled_ffmpeg() or "ffmpeg"), clip)
             runs = picture_runs(grey)
             return quantised(frame_map, runs) if runs else None
 
         replay.map_quantiser = _hold_one_answer_per_picture
-        from sm64_events.replay.mapalign import AnchorStats
+
+        def _map_from_picture_ledger(clip, rows, start_ts, duration_s, fps):
+            # Item 40: capture's own per-picture record becomes the map.
+            # Same decode as the quantiser; the display-lag constant is the
+            # one the feed series subtracts, so both map kinds land in one
+            # domain and the anchor store's medians stay comparable.
+            from sm64_events.replay.mapalign import (
+                decode_grey,
+                ledger_map,
+                picture_runs,
+            )
+            from sm64_events.replay.service import DISPLAY_LAG_FRAMES
+            grey = decode_grey(str(bundled_ffmpeg() or "ffmpeg"), clip)
+            runs = picture_runs(grey)
+            if not runs:
+                return None
+            slot_count = max(1, round(duration_s * fps))
+            return ledger_map(slot_count, runs, rows, start_ts, fps,
+                              lag_frames=DISPLAY_LAG_FRAMES)
+
+        replay.ledger_mapper = _map_from_picture_ledger
         from sm64_events.core.paths import data_root
+        from sm64_events.replay.mapalign import AnchorStats
         replay.anchor_stats = AnchorStats(
             data_root() / "data" / "mapalign_anchor.json")
     # Reading back what was captured needs no controller address, so the
