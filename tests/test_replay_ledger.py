@@ -91,17 +91,30 @@ def test_the_ledger_is_bounded():
 
 def test_a_torn_grab_settling_lands_one_row_not_two():
     """A grab can catch the surface mid-update; the settled picture arrives
-    a few ms later and must fold into the same row (measured on attempt
-    4518: 118 of 647 row gaps under 20 ms against the game's ~33 ms
-    cadence). The row keeps the FIRST time and stamp -- the present
+    a few ms later WITH THE SAME STAMP and must fold into the same row
+    (measured on attempt 4518: 118 of 647 row gaps under 20 ms against the
+    game's ~33 ms cadence). The row keeps the FIRST time -- the present
     moment's."""
     ledger = PictureLedger()
     ledger.observe(_picture(30), 100.0, 7)
-    ledger.observe(_picture(31), 100.008, 8)     # the same present, settling
+    ledger.observe(_picture(31), 100.008, 7)     # the same present, settling
     ledger.observe(_picture(32), 100.041, 8)     # the next real picture
     rows = ledger.rows_between(99.0, 101.0)
     assert [(row["ts"], row["frame"]) for row in rows] == [
         (100.0, 7), (100.041, 8)]
+
+
+def test_a_catch_up_present_this_close_is_kept():
+    """After an emulator stall the game presents several REAL pictures in
+    a burst (his lava clip: stamp advances of +3..+7). A close row with a
+    DIFFERENT stamp is one of those, never a torn settle -- eating it
+    would shift every later pairing by a picture."""
+    ledger = PictureLedger()
+    ledger.observe(_picture(33), 100.0, 7)
+    ledger.observe(_picture(34), 100.012, 8)     # burst: real, kept
+    rows = ledger.rows_between(99.0, 101.0)
+    assert [(row["ts"], row["frame"]) for row in rows] == [
+        (100.0, 7), (100.012, 8)]
 
 
 def test_caller_extras_ride_the_row():

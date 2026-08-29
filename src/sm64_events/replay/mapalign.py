@@ -202,6 +202,11 @@ EVIDENCE_CAP = 6.0
 # ...and votes at all only when its best offset lands within this many
 # noise-floors -- see the vote rule in measure_windows.
 VOTE_FLOOR = 2.0
+# ...and only when its slots actually SHOW digits: a picture with next to
+# no lit ink (a menu, the lead-in, a star dance) would otherwise "vote"
+# for whichever offset predicts the least ink -- chance preference with
+# nothing on screen. A single digit lights ~30+ pixels.
+MIN_VOTE_INK = 12.0
 # Switch-cost scaling by WHERE: stepping at a physically expressible seam
 # (the map's own advance is irregular there) is near-free; stepping in the
 # middle of a regular stretch needs overwhelming sustained evidence.
@@ -258,7 +263,10 @@ def measure_windows(ink: np.ndarray, rows_by_slot,
                if offset % 2 == 0]
     pictures, cheap = _pictures_and_seams(ink, rows_by_slot, frame_map, runs)
     costs = _picture_costs(ink, rows_by_slot, weights, offsets, pictures)
-    path = _best_path(costs, offsets, anchor.offset, cheap)
+    ink_means = np.array([
+        float(np.mean(ink[first:first + count])) if count else 0.0
+        for first, count in pictures])
+    path = _best_path(costs, offsets, anchor.offset, cheap, ink_means)
     return _stretches_of(path, pictures, offsets, ink, rows_by_slot, weights)
 
 
@@ -312,7 +320,7 @@ def _picture_costs(ink, rows_by_slot, weights, offsets, pictures):
     return costs
 
 
-def _best_path(costs, offsets, anchor_offset, cheap):
+def _best_path(costs, offsets, anchor_offset, cheap, ink_means):
     at_anchor = costs[:, offsets.index(anchor_offset)]
     floor = float(np.median(at_anchor[at_anchor > 0])) \
         if np.any(at_anchor > 0) else 1.0
@@ -324,6 +332,7 @@ def _best_path(costs, offsets, anchor_offset, cheap):
     # unexplained stretch would random-walk its way into a spurious
     # switch. No fit anywhere = no vote, and the path carries through.
     costs[costs.min(axis=1) >= VOTE_FLOOR * floor] = 0.0
+    costs[ink_means < MIN_VOTE_INK] = 0.0
     switch = VITERBI_SWITCH * floor
     best = switch * np.abs((np.array(offsets) - anchor_offset)
                            // 2).astype(float)
@@ -335,6 +344,12 @@ def _best_path(costs, offsets, anchor_offset, cheap):
             moves = best + switch * scale * np.abs(
                 (np.array(offsets) - offsets[column]) // 2)
             source = int(np.argmin(moves))
+            # STAY on a tie: an evidence-free stretch (a star dance, a
+            # dark pause) otherwise lets argmin's first-index habit walk
+            # the path across free seams (measured: his pyramid clip's
+            # post-grab region marched -8..+8 across five such stretches).
+            if moves[column] <= moves[source]:
+                source = column
             reached[column] = moves[source] + costs[row, column]
             back[row, column] = source
         best = reached
@@ -657,11 +672,97 @@ def _paint_rising(out: list, numbered: list[tuple[int, int, int]],
             out[slot] = frame
 
 
+# Phase unwrapping (round 32 item 50) -- the per-row closed form behind
+# "We MUST achieve 100% accuracy with each frame."
+#
+# composition = edge(stamp) + phase, and the present pipeline's delay is
+# SMOOTH: it drifts by milliseconds per second and never jumps. So the
+# whole-frame part of the delay -- the integer k in delay = phase +
+# k*period -- is chosen per row to keep the implied delay continuous
+# (plain unwrapping), and the displayed frame is stamp - 1 - k, exact up
+# to ONE whole-clip constant that the global digit anchor already
+# measures. Measured on his three clips (2026-08-28): the perfect one's
+# phases sit mid-period (16-28 ms of 33); the two wrong ones sit ON the
+# edge (24-36 ms), where the stamp flickers +-1 per row as jitter crosses
+# it -- a per-row error no stretch-level instrument can see, and exactly
+# what the unwrap resolves.
+FRAME_PERIOD_S = 1 / 30.0
+# Follow the delay's slow drift without chasing per-row jitter.
+UNWRAP_DRIFT_GAIN = 0.2
+# A row whose implied whole-frame correction is this large is not riding
+# the smooth pipeline (an emulator stall's catch-up burst): no estimate,
+# and the rising rule interpolates its run instead.
+UNWRAP_MAX_WHOLE_FRAMES = 4
+
+
+def unwrapped_display(rows: list[dict]) -> dict[int, int]:
+    """row index -> displayed-frame estimate (stamp - 1 - k), CANONICAL:
+    the whole-frame split is chosen so the clip's median implied delay
+    lands inside one frame period. That makes the one remaining constant
+    the session's true pipeline delay -- the same number on every clip --
+    so the digit anchor can confirm it where the digits are strong and
+    the learned store can supply it where they are flat (his island clip:
+    full-up held for seconds, a 0.03-wide score curve). Rows without a
+    stamp or a phase, or off the smooth pipeline, are simply absent."""
+    held: list[tuple[int, int, int, float]] = []   # (index, stamp, k, lag)
+    target_lag: float | None = None
+    for index, row in enumerate(rows):
+        stamp, phase = row.get("frame"), row.get("phase")
+        if stamp is None or phase is None:
+            continue
+        if target_lag is None:
+            whole = 0
+            lag = float(phase)
+        else:
+            whole = round((target_lag - phase) / FRAME_PERIOD_S)
+            lag = phase + whole * FRAME_PERIOD_S
+        if abs(whole) > UNWRAP_MAX_WHOLE_FRAMES:
+            continue                       # a stall's burst, not the pipeline
+        target_lag = (lag if target_lag is None
+                      else (1 - UNWRAP_DRIFT_GAIN) * target_lag
+                      + UNWRAP_DRIFT_GAIN * lag)
+        held.append((index, stamp, whole, lag))
+    if not held:
+        return {}
+    lags = sorted(lag for _index, _stamp, _whole, lag in held)
+    canonical = int(lags[len(lags) // 2] // FRAME_PERIOD_S)
+    return {index: stamp - 1 - whole - canonical
+            for index, stamp, whole, _lag in held}
+
+
 # Beyond this a run has NO ledger row: half a picture period (pictures are
 # ~33 ms apart), which also guarantees no row can match two runs.
 LEDGER_MATCH_TOLERANCE_S = 0.017
 # Fewer matched runs than this and the ledger does not cover the clip.
 LEDGER_MIN_MATCHED = 3
+
+
+def _inject_orphans(entries, stamped, used, bias, start_ts, fps,
+                    display_of) -> None:
+    """Item 50: a row no run matched is a picture the encoded-side
+    boundary detector merged away -- his pyramid's dark corridor fused
+    three near-identical pictures into one 4-slot run and frames 276-277
+    fell out of the map entirely. The ledger saw them (one row per
+    present, exact dedup), so each orphaned row carves its slots out of
+    the over-merged run at its own composition time. Only a run long
+    enough to PROVE a merge takes an injection (two pictures of slots,
+    split a full picture inside): jitter makes tie-losing rows look
+    orphaned, and splitting an honest run shreds the map. The pixels may
+    REFINE boundaries; they may never delete a picture."""
+    slots_per_picture = max(1, round(fps / 30.0))
+    for order, (ts, row_index) in enumerate(stamped):
+        if order in used:
+            continue
+        split = round((ts - bias - start_ts) * fps - 0.5)
+        for entry in entries:
+            start, length, _value = entry
+            if (length >= 2 * slots_per_picture
+                    and start + slots_per_picture <= split
+                    <= start + length - slots_per_picture):
+                tail = start + length - split
+                entry[1] = split - start
+                entries.append([split, tail, display_of(row_index)])
+                break
 
 
 def ledger_map(slot_count: int, runs: list[tuple[int, int]],
@@ -684,11 +785,18 @@ def ledger_map(slot_count: int, runs: list[tuple[int, int]],
     store's medians stay comparable. Too few matches: None, and the
     series path answers instead.
     """
-    stamped = sorted((row["ts"], row["frame"]) for row in rows
+    displays = unwrapped_display(rows)
+
+    def display_of(index: int) -> float:
+        held = displays.get(index)
+        return float(held if held is not None
+                     else rows[index]["frame"] - lag_frames)
+
+    stamped = sorted((row["ts"], index) for index, row in enumerate(rows)
                      if row.get("frame") is not None)
     if not stamped or not runs:
         return None
-    times = [ts for ts, _frame in stamped]
+    times = [ts for ts, _index in stamped]
     walls = [start_ts + (start + 0.5) / fps for start, _length in runs]
 
     def nearest(wall: float) -> int | None:
@@ -708,17 +816,18 @@ def ledger_map(slot_count: int, runs: list[tuple[int, int]],
     bias = sorted(deltas)[len(deltas) // 2]
 
     matched: dict[int, float] = {}
+    used: set[int] = set()
     for index, wall in enumerate(walls):
         found = nearest(wall + bias)
         if found is not None and (
                 abs(times[found] - (wall + bias))
                 <= LEDGER_MATCH_TOLERANCE_S):
-            matched[index] = float(stamped[found][1] - lag_frames)
+            matched[index] = display_of(stamped[found][1])
+            used.add(found)
     if len(matched) < max(LEDGER_MIN_MATCHED, len(runs) // 2):
         return None
 
-    numbered: list[tuple[int, int, int]] = []
-    values: list[float] = []
+    entries: list[list] = []                    # [start, length, value]
     previous_match: tuple[int, float] | None = None
     for index, (start, length) in enumerate(runs):
         value = matched.get(index)
@@ -730,8 +839,13 @@ def ledger_map(slot_count: int, runs: list[tuple[int, int]],
                 value = previous_match[1] + (index - previous_match[0])
         else:
             previous_match = (index, value)
-        numbered.append((index, start, length))
-        values.append(value)
+        entries.append([start, length, value])
+
+    _inject_orphans(entries, stamped, used, bias, start_ts, fps, display_of)
+    entries.sort(key=lambda entry: entry[0])
+    numbered = [(order, start, length)
+                for order, (start, length, _value) in enumerate(entries)]
+    values = [float(value) for _start, _length, value in entries]
     out: list = [None] * slot_count
     _paint_rising(out, numbered, values)
     return out

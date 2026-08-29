@@ -542,3 +542,107 @@ def test_the_cheap_seams_are_what_make_the_blip_flippable():
         assert wrong >= 8, "pricing seams flat should leave the blip"
     finally:
         mapalign.SWITCH_AT_IRREGULAR = original
+
+
+# -- phase unwrapping: the per-row closed form (item 50) --------------------
+
+def test_unwrap_resolves_edge_flicker_per_row():
+    """The pyramid's failure: the present sits ON the frame edge, so the
+    stamp flickers +-1 with jitter. The phase says which side each row
+    landed on, and the unwrap resolves every one exactly."""
+    period = 1 / 30
+    rows = []
+    for order in range(40):
+        crossed = order % 3 == 0                # jitter across the edge
+        rows.append({"ts": order * period,
+                     "frame": 100 + order + (1 if crossed else 0),
+                     "phase": 0.002 if crossed else 0.031})
+    display = mapalign.unwrapped_display(rows)
+    # One consistent staircase: the flicker resolves to a SINGLE constant
+    # (whose absolute value is the global anchor's job, not the unwrap's).
+    assert len({display[order] - (100 + order)
+                for order in range(40)}) == 1
+
+
+def test_unwrap_follows_slow_drift_across_a_wrap():
+    """The present drifts slowly; when it crosses an edge the stamp gains
+    a frame and the phase wraps -- the unwrap keeps the display
+    continuous."""
+    period = 1 / 30
+    rows = []
+    for order in range(60):
+        drift = 0.030 + order * 0.0002          # ~0.2 ms per picture
+        crossed = drift >= period
+        rows.append({"ts": order * period,
+                     "frame": 100 + order + (1 if crossed else 0),
+                     "phase": drift - (period if crossed else 0.0)})
+    display = mapalign.unwrapped_display(rows)
+    # One consistent constant across the wrap (its value is canonical to
+    # the implied delay, not to this test's arithmetic).
+    assert len({display[order] - (100 + order) for order in range(60)}) == 1
+
+
+def test_unwrap_skips_a_stall_burst_instead_of_guessing():
+    period = 1 / 30
+    rows = [{"ts": order * period, "frame": 100 + order, "phase": 0.020}
+            for order in range(10)]
+    rows.append({"ts": 11 * period, "frame": 117, "phase": 0.276})
+    display = mapalign.unwrapped_display(rows)
+    assert 10 not in display                    # the stall row: no estimate
+    assert display[9] == 108                    # neighbours untouched
+
+
+def test_rows_without_phase_are_absent_not_wrong():
+    display = mapalign.unwrapped_display(
+        [{"ts": 0.0, "frame": 100}, {"ts": 0.03, "frame": 101,
+                                     "phase": 0.02}])
+    assert 0 not in display and display[1] == 100
+
+
+def test_ledger_map_prefers_the_unwrap_over_the_constant():
+    """A flickering stamp with phases lands EXACT through ledger_map; the
+    same rows without phases keep the constant rule (and its error)."""
+    runs = [(2 * order, 2) for order in range(10)]
+    rows = []
+    for order in range(10):
+        crossed = order % 2 == 0
+        rows.append({"ts": LEDGER_T0 + (2 * order + 0.5) / FPS,
+                     "frame": 101 + order + (1 if crossed else 0),
+                     "phase": 0.002 if crossed else 0.031})
+    out = mapalign.ledger_map(20, runs, rows, LEDGER_T0, FPS, lag_frames=1)
+    base = out[0]
+    assert out == [base + order for order in range(10) for _ in (0, 1)]
+    bare = [{key: row[key] for key in ("ts", "frame")} for row in rows]
+    flickery = mapalign.ledger_map(20, runs, bare, LEDGER_T0, FPS,
+                                   lag_frames=1)
+    flat = {flickery[slot] - slot // 2 for slot in range(0, 20, 2)}
+    assert len(flat) > 1                        # the constant cannot fix it
+
+
+def test_unwrap_is_canonical_across_baselines():
+    """A delay past one whole period folds into the display estimate, so
+    the same physical pipeline yields the same numbers whatever the first
+    row's branch -- the constant means ONE thing on every clip."""
+    period = 1 / 30
+    short = [{"ts": order * period, "frame": 100 + order, "phase": 0.020}
+             for order in range(20)]
+    long_lag = [{"ts": order * period, "frame": 100 + order, "phase": 0.040}
+                for order in range(20)]
+    near = mapalign.unwrapped_display(short)
+    far = mapalign.unwrapped_display(long_lag)
+    assert near[5] - near[0] == far[5] - far[0] == 5
+    assert far[0] == near[0] - 1          # one extra whole frame of delay
+
+
+def test_an_orphaned_row_carves_its_pictures_out_of_a_merged_run():
+    """Item 50's headline: the encoded-side boundary detector can merge
+    near-identical pictures into one run (his pyramid's dark corridor:
+    three pictures, one 4-slot run, frames 276-277 gone from the map).
+    The ledger saw every one of them, so the rows no run matched split
+    the merged run at their own composition times -- the pixels may
+    refine boundaries, never delete a picture."""
+    runs = [(0, 2), (2, 6), (8, 2)]              # pictures 1-3 merged
+    rows = [{"ts": LEDGER_T0 + (2 * order + 0.5) / FPS, "frame": 101 + order}
+            for order in range(5)]
+    out = mapalign.ledger_map(10, runs, rows, LEDGER_T0, FPS, lag_frames=1)
+    assert out == [100, 100, 101, 101, 102, 102, 103, 103, 104, 104]

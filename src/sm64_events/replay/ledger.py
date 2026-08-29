@@ -85,8 +85,14 @@ class PictureLedger:
                 return False
             self._prev_shape = shape
             self._prev_sample = sample
-            if self._rows and capture_ts - self._rows[-1][0] < MIN_ROW_GAP_S:
-                return False           # a torn grab settling, not a new picture
+            if (self._rows
+                    and capture_ts - self._rows[-1][0] < MIN_ROW_GAP_S
+                    and frame == self._rows[-1][1]):
+                # A torn grab settling shares its present's stamp. A row
+                # this close with a DIFFERENT stamp is a catch-up present
+                # after an emulator stall (measured on his lava clip:
+                # stamp advances of +3..+7) -- a real picture, kept.
+                return False
             extras = dict(extras or {})
             for name, probe in self.stamps.items():
                 try:
