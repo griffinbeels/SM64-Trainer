@@ -471,6 +471,11 @@ class ReplayService:
         except Exception:
             log.exception("frame-map alignment failed; keeping the built map")
             return
+        # The aligner may answer (global, windows): the pipeline lag drifts
+        # by whole frames WITHIN a clip (attempt 4518's three shelves), so
+        # each window of footage names its own offset where its digits can.
+        found, windows = (found if isinstance(found, tuple)
+                          else (found, []))
         if found is None:
             # Digits unreadable in THIS clip: inherit the anchor other clips
             # measured (the stats store's median) rather than go uncorrected.
@@ -486,9 +491,17 @@ class ReplayService:
             meta["frame_map_aligned"] = False
             return
         # The correction is applied in the FRAME domain: an odd slot shift
-        # would split pictures that quantising just unified.
-        meta["frame_map"] = mapalign.frame_corrected(meta["frame_map"],
-                                                     found.offset)
+        # would split pictures that quantising just unified. With windows,
+        # each picture takes its nearest confident window's offset --
+        # piecewise, which is what a stepped lag needs; without, the global
+        # offset applies to everything as before.
+        if windows:
+            meta["frame_map"] = mapalign.window_corrected(meta["frame_map"],
+                                                          windows)
+            meta["frame_map_windows"] = [list(row) for row in windows]
+        else:
+            meta["frame_map"] = mapalign.frame_corrected(meta["frame_map"],
+                                                         found.offset)
         meta["frame_map_aligned"] = True
         meta["frame_map_offset"] = found.offset
         meta["frame_map_fit"] = round(found.fit, 4)

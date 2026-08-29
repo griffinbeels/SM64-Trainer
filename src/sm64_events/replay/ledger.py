@@ -44,6 +44,15 @@ SAMPLE_STRIDE = 8
 # own retention decides how far back a clip can be cut, never this.
 RETENTION_S = 1800.0
 _ROWS_CEILING = 35                     # eviction sizing only, above real 30/s
+# A grab can catch the surface MID-update: the torn picture differs from
+# both neighbours, so one presented picture lands TWO rows a few ms apart
+# (measured on attempt 4518: 118 of 647 gaps under 20 ms against the
+# game's ~33 ms picture cadence). A change this soon after the last row is
+# that same present settling -- fold it into the row it belongs to (the
+# first, whose time and stamp are the present moment's) instead of
+# appending a second. The game presents a NEW picture at most every 33 ms,
+# so nothing real is this close.
+MIN_ROW_GAP_S = 0.020
 
 
 class PictureLedger:
@@ -61,9 +70,12 @@ class PictureLedger:
         self.stamps: dict[str, Callable[[], object]] = {}
 
     def observe(self, bgra, capture_ts: float | None,
-                frame: int | None) -> bool:
+                frame: int | None, extras: dict | None = None) -> bool:
         """One grab off the capture thread. True = a NEW picture (row
-        landed). Never raises: a ledger bug must not cost the capture."""
+        landed). `extras` are caller-computed per-grab stamps (the registry
+        covers zero-arg probes; a stamp that needs THIS grab's own time --
+        the frame-edge phase -- arrives here instead). Never raises: a
+        ledger bug must not cost the capture."""
         try:
             if capture_ts is None:
                 return False           # a picture nobody can place in time
@@ -73,7 +85,9 @@ class PictureLedger:
                 return False
             self._prev_shape = shape
             self._prev_sample = sample
-            extras: dict = {}
+            if self._rows and capture_ts - self._rows[-1][0] < MIN_ROW_GAP_S:
+                return False           # a torn grab settling, not a new picture
+            extras = dict(extras or {})
             for name, probe in self.stamps.items():
                 try:
                     extras[name] = probe()

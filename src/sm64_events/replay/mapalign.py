@@ -40,6 +40,7 @@ The instrument is shared, not copied: `tools/score_frame_map.py` scores a
 clip with this same code, so the tool cannot drift from what extraction
 actually did.
 """
+import itertools
 import json
 import subprocess
 from bisect import bisect_right
@@ -170,6 +171,251 @@ def measure_offset(ink: np.ndarray, rows_by_slot,
     best, margin = verdict
     return Alignment(offset=best, fit=scores[best], margin=margin,
                      paired=paired_counts[best])
+
+
+# The per-picture anchor (round 32 items 41-43). One clip, two error
+# shapes, measured on attempt 4518: a long shelf (the map a whole frame
+# out for the last 7.6 s -- the pipeline lag drifts by whole frames WITHIN
+# a clip and the rising fit smooths across the step) and short BLIPS (a
+# few pictures wrong by one around a lag transition or a dropped frame --
+# his panel frames 30-33, one frame behind the screen, healing at 34).
+# A global offset can fix neither; a 4-second window fixes the shelf and
+# is structurally blind to a 4-picture blip. So every PICTURE chooses its
+# own offset by best path: the digits' evidence per picture, against a
+# switching cost -- long shelves and short blips fall out of one rule,
+# and a seam lands exactly where the evidence flips.
+#
+# All four knobs below are DIMENSIONLESS (multiples of the clip's own
+# noise floor at the global anchor), so they transfer across clips and
+# encoders where raw thresholds would not, and all sit on a wide plateau:
+# the synthetic worlds (a shelf with its seam, a 4-picture and a 2-picture
+# blip at physical seams, a 4 s noise stretch) resolve identically for
+# switch 4-8 x cap 6-14 (swept 2026-08-28).
+VITERBI_SWITCH = 4.0
+# Each picture's evidence is CAPPED at this many noise-floors: a picture
+# the model cannot explain at ANY offset (display obscured, a fade) then
+# prefers nothing instead of dragging the path around, while a genuinely
+# misaligned picture -- whose RIGHT offset still fits well -- keeps its
+# full vote. The cap is what lets the switch cost stay small enough for a
+# two-picture blip to flip.
+EVIDENCE_CAP = 6.0
+# ...and votes at all only when its best offset lands within this many
+# noise-floors -- see the vote rule in measure_windows.
+VOTE_FLOOR = 2.0
+# Switch-cost scaling by WHERE: stepping at a physically expressible seam
+# (the map's own advance is irregular there) is near-free; stepping in the
+# middle of a regular stretch needs overwhelming sustained evidence.
+SWITCH_AT_IRREGULAR = 0.25
+SWITCH_AT_REGULAR = 3.0
+
+
+def _slot_residuals(ink: np.ndarray, rows_by_slot, weights,
+                    offset: int) -> list:
+    """Squared prediction error per slot under one offset; None = unpaired."""
+    out: list = []
+    for slot in range(len(ink)):
+        index = slot + offset
+        row = rows_by_slot[index] if 0 <= index < len(rows_by_slot) else None
+        out.append(None if row is None
+                   else float((ink[slot] - row @ weights) ** 2))
+    return out
+
+
+def _paired(ink: np.ndarray, rows_by_slot, offset: int, lo: int, hi: int):
+    rows, targets = [], []
+    for slot in range(lo, hi):
+        index = slot + offset
+        row = rows_by_slot[index] if 0 <= index < len(rows_by_slot) else None
+        if row is not None:
+            rows.append(row)
+            targets.append(ink[slot])
+    return np.array(rows), np.array(targets)
+
+
+def measure_windows(ink: np.ndarray, rows_by_slot,
+                    anchor: Alignment,
+                    span: int = SEARCH_SLOTS,
+                    frame_map: list | None = None,
+                    runs: list[tuple[int, int]] | None = None) -> list[tuple]:
+    """Per-stretch offsets: [(lo, hi, offset, fit, margin)] TILING the clip.
+
+    Glyph weights are fitted ONCE at the global anchor's offset and held
+    fixed, so every score is a pure prediction test -- a local refit would
+    flatter every candidate. Each picture's evidence is its slots' summed
+    squared residual under each EVEN candidate offset (odd = half a game
+    frame, meaningless); the best path through those choices pays
+    VITERBI_SWITCH noise-floors per frame of change, so a single noisy
+    picture cannot flip the answer and a sustained disagreement -- shelf
+    or blip -- always does. Pictures the pixels cannot answer carry no
+    evidence and inherit their neighbours through the path. Empty list =
+    the weights cannot be fitted at all; the caller falls back to the
+    global offset."""
+    design, target = _paired(ink, rows_by_slot, anchor.offset, 0, len(ink))
+    if len(target) < MIN_PAIRED_SLOTS or float(np.var(target)) == 0.0:
+        return []
+    weights, *_ = np.linalg.lstsq(design, target, rcond=None)
+    offsets = [offset for offset in range(-span, span + 1)
+               if offset % 2 == 0]
+    pictures, cheap = _pictures_and_seams(ink, rows_by_slot, frame_map, runs)
+    costs = _picture_costs(ink, rows_by_slot, weights, offsets, pictures)
+    path = _best_path(costs, offsets, anchor.offset, cheap)
+    return _stretches_of(path, pictures, offsets, ink, rows_by_slot, weights)
+
+
+def _pictures_and_seams(ink, rows_by_slot, frame_map, runs):
+    """The path's units and its cheap switch points."""
+    if runs is not None and frame_map is not None:
+        # The encoded pictures themselves (a map-value walk would merge a
+        # DUP -- two pictures sharing a value, precisely the error being
+        # corrected -- and hide its boundary).
+        pictures = list(runs)
+        # A lag step is only physically expressible where the map's
+        # advance across a picture boundary is irregular (a skip or a dup
+        # -- truth and stamp advance one per picture, so their difference
+        # can move nowhere else). Entering such a picture switches
+        # cheaply; everywhere else a switch costs a multiple, which is
+        # what keeps a noisy stretch from wandering while a real step
+        # lands exactly on its seam.
+        cheap = [False]
+        for before, entering in itertools.pairwise(pictures):
+            left = frame_map[before[0]] if before[0] < len(frame_map) else None
+            right = (frame_map[entering[0]]
+                     if entering[0] < len(frame_map) else None)
+            cheap.append(left is None or right is None or right - left != 1)
+    else:
+        pictures = []                             # (first_slot, slot_count)
+        for slot in range(len(ink)):
+            if pictures and slot == pictures[-1][0] + pictures[-1][1] \
+                    and rows_by_slot[slot] is not None \
+                    and rows_by_slot[slot - 1] is not None \
+                    and np.array_equal(rows_by_slot[slot],
+                                       rows_by_slot[slot - 1]):
+                pictures[-1] = (pictures[-1][0], pictures[-1][1] + 1)
+            else:
+                pictures.append((slot, 1))
+        cheap = [False] * len(pictures)
+    return pictures, cheap
+
+
+def _picture_costs(ink, rows_by_slot, weights, offsets, pictures):
+    residuals = {offset: _slot_residuals(ink, rows_by_slot, weights, offset)
+                 for offset in offsets}
+    costs = np.zeros((len(pictures), len(offsets)))
+    for row, (first, count) in enumerate(pictures):
+        for column, offset in enumerate(offsets):
+            total = 0.0
+            for slot in range(first, first + count):
+                value = residuals[offset][slot]
+                if value is not None:
+                    total += value
+            costs[row, column] = total
+    return costs
+
+
+def _best_path(costs, offsets, anchor_offset, cheap):
+    at_anchor = costs[:, offsets.index(anchor_offset)]
+    floor = float(np.median(at_anchor[at_anchor > 0])) \
+        if np.any(at_anchor > 0) else 1.0
+    costs = np.minimum(costs, EVIDENCE_CAP * floor)
+    # A picture votes only when its best offset ACTUALLY FITS -- lands
+    # near the clip's own noise floor. Merely being below the cap is not
+    # enough: pure noise lands there by chance on ~half its pictures
+    # (measured 54 of 120 on the synthetic obscured stretch), and a long
+    # unexplained stretch would random-walk its way into a spurious
+    # switch. No fit anywhere = no vote, and the path carries through.
+    costs[costs.min(axis=1) >= VOTE_FLOOR * floor] = 0.0
+    switch = VITERBI_SWITCH * floor
+    best = switch * np.abs((np.array(offsets) - anchor_offset)
+                           // 2).astype(float)
+    back = np.zeros((len(costs), len(offsets)), dtype=int)
+    for row in range(len(costs)):
+        scale = SWITCH_AT_IRREGULAR if cheap[row] else SWITCH_AT_REGULAR
+        reached = np.full(len(offsets), np.inf)
+        for column in range(len(offsets)):
+            moves = best + switch * scale * np.abs(
+                (np.array(offsets) - offsets[column]) // 2)
+            source = int(np.argmin(moves))
+            reached[column] = moves[source] + costs[row, column]
+            back[row, column] = source
+        best = reached
+    state = int(np.argmin(best))
+    path = [0] * len(costs)
+    for row in range(len(costs) - 1, -1, -1):
+        path[row] = state
+        state = back[row, state]
+    return path
+
+
+def _stretches_of(path, pictures, offsets, ink, rows_by_slot, weights):
+    # Merge same-offset pictures into stretches; report each stretch's own
+    # explained variance so the sidecar says how sure each one is.
+    stretches: list[list] = []
+    for (first, count), column in zip(pictures, path):
+        offset = offsets[column]
+        if stretches and stretches[-1][2] == offset:
+            stretches[-1][1] = first + count
+        else:
+            stretches.append([first, first + count, offset, 0.0, 0.0])
+    for stretch in stretches:
+        rows, targets = _paired(ink, rows_by_slot, stretch[2],
+                                stretch[0], stretch[1])
+        if len(targets) and float(np.var(targets)) > 0.0:
+            residual = targets - rows @ weights
+            stretch[3] = round(
+                1 - float(np.var(residual) / np.var(targets)), 4)
+    return [tuple(stretch) for stretch in stretches]
+
+
+def _value_runs(frame_map: list) -> list[tuple[int, int, int]]:
+    """(first_slot, slot_count, value) per run of equal non-None values."""
+    runs: list[tuple[int, int, int]] = []
+    for slot, value in enumerate(frame_map):
+        if value is None:
+            continue
+        if (runs and runs[-1][2] == value
+                and slot == runs[-1][0] + runs[-1][1]):
+            runs[-1] = (runs[-1][0], runs[-1][1] + 1, value)
+        else:
+            runs.append((slot, 1, value))
+    return runs
+
+
+def window_corrected(frame_map: list, windows: list[tuple]) -> list:
+    """Apply each picture's shelf offset, in frames.
+
+    Per PICTURE, not per slot -- a per-slot walk would split the very
+    duplicates quantising unified. A downward step that would make a
+    picture regress is clamped to previous+1: right at a seam the map had
+    smoothed the step this reverses, so a picture of slack there is the
+    honest floor."""
+    if not windows:
+        return list(frame_map)
+    out = list(frame_map)
+    previous = None
+    active_delta = None
+    at = 0
+    for start, count, value in _value_runs(frame_map):
+        middle = start + count / 2
+        while at + 1 < len(windows) and windows[at][1] <= middle:
+            at += 1
+        wanted = round(windows[at][2] / 2)
+        if active_delta is None:
+            active_delta = wanted
+        elif wanted != active_delta and (previous is None
+                                         or value + wanted > previous):
+            # An UPWARD step is a skip and always expressible. A DOWNWARD
+            # one needs the original map to advance by 2+ here, or the
+            # corrected series would regress -- and clamping previous+1
+            # instead would CASCADE (+1 forever on a skipless stretch).
+            # Hold the old shelf until the first boundary that absorbs it.
+            active_delta = wanted
+        corrected = value + active_delta
+        if previous is not None and corrected <= previous:
+            corrected = previous + 1           # safety net; deferral above
+        previous = corrected
+        for slot in range(start, start + count):
+            out[slot] = corrected
+    return out
 
 
 def gate(scores: dict) -> tuple[int, float] | None:
@@ -505,15 +751,42 @@ def probe_width(ffmpeg: str, clip: Path) -> int:
         return REFERENCE_WIDTH
 
 
-def align_clip(clip: Path, frame_map, stick_of, ffmpeg: str,
-               width: int | None = None) -> Alignment | None:
-    """Measure one clip's map against its own footage. None = no verdict."""
+def _ink_and_rows(clip: Path, frame_map, stick_of, ffmpeg: str,
+                  width: int | None):
     rows = rows_for_map(frame_map, stick_of)
     if sum(1 for row in rows if row is not None) < MIN_PAIRED_SLOTS:
-        return None
+        return None, None
     if width is None:
         width = probe_width(ffmpeg, clip)
     pixels = decode_region(ffmpeg, clip, region_for_width(width))
     if len(pixels) == 0:
+        return None, None
+    return ink_per_slot(pixels), rows
+
+
+def align_clip(clip: Path, frame_map, stick_of, ffmpeg: str,
+               width: int | None = None) -> Alignment | None:
+    """Measure one clip's map against its own footage. None = no verdict."""
+    ink, rows = _ink_and_rows(clip, frame_map, stick_of, ffmpeg, width)
+    if ink is None:
         return None
-    return measure_offset(ink_per_slot(pixels), rows)
+    return measure_offset(ink, rows)
+
+
+def windowed_alignment(clip: Path, frame_map, stick_of, ffmpeg: str,
+                       width: int | None = None
+                       ) -> tuple[Alignment | None, list[tuple]]:
+    """The global verdict AND the per-window ones, from one decode.
+
+    (None, []) = the pixels cannot answer at all; (anchor, []) = a global
+    verdict but no window passed its own gate, so the caller applies the
+    global offset exactly as before."""
+    ink, rows = _ink_and_rows(clip, frame_map, stick_of, ffmpeg, width)
+    if ink is None:
+        return None, []
+    anchor = measure_offset(ink, rows)
+    if anchor is None:
+        return None, []
+    runs = picture_runs(decode_grey(ffmpeg, clip))
+    return anchor, measure_windows(ink, rows, anchor, frame_map=frame_map,
+                                   runs=runs or None)

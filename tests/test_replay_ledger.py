@@ -87,3 +87,27 @@ def test_the_ledger_is_bounded():
     for tick in range(200):
         ledger.observe(_picture(1000 + tick), 100.0 + tick * 0.033, tick)
     assert len(ledger.rows_between(0.0, 1e12)) == 35
+
+
+def test_a_torn_grab_settling_lands_one_row_not_two():
+    """A grab can catch the surface mid-update; the settled picture arrives
+    a few ms later and must fold into the same row (measured on attempt
+    4518: 118 of 647 row gaps under 20 ms against the game's ~33 ms
+    cadence). The row keeps the FIRST time and stamp -- the present
+    moment's."""
+    ledger = PictureLedger()
+    ledger.observe(_picture(30), 100.0, 7)
+    ledger.observe(_picture(31), 100.008, 8)     # the same present, settling
+    ledger.observe(_picture(32), 100.041, 8)     # the next real picture
+    rows = ledger.rows_between(99.0, 101.0)
+    assert [(row["ts"], row["frame"]) for row in rows] == [
+        (100.0, 7), (100.041, 8)]
+
+
+def test_caller_extras_ride_the_row():
+    """Per-grab stamps the registry cannot compute (they need THIS grab's
+    own time -- the frame-edge phase) arrive as an argument and merge."""
+    ledger = PictureLedger()
+    ledger.observe(_picture(40), 100.0, 7, {"phase": 0.011})
+    row = ledger.rows_between(99.0, 101.0)[0]
+    assert row["phase"] == 0.011 and row["frame"] == 7

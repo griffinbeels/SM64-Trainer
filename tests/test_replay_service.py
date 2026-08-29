@@ -870,3 +870,61 @@ def test_no_ledger_on_the_recorder_changes_nothing(tmp_path):
     svc.ledger_mapper = lambda *a: [1, 2]
     res = svc.view(42)
     assert res["frame_map"] is None
+
+
+def test_windowed_alignment_corrects_each_shelf_and_says_so(tmp_path):
+    """Items 41-43: the aligner may answer (global, windows); each picture
+    then takes its shelf's own offset and the sidecar records the shelves,
+    so a 'panel is off HERE' report is answerable from the file."""
+    import json as _json
+
+    from sm64_events.replay.frameclock import FrameClock
+    from sm64_events.replay.mapalign import Alignment
+
+    clock = FrameClock(now=lambda: 0.0)
+    base = (T0 - timedelta(seconds=3)).timestamp()
+    for n in range(17 * 30):
+        clock._now = lambda t=base + n / 30: t
+        # One skipped frame at n=310 (its picture never captured): the
+        # place a downward shelf step becomes expressible.
+        clock.mark(7000 + n + (1 if n >= 310 else 0))
+    svc = make_service(tmp_path, [attempt()])
+    svc._frame_clock = clock
+    windows = [(0, 500, 2, 0.9, 0.5), (500, 17 * 60, 0, 0.9, 0.5)]
+    svc.map_aligner = lambda clip, fm, a: (
+        Alignment(offset=0, fit=0.8, margin=0.3, paired=900), windows)
+    res = svc.view(42)
+    fm = res["frame_map"]
+    # +2 slots = +1 frame on the early shelf, untouched on the late one --
+    # proven against a twin service whose aligner applies no correction.
+    twin = make_service(tmp_path / "twin", [attempt()])
+    twin._frame_clock = clock
+    twin.map_aligner = lambda clip, fm, a: (
+        Alignment(offset=0, fit=0.8, margin=0.3, paired=900), [])
+    plain = twin.view(42)["frame_map"]
+    assert fm[10] == plain[10] + 1                 # early: up a frame
+    # The downward step waits for the skipped frame (n=310, ~slot 800),
+    # then the late shelf runs exactly as the uncorrected map does.
+    assert fm[900:1000] == plain[900:1000]
+    sidecar = _json.loads(
+        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
+    assert sidecar["frame_map_windows"] == [list(w) for w in windows]
+    assert sidecar["frame_map_aligned"] is True
+    assert sidecar["frame_map_offset"] == 0
+
+
+def test_an_aligner_answering_no_windows_applies_the_global_offset(tmp_path):
+    from sm64_events.replay.frameclock import FrameClock
+    from sm64_events.replay.mapalign import Alignment
+
+    clock = FrameClock(now=lambda: 0.0)
+    base = (T0 - timedelta(seconds=3)).timestamp()
+    for n in range(17 * 30):
+        clock._now = lambda t=base + n / 30: t
+        clock.mark(7000 + n)
+    svc = make_service(tmp_path, [attempt()])
+    svc._frame_clock = clock
+    svc.map_aligner = lambda clip, fm, a: (
+        Alignment(offset=-3, fit=0.7, margin=0.04, paired=900), [])
+    res = svc.view(42)
+    assert res["frame_map"][2] == 7000 - 2         # round(-3/2) frames

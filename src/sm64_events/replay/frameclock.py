@@ -288,6 +288,20 @@ class FrameClock:
         """The game's frame counter just advanced to `frame`."""
         self._pairs.append((self._now(), frame))
 
+    def edge_phase(self, capture_ts: float | None) -> float | None:
+        """Seconds from the last marked frame edge to capture_ts -- WHERE
+        in the frame period a picture was composed. The ledger stamps it
+        per picture (round 32 item 45): the stamp's +-1 wander flips when
+        the present drifts across a frame edge, so the phase is the
+        physical variable that predicts it. Record-only for now."""
+        if capture_ts is None:
+            return None
+        pairs = list(self._pairs)
+        for wall, _frame in reversed(pairs):
+            if wall <= capture_ts:
+                return round(capture_ts - wall, 5)
+        return None
+
     def latest_frame(self) -> int | None:
         """The frame the game is computing RIGHT NOW (the last marked edge)
         -- what the capture callback tags each captured picture with."""

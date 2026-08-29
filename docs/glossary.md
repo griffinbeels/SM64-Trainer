@@ -535,7 +535,9 @@ timing series -- presents (the screen's own updates), the tagged capture
 feed, the [[frame]]-edge stamps. **Then the trainer checks that answer against
 the clip itself**: with the game's own input display on, every picture
 shows the pad the game drew into it, so the trainer compares the map
-against what the pictures show and slides it onto them — and a clip whose
+against what the pictures show and slides it onto them, stretch by
+stretch -- the gap between the game and the footage steps mid-clip, so
+one slide cannot serve a whole clip — and a clip whose
 display it cannot read keeps the answer the clocks gave, and says so. The [[input timeline]]
 and every [[overlay layer]] read the clip through its map; a clip cut
 before maps existed falls back to a fixed offset.

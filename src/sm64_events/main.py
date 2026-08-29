@@ -436,7 +436,7 @@ def build():
         # answer. Wired here because it needs the input track, which the
         # replay zone must not reach into.
         from sm64_events.inputs.track import track_for_attempt
-        from sm64_events.replay.mapalign import align_clip
+        from sm64_events.replay.mapalign import windowed_alignment
 
         def _align_map_to_footage(clip, frame_map, attempt):
             track = track_for_attempt(db.inputs, attempt)
@@ -444,8 +444,10 @@ def build():
                 return None
             pads = {number: (frame.stick_x, frame.stick_y)
                     for number, frame in track}
-            return align_clip(clip, frame_map, pads.get,
-                              str(bundled_ffmpeg() or "ffmpeg"))
+            # (global verdict, per-window verdicts) -- the windows are what
+            # correct a lag that steps mid-clip (attempt 4518's shelves).
+            return windowed_alignment(clip, frame_map, pads.get,
+                                      str(bundled_ffmpeg() or "ffmpeg"))
 
         replay.map_aligner = _align_map_to_footage
 

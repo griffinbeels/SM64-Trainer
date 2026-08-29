@@ -522,7 +522,11 @@ class ReplayRecorder:
             # (item 40) -- before submit so the sample reads the buffer this
             # callback was handed. observe() never raises.
             if tag is not None:
-                self.ledger.observe(bgra, tag[1], tag[0])
+                phase = (self._frame_clock.edge_phase(tag[1])
+                         if self._frame_clock is not None else None)
+                self.ledger.observe(
+                    bgra, tag[1], tag[0],
+                    {"phase": phase} if phase is not None else None)
             sink.submit(bgra, tag)
             return
         # M1: _last_frame and _last_index are written here only; WGC guarantees

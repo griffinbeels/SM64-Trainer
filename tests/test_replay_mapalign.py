@@ -7,6 +7,8 @@ frame predicts the wrong glyphs, and the measurement has to find that --
 and, just as importantly, REFUSE when the pixels cannot answer, because a
 confident wrong shift is worse than the constants it replaces.
 """
+import itertools
+
 import numpy as np
 
 from sm64_events.replay import mapalign
@@ -214,7 +216,7 @@ def test_consecutive_pictures_are_consecutive_frames():
     runs = [(0, 2), (2, 2), (4, 2), (6, 2), (8, 2)]
     held = mapalign.quantised([7, 7, 7, 7, 7, 7, 9, 9, 10, 10], runs)
     seen = [held[start] for start, _length in runs]
-    assert all(later > earlier for earlier, later in zip(seen, seen[1:])), (
+    assert all(later > earlier for earlier, later in itertools.pairwise(seen)), (
         f"every picture must advance the frame: {seen}")
 
 
@@ -408,3 +410,135 @@ def test_rows_without_a_frame_do_not_count_as_coverage():
     for row in rows[4:]:
         row["frame"] = None
     assert mapalign.ledger_map(20, runs, rows, LEDGER_T0, FPS) is None
+
+
+# -- the windowed anchor: a lag that STEPS mid-clip (items 41-43) -----------
+
+def shelf_world(slots=1200, seam=400, early_ahead=2, late_ahead=0):
+    """The map runs `early_ahead` slots ahead of the footage before `seam`
+    and `late_ahead` after it -- attempt 4518's shape, where the pipeline
+    lag stepped by whole frames inside one clip."""
+    ink = ink_from([true_frame_at(slot) for slot in range(slots)], jitter=3.0)
+    frame_map = [true_frame_at(slot + (early_ahead if slot < seam
+                                       else late_ahead))
+                 for slot in range(slots)]
+    rows = [mapalign.glyph_row(*stick_at(value)) for value in frame_map]
+    return ink, rows, frame_map
+
+
+def test_each_shelf_measures_its_own_offset_and_the_seam_is_refined():
+    ink, rows, _map = shelf_world()
+    anchor = mapalign.measure_offset(ink, rows)
+    assert anchor is not None
+    shelves = mapalign.measure_windows(ink, rows, anchor)
+    assert [shelf[2] for shelf in shelves] == [-2, 0]
+    seam = shelves[0][1]
+    # Without the change-point refinement the seam can only land on a
+    # window boundary (multiples of 240); the truth is at 400.
+    assert abs(seam - 400) <= 8
+    assert shelves[0][0] == 0 and shelves[-1][1] == len(ink)
+
+
+def test_window_corrected_lands_every_shelf_on_the_footage():
+    ink, rows, frame_map = shelf_world()
+    anchor = mapalign.measure_offset(ink, rows)
+    shelves = mapalign.measure_windows(ink, rows, anchor)
+    corrected = mapalign.window_corrected(frame_map, shelves)
+    truth = [true_frame_at(slot) for slot in range(len(frame_map))]
+    wrong = [slot for slot, (now, want) in enumerate(zip(corrected, truth, strict=True))
+             if now != want]
+    # Exact everywhere except a picture or two around the seam.
+    assert all(abs(slot - 400) <= 12 for slot in wrong), wrong[:10]
+    ordered = [value for value in corrected if value is not None]
+    assert all(b >= a for a, b in itertools.pairwise(ordered))
+
+
+def test_an_unreadable_stretch_is_absorbed_by_its_neighbours():
+    ink, rows, _map = shelf_world(early_ahead=0, late_ahead=0)
+    # One window of the display obscured: its ink explains nothing, its
+    # gate refuses, and the shelves on either side own its slots. The
+    # noise sits at the ink's own scale so the GLOBAL anchor survives --
+    # louder noise drowns the whole clip's fit, which is the global
+    # refusal other tests already pin.
+    ink[480:720] = np.random.default_rng(3).normal(
+        ink.mean(), ink.std(), 240)
+    anchor = mapalign.measure_offset(ink, rows)
+    shelves = mapalign.measure_windows(ink, rows, anchor)
+    assert [shelf[2] for shelf in shelves] == [0]
+    assert shelves[0][0] == 0 and shelves[0][1] == len(ink)
+
+
+def test_no_gated_window_means_no_windows_not_a_guess():
+    ink, rows, _map = shelf_world(early_ahead=0, late_ahead=0)
+    anchor = mapalign.measure_offset(ink, rows)
+    flat = np.zeros_like(ink)
+    assert mapalign.measure_windows(flat, rows, anchor) == []
+
+
+def test_window_corrected_without_windows_is_identity():
+    frame_map = [10, 10, 11, 11, None, 12]
+    assert mapalign.window_corrected(frame_map, []) == frame_map
+
+
+def test_a_downward_seam_waits_for_a_skip_in_the_map():
+    """A shelf stepping DOWN cannot land where the map advances by one per
+    picture -- the corrected series would regress, and a previous+1 clamp
+    would cascade (+1 on every later picture until a skip). The old
+    shelf's delta holds until the first boundary the map itself can
+    absorb."""
+    frame_map = [100, 100, 101, 101, 102, 102, 103, 103,
+                 104, 104, 105, 105, 107, 107, 108, 108]
+    windows = [(0, 8, 2, 0.9, 0.5), (8, 16, 0, 0.9, 0.5)]
+    out = mapalign.window_corrected(frame_map, windows)
+    assert out[:8] == [101, 101, 102, 102, 103, 103, 104, 104]
+    assert out[8:12] == [105, 105, 106, 106]      # held on the old shelf
+    assert out[12:] == [107, 107, 108, 108]       # the skip absorbs the step
+
+
+PICTURE_RUNS_2SLOT = [(slot, 2) for slot in range(0, 1200, 2)]
+
+
+def physical_blip_world(slots=1200, blip_lo=600, blip_hi=608):
+    """The map one frame high inside [blip_lo, blip_hi): a +2 skip at
+    entry and a dup at exit -- the structure a smoothed map really carries
+    around a lag step, and the ONLY places such a step is expressible."""
+    truth = [true_frame_at(slot) for slot in range(slots)]
+    ink = ink_from(truth, jitter=3.0)
+    frame_map = [value + (1 if blip_lo <= slot < blip_hi else 0)
+                 for slot, value in enumerate(truth)]
+    rows = [mapalign.glyph_row(*stick_at(value)) for value in frame_map]
+    return ink, rows, frame_map, truth
+
+
+def test_a_short_blip_at_physical_seams_is_corrected():
+    """Items 41-43: a few pictures wrong by one, entered and left at the
+    map's own irregular boundaries. The path flips them; the honest floor
+    is the single dup picture at the exit seam."""
+    for blip_hi, worst in ((608, 2), (604, 2)):       # 4- and 2-picture blips
+        ink, rows, frame_map, truth = physical_blip_world(blip_hi=blip_hi)
+        anchor = mapalign.measure_offset(ink, rows)
+        stretches = mapalign.measure_windows(
+            ink, rows, anchor, frame_map=frame_map, runs=PICTURE_RUNS_2SLOT)
+        corrected = mapalign.window_corrected(frame_map, stretches)
+        wrong = sum(1 for now, want in zip(corrected, truth, strict=True)
+                    if now != want)
+        assert wrong <= worst, (blip_hi, wrong)
+
+
+def test_the_cheap_seams_are_what_make_the_blip_flippable():
+    """Mutation guard in test form: with irregular boundaries priced like
+    regular ones, the same blip stays -- the physicality of the seams is
+    load-bearing, not decorative."""
+    ink, rows, frame_map, truth = physical_blip_world()
+    anchor = mapalign.measure_offset(ink, rows)
+    original = mapalign.SWITCH_AT_IRREGULAR
+    try:
+        mapalign.SWITCH_AT_IRREGULAR = mapalign.SWITCH_AT_REGULAR
+        stretches = mapalign.measure_windows(
+            ink, rows, anchor, frame_map=frame_map, runs=PICTURE_RUNS_2SLOT)
+        corrected = mapalign.window_corrected(frame_map, stretches)
+        wrong = sum(1 for now, want in zip(corrected, truth, strict=True)
+                    if now != want)
+        assert wrong >= 8, "pricing seams flat should leave the blip"
+    finally:
+        mapalign.SWITCH_AT_IRREGULAR = original

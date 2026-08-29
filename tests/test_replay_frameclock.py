@@ -412,3 +412,18 @@ def test_a_normalized_run_lands_on_the_PICTURE_time_not_the_logic_time():
         assert abs(got_wall - want_wall) < 1e-9, (
             "a normalized present must sit at the moment the SCREEN showed "
             "the picture, never at the moment the game finished it")
+
+
+def test_edge_phase_places_a_composition_inside_its_frame_period():
+    """Item 45: WHERE in the frame period a picture was composed -- the
+    physical variable behind the ledger stamp's +-1 wander. Record-only."""
+    from sm64_events.replay.frameclock import FrameClock
+    clock = FrameClock(now=lambda: 10.0)
+    assert clock.edge_phase(10.5) is None        # no edge marked yet
+    clock.mark(700)
+    clock._now = lambda: 10.033
+    clock.mark(701)
+    assert clock.edge_phase(10.041) == 0.008     # 8 ms after 701's edge
+    assert clock.edge_phase(10.010) == 0.01      # inside 700's period
+    assert clock.edge_phase(9.5) is None         # before every edge
+    assert clock.edge_phase(None) is None
