@@ -895,11 +895,14 @@ def test_the_cards_sit_in_aligned_columns_with_secret_before_fights():
     right for the remainder (secret stars card, followed by bowser fights
     card)... The tops and bottoms of each card should end in the same
     place." Course columns of equal card count must agree on every card's
-    top AND bottom; the specials column leads with Secret."""
+    top AND bottom; the specials column leads with Secret. Driven at
+    1920px: round 11 raised the 4-column floor to a 1320px pane, and only
+    the 4-up layout puts all three course columns in ONE grid row — at
+    2-up they wrap, and cross-row tops legitimately differ."""
     with serve_ui() as base:
         _put_division_goal(base, "Bronze", "V")
 
-        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+        with get_driver().launch(headless=True, viewport=(1920, 1000)) as page:
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
@@ -943,3 +946,108 @@ def test_the_cards_sit_in_aligned_columns_with_secret_before_fights():
                 f"card {card_index}'s tops drift across columns: {tops}")
             assert max(bottoms) - min(bottoms) <= 1.5, (
                 f"card {card_index}'s bottoms drift across columns: {bottoms}")
+
+
+def test_every_card_labels_its_columns_and_keeps_them_in_register():
+    """Round 11, both items in one render. Labels: round 7's ruling ("there
+    should be column labels, because otherwise it's not obvious what each
+    number means") regressed in the round-9 rebuild — every card owes a
+    You/Goal/Δ row. Register: each line used to be its OWN grid, so a long
+    time (1'00"00+) widened only its own line's column; the card is one
+    column system now (subgrid), so within a card every line's You, Goal
+    and Δ cells must share their right edge — "even if the times are
+    XX'XX"XX long, they're all still aligned correctly"."""
+    with serve_ui() as base:
+        _put_division_goal(base, "Bronze", "V")
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_ms(200)
+
+            cards = page.evaluate(
+                "Array.from(document.querySelectorAll('.rank-page "
+                ".scorecard-card .score-card')).map((card) => ({"
+                "  labels: Array.from(card.querySelectorAll('.score-labels "
+                "span')).map((el) => el.textContent.trim()),"
+                "  you: Array.from(card.querySelectorAll('"
+                ".score-lines .score-line-you'))"
+                "    .map((el) => el.getBoundingClientRect().right),"
+                "  goal: Array.from(card.querySelectorAll('"
+                ".score-lines .score-line-goal'))"
+                "    .map((el) => el.getBoundingClientRect().right),"
+                "  gap: Array.from(card.querySelectorAll('"
+                ".score-lines .score-gap'))"
+                "    .map((el) => el.getBoundingClientRect().right),"
+                "}))")
+
+        assert cards, "no cards rendered"
+        for card in cards:
+            assert card["labels"] == ["You", "Goal", "Δ"], (
+                f"a card is missing its column labels: {card['labels']}")
+            for column in ("you", "goal", "gap"):
+                edges = card[column]
+                assert edges, f"a card drew no {column} cells"
+                assert max(edges) - min(edges) <= 1.0, (
+                    f"the {column} column drifts within one card: {edges}")
+
+
+def test_every_line_is_a_door_to_that_stars_library_page():
+    """Round 11: "the star text hyperlinks to the library page for that
+    star... We should also make the icon for each star link to the library
+    in the same way." One button carries icon AND name; clicking it lands
+    on that entity's Library target page. The hover glyph reserves its slot
+    at rest (visibility hidden, never display none) so a wrapped name
+    cannot reflow when it appears."""
+    with serve_ui() as base:
+        _put_division_goal(base, "Bronze", "V")
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_ms(200)
+
+            line_count = page.count(
+                ".rank-page .scorecard-card .score-lines .score-line")
+            link_count = page.count(
+                ".rank-page .scorecard-card .score-lines .score-line-link")
+            assert link_count == line_count, (
+                f"{line_count} lines but {link_count} doors — every line "
+                "links, icon and name together")
+
+            glyph = page.evaluate(
+                "(() => {"
+                "  const lib = document.querySelector('.rank-page "
+                ".scorecard-card .score-line-lib');"
+                "  if (!lib) return null;"
+                "  const style = getComputedStyle(lib);"
+                "  return { visibility: style.visibility, display: style.display };"
+                "})()")
+            assert glyph is not None, "no hidden library glyph in the name"
+            assert glyph["visibility"] == "hidden", glyph
+            assert glyph["display"] != "none", (
+                "the glyph must RESERVE its slot (visibility), or hovering "
+                "reflows the wrapped name")
+
+            clicked_label = page.evaluate(
+                "(() => {"
+                "  const link = document.querySelector('.rank-page "
+                ".scorecard-card .score-line-link');"
+                "  const label = link.querySelector('.score-line-name')"
+                "    .textContent.trim();"
+                "  link.click();"
+                "  return label;"
+                "})()")
+            page.wait_for(".library-page .library-target-page")
+            page.wait_ms(300)
+            heading = page.evaluate(
+                "document.querySelector('.library-page .library-target-page')"
+                ".textContent")
+
+        assert clicked_label
+        # the arrival page names the star the door was on
+        assert clicked_label.split("+")[0].strip()[:12] in heading

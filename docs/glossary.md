@@ -824,7 +824,12 @@ the Bowser Fights card in a fourth. Each card belongs to one course (plus
 those two, together holding all 120 [[star]]s and the Bowser fights),
 wears its course's own colour and art, and prints one line per [[star]] or
 [[segment]]: its icon, its full name, your [[personal best]], the current
-[[Goal]]'s time, and the gap between the two. A [[route]]-shaped [[Scope]] buckets
+[[Goal]]'s time, and the gap between the two — the icon and name together
+open that [[star]]'s [[Library tab]] page, landing on the example closest
+to the [[Goal]]'s time. The castle's Toad and MIPS [[star]]s sit out by
+default (no community tracker counts them and no [[Standard]] grades
+them); including one puts it back in the Secret card and the [[rank]]
+alike. A [[route]]-shaped [[Scope]] buckets
 that [[route]]'s entities into the same cards; a course-shaped one draws
 that course's card alone. A course's [[100-coin star]] is not its own
 line — its line combines it with a companion [[star]] (usually the course's

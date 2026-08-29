@@ -7313,7 +7313,12 @@
     display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 10px; align-items: stretch;
   }
-  @container (max-width: 1080px) {
+  /* Round 11 raised the 4-column floor 1080 -> 1320: the time columns now
+     reserve ~152px per card, so at 1080/4 the NAME was left ~110px and
+     wrapped every long star name — "the cards need to be a bit bigger".
+     Four-up only where each card gets ~320px+; otherwise two wide
+     columns. */
+  @container (max-width: 1320px) {
     .score-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   @container (max-width: 560px) {
@@ -7325,10 +7330,22 @@
   /* Each card wears its course's own tint (round 10: "a unique background
      color... so each pops better") via --card-tint from the component; the
      fallback keeps an untinted card legible rather than transparent (the
-     ui-core custom-property rule). Flex column so the foot can pin to the
-     bottom of a row-stretched card. */
+     ui-core custom-property rule).
+     The card IS the grid (round 11): one column system — icon / name /
+     You / Goal / Δ — that the labels row, every line and the foot join as
+     SUBGRIDS, so a wide time widens the column for the whole card and
+     nothing can drift ("even if the times are XX'XX"XX long, they're all
+     still aligned correctly"). Each line computing its own max-content was
+     round 10's misalignment. The time columns carry minimum widths sized
+     for XX'XX"XX (his named floor) so short times get the same room; the
+     `minmax(0,1fr)` lines row is what pins the foot to a stretched card's
+     bottom (replacing the flex margin-top:auto). */
   .score-card {
-    display: flex; flex-direction: column;
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) minmax(56px, max-content)
+                           minmax(56px, max-content) minmax(40px, max-content);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    column-gap: 5px;
     border: 1px solid color-mix(in srgb, var(--card-tint, #4a6a8a) 38%, rgba(148,180,212,.14));
     border-radius: 8px;
     padding: 6px 8px;
@@ -7336,9 +7353,28 @@
     box-shadow: 0 8px 18px rgba(0, 0, 0, .45);
   }
   .score-card-head {
+    grid-column: 1 / -1;
     display: flex; align-items: center; gap: 6px;
     padding-bottom: 4px; margin-bottom: 2px;
     border-bottom: 1px solid var(--border-soft);
+  }
+  /* Round 11 restored round 7's ruling ("there should be column labels,
+     because otherwise it's not obvious what each number means") — one
+     muted row per card, sitting exactly over the columns it names because
+     it shares them. */
+  .score-labels {
+    grid-column: 1 / -1;
+    display: grid; grid-template-columns: subgrid;
+    padding: 1px 0; font-size: .62rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .04em;
+  }
+  .score-label-you { grid-column: 3; justify-self: end; }
+  .score-label-goal { grid-column: 4; justify-self: end; }
+  .score-label-gap { grid-column: 5; justify-self: end; }
+  .score-lines {
+    grid-column: 1 / -1;
+    display: grid; grid-template-columns: subgrid;
+    align-content: start;
   }
   .score-card-art {
     width: 20px; height: 20px; border-radius: 4px; object-fit: cover;
@@ -7347,16 +7383,14 @@
   .score-card-name {
     flex: 1 1 auto; min-width: 0; font-weight: 700; font-size: .82rem;
   }
-  /* One line per star: icon | wrapping name | you | goal | gap. The two
-     time cells and the gap are max-content so a card's numbers line up down
-     the card; the NAME takes what is left and WRAPS -- round 9's "no word
-     is cut off" holds by construction, there is no ellipsis rule here at
-     all. */
+  /* One line per star: icon | wrapping name | you | goal | gap, on the
+     CARD's columns (subgrid, which also inherits its column gap). The
+     NAME takes what is left and WRAPS -- round 9's "no word is cut off"
+     holds by construction, there is no ellipsis rule here at all. */
   .score-line {
-    display: grid;
-    grid-template-columns: 16px minmax(0, 1fr) max-content max-content
-                           minmax(34px, max-content);
-    align-items: center; gap: 5px;
+    grid-column: 1 / -1;
+    display: grid; grid-template-columns: subgrid;
+    align-items: center;
     padding: 1px 0; font-size: .74rem; line-height: 1.25;
   }
   .score-line-icon {
@@ -7364,6 +7398,26 @@
     opacity: .9;
   }
   .score-line-name { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+  /* The icon+name DOOR to the Library (round 11). A full text reset, so it
+     declares its own min-height/display/justify-content (the button-flex
+     guards). Hover is his spec: the name turns blue and the hidden library
+     glyph appears appended; the glyph always occupies its slot
+     (visibility, never display) so a wrapped name cannot reflow on hover. */
+  .score-line-link {
+    grid-column: 1 / 3;
+    display: flex; align-items: center; justify-content: flex-start;
+    gap: 5px; min-height: 0; min-width: 0; padding: 0; margin: 0;
+    background: none; border: none; font: inherit; color: inherit;
+    text-align: left; cursor: pointer;
+  }
+  .score-line-link:hover .score-line-name,
+  .score-line-link:focus-visible .score-line-name { color: var(--blue); }
+  .score-line-lib {
+    display: inline-block; visibility: hidden; margin-left: 4px;
+    vertical-align: -2px; color: var(--blue);
+  }
+  .score-line-link:hover .score-line-lib,
+  .score-line-link:focus-visible .score-line-lib { visibility: visible; }
   .score-line-you, .score-line-goal {
     display: inline-flex; align-items: center; gap: 3px; justify-self: end;
     font-variant-numeric: tabular-nums; white-space: nowrap;
@@ -7380,15 +7434,17 @@
   }
   .score-gap.good { color: var(--green); }
   .score-gap.bad { color: var(--coral); }
+  /* The foot joins the same column system (its label spans icon+name), so
+     the Σ times sit exactly under the lines they sum. */
   .score-card-foot {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) max-content max-content
-                           minmax(34px, max-content);
-    align-items: center; gap: 5px;
-    margin-top: auto; padding-top: 3px;
+    grid-column: 1 / -1;
+    display: grid; grid-template-columns: subgrid;
+    align-items: center; padding-top: 3px;
     border-top: 1px solid var(--border-soft);
     font-size: .74rem; font-weight: 700;
   }
+  .score-card-foot-label { grid-column: 1 / 3; }
+  .score-sum-coverage { grid-column: 1 / 3; }
   .score-card-foot .score-line-goal { font-weight: 400; color: var(--muted); }
   .score-sum-coverage { color: var(--muted); font-size: .66rem; font-weight: 400; }
   /* Round 8's per-row remove, now in the card head. A full text reset, so

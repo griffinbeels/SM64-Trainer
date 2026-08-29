@@ -39,6 +39,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from sm64_events.library.examples import sheet_best
+from sm64_events.tracking.activestrat import ActiveStrats
 from sm64_events.library.export_column import column_lines, sheet_time
 from sm64_events.library.ratings import runner_times
 from sm64_events.library.sheet import read_rows
@@ -282,6 +283,24 @@ def create_scorecard_router(service, library=None, adoptions=None,
                 tile["you_rank"] = graded(tile["key"], tile["you_cs"])
                 tile["goal_rank"] = graded(tile["key"], tile["goal_cs"])
 
+    def _stamp_strats(card: dict) -> None:
+        """Each tile's ACTIVE strategy name (or None) -- the card's library
+        links land on the approach the player actually practises: "We
+        should try to match the user's strategy (if they have one
+        selected)" (round 11). Resolved through the same `ActiveStrats`
+        every other surface asks, never a second reading of the KV."""
+        active = ActiveStrats.from_db(service.db, service.strat_by_star,
+                                      service.strat_by_segment)
+        for row in card["rows"]:
+            for tile in row["tiles"]:
+                parts = tile["key"].split(":")
+                if parts[0] == "star":
+                    tile["strat"] = active.for_star(int(parts[1]), int(parts[2]))
+                elif parts[0] == "segment":
+                    tile["strat"] = active.for_segment(int(parts[1]))
+                else:
+                    tile["strat"] = None
+
     def scope_rows(scope_id: str) -> list[dict]:
         """The scope's row spec, or a 404 for a scope that does not exist --
         the same deliberate 404 `/api/marelo` gives a stale route id, so a
@@ -402,6 +421,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
 
         card = build_card(rows_spec, you=you, goal=goal_map)
         _grade_tiles(card)
+        _stamp_strats(card)
         return card, goal_value
 
     @router.get("")

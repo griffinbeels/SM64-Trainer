@@ -37,6 +37,7 @@ import { applyGoalOverrides, divisionOptions, fmtGapCs, goalGroups,
          parseGapTime } from "../scorecardgoal.js";
 import { capName, divisionDigit } from "./caps.js";
 import { entityIconSrc } from "./entityicons.js";
+import { Icon } from "./icons.js";
 import { RankIcon } from "./rankicon.js";
 import { SearchSelect } from "./searchselect.js";
 import { InlineState } from "./states.js";
@@ -151,12 +152,33 @@ function GoalCell({ tile, onGoalOverride }) {
 // time · goal cap + editable goal time · signed gap. The name WRAPS rather
 // than truncating — the card owns its width, so round 9's "no word is cut
 // off" holds by construction rather than by a tuned column.
-function ScoreLine({ t, tile, showCaps, onGoalOverride }) {
+//
+// Icon and name together are a DOOR to the Library (round 11: "the star
+// text hyperlinks to the library page for that star... it finds the
+// closest example in the library to my goal time"): one button spanning
+// both columns, carrying the tile's server-stamped active strategy and its
+// goal time so the arrival can land on the right example. The hover
+// affordance is his spec verbatim — the name turns blue and a hidden
+// library glyph appears appended to it; the glyph reserves its space
+// always (visibility, not display) so hovering never reflows a wrapped
+// name.
+function ScoreLine({ t, tile, showCaps, onGoalOverride, onOpenLibrary }) {
   const gapCls = tile.delta_cs != null
     ? (tile.delta_cs <= 0 ? "good" : "bad") : "";
+  const iconSrc = entityIconSrc(t, tile.key);
+  const openLine = onOpenLibrary
+    ? () => onOpenLibrary({ kind: "target", entity: tile.key,
+                            strat: tile.strat || null,
+                            goalCs: tile.goal_cs ?? null })
+    : null;
   return html`<div class="score-line">
-    <img class="score-line-icon" alt="" src=${entityIconSrc(t, tile.key)} />
-    <span class="score-line-name">${tile.label}</span>
+    ${openLine ? html`<button type="button" class="score-line-link"
+        title=${`Open ${tile.label} in the Library`} onclick=${openLine}>
+      <img class="score-line-icon" alt="" src=${iconSrc} />
+      <span class="score-line-name">${tile.label}<span class="score-line-lib"
+          aria-hidden="true"><${Icon} name="library" size=${11} /></span></span>
+    </button>` : html`<img class="score-line-icon" alt="" src=${iconSrc} />
+    <span class="score-line-name">${tile.label}</span>`}
     <span class="score-line-you">
       <${LineCap} rank=${tile.you_rank} show=${showCaps} />
       <span class="score-line-time">${tile.you_cs != null
@@ -245,7 +267,7 @@ function cardColumns(rows) {
 }
 
 function ScoreCard({ t, row, showCaps, removing,
-                     onRemove, onGoalOverride }) {
+                     onRemove, onGoalOverride, onOpenLibrary }) {
   // The remove control writes the SAME exclusion the Rank tab's own
   // breakdown writes (`POST /api/marelo/exclude`), never a second
   // scorecard-only ignore list -- round 7 settled that this card and the
@@ -269,9 +291,16 @@ function ScoreCard({ t, row, showCaps, removing,
           aria-label=${removeTitle} disabled=${removing}
           onclick=${() => onRemove(row)}>×</button>
     </div>
-    ${row.tiles.map((tile) => html`<${ScoreLine} key=${tile.key} t=${t}
-        tile=${tile} showCaps=${showCaps}
-        onGoalOverride=${onGoalOverride} />`)}
+    <div class="score-labels" aria-hidden="true">
+      <span class="score-label-you">You</span>
+      <span class="score-label-goal">Goal</span>
+      <span class="score-label-gap">Δ</span>
+    </div>
+    <div class="score-lines">
+      ${row.tiles.map((tile) => html`<${ScoreLine} key=${tile.key} t=${t}
+          tile=${tile} showCaps=${showCaps}
+          onGoalOverride=${onGoalOverride} onOpenLibrary=${onOpenLibrary} />`)}
+    </div>
     <${CardFoot} row=${row} />
   </section>`;
 }
@@ -399,7 +428,7 @@ function writeCapsPreference(on) {
   catch { /* display preference only -- losing it costs a click */ }
 }
 
-export function Scorecard({ t, scopeId = "overall" }) {
+export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   // null = not fetched yet (the Runners group is lazy, see the header
@@ -542,7 +571,8 @@ export function Scorecard({ t, scopeId = "overall" }) {
                     ? "score-col-courses" : "score-col-specials"}">
                 ${column.rows.map((row) => html`<${ScoreCard} key=${row.label}
                     t=${t} row=${row} showCaps=${showCaps} removing=${removing}
-                    onRemove=${removeRow} onGoalOverride=${handleGoalOverride} />`)}
+                    onRemove=${removeRow} onGoalOverride=${handleGoalOverride}
+                    onOpenLibrary=${openLibrary} />`)}
               </div>`)}
             </div>
             <label class="scorecard-caps-toggle">

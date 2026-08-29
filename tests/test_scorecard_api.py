@@ -307,9 +307,12 @@ def test_tiles_carry_server_graded_ranks(tmp_path):
         assert graded["goal_rank"] == {"tier": "Bronze", "division": "V"}
         # no PB on this one -> no you cap; goal still grades
         assert tiles["star:1:1"]["you_rank"] is None
-        # a castle secret has no ladder at all -> neither side grades
-        assert tiles["star:0:0"]["you_rank"] is None
-        assert tiles["star:0:0"]["goal_rank"] is None
+        # Slide Star (Under 21 Seconds) has no ladder in the standards
+        # store at all -> neither side grades. (The Toad/MIPS stars, the
+        # other ladder-less entities, left the default card entirely on
+        # 2026-08-28 -- UNTRACKED_CASTLE_STARS.)
+        assert tiles["star:19:1"]["you_rank"] is None
+        assert tiles["star:19:1"]["goal_rank"] is None
 
 
 def test_the_card_ignores_the_same_segments_the_route_ranking_ignores(tmp_path):
@@ -680,3 +683,24 @@ def test_a_saved_custom_goal_snaps_every_time_onto_the_displayable_set(tmp_path)
                  for row in card["rows"] for tile in row["tiles"]}
         assert tiles["star:1:0"]["goal_cs"] == 5103   # 51"01 unattainable at 30fps
         assert tiles["star:1:1"]["goal_cs"] == 5100   # already displayable: unmoved
+
+
+def test_castle_stars_are_off_the_card_until_included(tmp_path):
+    """His round-11 ruling: "nobody wants to track [Toad/MIPS]... ignore
+    these by default, too. If the user includes them manually, then it
+    should be included in the secret section." Same one exclusion door as
+    everything else -- an include reaches the Secret card AND the rating."""
+    with make_client(tmp_path) as (client, _db, _svc):
+        card = client.get("/api/scorecard").json()
+        keys = card_keys_of(card)
+        for star_id in range(5):
+            assert f"star:0:{star_id}" not in keys
+
+        client.post("/api/marelo/exclude",
+                    json={"entity": "star:0:0", "excluded": False})
+        card = client.get("/api/scorecard").json()
+        secret = next(row for row in card["rows"] if row["label"] == "Secret")
+        secret_keys = [tile["key"] for tile in secret["tiles"]]
+        assert "star:0:0" in secret_keys, (
+            "an included castle star must land back in the Secret section")
+        assert "star:0:1" not in secret_keys, "the include is per star"

@@ -725,12 +725,6 @@ PROJECT = Project(
             'overlap 7x2px inside button.starcell',
         '1061x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
-        # Two more samples of the SAME owed defect, surfaced 2026-08-28 when
-        # the scorecard's column breakpoint added 1080/1081 to the matrix.
-        '1080x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
-        '1081x1000 [page] overlap :: span.starholder x span.starrank':
-            'overlap 26x2px inside button.starcell',
         '1100x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1101x1000 [page] overlap :: span.starholder x span.starrank':
@@ -739,6 +733,13 @@ PROJECT = Project(
             'overlap 7x2px inside button.starcell',
         '1181x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
+        # Two more samples of the SAME owed defect, surfaced 2026-08-28
+        # when the scorecard's 4-column breakpoint added 1320/1321 to
+        # the matrix (round 11 moved it up from 1080).
+        '1320x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1321x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
         '1250x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1251x1000 [page] overlap :: span.starholder x span.starrank':
@@ -923,6 +924,14 @@ BOWSER_PROJECT = dataclasses.replace(
             'overlap 7x2px inside button.starcell',
         '1101x1000 [bowser-row] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
+        '1320x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1321x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1320x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1321x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
         '1180x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1180x1000 [bowser-row] overlap :: span.starholder x span.starrank':
@@ -1113,6 +1122,14 @@ SUBSECTION_PROJECT = dataclasses.replace(
         '1101x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1101x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1320x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1321x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1320x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1321x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1180x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',

@@ -1177,6 +1177,6 @@ export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null }) {
             ? (entity) => openLibrary({ kind: "target", entity: entity.key, you: true })
             : null} />
       </div>`}
-    <${Scorecard} t=${t} scopeId=${scopeId} />
+    <${Scorecard} t=${t} scopeId=${scopeId} openLibrary=${openLibrary} />
   </div>`;
 }

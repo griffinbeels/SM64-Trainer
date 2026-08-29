@@ -1010,6 +1010,7 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
                                onAdd, trayKeys, focusStrat, focusTier,
                                focusDivision = null, focusEntryUrl = null,
                                focusRunner = null, focusTimeCs = null,
+                               focusGoalCs = null,
                                focusYou = false, focusRow = null,
                                fallbackLabel = null, onRelink = () => {},
                                resolveEntityLabel = null, onOpenRunner = null }) {
@@ -1283,10 +1284,10 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
   const [focusMark, setFocusMark] = useState(null);
   const rootRef = useRef(null);
   useEffect(() => {
-    if (!focusStrat && !focusRunner) return undefined;
+    if (!focusStrat && !focusRunner && focusGoalCs == null) return undefined;
     const focusId = `${pageIdentity}::${focusStrat || ""}::${focusTier || ""}`
       + `::${focusDivision || ""}::${focusEntryUrl || ""}`
-      + `::${focusRunner || ""}::${focusTimeCs ?? ""}`;
+      + `::${focusRunner || ""}::${focusTimeCs ?? ""}::${focusGoalCs ?? ""}`;
     if (consumedFocusRef.current === focusId) return undefined;
     // A RUNNER focus (2026-08-22, the [[Runner page]]'s door): the entry is
     // the one the breakdown GRADED -- the runner's best visible time on this
@@ -1310,6 +1311,33 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
         if (runnerEntry && runnerEntry.exact) break;
       }
     }
+    // A GOAL focus (2026-08-28, round 11 -- the scorecard's line doors):
+    // "it finds the closest example in the library to my goal time... We
+    // should try to match the user's strategy (if they have one selected);
+    // if they don't have a strategy selected yet, it's just the closest
+    // time." Closest = smallest |time - goal| among VISIBLE timed entries;
+    // the active strategy's approach is tried first and wins outright when
+    // it has any timed entry, falling back to every approach when it has
+    // none (or no strategy rode the intent).
+    let goalEntry = null;
+    if (focusGoalCs != null && !focusRunner) {
+      const stratPool = focusStrat ? approaches.filter((approach) =>
+        approach.matched_strategy === focusStrat
+          || approach.name === focusStrat) : [];
+      const pools = stratPool.length ? [stratPool, approaches] : [approaches];
+      for (const pool of pools) {
+        for (const approach of pool) {
+          for (const entry of visibleEntriesFor(approach, version)) {
+            if (entry.time_cs == null) continue;
+            const distance = Math.abs(entry.time_cs - focusGoalCs);
+            if (!goalEntry || distance < goalEntry.distance) {
+              goalEntry = { approach, entry, distance };
+            }
+          }
+        }
+        if (goalEntry) break;
+      }
+    }
     // `approaches.find` here still resolves by NAME alone and can still land
     // on the first of two sibling sections that share one `matched_strategy`
     // (the 100-coin case, caveat 4) — that is not this fix's bug to close:
@@ -1317,8 +1345,10 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
     // design ("your rank on a strategy is the same fact wherever it
     // appears"), so a strategy-named link has no third piece of information
     // to disambiguate WHICH sibling with, and landing on either is correct.
-    const hit = runnerEntry ? runnerEntry.approach : approaches.find((approach) =>
-      approach.matched_strategy === focusStrat || approach.name === focusStrat);
+    const hit = runnerEntry ? runnerEntry.approach
+      : goalEntry ? goalEntry.approach
+      : approaches.find((approach) =>
+          approach.matched_strategy === focusStrat || approach.name === focusStrat);
     if (!hit) return undefined;  // approaches not loaded yet -- stay
                                   // unconsumed, try again next render
     consumedFocusRef.current = focusId;
@@ -1334,6 +1364,7 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
     // matches no entry (a vetted-only example, a JP-filtered one).
     let mark = null;
     const landedEntry = runnerEntry ? runnerEntry.entry
+      : goalEntry ? goalEntry.entry
       : focusEntryUrl ? (hit.entries || []).find((one) => one.video === focusEntryUrl)
       : null;
     if (landedEntry) {
@@ -1365,7 +1396,7 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
     const helloTimer = setTimeout(() => {
       const root = rootRef.current;
       const card = !root ? null
-        : landedEntry && runnerEntry
+        : landedEntry && (runnerEntry || goalEntry)
           ? root.querySelector(`[data-runner="${CSS.escape(landedEntry.runner)}"]`
               + `[data-time-cs="${landedEntry.time_cs}"]`)
           : focusEntryUrl
@@ -1378,7 +1409,7 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
     }, 550);
     return () => { clearTimeout(timer); clearTimeout(helloTimer); };
   }, [focusStrat, focusTier, focusDivision, focusEntryUrl, focusRunner,
-      focusTimeCs, approaches, pageIdentity, version]);
+      focusTimeCs, focusGoalCs, approaches, pageIdentity, version]);
 
   const iconSrc = entityKey ? entityIconSrc(t, entityKey) : genericStarSrc();
   const activeStratInfo = activeStrat ? stratByName[activeStrat] : null;

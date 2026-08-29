@@ -139,7 +139,7 @@ function pollImportJob(jobId) {
  * t            the tracker store
  * active       true while the Library tab is the one on screen
  * intent       null, or {kind:"target", entity, strat?, tier?, division?,
- *              entryUrl?, runner?, timeCs?, you?} / {kind:
+ *              entryUrl?, runner?, timeCs?, goalCs?, you?} / {kind:
  *              "compare", attemptId?, entity, strat} — a caller elsewhere in
  *              the app asking the Library to open on something specific
  *              (openLibrary in app.js). "target" routes straight to that
@@ -271,6 +271,10 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
                    // breakdown graded, named by runner + its time_cs.
                    focusRunner: focus.runner || null,
                    focusTimeCs: focus.timeCs ?? null,
+                   // 2026-08-28 (round 11, the scorecard's line doors): land
+                   // on the example CLOSEST to the goal time -- the active
+                   // strategy's approach when one is picked, else anywhere.
+                   focusGoalCs: focus.goalCs ?? null,
                    // 2026-08-23 (his own Rank tab's doors): land on the
                    // reader's OWN standing -- the subdivision his PB sits
                    // in on the section he is graded on.
@@ -368,6 +372,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
                                   division: intent.division,
                                   entryUrl: intent.entryUrl,
                                   runner: intent.runner, timeCs: intent.timeCs,
+                                  goalCs: intent.goalCs,
                                   you: !!intent.you });
     } else if (intent.kind === "compare") {
       // FINAL REVIEW FIX (broad review finding #7, never landed until now):
@@ -544,6 +549,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
               focusEntryUrl=${entry ? entry.focusEntryUrl : null}
               focusRunner=${entry ? entry.focusRunner : null}
               focusTimeCs=${entry ? entry.focusTimeCs : null}
+              focusGoalCs=${entry ? entry.focusGoalCs : null}
               focusYou=${entry ? entry.focusYou : false}
               focusRow=${entry ? entry.focusRow : null}
               fallbackLabel=${entry ? entry.fallbackLabel : null}
