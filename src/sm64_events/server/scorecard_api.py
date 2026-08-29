@@ -47,9 +47,11 @@ from sm64_events.library.store import build_and_stamp
 from sm64_events.core.timefmt import attainable_cs
 from sm64_events.ranks.classify import RANK_NAMES, display_cs
 from sm64_events.ranks.scorecard import (
-    build_card, card_keys, division_goal_cs, rows_for_course, rows_for_route,
-    template_rows, without_keys)
-from sm64_events.ranks.scoring import DIVISION_NUMERALS, best_ladder
+    FIGHTS_LABEL, build_card, card_keys, division_goal_cs, rows_for_course,
+    rows_for_route, template_rows, without_keys)
+from sm64_events.ranks.scoring import (
+    DIVISION_NUMERALS, best_ladder, progress_for_time)
+from sm64_events.tracking.views import segment_courses
 from sm64_events.server.import_api import sheet_row_placer
 
 _log = logging.getLogger("sm64.scorecard")
@@ -238,6 +240,48 @@ def create_scorecard_router(service, library=None, adoptions=None,
         if service.db is None:
             raise HTTPException(503, "scorecard unavailable")
 
+    def _fight_segments() -> list[tuple[str, str]]:
+        """[(entity_key, name)] for every Bowser fight -- BY CATEGORY, the
+        same fact `ranks/scopes.py::ranks_by_default` keys on, so the card
+        and the default-ranking rule can never disagree about what counts as
+        a fight (round 9: "all 120 stars, plus the bowser fights")."""
+        return [(f"segment:{row['id']}", row["name"])
+                for row in service.db.segment_defs()
+                if row.get("category") == "Bowser Fights"]
+
+    def _fight_ids() -> set[int]:
+        return {row["id"] for row in service.db.segment_defs()
+                if row.get("category") == "Bowser Fights"}
+
+    def _grade_tiles(card: dict) -> None:
+        """Stamp `you_rank`/`goal_rank` ({tier, division} or None) onto every
+        tile -- the caps a card line wears (round 9: "your rank icon + record
+        time so far, and the goal rank + time"). Graded HERE, never in the
+        browser: the server picks and the client only draws, the same split
+        every rank surface in this app follows. Ladders are fetched once per
+        entity and shared by both sides; a broadcast-only instance (no
+        standards) leaves every rank None, which the UI draws as no cap."""
+        ranks = service.ranks
+        if ranks is None:
+            return
+        ladder_of: dict[str, dict] = {}
+
+        def graded(key: str, cs):
+            if cs is None:
+                return None
+            if key not in ladder_of:
+                ladder_of[key] = best_ladder(ranks.ladders(key))
+            ladder = ladder_of[key]
+            if not ladder:
+                return None
+            result = progress_for_time(ladder, cs)
+            return {"tier": result["tier"], "division": result["division"]}
+
+        for row in card["rows"]:
+            for tile in row["tiles"]:
+                tile["you_rank"] = graded(tile["key"], tile["you_cs"])
+                tile["goal_rank"] = graded(tile["key"], tile["goal_cs"])
+
     def scope_rows(scope_id: str) -> list[dict]:
         """The scope's row spec, or a 404 for a scope that does not exist --
         the same deliberate 404 `/api/marelo` gives a stale route id, so a
@@ -245,7 +289,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
         different card (round 6: "whatever is in the scope is what we
         generate a scorecard for")."""
         if scope_id == "overall":
-            return template_rows()
+            return template_rows(fight_segments=_fight_segments())
         kind, _, rest = scope_id.partition(":")
         if kind == "course" and rest.isdigit():
             try:
@@ -258,7 +302,10 @@ def create_scorecard_router(service, library=None, adoptions=None,
             if route is not None:
                 labels = {row["id"]: row["name"]
                           for row in service.db.segment_defs()}
-                return rows_for_route(route, segment_labels=labels)
+                return rows_for_route(
+                    route, segment_labels=labels,
+                    segment_courses=segment_courses(service.db),
+                    fight_segment_ids=_fight_ids())
         raise HTTPException(404, f"unknown scope {scope_id!r}")
 
     def your_times(keys: list[str]) -> dict[str, int]:
@@ -354,6 +401,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
                                            ranks.grading_version)
 
         card = build_card(rows_spec, you=you, goal=goal_map)
+        _grade_tiles(card)
         return card, goal_value
 
     @router.get("")

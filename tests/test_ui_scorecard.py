@@ -199,7 +199,7 @@ def _get_scorecard(base: str) -> dict:
         return json.loads(response.read())
 
 
-def test_the_card_renders_tiles_colored_against_a_real_goal():
+def test_the_cards_render_colored_lines_against_a_real_goal():
     with serve_ui() as base:
         # A division comfortably inside the seeded fixture's own PBs, so at
         # least one tile actually grades -- the card must draw REAL good/bad
@@ -213,33 +213,34 @@ def test_the_card_renders_tiles_colored_against_a_real_goal():
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
             page.wait_for(".rank-page .scorecard-card")
-            page.wait_for(".rank-page .score-tile")
+            page.wait_for(".rank-page .score-line")
             page.wait_ms(200)
 
             colored = page.count(
-                ".rank-page .scorecard-card .score-tile.good, "
-                ".rank-page .scorecard-card .score-tile.bad")
-            assert colored >= 1, "no colored tile against a real division goal"
+                ".rank-page .scorecard-card .score-line .score-gap.good, "
+                ".rank-page .scorecard-card .score-line .score-gap.bad")
+            assert colored >= 1, "no colored line against a real division goal"
 
-            # Round 7 deleted the card-wide Upstairs RTA foot ("for now"),
-            # so the summed numbers on screen are the ROW's own You and Goal
-            # cells -- both drawn, both labelled, no hover needed.
+            # Round 9: each payload row is a CARD; its foot restates the
+            # Σ as You · Goal · gap. Content, not existence: the first
+            # card's foot must print the payload's own sums.
             first_row = payload["rows"][0]
+            card_count = page.count(".rank-page .scorecard-card .score-card")
+            line_count = page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".score-card').querySelectorAll('.score-line').length")
             you_text, goal_text = page.evaluate(
                 "(() => {"
-                "  const row = document.querySelector('.rank-page .scorecard-card "
-                ".score-row');"
-                "  return [row.querySelector('.score-sum-you .score-sum-value')"
+                "  const foot = document.querySelector('.rank-page "
+                ".scorecard-card .score-card .score-card-foot');"
+                "  return [foot.querySelector('.score-line-you')"
                 ".textContent.trim(),"
-                "          row.querySelector('.score-sum-goal .score-sum-value')"
+                "          foot.querySelector('.score-line-goal')"
                 ".textContent.trim()];"
                 "})()")
-            heads = page.evaluate(
-                "Array.from(document.querySelectorAll('.rank-page .scorecard-card "
-                ".score-sum-head')).map((el) => el.textContent.trim())")
-            assert page.count(".rank-page .scorecard-card .score-foot") == 0
 
-        assert heads == ["You", "Goal"]
+        assert card_count == len(payload["rows"])
+        assert line_count == len(first_row["tiles"])
         row_sum = first_row["sum"]
         if row_sum["counted"] > 0:
             assert you_text == _fmt_seconds_like_js(row_sum["you_cs"] / 100)
@@ -336,8 +337,9 @@ def test_the_picker_gains_a_runners_group_and_picking_one_colors_tiles():
             page.evaluate(
                 "document.querySelector('.rank-page .scorecard-card "
                 f'.search-menu-option[data-value="runner:{runner}"]\').click()')
-            page.wait_for(".rank-page .scorecard-card .score-tile.good, "
-                          ".rank-page .scorecard-card .score-tile.bad")
+            page.wait_for(
+                ".rank-page .scorecard-card .score-gap.good, "
+                ".rank-page .scorecard-card .score-gap.bad")
 
         card = _get_scorecard(base)
         assert card["goal"] == {"kind": "runner", "runner": runner}
@@ -403,29 +405,22 @@ def _first_seeded_tile(payload: dict) -> tuple[str, str, str]:
 
 
 def _open_goal_editor(page, row_label: str, tile_label: str) -> None:
-    """Expand ROW_LABEL's row and click TILE_LABEL's Goal cell into edit
-    mode -- the shared first half of every scenario below, entirely through
-    the real controls, never by writing state directly."""
+    """Click TILE_LABEL's Goal cell into edit mode, inside ROW_LABEL's card
+    -- the shared first half of every scenario below, entirely through the
+    real controls. Round 9: no expand step -- the goal button sits right on
+    the card's line."""
     row_label_js = json.dumps(row_label)
     tile_label_js = json.dumps(tile_label)
     page.evaluate(
         "(() => {"
-        f"  const rowLabel = {row_label_js};"
-        "  const row = Array.from(document.querySelectorAll("
-        "    '.rank-page .scorecard-card .score-row'))"
-        "    .find((r) => r.querySelector('.score-row-name').textContent === rowLabel);"
-        "  row.querySelector('.score-row-label').click();"
-        "})()")
-    page.wait_for(".rank-page .scorecard-card .score-detail-table")
-    page.evaluate(
-        "(() => {"
         f"  const rowLabel = {row_label_js}, starLabel = {tile_label_js};"
-        "  const row = Array.from(document.querySelectorAll("
-        "    '.rank-page .scorecard-card .score-row'))"
-        "    .find((r) => r.querySelector('.score-row-name').textContent === rowLabel);"
-        "  const tr = Array.from(row.querySelectorAll('.score-detail-table tbody tr'))"
-        "    .find((tr) => tr.children[0].textContent.trim().startsWith(starLabel));"
-        "  tr.querySelector('.score-detail-goal-btn').click();"
+        "  const card = Array.from(document.querySelectorAll("
+        "    '.rank-page .scorecard-card .score-card'))"
+        "    .find((c) => c.querySelector('.score-card-name').textContent === rowLabel);"
+        "  const line = Array.from(card.querySelectorAll('.score-line'))"
+        "    .find((l) => l.querySelector('.score-line-name')"
+        ".textContent.trim().startsWith(starLabel));"
+        "  line.querySelector('.score-detail-goal-btn').click();"
         "})()")
     page.wait_for(".rank-page .scorecard-card .score-detail-input")
 
@@ -456,9 +451,10 @@ def _blur_goal_editor(page) -> None:
 
 
 def _expand_row_and_edit_goal(page, row_label: str, tile_label: str, typed: str) -> None:
-    """Click the named row open, click that star's Goal cell into edit mode,
-    type `typed`, and commit with Enter -- entirely through the real
-    controls, never by writing state directly."""
+    """Click the named star's Goal cell into edit mode, type `typed`, and
+    commit with Enter -- entirely through the real controls. (The name
+    predates round 9; nothing expands any more, the editor is on the
+    line.)"""
     _open_goal_editor(page, row_label, tile_label)
     # The input and the Enter commit are dispatched in SEPARATE evaluate()
     # calls, with a tick between: Preact's `commit` closure captures `draft`
@@ -473,33 +469,6 @@ def _expand_row_and_edit_goal(page, row_label: str, tile_label: str, typed: str)
         "  new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}))")
 
 
-def test_expanding_a_row_shows_every_star_goal_you_and_delta():
-    with serve_ui() as base:
-        _put_division_goal(base, "Bronze", "V")
-        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
-            page.goto(f"{base}/ui/index.html")
-            page.wait_for(".log-list-card")
-            page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-row-label")
-
-            page.evaluate(
-                "document.querySelector('.rank-page .scorecard-card "
-                ".score-row-label').click()")
-            page.wait_for(".rank-page .scorecard-card .score-detail-table")
-
-            headers = page.evaluate(
-                "Array.from(document.querySelectorAll('.rank-page .scorecard-card "
-                ".score-detail-table th')).map((el) => el.textContent)")
-            row_count = page.evaluate(
-                "document.querySelectorAll('.rank-page .scorecard-card "
-                ".score-detail-table tbody tr').length")
-        # Round 5 (2026-08-24): "the YOU column first, *then* the GOAL column".
-        assert headers == ["Star", "You", "Goal", "Δ"]
-        # Round 6: six cells -- the 100c cell is combined with its companion
-        # star (his canonical pairing), so no course row has a seventh.
-        assert row_count == 6
-
-
 def test_blurring_an_empty_goal_draft_cancels_edit_mode():
     """His acceptance rule for a multi-step control: an EMPTY draft is 'I
     changed my mind', not 'I typed garbage' -- blurring away from it must
@@ -511,7 +480,7 @@ def test_blurring_an_empty_goal_draft_cancels_edit_mode():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-row-label")
+            page.wait_for(".rank-page .scorecard-card .score-card")
 
             # No goal is picked in this test, so the tile has no goal_cs and
             # the editor opens with an already-empty draft -- exactly the
@@ -539,7 +508,7 @@ def test_blurring_an_unparseable_goal_draft_shows_the_hint():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-row-label")
+            page.wait_for(".rank-page .scorecard-card .score-card")
 
             _open_goal_editor(page, row_label, tile_label)
             _type_into_goal_editor(page, "not a time")
@@ -570,7 +539,7 @@ def test_editing_a_goal_time_recomputes_the_tile_and_row_sum_before_saving():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-row-label")
+            page.wait_for(".rank-page .scorecard-card .score-card")
 
             # A generous, easily-beaten goal (5 minutes) so the edited tile
             # grades GOOD regardless of which real PB the fixture happened
@@ -583,8 +552,8 @@ def test_editing_a_goal_time_recomputes_the_tile_and_row_sum_before_saving():
                 "document.querySelector('.rank-page .scorecard-card "
                 ".scorecard-savebar .meta').textContent")
             colored = page.count(
-                ".rank-page .scorecard-card .score-tile.good, "
-                ".rank-page .scorecard-card .score-tile.bad")
+                ".rank-page .scorecard-card .score-gap.good, "
+                ".rank-page .scorecard-card .score-gap.bad")
             # The API was never called -- this is still an unsaved edit.
             unsaved_goal = _get_scorecard(base)["goal"]
 
@@ -601,7 +570,7 @@ def test_saving_a_custom_goal_persists_it_and_lists_it_first_in_the_picker():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-row-label")
+            page.wait_for(".rank-page .scorecard-card .score-card")
 
             _expand_row_and_edit_goal(page, row_label, tile_label, "5'00\"00")
             page.wait_for(".rank-page .scorecard-card .scorecard-savebar")
@@ -789,7 +758,7 @@ def test_a_typed_goal_snaps_onto_the_displayable_set_in_the_cell():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-row-label")
+            page.wait_for(".rank-page .scorecard-card .score-card")
 
             _expand_row_and_edit_goal(page, row_label, tile_label, "51\"01")
             page.wait_ms(150)
@@ -799,12 +768,13 @@ def test_a_typed_goal_snaps_onto_the_displayable_set_in_the_cell():
             cell = page.evaluate(
                 "(() => {"
                 f"  const rowLabel = {row_label_js}, starLabel = {tile_label_js};"
-                "  const row = Array.from(document.querySelectorAll("
-                "    '.rank-page .scorecard-card .score-row'))"
-                "    .find((r) => r.querySelector('.score-row-name').textContent === rowLabel);"
-                "  const tr = Array.from(row.querySelectorAll('.score-detail-table tbody tr'))"
-                "    .find((tr) => tr.children[0].textContent.trim().startsWith(starLabel));"
-                "  return tr.querySelector('.score-detail-goal-btn').textContent.trim();"
+                "  const card = Array.from(document.querySelectorAll("
+                "    '.rank-page .scorecard-card .score-card'))"
+                "    .find((c) => c.querySelector('.score-card-name').textContent === rowLabel);"
+                "  const line = Array.from(card.querySelectorAll('.score-line'))"
+                "    .find((l) => l.querySelector('.score-line-name')"
+                ".textContent.trim().startsWith(starLabel));"
+                "  return line.querySelector('.score-detail-goal-btn').textContent.trim();"
                 "})()")
 
         assert cell == "51\"03", (
@@ -821,55 +791,6 @@ def _create_route(base: str, name: str, steps: list) -> int:
         headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=10) as response:
         return json.loads(response.read())["id"]
-
-
-def test_expanding_one_row_expands_only_that_row():
-    """Round 7 item 1: "If I expand one of the rows in the scorecard, it
-    should only expand THAT row. It shouldn't expand all rows (like it
-    incorrectly does now)." The old expand key was `row.course_id ??
-    "secret"` and a ROUTE scope's rows ALL carry `course_id: null`, so every
-    row hashed to "secret" and toggled together.
-
-    Driven on a real ROUTE scope for exactly that reason: the Overall card
-    cannot show this bug at all (its 15 course rows carry distinct
-    course_ids and only the single Secret row is null), so a version of this
-    test written there passes with the bug fully restored -- measured by
-    mutation, not assumed."""
-    with serve_ui() as base:
-        route_id = _create_route(base, "Two visits", [
-            {"need": 1, "candidates": [{"type": "star", "course": 1, "star": 0}]},
-            {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}])
-
-        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
-            page.goto(f"{base}/ui/index.html")
-            page.wait_for(".log-list-card")
-            page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-row-label")
-
-            # Pick the route scope through the page's own control -- the same
-            # select every other card on the Rank tab follows.
-            page.evaluate(
-                "(() => {"
-                "  const select = document.querySelector('.rank-page "
-                ".route-focus-control select');"
-                f"  select.value = 'route:{route_id}';"
-                "  select.dispatchEvent(new Event('change', {bubbles: true}));"
-                "})()")
-            page.wait_ms(400)
-            rows_now = page.count(".rank-page .scorecard-card .score-row")
-            assert rows_now == 2, f"the route scope should draw 2 rows, drew {rows_now}"
-
-            page.evaluate(
-                "document.querySelectorAll('.rank-page .scorecard-card "
-                ".score-row-label')[0].click()")
-            page.wait_for(".rank-page .scorecard-card .score-detail-table")
-            page.wait_ms(150)
-
-            expanded = page.count(".rank-page .scorecard-card .score-row.is-expanded")
-            tables = page.count(".rank-page .scorecard-card .score-detail-table")
-
-        assert expanded == 1, f"expanding one row expanded {expanded} rows"
-        assert tables == 1, f"{tables} detail tables drawn for one expanded row"
 
 
 def test_the_row_x_removes_that_row_and_ignores_it_in_ranking():
@@ -890,7 +811,7 @@ def test_the_row_x_removes_that_row_and_ignores_it_in_ranking():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-row-label")
+            page.wait_for(".rank-page .scorecard-card .score-card")
             page.evaluate(
                 "(() => {"
                 "  const select = document.querySelector('.rank-page "
@@ -899,23 +820,23 @@ def test_the_row_x_removes_that_row_and_ignores_it_in_ranking():
                 "  select.dispatchEvent(new Event('change', {bubbles: true}));"
                 "})()")
             page.wait_ms(400)
-            assert page.count(".rank-page .scorecard-card .score-row") == 2
+            assert page.count(".rank-page .scorecard-card .score-card") == 2
 
             removed_label = page.evaluate(
                 "document.querySelector('.rank-page .scorecard-card "
-                ".score-row .score-row-name').textContent.trim()")
+                ".score-card .score-card-name').textContent.trim()")
             page.evaluate(
                 "document.querySelectorAll('.rank-page .scorecard-card "
                 ".score-row-remove')[0].click()")
             page.wait_ms(700)
 
-            rows_left = page.count(".rank-page .scorecard-card .score-row")
+            rows_left = page.count(".rank-page .scorecard-card .score-card")
             labels_left = page.evaluate(
                 "Array.from(document.querySelectorAll('.rank-page "
-                ".scorecard-card .score-row-name')).map((el) => "
+                ".scorecard-card .score-card-name')).map((el) => "
                 "el.textContent.trim())")
 
-        assert rows_left == 1, f"the X left {rows_left} rows, expected 1"
+        assert rows_left == 1, f"the X left {rows_left} cards, expected 1"
         assert removed_label not in labels_left
 
         # The SAME exclusion the Rank tab writes -- so the scope's own
@@ -932,3 +853,37 @@ def test_the_row_x_removes_that_row_and_ignores_it_in_ranking():
         assert marelo["n"] == 1, (
             "the removed star must leave the rating's denominator, not just "
             f"wear a flag: n={marelo['n']}")
+
+
+def test_the_caps_toggle_hides_every_cap_and_persists():
+    """Round 9, his own design: "at the bottom, under the scorecard, we
+    simply include a toggle for 'Show Rank Caps' which is on by default. If
+    the user wants the lean scorecard, they can toggle it off (which remains
+    off until the user re-enables it)." Persistence is proved by a RELOAD --
+    the preference must survive the page, not just the render."""
+    with serve_ui() as base:
+        _put_division_goal(base, "Bronze", "V")
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_ms(200)
+
+            caps_on = page.count(".rank-page .scorecard-card .score-line-cap")
+            assert caps_on >= 1, "with a goal set and PBs seeded, caps must draw by default"
+
+            page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".scorecard-caps-toggle input').click()")
+            page.wait_ms(200)
+            assert page.count(".rank-page .scorecard-card .score-line-cap") == 0
+
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_ms(200)
+            assert page.count(".rank-page .scorecard-card .score-line-cap") == 0, (
+                "the lean preference must survive a reload")

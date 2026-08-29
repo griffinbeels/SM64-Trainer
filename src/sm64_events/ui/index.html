@@ -7298,48 +7298,86 @@
     border-radius: 6px; color: inherit; padding: 4px 8px; font: inherit;
   }
   .scorecard-savebar .inline-state { flex-basis: 100%; }
-  .score-rows { display: grid; gap: 6px; }
-  /* FOUR tracks since round 7 -- the row's summed You and Goal each get
-     their own column so both are always drawn under a heading, where the
-     single gap chip used to sit alone with its two halves in a hover
-     ("there should be column labels, because otherwise it's not obvious
-     what each number means"). The two time columns share a fixed minimum so
-     every row's numbers line up under the headings even when one row's
-     value is far shorter than another's. `--score-time-col` is declared
-     once and read by both the heading row and every data row -- two
-     elements cannot drift apart about a width they are meant to share. */
-  .score-rows, .score-head-row, .score-row {
-    --score-time-col: 74px; --score-remove-col: 20px;
+  /* ---- The scorecard's card grid (round 9, 2026-08-28) -----------------
+     "Four big columns. Each column contains ~4 big rows. Each cell is a
+     card... compact enough so that if the window was landscape, I could
+     take a nice picture." CSS multi-column, not a grid: `columns` lets the
+     cards flow DOWN each column like his reference sheet's four vertical
+     bands, and the column count derives from the pane's own width (at most
+     4, each at least ~300px) with no media or container query at all --
+     which is also why this passes the component-container law trivially:
+     there is no breakpoint to gate. */
+  .score-cards { columns: 4 300px; column-gap: 10px; }
+  .score-card {
+    break-inside: avoid; margin: 0 0 10px;
+    border: 1px solid var(--border-soft); border-radius: 8px;
+    padding: 6px 8px; background: rgba(9,20,32,.55);
   }
-  .score-row, .score-head-row {
+  .score-card-head {
+    display: flex; align-items: center; gap: 6px;
+    padding-bottom: 4px; margin-bottom: 2px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .score-card-name {
+    flex: 1 1 auto; min-width: 0; font-weight: 700; font-size: .82rem;
+  }
+  /* One line per star: icon | wrapping name | you | goal | gap. The two
+     time cells and the gap are max-content so a card's numbers line up down
+     the card; the NAME takes what is left and WRAPS -- round 9's "no word
+     is cut off" holds by construction, there is no ellipsis rule here at
+     all. */
+  .score-line {
     display: grid;
-    /* `minmax(0, 1fr)` for the tile strip, never a bare `1fr`: `1fr` is
-       `minmax(auto, 1fr)`, whose AUTO MINIMUM refuses to shrink below the
-       strip's own content -- so a row of ten tiles squeezed the two time
-       tracks below their contents and the You value overlapped the Goal
-       value by 2px (caught by the responsive sweep at 26 viewports, not by
-       eye). A zero minimum lets the strip give way instead; the time
-       columns keep the width their numbers need. */
-    grid-template-columns: minmax(84px, 130px) minmax(0, 1fr)
-                           minmax(var(--score-time-col), max-content)
-                           minmax(var(--score-time-col), max-content)
-                           var(--score-remove-col);
-    align-items: center; gap: 10px;
+    grid-template-columns: 16px minmax(0, 1fr) max-content max-content
+                           minmax(34px, max-content);
+    align-items: center; gap: 5px;
+    padding: 1px 0; font-size: .74rem; line-height: 1.25;
   }
-  .score-head-row { padding: 2px 0 4px; }
-  /* Round 8's per-row remove. A full text reset, so it declares its own
-     `min-height`/`display`/`justify-content` -- the global `button` rule
-     sets min-height:34px and inline-flex, which a bare reset does not undo
-     and which would grow every row by 9px (tests/test_ui_button_flex.py
-     guards both halves). RED at rest, his own word ("add a red X next to
-     each of the rows"), held at .6 opacity so it reads as red without
-     competing with the numbers beside it on a card he screenshots; full
+  .score-line-icon {
+    width: 16px; height: 16px; border-radius: 3px; object-fit: cover;
+    opacity: .9;
+  }
+  .score-line-name { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+  .score-line-you, .score-line-goal {
+    display: inline-flex; align-items: center; gap: 3px; justify-self: end;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .score-line-time { color: var(--text); }
+  /* The cap sits inline before its time; RankIcon's own wing spill is
+     horizontal and small at 14px, and the shared .rank-icon-slot reserve
+     would double this line's height for wings no 14px cap makes legible --
+     a plain slot with its own tiny margin reads better at this density. */
+  .score-line-cap { display: inline-flex; align-items: center; }
+  .score-gap {
+    justify-self: end; font-variant-numeric: tabular-nums;
+    font-size: .72rem; white-space: nowrap; color: var(--muted);
+  }
+  .score-gap.good { color: var(--green); }
+  .score-gap.bad { color: var(--coral); }
+  .score-card-foot {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content max-content
+                           minmax(34px, max-content);
+    align-items: center; gap: 5px;
+    margin-top: 2px; padding-top: 3px;
+    border-top: 1px solid var(--border-soft);
+    font-size: .74rem; font-weight: 700;
+  }
+  .score-card-foot .score-line-goal { font-weight: 400; color: var(--muted); }
+  .score-sum-coverage { color: var(--muted); font-size: .66rem; font-weight: 400; }
+  /* Round 8's per-row remove, now in the card head. A full text reset, so
+     it declares its own min-height/display/justify-content -- the global
+     `button` rule sets min-height:34px and inline-flex, which a bare reset
+     does not undo (tests/test_ui_button_flex.py guards both halves). RED at
+     rest, his own word ("add a red X next to each of the rows"), held at .6
+     opacity so it reads as red without competing with the numbers; full
      strength on hover and focus. */
   .score-row-remove {
     display: flex; align-items: center; justify-content: center;
-    min-height: 0; width: 20px; height: 20px; padding: 0; margin: 0;
+    min-height: 0; width: 18px; height: 18px; padding: 0; margin: 0;
+    flex: 0 0 auto;
     background: none; border: none; border-radius: 5px;
-    font: inherit; font-size: .95rem; line-height: 1;
+    font: inherit; font-size: .9rem; line-height: 1;
     color: var(--coral); opacity: .6; cursor: pointer;
     transition: opacity .12s ease, background .12s ease;
   }
@@ -7347,147 +7385,29 @@
     opacity: 1; background: rgba(255,111,97,.14);
   }
   .score-row-remove:disabled { cursor: default; opacity: .25; }
-  .score-sum-head {
-    justify-self: end; font-size: .7rem; text-transform: uppercase;
-    letter-spacing: .04em; color: var(--muted);
-  }
-  /* The row label is now the expand/collapse control (round 8) -- a real
-     <button>, not a styled span, so it is reachable and announced the same
-     way every other disclosure control in this app is. The chevron and the
-     name are SEPARATE children because ellipsis has to land on the text
-     alone; a flex container with a fixed-width icon child inside it cannot
-     ellipsize as a single box. */
-  .score-row-label {
-    display: flex; align-items: center; justify-content: flex-start; gap: 4px; min-width: 0;
-    background: transparent; border: none; padding: 0; margin: 0;
-    font: inherit; font-size: .85rem; color: var(--muted); cursor: pointer;
-  }
-  .score-row.is-expanded .score-row-label { color: var(--text); }
-  .score-row-chevron { flex: 0 0 auto; font-size: .68rem; color: var(--muted); }
-  .score-row-name {
-    min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  /* Spans the row's own three tracks -- the detail panel is a FOURTH grid
-     child, placed on the row's next implicit row by the same
-     `grid-template-columns` the collapsed row uses, so nothing about the
-     row's own layout has to change to make room for it. */
-  .score-row-detail {
-    grid-column: 1 / -1;
-    display: grid; gap: 8px; margin-top: 4px; padding: 10px 12px;
-    background: rgba(255,255,255,.03); border: 1px solid var(--border-soft);
-    border-radius: 8px;
-  }
-  .score-detail-target {
-    display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  }
-  .score-detail-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
-  .score-detail-table th {
-    text-align: left; font-weight: 600; color: var(--muted); font-size: .72rem;
-    padding: 2px 8px 4px; border-bottom: 1px solid var(--border-soft);
-  }
-  .score-detail-table th:not(:first-child), .score-detail-table td:not(:first-child) {
-    text-align: right;
-  }
-  .score-detail-table td {
-    padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,.04);
-    font-variant-numeric: tabular-nums;
-  }
-  .score-detail-table tr:last-child td { border-bottom: none; }
-  .score-detail-table td.good { color: var(--green); }
-  .score-detail-table td.bad { color: var(--coral); }
-  /* The editable Goal cell: a dashed-border button reading as "click to
-     set", swapping in place for a text input on click -- never a second
-     element pushing the row taller, since the table's own row height must
-     stay put whether a cell is a button or an input. */
+  /* The goal editor, unchanged from rounds 5-6 apart from its new home on
+     the line (the classes name the EDITOR and the render tests key on
+     them). */
   .score-detail-goal-btn {
-    background: transparent; border: 1px dashed var(--border-soft);
-    border-radius: 5px; color: inherit; padding: 2px 8px; cursor: pointer;
-    font: inherit; font-variant-numeric: tabular-nums;
+    background: none; border: 1px dashed var(--border-soft); border-radius: 5px;
+    color: inherit; font: inherit; font-size: .72rem; padding: 0 4px;
+    cursor: pointer; min-height: 0; display: inline-flex; align-items: center;
+    justify-content: center;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
   }
   .score-detail-goal-btn:hover { border-color: var(--gold-soft); color: var(--gold-soft); }
-  /* Wraps the input so an invalid draft's hint (below) stacks under it
-     without disturbing the input's own width or alignment -- the row only
-     grows taller in this one state, never on the ordinary button<->input
-     swap the comment above already protects. */
-  .score-detail-editing { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .score-detail-editing { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; }
   .score-detail-input {
-    width: 90px; background: rgba(3,10,18,.8); border: 1px solid var(--border-soft);
-    border-radius: 5px; color: inherit; padding: 2px 6px; font: inherit;
-    font-variant-numeric: tabular-nums; text-align: right;
+    width: 64px; background: rgba(3,10,18,.8);
+    border: 1px solid var(--border-soft); border-radius: 5px;
+    color: inherit; font: inherit; font-size: .72rem; padding: 0 4px;
   }
   .score-detail-input.is-invalid { border-color: var(--coral); }
-  /* Where the click landed: the way out of an unparseable draft sits right
-     under the box that rejected it, never a toast (`.claude/rules/
-     acceptance.md`'s "put the reason where the click lands" rule). */
-  .score-detail-hint { font-size: .68rem; color: var(--coral); }
-  .score-row-tiles { display: flex; gap: 4px; flex-wrap: wrap; }
-  /* Tiles never shrink to fit the row -- the CoverageStrip squish lesson
-     (.claude/rules/ui-core.md: a route's worth of tiles otherwise shrinking
-     to fit their row while the row's height stays put IS the squished-art
-     bug). Fixed at ~44px regardless of row length (7 stars or the Secret
-     row's 10). */
-  .score-tile {
-    position: relative; flex: 0 0 auto;
-    width: 44px; height: 32px; border-radius: 5px; overflow: hidden;
-    display: flex; align-items: center; justify-content: center;
-    background: rgba(255,255,255,.04); border: 1px solid var(--border-soft);
+  .score-detail-hint { font-size: .66rem; color: var(--coral); }
+  .scorecard-caps-toggle {
+    display: inline-flex; align-items: center; gap: 6px; margin-top: 8px;
+    font-size: .76rem; color: var(--muted); cursor: pointer;
   }
-  /* The art rides a custom property the component supplies (--tile-art),
-     painted by a separate absolutely-positioned layer at low opacity --
-     never a plain `background` on the tile itself, which would sit UNDER
-     nothing (there would be no dim layer left to hold at reduced opacity).
-     `.score-tile-text` is a real, explicitly-stacked sibling element
-     (never assume paint order between a positioned pseudo-element and
-     ordinary inline text -- the pseudo is a POSITIONED descendant and can
-     paint above in-flow text by the CSS2.1 stacking order otherwise). */
-  .score-tile::before {
-    content: ""; position: absolute; inset: 0; z-index: 0;
-    background-image: var(--tile-art); background-size: cover;
-    background-position: center; opacity: .22; pointer-events: none;
-  }
-  .score-tile-text {
-    position: relative; z-index: 1;
-    font-size: .68rem; font-weight: 700; font-variant-numeric: tabular-nums;
-    color: var(--text);
-  }
-  .score-tile.good .score-tile-text { color: var(--green); }
-  .score-tile.bad .score-tile-text { color: var(--coral); }
-  .score-tile.dim .score-tile-text { color: var(--muted); opacity: .7; }
-  .score-sum {
-    display: flex; align-items: center; gap: 4px; justify-self: end;
-    font-size: .78rem; font-variant-numeric: tabular-nums; white-space: nowrap;
-    color: var(--text);
-  }
-  .score-sum.good { color: var(--green); }
-  .score-sum.bad { color: var(--coral); }
-  .score-sum-coverage { color: var(--muted); font-size: .7rem; }
-  /* The expanded detail restates the row's pair inline rather than in the
-     row grid, so it carries its own little two-up box. */
-  .score-detail-target-sums { display: flex; align-items: center; gap: 6px; }
-  .score-detail-target-sums .score-sum { justify-self: auto; }
-
-  /* Narrow: the label column no longer earns its own track -- it sits
-     above the tile strip instead of squeezing it, which is what keeps the
-     Secret row's ten tiles from ever needing to shrink or scroll. */
-  @container (max-width: 620px) {
-    .score-row, .score-head-row {
-      grid-template-columns: minmax(0, 1fr)
-                                 minmax(var(--score-time-col), max-content)
-                                 minmax(var(--score-time-col), max-content)
-                                 var(--score-remove-col);
-      grid-template-areas: "label you goal x" "tiles tiles tiles tiles";
-      row-gap: 4px;
-    }
-    .score-head-row { grid-template-areas: "label you goal x"; }
-    .score-row-remove { grid-area: x; }
-    .score-row-label { grid-area: label; }
-    .score-sum-you { grid-area: you; }
-    .score-sum-goal { grid-area: goal; }
-    .score-head-row .score-sum-head:nth-of-type(1) { grid-area: you; }
-    .score-head-row .score-sum-head:nth-of-type(2) { grid-area: goal; }
-    .score-row-tiles { grid-area: tiles; }
-  }
-
 </style></head>
 <body>
 <div id="app"></div>

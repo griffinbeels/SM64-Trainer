@@ -67,13 +67,23 @@ def test_template_rows_have_six_cells_with_the_combined_100c_cell_in_place():
 
 
 def test_card_keys_shape():
+    """105 star keys: 90 course lines (a 100c cell covers two stars) + 15
+    Secret lines -- the 120 stars of his round-9 count. The fights card
+    joins only when the caller resolves fight segments."""
     keys = scorecard.card_keys(scorecard.template_rows())
-    assert len(keys) == 15 * 6 + 10
+    assert len(keys) == 15 * 6 + 15
     assert keys[:6] == ["star:1:0", "star:1:1", "star:1:2", "star:1:6",
                         "star:1:4", "star:1:5"]
-    assert keys[-10:] == ["star:19:0", "star:19:1", "star:24:0",
+    assert keys[-15:] == ["star:19:0", "star:19:1", "star:24:0",
                            "star:16:0", "star:17:0", "star:18:0",
-                           "star:21:0", "star:22:0", "star:20:0", "star:23:0"]
+                           "star:21:0", "star:22:0", "star:20:0", "star:23:0",
+                           "star:0:0", "star:0:1", "star:0:2",
+                           "star:0:3", "star:0:4"]
+
+    with_fights = scorecard.template_rows([("segment:9", "Bowser Battle 1")])
+    assert [row["label"] for row in with_fights[-2:]] == [
+        scorecard.FIGHTS_LABEL, "Secret"]
+    assert len(scorecard.card_keys(with_fights)) == 15 * 6 + 15 + 1
 
 
 def test_secret_row_is_all_stars_with_the_bowser_reds():
@@ -84,9 +94,13 @@ def test_secret_row_is_all_stars_with_the_bowser_reds():
     secret = scorecard.template_rows()[-1]
     assert secret["course_id"] is None and secret["label"] == "Secret"
     keys = [key for key, _label, _clock in secret["entries"]]
+    # Round 9 restored the five castle secrets ("all 120 stars"); they close
+    # the row so the sheet-faithful ten keep their order.
     assert keys == ["star:19:0", "star:19:1", "star:24:0",
                     "star:16:0", "star:17:0", "star:18:0",
-                    "star:21:0", "star:22:0", "star:20:0", "star:23:0"]
+                    "star:21:0", "star:22:0", "star:20:0", "star:23:0",
+                    "star:0:0", "star:0:1", "star:0:2",
+                    "star:0:3", "star:0:4"]
     assert all(clock == "igt" for _key, _label, clock in secret["entries"])
     labels = {key: label for key, label, _clock in secret["entries"]}
     assert labels["star:16:0"] == "Bowser in the Dark World Red Coins"
@@ -117,7 +131,7 @@ def test_card_total_runs_the_same_sum_over_every_row():
     card = scorecard.build_card(scorecard.template_rows(), you=you, goal=goal)
     assert card["total"]["counted"] == 6
     assert card["total"]["you_cs"] == 6000 and card["total"]["goal_cs"] == 5400
-    assert card["total"]["total"] == 15 * 6 + 10
+    assert card["total"]["total"] == 15 * 6 + 15
 
 
 def _route(steps):
@@ -146,12 +160,59 @@ def test_route_rows_keep_a_companion_without_its_100c():
     assert rows[0]["entries"][0][1] == "Find the 8 Red Coins"
 
 
-def test_route_rows_carry_segments_with_their_own_names_and_clock():
-    route = _route([{"need": 1, "candidates": [
-        {"type": "segment", "segment_id": 41}]}])
-    rows = scorecard.rows_for_route(route, segment_labels={41: "LBLJ"})
-    assert rows[0]["label"] == "LBLJ"
-    assert rows[0]["entries"] == [("segment:41", "LBLJ", "rta")]
+def test_route_segments_bucket_by_kind():
+    """Round 9's grouping: a FIGHT (named by the caller, by category) gets
+    the fights card; a segment with a course joins that course's card; a
+    courseless non-fight (an included-back castle movement) lands in the
+    Secret card -- the misc bucket, like the reference sheet's own Secret
+    column. Fights then Secret close the set, after the course cards."""
+    route = _route([
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": 41}]},
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": 9}]},
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": 77}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}])
+    rows = scorecard.rows_for_route(
+        route,
+        segment_labels={41: "LBLJ", 9: "Bowser Battle 1", 77: "DDD Entry"},
+        segment_courses={77: 9},
+        fight_segment_ids={9})
+    assert [row["label"] for row in rows] == [
+        "Dire, Dire Docks", "Whomp's Fortress",
+        scorecard.FIGHTS_LABEL, "Secret"]
+    by_label = {row["label"]: row for row in rows}
+    assert by_label["Secret"]["entries"] == [("segment:41", "LBLJ", "rta")]
+    assert by_label[scorecard.FIGHTS_LABEL]["entries"] == [
+        ("segment:9", "Bowser Battle 1", "rta")]
+    assert by_label["Dire, Dire Docks"]["entries"] == [
+        ("segment:77", "DDD Entry", "rta")]
+
+
+def test_route_revisits_merge_into_one_course_card():
+    """Round 9: "BOB is all of the bobomb battlefield stars" -- a course
+    visited twice is ONE card at its first-touch position, duplicate
+    entities kept once."""
+    route = _route([
+        {"need": 1, "candidates": [{"type": "star", "course": 6, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]},
+        {"need": 2, "candidates": [
+            {"type": "star", "course": 6, "star": 0},
+            {"type": "star", "course": 6, "star": 1}]}])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    assert [row["label"] for row in rows] == [
+        "Hazy Maze Cave", "Whomp's Fortress"]
+    assert [key for key, _l, _c in rows[0]["entries"]] == [
+        "star:6:0", "star:6:1"]
+
+
+def test_route_castle_secrets_and_bowser_reds_share_the_secret_card():
+    route = _route([
+        {"need": 1, "candidates": [{"type": "star", "course": 0, "star": 3}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 16, "star": 0}]}])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    assert len(rows) == 1 and rows[0]["label"] == "Secret"
+    labels = {key: label for key, label, _c in rows[0]["entries"]}
+    assert labels["star:0:3"] == "MIPS 1st Star"
+    assert labels["star:16:0"] == "Bowser in the Dark World Red Coins"
 
 
 def test_route_rows_drop_a_deleted_segments_cell_and_an_empty_step():
@@ -170,13 +231,6 @@ def test_a_course_visit_drops_the_steps_own_star_count_label():
         {"type": "star", "course": 2, "star": 1}]}])
     rows = scorecard.rows_for_route(route, segment_labels={})
     assert rows[0]["label"] == "Whomp's Fortress"
-
-
-def test_route_rows_prefer_the_steps_own_label():
-    route = _route([{"label": "Lobby movement", "need": 1, "candidates": [
-        {"type": "segment", "segment_id": 41}]}])
-    rows = scorecard.rows_for_route(route, segment_labels={41: "LBLJ"})
-    assert rows[0]["label"] == "Lobby movement"
 
 
 def test_card_keys_deduplicates_a_route_that_revisits_an_entity():
@@ -217,8 +271,11 @@ def test_rows_for_course_serves_main_secret_and_refuses_the_castle():
     bitdw = scorecard.rows_for_course(16)[0]
     assert [key for key, _l, _c in bitdw["entries"]] == ["star:16:0"]
     assert bitdw["label"] == "Bowser in the Dark World"
+    # Course 0 = the five castle secrets, real cells since round 9.
+    castle = scorecard.rows_for_course(0)[0]
+    assert len(castle["entries"]) == 5
     with pytest.raises(LookupError):
-        scorecard.rows_for_course(0)
+        scorecard.rows_for_course(25)
 
 
 def test_division_goal_round_trips():

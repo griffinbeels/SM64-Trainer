@@ -1,39 +1,30 @@
-// src/sm64_events/ui/components/scorecard.js — the Rank tab's scorecard: every
-// star of the 120-star layout plus two castle movements as a small tile
-// printing your gap to a goal, one row per course plus a Secret row, a Sigma
-// per row, its You and Goal sums under labelled columns at the right edge
-// (round 7: "there should be column labels, because otherwise it's not
-// obvious what each number means"; the card-wide Upstairs RTA foot was
-// removed the same round, "for now"). The
-// community's template spreadsheet as a live, screenshot-able card.
+// src/sm64_events/ui/components/scorecard.js — the Rank tab's scorecard as a
+// GRID OF COURSE CARDS (round 9, 2026-08-28, replacing rounds 5-8's row
+// list): "Each cell is a card representing a course / category of stars /
+// segments... Each card contains the full name of each star prefixed by its
+// star/segment icon, your rank icon + record time so far, and the goal rank
+// + time, as well as the delta... compact enough so that if the window was
+// landscape, I could take a nice picture." Each payload row IS a card
+// (course / Bowser Fights / Secret — the server groups); each card draws
+// its entries one LINE apiece and restates its Σ as a Stage RTA foot. The
+// cards flow through CSS multi-column (`.score-cards`), four columns
+// narrowing to one, reading DOWN each column like his reference sheet.
 //
-// `divisionOptions()`/`fmtGapCs` are exported import-free (no Preact) so
-// tests/test_ui_scorecard.py drives them under node -- same pattern as
-// entitysection.js/caps.js.
+// A line's caps (`you_rank`/`goal_rank`) are SERVER-graded — the server
+// picks, the client draws — and the "Show rank caps" toggle under the grid
+// (localStorage `sm64.scorecardCaps`, on by default) drops both for the
+// lean sheet look. A goal time is editable IN PLACE (`GoalCell`, the round
+// 5-6 editor moved onto the line): edits live in `pendingOverrides` until
+// the "N edited → save as a named goal" bar writes them through
+// `PUT /api/scorecard/goal {kind:"custom", name, times}`.
 //
-// The runner goal's Runners group in the picker is fetched LAZILY, on the
-// picker's first open (`GET /api/library/runners`, 448 names) rather than
-// on this card's own mount -- the card lives on the Rank tab and mounts
-// every time that tab does, so an eager fetch would download the whole
-// roster on every visit whether or not anyone ever opens the goal picker.
-//
-// Both Copy buttons (Task 5) COPY to the clipboard rather than downloading
-// -- the desktop WebView2 shell's download behaviour is unverified, and a
-// button that does nothing there is the dead-control shape this project
-// treats as a bug (`.claude/rules/import.md`). `GET /api/scorecard/export
-// .csv` stays reachable by URL from a browser regardless.
-//
-// A row expands (`ScoreRow`'s own `expanded` state, lifted here so several
-// rows can be open at once) into a per-star Star/You/Goal/Δ table
-// (`ScoreRowDetail`/`ScoreDetailRow`) -- the Ultimate Sheet template's own
-// shape, his own screenshot of it. A star's Goal cell is editable in place;
-// edits live ONLY in `pendingOverrides` (entity_key -> goal_cs) until saved,
-// recomputed client-side through `applyGoalOverrides` -- no server round
-// trip per keystroke -- and saved under a NAME through
-// `PUT /api/scorecard/goal {kind:"custom", name, times}`, which both
-// creates/overwrites the named goal and makes it the active one in a single
-// write. Saved names surface at the TOP of the picker (`goalGroups`'s own
-// "Custom" group, scorecardgoal.js) via the payload's own `custom_goals`.
+// `divisionOptions()`/`fmtGapCs` stay exported import-free (no Preact) so
+// tests/test_ui_scorecard.py drives them under node; the pure logic lives
+// in ui/scorecardgoal.js (its header says why). The runner group of the
+// goal picker fetches LAZILY on first open. Both Copy buttons COPY to the
+// clipboard — the desktop WebView2 shell's download behaviour is
+// unverified, and a dead button is the shape this project treats as a bug;
+// `GET /api/scorecard/export.csv` stays reachable by URL regardless.
 import { h } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import htm from "htm";
@@ -43,6 +34,7 @@ import { applyGoalOverrides, divisionOptions, fmtGapCs, goalGroups,
          parseGapTime } from "../scorecardgoal.js";
 import { capName, divisionDigit } from "./caps.js";
 import { entityIconSrc } from "./entityicons.js";
+import { RankIcon } from "./rankicon.js";
 import { SearchSelect } from "./searchselect.js";
 import { InlineState } from "./states.js";
 
@@ -89,102 +81,22 @@ function valueToGoal(value) {
 // scorecardgoal.js so it stays node-testable the same way divisionOptions()
 // already is; this file just calls it with whatever runners it has.
 
-// A tile's own class + printed text. `hasGoal` is the CARD's goal, not the
-// tile's own goal_cs -- a tile whose ladder cannot grade the chosen goal
-// still reads as "missing a side" (dim), never as "no goal was ever set".
-function tileView(tile, hasGoal) {
-  if (!hasGoal) {
-    return { cls: "", text: tile.you_cs != null ? fmtSeconds(tile.you_cs / 100) : "—" };
-  }
-  if (tile.you_cs == null || tile.goal_cs == null) return { cls: "dim", text: "—" };
-  return { cls: tile.delta_cs <= 0 ? "good" : "bad", text: fmtGapCs(tile.delta_cs) };
-}
-
-function tileTitle(tile) {
-  const you = tile.you_cs != null ? fmtSeconds(tile.you_cs / 100) : "no time";
-  const goal = tile.goal_cs != null ? fmtSeconds(tile.goal_cs / 100) : "no goal";
-  return `${tile.label} — You ${you} · Goal ${goal}`;
-}
-
-function ScoreTile({ t, tile, hasGoal }) {
-  const { cls, text } = tileView(tile, hasGoal);
-  const classes = ["score-tile", cls].filter(Boolean).join(" ");
-  // The art rides a custom property, never a plain inline background --
-  // `.score-tile::before` reads it so the text stays a real, always-on-top
-  // sibling element instead of racing the pseudo-element's own paint order
-  // (`.claude/rules/ui-core.md`'s "assert the painted value" warning: a
-  // `background` set directly on this span would sit BEHIND nothing, since
-  // there would be no separate dim layer to hold it at low opacity).
-  return html`<span class=${classes} title=${tileTitle(tile)}
-      style=${`--tile-art:url(${entityIconSrc(t, tile.key)})`}>
-    <span class="score-tile-text">${text}</span>
+// One cap, drawn only when the server graded that side and the toggle is
+// on. 14px — big enough that the tier colour and division numeral read,
+// small enough that 120 lines of them stay a texture rather than a wall.
+function LineCap({ rank, show }) {
+  if (!show || !rank) return "";
+  return html`<span class="score-line-cap">
+    <${RankIcon} tier=${rank.tier} division=${rank.division} size=${14} />
   </span>`;
 }
 
-// The row's TWO right-hand cells: its summed You time and its summed Goal
-// time, one per labelled column (round 7 -- a single chip printing only the
-// gap left both numbers in a hover, and "it's not obvious what each number
-// means"). Row and tile times print differently on purpose: a tile's gap is
-// at most a few seconds (fmtGapCs's decimal notation), but a row sums up to
-// ten tiles and runs past a minute, so these print in fmtSeconds' M'SS"CC
-// notation. The GAP survives as colour on the You cell -- green at or under
-// the goal, coral over it -- since fmtSeconds cannot carry a sign.
-function SumCells({ sum }) {
-  const hasDelta = sum.delta_cs != null;
-  const behind = hasDelta && sum.delta_cs > 0;
-  // `counted === 0` still carries `you_cs`/`goal_cs` of 0 (Python `sum([])`),
-  // which is not a real 0'00"00 on either side -- printing them unconditionally
-  // fabricates a comparison nothing backs, the exact "cannot logically be
-  // compared" shape `.claude/rules/acceptance.md` rules against. No comparable
-  // tile means an em-dash on both sides, never two invented zeroes.
-  const title = hasDelta
-    ? `${sum.counted}/${sum.total} tiles comparable · ${
-        behind ? "behind by" : "ahead by"} ${fmtSeconds(Math.abs(sum.delta_cs) / 100)}`
-    : `${sum.counted}/${sum.total} tiles comparable`;
-  return html`<div class=${`score-sum score-sum-you ${
-        hasDelta ? (behind ? "bad" : "good") : ""}`} title=${title}>
-      <span class="score-sum-value">${hasDelta
-        ? fmtSeconds(sum.you_cs / 100) : "—"}</span>
-      ${sum.counted < sum.total
-        ? html`<span class="score-sum-coverage">${sum.counted}/${sum.total}</span>` : ""}
-    </div>
-    <div class="score-sum score-sum-goal" title=${title}>
-      <span class="score-sum-value">${hasDelta
-        ? fmtSeconds(sum.goal_cs / 100) : "—"}</span>
-    </div>`;
-}
-
-// The expanded breakdown: every tile in the row as Star / You / Goal / Δ (round 5:
-// "the YOU column first, *then* the GOAL column"),
-// the shape of the community's own Ultimate Sheet template (round 8, his
-// screenshot from it), plus the row's own Sigma restated as "Stage RTA
-// target" -- the row's collapsed cells already ARE those numbers, named here so
-// clicking in for detail also answers "what am I actually chasing on this
-// stage" without having to reread the collapsed row above it.
-function ScoreRowDetail({ row, onGoalOverride }) {
-  return html`<div class="score-row-detail">
-    <div class="score-detail-target">
-      <span class="meta">Stage RTA target</span>
-      <div class="score-detail-target-sums">
-        <span class="meta">You</span><${SumCells} sum=${row.sum} />
-      </div>
-    </div>
-    <table class="score-detail-table">
-      <thead><tr><th>Star</th><th>You</th><th>Goal</th><th>Δ</th></tr></thead>
-      <tbody>
-        ${row.tiles.map((tile) => html`<${ScoreDetailRow} key=${tile.key}
-            tile=${tile} onGoalOverride=${onGoalOverride} />`)}
-      </tbody>
-    </table>
-  </div>`;
-}
-
-// One star's editable Goal cell. Click/tap turns it into a text input
-// pre-filled with the CURRENT goal in the exact notation it is displayed in
-// (`fmtSeconds`) -- his rule is "replace the time entry", so what he types
-// over is byte-for-byte what he is looking at, never a different unit or a
-// three-box split. Enter or blur commits; Escape cancels with no write.
-function ScoreDetailRow({ tile, onGoalOverride }) {
+// The in-place goal editor — the round 5-6 editor moved onto the LINE
+// (round 9 deleted the expandable detail table; the card is the detail).
+// Class names are kept from the table era (`.score-detail-*`) because they
+// name the EDITOR, not the table, and the blur/snap/hint render tests key
+// on them.
+function GoalCell({ tile, onGoalOverride }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [invalid, setInvalid] = useState(false);
@@ -198,95 +110,113 @@ function ScoreDetailRow({ tile, onGoalOverride }) {
   function commit() {
     // An EMPTY blur/Enter is "I changed my mind", not "I typed garbage" --
     // cancelling (rather than flagging it invalid) is the only way out of
-    // edit mode a blur on an empty box ever had, and leaving it red and open
-    // is the un-dismissable-control shape `.claude/rules/acceptance.md`
+    // edit mode a blur on an empty box ever had, and leaving it red and
+    // open is the un-dismissable-control shape `.claude/rules/acceptance.md`
     // rules against.
     if (!draft.trim()) { cancel(); return; }
     const parsed = parseGapTime(draft);
     if (parsed === null) { setInvalid(true); return; }
     // The one snap the app already has (format.js::attainableCs, the
-    // import field's own door): only 30 of every 100 centisecond values can
-    // appear on the timer, so a typed goal rounds onto the displayable set
-    // and the cell shows the snapped value the moment the edit lands --
+    // import field's own door): only 30 of every 100 centisecond values
+    // can appear on the timer, so a typed goal rounds onto the displayable
+    // set and the cell shows the snapped value the moment the edit lands --
     // never a number nobody typed (round 5).
     onGoalOverride(tile.key, attainableCs(parsed));
     setEditing(false);
   }
 
-  return html`<tr>
-    <td>${tile.label}</td>
-    <td>${tile.you_cs != null ? fmtSeconds(tile.you_cs / 100) : "—"}</td>
-    <td class="score-detail-goal">
-      ${editing
-        ? html`<div class="score-detail-editing">
-              <input class="score-detail-input ${invalid ? "is-invalid" : ""}"
-                  value=${draft} placeholder="0'00&quot;00" autoFocus
-                  oninput=${(inputEvent) => { setDraft(inputEvent.target.value); setInvalid(false); }}
-                  onkeydown=${(keyEvent) => {
-                    if (keyEvent.key === "Enter") commit();
-                    if (keyEvent.key === "Escape") cancel();
-                  }}
-                  onblur=${commit} />
-              ${invalid
-                ? html`<span class="score-detail-hint">type it like 51"83</span>` : ""}
-            </div>`
-        : html`<button type="button" class="score-detail-goal-btn" onclick=${startEdit}>
-              ${tile.goal_cs != null ? fmtSeconds(tile.goal_cs / 100) : "set a time…"}
-            </button>`}
-    </td>
-    <td class=${tile.delta_cs != null ? (tile.delta_cs <= 0 ? "good" : "bad") : ""}>
-      ${tile.delta_cs != null ? fmtGapCs(tile.delta_cs) : "—"}
-    </td>
-  </tr>`;
+  if (editing) {
+    return html`<span class="score-detail-editing">
+      <input class="score-detail-input ${invalid ? "is-invalid" : ""}"
+          value=${draft} placeholder="0'00&quot;00" autoFocus
+          oninput=${(inputEvent) => { setDraft(inputEvent.target.value); setInvalid(false); }}
+          onkeydown=${(keyEvent) => {
+            if (keyEvent.key === "Enter") commit();
+            if (keyEvent.key === "Escape") cancel();
+          }}
+          onblur=${commit} />
+      ${invalid
+        ? html`<span class="score-detail-hint">type it like 51"83</span>` : ""}
+    </span>`;
+  }
+  return html`<button type="button" class="score-detail-goal-btn" onclick=${startEdit}>
+    ${tile.goal_cs != null ? fmtSeconds(tile.goal_cs / 100) : "set a time…"}
+  </button>`;
 }
 
-function ScoreRow({ t, row, rowKey, hasGoal, expanded, removing,
-                    onToggle, onRemove, onGoalOverride }) {
-  // The remove control writes the SAME exclusion the Rank tab's own
-  // breakdown writes (`POST /api/marelo/exclude`), never a second
-  // scorecard-only ignore list -- round 7 settled that this card and the
-  // scope's rating must agree, and two ignore sets that can disagree is the
-  // divergence class this project bans. So the title says what the click
-  // actually does, rather than leaving the rating change to be discovered
-  // ("put the reason where the click lands").
-  const removeTitle = `Ignore ${row.label} — drops it from this card and`
-    + " from this scope's ranking (undo from the Rank tab's breakdown)";
-  return html`<div class="score-row ${expanded ? "is-expanded" : ""}">
-    <button type="button" class="score-row-label" title=${row.label}
-        aria-expanded=${expanded} onclick=${() => onToggle(rowKey)}>
-      <span class="score-row-chevron">${expanded ? "▾" : "▸"}</span>
-      <span class="score-row-name">${row.label}</span>
-    </button>
-    <div class="score-row-tiles">
-      ${row.tiles.map((tile) => html`<${ScoreTile} key=${tile.key} t=${t}
-          tile=${tile} hasGoal=${hasGoal} />`)}
-    </div>
-    <${SumCells} sum=${row.sum} />
-    <!-- LAST in the DOM because it is the last COLUMN: this row is a plain
-         auto-placed grid, so DOM order IS column order, and putting the
-         button second (where it reads most naturally) shifted every later
-         cell one track right -- the tiles into the You track, You into
-         Goal's, and Goal into the 20px remove track, where it overflowed
-         and overlapped You by 2px. Caught by the responsive sweep at 26
-         viewports; the first fix attempt tuned the TRACKS instead and made
-         it 39, which is what measuring the actual rects settled. -->
-    <button type="button" class="score-row-remove" title=${removeTitle}
-        aria-label=${removeTitle} disabled=${removing}
-        onclick=${() => onRemove(row)}>×</button>
-    ${expanded
-      ? html`<${ScoreRowDetail} row=${row} onGoalOverride=${onGoalOverride} />` : ""}
+// One star (or segment) of a card: icon · full wrapping name · your cap +
+// time · goal cap + editable goal time · signed gap. The name WRAPS rather
+// than truncating — the card owns its width, so round 9's "no word is cut
+// off" holds by construction rather than by a tuned column.
+function ScoreLine({ t, tile, showCaps, onGoalOverride }) {
+  const gapCls = tile.delta_cs != null
+    ? (tile.delta_cs <= 0 ? "good" : "bad") : "";
+  return html`<div class="score-line">
+    <img class="score-line-icon" alt="" src=${entityIconSrc(t, tile.key)} />
+    <span class="score-line-name">${tile.label}</span>
+    <span class="score-line-you">
+      <${LineCap} rank=${tile.you_rank} show=${showCaps} />
+      <span class="score-line-time">${tile.you_cs != null
+        ? fmtSeconds(tile.you_cs / 100) : "—"}</span>
+    </span>
+    <span class="score-line-goal">
+      <${LineCap} rank=${tile.goal_rank} show=${showCaps} />
+      <${GoalCell} tile=${tile} onGoalOverride=${onGoalOverride} />
+    </span>
+    <span class="score-gap ${gapCls}">${tile.delta_cs != null
+      ? fmtGapCs(tile.delta_cs) : "—"}</span>
   </div>`;
 }
 
-// One button, one job: fetch/format the text via `onCopy`, hand it to the
-// clipboard, and flash "Copied ✓" for ~1.5s -- the same idiom
-// routes.js's plain `Copy JSON` button lacks (it has no feedback at all),
-// generalised here since two buttons on one card need to look alike.
-// `onCopy` returns the text to copy, or throws/rejects on failure; the
-// caller (ScorecardExports) is what turns a rejection into the inline
-// error line, so this component never needs to know the shape of a
-// server error.
-const COPIED_FLASH_MS = 1500;
+// The card foot: the Σ restated as You · Goal · gap, "Stage RTA" on a
+// course card and "Total" on Fights/Secret (the reference sheet's own
+// wording — only a stage has a Stage RTA). `counted === 0` still carries
+// sums of 0 (Python `sum([])`), which is not a real 0'00"00 -- em-dashes,
+// never two invented zeroes (`.claude/rules/acceptance.md`'s "cannot
+// logically be compared" rule).
+function CardFoot({ row }) {
+  const sum = row.sum;
+  const hasDelta = sum.delta_cs != null;
+  const behind = hasDelta && sum.delta_cs > 0;
+  return html`<div class="score-card-foot">
+    <span class="score-card-foot-label">${row.course_id != null ? "Stage RTA" : "Total"}</span>
+    <span class="score-line-you"><span class="score-line-time">${hasDelta
+      ? fmtSeconds(sum.you_cs / 100) : "—"}</span></span>
+    <span class="score-line-goal">${hasDelta
+      ? fmtSeconds(sum.goal_cs / 100) : "—"}</span>
+    <span class="score-gap ${hasDelta ? (behind ? "bad" : "good") : ""}">
+      ${hasDelta ? fmtGapCs(sum.delta_cs) : "—"}</span>
+    ${sum.counted < sum.total
+      ? html`<span class="score-sum-coverage">${sum.counted}/${sum.total}</span>` : ""}
+  </div>`;
+}
+
+function ScoreCard({ t, row, showCaps, removing,
+                     onRemove, onGoalOverride }) {
+  // The remove control writes the SAME exclusion the Rank tab's own
+  // breakdown writes (`POST /api/marelo/exclude`), never a second
+  // scorecard-only ignore list -- round 7 settled that this card and the
+  // scope's rating must agree. The title says what the click actually does
+  // ("put the reason where the click lands").
+  const removeTitle = `Ignore ${row.label} — drops it from this card and`
+    + " from this scope's ranking (undo from the Rank tab's breakdown)";
+  const headGap = row.sum.delta_cs;
+  return html`<section class="score-card">
+    <div class="score-card-head">
+      <span class="score-card-name">${row.label}</span>
+      <span class="score-gap ${headGap != null
+        ? (headGap > 0 ? "bad" : "good") : ""}">${headGap != null
+        ? fmtGapCs(headGap) : ""}</span>
+      <button type="button" class="score-row-remove" title=${removeTitle}
+          aria-label=${removeTitle} disabled=${removing}
+          onclick=${() => onRemove(row)}>×</button>
+    </div>
+    ${row.tiles.map((tile) => html`<${ScoreLine} key=${tile.key} t=${t}
+        tile=${tile} showCaps=${showCaps}
+        onGoalOverride=${onGoalOverride} />`)}
+    <${CardFoot} row=${row} />
+  </section>`;
+}
 
 function CopyButton({ className, label, onCopy, onError }) {
   const [copied, setCopied] = useState(false);
@@ -392,15 +322,29 @@ function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange, scopeId }
   </div>`;
 }
 
+// The caps preference — per BROWSER, like `sm64.rankIcons`: what a card
+// looks like is a display choice, not practice data. try/catch because a
+// blocked-storage context (thumbnail capture, hardened browser) must render
+// the default, never crash the card.
+const CAPS_KEY = "sm64.scorecardCaps";
+
+function readCapsPreference() {
+  try { return localStorage.getItem(CAPS_KEY) !== "off"; }
+  catch { return true; }
+}
+
+function writeCapsPreference(on) {
+  try { localStorage.setItem(CAPS_KEY, on ? "on" : "off"); }
+  catch { /* display preference only -- losing it costs a click */ }
+}
+
 export function Scorecard({ t, scopeId = "overall" }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   // null = not fetched yet (the Runners group is lazy, see the header
   // comment); [] once fetched even if the sheet somehow named nobody.
   const [runners, setRunners] = useState(null);
-  // Which rows are expanded -- a plain Set of `row.course_id ?? "secret"`,
-  // several open at once (no accordion constraint asked for).
-  const [expandedRows, setExpandedRows] = useState(() => new Set());
+  const [showCaps, setShowCaps] = useState(readCapsPreference);
   // entity_key -> goal_cs, UNSAVED. Lives here (not per-row) because a save
   // can gather edits made across several rows before he ever presses Save.
   const [pendingOverrides, setPendingOverrides] = useState({});
@@ -446,14 +390,6 @@ export function Scorecard({ t, scopeId = "overall" }) {
   // comparing against something now" -- coloring should not wait for a
   // saved goal to exist.
   const hasGoal = !!(data && data.goal) || Object.keys(pendingOverrides).length > 0;
-
-  function toggleRow(rowKey) {
-    setExpandedRows((current) => {
-      const next = new Set(current);
-      if (next.has(rowKey)) next.delete(rowKey); else next.add(rowKey);
-      return next;
-    });
-  }
 
   function handleGoalOverride(entityKey, goalCs) {
     setPendingOverrides((current) => ({ ...current, [entityKey]: goalCs }));
@@ -538,17 +474,19 @@ export function Scorecard({ t, scopeId = "overall" }) {
                     busy=${saveBusy} error=${saveError}
                     onSave=${saveCustomGoal} onDiscard=${discardOverrides} />`
               : ""}
-            <div class="score-head-row" aria-hidden="true">
-              <span></span><span></span>
-              <span class="score-sum-head">You</span>
-              <span class="score-sum-head">Goal</span>
+            <div class="score-cards">
+              ${displayData.rows.map((row, index) => html`<${ScoreCard} key=${index}
+                  t=${t} row=${row} showCaps=${showCaps} removing=${removing}
+                  onRemove=${removeRow} onGoalOverride=${handleGoalOverride} />`)}
             </div>
-            <div class="score-rows">
-              ${displayData.rows.map((row, index) => html`<${ScoreRow} key=${index}
-                  t=${t} row=${row} rowKey=${index} hasGoal=${hasGoal}
-                  expanded=${expandedRows.has(index)} removing=${removing}
-                  onToggle=${toggleRow} onRemove=${removeRow}
-                  onGoalOverride=${handleGoalOverride} />`)}
-            </div>`}
+            <label class="scorecard-caps-toggle">
+              <input type="checkbox" checked=${showCaps}
+                  onchange=${(changeEvent) => {
+                    const on = changeEvent.target.checked;
+                    setShowCaps(on);
+                    writeCapsPreference(on);
+                  }} />
+              ${" "}Show rank caps
+            </label>`}
   </div>`;
 }

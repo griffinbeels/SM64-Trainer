@@ -1102,8 +1102,8 @@ def test_the_scorecard_reaches_a_card_with_tiles(page):
     is behind a nav click, not on the page by default -- unreachable by
     this gate until the 'scorecard' Story's own setup navigates there."""
     reach(page, "scorecard")
-    page.wait_for(".rank-page .scorecard-card .score-tile", timeout_ms=15000)
-    assert count(page, ".rank-page .scorecard-card .score-tile") > 0
+    page.wait_for(".rank-page .scorecard-card .score-line", timeout_ms=15000)
+    assert count(page, ".rank-page .scorecard-card .score-line") > 0
 
 
 def test_an_empty_log_falls_back_to_the_course_grid(fresh_db_page):

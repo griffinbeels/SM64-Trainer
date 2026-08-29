@@ -321,9 +321,9 @@ if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') {
   rankBtn.click();
 }
 await waitFor(() => !!document.querySelector('.rank-page .scorecard-card'));
-await waitFor(() => !!document.querySelector('.rank-page .score-tile'));
-if (!document.querySelector('.rank-page .scorecard-card .score-tile.good, '
-    + '.rank-page .scorecard-card .score-tile.bad')) {
+await waitFor(() => !!document.querySelector('.rank-page .score-line'));
+if (!document.querySelector('.rank-page .scorecard-card .score-gap.good, '
+    + '.rank-page .scorecard-card .score-gap.bad')) {
   // Through the REAL picker, not a raw fetch() -- the card refetches only
   // through its own onGoalChange handler (the spec's own rule: "the picker
   // is the only writer and refetches itself"), so a PUT that bypasses it
@@ -342,8 +342,8 @@ if (!document.querySelector('.rank-page .scorecard-card .score-tile.good, '
     if (option) {
       option.click();
       await waitFor(() => !!document.querySelector(
-        '.rank-page .scorecard-card .score-tile.good, '
-        + '.rank-page .scorecard-card .score-tile.bad'), 3000);
+        '.rank-page .scorecard-card .score-gap.good, '
+        + '.rank-page .scorecard-card .score-gap.bad'), 3000);
     }
   }
 }

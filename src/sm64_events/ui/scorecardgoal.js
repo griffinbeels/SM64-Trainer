@@ -101,7 +101,13 @@ function _recomputeTile(tile, overrides) {
   if (!(tile.key in overrides)) return tile;
   const goal_cs = overrides[tile.key];
   const delta_cs = tile.you_cs != null ? tile.you_cs - goal_cs : null;
-  return { ...tile, goal_cs, delta_cs };
+  // The server graded `goal_rank` against the goal it RESOLVED; an unsaved
+  // edit invalidates that grade and this module cannot re-derive it (a rank
+  // needs the standards ladders, which the server owns). Null is the honest
+  // value -- the line drops its goal cap until the save refetches -- and it
+  // is also what `_tile()` births the key as, so the parity comparison sees
+  // one shape on both sides.
+  return { ...tile, goal_cs, delta_cs, goal_rank: null };
 }
 
 // A row's (or the card's) Sigma over a tile LIST -- mirrors

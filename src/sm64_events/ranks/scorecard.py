@@ -36,7 +36,8 @@ from sm64_events.ranks.scoring import (
     DIVISION_NUMERALS, DIVISIONS_PER_TIER, defined_tiers, progress_for_time,
     tier_band, time_for_score)
 
-__all__ = ["SECRET_ROW", "hundred_coin_companion", "template_rows",
+__all__ = ["SECRET_ROW", "SPECIAL_STAR_LABELS", "FIGHTS_LABEL",
+           "hundred_coin_companion", "template_rows",
            "rows_for_course", "rows_for_route", "without_keys", "card_keys",
            "division_goal_cs", "build_card"]
 
@@ -89,7 +90,22 @@ SECRET_ROW: list[tuple[str, str]] = [
     ("star:22:0", COURSE_NAMES[22]),
     ("star:20:0", COURSE_NAMES[20]),
     ("star:23:0", COURSE_NAMES[23]),
+    # The five castle secrets, RESTORED in round 9 (2026-08-28) -- his "This
+    # should collectively contain all 120 stars" reversed round 6's
+    # template-faithful omission (the community sheet leaves them out
+    # because they are untimed grabs in a run; his card counts them anyway).
+    # They close the row so the sheet-faithful ten keep their order.
+    ("star:0:0", star_name(0, 0)),
+    ("star:0:1", star_name(0, 1)),
+    ("star:0:2", star_name(0, 2)),
+    ("star:0:3", star_name(0, 3)),
+    ("star:0:4", star_name(0, 4)),
 ]
+
+# One dict for "this star's card label is not star_name" -- the Secret row's
+# own overrides, reused by the route grouping below so a Bowser reds star is
+# labelled identically whichever scope drew it.
+SPECIAL_STAR_LABELS = dict(SECRET_ROW)
 
 
 def _merge_hundred_coins(entries: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
@@ -129,10 +145,20 @@ def _course_row(course_id: int) -> dict:
             "entries": _merge_hundred_coins(entries)}
 
 
-def template_rows() -> list[dict]:
-    """The Overall card: 15 course rows (6 cells each -- the 100c cell
-    combined with its companion), then the Secret row."""
+FIGHTS_LABEL = "Bowser Fights"
+
+
+def template_rows(fight_segments=()) -> list[dict]:
+    """The Overall card set: 15 course cards (6 cells each -- the 100c cell
+    combined with its companion), a Bowser-fights card when the caller
+    resolves any (round 9: "all 120 stars, plus the bowser fights" -- the
+    fights are segments, so the ROUTER finds them by category and this stays
+    pure), then the Secret card. `fight_segments` is [(entity_key, label)]."""
     rows = [_course_row(course_id) for course_id in range(1, 16)]
+    if fight_segments:
+        rows.append({"course_id": None, "label": FIGHTS_LABEL,
+                     "entries": [(key, label, "rta")
+                                 for key, label in fight_segments]})
     rows.append({"course_id": None, "label": "Secret",
                  "entries": [(key, label, "igt") for key, label in SECRET_ROW]})
     return rows
@@ -153,16 +179,37 @@ def rows_for_course(course_id: int) -> list[dict]:
              "entries": entries}]
 
 
-def rows_for_route(route: dict, *, segment_labels: dict[int, str]) -> list[dict]:
-    """One row per route step-group, in route order, the cell rule applied
-    within each row. A step's own label wins; else a row whose stars share
-    one course wears the course name; a lone segment wears its own name;
-    anything else is "Step N". A candidate `segment_labels` cannot name (a
-    deleted segment) draws no cell."""
-    rows = []
-    for index, step in enumerate(route.get("steps", []), start=1):
-        entries = []
-        courses = set()
+def rows_for_route(route: dict, *, segment_labels: dict[int, str],
+                   segment_courses: dict[int, int] | None = None,
+                   fight_segment_ids=()) -> list[dict]:
+    """Round 9 (2026-08-28): a route scope composes CARDS, not step rows --
+    "Each cell is a card representing a course / category of stars /
+    segments. It goes in Route order (e.g., BOB is all of the bobomb
+    battlefield stars...)". One card per COURSE with repeat visits MERGED,
+    ordered by when the route first touches the course; the Bowser FIGHTS
+    (identified by the caller, by category) get their own card; every other
+    one-off -- castle secrets, cap stages, Bowser reds, and any in-scope
+    segment with no course of its own -- collects into one Secret card.
+    Fights, then Secret, close the set, like the reference sheet's own
+    Secret column. Duplicate entities (a route can revisit) keep their first
+    appearance; the 100c companion merge applies per card. A candidate
+    `segment_labels` cannot name (a deleted segment) draws no cell."""
+    segment_courses = segment_courses or {}
+    fight_ids = set(fight_segment_ids)
+    order: list[tuple] = []
+    buckets: dict[tuple, list] = {}
+    seen: set[str] = set()
+
+    def add(bucket: tuple, entry) -> None:
+        if entry[0] in seen:
+            return
+        seen.add(entry[0])
+        if bucket not in buckets:
+            buckets[bucket] = []
+            order.append(bucket)
+        buckets[bucket].append(entry)
+
+    for step in route.get("steps", []):
         for candidate in step.get("candidates", []):
             key = candidate_key(candidate)
             if key is None:
@@ -170,35 +217,37 @@ def rows_for_route(route: dict, *, segment_labels: dict[int, str]) -> list[dict]
             parts = key.split(":")
             if parts[0] == "star":
                 course_id, star_id = int(parts[1]), int(parts[2])
-                courses.add(course_id)
-                entries.append((key, star_name(course_id, star_id), "igt"))
+                label = SPECIAL_STAR_LABELS.get(
+                    key, star_name(course_id, star_id))
+                bucket = (("course", course_id) if 1 <= course_id <= 15
+                          else ("secret",))
+                add(bucket, (key, label, "igt"))
             else:
                 segment_id = int(parts[1])
                 label = segment_labels.get(segment_id)
                 if label is None:
                     continue
-                entries.append((key, label, "rta"))
-        if not entries:
-            continue
-        merged = _merge_hundred_coins(entries)
-        # A COURSE VISIT wears the course's own name, ahead of the step's
-        # authored label -- round 8 (2026-08-28): "We also don't need the
-        # 'DDD -- 3 stars' or 'WDW -- 7 stars' the '-- X stars' count. Just
-        # the name of the course." That suffix is real and stays where it
-        # belongs (`corpus_vocab._merge_label` writes it; the Run tab and the
-        # route builder both show it) -- the scorecard just does not want a
-        # count in a row whose own cells already are the count. Anything
-        # that is not one course's stars still prefers the step's label,
-        # which is what names a movement row ("→ WF", "Lakitu Skip").
-        one_course = (len(courses) == 1
-                      and all(entry[0].startswith("star:") for entry in merged))
-        if one_course:
-            label = COURSE_NAMES[courses.pop()]
-        else:
-            label = (step.get("label")
-                     or (merged[0][1] if len(merged) == 1 else f"Step {index}"))
-        rows.append({"course_id": None, "label": label, "entries": merged})
-    return rows
+                course_id = segment_courses.get(segment_id)
+                if segment_id in fight_ids:
+                    bucket = ("fights",)
+                elif course_id is not None and 1 <= course_id <= 15:
+                    bucket = ("course", course_id)
+                else:
+                    bucket = ("secret",)
+                add(bucket, (key, label, "rta"))
+
+    def row_of(bucket: tuple) -> dict:
+        if bucket[0] == "course":
+            return {"course_id": bucket[1], "label": COURSE_NAMES[bucket[1]],
+                    "entries": _merge_hundred_coins(buckets[bucket])}
+        label = FIGHTS_LABEL if bucket[0] == "fights" else "Secret"
+        return {"course_id": None, "label": label,
+                "entries": _merge_hundred_coins(buckets[bucket])}
+
+    course_buckets = [b for b in order if b[0] == "course"]
+    tail = ([("fights",)] if ("fights",) in buckets else []) \
+        + ([("secret",)] if ("secret",) in buckets else [])
+    return [row_of(bucket) for bucket in course_buckets + tail]
 
 
 def without_keys(rows_spec: list[dict], excluded) -> list[dict]:
@@ -239,8 +288,15 @@ def _tile(you: dict, goal: dict, key: str, label: str, clock: str) -> dict:
     you_cs = you.get(key)
     goal_cs = goal.get(key)
     delta_cs = (you_cs - goal_cs) if you_cs is not None and goal_cs is not None else None
+    # `you_rank`/`goal_rank` are the caps a card line wears (round 9). None
+    # HERE, always: this module is pure and a rank needs the standards
+    # store, so the ROUTER grades them in after build (`_grade_tiles`).
+    # Emitting the keys from birth keeps the tile shape constant, which is
+    # what lets the JS live-edit recompute null a stale goal_rank without
+    # the parity comparison seeing two different shapes.
     return {"key": key, "label": label, "clock": clock,
-            "you_cs": you_cs, "goal_cs": goal_cs, "delta_cs": delta_cs}
+            "you_cs": you_cs, "goal_cs": goal_cs, "delta_cs": delta_cs,
+            "you_rank": None, "goal_rank": None}
 
 
 def _sum_tiles(tiles: list[dict]) -> dict:

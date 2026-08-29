@@ -287,6 +287,31 @@ def card_keys_of(card):
     return [tile["key"] for row in card["rows"] for tile in row["tiles"]]
 
 
+def test_tiles_carry_server_graded_ranks(tmp_path):
+    """Round 9: a card line wears caps -- `you_rank`/`goal_rank`, graded by
+    the SERVER against the entity's best ladder (the server picks, the
+    client draws). A side with no time, or an entity with no ladder (the
+    castle secrets), stays None."""
+    with make_client(tmp_path) as (client, _db, _svc):
+        client.post("/api/import/manual", json={
+            "entity_key": "star:1:0", "strat_tag": "Standard",
+            "time_cs": 4370})
+        client.put("/api/scorecard/goal", json={
+            "kind": "division", "tier": "Bronze", "division": "V"})
+        card = client.get("/api/scorecard").json()
+        tiles = {tile["key"]: tile
+                 for row in card["rows"] for tile in row["tiles"]}
+        graded = tiles["star:1:0"]
+        assert graded["you_rank"] is not None
+        assert set(graded["you_rank"]) == {"tier", "division"}
+        assert graded["goal_rank"] == {"tier": "Bronze", "division": "V"}
+        # no PB on this one -> no you cap; goal still grades
+        assert tiles["star:1:1"]["you_rank"] is None
+        # a castle secret has no ladder at all -> neither side grades
+        assert tiles["star:0:0"]["you_rank"] is None
+        assert tiles["star:0:0"]["goal_rank"] is None
+
+
 def test_the_card_ignores_the_same_segments_the_route_ranking_ignores(tmp_path):
     """Round 7 item 3: "By default, all segments should be ignored (other
     than Bowser segments / bowser fights, and other than the 100c
