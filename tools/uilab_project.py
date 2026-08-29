@@ -725,6 +725,12 @@ PROJECT = Project(
             'overlap 7x2px inside button.starcell',
         '1061x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
+        # Two more samples of the SAME owed defect, surfaced 2026-08-28 when
+        # the scorecard's column breakpoint added 1080/1081 to the matrix.
+        '1080x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1081x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
         '1100x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1101x1000 [page] overlap :: span.starholder x span.starrank':

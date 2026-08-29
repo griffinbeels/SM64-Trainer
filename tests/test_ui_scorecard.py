@@ -855,12 +855,11 @@ def test_the_row_x_removes_that_row_and_ignores_it_in_ranking():
             f"wear a flag: n={marelo['n']}")
 
 
-def test_the_caps_toggle_hides_every_cap_and_persists():
-    """Round 9, his own design: "at the bottom, under the scorecard, we
-    simply include a toggle for 'Show Rank Caps' which is on by default. If
-    the user wants the lean scorecard, they can toggle it off (which remains
-    off until the user re-enables it)." Persistence is proved by a RELOAD --
-    the preference must survive the page, not just the render."""
+def test_the_caps_toggle_defaults_off_and_enabling_persists():
+    """Round 10 flipped round 9's default — "No rank caps by default
+    (disable by default)" — so a fresh browser sees the lean sheet and
+    turning caps ON is what persists (same key). Persistence is proved by a
+    RELOAD -- the preference must survive the page, not just the render."""
     with serve_ui() as base:
         _put_division_goal(base, "Bronze", "V")
 
@@ -871,19 +870,76 @@ def test_the_caps_toggle_hides_every_cap_and_persists():
             page.wait_for(".rank-page .scorecard-card .score-card")
             page.wait_ms(200)
 
-            caps_on = page.count(".rank-page .scorecard-card .score-line-cap")
-            assert caps_on >= 1, "with a goal set and PBs seeded, caps must draw by default"
+            assert page.count(".rank-page .scorecard-card .score-line-cap") == 0, (
+                "a fresh browser must see the lean sheet — no caps")
 
             page.evaluate(
                 "document.querySelector('.rank-page .scorecard-card "
                 ".scorecard-caps-toggle input').click()")
             page.wait_ms(200)
-            assert page.count(".rank-page .scorecard-card .score-line-cap") == 0
+            caps_on = page.count(".rank-page .scorecard-card .score-line-cap")
+            assert caps_on >= 1, "with a goal set and PBs seeded, the toggle must draw caps"
 
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
             page.wait_for(".rank-page .scorecard-card .score-card")
             page.wait_ms(200)
-            assert page.count(".rank-page .scorecard-card .score-line-cap") == 0, (
-                "the lean preference must survive a reload")
+            assert page.count(".rank-page .scorecard-card .score-line-cap") >= 1, (
+                "the enabled preference must survive a reload")
+
+
+def test_the_cards_sit_in_aligned_columns_with_secret_before_fights():
+    """Round 10's placement, his words as geometry: "3 columns of 5 cards
+    (for each of the courses, in order), and then a 4th column on the far
+    right for the remainder (secret stars card, followed by bowser fights
+    card)... The tops and bottoms of each card should end in the same
+    place." Course columns of equal card count must agree on every card's
+    top AND bottom; the specials column leads with Secret."""
+    with serve_ui() as base:
+        _put_division_goal(base, "Bronze", "V")
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_ms(200)
+
+            columns = page.evaluate(
+                "Array.from(document.querySelectorAll('.rank-page "
+                ".scorecard-card .score-cards > .score-col')).map((col) => ({"
+                "  kind: col.className.includes('score-col-courses')"
+                "    ? 'courses' : 'specials',"
+                "  cards: Array.from(col.querySelectorAll('.score-card'))"
+                "    .map((card) => ({"
+                "      label: card.querySelector('.score-card-name')"
+                "        .textContent.trim(),"
+                "      top: card.getBoundingClientRect().top,"
+                "      bottom: card.getBoundingClientRect().bottom,"
+                "    })),"
+                "}))")
+
+        course_cols = [col for col in columns if col["kind"] == "courses"]
+        special_cols = [col for col in columns if col["kind"] == "specials"]
+        assert len(course_cols) == 3, (
+            f"the overall card chunks its courses into 3 columns, got "
+            f"{len(course_cols)}")
+        assert len(special_cols) == 1
+        assert special_cols[0]["cards"][0]["label"] == "Secret", (
+            "the specials column leads with Secret ('secret stars card, "
+            "followed by bowser fights card')")
+        assert columns[-1]["kind"] == "specials", (
+            "the specials column sits on the far right")
+
+        counts = {len(col["cards"]) for col in course_cols}
+        assert counts == {len(course_cols[0]["cards"])}, (
+            f"the fixture's course columns should chunk evenly, got {counts}"
+            " — re-derive this test's alignment claim if the seed changed")
+        for card_index in range(len(course_cols[0]["cards"])):
+            tops = [col["cards"][card_index]["top"] for col in course_cols]
+            bottoms = [col["cards"][card_index]["bottom"] for col in course_cols]
+            assert max(tops) - min(tops) <= 1.5, (
+                f"card {card_index}'s tops drift across columns: {tops}")
+            assert max(bottoms) - min(bottoms) <= 1.5, (
+                f"card {card_index}'s bottoms drift across columns: {bottoms}")

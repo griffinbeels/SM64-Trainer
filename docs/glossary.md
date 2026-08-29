@@ -818,19 +818,21 @@ pill]], the [[scope]] control, and your [[rank]]s across everything.
 ### Scorecard
 
 The [[Rank tab]]'s grid of course cards — the reference sheet's own shape,
-compact enough that one landscape screenshot shows your whole progress. Each
-card belongs to one course (plus one Bowser Fights card and one Secret card,
-together holding all 120 [[star]]s and the Bowser fights) and prints one
-line per [[star]] or [[segment]]: its icon, its full name, your
-[[personal best]] with your [[rank]]'s cap, the current [[Goal]]'s time with
-its cap, and the gap between the two. A [[route]]-shaped [[Scope]] buckets
+compact enough that one landscape screenshot shows your whole progress:
+three aligned columns of course cards in order, with the Secret card and
+the Bowser Fights card in a fourth. Each card belongs to one course (plus
+those two, together holding all 120 [[star]]s and the Bowser fights),
+wears its course's own colour and art, and prints one line per [[star]] or
+[[segment]]: its icon, its full name, your [[personal best]], the current
+[[Goal]]'s time, and the gap between the two. A [[route]]-shaped [[Scope]] buckets
 that [[route]]'s entities into the same cards; a course-shaped one draws
 that course's card alone. A course's [[100-coin star]] is not its own
 line — its line combines it with a companion [[star]] (usually the course's
 red-coin [[star]]; five courses pair differently), because the 100-coin
 [[run]] collects that companion's objective on the way. A card's foot sums
 its lines into one Stage RTA gap, counting only lines both sides have a
-time for, and a toggle under the grid hides every cap for the lean look.
+time for, and a toggle under the grid adds each line's [[rank]] caps —
+off by default, remembered once you turn it on.
 
 - **Lives** — the card builder (`src/sm64_events/ranks/scorecard.py`)
   → the card (`src/sm64_events/ui/components/scorecard.js`)

@@ -6,14 +6,17 @@
 // + time, as well as the delta... compact enough so that if the window was
 // landscape, I could take a nice picture." Each payload row IS a card
 // (course / Bowser Fights / Secret — the server groups); each card draws
-// its entries one LINE apiece and restates its Σ as a Stage RTA foot. The
-// cards flow through CSS multi-column (`.score-cards`), four columns
-// narrowing to one, reading DOWN each column like his reference sheet.
+// its entries one LINE apiece and restates its Σ as a Stage RTA foot.
+// Placement is DETERMINISTIC (round 10, replacing CSS multi-column, whose
+// height-balancing staggered the card edges): three equal-height column
+// stacks of course cards in order, a fourth column of Secret then Bowser
+// Fights, stepping 4 → 2 → 1 columns as the pane narrows. Each card wears
+// its course's own tint and art (`CARD_TINTS`, `.score-card-art`).
 //
 // A line's caps (`you_rank`/`goal_rank`) are SERVER-graded — the server
 // picks, the client draws — and the "Show rank caps" toggle under the grid
-// (localStorage `sm64.scorecardCaps`, on by default) drops both for the
-// lean sheet look. A goal time is editable IN PLACE (`GoalCell`, the round
+// (localStorage `sm64.scorecardCaps`, OFF by default since round 10) adds
+// both on top of the lean sheet look. A goal time is editable IN PLACE (`GoalCell`, the round
 // 5-6 editor moved onto the line): edits live in `pendingOverrides` until
 // the "N edited → save as a named goal" bar writes them through
 // `PUT /api/scorecard/goal {kind:"custom", name, times}`.
@@ -191,6 +194,56 @@ function CardFoot({ row }) {
   </div>`;
 }
 
+// Course-THEMED card tints (round 10: "Each card should get a unique
+// background color"): the hue is what the course IS — grass, lava, sand —
+// never a hash, because the point is legibility for a human skimming his
+// progress. The CSS mixes these down to a dark wash off one `--card-tint`
+// custom property, so the stylesheet never names a course.
+const CARD_TINTS = {
+  1: "#6fae4e",   // BOB — grass
+  2: "#9aa5b1",   // WF — stone
+  3: "#3f7fbf",   // JRB — ocean
+  4: "#6fc7e0",   // CCM — ice slide
+  5: "#8f6bc7",   // BBH — haunt purple
+  6: "#5f8f80",   // HMC — cave teal
+  7: "#d95f3b",   // LLL — lava
+  8: "#d8b25a",   // SSL — sand
+  9: "#3b5fc9",   // DDD — deep sea
+  10: "#a9d7e8",  // SL — pale ice
+  11: "#47b3a5",  // WDW — aqua town
+  12: "#a3814f",  // TTM — mountain earth
+  13: "#62b657",  // THI — leafy island
+  14: "#c9a23b",  // TTC — clock brass
+  15: "#7f6fd9",  // RR — sky violet
+};
+const SECRET_TINT = "#d7b64f";  // castle-star gold
+const FIGHTS_TINT = "#b03a3a";  // Bowser red
+
+function cardTint(row) {
+  if (row.course_id != null) return CARD_TINTS[row.course_id] || SECRET_TINT;
+  return row.label === "Secret" ? SECRET_TINT : FIGHTS_TINT;
+}
+
+// Round 10's placement, his words as geometry: "3 columns of 5 cards (for
+// each of the courses, in order), and then a 4th column on the far right
+// for the remainder (secret stars card, followed by bowser fights card)".
+// Course cards chunk into three stacks in payload order; the specials
+// column reorders Secret ahead of Fights for DISPLAY only — the payload
+// and the CSV keep the builder's order. A route scope with fewer course
+// cards chunks the same way; empty columns simply don't render.
+function cardColumns(rows) {
+  const courses = rows.filter((row) => row.course_id != null);
+  const specials = rows.filter((row) => row.course_id == null)
+    .sort((a, b) => (a.label === "Secret" ? 0 : 1)
+                  - (b.label === "Secret" ? 0 : 1));
+  const perColumn = Math.ceil(courses.length / 3) || 1;
+  const columns = [];
+  for (let start = 0; start < courses.length; start += perColumn)
+    columns.push({ kind: "courses", rows: courses.slice(start, start + perColumn) });
+  if (specials.length) columns.push({ kind: "specials", rows: specials });
+  return columns;
+}
+
 function ScoreCard({ t, row, showCaps, removing,
                      onRemove, onGoalOverride }) {
   // The remove control writes the SAME exclusion the Rank tab's own
@@ -201,8 +254,13 @@ function ScoreCard({ t, row, showCaps, removing,
   const removeTitle = `Ignore ${row.label} — drops it from this card and`
     + " from this scope's ranking (undo from the Rank tab's breakdown)";
   const headGap = row.sum.delta_cs;
-  return html`<section class="score-card">
+  const isCourse = row.course_id != null && row.course_id >= 1
+    && row.course_id <= 15;
+  return html`<section class="score-card"
+      style=${`--card-tint:${cardTint(row)}`}>
     <div class="score-card-head">
+      ${isCourse ? html`<img class="score-card-art" alt=""
+          src=${entityIconSrc(t, `course:${row.course_id}`)} />` : ""}
       <span class="score-card-name">${row.label}</span>
       <span class="score-gap ${headGap != null
         ? (headGap > 0 ? "bad" : "good") : ""}">${headGap != null
@@ -328,9 +386,12 @@ function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange, scopeId }
 // the default, never crash the card.
 const CAPS_KEY = "sm64.scorecardCaps";
 
+// OFF by default since round 10 ("No rank caps by default"); enabling
+// persists under the same key, so the lean sheet is what a fresh browser
+// sees and the caps are one remembered click away.
 function readCapsPreference() {
-  try { return localStorage.getItem(CAPS_KEY) !== "off"; }
-  catch { return true; }
+  try { return localStorage.getItem(CAPS_KEY) === "on"; }
+  catch { return false; }
 }
 
 function writeCapsPreference(on) {
@@ -475,9 +536,14 @@ export function Scorecard({ t, scopeId = "overall" }) {
                     onSave=${saveCustomGoal} onDiscard=${discardOverrides} />`
               : ""}
             <div class="score-cards">
-              ${displayData.rows.map((row, index) => html`<${ScoreCard} key=${index}
-                  t=${t} row=${row} showCaps=${showCaps} removing=${removing}
-                  onRemove=${removeRow} onGoalOverride=${handleGoalOverride} />`)}
+              ${cardColumns(displayData.rows).map((column, columnIndex) => html`<div
+                  key=${columnIndex}
+                  class="score-col ${column.kind === "courses"
+                    ? "score-col-courses" : "score-col-specials"}">
+                ${column.rows.map((row) => html`<${ScoreCard} key=${row.label}
+                    t=${t} row=${row} showCaps=${showCaps} removing=${removing}
+                    onRemove=${removeRow} onGoalOverride=${handleGoalOverride} />`)}
+              </div>`)}
             </div>
             <label class="scorecard-caps-toggle">
               <input type="checkbox" checked=${showCaps}

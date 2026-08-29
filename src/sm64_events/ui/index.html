@@ -7298,25 +7298,51 @@
     border-radius: 6px; color: inherit; padding: 4px 8px; font: inherit;
   }
   .scorecard-savebar .inline-state { flex-basis: 100%; }
-  /* ---- The scorecard's card grid (round 9, 2026-08-28) -----------------
-     "Four big columns. Each column contains ~4 big rows. Each cell is a
-     card... compact enough so that if the window was landscape, I could
-     take a nice picture." CSS multi-column, not a grid: `columns` lets the
-     cards flow DOWN each column like his reference sheet's four vertical
-     bands, and the column count derives from the pane's own width (at most
-     4, each at least ~300px) with no media or container query at all --
-     which is also why this passes the component-container law trivially:
-     there is no breakpoint to gate. */
-  .score-cards { columns: 4 300px; column-gap: 10px; }
+  /* ---- The scorecard's card grid (rounds 9-10, 2026-08-28) -------------
+     Round 10 replaced CSS multi-column with DETERMINISTIC columns: the
+     balancer staggered card edges ("this weird spacing that feels
+     unsettling"). Three column stacks of course cards plus a specials
+     column (Secret, then Bowser Fights) — the component buckets them.
+     The outer grid stretches every column to one height and a course
+     column divides into EQUAL rows, which is what "the tops and bottoms
+     of each card should end in the same place" means as geometry; the
+     specials column packs to the top (its two cards are honestly
+     different sizes). Steps 4 -> 2 -> 1 columns on the CARD's own pane
+     (@container, never @media, per the container law). */
+  .score-cards {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px; align-items: stretch;
+  }
+  @container (max-width: 1080px) {
+    .score-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @container (max-width: 560px) {
+    .score-cards { grid-template-columns: minmax(0, 1fr); }
+  }
+  .score-col { display: grid; gap: 10px; min-width: 0; }
+  .score-col-courses { grid-auto-rows: 1fr; }
+  .score-col-specials { align-content: start; grid-auto-rows: max-content; }
+  /* Each card wears its course's own tint (round 10: "a unique background
+     color... so each pops better") via --card-tint from the component; the
+     fallback keeps an untinted card legible rather than transparent (the
+     ui-core custom-property rule). Flex column so the foot can pin to the
+     bottom of a row-stretched card. */
   .score-card {
-    break-inside: avoid; margin: 0 0 10px;
-    border: 1px solid var(--border-soft); border-radius: 8px;
-    padding: 6px 8px; background: rgba(9,20,32,.55);
+    display: flex; flex-direction: column;
+    border: 1px solid color-mix(in srgb, var(--card-tint, #4a6a8a) 38%, rgba(148,180,212,.14));
+    border-radius: 8px;
+    padding: 6px 8px;
+    background: color-mix(in srgb, var(--card-tint, #4a6a8a) 15%, rgba(8,17,28,.92));
+    box-shadow: 0 8px 18px rgba(0, 0, 0, .45);
   }
   .score-card-head {
     display: flex; align-items: center; gap: 6px;
     padding-bottom: 4px; margin-bottom: 2px;
     border-bottom: 1px solid var(--border-soft);
+  }
+  .score-card-art {
+    width: 20px; height: 20px; border-radius: 4px; object-fit: cover;
+    flex: 0 0 auto;
   }
   .score-card-name {
     flex: 1 1 auto; min-width: 0; font-weight: 700; font-size: .82rem;
@@ -7359,7 +7385,7 @@
     grid-template-columns: minmax(0, 1fr) max-content max-content
                            minmax(34px, max-content);
     align-items: center; gap: 5px;
-    margin-top: 2px; padding-top: 3px;
+    margin-top: auto; padding-top: 3px;
     border-top: 1px solid var(--border-soft);
     font-size: .74rem; font-weight: 700;
   }
