@@ -32,6 +32,7 @@ import { h } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { useMeasuredWidth } from "../viewport.js";
 import { attainableCs, fmtSeconds } from "../format.js";
 import { applyGoalOverrides, divisionOptions, fmtGapCs, goalGroups,
          parseGapTime } from "../scorecardgoal.js";
@@ -248,23 +249,31 @@ function cardTint(row) {
 
 // Round 10's placement, his words as geometry: "3 columns of 5 cards (for
 // each of the courses, in order), and then a 4th column on the far right
-// for the remainder (secret stars card, followed by bowser fights card)".
-// Course cards chunk into three stacks in payload order; the specials
-// column reorders Secret ahead of Fights for DISPLAY only — the payload
-// and the CSV keep the builder's order. A route scope with fewer course
-// cards chunks the same way; empty columns simply don't render.
-function cardColumns(rows) {
+// for the remainder (secret stars card, followed by bowser fights card)" —
+// and round 12's wide shape for a full monitor: "Maybe it should be 5
+// columns of 3 for the main courses, and then the two secret/bowser
+// fights cards as the 6th column." Course cards chunk into
+// `courseColumns` stacks in payload order; the specials column reorders
+// Secret ahead of Fights for DISPLAY only — the payload and the CSV keep
+// the builder's order. A route scope with fewer course cards chunks the
+// same way; empty columns simply don't render.
+function cardColumns(rows, courseColumns = 3) {
   const courses = rows.filter((row) => row.course_id != null);
   const specials = rows.filter((row) => row.course_id == null)
     .sort((a, b) => (a.label === "Secret" ? 0 : 1)
                   - (b.label === "Secret" ? 0 : 1));
-  const perColumn = Math.ceil(courses.length / 3) || 1;
+  const perColumn = Math.ceil(courses.length / courseColumns) || 1;
   const columns = [];
   for (let start = 0; start < courses.length; start += perColumn)
     columns.push({ kind: "courses", rows: courses.slice(start, start + perColumn) });
   if (specials.length) columns.push({ kind: "specials", rows: specials });
   return columns;
 }
+
+// The pane width at which the card switches to round 12's wide shape (5
+// course columns + specials = 6 tracks). 1900px gives every one of the six
+// columns at least ~310px — the same floor the 4-up step guarantees.
+const WIDE_CARDS_MIN_PX = 1900;
 
 function ScoreCard({ t, row, showCaps, removing,
                      onRemove, onGoalOverride, onOpenLibrary }) {
@@ -435,6 +444,7 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
   // comment); [] once fetched even if the sheet somehow named nobody.
   const [runners, setRunners] = useState(null);
   const [showCaps, setShowCaps] = useState(readCapsPreference);
+  const [setCardsElement, cardsWidth] = useMeasuredWidth(0);
   // entity_key -> goal_cs, UNSAVED. Lives here (not per-row) because a save
   // can gather edits made across several rows before he ever presses Save.
   const [pendingOverrides, setPendingOverrides] = useState({});
@@ -564,8 +574,11 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
                     busy=${saveBusy} error=${saveError}
                     onSave=${saveCustomGoal} onDiscard=${discardOverrides} />`
               : ""}
-            <div class="score-cards">
-              ${cardColumns(displayData.rows).map((column, columnIndex) => html`<div
+            <div class="score-cards" ref=${setCardsElement}
+                data-cols=${cardsWidth >= WIDE_CARDS_MIN_PX ? "6" : "4"}>
+              ${cardColumns(displayData.rows,
+                            cardsWidth >= WIDE_CARDS_MIN_PX ? 5 : 3)
+                .map((column, columnIndex) => html`<div
                   key=${columnIndex}
                   class="score-col ${column.kind === "courses"
                     ? "score-col-courses" : "score-col-specials"}">

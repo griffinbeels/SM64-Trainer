@@ -314,25 +314,30 @@ def _sum_tiles(tiles: list[dict]) -> dict:
 
 
 def division_goal_cs(ladder_cs: dict[str, int], tier: str, division: str) -> int | None:
-    """The slowest displayed centisecond that still grades `(tier, division)`
-    on this ladder -- the goal time a tile shows for that rank. None when
-    `tier` is not one this ladder defines at all, OR when no integer
-    centisecond grades to this exact division at all: near the fastest
-    tiers `score_for`'s extrapolation slope is steep enough that a division
-    a whole cs wide in SCORE spans zero real centiseconds (measured against
-    the bundled seed: `star:8:1`'s ladder never grades Mario III -- 673cs is
-    Mario II, 674cs is already Mario IV). That is the same "no goal on this
-    tile" case as an undefined tier, not a bug to raise on.
+    """The slowest displayed centisecond that grades AT LEAST
+    `(tier, division)` on this ladder -- the goal time a tile shows for that
+    rank. None only when `tier` is not one this ladder defines at all.
+
+    "At least", not "exactly" (round 12, 2026-08-29): near the fastest tiers
+    a whole division can span ZERO integer centiseconds -- his own ladders
+    put 3cs across the entire Metal tier of Get a Hand, so Metal 2 had no
+    exact time and four tiles showed "set a time..." under a Metal goal.
+    His ruling: "we should generate a reasonable [goal] based on the times.
+    We should never be missing a tier like this in our system." A time that
+    grades a division ABOVE the asked one still honours the goal -- reaching
+    it puts you at least where you aimed -- and wherever the exact division
+    IS reachable this resolves to the identical centisecond, because the
+    slowest time meeting the division's entry score sits inside the division
+    whenever anything does.
 
     `division`'s own entry score (the low edge of its five-way slice of the
-    tier's score band) is exactly the score of the slowest time still inside
-    it, so `time_for_score` inverts straight to (approximately) the answer;
-    the loop only corrects the centisecond-rounding slop `time_for_score` and
-    `progress_for_time` can each introduce independently, walking toward the
-    last centisecond that still grades here. Bounded at 10 steps -- measured
-    against every ladder/tier/division the bundled seed ships (4,580 combos):
-    every one either converges in well under 10 steps or is genuinely
-    unreachable, so a wider bound would not recover a different answer."""
+    tier's score band) is exactly the score of the slowest time still at or
+    inside it, so `time_for_score` inverts straight to (approximately) the
+    answer; the loop only corrects the centisecond-rounding slop
+    `time_for_score` and `progress_for_time` can each introduce
+    independently, walking toward the last centisecond whose score still
+    meets the entry. Bounded at 10 steps -- ample for rounding slop (the
+    pre-round-12 bound was measured over all 4,580 seed combos)."""
     defined = defined_tiers(ladder_cs)
     if tier not in defined:
         return None
@@ -341,19 +346,14 @@ def division_goal_cs(ladder_cs: dict[str, int], tier: str, division: str) -> int
     cs = time_for_score(ladder_cs, entry_score)
     if cs is None:
         return None
-    target = (tier, division)
     for _ in range(10):
-        graded = progress_for_time(ladder_cs, cs)
-        if (graded["tier"], graded["division"]) == target:
-            beyond = progress_for_time(ladder_cs, cs + 1)
-            if (beyond["tier"], beyond["division"]) != target:
-                return cs
-            cs += 1                       # still inside -- push toward the slowest
-        elif graded["score"] > entry_score:
-            cs += 1                       # graded better than this division -- slow down
+        if progress_for_time(ladder_cs, cs)["score"] >= entry_score:
+            if progress_for_time(ladder_cs, cs + 1)["score"] < entry_score:
+                return cs                 # the slowest cs still meeting the entry
+            cs += 1                       # still meets it -- push toward the slowest
         else:
-            cs -= 1                       # graded worse than this division -- speed up
-    return None                           # unreachable: no goal for this tile
+            cs -= 1                       # scores below the entry -- speed up
+    return None                           # rounding never converged (unseen in the seed)
 
 
 def build_card(rows_spec: list[dict], *, you: dict[str, int],

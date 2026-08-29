@@ -1407,7 +1407,14 @@
     --radius: 9px;
   }
   * { box-sizing: border-box; }
-  html, body, #app { min-height: 100%; max-width: 100%; overflow-x: hidden; }
+  /* `clip`, NOT `hidden` (round 12): overflow-x:hidden makes an element a
+     scroll container, and position:sticky sticks to its nearest SCROLLING
+     ancestor — body and #app never scroll themselves (the viewport does),
+     so the sidebar's sticky silently never fired and it scrolled away with
+     the page (measured: top=-8133px after an 8133px scroll, exactly
+     unstuck). `clip` clips the same pixels without creating a scroll
+     container, on all three so no layer re-arms the trap. */
+  html, body, #app { min-height: 100%; max-width: 100%; overflow-x: clip; }
   /* Reserve the scrollbar's width whether or not one is showing, so a pane
      that grows past the fold can never shove the whole layout sideways (live
      audit 2026-07-25: opening a library group shifted the entire page). This
@@ -1651,8 +1658,14 @@
      rules measure against (the sidebar's 1180px step means this column's
      width is not monotonic in window width). */
   .marelo-slot { min-width: 0; display: grid; container-type: inline-size; }
+  /* 2600px, raised from 1500 on 2026-08-29 (round 12, his 4K fullscreen:
+     "the overall width needs to be way bigger when the screen is full...
+     I can't fit everything into a single screenshot") — wide enough for
+     the scorecard's six-column shape with margin auto still centering on
+     anything wider. Every component gates its own layout on its container,
+     so more pane is more room, not a new breakpoint regime. */
   .workspace {
-    width: 100%; max-width: 1500px; min-width: 0; margin: 0 auto;
+    width: 100%; max-width: 2600px; min-width: 0; margin: 0 auto;
     padding: 4px 14px 28px; overflow-x: hidden;
   }
   .view-pane, .practice-page { min-width: 0; max-width: 100%; }
@@ -7318,6 +7331,13 @@
      wrapped every long star name — "the cards need to be a bit bigger".
      Four-up only where each card gets ~320px+; otherwise two wide
      columns. */
+  /* Round 12's wide shape, chosen by the COMPONENT from its measured width
+     (the bucket count has to change with the track count, which no CSS
+     query can do): 5 course columns + the specials column on a full
+     monitor. */
+  .score-cards[data-cols="6"] {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
   @container (max-width: 1320px) {
     .score-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }

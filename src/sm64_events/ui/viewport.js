@@ -81,3 +81,23 @@ export function usePaneCap() {
   }, [element]);
   return setElement;
 }
+
+// A measured element WIDTH on the same callback-ref pattern as usePaneCap
+// (the node may not exist on first render; keying the effect on the NODE
+// means it runs exactly when it appears). Lifted out of rankpage.js on
+// 2026-08-29 so the scorecard's wide-layout switch and the rank chart share
+// one implementation.
+export function useMeasuredWidth(fallback) {
+  const [element, setElement] = useState(null);
+  const [width, setWidth] = useState(fallback);
+  useEffect(() => {
+    if (!element || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const measuredWidth = entries[0] && entries[0].contentRect.width;
+      if (measuredWidth) setWidth(Math.round(measuredWidth));
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return [setElement, width];
+}

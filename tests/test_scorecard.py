@@ -298,15 +298,43 @@ def test_division_goal_refuses_an_undefined_tier():
     assert scorecard.division_goal_cs({"Bronze": 5000}, "Master", "III") is None
 
 
-def test_division_goal_returns_none_for_a_division_no_centisecond_reaches():
+def test_division_goal_snaps_to_at_least_when_no_centisecond_lands_exactly():
     """A real seeded ladder (star:8:1) whose Mario band spans only 5.0 score
-    points across 3 real centiseconds (674-676cs): 673cs already grades
-    Mario II and 674cs already grades Mario IV, so no integer centisecond
-    ever grades Mario III on this entity. Found by sweeping all 4,580
-    ladder/tier/division combinations in the bundled seed -- 32 of them hit
-    this, all near the fastest tiers where the extrapolation slope is
-    steepest. This is "no goal for this tile", not an error."""
+    points across 3 real centiseconds (674-676cs): no integer centisecond
+    grades EXACTLY Mario III on this entity. Until round 12 that was "no
+    goal for this tile" -- and four of his live tiles showed "set a
+    time..." under a Metal goal for exactly this reason (his ladders put
+    3cs across Get a Hand's whole Metal tier). His ruling: "We should never
+    be missing a tier like this in our system." The resolver now returns
+    the slowest centisecond grading AT LEAST the asked division -- reaching
+    it honours the goal -- and still resolves identically wherever the
+    exact division is reachable (the sweep companion below)."""
     entities = json.loads(SEED.read_text())["entities"]
     ladder = scoring.best_ladder(entities["star:8:1"]["strategies"])
     assert ladder["Mario"] == 676          # pin the fixture so a seed update is visible here
-    assert scorecard.division_goal_cs(ladder, "Mario", "III") is None
+    goal = scorecard.division_goal_cs(ladder, "Mario", "III")
+    assert goal is not None
+    graded = scoring.progress_for_time(ladder, goal)
+    assert graded["tier"] == "Mario"
+    assert graded["division"] in ("I", "II", "III"), (
+        "the snapped goal must grade AT LEAST Mario III")
+    # ...and one centisecond slower must NOT meet Mario III any more, or the
+    # goal is not the SLOWEST honouring time.
+    slower = scoring.progress_for_time(ladder, goal + 1)
+    assert (slower["tier"], slower["division"]) not in (
+        ("Mario", "I"), ("Mario", "II"), ("Mario", "III"))
+
+
+def test_division_goal_covers_every_defined_tier_and_division_in_the_seed():
+    """Round 12's whole point, as a sweep: for every seeded entity, every
+    tier its best ladder defines resolves a goal for all five divisions --
+    zero holes (was 32 before the at-least snap)."""
+    entities = json.loads(SEED.read_text())["entities"]
+    holes = []
+    for key, spec in entities.items():
+        ladder = scoring.best_ladder(spec["strategies"])
+        for tier in ladder:
+            for division in ("I", "II", "III", "IV", "V"):
+                if scorecard.division_goal_cs(ladder, tier, division) is None:
+                    holes.append((key, tier, division))
+    assert not holes, holes[:10]

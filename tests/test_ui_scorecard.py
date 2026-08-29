@@ -994,6 +994,51 @@ def test_every_card_labels_its_columns_and_keeps_them_in_register():
                     f"the {column} column drifts within one card: {edges}")
 
 
+def test_a_full_monitor_gets_the_five_course_column_shape():
+    """Round 12, his 4K read: "Maybe it should be 5 columns of 3 for the
+    main courses, and then the two secret/bowser fights cards as the 6th
+    column. Need enough width to support that." The component measures its
+    own pane and rebuckets — the same cards, five course stacks wide, the
+    specials column still last."""
+    with serve_ui() as base:
+        _put_division_goal(base, "Bronze", "V")
+
+        with get_driver().launch(headless=True, viewport=(2860, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_ms(400)  # the ResizeObserver's rebucket lands post-mount
+
+            state = page.evaluate(
+                "(() => {"
+                "  const cards = document.querySelector('.rank-page "
+                ".scorecard-card .score-cards');"
+                "  const cols = Array.from(cards.querySelectorAll(':scope > "
+                ".score-col'));"
+                "  return {"
+                "    dataCols: cards.dataset.cols,"
+                "    width: cards.getBoundingClientRect().width,"
+                "    kinds: cols.map((col) => col.className.includes("
+                "'score-col-courses') ? 'courses' : 'specials'),"
+                "    courseCounts: cols.filter((col) => col.className"
+                ".includes('score-col-courses')).map((col) =>"
+                " col.querySelectorAll('.score-card').length),"
+                "  };"
+                "})()")
+
+        assert state["width"] >= 1900, (
+            f"the pane itself is only {state['width']}px wide — the "
+            "workspace cap is back")
+        assert state["dataCols"] == "6", state
+        course_count = sum(state["courseCounts"])
+        per_column = -(-course_count // 5)          # ceil
+        expected_columns = -(-course_count // per_column)
+        assert len(state["courseCounts"]) == expected_columns, state
+        assert state["kinds"][-1] == "specials", (
+            "the Secret/Fights column stays on the far right")
+
+
 def test_every_line_is_a_door_to_that_stars_library_page():
     """Round 11: "the star text hyperlinks to the library page for that
     star... We should also make the icon for each star link to the library

@@ -8,6 +8,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { requestTarget } from "../target.js";
+import { useMeasuredWidth } from "../viewport.js";
 import { fmtSeconds } from "../format.js";
 import { rankColor } from "./ranks.js";
 import { capGradient, capName, divisionDigit } from "./caps.js";
@@ -379,25 +380,9 @@ function timeTicks(minTime, maxTime, plotWidth) {
   });
 }
 
-// Callback ref held in state, not useRef: the chart doesn't exist on the
-// first render whenever `points` is still too short (the bail-out below), so
-// a ref effect keyed on `[]` would read null once and never re-run when the
-// real <svg> mounts later. Same fix as viewport.js's usePaneCap, applied to
-// width instead of height.
-function useMeasuredWidth(fallback) {
-  const [element, setElement] = useState(null);
-  const [width, setWidth] = useState(fallback);
-  useEffect(() => {
-    if (!element || typeof ResizeObserver === "undefined") return undefined;
-    const observer = new ResizeObserver((entries) => {
-      const measuredWidth = entries[0] && entries[0].contentRect.width;
-      if (measuredWidth) setWidth(Math.round(measuredWidth));
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [element]);
-  return [setElement, width];
-}
+// useMeasuredWidth moved to ../viewport.js (2026-08-29) — the scorecard's
+// wide-layout switch needs the same measurement, and importing it from here
+// would close an import cycle (this file imports Scorecard).
 
 // Measures its own container and draws the viewBox at the SAME width, so the
 // chart always renders 1:1 — no `preserveAspectRatio="none"`, which would
