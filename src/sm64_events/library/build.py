@@ -11,8 +11,9 @@ Several sheet targets legitimately share one entity key (every "+ 100c" row is
 the course's 100-coin star). They stay separate targets here: they are
 genuinely different runs, and collapsing them would merge four CCM routes into
 one unreadable list."""
-from sm64_events.library.mapping import map_target, miss_reason
-from sm64_events.library.sheet import base_name as _base_name, read_rows
+from sm64_events.library.mapping import map_target, miss_reason, split_for
+from sm64_events.library.sheet import base_name as _base_name
+from sm64_events.library.sheet import read_rows
 from sm64_events.library.workbook import log_revision
 
 # 2: approaches carry `matched_strategy` (2026-08-07). The Library page
@@ -71,6 +72,43 @@ def _pack_approaches(rows) -> list:
     return out
 
 
+def _apply_splits(targets: list) -> list:
+    """Split any sheet target that holds two of OUR entities into two
+    targets (`mapping.TARGET_SPLITS`; today the Princess's Secret Slide
+    block, whose [2]/[4] approaches are the Under-21 star's).
+
+    The split target keeps its place in the list, immediately followed by
+    the one carved out of it, so the Library's own order still follows the
+    sheet. A subsection moves only when its ids lie ENTIRELY inside the
+    carved-out approaches -- the slide's two "Slide time" rows are shared
+    ([1|2] and [3|4]), and a piece that times both stars belongs to the
+    heading it was written under rather than being duplicated into both."""
+    out = []
+    for target in targets:
+        rule = split_for(target.get("section", ""), target.get("label", ""))
+        matched = ([one for one in target["approaches"] if rule["matches"](one["name"])]
+                   if rule else [])
+        if not rule or not matched or len(matched) == len(target["approaches"]):
+            out.append(target)            # nothing to split, or nothing left behind
+            continue
+        moved_ids = {one for approach in matched for one in approach["ids"]}
+        target["approaches"] = [one for one in target["approaches"]
+                                if one not in matched]
+        kept_subsections, moved_subsections = [], []
+        for subsection in target["subsections"]:
+            (moved_subsections if set(subsection["ids"]) <= moved_ids
+             else kept_subsections).append(subsection)
+        target["subsections"] = kept_subsections
+        out.append(target)
+        out.append({**{key: value for key, value in target.items()
+                       if key not in ("approaches", "subsections",
+                                      "entity_key", "label", "miss_reason")},
+                    "entity_key": rule["entity_key"], "label": rule["label"],
+                    "miss_reason": None,
+                    "approaches": matched, "subsections": moved_subsections})
+    return out
+
+
 def build(data: bytes, fetched_at: str, overrides: dict | None = None) -> dict:
     rows = read_rows(data)
     runners = sorted({runner for row in rows for runner in row.entries})
@@ -100,6 +138,7 @@ def build(data: bytes, fetched_at: str, overrides: dict | None = None) -> dict:
                  "entries": _entries(row)})
     for target in targets:
         target["approaches"] = _pack_approaches(target.pop("_approach_rows"))
+    targets = _apply_splits(targets)
     payload = {"schema_version": SCHEMA_VERSION,
                "sheet_revision": log_revision(data),
                "fetched_at": fetched_at,

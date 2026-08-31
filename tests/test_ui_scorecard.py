@@ -202,6 +202,32 @@ def _put_custom_goal(base: str, name: str, times: dict) -> None:
     urllib.request.urlopen(request, timeout=10).read()
 
 
+def _put_runner_goal(base: str, runner: str) -> None:
+    body = json.dumps({"kind": "runner", "runner": runner}).encode()
+    request = urllib.request.Request(
+        f"{base}/api/scorecard/goal", data=body, method="PUT",
+        headers={"Content-Type": "application/json"})
+    urllib.request.urlopen(request, timeout=10).read()
+
+
+def _any_sheet_runner() -> str:
+    """A real runner off the bundled snapshot with SOME star times but not
+    all of them -- derived rather than named, so a re-scrape can move the
+    corpus without stranding this test on a runner who stopped playing."""
+    from sm64_events.core.paths import bundled_sheet_library
+    from sm64_events.library.ratings import runner_times
+    from sm64_events.library.store import LibraryStore
+
+    store = LibraryStore(bundled_path=bundled_sheet_library())
+    store.load()
+    times = runner_times(store.payload, {}, version="us")
+    for name, by_entity in sorted(times.items()):
+        stars = [key for key in by_entity if key.startswith("star:")]
+        if 5 <= len(stars) <= 60:
+            return name
+    raise AssertionError("no partially-covering runner in the snapshot")
+
+
 def _get_scorecard(base: str) -> dict:
     with urllib.request.urlopen(f"{base}/api/scorecard", timeout=10) as response:
         return json.loads(response.read())
@@ -259,15 +285,19 @@ def test_the_cards_render_colored_lines_against_a_real_goal():
 
 def test_the_card_reaches_a_real_goal_covers_line_when_partial():
     with serve_ui() as base:
-        # The hardest division: almost nothing the fixture seeded will grade
-        # it, so coverage is genuinely partial and the note has content to
-        # report against the payload's own numbers.
-        _put_division_goal(base, "Mario", "I")
+        # A RUNNER goal, not a division: a division now covers every tile on
+        # the card, because every star the community publishes standards for
+        # carries a ladder (2026-08-31 gave the last exception, Slide Star
+        # (Under 21 Seconds), its own entity). A runner is partial BY NATURE
+        # -- they have no time wherever they never recorded one, which is
+        # `runner_times`' own absent-never-zero rule -- so the note has real
+        # content to report against the payload's own numbers.
+        _put_runner_goal(base, _any_sheet_runner())
         payload = _get_scorecard(base)
         coverage = payload["goal_coverage"]
-        assert coverage["covered"] < coverage["tiles"], (
-            "fixture graded every tile at Mario I -- pick a harder goal or "
-            "seed less, or this test proves nothing about the partial case")
+        assert 0 < coverage["covered"] < coverage["tiles"], (
+            "this runner covers all or none of the card -- pick another, or "
+            "this test proves nothing about the partial case")
 
         with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
             page.goto(f"{base}/ui/index.html")

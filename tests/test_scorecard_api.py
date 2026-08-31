@@ -307,12 +307,21 @@ def test_tiles_carry_server_graded_ranks(tmp_path):
         assert graded["goal_rank"] == {"tier": "Bronze", "division": "V"}
         # no PB on this one -> no you cap; goal still grades
         assert tiles["star:1:1"]["you_rank"] is None
-        # Slide Star (Under 21 Seconds) has no ladder in the standards
-        # store at all -> neither side grades. (The Toad/MIPS stars, the
-        # other ladder-less entities, left the default card entirely on
-        # 2026-08-28 -- UNTRACKED_CASTLE_STARS.)
-        assert tiles["star:19:1"]["you_rank"] is None
-        assert tiles["star:19:1"]["goal_rank"] is None
+        # An entity with NO ladder grades neither side. Every star the
+        # community publishes standards for now HAS one -- Slide Star
+        # (Under 21 Seconds) was the last exception and got its own
+        # entity on 2026-08-31 -- so the ladder-less case is reached
+        # through a castle star, which is off the card by default and
+        # comes back through the ordinary include door.
+        client.post("/api/marelo/exclude",
+                    json={"entity": "star:0:0", "excluded": False})
+        included = {tile["key"]: tile
+                    for row in client.get("/api/scorecard").json()["rows"]
+                    for tile in row["tiles"]}
+        assert included["star:0:0"]["you_rank"] is None
+        assert included["star:0:0"]["goal_rank"] is None
+        # ...and the star this round fixed grades from both sides now.
+        assert tiles["star:19:1"]["goal_rank"] is not None
 
 
 def test_the_card_ignores_the_same_segments_the_route_ranking_ignores(tmp_path):

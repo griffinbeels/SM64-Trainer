@@ -99,3 +99,58 @@ def test_coverage_counts_mapped_and_unmapped():
     assert cov["entities"] == 1
     assert cov["approaches"] == 2 and cov["subsections"] == 1
     assert cov["entries"] == 1 and cov["videos"] == 1 and cov["runners"] == 1
+
+
+# The Princess's Secret Slide, in the sheet's own shape: ONE heading holding
+# both slide stars, their approaches interleaved by id ([1] and [3] are the
+# box star's, [2] and [4] the Under-21 star's) and two "Slide time" pieces
+# each shared across one pair.
+SLIDE = [
+    ("Castle Secret Stars", False, BLACK, None, None, {}),
+    ("[1] The Princess's Secret Slide", True, BLACK, "24.66", "Avatar",
+     {"Kally": ("24.80", "https://youtu.be/box")}),
+    ("[2] Under 21", False, BLACK, "20.60", "Suigi",
+     {"Kally": ("20.90", "https://youtu.be/u21")}),
+    ("[1|2] Slide time", False, GREY, "12.40", "taihou", {}),
+    ("[3] Late wall bounce strat", False, BLACK, "24.56", "Ikori", {}),
+    ("[4] Late wall bounce strat (U21)", False, BLACK, "20.50", "Ikori", {}),
+    ("[3|4] Slide time", False, GREY, "12.30", "taihou", {}),
+]
+
+
+def test_the_slide_block_splits_into_two_stars():
+    """2026-08-31, his report: row 550 ("Under 21") is a STAR of ours, not an
+    approach of the box star. The sheet models both as variants of one
+    heading and interleaves their ids, so the split is stated in
+    `mapping.TARGET_SPLITS` and applied after the target is assembled."""
+    out = build.build(_workbook(SLIDE), fetched_at="")
+    slides = [t for t in out["targets"] if t["section"] == "Castle Secret Stars"]
+    assert [t["entity_key"] for t in slides] == ["star:19:0", "star:19:1"], slides
+    box, u21 = slides
+
+    assert [a["name"] for a in box["approaches"]] == [
+        "The Princess's Secret Slide", "Late wall bounce strat"]
+    assert [a["name"] for a in u21["approaches"]] == [
+        "Under 21", "Late wall bounce strat (U21)"]
+    assert u21["label"] == "Slide Star (Under 21 Seconds)"
+    assert u21["miss_reason"] is None
+
+    # The U21 runner time follows its own star rather than the box star's.
+    assert any(entry["runner"] == "Kally" and entry["time_cs"] == 2090
+               for approach in u21["approaches"] for entry in approach["entries"])
+    assert all(entry["time_cs"] != 2090
+               for approach in box["approaches"] for entry in approach["entries"])
+
+    # A piece timing BOTH stars stays with the heading it was written under;
+    # only one whose ids lie entirely inside the carved-out approaches moves.
+    # Here both "Slide time" rows are shared, so both stay.
+    assert [s["ids"] for s in box["subsections"]] == [["1", "2"], ["3", "4"]]
+    assert u21["subsections"] == []
+
+
+def test_a_target_with_no_split_rule_is_untouched():
+    """The split fires on ONE stated (section, label) pair; everything else
+    goes through build() exactly as before."""
+    out = build.build(_workbook(BOB), fetched_at="")
+    assert len(out["targets"]) == 1
+    assert out["targets"][0]["entity_key"] == "star:1:0"
