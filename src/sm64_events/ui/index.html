@@ -7432,6 +7432,12 @@
   }
   .score-line-link:hover .score-line-name,
   .score-line-link:focus-visible .score-line-name { color: var(--blue); }
+  /* The last word and the glyph travel together (round 13): the glyph
+     reserves inline space, and on a name that fills its column that space
+     landed the glyph alone on a second line — one line of visible text
+     inside a two-line box, so the icon centred BELOW the text. Bound to
+     the last word, the glyph can only wrap alongside something visible. */
+  .score-line-tail { white-space: nowrap; }
   .score-line-lib {
     display: inline-block; visibility: hidden; margin-left: 4px;
     vertical-align: -2px; color: var(--blue);

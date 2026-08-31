@@ -1096,3 +1096,62 @@ def test_every_line_is_a_door_to_that_stars_library_page():
         assert clicked_label
         # the arrival page names the star the door was on
         assert clicked_label.split("+")[0].strip()[:12] in heading
+
+
+def test_no_star_name_leaves_a_blank_line_under_itself():
+    """Round 13. The hover glyph reserves inline space, and on a name that
+    fills its column that space landed the glyph ALONE on a second line:
+    one line of visible text inside a two-line box, so the icon -- centred
+    on the box, correctly -- drew below the text. His report: "the text
+    ends up not being center aligned, and it appears to have incorrectly
+    loaded above the course icon", naming six real stars.
+
+    The property, measured rather than inspected: every name's last line of
+    VISIBLE TEXT reaches the bottom of its own box. Driven at 2860px, where
+    the six-column layout makes those exact names wrap (at 1500px nothing
+    wraps and the defect cannot appear at all)."""
+    with serve_ui() as base:
+        _put_division_goal(base, "Bronze", "V")
+
+        with get_driver().launch(headless=True, viewport=(2860, 1200)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_ms(400)
+
+            names = page.evaluate(
+                "(() => {"
+                "  const out = [];"
+                "  for (const name of document.querySelectorAll('.rank-page "
+                ".scorecard-card .score-line-name')) {"
+                "    const walker = document.createTreeWalker(name, NodeFilter.SHOW_TEXT);"
+                "    let last = null;"
+                "    while (walker.nextNode())"
+                "      if (walker.currentNode.data.trim()) last = walker.currentNode;"
+                "    if (!last) continue;"
+                "    const range = document.createRange();"
+                "    range.setStart(name, 0);"
+                "    range.setEnd(last, last.data.length);"
+                "    const rects = Array.from(range.getClientRects());"
+                "    if (!rects.length) continue;"
+                "    const box = name.getBoundingClientRect();"
+                "    out.push({ text: name.textContent.trim(),"
+                "               lines: rects.length,"
+                "               slack: box.bottom - Math.max(...rects.map((r) => r.bottom)) });"
+                "  }"
+                "  return out;"
+                "})()")
+
+        assert names, "no names measured"
+        wrapped = [row for row in names if row["lines"] > 1]
+        assert wrapped, (
+            "no name wrapped at this width — the fixture can no longer "
+            "exhibit the defect, so this guard proves nothing; widen the "
+            "names or narrow the viewport")
+        blank_tailed = [row for row in names if row["slack"] > 4]
+        assert not blank_tailed, (
+            "these names end in a blank line, so their icon centres below "
+            "the text: "
+            + ", ".join(f"{row['text']!r} (+{row['slack']:.1f}px)"
+                        for row in blank_tailed[:6]))

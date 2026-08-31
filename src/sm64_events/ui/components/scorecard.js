@@ -172,12 +172,27 @@ function ScoreLine({ t, tile, showCaps, onGoalOverride, onOpenLibrary }) {
                             strat: tile.strat || null,
                             goalCs: tile.goal_cs ?? null })
     : null;
+  // The glyph rides GLUED to the last word (round 13). It reserves inline
+  // space, so a name that fills its column pushed the glyph onto a line of
+  // its own -- measured: six real names drew ONE line of text inside a
+  // TWO-line box, which centred the icon below the text he could see
+  // ("the text ends up not being center aligned, and it appears to have
+  // incorrectly loaded above the course icon"). Bound to the last word in
+  // a nowrap span, the glyph can only ever wrap TOGETHER with a visible
+  // word, so no blank line exists to be centred against. A single-word
+  // label keeps the plain form -- nowrap on the whole name could overflow
+  // the column, which is a worse bug than the one being fixed.
+  const lastSpace = tile.label.lastIndexOf(" ");
+  const nameHead = lastSpace > 0 ? tile.label.slice(0, lastSpace + 1) : "";
+  const nameTail = lastSpace > 0 ? tile.label.slice(lastSpace + 1) : tile.label;
+  const glyph = html`<span class="score-line-lib" aria-hidden="true">
+    <${Icon} name="library" size=${11} /></span>`;
   return html`<div class="score-line">
     ${openLine ? html`<button type="button" class="score-line-link"
         title=${`Open ${tile.label} in the Library`} onclick=${openLine}>
       <img class="score-line-icon" alt="" src=${iconSrc} />
-      <span class="score-line-name">${tile.label}<span class="score-line-lib"
-          aria-hidden="true"><${Icon} name="library" size=${11} /></span></span>
+      <span class="score-line-name">${nameHead}<span
+          class=${nameHead ? "score-line-tail" : ""}>${nameTail}${glyph}</span></span>
     </button>` : html`<img class="score-line-icon" alt="" src=${iconSrc} />
     <span class="score-line-name">${tile.label}</span>`}
     <span class="score-line-you">

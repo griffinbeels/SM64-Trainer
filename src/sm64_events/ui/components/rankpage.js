@@ -4,7 +4,7 @@
 // averages and overall progress are the same view under different scopes, so
 // there is one picker/card/chart/breakdown, not three near-duplicate pages.
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { requestTarget } from "../target.js";
@@ -716,14 +716,22 @@ export function Breakdown({ t, data, routeOrder, onToggle, variant = "yours",
 // `/api/leaderboard/runner/{name}/summary` instead -- the identical chip
 // shape (board.py::runner_summary's own docstring), so this is a data-source
 // swap and nothing about the row itself changes.
-export function ScopeChips({ activeScopeId, onPick, refreshKey, source = "/api/marelo/summary" }) {
-  const [chips, setChips] = useState(null);
+// `chips` PROVIDED means the caller owns the fetch and this draws what it
+// is handed (round 13): RankPage holds its whole body behind one spinner
+// until every section can be drawn in its final position, and it can only
+// know when the chips have landed if it fetches them itself. RunnerPage
+// passes nothing and keeps fetching its own, unchanged.
+export function ScopeChips({ activeScopeId, onPick, refreshKey,
+                             source = "/api/marelo/summary", chips: given = null }) {
+  const [fetched, setFetched] = useState(null);
   useEffect(() => {
+    if (given) return undefined;
     let alive = true;
-    getJSON(source).then((response) => alive && setChips(response.chips))
-      .catch(() => alive && setChips([]));
+    getJSON(source).then((response) => alive && setFetched(response.chips))
+      .catch(() => alive && setFetched([]));
     return () => { alive = false; };
-  }, [refreshKey, source]);
+  }, [refreshKey, source, given]);
+  const chips = given || fetched;
   if (!chips || !chips.length) return null;
   return html`<div class="scope-chip-row">
     ${chips.map((chip) => html`<button type="button" key=${chip.scope_id}
@@ -982,6 +990,23 @@ export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null }) {
   const [dataErr, setDataErr] = useState(null);
   const [replayable, setReplayable] = useState(new Set());
   const [points, setPoints] = useState([]);
+  // Round 13's load gate. The page's sections used to appear as each fetch
+  // landed, so the scorecard drew at the TOP of a page of placeholders and
+  // was shoved to the bottom when the rest arrived -- *layout shift*, read
+  // as a glitch: "we shouldn't accidentally render elements and then
+  // reorder them". These two say when the last of this page's OWN data is
+  // in; the chips are fetched here rather than inside ScopeChips for the
+  // same reason (a child cannot report readiness before it is mounted, and
+  // mounting it is what would draw the half-built page).
+  const [chips, setChips] = useState(null);
+  const [pointsLoaded, setPointsLoaded] = useState(false);
+  // Latched once the page has been drawn whole. Every LATER refetch -- a
+  // scope pick, and `t.mareloRev` on every completed attempt -- keeps the
+  // page on screen with its own inline states, because blanking the Rank
+  // tab back to a spinner mid-play would be a worse glitch than the one
+  // this fixes. A ref, not state: latching must not itself cause a render
+  // (the state that made the page ready already did).
+  const settledRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -1021,10 +1046,21 @@ export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null }) {
     getJSON("/api/replay/available")
       .then((response) => alive && setReplayable(new Set(response.available)))
       .catch(() => alive && setReplayable(new Set()));
-    getJSON(`/api/marelo/history${query}`).then((response) => alive && setPoints(response.points))
-      .catch(() => alive && setPoints([]));
+    getJSON(`/api/marelo/history${query}`)
+      .then((response) => { if (alive) { setPoints(response.points); setPointsLoaded(true); } })
+      .catch(() => { if (alive) { setPoints([]); setPointsLoaded(true); } });
     return () => { alive = false; };
   }, [scopeId, t.mareloRev]);
+
+  // The scope chips (see the gate above). Scope-independent, so it follows
+  // `t.mareloRev` alone -- the same key ScopeChips used for itself.
+  useEffect(() => {
+    let alive = true;
+    getJSON("/api/marelo/summary")
+      .then((response) => alive && setChips(response.chips || []))
+      .catch(() => alive && setChips([]));
+    return () => { alive = false; };
+  }, [t.mareloRev]);
 
   async function toggleExcluded(entityKey, excluded) {
     try {
@@ -1045,15 +1081,22 @@ export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null }) {
   const tweenedMarelo = useTween(data ? data.marelo : null);
   const tweenedMastery = useTween(data ? data.mastery : null);
 
-  if (!scopes) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
-      title="Loading ranks" message=${scopesErr ? scopesErr.message : undefined} />`;
-  if (!scopeId) return html`<${PageState} kind=${t.connected ? "loading" : "offline"}
-      title="Loading ranks" />`;
+  // The load gate (round 13). Everything this page's LAYOUT depends on has
+  // to be in hand before any of it is drawn, or the sections arrive out of
+  // order and shove each other around. `dataErr` counts as settled: an
+  // error is a final answer and the page draws it inline. After the first
+  // whole render `settled` pins it open -- see its declaration.
+  const ready = !!(scopes && scopeId && chips
+                   && (data || dataErr) && pointsLoaded);
+  if (ready) settledRef.current = true;
+  if (!settledRef.current) return html`<${PageState}
+      kind=${t.connected ? "loading" : "offline"} title="Loading ranks"
+      message=${scopesErr ? scopesErr.message : undefined} />`;
 
   const routeOrder = scopeId.startsWith("route:");
 
   return html`<div class="rank-page">
-    <${ScopeChips} activeScopeId=${scopeId} onPick=${setScopeId} refreshKey=${t.mareloRev} />
+    <${ScopeChips} activeScopeId=${scopeId} onPick=${setScopeId} chips=${chips} />
     <${LeaderboardCard} t=${t} scopeId=${scopeId} onOpenRunner=${onOpenRunner} />
     <div class="practice-card rank-card">
       <label class="route-focus-control">
