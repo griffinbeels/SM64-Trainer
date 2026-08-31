@@ -704,3 +704,84 @@ def test_castle_stars_are_off_the_card_until_included(tmp_path):
         assert "star:0:0" in secret_keys, (
             "an included castle star must land back in the Secret section")
         assert "star:0:1" not in secret_keys, "the include is per star"
+
+
+def test_a_multi_goal_takes_the_slowest_offer_and_unions_coverage(tmp_path):
+    """Round 14, his design: "what if we could select multiple options
+    (e.g., I could select 10 players plus a rank standard like Toad 1).
+    Then, we should take the MAX TIME from all of those players... if you
+    are tracking multiple different runners, then you should have 100%
+    coverage across all stars."
+
+    Two saved custom goals stand in for two runners: a custom source
+    resolves with no ladder or sheet lookup, so the MERGE is the only thing
+    this test can fail on."""
+    with make_client(tmp_path) as (client, _db, _svc):
+        # A: fast on star:1:0, silent on star:1:1
+        client.put("/api/scorecard/goal", json={
+            "kind": "custom", "name": "A", "times": {"star:1:0": 4000}})
+        # B: slower on star:1:0, and the only one covering star:1:1
+        client.put("/api/scorecard/goal", json={
+            "kind": "custom", "name": "B",
+            "times": {"star:1:0": 4500, "star:1:1": 6000}})
+
+        response = client.put("/api/scorecard/goal", json={
+            "kind": "multi",
+            "sources": [{"kind": "custom", "name": "A"},
+                        {"kind": "custom", "name": "B"}]})
+        assert response.status_code == 200
+        assert response.json()["goal"] == {
+            "kind": "multi",
+            "sources": [{"kind": "custom", "name": "A"},
+                        {"kind": "custom", "name": "B"}]}
+
+        card = client.get("/api/scorecard").json()
+        tiles = {tile["key"]: tile
+                 for row in card["rows"] for tile in row["tiles"]}
+        # the SLOWEST offer wins -- beating it beats every source
+        assert tiles["star:1:0"]["goal_cs"] == 4500
+        # ...and a star only ONE source covers is still covered
+        assert tiles["star:1:1"]["goal_cs"] == 6000
+
+
+def test_a_multi_goal_validates_every_source_like_a_single_one(tmp_path):
+    with make_client(tmp_path) as (client, _db, _svc):
+        assert client.put("/api/scorecard/goal", json={
+            "kind": "multi", "sources": []}).status_code == 422
+        assert client.put("/api/scorecard/goal", json={
+            "kind": "multi",
+            "sources": [{"kind": "division", "tier": "Iron", "division": "I"}],
+        }).status_code == 422
+        assert client.put("/api/scorecard/goal", json={
+            "kind": "multi",
+            "sources": [{"kind": "custom", "name": "never saved"}],
+        }).status_code == 404
+        assert client.put("/api/scorecard/goal", json={
+            "kind": "multi", "sources": [{"kind": "nonsense"}],
+        }).status_code == 422
+
+
+def test_a_multi_goal_mixes_a_division_with_a_per_entity_source(tmp_path):
+    """The mixed pick he named -- "10 players plus a rank standard like
+    Toad 1" -- where the division supplies the stars a per-entity source
+    misses, and wins wherever it is the slower of the two."""
+    with make_client(tmp_path) as (client, _db, _svc):
+        client.put("/api/scorecard/goal", json={
+            "kind": "custom", "name": "fast one",
+            "times": {"star:1:0": 100}})       # 1.00s: never the slowest
+        client.put("/api/scorecard/goal", json={
+            "kind": "multi",
+            "sources": [{"kind": "custom", "name": "fast one"},
+                        {"kind": "division", "tier": "Bronze", "division": "I"}]})
+        mixed = {tile["key"]: tile
+                 for row in client.get("/api/scorecard").json()["rows"]
+                 for tile in row["tiles"]}
+
+        client.put("/api/scorecard/goal", json={
+            "kind": "division", "tier": "Bronze", "division": "I"})
+        alone = {tile["key"]: tile
+                 for row in client.get("/api/scorecard").json()["rows"]
+                 for tile in row["tiles"]}
+
+        assert alone["star:1:0"]["goal_cs"] is not None
+        assert mixed["star:1:0"]["goal_cs"] == alone["star:1:0"]["goal_cs"]

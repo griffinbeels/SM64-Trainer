@@ -6,7 +6,7 @@
 // + time, as well as the delta... compact enough so that if the window was
 // landscape, I could take a nice picture." Each payload row IS a card
 // (course / Bowser Fights / Secret — the server groups); each card draws
-// its entries one LINE apiece and restates its Σ as a Stage RTA foot.
+// its entries one LINE apiece and restates its Σ as a Stage Sum foot.
 // Placement is DETERMINISTIC (round 10, replacing CSS multi-column, whose
 // height-balancing staggered the card edges): three equal-height column
 // stacks of course cards in order, a fourth column of Secret then Bowser
@@ -58,12 +58,43 @@ function goalToValue(goal) {
   return "";
 }
 
+// The picker is a MULTI-select (round 14): its value is the list of picked
+// sources, and a stored goal of any kind reads back as that list -- a
+// single pick is simply a list of one, so there is no second shape for
+// "one goal" and nothing to migrate.
+function goalToValues(goal) {
+  if (!goal) return [];
+  if (goal.kind === "multi") {
+    return (goal.sources || []).map(goalToValue).filter(Boolean);
+  }
+  const one = goalToValue(goal);
+  return one ? [one] : [];
+}
+
 function goalToLabel(goal) {
   if (!goal) return "No goal";
   if (goal.kind === "division") return `${capName(goal.tier)} ${divisionDigit(goal.division)}`;
   if (goal.kind === "runner") return goal.runner;
   if (goal.kind === "custom") return goal.name;
+  if (goal.kind === "multi") {
+    const sources = goal.sources || [];
+    // One name reads better than "1 picked"; past that the count IS the
+    // useful summary, and the panel itself lists which ones are on.
+    if (sources.length === 1) return goalToLabel(sources[0]);
+    return `${sources.length} picked`;
+  }
   return "No goal";
+}
+
+// The list of picks -> the goal to store. Nothing picked clears the goal;
+// ONE pick stores that goal in its own shape (so a division stays a
+// division everywhere it is read); several store a `multi`, whose per-tile
+// answer is the SLOWEST offer among them.
+function valuesToGoal(values) {
+  const goals = (values || []).map(valueToGoal).filter(Boolean);
+  if (!goals.length) return null;
+  if (goals.length === 1) return goals[0];
+  return { kind: "multi", sources: goals };
 }
 
 // Re-selecting an EXISTING custom goal (picked from the dropdown) carries no
@@ -209,9 +240,13 @@ function ScoreLine({ t, tile, showCaps, onGoalOverride, onOpenLibrary }) {
   </div>`;
 }
 
-// The card foot: the Σ restated as You · Goal · gap, "Stage RTA" on a
-// course card and "Total" on Fights/Secret (the reference sheet's own
-// wording — only a stage has a Stage RTA). `counted === 0` still carries
+// The card foot: the Σ restated as You · Goal · gap, "Stage Sum" on a
+// course card and "Total" on Fights/Secret. SUM, not "Stage RTA" (round
+// 14): Stage RTA names a real thing -- a route category in this app's own
+// corpus, the run where you play a whole course start to finish -- and
+// this number is not that, it is the addition of separately practised
+// times. The CSV export keeps the sheet template's own wording, since it
+// exists to be pasted back into that sheet. `counted === 0` still carries
 // sums of 0 (Python `sum([])`), which is not a real 0'00"00 -- em-dashes,
 // never two invented zeroes (`.claude/rules/acceptance.md`'s "cannot
 // logically be compared" rule).
@@ -220,7 +255,7 @@ function CardFoot({ row }) {
   const hasDelta = sum.delta_cs != null;
   const behind = hasDelta && sum.delta_cs > 0;
   return html`<div class="score-card-foot">
-    <span class="score-card-foot-label">${row.course_id != null ? "Stage RTA" : "Total"}</span>
+    <span class="score-card-foot-label">${row.course_id != null ? "Stage Sum" : "Total"}</span>
     <span class="score-line-you"><span class="score-line-time">${hasDelta
       ? fmtSeconds(sum.you_cs / 100) : "—"}</span></span>
     <span class="score-line-goal">${hasDelta
@@ -423,9 +458,9 @@ function ScorecardSaveBar({ pendingCount, initialName, busy, error, onSave, onDi
 function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange, scopeId }) {
   return html`<div class="scorecard-head">
     <h3>Scorecard</h3>
-    <${SearchSelect} value=${goalToValue(goal)} valueLabel=${goalToLabel(goal)}
-        title="Pick a goal" groups=${groups} onOpen=${onOpen} onChange=${onGoalChange}
-        align="right" />
+    <${SearchSelect} value=${goalToValues(goal)} valueLabel=${goalToLabel(goal)}
+        title="Pick one or more goals" groups=${groups} onOpen=${onOpen}
+        onChange=${onGoalChange} align="right" multi />
     ${goal && coverage.covered < coverage.tiles
       ? html`<p class="meta scorecard-note">goal covers ${coverage.covered}/${coverage.tiles}</p>`
       : ""}
@@ -537,15 +572,15 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
     setSaveError(null);
   }
 
-  async function onGoalChange(value) {
+  async function onGoalChange(values) {
     // Picking a different base goal makes any unsaved edit ambiguous (it
     // was relative to whatever was active a moment ago) -- discard rather
     // than silently carry it onto a goal it was never made against.
     setPendingOverrides({});
     setSaveError(null);
     try {
-      await send("PUT", "/api/scorecard/goal", valueToGoal(value));
-      setData(await getJSON("/api/scorecard"));
+      await send("PUT", "/api/scorecard/goal", valuesToGoal(values));
+      setData(await getJSON(`/api/scorecard?scope=${encodeURIComponent(scopeId)}`));
     } catch (err) { setError(err); }
   }
 

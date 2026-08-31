@@ -494,15 +494,16 @@ top of a [[tier]] from its bottom at a glance.
 
 ### Goal
 
-The one persisted choice the [[Scorecard]] grades every tile against — a
-[[tier]] and [[division]] inside it, one [[runner]]'s own times, or a set of
-times you typed yourself and saved under a name. The trainer turns it into
-one time per tile and the [[Scorecard]] compares that time against your
-[[personal best]]. None of the three reaches every tile: a
-[[tier]]/[[division]] pick can leave the narrowest [[division]]s near the
-fastest [[tier]]s with nothing to grade against, a [[runner]] pick has
-nothing wherever that [[runner]] never recorded a time, and a hand-typed
-goal reaches only the tiles you typed a time for.
+The persisted choice the [[Scorecard]] grades every tile against — a
+[[tier]] and [[division]] inside it, one [[runner]]'s own times, a set of
+times you typed yourself and saved under a name, or SEVERAL of those at
+once. The trainer turns it into one time per tile and the [[Scorecard]]
+compares that time against your [[personal best]]. Picking several keeps
+the slowest time any of them offers on each tile, so the goal stays
+beatable and the picks cover between them the [[star]]s none of them
+covers alone — which matters because a single pick can fall short: a
+[[runner]] has nothing wherever they never recorded a time, and a
+hand-typed goal reaches only the tiles you typed.
 
 - **Lives** — the goal resolvers (`src/sm64_events/server/scorecard_api.py`)
   → the goal picker (`src/sm64_events/ui/scorecardgoal.js`), and, for typing

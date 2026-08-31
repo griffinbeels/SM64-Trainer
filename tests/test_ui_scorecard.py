@@ -1098,6 +1098,88 @@ def test_every_line_is_a_door_to_that_stars_library_page():
         assert clicked_label.split("+")[0].strip()[:12] in heading
 
 
+def _option_click(value: str) -> str:
+    return ("document.querySelector('.rank-page .scorecard-card "
+            f".search-menu-option[data-value=\"{value}\"]').click()")
+
+
+def test_the_picker_takes_several_goals_and_keeps_the_panel_open():
+    """Round 14, his design: "what if we could select multiple options
+    (e.g., I could select 10 players plus a rank standard like Toad 1)."
+    Two picks through the REAL panel: it must stay open between them (ten
+    picks cannot cost ten trips through the trigger), mark what is on, and
+    store a `multi` goal whose sources are both."""
+    with serve_ui() as base:
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .search-select-trigger")
+            page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".search-select-trigger').click()")
+            page.wait_for(".rank-page .scorecard-card "
+                          '.search-menu-option[data-value="division:Bronze:V"]')
+
+            for value in ("division:Bronze:V", "division:Silver:III"):
+                page.evaluate(_option_click(value))
+                page.wait_ms(250)
+
+            still_open = page.count(".rank-page .scorecard-card .search-menu")
+            picked = page.evaluate(
+                "Array.from(document.querySelectorAll('.rank-page "
+                ".scorecard-card .search-menu-option.is-picked'))"
+                ".map((el) => el.dataset.value)")
+            label = page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".search-select-value').textContent.trim()")
+
+        assert still_open == 1, "the panel must stay open while picking several"
+        assert sorted(picked) == ["division:Bronze:V", "division:Silver:III"], picked
+        assert label == "2 picked", label
+
+        card = _get_scorecard(base)
+        assert card["goal"] == {"kind": "multi", "sources": [
+            {"kind": "division", "tier": "Bronze", "division": "V"},
+            {"kind": "division", "tier": "Silver", "division": "III"}]}
+
+
+def test_unpicking_the_last_goal_clears_it_and_one_pick_stays_single():
+    """A list of one is not a new shape: it stores the goal in its own kind,
+    so everything that reads a division goal keeps reading a division."""
+    with serve_ui() as base:
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .search-select-trigger")
+            page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".search-select-trigger').click()")
+            page.wait_for(".rank-page .scorecard-card "
+                          '.search-menu-option[data-value="division:Bronze:V"]')
+            page.evaluate(_option_click("division:Bronze:V"))
+            page.wait_ms(300)
+
+        assert _get_scorecard(base)["goal"] == {
+            "kind": "division", "tier": "Bronze", "division": "V"}
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .search-select-trigger")
+            page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".search-select-trigger').click()")
+            page.wait_for(".rank-page .scorecard-card "
+                          ".search-menu-option.is-picked")
+            page.evaluate(_option_click("division:Bronze:V"))   # toggle it off
+            page.wait_ms(300)
+
+        assert _get_scorecard(base)["goal"] is None
+
+
 def test_no_star_name_leaves_a_blank_line_under_itself():
     """Round 13. The hover glyph reserves inline space, and on a name that
     fills its column that space landed the glyph ALONE on a second line:

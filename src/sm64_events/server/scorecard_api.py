@@ -77,6 +77,13 @@ class GoalBody(BaseModel):
     # re-sent by the picker either.
     name: str | None = None
     times: dict[str, int] | None = None
+    # `multi` only: the picked goals themselves, each in the SAME shape a
+    # single goal has ({"kind":"division",...} / {"kind":"runner",...} /
+    # {"kind":"custom","name":...}). Structured rather than the picker's
+    # "division:Bronze:I" value strings on purpose -- a string would need
+    # the same parser written in JS and again in Python, and the one thing
+    # this project does not allow is a second door onto one rule.
+    sources: list[dict] | None = None
 
 
 def _fetch_column_source(overrides):
@@ -383,6 +390,46 @@ def create_scorecard_router(service, library=None, adoptions=None,
         saved = custom_goal_store().get(name, {})
         return {key: cs for key, cs in saved.items() if key in keys}
 
+    def resolve_goal(goal_value, keys: list[str], ranks) -> dict[str, int]:
+        """One goal value -> {entity key: goal centiseconds}.
+
+        A custom goal is typed data with no ladder lookup at all, so it
+        resolves independent of `ranks` -- a broadcast-only instance can
+        still grade against a hand-picked target even though it can never
+        grade against a division or a runner.
+
+        A MULTI goal (round 14, his own design: "what if we could select
+        multiple options... Then, we should take the MAX TIME from all of
+        those players") resolves each source through this same function and
+        keeps the SLOWEST offer per entity. Two properties come out of that
+        and both are his stated intent: the goal stays beatable -- clearing
+        the slowest of the times you picked clears them all -- and coverage
+        is the UNION, so runners who never entered a star are covered by
+        whoever did ("if you are tracking multiple different runners, then
+        you should have 100% coverage across all stars")."""
+        if not goal_value:
+            return {}
+        kind = goal_value.get("kind")
+        if kind == "custom":
+            return custom_goal_map(keys, goal_value["name"])
+        if kind == "multi":
+            merged: dict[str, int] = {}
+            for source in goal_value.get("sources") or []:
+                if not isinstance(source, dict) or source.get("kind") == "multi":
+                    continue                 # never nest; a corrupt KV is empty
+                for key, cs in resolve_goal(source, keys, ranks).items():
+                    if key not in merged or cs > merged[key]:
+                        merged[key] = cs
+            return merged
+        if ranks is None:
+            return {}
+        if kind == "division":
+            return division_goal_map(keys, goal_value["tier"],
+                                     goal_value["division"])
+        if kind == "runner":
+            return runner_goal_map(goal_value["runner"], ranks.grading_version)
+        return {}
+
     def current_card(scope_id: str = "overall"):
         """`(card, goal_value)` -- the one door both `GET /api/scorecard`
         and the CSV export build from, so a downloaded row can never
@@ -404,20 +451,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
             goal_value = None                # a corrupt KV reads as no goal
         ranks = service.ranks
 
-        goal_map: dict[str, int] = {}
-        # A custom goal is typed data with no ladder lookup at all, so it
-        # resolves independent of `ranks` -- a broadcast-only instance can
-        # still grade against a hand-picked target even though it can never
-        # grade against a division or a runner.
-        if goal_value and goal_value.get("kind") == "custom":
-            goal_map = custom_goal_map(keys, goal_value["name"])
-        if ranks is not None:
-            if goal_value and goal_value.get("kind") == "division":
-                goal_map = division_goal_map(keys, goal_value["tier"],
-                                             goal_value["division"])
-            elif goal_value and goal_value.get("kind") == "runner":
-                goal_map = runner_goal_map(goal_value["runner"],
-                                           ranks.grading_version)
+        goal_map = resolve_goal(goal_value, keys, ranks)
 
         card = build_card(rows_spec, you=you, goal=goal_map)
         _grade_tiles(card)
@@ -486,6 +520,39 @@ def create_scorecard_router(service, library=None, adoptions=None,
             elif name not in store:
                 raise HTTPException(404, f"no saved custom goal named {name!r}")
             value = {"kind": "custom", "name": name}
+        elif body.kind == "multi":
+            # Every source is validated by the SAME rules a single goal of
+            # that kind is, so "several goals at once" can never smuggle in
+            # a tier or a runner that a single pick would have refused. A
+            # custom source must already be saved -- a multi pick names
+            # existing goals, it never creates one.
+            sources = body.sources or []
+            if not sources:
+                raise HTTPException(422, "a multi goal needs at least one source")
+            store = custom_goal_store()
+            cleaned = []
+            for source in sources:
+                kind = (source or {}).get("kind")
+                if kind == "division":
+                    if (source.get("tier") not in _VALID_TIERS
+                            or source.get("division") not in DIVISION_NUMERALS):
+                        raise HTTPException(
+                            422, f"unknown tier/division in {source!r}")
+                    cleaned.append({"kind": "division", "tier": source["tier"],
+                                    "division": source["division"]})
+                elif kind == "runner":
+                    if not source.get("runner"):
+                        raise HTTPException(422, "a runner source needs a name")
+                    cleaned.append({"kind": "runner", "runner": source["runner"]})
+                elif kind == "custom":
+                    name = (source.get("name") or "").strip()
+                    if name not in store:
+                        raise HTTPException(
+                            404, f"no saved custom goal named {name!r}")
+                    cleaned.append({"kind": "custom", "name": name})
+                else:
+                    raise HTTPException(422, f"unknown source kind {kind!r}")
+            value = {"kind": "multi", "sources": cleaned}
         else:
             raise HTTPException(422, f"unknown goal kind {body.kind!r}")
         service.db.set_state(_GOAL_KEY, value)

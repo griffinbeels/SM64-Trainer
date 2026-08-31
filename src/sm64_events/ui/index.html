@@ -502,6 +502,18 @@
   .search-menu-option:hover {
     border-color: var(--border-soft); background: rgba(20,36,54,.7);
   }
+  /* MULTI mode (round 14): the panel stays open and each row is a toggle,
+     so a row has to say whether it is on. The tick column is always
+     present in that mode -- reserving it means ticking a row cannot shift
+     its own label sideways. */
+  .search-menu-check {
+    display: inline-block; width: .9rem; flex: 0 0 auto;
+    margin-right: .35rem; color: var(--gold-soft);
+  }
+  .search-menu-option.is-picked {
+    border-color: var(--gold-soft);
+    background: color-mix(in srgb, var(--gold-soft) 12%, rgba(20,36,54,.7));
+  }
   .search-menu-error { color: var(--coral); font-size: .8rem; margin: 0; }
   .search-select { position: relative; display: inline-flex; }
   .search-select-trigger { display: inline-flex; align-items: center; gap: .4rem; }
