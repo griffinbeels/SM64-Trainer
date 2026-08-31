@@ -47,9 +47,14 @@ def create_inputs_router(inputs) -> APIRouter:
     templates = inputs.templates
 
     @router.get("/attempts/{attempt_id}/inputs")
-    def timeline(attempt_id: int):
+    def timeline(attempt_id: int, from_frame: int | None = None,
+                 to_frame: int | None = None):
+        # The clip's own frame range, when the caller has one: the timeline
+        # then spans exactly what the video shows (round 32 item 53).
+        span = (None if from_frame is None or to_frame is None
+                else (from_frame, to_frame))
         try:
-            return inputs.timeline(attempt_id)
+            return inputs.timeline(attempt_id, span=span)
         except Exception as error:
             raise _http(error) from error
 

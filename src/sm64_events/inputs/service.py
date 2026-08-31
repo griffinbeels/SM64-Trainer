@@ -164,34 +164,14 @@ class InputsService:
                 for number, frame in
                 self.store.frames_between(start.isoformat(), end)}
 
-    # How far before the attempt the level-entry search reaches. The chunk
-    # store's own widening only reaches CHUNK_REACH_S, so a longer memory
-    # would name a spawn whose frames cannot be resolved anyway.
-    LEAD_REACH_S = 20.0
-
-    def _lead_frame(self, attempt) -> int | None:
-        """The spawn into the level for THIS stay (round 32 items 51-52):
-        the latest level entry before the anchor. His camera moves between
-        warping into the level and pressing the reset were real, in-level,
-        and invisible to a track that began at the reset -- "the input
-        timeline should begin when mario actually spawns into the level".
-        None when the previous attempt ended inside this level (a
-        reset-after-reset): nothing changes for it."""
-        if self._events is None or attempt.anchor_frame is None:
-            return None
-        from datetime import datetime, timedelta
-        started = datetime.fromisoformat(attempt.started_utc)
-        reach = (started - timedelta(seconds=self.LEAD_REACH_S)).isoformat()
-        entries = [row.frame for row in self._events(reach,
-                                                     attempt.started_utc)
-                   if row.type == "level_changed" and row.frame is not None
-                   and row.frame < attempt.anchor_frame]
-        return max(entries) if entries else None
-
-    def timeline(self, attempt_id: int) -> dict:
+    def timeline(self, attempt_id: int,
+                 span: tuple[int, int] | None = None) -> dict:
+        """`span` is the range of game frames the attempt's CLIP shows, so
+        the timeline can match the video exactly (round 32 item 53). The
+        caller reads it off the clip's own frame map; with no clip there is
+        no buffer to match and the track is the attempt alone."""
         attempt = self.attempt(attempt_id)
-        frames, lead = track_with_lead(self.store, attempt,
-                                       lead_frame=self._lead_frame(attempt))
+        frames, lead = track_with_lead(self.store, attempt, span)
         axis = capture_axis(frames)
         kind, key = entity_key_of(attempt)
         return {

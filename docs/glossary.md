@@ -527,13 +527,15 @@ way in is visible without moving where the [[attempt]] starts.
 ### Lead-in
 
 The stretch of play the [[input timeline]] draws BEFORE the [[attempt]]
-itself: from the [[frame]] you spawned into the course to the [[frame]] your
-[[reset]] landed on. You are in the level for those [[frame]]s and your
-camera answers, so a timeline that began at the [[reset]] hid real input.
-They number backwards from zero and sit behind a shaded band, so the
-[[attempt]]'s own start and its own length — the number the [[ladder]]
-grades its [[personal best]] against — do not move. Entering a course and
-resetting again inside it leaves no lead-in, because you never left.
+itself: the lead its clip carries, from the clip's first [[frame]] to the
+[[frame]] your [[reset]] landed on. You are in the level for those
+[[frame]]s and your camera answers, so a timeline that began at the
+[[reset]] hid real input. They number backwards from zero and sit behind a
+shaded band, so the [[attempt]]'s own start and its own length — the number
+the [[ladder]] grades its [[personal best]] against — do not move. The
+timeline spans exactly what its clip shows -- the [[frame map]] names
+every [[frame]] the footage holds -- so every part of it points at video
+you can watch; with no clip there is no lead-in.
 
 - **Lives** — the track resolver
   (`src/sm64_events/inputs/track.py`), which reaches back to the entry the

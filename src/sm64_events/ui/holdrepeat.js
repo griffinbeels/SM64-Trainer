@@ -36,6 +36,34 @@ function stopOn(element, timers) {
   if (state.resume) state.resume();
 }
 
+// Begin a hold on any host object -- a button for a pointer press, the
+// window for a held ARROW KEY (round 32 item 54: "hold to continuously
+// scrub, just like pressing and holding on the back 1 frame button"). The
+// schedule lives here so the key and the button cannot drift: a browser's
+// own key auto-repeat has an OS-set delay and rate, which is a different
+// feel from the one he tuned, so the key handler ignores auto-repeat and
+// runs THIS.
+export function startHold(host, step, { onPress = null,
+                                        timers = globalThis } = {}) {
+  stopOn(host, timers);
+  const resume = onPress ? onPress() : null;
+  const state = { delay: null, interval: null, resume };
+  host[STATE] = state;
+  step();
+  state.delay = timers.setTimeout(() => {
+    state.delay = null;
+    state.interval = timers.setInterval(step, HOLD_INTERVAL_MS);
+  }, HOLD_DELAY_MS);
+}
+
+export function stopHold(host, { timers = globalThis } = {}) {
+  stopOn(host, timers);
+}
+
+export function holdIsRunning(host) {
+  return Boolean(host[STATE]);
+}
+
 // Returns the handlers to spread onto a <button>. The step fires on
 // POINTERDOWN (not click) so the hold can start from the same gesture; a
 // keyboard activation arrives as a click with `detail === 0` and steps once.
@@ -53,14 +81,7 @@ export function holdRepeat(step, { onPress = null, timers = globalThis } = {}) {
       if (element.setPointerCapture && event.pointerId !== undefined) {
         try { element.setPointerCapture(event.pointerId); } catch (_) { /* not capturable */ }
       }
-      const resume = onPress ? onPress() : null;
-      const state = { delay: null, interval: null, resume };
-      element[STATE] = state;
-      step();
-      state.delay = timers.setTimeout(() => {
-        state.delay = null;
-        state.interval = timers.setInterval(step, HOLD_INTERVAL_MS);
-      }, HOLD_DELAY_MS);
+      startHold(element, step, { onPress, timers });
     },
     onpointerup: stop,
     onpointerleave: stop,          // only reachable when capture was refused

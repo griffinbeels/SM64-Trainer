@@ -928,3 +928,44 @@ def test_an_aligner_answering_no_windows_applies_the_global_offset(tmp_path):
         Alignment(offset=-3, fit=0.7, margin=0.04, paired=900), [])
     res = svc.view(42)
     assert res["frame_map"][2] == 7000 - 2         # round(-3/2) frames
+
+
+def test_the_digit_refit_replaces_the_map_and_says_so(tmp_path):
+    """Round 32 item 55: the anchors move a map by one number, and his BBH
+    clip drifts instead -- exact at frames 87-89, one to two early at
+    129-141. The refit gives every picture its own frame; a refusal or a
+    failure leaves the anchored map exactly as it was."""
+    import json as _json
+
+    from sm64_events.replay.frameclock import FrameClock
+    from sm64_events.replay.mapalign import Alignment
+
+    def wired(tmp):
+        clock = FrameClock(now=lambda: 0.0)
+        base = (T0 - timedelta(seconds=3)).timestamp()
+        for n in range(17 * 30):
+            clock._now = lambda t=base + n / 30: t
+            clock.mark(7000 + n)
+        svc = make_service(tmp, [attempt()])
+        svc._frame_clock = clock
+        svc.map_aligner = lambda clip, fm, a: (
+            Alignment(offset=0, fit=0.8, margin=0.3, paired=900), [])
+        return svc
+
+    svc = wired(tmp_path)
+    svc.map_digit_fit = lambda clip, fm, a: [4242] * len(fm)
+    assert svc.view(42)["frame_map"] == [4242] * (17 * 60)
+    sidecar = _json.loads(
+        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
+    assert sidecar["frame_map_digitfit"] is True
+
+    refused = wired(tmp_path / "b")
+    refused.map_digit_fit = lambda clip, fm, a: None
+    assert refused.view(42)["frame_map"][2] == 7000
+
+    def broken(clip, fm, a):
+        raise RuntimeError("decode died")
+
+    crashed = wired(tmp_path / "c")
+    crashed.map_digit_fit = broken
+    assert crashed.view(42)["frame_map"][2] == 7000

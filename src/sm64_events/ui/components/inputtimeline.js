@@ -290,17 +290,38 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   // and "Mario" (his report, 2026-08-22).
   const trackColumn = useRef(null);
 
+  // THE CLIP'S OWN RANGE (round 32 item 53): the map says which game frame
+  // each video frame shows, so its own extremes ARE what the video shows --
+  // ask for exactly that and the timeline matches the footage, buffers
+  // included, with no part of it pointing at video that does not exist.
+  // Null until the clip's view lands (or forever, with no clip), and the
+  // track is then the attempt alone.
+  const clipSpan = useMemo(() => {
+    if (!frameMap || !frameMap.length) return null;
+    let low = null;
+    let high = null;
+    for (const raw of frameMap) {
+      if (raw == null) continue;
+      if (low === null || raw < low) low = raw;
+      if (high === null || raw > high) high = raw;
+    }
+    return low === null ? null : `${low},${high}`;
+  }, [frameMap]);
+
   useEffect(() => {
     let alive = true;
     setState({ phase: "loading" });
-    fetch(`/api/attempts/${attemptId}/inputs`)
+    const range = clipSpan
+      ? `?from_frame=${clipSpan.split(",")[0]}&to_frame=${clipSpan.split(",")[1]}`
+      : "";
+    fetch(`/api/attempts/${attemptId}/inputs${range}`)
       .then((response) => (response.ok
         ? response.json()
         : response.text().then((text) => Promise.reject(new Error(text)))))
       .then((data) => { if (alive) setState({ phase: "ready", data }); })
       .catch((error) => { if (alive) setState({ phase: "error", error: String(error) }); });
     return () => { alive = false; };
-  }, [attemptId]);
+  }, [attemptId, clipSpan]);
 
   // ONE CLOCK, ALWAYS. The video is the clock whenever there is one: the
   // timeline reads it every frame and never keeps a position of its own, so
@@ -312,21 +333,52 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   // sync").
   useEffect(() => {
     if (!video || state.phase !== "ready") return undefined;
-    let raf = 0;
     const { fps, frames, stretches } = state.data;
     const lead = state.data.lead_frames || 0;
-    const tick = () => {
-      const seconds = video.currentTime || 0;
+    const readAt = (seconds) => {
       const mapped = mappedFrameAtTime(seconds, frameMap, clipFps,
         stretches, frames);
       // The fallback arithmetic counts from the ANCHOR (the attempt's own
-      // frame 0), which sits `lead` slots into the axis when a lead-in is
+      // frame 0), which sits `lead` slots into the axis when a buffer is
       // drawn; the mapped path lands on the axis directly.
       const at = mapped !== null
         ? mapped
         : Math.min(frames - 1,
                    frameAtTime(seconds, anchorOffsetS, fps, frames) + lead);
       setFrame((current) => (current === at ? current : at));
+    };
+    // THE FRAME THE BROWSER IS ACTUALLY SHOWING, not the time we asked for.
+    // `requestVideoFrameCallback` hands back that frame's own `mediaTime`,
+    // so the panel reads the picture on screen rather than a slot computed
+    // from `currentTime` -- and `currentTime` is the time of the SEEK, which
+    // does not have to be inside the interval of the frame the decoder then
+    // presents. That off-by-one is what he stepped into on this clip's
+    // frames 87-89: the map named slot 363 (which really does draw L4, read
+    // off the pixels) while the element was still showing 362's L3, so the
+    // panel and the video disagreed by exactly one frame in places.
+    if (typeof video.requestVideoFrameCallback === "function") {
+      let handle = 0;
+      let live = true;
+      const onFrame = (_now, meta) => {
+        if (!live) return;
+        readAt(meta.mediaTime);
+        handle = video.requestVideoFrameCallback(onFrame);
+      };
+      handle = video.requestVideoFrameCallback(onFrame);
+      // A seek that lands on the frame already displayed presents nothing,
+      // so read once up front rather than waiting for a callback that has
+      // no reason to come.
+      readAt(video.currentTime || 0);
+      return () => {
+        live = false;
+        if (video.cancelVideoFrameCallback) {
+          video.cancelVideoFrameCallback(handle);
+        }
+      };
+    }
+    let raf = 0;
+    const tick = () => {
+      readAt(video.currentTime || 0);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);

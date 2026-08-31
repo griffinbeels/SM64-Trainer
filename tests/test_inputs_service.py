@@ -295,41 +295,43 @@ def test_the_template_carries_marios_rows_like_the_attempt_does(rig):
     assert [each["label"] for each in template["actions"]] == ["dive"]
 
 
-def test_the_lead_in_reaches_back_to_the_level_entry(rig):
-    """Round 32 items 51-52: he warps into the level, adjusts the camera,
-    THEN resets -- those in-level frames were real and invisible. The
-    latest level entry before the anchor extends the track; `lead_frames`
-    says by how many frames, so FRAME 0 stays the attempt's start; and
-    the active template shifts by the same amount so frame 0 aligns with
-    frame 0."""
-    from sm64_events.storage.db import EventRow
+def test_the_timeline_spans_the_CLIP_when_the_caller_names_it(rig):
+    """Round 32 item 53, correcting item 51. His rule: "the expectation for
+    the input timeline is that it visibly matches the actual contents of the
+    video shown... I would expect the duration of the timeline to match the
+    exact duration of the video, including the before and after buffer." So
+    the caller hands over the clip's own frame range and the track spans
+    exactly that -- while FRAME 0 stays the attempt's start (`lead_frames`
+    counts what precedes it) and the attempt's own length is untouched."""
     service, _templates, attempt = rig
-    attempt.anchor_frame = 100
-    attempt.igt_frames = 40
-    attempt.rta_frames = 40
-
-    def events(started_utc, ended_utc):
-        if ended_utc == attempt.started_utc:
-            return [EventRow(id=1, session_id=1, seq=1, type="level_changed",
-                             frame=88, wall_time_utc=started_utc, payload={})]
-        return []
-
-    service._events = events
-    service._landmark_names = dict
-    db_frames = frames([(80 + n, 0, 0, 0) for n in range(20)])
-    service.store.append(1, db_frames, AT, LATER)
-    payload = service.timeline(7)
-    # first = close(140) - (igt-1) = 101; the lead spans 88..100.
-    assert payload["lead_frames"] == 13
-    assert payload["frames"] == 40            # 88..127, lead included
+    # Clear of the rig's own 100..127 chunk: two chunks holding the same
+    # frame numbers would both answer and every count would double.
+    attempt.anchor_frame = 1000
+    attempt.igt_frames = 20
+    attempt.rta_frames = 20
+    service.store.append(1, frames([(980 + n, 0, 0, 0) for n in range(60)]),
+                         AT, LATER)
+    # The attempt itself: close = 1020, first = 1020 - 19 = 1001.
+    plain = service.timeline(7)
+    assert plain["lead_frames"] == 0 and plain["frames"] == 20
+    # The clip carries 20 frames of run-up and 10 past the end.
+    spanned = service.timeline(7, span=(981, 1030))
+    assert spanned["lead_frames"] == 20        # 981..1000
+    assert spanned["frames"] == 50             # 981..1030, buffers included
 
 
-def test_a_reset_after_reset_attempt_has_no_lead(rig):
+def test_a_span_can_only_widen_the_attempt_never_cut_it(rig):
+    """A clip that starts after the attempt did (the ring evicted its
+    run-up) must not shorten the timeline -- the attempt's own frames are
+    the one thing the span may never take away."""
     service, _templates, attempt = rig
-    attempt.anchor_frame = 100
-    service._events = lambda a, b: []
-    service._landmark_names = dict
-    assert service.timeline(7)["lead_frames"] == 0
+    attempt.anchor_frame = 1000
+    attempt.igt_frames = 20
+    attempt.rta_frames = 20
+    service.store.append(1, frames([(980 + n, 0, 0, 0) for n in range(60)]),
+                         AT, LATER)
+    inside = service.timeline(7, span=(1010, 1015))
+    assert inside["frames"] == 20 and inside["lead_frames"] == 0
 
 
 def test_a_shifted_template_is_clipped_to_the_track(rig):

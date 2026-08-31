@@ -865,6 +865,153 @@ def probe_width(ffmpeg: str, clip: Path) -> int:
         return REFERENCE_WIDTH
 
 
+# --- the digit fit: every picture assigned its own game frame -------------
+# Round 32 item 55. Offsets could not express what his BBH clip does: the
+# map was EXACT at frames 87-89 (the pixels show L3/L4/L5 exactly where it
+# said) and 1-2 frames early at 129-141, in one clip, with ten stretches
+# already fitted. A per-stretch offset assumes the error is piecewise
+# constant; what actually varies is which game frames the capture DROPPED,
+# and a drop shifts everything after it by one until the next drop.
+#
+# So the assignment is fitted directly: each encoded PICTURE takes the game
+# frame whose drawn digits best explain its ink, subject to the only two
+# laws the physics gives -- pictures advance monotonically, and consecutive
+# pictures advance by at least one frame. That is a shortest-path problem
+# over (picture, frame), which is exact rather than iterative, and it
+# expresses a dropped frame as a step of two without needing to detect one.
+MAX_PICTURE_STEP = 6          # a stall's catch-up; beyond this the band ends
+FIT_BAND = 24                 # frames either side of the prior map's answer
+
+
+def _predicted_ink(rows_by_frame, weights):
+    return {frame: float(row @ weights)
+            for frame, row in rows_by_frame.items()}
+
+
+def fit_pictures_to_frames(ink, runs, prior_map, rows_by_frame,
+                           weights, band: int = FIT_BAND) -> list | None:
+    """A frame map built by assigning each picture its best-fitting frame.
+
+    `ink` is per video slot, `runs` the encoded pictures, `prior_map` the
+    map to band the search around, `rows_by_frame` the glyph composition
+    the track says each game frame drew, and `weights` the per-glyph ink
+    already fitted. Returns a new per-slot map, or None when the pictures
+    or the track cannot carry the question.
+    """
+    if not runs or not rows_by_frame:
+        return None
+    predicted = _predicted_ink(rows_by_frame, weights)
+    frames = sorted(predicted)
+    index_of = {frame: at for at, frame in enumerate(frames)}
+    # Each picture's measured ink (the median over its own slots -- one
+    # slot can catch a fade or a torn present).
+    measured, anchors = [], []
+    for start, length in runs:
+        window = [ink[slot] for slot in range(start, min(start + length,
+                                                         len(ink)))]
+        if not window:
+            return None
+        measured.append(float(np.median(window)))
+        prior = next((prior_map[slot]
+                      for slot in range(start, min(start + length,
+                                                   len(prior_map)))
+                      if prior_map[slot] is not None), None)
+        anchors.append(prior)
+    if any(anchor is None for anchor in anchors):
+        return None
+    # Candidate frames per picture: a band around the prior's answer.
+    candidates = []
+    for anchor in anchors:
+        centre = index_of.get(anchor)
+        if centre is None:
+            centre = min(range(len(frames)),
+                         key=lambda at: abs(frames[at] - anchor))
+        low = max(0, centre - band)
+        high = min(len(frames), centre + band + 1)
+        candidates.append(range(low, high))
+    # Shortest path: cost of a picture taking a frame is the squared error
+    # of its ink, and a move must advance by 1..MAX_PICTURE_STEP frames.
+    best = {at: (measured[0] - predicted[frames[at]]) ** 2
+            for at in candidates[0]}
+    back = []
+    for order in range(1, len(measured)):
+        step_back = {}
+        reached = {}
+        window = sorted(best)
+        for at in candidates[order]:
+            source, source_cost = None, None
+            for step in range(1, MAX_PICTURE_STEP + 1):
+                prior_at = at - step
+                if prior_at in best and (source_cost is None
+                                         or best[prior_at] < source_cost):
+                    source, source_cost = prior_at, best[prior_at]
+            if source is None:
+                continue
+            reached[at] = source_cost + (measured[order]
+                                         - predicted[frames[at]]) ** 2
+            step_back[at] = source
+        if not reached:
+            return None
+        best, _ = reached, window
+        back.append(step_back)
+    at = min(best, key=best.get)
+    path = [at]
+    for step_back in reversed(back):
+        at = step_back[at]
+        path.append(at)
+    path.reverse()
+    out = [None] * len(prior_map)
+    for (start, length), at in zip(runs, path):
+        for slot in range(start, min(start + length, len(out))):
+            out[slot] = frames[at]
+    return out
+
+
+def digit_fitted(clip: Path, frame_map, stick_of, ffmpeg: str,
+                 width: int | None = None) -> list | None:
+    """The clip's map, refitted picture by picture against its own digits.
+
+    The offset instruments (global, then per stretch) assume the error is
+    piecewise constant. His BBH clip is not: the map was EXACT at frames
+    87-89 -- the pixels there really do draw L3, L4, L5 where it said --
+    and one to two frames early at 129-141, in one clip. What varies is
+    which frames the capture DROPPED, and a drop shifts everything after
+    it until the next one, which no offset can express. So each picture
+    takes the frame whose digits best explain its ink, monotonically.
+    None when the pixels or the track cannot carry the question.
+    """
+    ink, _rows = _ink_and_rows(clip, frame_map, stick_of, ffmpeg, width)
+    if ink is None:
+        return None
+    runs = picture_runs(decode_grey(ffmpeg, clip))
+    rows_by_frame = {}
+    for raw in {value for value in frame_map if value is not None}:
+        pad = stick_of(raw)
+        if pad is not None:
+            rows_by_frame[raw] = glyph_row(*pad)
+    # Every frame the clip could be showing, not only the ones it claims:
+    # the fit has to be able to move a picture onto a neighbour.
+    if rows_by_frame:
+        low, high = min(rows_by_frame), max(rows_by_frame)
+        for raw in range(low - SEARCH_SLOTS, high + SEARCH_SLOTS + 1):
+            if raw in rows_by_frame:
+                continue
+            pad = stick_of(raw)
+            if pad is not None:
+                rows_by_frame[raw] = glyph_row(*pad)
+    design, target = [], []
+    for slot, raw in enumerate(frame_map):
+        if raw in rows_by_frame and slot < len(ink):
+            design.append(rows_by_frame[raw])
+            target.append(ink[slot])
+    if len(target) < MIN_PAIRED_SLOTS:
+        return None
+    weights, *_ = np.linalg.lstsq(np.array(design), np.array(target),
+                                  rcond=None)
+    return fit_pictures_to_frames(ink, runs, frame_map, rows_by_frame,
+                                  weights)
+
+
 def _ink_and_rows(clip: Path, frame_map, stick_of, ffmpeg: str,
                   width: int | None):
     rows = rows_for_map(frame_map, stick_of)

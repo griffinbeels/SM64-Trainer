@@ -1417,6 +1417,36 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                      / "library_adoptions.json",
                      mode_path=Path(compare_cache_scratch.name) / "tracker_mode.json")
 
+    # A CLIP'S FRAME MAP, without a clip (round 32 item 53). The timeline's
+    # buffers are the video's, so with no replay service the drawer draws
+    # the lead-less layout and the shaded band is unreachable by every
+    # sweep -- the "clean page nobody is looking at" trap again. This
+    # answers the drawer's own replay POST with a synthetic view whose
+    # `frame_map` carries three seconds of run-up and two of tail around
+    # the attempt, which is exactly what the real thing carries; the video
+    # URL 404s and the player shows its own empty state, which is honest.
+    @app.post("/api/attempts/{attempt_id}/replay")
+    def _fixture_replay_view(attempt_id: int):
+        rows = [a for a in database.attempts() if a.id == attempt_id]
+        if not rows or rows[0].anchor_frame is None:
+            return {"clip_url": None, "duration_s": 0, "fps": 60,
+                    "game_fps": 30, "frame_map": None, "source": "buffer",
+                    "anchor_offset_s": 0, "truncated": False,
+                    "saved_path": None}
+        attempt = rows[0]
+        close = attempt.anchor_frame + (attempt.rta_frames or 0)
+        first = (close - (attempt.igt_frames - 1)
+                 if attempt.igt_frames else attempt.anchor_frame)
+        pre, post = 90, 60                       # 3 s and 2 s at 30 fps
+        frame_map = []
+        for raw in range(first - pre, close + post):
+            frame_map.extend([raw, raw])          # 30 fps game, 60 fps video
+        return {"clip_url": None,
+                "duration_s": len(frame_map) / 60,
+                "fps": 60, "game_fps": 30, "frame_map": frame_map,
+                "source": "buffer", "anchor_offset_s": pre / 30,
+                "truncated": False, "saved_path": None}
+
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(
         app, host="127.0.0.1", port=port, log_level="warning"))

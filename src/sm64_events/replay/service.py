@@ -143,6 +143,12 @@ class ReplayService:
     #: with a real path under data/.
     anchor_stats = None
 
+    #: Refits a clip's map picture-by-picture against its own digits
+    #: (`replay/mapalign.py::digit_fitted`), signature
+    #: (clip, frame_map, attempt) -> list | None. Injected like the aligner;
+    #: None or a refusal leaves the anchored map exactly as it was.
+    map_digit_fit = None
+
     #: Builds a frame map from the picture ledger's rows and the clip's own
     #: picture runs (`replay/mapalign.py::ledger_map`), signature
     #: (clip, rows, start_ts, duration_s, fps) -> list | None. Injected like
@@ -505,12 +511,37 @@ class ReplayService:
         meta["frame_map_aligned"] = True
         meta["frame_map_offset"] = found.offset
         meta["frame_map_fit"] = round(found.fit, 4)
+        self._refit_to_the_digits(meta, clip, attempt)
         if self.anchor_stats is not None:
             self.anchor_stats.record(getattr(attempt, "id", 0),
                                      found.offset, found.fit)
         log.info("frame map aligned to the footage: %+d slots "
                  "(fit %.3f, margin %.3f, %d slots paired)",
                  found.offset, found.fit, found.margin, found.paired)
+
+    def _refit_to_the_digits(self, meta: dict, clip: Path, attempt) -> None:
+        """Give every picture its OWN frame (round 32 item 55).
+
+        The anchors above move the whole map, or a stretch of it, by one
+        number. What his BBH clip actually does is drift where the capture
+        dropped frames -- exact at 87-89, one to two early at 129-141 -- so
+        the last step assigns each picture the frame whose digits explain
+        its ink, monotonically. Any failure leaves the anchored map.
+        """
+        if self.map_digit_fit is None:
+            return
+        try:
+            fitted = self.map_digit_fit(clip, meta["frame_map"], attempt)
+        except Exception:
+            log.exception("digit refit failed; keeping the anchored map")
+            return
+        if fitted is None:
+            return
+        moved = sum(1 for was, now in zip(meta["frame_map"], fitted)
+                    if was != now)
+        meta["frame_map"] = fitted
+        meta["frame_map_digitfit"] = True
+        log.info("frame map refitted to the digits: %d slots moved", moved)
 
     def _anchor_offset(self, a, meta: dict) -> float:
         """Where in the clip the anchor frame's PICTURE is on screen, in

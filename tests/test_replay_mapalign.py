@@ -646,3 +646,44 @@ def test_an_orphaned_row_carves_its_pictures_out_of_a_merged_run():
             for order in range(5)]
     out = mapalign.ledger_map(10, runs, rows, LEDGER_T0, FPS, lag_frames=1)
     assert out == [100, 100, 101, 101, 102, 102, 103, 103, 104, 104]
+
+
+# -- the digit fit: every picture takes its OWN frame (item 55) -------------
+
+def test_the_fit_expresses_a_DROPPED_frame_no_offset_could():
+    """His BBH clip was exact at frames 87-89 and one to two early at
+    129-141 -- one clip, so no single offset and no per-stretch offset can
+    describe it. What actually happens is a DROPPED capture frame: it
+    shifts everything after it by one until the next drop. The fit assigns
+    each picture its own frame, so a drop reads as a step of two."""
+    truth = []
+    for order in range(300):
+        # The capture misses frame 150: pictures run ..149, 151, 152..
+        frame = FIRST_FRAME + order + (1 if order >= 150 else 0)
+        truth.append(frame)
+    runs = [(2 * order, 2) for order in range(len(truth))]
+    ink = np.zeros(2 * len(truth))
+    weights = np.array([INK_WEIGHTS[glyph] for glyph in mapalign.GLYPHS])
+    rows_by_frame = {}
+    for order, frame in enumerate(truth):
+        row = mapalign.glyph_row(*stick_at(frame))
+        rows_by_frame[frame] = row
+        ink[2 * order] = ink[2 * order + 1] = float(row @ weights)
+    for frame in range(FIRST_FRAME - 4, FIRST_FRAME + len(truth) + 8):
+        rows_by_frame.setdefault(frame, mapalign.glyph_row(*stick_at(frame)))
+    # The prior map never noticed the drop: it just counts up.
+    prior = [FIRST_FRAME + slot // 2 for slot in range(2 * len(truth))]
+    fitted = mapalign.fit_pictures_to_frames(ink, runs, prior, rows_by_frame,
+                                             weights)
+    assert fitted is not None
+    got = [fitted[2 * order] for order in range(len(truth))]
+    assert got == truth, [
+        (order, a, b) for order, (a, b) in enumerate(zip(got, truth))
+        if a != b][:5]
+
+
+def test_the_fit_stays_monotone_and_refuses_an_empty_world():
+    assert mapalign.fit_pictures_to_frames(
+        np.zeros(4), [], [None, None, None, None], {}, np.zeros(14)) is None
+    assert mapalign.fit_pictures_to_frames(
+        np.zeros(4), [(0, 2), (2, 2)], [None] * 4, {}, np.zeros(14)) is None
