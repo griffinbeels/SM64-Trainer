@@ -91,7 +91,8 @@ export function ReplayPlayer({ attemptId, onCompare, onVideoEl, onView }) {
   // frame occasionally spans 1 or 3 encoded frames, so once in a while a
   // single press lands on a duplicate; the next press recovers.
   function step(dir) {
-    stepGameFrame(videoEl.current, dir, state.game_fps || 30);
+    stepGameFrame(videoEl.current, dir, state.game_fps || 30,
+                  state.frame_map || null, state.fps || 60);
   }
   // A press remembers whether the clip was playing; the release hands that
   // back, so a hold mid-playback scrubs and then plays on, while a step on
@@ -148,7 +149,7 @@ export function ReplayPlayer({ attemptId, onCompare, onVideoEl, onView }) {
       globalThis.removeEventListener("keydown", down);
       globalThis.removeEventListener("keyup", up);
     };
-  }, [state.game_fps]);
+  }, [state.game_fps, state.frame_map, state.fps]);
 
   function togglePlay() {
     const v = videoEl.current;

@@ -47,7 +47,8 @@ class InputSampler:
         self._latest: InputFrame | None = None
         self._previous_buttons = 0
         self._counts = {"samples": 0, "straddles": 0, "frames": 0,
-                        "edge_checks": 0, "edge_mismatches": 0}
+                        "edge_checks": 0, "edge_mismatches": 0,
+                        "skips": 0, "skipped_frames": 0, "worst_skip": 0}
 
     def health(self) -> dict:
         """Counters for the perf monitor.
@@ -57,6 +58,17 @@ class InputSampler:
         non-zero count means we filed an input under the wrong frame number.
         It makes the sampling rate a thing we measure rather than a thing we
         assume is sufficient.
+
+        `skips`/`skipped_frames`/`worst_skip` count the OTHER failure, the
+        one he can see: the counter advancing by more than one between two
+        observed samples, which means nobody read the frames in between and
+        their input is gone -- the timeline says "No capture on this frame"
+        for each. Measured over his whole journal (2026-08-31): 84 frames of
+        93,958, 0.089%, in 39 of 245 attempts, almost all one or two frames
+        wide. A hole needs the poll loop to stall past a whole game frame
+        (33 ms) since eight samples land inside one at 250 Hz -- these
+        counters are what turn "why did that happen" into a number instead
+        of a theory.
         """
         return dict(self._counts)
 
@@ -75,13 +87,21 @@ class InputSampler:
         if before != after:
             # The game advanced mid-read, so this pairing of counter and pad
             # is not one frame. Discarding is the only thing preventing frame
-            # N's number from being stapled to frame N+1's input.
+            # N's number from being stapled to frame N+1's input. The frame
+            # the read LANDED in is still worth knowing -- the caller paces
+            # on it -- but nothing is held from a straddled read.
             self._counts["straddles"] += 1
             return None
         if self._frame is None:
             self._frame = before
         elif before != self._frame:
             backward = before < self._frame
+            if not backward and before - self._frame > 1:
+                missed = before - self._frame - 1
+                self._counts["skips"] += 1
+                self._counts["skipped_frames"] += missed
+                self._counts["worst_skip"] = max(self._counts["worst_skip"],
+                                                 missed)
             self._emit()
             if backward:
                 # A console reset restarting the counter. Whatever was held

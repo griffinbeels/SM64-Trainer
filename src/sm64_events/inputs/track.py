@@ -69,6 +69,45 @@ def _frames_around(store, attempt) -> list[tuple[int, InputFrame]]:
     return tight
 
 
+def _dance_start(frames: list[tuple[int, InputFrame]], close: int) -> int:
+    """The FIRST frame of the star dance that ends this attempt.
+
+    His rule (2026-08-22) was always "stop only AFTER mario enters the star
+    grab", and the end anchors the whole track: the start is derived from
+    it as `last - (igt - 1)`. The first version took the first grab-action
+    frame at or AFTER `close` (our anchor plus our RTA) -- but the dance
+    routinely begins BEFORE that, since our clock and Usamune's disagree by
+    a frame or two and the anchor itself can land late. Measured on four of
+    his attempts: the dance started 7, 8 and 25 frames before the chosen
+    frame, and every one of those pushed the run's own frame 0 the same
+    distance late. On the 25 he could see it -- the fall after his reset
+    read as "before the reset" while Usamune's timer, paused mid-fall, said
+    0'00"20 (2026-08-31).
+
+    So the dance is found as a contiguous RUN of grab-action frames and the
+    run's own first frame is the answer. A run is the attempt's own when it
+    contains `close` or starts within `GRAB_SEARCH_FRAMES` after it; an
+    earlier star's dance sits far outside that window and cannot be picked.
+    No such run: the close stands, which is what a reset or an abandon
+    gets.
+    """
+    runs: list[list[int]] = []
+    for number, frame in frames:
+        if frame.action not in A.STAR_GRAB_ACTIONS:
+            continue
+        if runs and number == runs[-1][-1] + 1:
+            runs[-1].append(number)
+        else:
+            runs.append([number])
+    for run in runs:
+        if run[0] <= close <= run[-1]:
+            return run[0]
+    for run in runs:
+        if close < run[0] <= close + GRAB_SEARCH_FRAMES:
+            return run[0]
+    return close
+
+
 def track_for_attempt(store, attempt,
                       span: tuple[int, int] | None = None
                       ) -> list[tuple[int, InputFrame]]:
@@ -118,12 +157,7 @@ def track_with_lead(store, attempt, span: tuple[int, int] | None = None
         return [(number, frame) for number, frame in frames
                 if number >= first], 0
     close = first + attempt.rta_frames
-    last = close
-    for number, frame in frames:
-        if (close <= number <= close + GRAB_SEARCH_FRAMES
-                and frame.action in A.STAR_GRAB_ACTIONS):
-            last = number
-            break
+    last = _dance_start(frames, close)
     if attempt.igt_frames:
         first = last - (attempt.igt_frames - 1)
     # THE CLIP'S OWN WINDOW (round 32 item 53, 2026-08-31). `span` is the

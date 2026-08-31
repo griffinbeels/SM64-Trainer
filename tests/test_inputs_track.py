@@ -3,10 +3,8 @@ from dataclasses import dataclass
 import pytest
 
 from sm64_events.inputs.frame import InputFrame
+from sm64_events.inputs.track import document_for_attempt, target_of, track_for_attempt
 from sm64_events.memory import addresses as A
-from sm64_events.inputs.store import InputStore
-from sm64_events.inputs.track import (document_for_attempt, target_of,
-                                      track_for_attempt)
 from sm64_events.storage.db import Database
 
 AT = "2026-08-20T21:00:00+00:00"
@@ -179,3 +177,33 @@ def test_a_console_reset_inside_the_widened_window_is_not_crossed(tmp_path):
         anchor_frame=100, rta_frames=14, igt_frames=20))
     numbers = [number for number, _f in got]
     assert min(numbers) >= 100, "a pre-reset frame must never enter the track"
+
+
+def test_the_end_is_the_DANCE_S_OWN_FIRST_FRAME_not_the_close(monkeypatch):
+    """Round 32 item 58. The end anchors everything -- the start is derived
+    from it as `last - (igt - 1)` -- and the dance routinely begins BEFORE
+    our own close, since our clock and Usamune's disagree and the anchor
+    can land late. Measured on four of his attempts: 7, 8 and 25 frames
+    early, and each pushed the run's frame 0 that far late. At 25 he could
+    see it: the fall after his reset read as "before the reset" while
+    Usamune's timer, paused mid-fall, already said 0'00"20."""
+    from sm64_events.inputs.track import _dance_start
+    from sm64_events.memory import addresses as A
+
+    grab = next(iter(A.STAR_GRAB_ACTIONS))
+    def rows(spans):
+        out = []
+        for number in range(1000, 1400):
+            action = grab if any(lo <= number <= hi for lo, hi in spans) else 0
+            out.append((number, InputFrame(0, 0, 0, 0, action)))
+        return out
+
+    # The dance CONTAINS the close: its own first frame wins, not the close.
+    assert _dance_start(rows([(1100, 1300)]), 1125) == 1100
+    # A dance starting just after the close still answers.
+    assert _dance_start(rows([(1150, 1300)]), 1125) == 1150
+    # A PREVIOUS star's dance, far behind, may never be chosen.
+    assert _dance_start(rows([(1000, 1010), (1200, 1300)]), 1190) == 1200
+    assert _dance_start(rows([(1000, 1010)]), 1300) == 1300
+    # No dance at all (a reset, an abandon): the close stands.
+    assert _dance_start(rows([]), 1234) == 1234

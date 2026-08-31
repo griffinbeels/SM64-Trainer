@@ -179,3 +179,33 @@ def test_a_script_row_with_no_mario_state_reads_as_not_captured():
     got, _sampler = run([(10, 0x8000, 0x8000, 0, 0), (11, 0, 0, 0, 0)])
     assert got[0][1].action == 0
     assert got[0][1].speed == 0.0
+
+
+def test_a_skipped_frame_is_COUNTED_since_its_input_is_gone():
+    """His question, 2026-08-31: "I noticed this frame for some reason
+    doesn't have a capture on this frame... Why did this happen? Can we
+    prevent it?" A frame nobody sampled has no input to recover -- the game
+    keeps no history -- so the honest answer is to say so on the timeline
+    and to MEASURE how often it happens. Counting it at the source is what
+    turns that into a number rather than a theory."""
+    got, sampler = run([(100, 0x0000, 0, 0, 0),
+                        (101, 0x0000, 0, 0, 0),
+                        (104, 0x0000, 0, 0, 0),   # a stall: 102, 103 unseen
+                        (105, 0x0000, 0, 0, 0)])
+    health = sampler.health()
+    assert health["skips"] == 1
+    assert health["skipped_frames"] == 2
+    assert health["worst_skip"] == 2
+    # The frames it DID observe are still emitted, in order, and nothing is
+    # invented for the two nobody read.
+    assert [number for number, _frame in got] == [100, 101, 104]
+
+
+def test_a_counter_RESTART_is_not_a_skip():
+    """A console reset runs the counter backwards; that is an epoch change,
+    not a frame nobody read, and counting it would make the health number
+    lie about capture quality."""
+    _got, sampler = run([(5000, 0x0000, 0, 0, 0),
+                         (12, 0x0000, 0, 0, 0),
+                         (13, 0x0000, 0, 0, 0)])
+    assert sampler.health()["skips"] == 0

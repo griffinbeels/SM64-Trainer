@@ -17,6 +17,7 @@
 // which CROPS whatever the container's aspect does not cover.
 import { h } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { clampToFrames } from "../frame.js";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { fmtIgtShort } from "../format.js";
@@ -426,9 +427,13 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       if (!video.paused) video.pause();
       const mapped = mappedTimeAtFrame(clamped, frameMap, clipFps,
         data.stretches);
-      video.currentTime = mapped !== null
-        ? mapped
-        : timeAtFrame(clamped - lead, anchorOffsetS, data.fps);
+      // Inside the clip, always: a seek to the very edge leaves the element
+      // reporting itself ended, and the panel then reads whatever it
+      // presents (his 2026-08-31 jump from frame 770 to 591).
+      video.currentTime = clampToFrames(
+        mapped !== null ? mapped
+                        : timeAtFrame(clamped - lead, anchorOffsetS, data.fps),
+        video.duration || 0, data.fps);
     }
   };
   const seekFromPointer = (event) => {
