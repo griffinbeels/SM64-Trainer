@@ -499,11 +499,13 @@ The persisted choice the [[Scorecard]] grades every tile against — a
 times you typed yourself and saved under a name, or SEVERAL of those at
 once. The trainer turns it into one time per tile and the [[Scorecard]]
 compares that time against your [[personal best]]. Picking several keeps
-the slowest time any of them offers on each tile, so the goal stays
-beatable and the picks cover between them the [[star]]s none of them
-covers alone — which matters because a single pick can fall short: a
-[[runner]] has nothing wherever they never recorded a time, and a
-hand-typed goal reaches only the tiles you typed.
+the FASTEST time any of them offers on each tile — a [[runner]]'s own
+offer being their best across every [[strategy]] they have recorded that
+[[star]] with — so the goal is the best anybody you picked has managed,
+and the picks cover between them the [[star]]s none of them covers alone.
+That coverage matters because a single pick falls short: a [[runner]] has
+nothing wherever they never recorded a time, and a hand-typed goal
+reaches only the tiles you typed.
 
 - **Lives** — the goal resolvers (`src/sm64_events/server/scorecard_api.py`)
   → the goal picker (`src/sm64_events/ui/scorecardgoal.js`), and, for typing

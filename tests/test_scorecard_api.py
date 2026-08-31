@@ -706,18 +706,19 @@ def test_castle_stars_are_off_the_card_until_included(tmp_path):
         assert "star:0:1" not in secret_keys, "the include is per star"
 
 
-def test_a_multi_goal_takes_the_slowest_offer_and_unions_coverage(tmp_path):
-    """Round 14, his design: "what if we could select multiple options
-    (e.g., I could select 10 players plus a rank standard like Toad 1).
-    Then, we should take the MAX TIME from all of those players... if you
-    are tracking multiple different runners, then you should have 100%
-    coverage across all stars."
+def test_a_multi_goal_takes_the_fastest_offer_and_unions_coverage(tmp_path):
+    """Round 16, correcting round 14's reading of "MAX TIME": "I meant we
+    should take the FASTEST time from all of the runners / all of the
+    options provided... we collect all of the options' fastest times, and
+    select the fastest time from all of them." Coverage is still the union
+    ("if you are tracking multiple different runners, then you should have
+    100% coverage across all stars").
 
     Two saved custom goals stand in for two runners: a custom source
     resolves with no ladder or sheet lookup, so the MERGE is the only thing
     this test can fail on."""
     with make_client(tmp_path) as (client, _db, _svc):
-        # A: fast on star:1:0, silent on star:1:1
+        # A: FASTER on star:1:0, silent on star:1:1
         client.put("/api/scorecard/goal", json={
             "kind": "custom", "name": "A", "times": {"star:1:0": 4000}})
         # B: slower on star:1:0, and the only one covering star:1:1
@@ -738,25 +739,25 @@ def test_a_multi_goal_takes_the_slowest_offer_and_unions_coverage(tmp_path):
         card = client.get("/api/scorecard").json()
         tiles = {tile["key"]: tile
                  for row in card["rows"] for tile in row["tiles"]}
-        # the SLOWEST offer wins -- beating it beats every source
-        assert tiles["star:1:0"]["goal_cs"] == 4500
+        # the FASTEST offer wins -- the best anybody you picked has done
+        assert tiles["star:1:0"]["goal_cs"] == 4000
         # ...and a star only ONE source covers is still covered
         assert tiles["star:1:1"]["goal_cs"] == 6000
 
 
 def test_a_multi_goal_attributes_every_tile_to_the_source_that_set_it(tmp_path):
     """Round 15: "that clearly tells us that player two is the reason that
-    the goal is that time." The winner is recorded where the comparison
-    happens, so the card's coloured dot and the number beside it cannot
-    disagree. Ties keep the EARLIER source, so attribution never depends on
-    iteration order."""
+    the goal is that time." The winner -- the FASTEST offer since round 16
+    -- is recorded where the comparison happens, so the card's coloured dot
+    and the number beside it cannot disagree. Ties keep the EARLIER source,
+    so attribution never depends on iteration order."""
     with make_client(tmp_path) as (client, _db, _svc):
         client.put("/api/scorecard/goal", json={
             "kind": "custom", "name": "one",
-            "times": {"star:1:0": 4000, "star:1:1": 7000, "star:1:2": 5000}})
+            "times": {"star:1:0": 4500, "star:1:1": 7000, "star:1:2": 5000}})
         client.put("/api/scorecard/goal", json={
             "kind": "custom", "name": "two",
-            "times": {"star:1:0": 4500, "star:1:2": 5000}})
+            "times": {"star:1:0": 4000, "star:1:2": 5000}})
         client.put("/api/scorecard/goal", json={
             "kind": "multi",
             "sources": [{"kind": "custom", "name": "one"},
@@ -765,7 +766,7 @@ def test_a_multi_goal_attributes_every_tile_to_the_source_that_set_it(tmp_path):
         tiles = {tile["key"]: tile
                  for row in client.get("/api/scorecard").json()["rows"]
                  for tile in row["tiles"]}
-        assert tiles["star:1:0"]["goal_source"] == 1     # "two" is slower here
+        assert tiles["star:1:0"]["goal_source"] == 1     # "two" is FASTER here
         assert tiles["star:1:1"]["goal_source"] == 0     # only "one" covers it
         assert tiles["star:1:2"]["goal_source"] == 0     # tie -> the earlier pick
         # a tile no source covers is attributed to nobody
@@ -804,12 +805,13 @@ def test_a_multi_goal_validates_every_source_like_a_single_one(tmp_path):
 
 def test_a_multi_goal_mixes_a_division_with_a_per_entity_source(tmp_path):
     """The mixed pick he named -- "10 players plus a rank standard like
-    Toad 1" -- where the division supplies the stars a per-entity source
-    misses, and wins wherever it is the slower of the two."""
+    Toad 1" -- where the division COVERS the stars a per-entity source
+    misses, while a faster per-entity time wins wherever it exists (round
+    16: the fastest offer, not the slowest)."""
     with make_client(tmp_path) as (client, _db, _svc):
         client.put("/api/scorecard/goal", json={
             "kind": "custom", "name": "fast one",
-            "times": {"star:1:0": 100}})       # 1.00s: never the slowest
+            "times": {"star:1:0": 100}})       # 1.00s: faster than any tier
         client.put("/api/scorecard/goal", json={
             "kind": "multi",
             "sources": [{"kind": "custom", "name": "fast one"},
@@ -824,5 +826,11 @@ def test_a_multi_goal_mixes_a_division_with_a_per_entity_source(tmp_path):
                  for row in client.get("/api/scorecard").json()["rows"]
                  for tile in row["tiles"]}
 
-        assert alone["star:1:0"]["goal_cs"] is not None
-        assert mixed["star:1:0"]["goal_cs"] == alone["star:1:0"]["goal_cs"]
+        # the faster per-entity time wins its own star...
+        assert mixed["star:1:0"]["goal_cs"] == 100
+        assert mixed["star:1:0"]["goal_source"] == 0
+        # ...and the division still covers every star it alone reaches
+        other = next(key for key, tile in alone.items()
+                     if key != "star:1:0" and tile["goal_cs"] is not None)
+        assert mixed[other]["goal_cs"] == alone[other]["goal_cs"]
+        assert mixed[other]["goal_source"] == 1

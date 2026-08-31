@@ -398,15 +398,21 @@ def create_scorecard_router(service, library=None, adoptions=None,
         still grade against a hand-picked target even though it can never
         grade against a division or a runner.
 
-        A MULTI goal (round 14, his own design: "what if we could select
-        multiple options... Then, we should take the MAX TIME from all of
-        those players") resolves each source through this same function and
-        keeps the SLOWEST offer per entity. Two properties come out of that
-        and both are his stated intent: the goal stays beatable -- clearing
-        the slowest of the times you picked clears them all -- and coverage
-        is the UNION, so runners who never entered a star are covered by
-        whoever did ("if you are tracking multiple different runners, then
-        you should have 100% coverage across all stars")."""
+        A MULTI goal resolves each source through this same function and
+        keeps the FASTEST offer per entity -- his round-16 correction of
+        round 14's reading ("I meant we should take the FASTEST time from
+        all of the runners / all of the options provided"), verified
+        against the Library: on Scale the Mountain his card showed Toad 1's
+        19"02 while ikori has 16"53, because the merge had been taking the
+        slowest source. Two levels, both his words: WITHIN an option, the
+        fastest that option has on that star across every strategy
+        (`ratings.best_entries` already minimises over every approach and
+        subsection mapping to the entity -- RONC3NA's 17"50 on "Log firsty"
+        beats his own 17"83 on the plain row); ACROSS options, the fastest
+        of those. Coverage is still the UNION, so a runner who never
+        entered a star is covered by whoever did ("if you are tracking
+        multiple different runners, then you should have 100% coverage
+        across all stars")."""
         if not goal_value:
             return {}
         kind = goal_value.get("kind")
@@ -442,7 +448,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
             if not isinstance(source, dict) or source.get("kind") == "multi":
                 continue                     # never nest; a corrupt KV is empty
             for key, cs in resolve_goal(source, keys, ranks).items():
-                if key not in merged or cs > merged[key]:
+                if key not in merged or cs < merged[key]:
                     merged[key] = cs
                     owner[key] = index
         return merged, owner

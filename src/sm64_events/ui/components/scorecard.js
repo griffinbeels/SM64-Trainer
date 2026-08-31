@@ -89,7 +89,7 @@ function goalToLabel(goal) {
 // The list of picks -> the goal to store. Nothing picked clears the goal;
 // ONE pick stores that goal in its own shape (so a division stays a
 // division everywhere it is read); several store a `multi`, whose per-tile
-// answer is the SLOWEST offer among them.
+// answer is the FASTEST offer among them (round 16).
 function valuesToGoal(values) {
   const goals = (values || []).map(valueToGoal).filter(Boolean);
   if (!goals.length) return null;
