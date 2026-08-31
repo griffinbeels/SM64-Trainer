@@ -4698,7 +4698,11 @@
   .input-lane.is-actions .input-lane-track { height: 20px; background: #0b1a14; }
   .input-lane.is-speed .input-lane-track { height: 30px; background: #0a1420; }
   .action-span {
+    /* border-box so the padding cannot push a span past the room its own
+       inline max-width leaves it: a short span near the right edge rendered
+       ~6px wide whatever its share and hung 3px outside the lane. */
     position: absolute; top: 2px; bottom: 2px; min-width: 3px; padding: 0 .2rem;
+    box-sizing: border-box;
     display: flex; align-items: center; justify-content: flex-start;
     min-height: 0; height: auto;
     border: 0; border-radius: 3px; overflow: hidden; cursor: pointer;
@@ -4777,6 +4781,18 @@
     position: absolute; top: 0; bottom: 0; width: 0;
     border-left: 1px solid #f4f7fb; pointer-events: none;
   }
+  /* The lead-in (level entry -> the reset): real in-level frames before the
+     attempt's own frame 0, shaded so the extension explains itself. */
+  .input-lead-shade {
+    position: absolute; top: 0; bottom: 0; left: 0;
+    /* Reads as its own region at a glance -- at .13 it was invisible in a
+       render, which is the "correct but unexplained" state he rejects.
+       It overlays the lanes, so the tint stays light enough that the
+       lead's OWN bars and stick line read through it. */
+    background: rgba(126, 152, 184, .22); pointer-events: none;
+    border-right: 1px dashed rgba(170, 192, 216, .7);
+  }
+  .input-lead-note { font-size: .7rem; color: #8fa3b8; margin-left: .55rem; }
 
   .input-inspector {
     display: flex; align-items: center; gap: .8rem; flex-wrap: wrap;

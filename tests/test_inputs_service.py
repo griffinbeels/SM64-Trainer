@@ -83,6 +83,8 @@ def test_the_timeline_carries_the_journals_moments_when_wired(rig):
     attempt.anchor_frame = 100
 
     def events(started_utc, ended_utc):
+        if ended_utc == attempt.started_utc:
+            return []                     # the lead-in's level-entry search
         assert (started_utc, ended_utc) == (attempt.started_utc,
                                             attempt.ended_utc)
         return [EventRow(id=1, session_id=1, seq=1, type="moment_reached",
@@ -291,3 +293,54 @@ def test_the_template_carries_marios_rows_like_the_attempt_does(rig):
     assert [each["yaw"] for each in template["runs"]] == [-1234, -1200]
     assert [each["speed"] for each in template["runs"]] == [31.25, 30.0]
     assert [each["label"] for each in template["actions"]] == ["dive"]
+
+
+def test_the_lead_in_reaches_back_to_the_level_entry(rig):
+    """Round 32 items 51-52: he warps into the level, adjusts the camera,
+    THEN resets -- those in-level frames were real and invisible. The
+    latest level entry before the anchor extends the track; `lead_frames`
+    says by how many frames, so FRAME 0 stays the attempt's start; and
+    the active template shifts by the same amount so frame 0 aligns with
+    frame 0."""
+    from sm64_events.storage.db import EventRow
+    service, _templates, attempt = rig
+    attempt.anchor_frame = 100
+    attempt.igt_frames = 40
+    attempt.rta_frames = 40
+
+    def events(started_utc, ended_utc):
+        if ended_utc == attempt.started_utc:
+            return [EventRow(id=1, session_id=1, seq=1, type="level_changed",
+                             frame=88, wall_time_utc=started_utc, payload={})]
+        return []
+
+    service._events = events
+    service._landmark_names = dict
+    db_frames = frames([(80 + n, 0, 0, 0) for n in range(20)])
+    service.store.append(1, db_frames, AT, LATER)
+    payload = service.timeline(7)
+    # first = close(140) - (igt-1) = 101; the lead spans 88..100.
+    assert payload["lead_frames"] == 13
+    assert payload["frames"] == 40            # 88..127, lead included
+
+
+def test_a_reset_after_reset_attempt_has_no_lead(rig):
+    service, _templates, attempt = rig
+    attempt.anchor_frame = 100
+    service._events = lambda a, b: []
+    service._landmark_names = dict
+    assert service.timeline(7)["lead_frames"] == 0
+
+
+def test_a_shifted_template_is_clipped_to_the_track(rig):
+    """The template shifts right by the lead so frame 0 meets frame 0 --
+    and is then CLIPPED. A template as long as the attempt otherwise runs
+    off the right edge and the lanes overflow their own box (66 layout
+    defects, measured 2026-08-31). What has nothing to compare against is
+    not drawn."""
+    from sm64_events.inputs.service import _shifted_spans
+    spans = [{"start": 0, "length": 10}, {"start": 10, "length": 10}]
+    assert _shifted_spans(spans, 0, 0) == spans
+    moved = _shifted_spans(spans, 5, 18)
+    assert moved == [{"start": 5, "length": 10}, {"start": 15, "length": 3}]
+    assert _shifted_spans(spans, 20, 18) == []

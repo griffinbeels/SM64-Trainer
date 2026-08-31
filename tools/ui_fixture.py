@@ -26,7 +26,7 @@ import sqlite3
 import tempfile
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 
 import uvicorn
@@ -241,10 +241,49 @@ def seed_inputs(database, template: bool = True) -> None:
         return
     sessions = database.sessions()
     session = sessions[-1]["id"] if sessions else 1
+    from datetime import datetime, timedelta
+
+    def moments_before(stamp: str, seconds: float) -> datetime:
+        return datetime.fromisoformat(stamp) - timedelta(seconds=seconds)
+
     for index, attempt in enumerate(attempts[:12]):
         base = attempt.anchor_frame if attempt.anchor_frame else 1000
         database.inputs.append(session, track(base, index % 3),
                                attempt.started_utc, attempt.ended_utc)
+    # THE LEAD-IN (round 32 items 51-52): capture for the stretch between the
+    # level entry `seed_practice` published and the attempt's own first
+    # frame, so the drawer's timeline renders the lead band and the negative
+    # numbering. The ENTRY is read back from the journal rather than
+    # recomputed here -- the same query the service runs -- because the
+    # rule for where a track starts (Usamune's igt, which can reach back
+    # past our anchor) lives in one place and a second copy here drew no
+    # lead at all for the one attempt whose igt outruns its rta.
+    lead_seeded = 0
+    for attempt in attempts:
+        if attempt.anchor_frame is None:
+            continue                      # no attempt-start frame, no lead
+        entries = [row.frame for row in
+                   database.events_between(
+                       moments_before(attempt.started_utc, 60.0).isoformat(),
+                       attempt.started_utc)
+                   if row.type == "level_changed" and row.frame is not None
+                   and row.frame < attempt.anchor_frame]
+        if not entries:
+            continue
+        entry = max(entries)
+        lead_seeded += 1
+        span = max(2, attempt.anchor_frame - entry)
+        database.inputs.append(
+            session,
+            [(entry + n, InputFrame(0, 0, 0, min(30 + n, 80)))
+             for n in range(span)],
+            moments_before(attempt.started_utc, 30.0).isoformat(),
+            attempt.started_utc)
+    if not lead_seeded:
+        raise AssertionError(
+            "seed_inputs seeded no lead-in: seed_practice published no level "
+            "entry before any attempt, so the timeline's lead layout is "
+            "unreachable by every sweep")
     if not template:
         return
     marked = attempts[-1]
@@ -523,6 +562,38 @@ def _pad_log_with_more_entities(service) -> None:
                 payload=_place_time({"level": level}, frame % 600)))
             frame += 100
             previous_level = level
+
+    asyncio.run(go())
+
+
+def _seed_level_entries(service, level: int) -> None:
+    """The level entries the input timeline's LEAD-IN is measured from.
+
+    Round 32 items 51-52. His report: "the input timeline should begin when
+    mario actually spawns into the level" -- so the track reaches back to
+    the latest `level_changed` before the attempt's anchor, and without one
+    in the journal every sweep measures the lead-less layout.
+
+    Published HERE rather than beside each reset in `seed_practice`: a
+    `level_changed` disarms a segment and can retire a target, so entries
+    in play order undid the seeding the rest of this file arranges (27
+    tests red across five files, measured 2026-08-31). Nothing is armed or
+    open yet at this point, and replay ORDER does not matter to the lead --
+    the timeline resolves it by frame and wall clock -- so carrying the
+    entries early costs nothing and disturbs nothing.
+
+    The frames are the ones `seed_practice` anchors its attempts at, each
+    far enough back to sit before the attempt's own FIRST frame rather than
+    merely before its reset: the last attempt's igt (784) outruns its rta
+    (350), so its track already starts at 3567.
+    """
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=UTC)
+
+    async def go() -> None:
+        for frame in (940, 1940, 2940, 3500):
+            await service.publish(Event(
+                type="level_changed", frame=frame, timestamp_utc=now,
+                payload=_place_time({"from": level, "to": level}, 0)))
 
     asyncio.run(go())
 
@@ -1377,6 +1448,22 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
             # target set below survives untouched and coexists with the
             # still-armed segment. Setting a star target itself only journals
             # `target_set` -- it does not read or touch segment arm state.
+            # THE LEVEL ENTRIES the timeline's LEAD-IN is measured from
+            # (round 32 items 51-52), published BEFORE anything arms.
+            # A `level_changed` disarms a segment and can retire a target
+            # whatever level it names, so one published in play order beside
+            # each reset undid the seeding this file spends its length
+            # arranging (measured: 27 tests red across five files). Here,
+            # with nothing armed and nothing open yet, it disturbs nothing --
+            # and the journal only has to CARRY the entry for the timeline
+            # to find it, since the lead is resolved by frame and wall clock
+            # rather than by replay order. The frames are the ones
+            # `seed_practice` will anchor its attempts at, each far enough
+            # back to sit before the attempt's own first frame (the last
+            # attempt's igt outruns its rta, so its track already starts at
+            # 3567 -- 3500, not merely below its 4000 reset).
+            _seed_level_entries(service,
+                                (stage or (FIXTURE_COURSE, FIXTURE_LEVEL))[1])
             if arm_segment is not None:
                 # Pad FIRST: each padding entity is a real course-crossing
                 # level_changed that would disarm `arm_segment`'s own

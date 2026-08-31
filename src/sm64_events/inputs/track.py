@@ -69,7 +69,15 @@ def _frames_around(store, attempt) -> list[tuple[int, InputFrame]]:
     return tight
 
 
-def track_for_attempt(store, attempt) -> list[tuple[int, InputFrame]]:
+def track_for_attempt(store, attempt,
+                      lead_frame: int | None = None
+                      ) -> list[tuple[int, InputFrame]]:
+    frames, _lead = track_with_lead(store, attempt, lead_frame)
+    return frames
+
+
+def track_with_lead(store, attempt, lead_frame: int | None = None
+                    ) -> tuple[list[tuple[int, InputFrame]], int]:
     """Every captured frame from the attempt's anchor THROUGH the grab.
 
     The wall-clock span picks CHUNKS, and a chunk is ten seconds of capture
@@ -104,10 +112,11 @@ def track_for_attempt(store, attempt) -> list[tuple[int, InputFrame]]:
     """
     frames = _frames_around(store, attempt)
     if attempt.anchor_frame is None:
-        return frames
+        return frames, 0
     first = attempt.anchor_frame
     if attempt.rta_frames is None:
-        return [(number, frame) for number, frame in frames if number >= first]
+        return [(number, frame) for number, frame in frames
+                if number >= first], 0
     close = first + attempt.rta_frames
     last = close
     for number, frame in frames:
@@ -117,8 +126,22 @@ def track_for_attempt(store, attempt) -> list[tuple[int, InputFrame]]:
             break
     if attempt.igt_frames:
         first = last - (attempt.igt_frames - 1)
+    # THE LEAD-IN (round 32 items 51-52, 2026-08-31). His camera moves
+    # between spawning into the level and pressing the reset were real,
+    # in-level, and invisible: "I can actually trigger camera movements /
+    # camera actions before then, so technically the input timeline
+    # should begin when mario actually spawns into the level." The caller
+    # names that spawn (the latest level entry before the anchor, from
+    # the journal) and the track reaches back to it; everything from
+    # `first` on is still the attempt itself, so frame numbering and the
+    # PB-identical length are untouched -- the lead draws as negative
+    # frames.
+    if lead_frame is not None and lead_frame < first:
+        kept = [(number, frame) for number, frame in frames
+                if lead_frame <= number <= last]
+        return kept, sum(1 for number, _frame in kept if number < first)
     return [(number, frame) for number, frame in frames
-            if first <= number <= last]
+            if first <= number <= last], 0
 
 
 def target_of(attempt) -> str:

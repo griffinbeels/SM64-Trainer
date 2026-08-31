@@ -146,14 +146,24 @@ function spanLabel(start, length) {
 // beneath yours rather than behind it: two labelled spans stacked in one
 // lane would read as one unreadable label, where two lanes read as "he was
 // diving here and you were still running".
-function ActionRow({ name, spans, percent, seek, ghost = false }) {
+// `total` is the track's own length: a span that REACHES the end is placed
+// from the RIGHT edge, so it grows inward. `.action-span` carries padding
+// that no width can compress below (~6.4px), so a short final span rendered
+// that wide whatever its share -- and placing it by `left` hung it 3px past
+// the lane, since an over-constrained box drops its `right` rather than its
+// `left` (66 layout defects the moment the lead-in made the timeline denser,
+// measured 2026-08-31).
+function ActionRow({ name, spans, percent, seek, ghost = false, total = 0 }) {
   return html`<div class=${`input-lane is-actions ${ghost ? "is-template" : ""}`}>
     <span class="input-lane-name">${name}</span>
     <div class="input-lane-track">
       ${spans.map((span) => html`
         <button class=${`action-span group-${span.group} ${ghost ? "is-template" : ""}`}
                 key=${span.start}
-                style=${`left:${percent(span.start)};width:${percent(span.length)}`}
+                style=${total && span.start + span.length >= total
+                  ? `right:0;width:${percent(span.length)}`
+                  : `left:${percent(span.start)};width:${percent(span.length)};`
+                    + `max-width:calc(100% - ${percent(span.start)})`}
                 onclick=${(event) => { event.stopPropagation(); seek(span.start); }}
                 title=${`${ghost ? "Template — " : ""}${span.label} — ${spanLabel(span.start, span.length)} (${span.length}f)`}
                 aria-label=${`${ghost ? "Template " : ""}${span.label} from ${spanLabel(span.start, span.length)}`}>
@@ -171,7 +181,10 @@ function ActionRow({ name, spans, percent, seek, ghost = false }) {
 // one thing two ways. A label gets the room up to the next tick and no more,
 // so two moments a few frames apart read as two ticks rather than one
 // smeared word; the tooltip carries the whole sentence.
-function MomentRow({ markers, total, percent, seek }) {
+// `lead` is the lead-in's length: a marker's own frame is on the AXIS, and
+// the time it states must be on the ATTEMPT's clock, so a moment inside the
+// lead reads negative rather than pretending the attempt started earlier.
+function MomentRow({ markers, total, percent, seek, lead = 0 }) {
   return html`<div class="input-lane is-moments">
     <span class="input-lane-name">Moments</span>
     <div class="input-lane-track">
@@ -180,10 +193,11 @@ function MomentRow({ markers, total, percent, seek }) {
         const room = Math.max(next - marker.frame, 1);
         return html`
           <button class=${`moment-mark type-${marker.type}`} key=${`${marker.frame}-${index}`}
+                  data-frame=${marker.frame}
                   style=${`left:${percent(marker.frame)};width:${percent(room)}`}
                   onclick=${(event) => { event.stopPropagation(); seek(marker.frame); }}
-                  title=${`${marker.label} — ${timeLabel(marker.frame)}`}
-                  aria-label=${`${marker.label} at ${timeLabel(marker.frame)}`}>
+                  title=${`${marker.label} — ${timeLabel(marker.frame - lead)}`}
+                  aria-label=${`${marker.label} at ${timeLabel(marker.frame - lead)}`}>
             <span class="moment-mark-tick"></span>
             <span class="moment-mark-name">${marker.label}</span>
           </button>`;
@@ -300,13 +314,18 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
     if (!video || state.phase !== "ready") return undefined;
     let raf = 0;
     const { fps, frames, stretches } = state.data;
+    const lead = state.data.lead_frames || 0;
     const tick = () => {
       const seconds = video.currentTime || 0;
       const mapped = mappedFrameAtTime(seconds, frameMap, clipFps,
         stretches, frames);
+      // The fallback arithmetic counts from the ANCHOR (the attempt's own
+      // frame 0), which sits `lead` slots into the axis when a lead-in is
+      // drawn; the mapped path lands on the axis directly.
       const at = mapped !== null
         ? mapped
-        : frameAtTime(seconds, anchorOffsetS, fps, frames);
+        : Math.min(frames - 1,
+                   frameAtTime(seconds, anchorOffsetS, fps, frames) + lead);
       setFrame((current) => (current === at ? current : at));
       raf = requestAnimationFrame(tick);
     };
@@ -340,6 +359,11 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   }
 
   const total = data.frames || 1;
+  // The lead-in: frames before the attempt's own first (the level entry to
+  // the reset). FRAME 0 stays the attempt's start -- the lead draws as
+  // negative numbers and a shaded band, so the attempt's own length (the
+  // number his PB is graded on) reads unchanged.
+  const lead = data.lead_frames || 0;
   const seek = (next) => {
     const clamped = Math.max(0, Math.min(total - 1, next));
     setFrame(clamped);
@@ -352,7 +376,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         data.stretches);
       video.currentTime = mapped !== null
         ? mapped
-        : timeAtFrame(clamped, anchorOffsetS, data.fps);
+        : timeAtFrame(clamped - lead, anchorOffsetS, data.fps);
     }
   };
   const seekFromPointer = (event) => {
@@ -404,7 +428,9 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
     <header class="input-timeline-head">
       <div>
         <span class="eyebrow">Inputs</span>
-        <h4>${timeLabel(total)}${" "}·${" "}${total} frames${" "}·${" "}${data.fps} fps</h4>
+        <h4>${timeLabel(total - lead)}${" "}·${" "}${total - lead} frames${" "}·${" "}${data.fps} fps</h4>
+        ${lead > 0 && html`<span class="input-lead-note">+${lead}f lead-in
+          before the reset</span>`}
       </div>
     </header>
 
@@ -422,6 +448,8 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
          onpointermove=${(event) => { if (event.buttons & 1) seekFromPointer(event); }}
          role="group" aria-label="Input lanes">
       <div class="input-track-column" ref=${trackColumn}>
+        ${lead > 0 && html`<div class="input-lead-shade"
+            style=${`width:${percent(lead)}`}></div>`}
         <div class="input-playhead" style=${`left:${percent(frame)}`}></div>
       </div>
       <div class="input-lane is-stick">
@@ -444,12 +472,14 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         </div>
       </div>
       ${(data.actions || []).length > 0 && html`
-        <${ActionRow} name="Mario" spans=${data.actions} percent=${percent} seek=${seek} />`}
+        <${ActionRow} name="Mario" spans=${data.actions} percent=${percent}
+            seek=${seek} total=${total} />`}
       ${template && (template.actions || []).length > 0 && html`
         <${ActionRow} name="Template" spans=${template.actions} percent=${percent}
-            seek=${seek} ghost=${true} />`}
+            seek=${seek} ghost=${true} total=${total} />`}
       ${markers.length > 0 && html`
-        <${MomentRow} markers=${markers} total=${total} percent=${percent} seek=${seek} />`}
+        <${MomentRow} markers=${markers} total=${total} percent=${percent}
+            seek=${seek} lead=${lead} />`}
       <div class="input-lane is-speed">
         <span class="input-lane-name">Speed</span>
         <div class="input-lane-track">
@@ -469,8 +499,9 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
     <footer class="input-inspector">
       <div class="input-inspector-frame">
         <span class="eyebrow">Frame</span>
-        <strong>${frame} / ${total}</strong>
-        <span class="meta">${timeLabel(frame)}</span>
+        <strong>${frame - lead} / ${total - lead}</strong>
+        <span class="meta">${frame >= lead ? timeLabel(frame - lead)
+                                           : "lead-in"}</span>
       </div>
       <${ControllerPanel} frame=${here} buttons=${data.buttons}
           stickMax=${data.stick_max} deadZone=${data.dead_zone}

@@ -1222,16 +1222,28 @@ def test_the_drawer_reaches_a_MOMENT_on_the_track(page):
     # one, and the design system's own `button` rule centres flex content --
     # so a guard measuring the button's left edge passed while the tick drew
     # mid-span, a third of the timeline from its own frame (his report
-    # 2026-08-23). The fixture's pole grab is 30 frames into a 63-frame
-    # track: the tick must sit at 30/63 of the track, within a slot.
-    tick_at, button_at, track = page.evaluate(
-        "(() => { const tick = document.querySelector('.moment-mark-tick')"
-        ".getBoundingClientRect(); const button = document.querySelector("
-        "'.moment-mark').getBoundingClientRect(); const lane = document"
-        ".querySelector('.input-lane.is-moments .input-lane-track')"
-        ".getBoundingClientRect(); return [tick.left, button.left, lane]; })()")
-    expected = track["x"] + (30 / 63) * track["width"]
-    assert abs(tick_at - expected) < track["width"] / 63, (
+    # 2026-08-23). Every number here is READ OFF THE SURFACE -- the marker's
+    # own axis frame, the attempt's length from the header, the lead-in's
+    # from its note -- because the version that hard-coded the fixture's
+    # "30 frames into 63" went stale the moment the lead-in landed and
+    # reported a placement bug that did not exist (2026-08-31).
+    tick_at, button_at, track, marker_frame, total = page.evaluate(
+        "(() => {"
+        " const tick = document.querySelector('.moment-mark-tick')"
+        "  .getBoundingClientRect();"
+        " const button = document.querySelector('.moment-mark');"
+        " const lane = document.querySelector("
+        "  '.input-lane.is-moments .input-lane-track').getBoundingClientRect();"
+        " const head = document.querySelector('.input-timeline-head h4')"
+        "  .textContent.match(/(\\d+) frames/);"
+        " const note = document.querySelector('.input-lead-note');"
+        " const lead = note"
+        "  ? Number(note.textContent.match(/\\+(\\d+)f/)[1]) : 0;"
+        " return [tick.left, button.getBoundingClientRect().left, lane,"
+        "  Number(button.getAttribute('data-frame')), Number(head[1]) + lead];"
+        "})()")
+    expected = track["x"] + (marker_frame / total) * track["width"]
+    assert abs(tick_at - expected) < track["width"] / total, (
         f"the moment's TICK sits at {tick_at:.0f}, its frame is at "
         f"{expected:.0f} -- the label is being centred in the button again")
     assert abs(tick_at - button_at) < 4, (
@@ -1282,3 +1294,26 @@ def test_the_open_drawer_stays_inside_its_card_below_the_supported_width(page):
             f"at {viewport}: the drawer ends at {drawer_bottom:.0f} but its "
             f"card ends at {card_bottom:.0f} -- the drawer's row is clamped")
     page.set_viewport(1400, 900)
+
+
+def test_the_timeline_reaches_a_LEAD_IN_and_frame_zero_stays_the_attempt(page):
+    """Round 32 items 51-52: he warps into the level, adjusts the camera,
+    then resets -- the track now reaches back to that entry. The lead must
+    RENDER (the shaded band + the header note), and FRAME 0 must still be
+    the attempt's own start: the readout total is the attempt's length,
+    not the track's."""
+    reach(page, "input-timeline")
+    assert count(page, ".input-lead-shade") == 1, (
+        "no lead band rendered -- the fixture seeded no level entry before "
+        "the anchor, so the lead-in layout is unreachable by every sweep")
+    assert count(page, ".input-lead-note") == 1
+    note = page.evaluate(
+        "document.querySelector('.input-lead-note').textContent")
+    assert "lead-in" in note
+    readout = page.evaluate(
+        "document.querySelector('.input-inspector-frame strong').textContent")
+    total = int(readout.split("/")[1].strip())
+    frames_head = page.evaluate(
+        "document.querySelector('.input-timeline-head h4').textContent")
+    assert f"{total} frames" in frames_head, (
+        "the header and the readout disagree on the attempt's length")

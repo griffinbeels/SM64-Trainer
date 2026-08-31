@@ -518,9 +518,28 @@ the same sentence the [[segment recorder]] gives it. It reports what each
 track was doing on a [[frame]] and names nothing as the reason — you read
 the gap yourself. It opens inside an [[attempt]]'s own row, beside that
 [[attempt]]'s clip, and follows the clip's clock rather than keeping one.
+It draws the [[lead-in]] before its own [[frame]] 0, so what you did on the
+way in is visible without moving where the [[attempt]] starts.
 
 - **Lives** — the timeline component
   (`src/sm64_events/ui/components/inputtimeline.js`)
+
+### Lead-in
+
+The stretch of play the [[input timeline]] draws BEFORE the [[attempt]]
+itself: from the [[frame]] you spawned into the course to the [[frame]] your
+[[reset]] landed on. You are in the level for those [[frame]]s and your
+camera answers, so a timeline that began at the [[reset]] hid real input.
+They number backwards from zero and sit behind a shaded band, so the
+[[attempt]]'s own start and its own length — the number the [[ladder]]
+grades its [[personal best]] against — do not move. Entering a course and
+resetting again inside it leaves no lead-in, because you never left.
+
+- **Lives** — the track resolver
+  (`src/sm64_events/inputs/track.py`), which reaches back to the entry the
+  [[journal]] recorded
+- **Not** — part of the [[input track]] a [[template track]] or an export
+  carries. Those stay exactly the [[attempt]].
 
 ### Frame map
 

@@ -18,7 +18,7 @@ from sm64_events.inputs.markers import markers_of
 from sm64_events.inputs.runs import Run, capture_axis, collapse, stretches
 from sm64_events.inputs.templates import TemplateStore
 from sm64_events.inputs.track import (document_for_attempt, target_of,
-                                      track_for_attempt)
+                                      track_for_attempt, track_with_lead)
 from sm64_events.memory import addresses as A
 
 
@@ -82,6 +82,20 @@ def actions_of(frames: list[tuple[int, InputFrame]]) -> list[dict]:
     """
     return [_action_payload(run)
             for run in collapse(capture_axis(frames), _same_action)]
+
+
+def _shifted_spans(spans: list[dict], shift: int, limit: int) -> list[dict]:
+    """Move spans right by `shift` and clip them at `limit` frames."""
+    moved = []
+    for span in spans:
+        start = span["start"] + shift
+        if limit and start >= limit:
+            break
+        length = span["length"]
+        if limit:
+            length = min(length, limit - start)
+        moved.append({**span, "start": start, "length": length})
+    return moved
 
 
 class InputsService:
@@ -150,9 +164,34 @@ class InputsService:
                 for number, frame in
                 self.store.frames_between(start.isoformat(), end)}
 
+    # How far before the attempt the level-entry search reaches. The chunk
+    # store's own widening only reaches CHUNK_REACH_S, so a longer memory
+    # would name a spawn whose frames cannot be resolved anyway.
+    LEAD_REACH_S = 20.0
+
+    def _lead_frame(self, attempt) -> int | None:
+        """The spawn into the level for THIS stay (round 32 items 51-52):
+        the latest level entry before the anchor. His camera moves between
+        warping into the level and pressing the reset were real, in-level,
+        and invisible to a track that began at the reset -- "the input
+        timeline should begin when mario actually spawns into the level".
+        None when the previous attempt ended inside this level (a
+        reset-after-reset): nothing changes for it."""
+        if self._events is None or attempt.anchor_frame is None:
+            return None
+        from datetime import datetime, timedelta
+        started = datetime.fromisoformat(attempt.started_utc)
+        reach = (started - timedelta(seconds=self.LEAD_REACH_S)).isoformat()
+        entries = [row.frame for row in self._events(reach,
+                                                     attempt.started_utc)
+                   if row.type == "level_changed" and row.frame is not None
+                   and row.frame < attempt.anchor_frame]
+        return max(entries) if entries else None
+
     def timeline(self, attempt_id: int) -> dict:
         attempt = self.attempt(attempt_id)
-        frames = track_for_attempt(self.store, attempt)
+        frames, lead = track_with_lead(self.store, attempt,
+                                       lead_frame=self._lead_frame(attempt))
         axis = capture_axis(frames)
         kind, key = entity_key_of(attempt)
         return {
@@ -174,8 +213,13 @@ class InputsService:
             "buttons": [[bit, name] for bit, name in A.BUTTON_BITS],
             "stick_max": A.STICK_MAX,
             "dead_zone": A.STICK_DEAD_ZONE,
+            # The lead-in's length: the timeline subtracts it, so FRAME 0
+            # stays the attempt's start and the lead draws as negative
+            # frames -- the PB-identical length is untouched.
+            "lead_frames": lead,
             "template": self._template_payload(
-                self.templates.active_for(kind, key, attempt.strat_tag)),
+                self.templates.active_for(kind, key, attempt.strat_tag),
+                shift=lead, limit=axis[-1][0] + 1 if axis else 0),
         }
 
     def _markers(self, attempt, frames) -> list[dict]:
@@ -188,7 +232,8 @@ class InputsService:
         return markers_of(rows, frames, names)
 
     @staticmethod
-    def _template_payload(template) -> dict | None:
+    def _template_payload(template, shift: int = 0,
+                          limit: int = 0) -> dict | None:
         if template is None:
             return None
         payload = {"id": template.id, "name": template.name,
@@ -206,4 +251,16 @@ class InputsService:
         # all mario data", so the template carries everything the run does.
         payload["runs"] = runs_of(frames)
         payload["actions"] = actions_of(frames)
+        if shift:
+            # The attempt's own frame 0 sits `shift` slots into its axis
+            # (the lead-in); the template's sits at 0. Move the template so
+            # frame 0 aligns with frame 0, which is the whole comparison --
+            # then CLIP to the track's own length. Shifting alone lets a
+            # template as long as the attempt run off the right edge, and
+            # the lanes then overflow their own box (66 layout defects,
+            # measured 2026-08-31): a template is drawn to be compared
+            # against what is there, so the part with nothing to compare
+            # against is not drawn.
+            for name in ("runs", "actions"):
+                payload[name] = _shifted_spans(payload[name], shift, limit)
         return payload
