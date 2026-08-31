@@ -532,14 +532,18 @@ function LeaderboardList({ leaderboard, query, onOpenRunner }) {
     ? leaderboard.filter((row) => row.entry._isYou || matchesRunner(row.entry, query))
     : leaderboard;
   if (!shown.length) {
-    // Two different empty causes need two different sentences (fix wave,
-    // final review, L6) -- "no community times recorded here yet" blamed a
-    // live search that simply matched nothing exactly the same as it blamed
-    // a genuinely empty leaderboard, which reads as the SEARCH being broken
-    // rather than honest.
-    return html`<p class="meta library-leaderboard-empty">${leaderboard.length
-      ? "No runner matches your search."
-      : "No community times recorded here yet."}</p>`;
+    // 2026-08-31 retired L6's second sentence rather than keeping it dead. Two
+    // empty causes did need two sentences -- "no community times recorded
+    // here yet" blamed a live search that simply matched nothing exactly the
+    // same as it blamed a genuinely empty leaderboard (fix wave, final
+    // review, L6) -- but that judgement now happens ONE LEVEL UP: a section
+    // with no matching runner never renders at all while a query is live, so
+    // a list that survives to here always holds the match that saved it, and
+    // `!shown.length` can only mean an actually empty board. The section's
+    // own disappearance is what a fruitless search says now, and the page
+    // says "No runner here matches" once instead of per section.
+    return html`<p class="meta library-leaderboard-empty">
+      No community times recorded here yet.</p>`;
   }
   return html`<div class="library-leaderboard">
     ${shown.map((row) => html`<${LeaderboardRow}
@@ -726,10 +730,17 @@ function TargetLinkControl({ rows, approaches, linkCtx }) {
  */
 function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
                       onAdd, linkCtx, version, gradingVersion, onOpenRunner }) {
-  if (!pieces.length) return null;
+  // 2026-08-31: the same query filter each Section applies to itself, applied
+  // here too -- otherwise a search with no matching piece leaves the "Pieces
+  // of this run" heading standing over nothing, which reads as a section that
+  // failed to load rather than as one with no results.
+  const shown = query
+    ? pieces.filter((piece) => hasRunnerMatch(piece, version, query))
+    : pieces;
+  if (!shown.length) return null;
   return html`<div class="library-pieces">
     <h4 class="library-pieces-head">Pieces of this run</h4>
-    ${pieces.map((piece) => html`<${Section} key=${approachIdentity(piece)}
+    ${shown.map((piece) => html`<${Section} key=${approachIdentity(piece)}
         approach=${piece} open=${expanded === approachIdentity(piece)}
         onOpen=${() => onOpen(approachIdentity(piece))}
         query=${query} stratInfo=${null} version=${version} gradingVersion=${gradingVersion}
@@ -779,6 +790,22 @@ function visibleEntriesFor(item, version) {
     : entries;
 }
 
+// 2026-08-31, his report: "when searching a user in the Library for a specific
+// star, it should automatically expand all of the dropdowns that are relevant,
+// and hide any dropdowns that are not relevant". ONE predicate, read by both
+// the surfaces that act on it -- Section (which of us disappears) and
+// LibraryTarget (did the whole page come up empty) -- so the page can never
+// hide every section and still claim there is something to look at.
+// Equivalent to `shownBands.length` by construction, and deliberately not
+// derived from it: `bandsOf` files EVERY entry into some band (`bandFor`
+// always answers, Capless included) and drops only bands that end up with
+// neither an entry nor a cutoff, so "some visible entry matches" and "some
+// band survives the query" are the same statement about the same list.
+function hasRunnerMatch(item, version, query) {
+  return visibleEntriesFor(item, version)
+    .some((entry) => matchesRunner(entry, query));
+}
+
 function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey, onAdd,
                    linkCtx, door = null, focusMark = null, version = "us",
                    gradingVersion = "us", onOpenRunner, focusYou = false }) {
@@ -794,6 +821,16 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
   const shownBands = query
     ? bands.filter((band) => band.entries.some((entry) => matchesRunner(entry, query)))
     : bands;
+  // 2026-08-31: round 4's rule, one level up. A section with no matching runner
+  // disappears for the query's duration; every section that HAS one is forced
+  // open, so a search lands on the answer instead of on a wall of collapsed
+  // headers (his report, 2026-08-31). The page's single-open accordion still
+  // owns `open` underneath -- `expanded` is never written here, so the manual
+  // choice is exactly where he left it the moment the box clears. The actual
+  // `return null` cannot happen until every hook below has run.
+  const searching = !!query;
+  const hidden = searching && !hasRunnerMatch(approach, version, query);
+  const effectiveOpen = searching || open;
   const marioKey = approach.ladder && approach.ladder.Mario != null
     ? approach.ladder.Mario : -1;   // presentational echo of sectionOrder's own key; -1 (not -Infinity) so it survives JSON round-trips a render probe takes
 
@@ -862,12 +899,14 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
   const leaderboard = useMemo(() => leaderboardOf(ladder, leaderboardEntries),
     [ladder, leaderboardEntries]);
 
-  return html`<div class=${`library-section ${open ? "open" : ""}`
+  if (hidden) return null;
+
+  return html`<div class=${`library-section ${effectiveOpen ? "open" : ""}`
         + (approach._piece ? " library-piece-section" : "")}
       data-mario=${marioKey} ref=${sectionRef}
       id=${sectionAnchorId(approach)}>
     <button type="button" class="library-section-head" onclick=${onOpen}
-        aria-expanded=${open}>
+        aria-expanded=${effectiveOpen}>
       <div class="library-section-text">
         <div class="library-section-identity">
           <span class="library-section-name">${approach.name}</span>
@@ -911,7 +950,7 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
          may not contain a button. Approaches pass no door (round 7: the
          whole-target control owns theirs). */""}
     ${door ? html`<div class="library-section-door">${door}</div>` : ""}
-    <${Disclose} open=${open} className="library-section-disclose">
+    <${Disclose} open=${effectiveOpen} className="library-section-disclose">
       <div class="library-section-body">
         ${/* Round 7: approaches carry NO row-level door -- the whole-target
              control beside the page's name owns linking now ("moved near
@@ -1427,8 +1466,21 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
          linked or name-matched to. An entity-less, unlinked movement passes
          null and the section says so rather than not rendering — a page that
          looks identical after a change reads as the change not working. */""}
-    <${OverallStandards} entity=${gradingEntity} label=${gradingLabel}
-        pbCs=${gradingPbCs} version=${version} />
+    ${/* 2026-08-31: this one holds no runner times at all, so under a runner
+         search it can never be a result -- it stands down for the query's
+         duration alongside every strategy section that has no match, and
+         comes straight back when the box clears. */""}
+    ${query ? "" : html`<${OverallStandards} entity=${gradingEntity} label=${gradingLabel}
+        pbCs=${gradingPbCs} version=${version} />`}
+    ${/* 2026-08-31: a query that matches nobody hides every section, and a page
+         that empties itself reads as broken rather than as an honest "no
+         results". It is said ONCE for the page rather than once per section,
+         which is what let LeaderboardList's own search-blame sentence go.
+         Uses the SAME predicate the sections hide themselves by, so the two
+         can never disagree about whether anything is on screen. */""}
+    ${query && (approaches.length > 0 || pieces.length > 0)
+      && ![...approaches, ...pieces].some((item) => hasRunnerMatch(item, version, query))
+      ? html`<p class="library-target-empty">No runner here matches "${query}".</p>` : ""}
     ${approaches.length === 0
       ? html`<p class="library-target-empty">
           ${missReason === "castle_movement" ? "Browse only — no segment adopts this movement yet."
