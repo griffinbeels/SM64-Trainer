@@ -108,6 +108,36 @@ SECRET_ROW: list[tuple[str, str]] = [
 SPECIAL_STAR_LABELS = dict(SECRET_ROW)
 
 
+# Where an entry sits in a card, whatever order the scope reached it in
+# (round 17): "the scorecard should always be ordered by star order... we
+# already have this data in our system". A course's stars run in SLOT
+# order -- the game's own star-select order, which is also his reference
+# sheet's; a Secret-card star runs in SECRET_ROW's order; a segment
+# follows the stars in the order the scope met it, since a movement has no
+# slot to sort by. Applied BEFORE the 100c merge, which keeps the
+# companion's position, so "Wiggler's Red Coins + 100c" lands on the reds
+# star's line exactly as the sheet has it.
+_SEGMENT_ORDER_BASE = 1000
+
+
+def _template_order(entries: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
+    secret_index = {key: index for index, (key, _label) in enumerate(SECRET_ROW)}
+
+    def sort_key(pair):
+        arrival, (key, _label, _clock) = pair
+        parts = key.split(":")
+        if parts[0] == "star":
+            course_id, star_id = int(parts[1]), int(parts[2])
+            if 1 <= course_id <= 15:
+                return (star_id, arrival)
+            return (secret_index.get(key, len(secret_index) + arrival), arrival)
+        return (_SEGMENT_ORDER_BASE + arrival, arrival)
+
+    return [entry for _key, entry in
+            sorted(((index, entry) for index, entry in enumerate(entries)),
+                   key=sort_key)]
+
+
 def _merge_hundred_coins(entries: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
     """Apply the cell rule to one row's (key, label, clock) entries.
 
@@ -237,12 +267,14 @@ def rows_for_route(route: dict, *, segment_labels: dict[int, str],
                 add(bucket, (key, label, "rta"))
 
     def row_of(bucket: tuple) -> dict:
+        # Route order decides which CARDS exist and in what order; the
+        # TEMPLATE decides the order of the lines inside one (round 17).
+        entries = _merge_hundred_coins(_template_order(buckets[bucket]))
         if bucket[0] == "course":
             return {"course_id": bucket[1], "label": COURSE_NAMES[bucket[1]],
-                    "entries": _merge_hundred_coins(buckets[bucket])}
+                    "entries": entries}
         label = FIGHTS_LABEL if bucket[0] == "fights" else "Secret"
-        return {"course_id": None, "label": label,
-                "entries": _merge_hundred_coins(buckets[bucket])}
+        return {"course_id": None, "label": label, "entries": entries}
 
     course_buckets = [b for b in order if b[0] == "course"]
     tail = ([("fights",)] if ("fights",) in buckets else []) \

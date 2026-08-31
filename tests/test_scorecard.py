@@ -187,6 +187,58 @@ def test_route_segments_bucket_by_kind():
         ("segment:77", "DDD Entry", "rta")]
 
 
+def test_a_route_card_runs_in_star_select_order():
+    """Round 17: "each row in each section is organized by the appearance
+    in the star select menu in game... the scorecard should always be
+    ordered by star order." A route reaches a course's stars in whatever
+    order it plays them; the CARD lists them by slot, the order the game's
+    own star select uses and his reference sheet follows. THI's real slots,
+    fed in deliberately jumbled."""
+    route = _route([
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 5}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 3}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 1}]},
+    ])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    keys = [key for key, _label, _clock in rows[0]["entries"]]
+    assert keys == ["star:13:0", "star:13:1", "star:13:3", "star:13:5"]
+
+
+def test_a_route_cards_100c_cell_keeps_its_companions_slot():
+    """Ordering runs BEFORE the 100c merge, so the combined cell lands on
+    the companion's own line -- "Wiggler's Red Coins + 100c" sits where the
+    reds star sits, exactly as the sheet has it, not at slot 6."""
+    route = _route([
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 6}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 5}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 4}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 0}]},
+    ])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    entries = rows[0]["entries"]
+    assert scorecard.hundred_coin_companion(13) == 4
+    keys = [key for key, _label, _clock in entries]
+    # the merged cell carries the 100c ENTITY at the companion's position
+    assert keys == ["star:13:0", "star:13:6", "star:13:5"]
+    assert entries[1][1].endswith("+ 100c")
+
+
+def test_a_route_secret_card_runs_in_template_order():
+    """The same rule on the Secret card: SECRET_ROW's own order, not the
+    order the route happened to reach them in."""
+    route = _route([
+        {"need": 1, "candidates": [{"type": "star", "course": 23, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 19, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 24, "star": 0}]},
+    ])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    keys = [key for key, _label, _clock in rows[0]["entries"]]
+    template = [key for key, _label in scorecard.SECRET_ROW]
+    assert keys == [key for key in template if key in set(keys)]
+    assert keys == ["star:19:0", "star:24:0", "star:23:0"]
+
+
 def test_route_revisits_merge_into_one_course_card():
     """Round 9: "BOB is all of the bobomb battlefield stars" -- a course
     visited twice is ONE card at its first-touch position, duplicate
