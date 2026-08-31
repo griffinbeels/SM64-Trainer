@@ -24,10 +24,11 @@
 // `divisionOptions()`/`fmtGapCs` stay exported import-free (no Preact) so
 // tests/test_ui_scorecard.py drives them under node; the pure logic lives
 // in ui/scorecardgoal.js (its header says why). The runner group of the
-// goal picker fetches LAZILY on first open. Both Copy buttons COPY to the
-// clipboard — the desktop WebView2 shell's download behaviour is
-// unverified, and a dead button is the shape this project treats as a bug;
-// `GET /api/scorecard/export.csv` stays reachable by URL regardless.
+// goal picker fetches LAZILY on first open. The one Copy button COPIES to
+// the clipboard rather than downloading — the desktop WebView2 shell's
+// download behaviour is unverified, and a dead button is the shape this
+// project treats as a bug. The CSV button was removed in round 19 (his
+// call); `GET /api/scorecard/export.csv` stays reachable by URL.
 import { h } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import htm from "htm";
@@ -445,34 +446,24 @@ function CopyButton({ className, label, onCopy, onError }) {
   </button>`;
 }
 
-async function fetchCsvText(scopeId) {
-  const response = await fetch(
-    `/api/scorecard/export.csv?scope=${encodeURIComponent(scopeId)}`);
-  if (response.ok) return response.text();
-  let detail = null;
-  try { detail = (await response.json()).detail; } catch { /* non-JSON body */ }
-  throw new Error(detail || `export.csv: ${response.status}`);
-}
-
 // The column door's own 503 ("could not read the sheet: …") is shown
 // INLINE beside the buttons, never a toast -- the same "put the reason
 // where the click lands" rule `.claude/rules/acceptance.md` states for a
 // disabled control applies to a button whose action just failed. The CSV
-// door reads the cached snapshot rather than fetching live, so it is far
-// less likely to fail, but a network hiccup on the fetch itself still
-// lands in the same slot rather than going nowhere.
-function ScorecardExports({ scopeId }) {
+// column is the one door here now, and a live sheet fetch is exactly the
+// kind of thing that fails, so its message has a home.
+function ScorecardExports() {
   const [error, setError] = useState(null);
 
   // The sheet column deliberately takes NO scope: its whole contract is one
   // line per live worksheet row of the community sheet, whatever the card
-  // above it is scoped to. The CSV is the CARD, so it follows the scope.
+  // above it is scoped to. The CSV button was removed in round 19 (his
+  // call); `GET /api/scorecard/export.csv` stays reachable by URL for
+  // anyone who wants the card as a file, it simply has no button now.
   return html`<div class="scorecard-exports">
     <${CopyButton} className="scorecard-copy-column" label="Copy sheet column"
         onCopy=${async () => (await getJSON("/api/scorecard/column")).lines.join("\n")}
         onError=${setError} />
-    <${CopyButton} className="scorecard-copy-csv" label="Copy scorecard CSV"
-        onCopy=${() => fetchCsvText(scopeId)} onError=${setError} />
     ${error ? html`<${InlineState} kind="error">${error}<//>` : ""}
   </div>`;
 }
@@ -513,7 +504,7 @@ function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange, scopeId }
     ${goal && coverage.covered < coverage.tiles
       ? html`<p class="meta scorecard-note">goal covers ${coverage.covered}/${coverage.tiles}</p>`
       : ""}
-    <${ScorecardExports} scopeId=${scopeId} />
+    <${ScorecardExports} />
   </div>`;
 }
 

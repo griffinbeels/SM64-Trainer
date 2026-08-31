@@ -749,24 +749,22 @@ def test_copy_sheet_column_shows_the_doors_own_sentence_inline_on_a_503(monkeypa
     assert "could not read the sheet" in message
 
 
-def test_copy_scorecard_csv_writes_the_real_csv_text_to_the_clipboard():
+def test_the_card_offers_only_the_sheet_column_button():
+    """Round 19 (his call): the CSV button is gone. The export endpoint
+    stays reachable by URL -- what left is the control, so the card has
+    exactly one export door and it is the sheet column."""
     with serve_ui() as base:
-        expected = urllib.request.urlopen(
-            f"{base}/api/scorecard/export.csv", timeout=10).read().decode("utf-8")
-
         with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-copy-csv")
-
-            assert page.evaluate(_INSTALL_CLIPBOARD_SHIM) is True
-            page.evaluate(
-                "document.querySelector('.scorecard-copy-csv').click()")
-            page.wait_ms(400)
-            copied = page.evaluate("window.__scorecardCopied")
-
-        assert copied == [expected]
+            page.wait_for(".rank-page .scorecard-copy-column")
+            page.wait_ms(200)
+            buttons = page.evaluate(
+                "Array.from(document.querySelectorAll('.rank-page "
+                ".scorecard-exports .scorecard-copy-btn'))"
+                ".map((el) => el.textContent.trim())")
+        assert buttons == ["Copy sheet column"], buttons
 
 
 def _fmt_seconds_like_js(seconds: float) -> str:
