@@ -881,6 +881,18 @@ def probe_width(ffmpeg: str, clip: Path) -> int:
 # expresses a dropped frame as a step of two without needing to detect one.
 MAX_PICTURE_STEP = 6          # a stall's catch-up; beyond this the band ends
 FIT_BAND = 24                 # frames either side of the prior map's answer
+# What an extra frame of step COSTS, in multiples of the clip's own ink
+# noise. Without it the path is free wherever the picture cannot answer --
+# a white fade-in, a dark room -- and it takes maximum steps for a
+# rounding's worth of fit: his BBH clip jumped six frames per press through
+# exactly such a stretch (2026-08-31), skipping the R and C-down he had
+# just pressed. Most pictures really do advance by one, so a skip has to
+# earn itself against the pixels.
+STEP_PENALTY = 4.0
+# The refit is only accepted when it explains the digits BETTER than the
+# map it replaces, by this much of the noise floor per picture. A fit that
+# cannot beat the prior has no business moving anything.
+MIN_FIT_GAIN = 0.02
 
 
 def _predicted_ink(rows_by_frame, weights):
@@ -895,8 +907,17 @@ def fit_pictures_to_frames(ink, runs, prior_map, rows_by_frame,
     `ink` is per video slot, `runs` the encoded pictures, `prior_map` the
     map to band the search around, `rows_by_frame` the glyph composition
     the track says each game frame drew, and `weights` the per-glyph ink
-    already fitted. Returns a new per-slot map, or None when the pictures
-    or the track cannot carry the question.
+    already fitted.
+
+    TWO guards, both paid for by his BBH clip on 2026-08-31, where the
+    first version of this stepped six frames per press through a washed-out
+    fade-in and skipped inputs he had just made. A step of more than one
+    frame COSTS (`STEP_PENALTY` noise floors per extra frame), because most
+    pictures really do advance by one and a skip has to earn itself; and
+    the result is only returned when it explains the digits better than the
+    map it replaces (`MIN_FIT_GAIN`), so a refit can never be worse than
+    doing nothing. Returns None when the pictures or the track cannot carry
+    the question, or when the fit has not earned its change.
     """
     if not runs or not rows_by_frame:
         return None
@@ -929,30 +950,45 @@ def fit_pictures_to_frames(ink, runs, prior_map, rows_by_frame,
         low = max(0, centre - band)
         high = min(len(frames), centre + band + 1)
         candidates.append(range(low, high))
-    # Shortest path: cost of a picture taking a frame is the squared error
-    # of its ink, and a move must advance by 1..MAX_PICTURE_STEP frames.
-    best = {at: (measured[0] - predicted[frames[at]]) ** 2
-            for at in candidates[0]}
+    def error(order, at):
+        return (measured[order] - predicted[frames[at]]) ** 2
+
+    # The clip's own noise floor: the typical error the PRIOR map already
+    # carries. Every penalty below is a multiple of it, so nothing here is
+    # tuned to one clip's brightness or one encoder's contrast.
+    prior_errors = []
+    for order, anchor in enumerate(anchors):
+        at = index_of.get(anchor)
+        if at is not None:
+            prior_errors.append(error(order, at))
+    if not prior_errors:
+        return None
+    floor = sorted(prior_errors)[len(prior_errors) // 2] or 1.0
+
+    # Shortest path: a picture's cost is its ink error, and a move must
+    # advance by 1..MAX_PICTURE_STEP frames -- paying for every frame past
+    # the first, so a skip is a claim the pixels have to support.
+    best = {at: error(0, at) for at in candidates[0]}
     back = []
     for order in range(1, len(measured)):
         step_back = {}
         reached = {}
-        window = sorted(best)
         for at in candidates[order]:
             source, source_cost = None, None
             for step in range(1, MAX_PICTURE_STEP + 1):
                 prior_at = at - step
-                if prior_at in best and (source_cost is None
-                                         or best[prior_at] < source_cost):
-                    source, source_cost = prior_at, best[prior_at]
+                if prior_at not in best:
+                    continue
+                moved = best[prior_at] + STEP_PENALTY * floor * (step - 1)
+                if source_cost is None or moved < source_cost:
+                    source, source_cost = prior_at, moved
             if source is None:
                 continue
-            reached[at] = source_cost + (measured[order]
-                                         - predicted[frames[at]]) ** 2
+            reached[at] = source_cost + error(order, at)
             step_back[at] = source
         if not reached:
             return None
-        best, _ = reached, window
+        best = reached
         back.append(step_back)
     at = min(best, key=best.get)
     path = [at]
@@ -960,6 +996,14 @@ def fit_pictures_to_frames(ink, runs, prior_map, rows_by_frame,
         at = step_back[at]
         path.append(at)
     path.reverse()
+
+    # EARNED, or nothing moves: the refit must explain the digits better
+    # than the map it replaces, per picture.
+    fitted_error = sum(error(order, at) for order, at in enumerate(path))
+    prior_error = sum(prior_errors) * len(path) / len(prior_errors)
+    if fitted_error > prior_error - MIN_FIT_GAIN * floor * len(path):
+        return None
+
     out = [None] * len(prior_map)
     for (start, length), at in zip(runs, path):
         for slot in range(start, min(start + length, len(out))):
@@ -970,6 +1014,17 @@ def fit_pictures_to_frames(ink, runs, prior_map, rows_by_frame,
 def digit_fitted(clip: Path, frame_map, stick_of, ffmpeg: str,
                  width: int | None = None) -> list | None:
     """The clip's map, refitted picture by picture against its own digits.
+
+    BUILT AND NOT WIRED (round 32 item 57, 2026-08-31). It fixed one of his
+    clips and broke another: where a picture is washed out -- a bright
+    fade-in, a dark room -- the ink says nothing, so the path buys a
+    marginal fit with six-frame skips and drops inputs he had just
+    pressed. A step penalty and a gate requiring it to explain the digits
+    BETTER than the map it replaces were both added, and the wrong path
+    still won. That is the finding, and it is about the SIGNAL: total ink
+    is one number per slot, too weak to overrule the ledger's own answer.
+    Wire it when the digits are READ rather than summed
+    (`replay/pixelmap.py`) and gate it on the same 99% that reader owes.
 
     The offset instruments (global, then per stretch) assume the error is
     piecewise constant. His BBH clip is not: the map was EXACT at frames

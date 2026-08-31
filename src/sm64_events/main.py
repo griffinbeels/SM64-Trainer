@@ -451,24 +451,17 @@ def build():
 
         replay.map_aligner = _align_map_to_footage
 
-        def _refit_map_to_digits(clip, frame_map, attempt):
-            from sm64_events.replay.mapalign import digit_fitted
-            seen = [value for value in frame_map if value is not None]
-            if not seen:
-                return None
-            # The CLIP's own range, so the pads either side of the attempt
-            # are available too -- the fit needs a glyph row for every
-            # frame the footage could be showing.
-            track = track_for_attempt(db.inputs, attempt,
-                                      span=(min(seen), max(seen)))
-            if not track:
-                return None
-            pads = {number: (frame.stick_x, frame.stick_y)
-                    for number, frame in track}
-            return digit_fitted(clip, frame_map, pads.get,
-                                str(bundled_ffmpeg() or "ffmpeg"))
-
-        replay.map_digit_fit = _refit_map_to_digits
+        # THE DIGIT REFIT IS BUILT AND NOT WIRED (round 32 item 57).
+        # `mapalign.digit_fitted` assigns every picture its own frame by
+        # ink, which fixed one of his clips (5146) and BROKE another
+        # (5165): where the picture is washed out the ink says nothing, so
+        # the path buys a marginal fit with six-frame skips and drops
+        # inputs he had just pressed. A step penalty and an "explain the
+        # digits better than the prior" gate were both added and the wrong
+        # path STILL won, which is the finding: total ink is too weak a
+        # signal to overrule the ledger. Wire it only when the digits are
+        # READ rather than summed (`replay/pixelmap.py`), and gate it on
+        # the same 99% the pixel reader owes.
 
         def _hold_one_answer_per_picture(clip, frame_map):
             from sm64_events.replay.mapalign import decode_grey, picture_runs, quantised
