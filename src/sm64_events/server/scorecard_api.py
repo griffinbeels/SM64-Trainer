@@ -413,13 +413,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
         if kind == "custom":
             return custom_goal_map(keys, goal_value["name"])
         if kind == "multi":
-            merged: dict[str, int] = {}
-            for source in goal_value.get("sources") or []:
-                if not isinstance(source, dict) or source.get("kind") == "multi":
-                    continue                 # never nest; a corrupt KV is empty
-                for key, cs in resolve_goal(source, keys, ranks).items():
-                    if key not in merged or cs > merged[key]:
-                        merged[key] = cs
+            merged, _ = resolve_multi(goal_value, keys, ranks)
             return merged
         if ranks is None:
             return {}
@@ -429,6 +423,29 @@ def create_scorecard_router(service, library=None, adoptions=None,
         if kind == "runner":
             return runner_goal_map(goal_value["runner"], ranks.grading_version)
         return {}
+
+    def resolve_multi(goal_value, keys: list[str], ranks):
+        """A multi goal -> `({key: cs}, {key: source index})`.
+
+        WHICH source won is recorded where the comparison happens, not
+        re-derived later: the card's attribution -- his round-15 ask, a
+        coloured dot after each star naming the pick that set it ("that
+        clearly tells us that player two is the reason that the goal is
+        that time") -- has to agree with the number beside it, and the only
+        way two surfaces cannot disagree is for one of them to never
+        compute it. Ties keep the EARLIER source, so the legend order is
+        also the tie-break and the attribution never depends on dict
+        iteration order."""
+        merged: dict[str, int] = {}
+        owner: dict[str, int] = {}
+        for index, source in enumerate(goal_value.get("sources") or []):
+            if not isinstance(source, dict) or source.get("kind") == "multi":
+                continue                     # never nest; a corrupt KV is empty
+            for key, cs in resolve_goal(source, keys, ranks).items():
+                if key not in merged or cs > merged[key]:
+                    merged[key] = cs
+                    owner[key] = index
+        return merged, owner
 
     def current_card(scope_id: str = "overall"):
         """`(card, goal_value)` -- the one door both `GET /api/scorecard`
@@ -451,11 +468,20 @@ def create_scorecard_router(service, library=None, adoptions=None,
             goal_value = None                # a corrupt KV reads as no goal
         ranks = service.ranks
 
-        goal_map = resolve_goal(goal_value, keys, ranks)
+        # A MULTI goal also answers WHO: the source index that set each
+        # tile, so the card can attribute every number to the pick behind
+        # it (round 15). Any other kind has one source and needs no legend.
+        if goal_value and goal_value.get("kind") == "multi":
+            goal_map, goal_owner = resolve_multi(goal_value, keys, ranks)
+        else:
+            goal_map, goal_owner = resolve_goal(goal_value, keys, ranks), {}
 
         card = build_card(rows_spec, you=you, goal=goal_map)
         _grade_tiles(card)
         _stamp_strats(card)
+        for row in card["rows"]:
+            for tile in row["tiles"]:
+                tile["goal_source"] = goal_owner.get(tile["key"])
         return card, goal_value
 
     @router.get("")

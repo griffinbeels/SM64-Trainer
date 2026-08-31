@@ -744,6 +744,47 @@ def test_a_multi_goal_takes_the_slowest_offer_and_unions_coverage(tmp_path):
         assert tiles["star:1:1"]["goal_cs"] == 6000
 
 
+def test_a_multi_goal_attributes_every_tile_to_the_source_that_set_it(tmp_path):
+    """Round 15: "that clearly tells us that player two is the reason that
+    the goal is that time." The winner is recorded where the comparison
+    happens, so the card's coloured dot and the number beside it cannot
+    disagree. Ties keep the EARLIER source, so attribution never depends on
+    iteration order."""
+    with make_client(tmp_path) as (client, _db, _svc):
+        client.put("/api/scorecard/goal", json={
+            "kind": "custom", "name": "one",
+            "times": {"star:1:0": 4000, "star:1:1": 7000, "star:1:2": 5000}})
+        client.put("/api/scorecard/goal", json={
+            "kind": "custom", "name": "two",
+            "times": {"star:1:0": 4500, "star:1:2": 5000}})
+        client.put("/api/scorecard/goal", json={
+            "kind": "multi",
+            "sources": [{"kind": "custom", "name": "one"},
+                        {"kind": "custom", "name": "two"}]})
+
+        tiles = {tile["key"]: tile
+                 for row in client.get("/api/scorecard").json()["rows"]
+                 for tile in row["tiles"]}
+        assert tiles["star:1:0"]["goal_source"] == 1     # "two" is slower here
+        assert tiles["star:1:1"]["goal_source"] == 0     # only "one" covers it
+        assert tiles["star:1:2"]["goal_source"] == 0     # tie -> the earlier pick
+        # a tile no source covers is attributed to nobody
+        assert tiles["star:1:4"]["goal_cs"] is None
+        assert tiles["star:1:4"]["goal_source"] is None
+
+
+def test_a_single_goal_attributes_nothing(tmp_path):
+    """One source needs no legend, so every tile's attribution is null --
+    the card draws dots only when there is something to tell apart."""
+    with make_client(tmp_path) as (client, _db, _svc):
+        client.put("/api/scorecard/goal", json={
+            "kind": "division", "tier": "Bronze", "division": "I"})
+        tiles = [tile for row in client.get("/api/scorecard").json()["rows"]
+                 for tile in row["tiles"]]
+        assert any(tile["goal_cs"] is not None for tile in tiles)
+        assert all(tile["goal_source"] is None for tile in tiles)
+
+
 def test_a_multi_goal_validates_every_source_like_a_single_one(tmp_path):
     with make_client(tmp_path) as (client, _db, _svc):
         assert client.put("/api/scorecard/goal", json={

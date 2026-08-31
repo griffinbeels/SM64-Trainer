@@ -117,6 +117,42 @@ function valueToGoal(value) {
 // scorecardgoal.js so it stays node-testable the same way divisionOptions()
 // already is; this file just calls it with whatever runners it has.
 
+// One colour per PICK of a multi goal (round 15). The server says which
+// source set each tile (`tile.goal_source`, an index into `goal.sources`),
+// and both surfaces that show attribution -- the legend pills under the
+// picker and the dot after a star's name -- read this same table by that
+// index, so the dot beside a time and the pill it points at cannot
+// disagree. Ten hues, walked in order: distinct at a glance beside each
+// other and against the card tints, and a pick past the tenth simply
+// re-uses one (the pill's own name is still there to read).
+const SOURCE_COLOURS = [
+  "#5bb8ff", "#ffb347", "#7ee081", "#ff6f97", "#c191ff",
+  "#ffd95b", "#4fd6c4", "#ff8f5b", "#9fb3ff", "#e08fd0",
+];
+
+export function sourceColour(index) {
+  if (index == null || index < 0) return null;
+  return SOURCE_COLOURS[index % SOURCE_COLOURS.length];
+}
+
+// The legend: every pick, in the order they were picked, each wearing the
+// colour its dots use. His ask -- "it should show pills underneath the '4
+// picked'... otherwise, it's very hard to understand which of the options
+// you've selected."
+function GoalLegend({ goal }) {
+  if (!goal || goal.kind !== "multi") return "";
+  const sources = goal.sources || [];
+  if (!sources.length) return "";
+  return html`<div class="goal-legend">
+    ${sources.map((source, index) => html`<span class="goal-pill"
+        key=${`${index}:${goalToValue(source)}`}
+        style=${`--pill-colour:${sourceColour(index)}`}>
+      <span class="goal-pill-dot" aria-hidden="true"></span>
+      ${goalToLabel(source)}
+    </span>`)}
+  </div>`;
+}
+
 // One cap, drawn only when the server graded that side and the toggle is
 // on. 14px — big enough that the tier colour and division numeral read,
 // small enough that 120 lines of them stay a texture rather than a wall.
@@ -194,7 +230,8 @@ function GoalCell({ tile, onGoalOverride }) {
 // library glyph appears appended to it; the glyph reserves its space
 // always (visibility, not display) so hovering never reflows a wrapped
 // name.
-function ScoreLine({ t, tile, showCaps, onGoalOverride, onOpenLibrary }) {
+function ScoreLine({ t, tile, showCaps, onGoalOverride, onOpenLibrary,
+                     sourceTitle = null }) {
   const gapCls = tile.delta_cs != null
     ? (tile.delta_cs <= 0 ? "good" : "bad") : "";
   const iconSrc = entityIconSrc(t, tile.key);
@@ -216,6 +253,16 @@ function ScoreLine({ t, tile, showCaps, onGoalOverride, onOpenLibrary }) {
   const lastSpace = tile.label.lastIndexOf(" ");
   const nameHead = lastSpace > 0 ? tile.label.slice(0, lastSpace + 1) : "";
   const nameTail = lastSpace > 0 ? tile.label.slice(lastSpace + 1) : tile.label;
+  // The attribution dot (round 15) rides in the SAME nowrap tail as the
+  // library glyph, for the same reason round 13 put the glyph there: a
+  // mark that can wrap onto a line of its own leaves a blank line under
+  // the text and drops the icon below it. Titled, so the colour is never
+  // the only way to read it.
+  const sourceColor = sourceColour(tile.goal_source);
+  const dot = sourceColor
+    ? html`<span class="score-line-source" title=${sourceTitle || ""}
+        style=${`--source-colour:${sourceColor}`} aria-hidden="true"></span>`
+    : "";
   const glyph = html`<span class="score-line-lib" aria-hidden="true">
     <${Icon} name="library" size=${11} /></span>`;
   return html`<div class="score-line">
@@ -223,9 +270,9 @@ function ScoreLine({ t, tile, showCaps, onGoalOverride, onOpenLibrary }) {
         title=${`Open ${tile.label} in the Library`} onclick=${openLine}>
       <img class="score-line-icon" alt="" src=${iconSrc} />
       <span class="score-line-name">${nameHead}<span
-          class=${nameHead ? "score-line-tail" : ""}>${nameTail}${glyph}</span></span>
+          class=${nameHead ? "score-line-tail" : ""}>${nameTail}${dot}${glyph}</span></span>
     </button>` : html`<img class="score-line-icon" alt="" src=${iconSrc} />
-    <span class="score-line-name">${tile.label}</span>`}
+    <span class="score-line-name">${tile.label}${dot}</span>`}
     <span class="score-line-you">
       <${LineCap} rank=${tile.you_rank} show=${showCaps} />
       <span class="score-line-time">${tile.you_cs != null
@@ -326,7 +373,8 @@ function cardColumns(rows, courseColumns = 3) {
 const WIDE_CARDS_MIN_PX = 1900;
 
 function ScoreCard({ t, row, showCaps, removing,
-                     onRemove, onGoalOverride, onOpenLibrary }) {
+                     onRemove, onGoalOverride, onOpenLibrary,
+                     sourceNames = [] }) {
   // The remove control writes the SAME exclusion the Rank tab's own
   // breakdown writes (`POST /api/marelo/exclude`), never a second
   // scorecard-only ignore list -- round 7 settled that this card and the
@@ -358,6 +406,7 @@ function ScoreCard({ t, row, showCaps, removing,
     <div class="score-lines">
       ${row.tiles.map((tile) => html`<${ScoreLine} key=${tile.key} t=${t}
           tile=${tile} showCaps=${showCaps}
+          sourceTitle=${sourceNames[tile.goal_source] || null}
           onGoalOverride=${onGoalOverride} onOpenLibrary=${onOpenLibrary} />`)}
     </div>
     <${CardFoot} row=${row} />
@@ -495,6 +544,11 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
   const [runners, setRunners] = useState(null);
   const [showCaps, setShowCaps] = useState(readCapsPreference);
   const [setCardsElement, cardsWidth] = useMeasuredWidth(0);
+  // The picks' own names, by the index the server attributes tiles with --
+  // so a dot's tooltip says WHICH pick set that star without any surface
+  // re-deriving the winner.
+  const sourceNames = (data && data.goal && data.goal.kind === "multi"
+    ? (data.goal.sources || []).map(goalToLabel) : []);
   // entity_key -> goal_cs, UNSAVED. Lives here (not per-row) because a save
   // can gather edits made across several rows before he ever presses Save.
   const [pendingOverrides, setPendingOverrides] = useState({});
@@ -624,6 +678,7 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
                     busy=${saveBusy} error=${saveError}
                     onSave=${saveCustomGoal} onDiscard=${discardOverrides} />`
               : ""}
+            <${GoalLegend} goal=${data.goal} />
             <div class="score-cards" ref=${setCardsElement}
                 data-cols=${cardsWidth >= WIDE_CARDS_MIN_PX ? "6" : "4"}>
               ${cardColumns(displayData.rows,
@@ -635,7 +690,7 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
                 ${column.rows.map((row) => html`<${ScoreCard} key=${row.label}
                     t=${t} row=${row} showCaps=${showCaps} removing=${removing}
                     onRemove=${removeRow} onGoalOverride=${handleGoalOverride}
-                    onOpenLibrary=${openLibrary} />`)}
+                    onOpenLibrary=${openLibrary} sourceNames=${sourceNames} />`)}
               </div>`)}
             </div>
             <label class="scorecard-caps-toggle">

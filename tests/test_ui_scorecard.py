@@ -194,6 +194,14 @@ def _put_division_goal(base: str, tier: str, division: str) -> None:
     urllib.request.urlopen(request, timeout=10).read()
 
 
+def _put_custom_goal(base: str, name: str, times: dict) -> None:
+    body = json.dumps({"kind": "custom", "name": name, "times": times}).encode()
+    request = urllib.request.Request(
+        f"{base}/api/scorecard/goal", data=body, method="PUT",
+        headers={"Content-Type": "application/json"})
+    urllib.request.urlopen(request, timeout=10).read()
+
+
 def _get_scorecard(base: str) -> dict:
     with urllib.request.urlopen(f"{base}/api/scorecard", timeout=10) as response:
         return json.loads(response.read())
@@ -1142,6 +1150,93 @@ def test_the_picker_takes_several_goals_and_keeps_the_panel_open():
         assert card["goal"] == {"kind": "multi", "sources": [
             {"kind": "division", "tier": "Bronze", "division": "V"},
             {"kind": "division", "tier": "Silver", "division": "III"}]}
+
+
+def test_the_legend_names_every_pick_and_each_dot_wears_its_pick_colour():
+    """Round 15: "it should show pills underneath the '4 picked'... each of
+    the pills should get a designated color... then we should append a
+    small dot using that color to the end of the star name... that clearly
+    tells us that player two is the reason that the goal is that time."
+
+    The two surfaces must agree by construction, so the test compares
+    PAINTED colours: every dot's colour has to be one of the legend's, and
+    a dot's own tooltip has to name the pill of that colour."""
+    with serve_ui() as base:
+        # Two picks whose times CROSS, so each really owns some stars. Two
+        # divisions of one ladder never cross — the easier tier is
+        # uniformly slower and would own everything, leaving the
+        # attribution untested.
+        _put_custom_goal(base, "alpha", {"star:1:0": 9000, "star:1:1": 1000})
+        _put_custom_goal(base, "beta", {"star:1:0": 1000, "star:1:1": 9000})
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .search-select-trigger")
+            page.evaluate(
+                "document.querySelector('.rank-page .scorecard-card "
+                ".search-select-trigger').click()")
+            page.wait_for(".rank-page .scorecard-card "
+                          '.search-menu-option[data-value="custom:alpha"]')
+            page.evaluate(_option_click("custom:alpha"))   # beta is already on
+            page.wait_ms(400)
+
+            state = page.evaluate(
+                "(() => {"
+                "  const pills = Array.from(document.querySelectorAll("
+                "    '.rank-page .scorecard-card .goal-pill'));"
+                "  const legend = pills.map((pill) => ({"
+                "    label: pill.textContent.trim(),"
+                "    colour: getComputedStyle("
+                "      pill.querySelector('.goal-pill-dot')).backgroundColor,"
+                "  }));"
+                "  const dots = Array.from(document.querySelectorAll("
+                "    '.rank-page .scorecard-card .score-line-source')).map((dot) => ({"
+                "    colour: getComputedStyle(dot).backgroundColor,"
+                "    title: dot.getAttribute('title') || '',"
+                "  }));"
+                "  return { legend, dots };"
+                "})()")
+
+        legend = state["legend"]
+        dots = state["dots"]
+        assert len(legend) == 2, f"the legend must name every pick: {legend}"
+        assert legend[0]["label"] != legend[1]["label"], legend
+        assert legend[0]["colour"] != legend[1]["colour"], (
+            f"each pill needs its own colour: {legend}")
+        assert all(pill["colour"] not in ("rgba(0, 0, 0, 0)", "transparent")
+                   for pill in legend), legend
+
+        assert dots, "no attribution dots drawn for a multi goal"
+        by_colour = {pill["colour"]: pill["label"] for pill in legend}
+        for dot in dots:
+            assert dot["colour"] in by_colour, (
+                f"a dot wears a colour no pill has: {dot} vs {legend}")
+            assert dot["title"] == by_colour[dot["colour"]], (
+                "a dot's colour and its named source disagree: "
+                f"{dot} vs {by_colour}")
+        # both picks really do own tiles, or the attribution is untested
+        assert len({dot["colour"] for dot in dots}) == 2, (
+            f"only one source owns anything: {set(d['colour'] for d in dots)}")
+
+
+def test_a_single_goal_draws_no_legend_and_no_dots():
+    """One pick has nothing to tell apart, so the card stays clean."""
+    with serve_ui() as base:
+        _put_division_goal(base, "Bronze", "V")
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_ms(300)
+            counts = page.evaluate(
+                "({ pills: document.querySelectorAll('.rank-page "
+                ".scorecard-card .goal-pill').length,"
+                "   dots: document.querySelectorAll('.rank-page "
+                ".scorecard-card .score-line-source').length })")
+        assert counts == {"pills": 0, "dots": 0}, counts
 
 
 def test_unpicking_the_last_goal_clears_it_and_one_pick_stays_single():
