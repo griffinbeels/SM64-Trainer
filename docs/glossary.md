@@ -840,6 +840,10 @@ its lines into one Stage RTA gap, counting only lines both sides have a
 time for, and a toggle under the grid adds each line's [[rank]] caps —
 off by default, remembered once you turn it on.
 
+The [[Ultimate Sheet]] and the community's [[Standard]]s both file the
+Under-21 slide [[star]] under the box [[star]]'s heading; the trainer splits
+both sources so that [[star]] carries its own times and its own [[Ladder]].
+
 - **Lives** — the card builder (`src/sm64_events/ranks/scorecard.py`)
   → the card (`src/sm64_events/ui/components/scorecard.js`)
 

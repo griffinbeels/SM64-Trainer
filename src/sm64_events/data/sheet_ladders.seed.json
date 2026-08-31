@@ -4,14 +4,14 @@
    "jp_strategies": {},
    "strategies": {
     "Ultimate FS w/o speed slidekick": {
-     "Bronze": 34.96,
-     "Diamond": 33.7,
+     "Bronze": 34.93,
+     "Diamond": 33.9,
      "Gold": 34.36,
      "Grandmaster": 33.33,
-     "Mario": 33.1,
+     "Mario": 33.13,
      "Master": 33.5,
      "Platinum": 34.23,
-     "Silver": 34.43
+     "Silver": 34.4
     }
    }
   },
@@ -53,12 +53,12 @@
   "segment:8": {
    "jp_strategies": {
     "Bowser dance": {
-     "Bronze": 27.7,
+     "Bronze": 27.66,
      "Diamond": 26.8,
      "Gold": 27.3,
      "Grandmaster": 26.1,
-     "Mario": 25.8,
-     "Master": 26.36,
+     "Mario": 25.76,
+     "Master": 26.33,
      "Platinum": 27.0,
      "Silver": 27.36
     },
@@ -86,7 +86,7 @@
    "strategies": {
     "Bowser dance": {
      "Bronze": 27.1,
-     "Diamond": 26.0,
+     "Diamond": 25.96,
      "Gold": 26.46,
      "Grandmaster": 25.2,
      "Mario": 24.86,
@@ -212,13 +212,13 @@
    "strategies": {
     "Clockwise strat": {
      "Bronze": 49.0,
-     "Diamond": 41.63,
-     "Gold": 43.66,
+     "Diamond": 41.66,
+     "Gold": 43.63,
      "Grandmaster": 40.53,
      "Mario": 39.96,
-     "Master": 41.16,
+     "Master": 41.2,
      "Platinum": 42.2,
-     "Silver": 45.66
+     "Silver": 45.6
     }
    }
   },
@@ -227,47 +227,46 @@
    "strategies": {
     "Log firsty, no edge water jump": {
      "Bronze": 20.16,
-     "Diamond": 17.0,
+     "Diamond": 17.06,
      "Gold": 18.3,
-     "Grandmaster": 16.33,
+     "Grandmaster": 16.36,
      "Mario": 16.0,
-     "Master": 16.73,
-     "Platinum": 18.16,
-     "Silver": 18.73
+     "Master": 16.76,
+     "Platinum": 17.83,
+     "Silver": 18.7
     },
     "No edge water jump": {
      "Bronze": 22.86,
      "Diamond": 17.43,
      "Gold": 19.46,
-     "Grandmaster": 16.76,
+     "Grandmaster": 16.7,
      "Mario": 16.4,
-     "Master": 17.13,
-     "Platinum": 18.36,
-     "Silver": 19.8
+     "Master": 17.1,
+     "Platinum": 18.3,
+     "Silver": 19.73
     }
    }
   },
   "star:12:1": {
-   "jp_strategies": {
-    "Log firsty": {
-     "Bronze": 43.53,
-     "Diamond": 36.0,
-     "Gold": 38.4,
+   "jp_strategies": {},
+   "strategies": {
+    "Log firsty, no edge water jump": {
+     "Diamond": 35.76,
+     "Gold": 43.53,
      "Grandmaster": 34.36,
      "Mario": 34.3,
-     "Master": 35.0,
-     "Platinum": 37.26,
-     "Silver": 40.9
-    }
-   },
-   "strategies": {
-    "Log firsty": {
-     "Diamond": 35.66,
-     "Grandmaster": 34.33,
-     "Mario": 34.1,
-     "Master": 35.2,
-     "Platinum": 43.66,
-     "Silver": 46.66
+     "Master": 34.8,
+     "Platinum": 36.7
+    },
+    "No edge water jump": {
+     "Bronze": 44.83,
+     "Diamond": 35.43,
+     "Gold": 37.9,
+     "Grandmaster": 34.7,
+     "Mario": 34.3,
+     "Master": 34.96,
+     "Platinum": 36.86,
+     "Silver": 41.7
     }
    }
   },
@@ -276,12 +275,12 @@
    "strategies": {
     "SJ onto first mushroom, go right after #4": {
      "Bronze": 30.5,
-     "Diamond": 25.63,
-     "Gold": 27.4,
+     "Diamond": 25.6,
+     "Gold": 27.43,
      "Grandmaster": 24.3,
      "Mario": 24.0,
-     "Master": 24.93,
-     "Platinum": 26.36,
+     "Master": 24.9,
+     "Platinum": 26.4,
      "Silver": 28.13
     }
    }
@@ -420,8 +419,8 @@
     },
     "Full WK -> Full SJ": {
      "Bronze": 23.66,
-     "Diamond": 20.56,
-     "Gold": 21.53,
+     "Diamond": 20.36,
+     "Gold": 21.46,
      "Grandmaster": 19.56,
      "Mario": 19.13,
      "Master": 19.83,
@@ -479,13 +478,13 @@
     },
     "Assless w/ full DJ + SF dive into cannon": {
      "Bronze": 34.5,
-     "Diamond": 30.9,
-     "Gold": 31.73,
-     "Grandmaster": 29.53,
+     "Diamond": 30.23,
+     "Gold": 31.43,
+     "Grandmaster": 29.43,
      "Mario": 29.1,
-     "Master": 29.96,
-     "Platinum": 31.4,
-     "Silver": 32.43
+     "Master": 29.86,
+     "Platinum": 31.3,
+     "Silver": 31.56
     },
     "Full WK -> Full SJ + DJ dive into cannon": {
      "Bronze": 36.5,
@@ -558,7 +557,7 @@
      "Gold": 33.5,
      "Grandmaster": 31.03,
      "Mario": 30.76,
-     "Master": 31.66,
+     "Master": 31.63,
      "Platinum": 32.76,
      "Silver": 34.16
     },
@@ -621,13 +620,13 @@
    "jp_strategies": {},
    "strategies": {
     "No slope clip (Half cycle)": {
-     "Bronze": 32.23,
+     "Bronze": 32.63,
      "Diamond": 30.83,
-     "Gold": 31.73,
-     "Grandmaster": 30.06,
+     "Gold": 31.76,
+     "Grandmaster": 30.1,
      "Mario": 29.73,
-     "Master": 30.5,
-     "Platinum": 31.53,
+     "Master": 30.53,
+     "Platinum": 31.56,
      "Silver": 31.96
     }
    }
@@ -650,14 +649,14 @@
   "star:2:2": {
    "jp_strategies": {},
    "strategies": {
-    "Single jump ending, no speedkick": {
-     "Bronze": 10.26,
+    "Single jump ending": {
+     "Bronze": 10.3,
      "Diamond": 9.76,
-     "Gold": 9.96,
-     "Grandmaster": 9.53,
-     "Mario": 9.43,
+     "Gold": 9.9,
+     "Grandmaster": 9.56,
+     "Mario": 9.36,
      "Master": 9.66,
-     "Platinum": 9.83,
+     "Platinum": 9.86,
      "Silver": 10.0
     }
    }
@@ -754,7 +753,7 @@
      "Diamond": 13.4,
      "Gold": 14.43,
      "Grandmaster": 12.93,
-     "Mario": 12.9,
+     "Mario": 12.83,
      "Master": 13.16,
      "Platinum": 14.33,
      "Silver": 14.5
@@ -808,11 +807,11 @@
      "Bronze": 19.1,
      "Diamond": 14.9,
      "Gold": 15.13,
-     "Grandmaster": 14.7,
+     "Grandmaster": 14.66,
      "Mario": 14.5,
      "Master": 14.83,
-     "Platinum": 15.03,
-     "Silver": 15.36
+     "Platinum": 14.96,
+     "Silver": 15.33
     }
    }
   },
@@ -841,11 +840,11 @@
     },
     "Pole skip ending, no speed preservation": {
      "Bronze": 18.2,
-     "Diamond": 17.73,
+     "Diamond": 17.7,
      "Gold": 18.03,
      "Grandmaster": 17.5,
      "Mario": 17.26,
-     "Master": 17.6,
+     "Master": 17.56,
      "Platinum": 17.86,
      "Silver": 18.06
     }
@@ -882,12 +881,12 @@
     "Free Flying for 8 Red Coins": {
      "Bronze": 89.2,
      "Diamond": 54.5,
-     "Gold": 65.43,
+     "Gold": 64.6,
      "Grandmaster": 49.93,
      "Mario": 48.56,
-     "Master": 53.03,
-     "Platinum": 58.5,
-     "Silver": 68.66
+     "Master": 52.96,
+     "Platinum": 57.66,
+     "Silver": 68.46
     },
     "Z slide after the pond red": {
      "Bronze": 50.33,
@@ -916,12 +915,12 @@
    "strategies": {
     "Pyramid Puzzle": {
      "Bronze": 75.26,
-     "Diamond": 32.66,
-     "Gold": 35.5,
-     "Grandmaster": 29.66,
+     "Diamond": 32.86,
+     "Gold": 35.43,
+     "Grandmaster": 29.7,
      "Mario": 28.13,
-     "Master": 31.23,
-     "Platinum": 34.2,
+     "Master": 31.3,
+     "Platinum": 34.36,
      "Silver": 38.4
     },
     "Single jump on the small hill": {
@@ -939,7 +938,7 @@
      "Diamond": 26.2,
      "Gold": 26.86,
      "Grandmaster": 25.66,
-     "Mario": 25.33,
+     "Mario": 25.3,
      "Master": 25.96,
      "Platinum": 26.53,
      "Silver": 27.6
@@ -980,7 +979,7 @@
    "jp_strategies": {},
    "strategies": {
     "Chip clip w/ punch": {
-     "Bronze": 43.96,
+     "Bronze": 43.9,
      "Diamond": 41.76,
      "Gold": 42.4,
      "Grandmaster": 41.23,
@@ -1002,7 +1001,7 @@
   "Platinum": 80.4,
   "Silver": 94.0
  },
- "sheet_revision": "2026-08-10T15:14:43",
+ "sheet_revision": "2026-09-01T05:14:25",
  "source": "sheet",
  "version": 2
 }

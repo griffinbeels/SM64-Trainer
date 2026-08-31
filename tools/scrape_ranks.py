@@ -18,7 +18,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from sm64_events.memory.addresses import star_name  # noqa: E402
 from sm64_events.ranks.standards import entity_key, qualify  # noqa: E402
 
-SEED_VERSION = 5  # bump whenever the bundled seed should push to existing installs
+# Bump whenever the bundled seed should push to existing installs -- an equal
+# version is NOT reconciled (`ranks/standards.py`: `stored < seed` only), so a
+# fix that only rewrites the seed file reaches fresh installs and nobody else.
+# v6 (2026-08-31): the Under-21 slide star became its own entity (star:19:1)
+# instead of a strategy of the box star.
+SEED_VERSION = 6
 
 # A main course's 100-coin key is "<stage>_100c<N>", N being the 1-BASED exit
 # star the run ends on: "3_100c1" is CCM's 100-coin run ended on Slip Slidin'
@@ -41,6 +46,18 @@ _BOWSER = {"1n": 5, "2n": 6, "3n": 7, "1x": 8, "2x": 9, "3x": 10}  # No Reds=pip
 # keys unmapped silently dropped every Bowser reds ladder from the seed
 # (user-reported 2026-07-23); tests pin the bundled seed's Bowser coverage.
 _BOWSER_REDS = {"1r": 16, "2r": 17, "3r": 18}
+
+# One xcams key whose STRATEGIES are two different stars of ours. The
+# Princess's Secret Slide has one catalog entry with two ladders, "Box Star"
+# and "Under 21"; our registry (and the game) has two stars, 19:0 and 19:1.
+# Both landed on 19:0, so the Under-21 star had no standard at all and its
+# scorecard cell read "set a time..." (his report, 2026-08-31). Keyed on
+# (key, STRATEGY) rather than on the key, because only one of the two
+# ladders moves; a strategy not listed here stays where `key_to_entity`
+# puts it.
+_STRATEGY_ENTITY = {
+    ("15_pss", "Under 21"): (19, 1),
+}
 
 # Movement segments with no xcams source -> hand-authored RTA defaults (seconds).
 DEFAULT_SEGMENT_LADDERS = {
@@ -387,22 +404,34 @@ def build_seed(parsed: dict, catalog=None, cams=None, jp_deltas=None) -> dict:
                 raise ValueError(f"{ek}: label {label!r} claims two exit stars")
             known[label] = exit_star
             rename = {s: qualify(label, s) for s in ladders}
+        # WHERE each strategy lands. Normally the key's own entity; a
+        # `_STRATEGY_ENTITY` row moves one ladder to a different star,
+        # taking its video, clips and JP deltas with it -- they belong to
+        # that ladder, not to the key.
+        def home(strategy, _ent=ent, _key=key, _clock=clock):
+            split = _STRATEGY_ENTITY.get((_key, strategy))
+            if split is None:
+                return _ent
+            return entities.setdefault(entity_key(*split),
+                                       {"clock": _clock, "strategies": {}})
+
         for was, now in rename.items():
-            if now in ent["strategies"]:
+            target = home(was)
+            if now in target["strategies"]:
                 raise ValueError(f"{ek}: two ladders would be stored as {now!r}")
-            ent["strategies"][now] = ladders[was]
+            target["strategies"][now] = ladders[was]
         if jp_deltas and jp_deltas.get(key):
-            ent.setdefault("jp_strategies", {}).update(
-                {rename[s]: d for s, d in jp_deltas[key].items() if s in rename})
+            for strategy, delta in jp_deltas[key].items():
+                if strategy in rename:
+                    home(strategy).setdefault("jp_strategies", {})[
+                        rename[strategy]] = delta
         if catalog and cams and star:
-            vids = {rename[s]: u for s, u in strat_videos(star, cams).items()
-                    if s in rename}
-            if vids:
-                ent.setdefault("videos", {}).update(vids)
-            clips = {rename[s]: c for s, c in strat_clips(star, cams).items()
-                     if s in rename}
-            if clips:
-                ent.setdefault("clips", {}).update(clips)
+            for strategy, url in strat_videos(star, cams).items():
+                if strategy in rename:
+                    home(strategy).setdefault("videos", {})[rename[strategy]] = url
+            for strategy, clip in strat_clips(star, cams).items():
+                if strategy in rename:
+                    home(strategy).setdefault("clips", {})[rename[strategy]] = clip
     for seg_id, strategies in DEFAULT_SEGMENT_LADDERS.items():
         entities.setdefault(f"segment:{seg_id}", {"clock": "rta", "strategies": strategies})
     return {"version": SEED_VERSION, "entities": entities}

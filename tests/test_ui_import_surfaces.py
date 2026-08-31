@@ -318,8 +318,15 @@ def test_the_sheet_door_lists_every_dropped_row_by_name_under_its_reason(
                 "Hot-Foot-It into the Volcano — Inside the volcano — 0'08\"53",
                 "Hot-Foot-It into the Volcano — Volcano entry — 0'08\"06"], drawn
             assert len(drawn["groups"][1]["rows"]) == 22, drawn
-            assert drawn["groups"][1]["rows"][0] == \
-                "Lobby door (L) - CCM wooden door — 0'02\"43", drawn
+            # A CLASS of row, not one by position. This group is the sheet's
+            # castle-movement rows, and the sheet is edited daily: between
+            # the 2026-08-10 and 2026-09-01 snapshots one row was renamed
+            # ("+ low dive -> SJ ending" became "+ full dive -> LJ ending")
+            # and the order moved, so pinning `rows[0]` by name failed on a
+            # change that dropped and gained nothing. Same reasoning as the
+            # library's own count FLOORS (`.claude/rules/library.md`).
+            assert sum("door" in row for row in drawn["groups"][1]["rows"]) >= 5, drawn
+            assert all(" — " in row for row in drawn["groups"][1]["rows"]), drawn
             # His Bowser correction: the seeded movements took their rows --
             # none sits in the list -- and "Lakitu skip" name-matched the
             # seeded Lakitu Skip. Segment PBs on the page grew by the six

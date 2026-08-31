@@ -18,6 +18,36 @@ from sm64_events.memory.addresses import course_name, star_count, star_name
 
 MAIN_COURSES = range(1, 16)
 SECRET_COURSES = (19, 20, 21, 22, 23, 24)
+
+# One sheet target that is really TWO of ours (2026-08-31, his report). The
+# Princess's Secret Slide block holds both slide stars under one heading,
+# because the sheet models them as variants of one row: [1] the box star,
+# [2] "Under 21", [3] a strat for the box star, [4] the same strat for U21.
+# The game does not -- 19:0 and 19:1 are separate stars with separate
+# published standards -- so every U21 approach was filing under the box
+# star, and 151 runners' U21 times (best 20"60, measured live) reached
+# nothing. The ids INTERLEAVE, so no "this row opens a target" rule can
+# split them; and name matching cannot either, since `_normalize` strips a
+# trailing parenthetical and "Slide Star (Under 21 Seconds)" collapses onto
+# "Slide Star". So the split is stated: which approaches of which target
+# belong to which OTHER entity, matched on the marker the sheet itself
+# uses for them.
+_U21_MARKER = re.compile(r"\bunder\s*21\b|\(\s*u21\s*\)", re.IGNORECASE)
+
+TARGET_SPLITS = {
+    ("Castle Secret Stars", "The Princess's Secret Slide"): {
+        "entity_key": "star:19:1",
+        "label": "Slide Star (Under 21 Seconds)",
+        "matches": _U21_MARKER.search,
+    },
+}
+
+
+def split_for(section: str, label: str) -> dict | None:
+    """The split rule for a sheet target, or None. Keyed on the target's
+    own (section, label) so a rule cannot fire on a row that merely reads
+    like one."""
+    return TARGET_SPLITS.get((section or "", label or ""))
 # (course, "Course" segment, "Battle" segment) -- the pipe-entry and fight
 # segments, matching tools/scrape_ranks.py's own Bowser mapping. Those ids are
 # the ones migration v1 seeds in every database, in that order, and the rank
