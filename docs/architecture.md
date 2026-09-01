@@ -82,9 +82,17 @@ grab tick (anchor + star_collected + attempt_completed + target_changed)
 ran 3.5 ms median / 5.8 ms max, well within the 16.6 ms 60 Hz budget.
 
 **Full re-projection cost** (`_reproject()`, triggered by clear/restore
-commands — not on the poll path). Measured: ~6.5 ms @ 100 events, ~23 ms
-@ 1,000 events, ~97 ms @ 5,000 events. Acceptable for an explicit user
-command; would need batching if it became per-tick.
+commands, a definition edit and a Usamune time correction — not on the poll
+path). Measured: ~6.5 ms @ 100 events, ~23 ms @ 1,000 events, ~97 ms
+@ 5,000 events — and **0.7–1.0 s @ 18,247 events** on his own journal
+(2026-09-01, `_reproject()` timed in-process; 90 % of it is the segment
+engine re-judging every event against every definition). It blocks the event
+loop for that long, so the browser cannot even receive the broadcast the same
+command sent. Acceptable for a command he issues rarely; **not for one he
+issues per row**: reclassifying an attempt's strategy took this path until
+2026-09-01 and was the second his strategy picker sat on the old value (task
+0113). It now writes the one column directly (`Database.retag_attempt` +
+`Projector.override_strat`), and a test holds the two doors equal.
 
 **Sessions are resumable and hard-deletable.** `POST /api/session/continue` reopens an ended session by clearing its `ended_utc` — new attempts append to it as if it never closed. `DELETE /api/session/{id}` is the journal's one deletion path: it bulk-removes all journal rows whose session matches, then runs a full re-projection; the active session is protected (409). PBs are stored separately and survive. Any `attempt_cleared` events recorded inside the deleted session disappear with it — targets those clears had overridden revert to their pre-clear state in the re-projected view (documented revert, not a bug). Timelines (`timeline` field on each session-view section) are a pure read over the view's SCOPED attempts (session scope plots only that session; lifetime everything — scope-following since 2026-07-24): the `TIMELINE_OUTCOMES` registry in `tracking/views.py` maps outcome keys to display properties; `MARKERS` in `ui/components/timeline.js` maps them to SVG shapes. Adding a new marker kind is two registry rows and no other code changes.
 

@@ -101,6 +101,30 @@ function manual() {{
   out.without_a_burst_window = runs;
 }}
 
+// E: request() hands back a promise that settles when the run that OBSERVED
+// the request completes. A component that just wrote through the API awaits
+// it to know the view now carries its write -- so a request made while a run
+// is already in flight settles with the FOLLOW-UP, never with the run that
+// may have read the world before the write landed.
+{{
+  const w = manual();
+  let runs = 0, release = null;
+  const request = coalesce(async () => {{
+    runs += 1;
+    await new Promise((r) => {{ release = r; }});
+  }}, w.schedule);
+  let firstSettledAfter = null, midSettledAfter = null;
+  request().then(() => {{ firstSettledAfter = runs; }});
+  w.drain(); await flush();                       // run 1 in flight
+  request().then(() => {{ midSettledAfter = runs; }});
+  release(); await flush();                       // run 1 done, follow-up scheduled
+  out.first_settled_after_run = firstSettledAfter;
+  out.mid_unsettled_after_run_one = midSettledAfter;
+  w.drain(); await flush();                       // run 2 in flight
+  release(); await flush();
+  out.mid_settled_after_run = midSettledAfter;
+}}
+
 console.log(JSON.stringify(out));
 """
 
@@ -139,6 +163,16 @@ def test_two_runs_are_never_in_flight_together(result):
 def test_a_failed_run_does_not_wedge_the_coalescer(result):
     assert result["after_a_failed_run"] == 2, (
         "a rejected run left the coalescer permanently in flight")
+
+
+def test_a_request_settles_with_the_run_that_saw_it(result):
+    assert result["first_settled_after_run"] == 1, (
+        "a request's promise did not settle when its run completed")
+    assert result["mid_unsettled_after_run_one"] is None, (
+        "a request made mid-run settled with the run already in flight -- "
+        "that run may have fetched a view from before the caller's write")
+    assert result["mid_settled_after_run"] == 2, (
+        "a request made mid-run never settled with the follow-up run")
 
 
 def test_without_the_burst_window_a_grab_costs_two_runs(result):

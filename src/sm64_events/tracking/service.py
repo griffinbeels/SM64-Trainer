@@ -821,9 +821,10 @@ class TrackerService:
         """Reclassify ONE recorded attempt's strategy (None = unlabeled).
 
         A strategy is declared before a run, so it is routinely wrong after
-        it. Journal-first like clear/restore: the correction is appended and
-        folded in by projection.strat_overrides, never written into the
-        derived attempts row. Editing an OLDER row does not touch the live
+        it. Journal-first like clear/restore: the correction is appended, and
+        every replay folds it in through projection.strat_overrides. Unlike
+        clear/restore it does NOT then replay the journal -- the row's one
+        column is written directly, see below. Editing an OLDER row does not touch the live
         per-target strategy memory. Reclassifying the entity's NEWEST
         non-cleared attempt is the exception (user request 2026-07-24): "my
         last run was actually strat X" means X is what's being practiced
@@ -873,6 +874,22 @@ class TrackerService:
             self._register_strategy(
                 db, entity_key(attempt.course_id, attempt.star_id,
                                attempt.segment_id), strat_tag)
+        # The row itself: ONE column, written directly, plus the projector's
+        # own override map so its picture matches what a replay of this
+        # journal would build. NOT `_reproject()` (until 2026-09-01 it was):
+        # a full replay is O(journal) -- 0.7-1.0 s over his 18,247-event
+        # journal, with the event loop blocked so the browser could not even
+        # receive the strat_set broadcast above -- and that second is exactly
+        # how long his strategy picker sat on the OLD value before snapping to
+        # the new one (task 0113). The override reaches one column of one row
+        # and nothing else (projection.py's three `.get` sites), which is what
+        # makes the direct write the same answer; the equivalence is pinned by
+        # test_set_attempt_strat_agrees_with_a_full_replay, and the door by
+        # test_set_attempt_strat_does_not_replay_the_journal. Written BEFORE
+        # the propagation below, so a client refreshing on its strat_set
+        # already sees the retagged row.
+        db.retag_attempt(attempt_id, strat_tag)
+        self._projector.override_strat(attempt_id, strat_tag)
         # Newest-attempt exception (docstring above): the active strategy
         # follows a reclassified top-of-log row.
         if (strat_tag and has_entity
@@ -882,7 +899,11 @@ class TrackerService:
             else:
                 await self.set_strat(attempt.course_id, attempt.star_id,
                                      strat_tag)
-        await self._reproject()
+        # The same bare refetch ping a reprojection ends with: an OLDER row's
+        # retag publishes no strat_set, and a second browser would otherwise
+        # keep drawing the old tag.
+        await self.publish(Event(type="attempts_invalidated", frame=0,
+                                 timestamp_utc=_now(), payload={}))
 
     @staticmethod
     def _newest_attempt_id(db, attempt) -> int | None:
