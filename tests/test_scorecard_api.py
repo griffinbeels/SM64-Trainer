@@ -490,6 +490,22 @@ def test_the_column_endpoint_serves_one_line_per_worksheet_row(tmp_path, monkeyp
         assert payload["mapped"] <= payload["total_rows"]
 
 
+def test_the_column_lands_each_time_on_the_row_it_came_from(tmp_path, monkeypatch):
+    """The paste anchor, end to end (round 19, item 3): he pastes into his
+    own column's row-2 cell, so line 0 IS worksheet row 2. Bob-omb's target
+    opens at row 3, which makes its time line 1 -- and line 0 stays empty
+    because row 2 is a section header `read_rows` never emits."""
+    monkeypatch.setattr("sm64_events.server.scorecard_api.fetch", _bob_workbook)
+    with make_client(tmp_path) as (client, db, _svc):
+        db.insert_pb(1, 0, "Big Bob-omb on the Summit", "igt", 1324, None,
+                     "2026-08-24T00:00:00Z")
+        payload = client.get("/api/scorecard/column").json()
+        assert payload["lines"][0] == ""                      # row 2, header
+        assert payload["lines"][1] == sheet_time(display_cs(1324))   # row 3
+        assert payload["lines"][2] == ""                      # row 4, unlinked
+        assert payload["mapped"] == 1
+
+
 def test_a_column_export_that_cannot_read_the_sheet_says_so(tmp_path, monkeypatch):
     """Mirrors `/api/import/sheet`'s own wording -- "could not read the
     sheet" and "you have nothing on it" must never look identical."""
@@ -564,19 +580,29 @@ def test_the_endpoints_placer_lands_a_bowser_row_on_the_seeded_movement(tmp_path
         assert placed == (f"segment:{bitfs_id}", "rta", None)
 
 
-def test_a_star_approach_with_no_matched_strategy_stays_blank_through_the_real_placer(
-        tmp_path):
-    """The join rule's literal 3 branches, end to end through `column_lines`
-    with the REAL shared placer (not a stub): a star approach with no vetted
-    `matched_strategy` and no explicit adoption link is not rescued by
-    either of the placer's other two facts (name-match only fires for an
-    entity-LESS target; the seed-key fact only fires for a `segment:` key),
-    so it stays blank rather than landing under a guessed strategy name."""
+def test_an_imported_star_row_exports_the_time_it_was_imported_with(tmp_path):
+    """The round trip, end to end through the REAL shared placer: a sheet
+    row with no vetted `matched_strategy` is landed by `POST
+    /api/import/sheet` under the sheet's own approach name, so this door
+    asks for that same name and gets the same time back.
+
+    Round 19's whole finding lives here. Until then the export refused the
+    name half of the import's own rule, so 335 star rows -- and every line
+    of a column he had just imported -- exported blank."""
     from sm64_events.library.export_column import column_lines
     from sm64_events.library.sheet import SheetRow
     from sm64_events.server.import_api import sheet_row_placer
+    from sm64_events.server.scorecard_api import _column_resolve
 
-    with make_client(tmp_path) as (_client, _db, svc):
+    with make_client(tmp_path) as (_client, db, svc):
+        # Exactly what the import writes for this row: strat_tag = the
+        # sheet's own approach name, on the star the target maps to. The
+        # FASTER decoy under another name is what makes this test able to
+        # fail -- a lookup that forgot the name would answer with it.
+        db.insert_pb(1, 0, "Big Bob-omb on the Summit", "igt", 1324, None,
+                     "2026-08-24T00:00:00Z")
+        db.insert_pb(1, 0, "Some other way round", "igt", 900, None,
+                     "2026-08-24T00:00:00Z")
         rows = [SheetRow(row=2, group="G", section="1. Bob-omb Battlefield",
                          label="Big Bob-omb on the Summit", ids=frozenset({"1"}),
                          kind="approach", opens_target=True, version=None,
@@ -588,7 +614,79 @@ def test_a_star_approach_with_no_matched_strategy_stays_blank_through_the_real_p
              "approaches": [{"name": "Big Bob-omb on the Summit", "ids": ["1"]}],
              "subsections": []}]}
         place = sheet_row_placer(svc, None)
-        lines = column_lines(rows, payload, lambda *a: 4370, place=place)
+        lines = column_lines(rows, payload, _column_resolve(svc), place=place)
+        assert lines == [sheet_time(display_cs(1324))]
+
+
+def test_a_subsection_he_has_linked_exports_on_its_own_clock(tmp_path):
+    """His ask, the subsection half: a piece exports once he has LINKED the
+    sheet row to a movement he built, under that link's own strategy
+    ("Standard" -- a subsection row names the piece, not a way of doing it)
+    and on that piece's own clock. Unlinked it stays blank, which is exactly
+    what the import does with the same row, through this same placer."""
+    from sm64_events.library.audit import row_key
+    from sm64_events.library.export_column import column_lines
+    from sm64_events.library.sheet import SheetRow
+    from sm64_events.server.import_api import sheet_row_placer
+    from sm64_events.server.scorecard_api import _column_resolve
+
+    class _Links:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def rows(self):
+            return dict(self._rows)
+
+    with make_client(tmp_path) as (_client, db, svc):
+        piece = db.insert_segment_def("Warp fadeout", [], [], [],
+                                      "2026-08-24T00:00:00Z")
+        db.insert_pb(None, None, "Standard", "rta", 477, None,
+                     "2026-08-24T00:00:00Z", segment_id=piece)
+        target = {"section": "1. Bob-omb Battlefield", "entity_key": "star:1:0",
+                  "label": "Big Bob-omb on the Summit",
+                  "approaches": [],
+                  "subsections": [{"name": "Warp fadeout", "ids": ["1", "2"]}]}
+        rows = [SheetRow(row=2, group="G", section="1. Bob-omb Battlefield",
+                         label="Warp fadeout", ids=frozenset({"1", "2"}),
+                         kind="subsection", opens_target=True, version=None,
+                         best_cs=None, best_runner="", ideal_cs=None,
+                         fill_rate=None)]
+        payload = {"targets": [target]}
+        resolve = _column_resolve(svc)
+
+        unlinked = sheet_row_placer(svc, _Links({}))
+        assert column_lines(rows, payload, resolve, place=unlinked) == [""]
+
+        key = row_key(target, "Warp fadeout", ["1", "2"])
+        linked = sheet_row_placer(svc, _Links({key: f"segment:{piece}"}))
+        assert column_lines(rows, payload, resolve, place=linked) == [
+            sheet_time(display_cs(477))]
+
+
+def test_a_row_naming_a_strategy_this_database_never_heard_of_stays_blank(
+        tmp_path):
+    """The other half of that fallback, and why it is safe: the name is
+    only ever a LOOKUP. A sheet approach nobody here has a PB under
+    resolves to None and the line stays blank -- the export can print a
+    missing time, never a wrong one."""
+    from sm64_events.library.export_column import column_lines
+    from sm64_events.library.sheet import SheetRow
+    from sm64_events.server.scorecard_api import _column_resolve
+
+    with make_client(tmp_path) as (_client, db, svc):
+        db.insert_pb(1, 0, "Big Bob-omb on the Summit", "igt", 1324, None,
+                     "2026-08-24T00:00:00Z")
+        rows = [SheetRow(row=2, group="G", section="1. Bob-omb Battlefield",
+                         label="Whomp fortress skip", ids=frozenset({"1"}),
+                         kind="approach", opens_target=True, version=None,
+                         best_cs=None, best_runner="", ideal_cs=None,
+                         fill_rate=None)]
+        payload = {"targets": [
+            {"section": "1. Bob-omb Battlefield", "entity_key": "star:1:0",
+             "label": "Big Bob-omb on the Summit",
+             "approaches": [{"name": "Whomp fortress skip", "ids": ["1"]}],
+             "subsections": []}]}
+        lines = column_lines(rows, payload, _column_resolve(svc))
         assert lines == [""]
 
 

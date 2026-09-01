@@ -82,7 +82,16 @@ def _apply_splits(targets: list) -> list:
     sheet. A subsection moves only when its ids lie ENTIRELY inside the
     carved-out approaches -- the slide's two "Slide time" rows are shared
     ([1|2] and [3|4]), and a piece that times both stars belongs to the
-    heading it was written under rather than being duplicated into both."""
+    heading it was written under rather than being duplicated into both.
+
+    The carved-out target carries `split_from`, the label of the block it
+    came out of, and it is the only target in the payload with NO opening
+    row of its own -- every other one begins where a `SheetRow.opens_target`
+    row does. Anything walking rows and targets together has to know that
+    (`library/export_column.py::column_lines` pairs one opening row with one
+    BLOCK for exactly this reason); without the mark an extra target shifts
+    every later row against the wrong target, silently, for the rest of the
+    sheet."""
     out = []
     for target in targets:
         rule = split_for(target.get("section", ""), target.get("label", ""))
@@ -104,7 +113,7 @@ def _apply_splits(targets: list) -> list:
                        if key not in ("approaches", "subsections",
                                       "entity_key", "label", "miss_reason")},
                     "entity_key": rule["entity_key"], "label": rule["label"],
-                    "miss_reason": None,
+                    "miss_reason": None, "split_from": target["label"],
                     "approaches": matched, "subsections": moved_subsections})
     return out
 

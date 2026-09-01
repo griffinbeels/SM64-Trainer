@@ -749,13 +749,16 @@ name, the assignment still lands and the vetted [[ladder]] keeps grading.
 
 The reverse of an [[imported time]] — your [[personal best]]s written out in
 the [[Ultimate Sheet]]'s own notation, one line per live worksheet row, ready
-to paste back into the sheet as your own [[runner]] column. An [[approach]]
-on a [[star]] prints only where a [[matched strategy]] names which
-[[strategy]] it is; a [[sheet piece]] or a castle-movement [[approach]] prints
-only where an [[adoption]] (or the unasked name/seed-key match that grants
-one) says which [[segment]] it lands on. Anything neither names stays blank
-— it never guesses a [[strategy]] from the sheet's own row name the way an
-import will.
+to paste back into the sheet as your own [[runner]] column. Its first line is
+worksheet row 2, so pasting into your column's second cell puts every time
+back on the row it came from. It prints a time exactly where an [[imported
+time]] would land one, under the same [[strategy]] name: a [[sheet piece]] or
+a castle-movement [[approach]] needs an [[adoption]] (or the unasked
+name/seed-key match that grants one) to say which [[segment]] it lands on,
+and an [[approach]] on a [[star]] otherwise files under its [[matched
+strategy]], or under the sheet's own row name where no match names one. A
+name this database holds no [[personal best]] under stays blank, so the
+column can miss a time but never print a wrong one.
 
 - **Lives** — the column builder
   (`src/sm64_events/library/export_column.py`)

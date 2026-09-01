@@ -111,10 +111,117 @@ def test_a_version_mismatch_is_the_caller_resolves_responsibility():
     assert seen == ["jp"]
 
 
-def test_no_placer_means_anything_not_matched_by_strategy_stays_blank():
+def test_a_star_approach_with_no_vetted_strategy_exports_under_the_sheets_name():
+    """The round trip's closing half (round 19): `import_runner.py` files a
+    star row under `matched_strategy or the sheet's own name`, so this door
+    has to ASK for the same name or a freshly imported column exports blank.
+    A name this database never heard of resolves to None, which is why the
+    fallback cannot print a wrong time."""
     rows, payload = _fixture()
-    lines = column_lines(rows, payload, lambda *a: None)
-    assert lines[1] == ""                               # Approach B needed a placer
+    asked = []
+
+    def resolve(entity_key, strat_tag, timer_mode, version):
+        asked.append((entity_key, strat_tag))
+        return 4370 if strat_tag == "Approach B" else None
+
+    lines = column_lines(rows, payload, resolve)
+    assert lines[1] == "43.70"                          # row 3, no placer at all
+    assert ("star:1:0", "Approach B") in asked
+
+
+def test_the_placer_outranks_the_star_fallback():
+    """`import_runner.py::candidates_for` asks `place` FIRST and only falls
+    back to the star; a row he has explicitly linked to a piece he built is
+    about that piece, on that piece's own clock."""
+    rows, payload = _fixture()
+
+    def place(target, item, kind):
+        if item.get("name") == "Approach A":
+            return ("segment:9", "rta", "Linked Strat")
+        return None
+
+    seen = []
+
+    def resolve(entity_key, strat_tag, timer_mode, version):
+        seen.append((entity_key, strat_tag, timer_mode))
+        return 8100
+
+    lines = column_lines(rows, payload, resolve, place=place)
+    assert lines[0] == "1:21.00"
+    assert seen[0] == ("segment:9", "Linked Strat", "rta")
+
+
+def _split_fixture():
+    """One sheet heading that `build.py::_apply_splits` turned into TWO
+    targets: the parent, and a carved-out one marked `split_from` with no
+    opening row of its own. A second heading follows, to catch the shift."""
+    rows = [
+        _row(2, "Box Star", "approach", True, ids=("1",)),
+        _row(3, "Under 21", "approach", False, ids=("2",)),
+        _row(4, "Next Star", "approach", True, ids=("1",)),
+    ]
+    payload = {"targets": [
+        {"entity_key": "star:19:0", "label": "The Slide",
+         "approaches": [{"name": "Box Star", "ids": ["1"]}], "subsections": []},
+        {"entity_key": "star:19:1", "label": "Slide Star (Under 21 Seconds)",
+         "split_from": "The Slide",
+         "approaches": [{"name": "Under 21", "ids": ["2"]}], "subsections": []},
+        {"entity_key": "star:1:0", "label": "Next Star",
+         "approaches": [{"name": "Next Star", "ids": ["1"]}], "subsections": []},
+    ]}
+    return rows, payload
+
+
+def test_a_carved_out_target_shares_its_parents_opening_row():
+    """The round-18 regression: a split adds a target the sheet has no row
+    for, so counting targets one-per-opening-row read every LATER row
+    against its neighbour's target -- 214 of 803 rows, the whole tail of the
+    sheet, silently blank. One opening row opens one BLOCK."""
+    rows, payload = _split_fixture()
+    lines = column_lines(rows, payload,
+                         lambda entity_key, strat, mode, version: {
+                             ("star:19:0", "Box Star"): 4370,
+                             ("star:19:1", "Under 21"): 2060,
+                             ("star:1:0", "Next Star"): 8100,
+                         }.get((entity_key, strat)))
+    assert lines == ["43.70", "20.60", "1:21.00"]
+
+
+def test_same_name_rows_in_one_block_are_told_apart_by_their_ids():
+    """49 live rows share a name with a sibling in their own block -- "Warp
+    fadeout" once per route, "100 coin star Xcam" once per 100-coin route.
+    Name alone hands both rows the FIRST item, which sends a subsection's
+    adoption link (keyed on its ids) to the wrong piece."""
+    rows = [
+        _row(2, "Some Star", "approach", True, ids=("1",)),
+        _row(3, "Warp fadeout", "subsection", False, ids=("1", "2")),
+        _row(4, "Warp fadeout", "subsection", False, ids=("3", "4")),
+    ]
+    payload = {"targets": [
+        {"entity_key": "star:1:0", "label": "Some Star",
+         "approaches": [{"name": "Some Star", "ids": ["1"]}],
+         "subsections": [{"name": "Warp fadeout", "ids": ["1", "2"]},
+                         {"name": "Warp fadeout", "ids": ["3", "4"]}]}]}
+    placed = []
+
+    def place(target, item, kind):
+        placed.append(sorted(item["ids"]))
+        return None
+
+    column_lines(rows, payload, lambda *a: None, place=place)
+    assert placed == [["1"], ["1", "2"], ["3", "4"]]
+
+
+def test_a_lone_candidate_wins_on_its_name_alone():
+    """A merged (JP)/(US) approach carries the UNION of its two rows' ids,
+    so an ids-equality test would reject both rows. Ids only ever DECIDE
+    between same-name candidates."""
+    rows = [_row(2, "Approach A (JP)", "approach", True, ids=("1",), version="jp")]
+    payload = {"targets": [
+        {"entity_key": "star:1:0", "label": "Some Star",
+         "approaches": [{"name": "Approach A", "ids": ["1", "2"]}],
+         "subsections": []}]}
+    assert column_lines(rows, payload, lambda *a: 4370) == ["43.70"]
 
 
 def test_no_rows_is_no_lines():
