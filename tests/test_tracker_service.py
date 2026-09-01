@@ -1927,6 +1927,74 @@ def test_set_attempt_strat_moves_the_saved_pb(tmp_path):
     assert db.current_pb(2, 2, "igt", strat_tag="Cannonless") is None
 
 
+def _two_star_attempts(db, svc):
+    asyncio.run(svc.set_target(2, 2, strat_tag="Cannonless"))
+    asyncio.run(svc.publish(ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(1350)))
+    asyncio.run(svc.publish(ev("practice_reset", 2000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(2350)))
+    ids = sorted(row.id for row in db.attempts())
+    return ids[0], ids[-1]          # older, newest
+
+
+def test_set_attempt_strat_does_not_replay_the_journal(tmp_path, monkeypatch):
+    """A reclassification is ONE column of ONE row -- the three override
+    sites in projection.py all read `_strat_overrides.get(id, ...)` and
+    nothing else in the projector does -- so it must not pay for a full
+    replay. It did until 2026-09-01: 0.7-1.0 s over his 18,247-event journal
+    with the event loop blocked throughout, which is exactly the second his
+    strategy picker sat on the OLD value before snapping to the new one (task
+    0113). The replay's cost grows with the journal, so a fixed budget here
+    would pass today and fail him next month; the contract is the door."""
+    db, svc = make(tmp_path)
+    older, newest = _two_star_attempts(db, svc)
+
+    async def replayed():
+        raise AssertionError("set_attempt_strat replayed the whole journal")
+    monkeypatch.setattr(svc, "_reproject", replayed)
+    asyncio.run(svc.set_attempt_strat(newest, "Slide Kick"))
+    asyncio.run(svc.set_attempt_strat(older, None))
+    by_id = {row.id: row.strat_tag for row in db.attempts()}
+    assert by_id == {newest: "Slide Kick", older: None}
+
+
+def test_set_attempt_strat_agrees_with_a_full_replay(tmp_path):
+    """The two doors must build the same rows: what the live command writes
+    directly is what a restart's replay of the same journal would derive.
+    Newest row, older row, an un-labelling, and a segment attempt -- then
+    the full replay, and every attempt field is byte-identical."""
+    db, svc = make(tmp_path)
+    older, newest = _two_star_attempts(db, svc)
+    lblj = seed_id(db, "LBLJ")
+    asyncio.run(svc.publish(ev("level_changed", 3000, {"from": 16, "to": 6})))
+    asyncio.run(svc.publish(ev("warp_entered", 3085,
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(ev("level_changed", 3108, {"from": 6, "to": 17})))
+    seg_aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
+    asyncio.run(svc.set_attempt_strat(newest, "Slide Kick"))
+    asyncio.run(svc.set_attempt_strat(older, None))
+    asyncio.run(svc.set_attempt_strat(seg_aid, "no bljs"))
+    live = db.attempts()
+    assert {a.id: a.strat_tag for a in live} == {
+        newest: "Slide Kick", older: None, seg_aid: "no bljs"}
+    asyncio.run(svc._reproject())
+    assert db.attempts() == live
+
+
+def test_set_attempt_strat_pings_every_client_to_refetch(tmp_path):
+    """Retagging an OLDER row publishes no strat_set (the active strategy
+    does not follow deeper history), so without its own ping a second
+    browser would keep drawing the old tag. `attempts_invalidated` is the
+    same bare refetch ping a full reprojection sends (store.js REFRESH_ON)."""
+    db, svc, sent = make_rec(tmp_path)
+    older, _newest = _two_star_attempts(db, svc)
+    del sent[:]
+    asyncio.run(svc.set_attempt_strat(older, "Slide Kick"))
+    types = [e.type for e in sent]
+    assert "attempts_invalidated" in types
+    assert "strat_set" not in types
+
+
 def test_set_attempt_strat_unknown_attempt_raises_lookup_error(tmp_path):
     db, svc = make(tmp_path)
     with pytest.raises(LookupError):

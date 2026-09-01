@@ -417,9 +417,13 @@ def strat_overrides(events) -> dict[int, str | None]:
     The compensating-event sibling of cleared_ids(). A strategy is declared
     BEFORE a run and is therefore often wrong after it ("I said Cannonless,
     then did something else"); the journal is append-only, so the correction
-    is appended and folded in here rather than written into the derived
-    attempts row. Last write wins, which makes re-picking the previous
-    strategy the undo — no restore event needed."""
+    is appended and folded in here on every replay. Last write wins, which
+    makes re-picking the previous strategy the undo — no restore event
+    needed. The LIVE command (service.set_attempt_strat) writes that same
+    one column directly and records the override through
+    `Projector.override_strat`, because a replay costs the whole journal
+    (0.7-1.0 s at 18k events, 2026-09-01) to move one row; the two doors are
+    held equal by test_set_attempt_strat_agrees_with_a_full_replay."""
     out: dict[int, str | None] = {}
     for ev in events:
         if ev.type == "attempt_strat_set":
@@ -778,6 +782,20 @@ class Projector:
         service can diff armed sets across a reproject without reaching
         into privates."""
         return self._segments.armed_ids()
+
+    def override_strat(self, attempt_id: int, strat_tag: str | None) -> None:
+        """Record a reclassification the journal now carries, so this live
+        projector's override map equals the one `replay()` would rebuild
+        from the same journal (`strat_overrides(events)`, last write wins).
+
+        The service calls this beside `Database.retag_attempt` instead of
+        replaying the whole journal for one column of one row (measured
+        0.7-1.0 s over 18k events, 2026-09-01). The override's only readers
+        are the three `_strat_overrides.get(id, ...)` sites below, each
+        stamping `strat_tag` on the attempt with that id and nothing else --
+        no memory, no attribution, no clearing depends on it -- which is
+        what makes the direct write equivalent to the replay."""
+        self._strat_overrides[attempt_id] = strat_tag
 
     def settle(self, frame: int) -> list[dict]:
         """Let the CLOCK deliver a topological verdict the journal has no event

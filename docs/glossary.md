@@ -891,7 +891,10 @@ they earn, and each [[rank]] band split into its five [[division]]s —
 collapsed until you open the exact one you want to study. A search box above
 the grid finds a [[star]] or [[segment]] by name as you type, matching its
 [[approach]]es' names and the [[runner]]s who hold a time on it as well, and
-its results stand in place of the grid until you clear it. A [[sheet entry]] with a
+its results stand in place of the grid until you clear it. A second box, on
+the [[target]]'s own page, searches [[runner]]s instead: it keeps only the
+[[approach]]es where that [[runner]] holds a time, opens every one it keeps,
+and restores the whole page when you clear it. A [[sheet entry]] with a
 video draws a playable card; one without draws a compact [[runner]]-and-time
 row. The [[tray]] collects [[sheet entry]] rows to compare side by side. A
 [[target]]'s page wears the [[wiki mark]] beside its name when Ukikipedia has
@@ -1163,7 +1166,9 @@ leaves your settings exactly as they were.
 
 ### Strategy picker
 
-The control for choosing which [[strategy]] your next [[attempt]] uses.
+The control for choosing which [[strategy]] your next [[attempt]] uses. It
+keeps your pick on screen from the instant you make it until the trainer's own
+answer carries it, so nothing that repaints in between can show the old value.
 
 - **Lives** — the picker
   (`src/sm64_events/ui/components/stratpicker.js`)

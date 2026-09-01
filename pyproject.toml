@@ -65,3 +65,72 @@ packages = ["src/sm64_events"]
 #
 #   uv pip install --python ".venv\Scripts\python.exe" -e <uilab> -e . pytest
 #   .venv\Scripts\python.exe -m playwright install chromium
+
+# ---------------------------------------------------------------------------
+# The Python half of the AGENT-MAINTAINABILITY GATE.
+#
+# Every rule below earns its place by making the NEXT agent fail, not by taste.
+# The evidence for each family, the thresholds, what was deliberately left out,
+# and how to re-evaluate this list live in docs/agent-maintainability.md. Read
+# that before adding or removing a rule — a rule with no failure story is how
+# this becomes a style preset nobody reads.
+#
+# The gate is DIFF-SCOPED (.claude/hooks/lint-gate.py): only findings on lines
+# a commit actually adds can block it. That is why a 312-finding backlog can
+# sit here without anyone declaring bankruptcy.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py312"
+extend-exclude = ["build", "dist", "ds-bundle", ".design-sync", "replays", "logs"]
+
+[tool.ruff.lint]
+select = [
+    # --- the code does not mean what it says ---
+    "F",      # pyflakes: undefined names, unused imports/vars, f-string slips
+    "E9",     # syntax / IO errors
+    "E711", "E712", "E713", "E714", "E721",  # None/True/type compared by value
+    "PLE",    # pylint errors — genuine mistakes, not preferences
+    "B",      # bugbear: mutable defaults, loop-variable capture, zip truncation
+    "ASYNC",  # a blocking call inside an async def — this app is FastAPI
+    "DTZ",    # naive datetime; domain rule 7 says timestamps are UTC
+    "RUF059", # an unpacked value nobody reads
+
+    # --- something failed and nothing said so ---
+    # This family is the one with direct evidence behind it: the 2026
+    # agent-maintainability study found error/validation contract drift to be
+    # THE code-level predictor of a later agent failing on earlier agent code.
+    "E722",   # bare except
+    "BLE",    # except Exception with no re-raise
+    "S110", "S112",  # try/except/pass and try/except/continue
+    "TRY400", "TRY401",  # logging.error inside except discards the traceback
+    "LOG",    # logging misuse
+    "PLW",    # pylint warnings; the useful one is subprocess-run without check
+
+    # --- size and shape, calibrated in docs/agent-maintainability.md ---
+    "C901", "PLR0912", "PLR0915",
+]
+ignore = [
+    "PLW2901",  # rebinding a loop variable is idiomatic here
+    "PLW0603",  # module-level singletons are a deliberate pattern in this app
+    "PLW0108",  # unnecessary-lambda is style
+    "PLW1508",  # os.getenv default type is style
+    "PLW1514",  # explicit encoding on open(); worth doing, not worth blocking
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.pylint]
+max-statements = 50   # ~= a 75-line function; see the calibration in the doc
+max-branches = 18
+
+[tool.ruff.lint.per-file-ignores]
+# Test STYLE is explicitly not policed (his call, 2026-08-28) — but everything
+# in the silent-failure family still applies, because a test that swallows an
+# error is a test that passes while proving nothing.
+"tests/**" = [
+    "RUF059",   # `a, b = f()` asserting only on `a` is normal in a test
+    "PLW1510",  # a test inspects returncode itself
+    "F811",     # fixture shadowing is how pytest works
+]
+"tools/**" = ["PLW1510"]  # scripts check their own subprocess results

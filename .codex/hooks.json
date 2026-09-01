@@ -28,6 +28,15 @@
             "command": "python .claude/hooks/no-merge-dirty-worktree.py"
           }
         ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/lint-gate.py"
+          }
+        ]
       }
     ],
     "PostToolUse": [

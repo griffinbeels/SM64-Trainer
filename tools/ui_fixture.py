@@ -1038,6 +1038,12 @@ def _pad_journal(db_path: Path, count: int) -> None:
     type "padding" is unknown to every detector, projector branch and label
     rule, so the replay and the timeline walks pay for them (the cost being
     simulated) and no derived state changes.
+
+    That makes it honest for the WALK and about 4x too cheap for a REPLAY:
+    the segment engine still visits every padded row but matches none, so a
+    command that reprojects cost 268 ms here against 1003 ms on a snapshot of
+    his real 18k-event journal (2026-09-01, task 0113). For anything that
+    replays, measure on `snapshot_db(<his journal>)` with `seed=True` instead.
     """
     with contextlib.closing(sqlite3.connect(db_path)) as conn:
         cursor = conn.execute(
@@ -1106,7 +1112,11 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     survive that.
 
     `from_dev_db=True` still snapshots, for exploratory work where you want
-    whatever is really in there. Never for a gate.
+    whatever is really in there. Never for a gate. With a real journal, keep
+    `seed=True`: the fixture opens a NEW session and the practice log is
+    session-scoped, so `seed=False` on his 18k-event journal renders nothing
+    but the Unassigned card (2026-09-01) -- the seed lays known rows on top of
+    the real replay cost, which is the combination a timing bug needs.
 
     A fresh clone has no dev database at all, so the default also happens to be
     the only mode that works everywhere.

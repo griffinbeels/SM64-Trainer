@@ -956,19 +956,15 @@ def test_leaderboard_mode_numbers_every_entry_fastest_first(library_page):
     assert positions[0] == 1, rows
 
 
-def test_leaderboard_mode_empty_search_blames_the_search_not_the_board(library_page):
-    """Fix wave (final review, L6). `shown.length === 0` used to render the
-    same "No community times recorded here yet" sentence whether the board
-    itself was empty OR a live search simply matched nothing -- reading as a
-    broken search rather than an honest empty state. `leaderboard.length`
-    (the count BEFORE the query filters it) is what tells the two apart.
+def test_leaderboard_mode_empty_search_hides_the_section_not_the_board(library_page):
+    """L6 asked that a fruitless search never read as an empty board.
+    2026-08-31 answers it one level up instead of per list: a section holding no
+    match for the live query does not render at all, in either mode, so the
+    misleading sentence has nowhere to appear.
 
-    Opens "Owl strat w/o speed preservation" explicitly (never the
-    auto-opened section) because L5's own fix (above) keeps a you-row on
-    screen through ANY query -- on a section carrying a saved PB, `shown`
-    can never reach zero at all, which would make this test unable to reach
-    the state it exists to check. This section carries no PB (probed live:
-    0 you-rows), so a query matching nothing genuinely empties it."""
+    Drives "Owl strat w/o speed preservation" explicitly -- it carries no
+    saved PB (probed live: 0 you-rows), so L5's always-keep-the-you-row rule
+    cannot be what empties it, and its disappearance is the query's doing."""
     opened = library_page.evaluate("""
       (() => {
         const heads = Array.from(document.querySelectorAll('.library-section-head'));
@@ -990,23 +986,26 @@ def test_leaderboard_mode_empty_search_blames_the_search_not_the_board(library_p
         "document.querySelectorAll("
         "'.library-section.open .library-leaderboard-row.is-you').length") == 0, (
         "this section now carries a you-row -- pick a different PB-less "
-        "section, since L5's fix means this test cannot reach an empty "
-        "`shown` list otherwise")
-    set_native_value(library_page, ".library-target-search",
-                     "NoRunnerCouldEverBeNamedThis999")
-    # Wait for the CONTROL the assertion reads, not a fixed sleep
-    # (ui-core.md's own rule) -- a fixed 200ms flaked under a full-file run
-    # with many browsers already open.
-    library_page.wait_for(".library-section.open .library-leaderboard-empty",
-                          timeout_ms=5000)
+        "section, since L5's fix means its emptiness would no longer be "
+        "the query's doing")
     try:
-        text = library_page.evaluate(
-            "document.querySelector('.library-section.open .library-leaderboard-empty')"
-            "?.textContent || ''")
-        assert "search" in text.lower(), (
-            f"an empty search result did not blame the search: {text!r}")
-        assert "community times" not in text.lower(), (
-            f"an empty search result still read like an empty board: {text!r}")
+        set_native_value(library_page, ".library-target-search",
+                         "NoRunnerCouldEverBeNamedThis999")
+        library_page.wait_for(".library-target-empty", timeout_ms=5000)
+        state = library_page.evaluate("""
+          (() => ({
+            sections: document.querySelectorAll('.library-section').length,
+            boardEmpties: document.querySelectorAll(
+              '.library-leaderboard-empty').length,
+            said: (document.querySelector('.library-target-empty') || {})
+                  .textContent || '',
+          }))()
+        """)
+        assert state["sections"] == 0, state
+        assert state["boardEmpties"] == 0, (
+            f"a fruitless search still drew a board-level empty state: {state}")
+        assert "community times" not in state["said"].lower(), state
+        assert "matches" in state["said"].lower(), state
     finally:
         set_native_value(library_page, ".library-target-search", "")
         library_page.wait_ms(200)
@@ -1194,3 +1193,83 @@ def test_leaderboard_rows_are_condensed_lines_with_the_video_folded(library_page
       })())"""))
     assert closed["expanded"] == "false" and closed["h"] == 0, closed
 
+
+
+# ---- 2026-08-31: the search filters the SECTION list too -------------------
+
+SECTION_STATE = """
+  (() => {
+    const sections = Array.from(document.querySelectorAll('.library-section'));
+    return {
+      count: sections.length,
+      closed: sections.filter((s) => !s.classList.contains('open')).length,
+      names: sections.map((s) =>
+        s.querySelector('.library-section-name').textContent),
+      overall: !!document.querySelector('.library-overall'),
+      empty: (document.querySelector('.library-target-empty') || {}).textContent
+             || null,
+    };
+  })()
+"""
+
+
+def _best_runners(page):
+    """Every section's community-best runner, read off the COLLAPSED headers
+    -- the only runner name a closed section puts in the DOM (`Disclose`
+    mounts its contents only while open), and one guaranteed to be an entry
+    of that section."""
+    return page.evaluate("""
+      Array.from(document.querySelectorAll('.library-section')).map((s) => {
+        const facts = Array.from(s.querySelectorAll('.library-section-facts .meta'));
+        const best = facts.map((f) => f.textContent)
+          .find((text) => text.startsWith('Best '));
+        return best ? best.split('·').pop().trim() : null;
+      })
+    """)
+
+
+def test_search_opens_every_matching_section_and_hides_the_rest(library_page):
+    """His report, 2026-08-31: searching a runner left every strategy section
+    collapsed, so the page never said WHERE that runner's times were. Round 4
+    already did this to bands and subdivisions; this is the same rule one
+    level up. The loop IS the anti-vacuity check -- a runner who happens to
+    appear in every section would prove nothing about hiding, so the test
+    hunts one who does not and fails if the fixture has none."""
+    before = library_page.evaluate(SECTION_STATE)
+    assert before["count"] > 1 and before["overall"], before
+    found = None
+    for runner in [name for name in _best_runners(library_page) if name]:
+        set_native_value(library_page, ".library-target-search", runner)
+        after = library_page.evaluate(SECTION_STATE)
+        if 0 < after["count"] < before["count"]:
+            found = (runner, after)
+            break
+    assert found, "no fixture runner is exclusive to some sections"
+    runner, after = found
+    assert after["closed"] == 0, after          # every survivor auto-expanded
+    assert after["empty"] is None, after
+    assert not after["overall"], after          # holds no runner times at all
+    hits = library_page.evaluate("""
+      Array.from(document.querySelectorAll('.library-section')).map((s) =>
+        Array.from(s.querySelectorAll(
+          '.library-example-runner, .library-plain-runner'))
+          .filter((el) => el.textContent.toLowerCase()
+            .includes(document.querySelector('.library-target-search')
+              .value.toLowerCase())).length)
+    """)
+    assert hits and all(count > 0 for count in hits), (runner, hits)
+    # ...and the whole structure returns the moment the box clears.
+    set_native_value(library_page, ".library-target-search", "")
+    restored = library_page.evaluate(SECTION_STATE)
+    assert restored["names"] == before["names"], (restored, before)
+    assert restored["closed"] == before["closed"], (restored, before)
+    assert restored["overall"], restored
+
+
+def test_search_matching_nobody_says_so_instead_of_emptying_the_page(library_page):
+    """Hiding every section is the right answer to a query nobody matches;
+    a page that silently empties itself reads as broken, so it says so."""
+    set_native_value(library_page, ".library-target-search", "zzz-nobody")
+    state = library_page.evaluate(SECTION_STATE)
+    assert state["count"] == 0, state
+    assert state["empty"] and "zzz-nobody" in state["empty"], state

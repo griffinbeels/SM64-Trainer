@@ -59,6 +59,7 @@ uv run python tools/measure_entrance_sweep.py         # replay both journals und
 
 uv run python tools/measure_reset_stubs.py            # how often a reset's own interrupted action was re-read onto the NEXT attempt (exact), and how fast the reload's spawn ends the hold
 uv run python tools/measure_target_queue.py           # replay the journals under the pre-queue rule and the target queue: diff every target reading and every recorded row (round 19's own gate)
+uv run python tools/lint_changed.py                  # the AGENT-MAINTAINABILITY GATE by hand -- what a commit would be blocked on (--all = the standing backlog, read it during a re-evaluation pass; --warm = prime the npx eslint cache, once per machine or the JS half silently skips)
 node .design-sync/facade/build.mjs                   # rebuild the Claude Design bundle from .design-sync/components.mjs (the registry: one row per published component)
 uv run pytest tests/test_design_sync_registry.py -q  # that registry's own gate: does every declared prop still exist on the component
 ```
@@ -281,6 +282,23 @@ Contract changes land on main first, then dependent work fans out. Merge with
   Hunt a specific reported row by VALUE across all three instead: the displayed
   time converts at 30fps, so `0'26"13` is `igt_frames` 784, and one read-only
   query over the three files names the owner in one shot.
+- **A `git commit` runs the AGENT-MAINTAINABILITY GATE, and it is curated for
+  one question: does this change make the NEXT agent fail?** Not style. The
+  rule sets live in `pyproject.toml` (`[tool.ruff.lint]`) and
+  `eslint.config.mjs`; `.claude/hooks/lint-gate.py` fires them on the lines a
+  commit ADDS, so the ~400-finding backlog blocks nothing and new work cannot
+  add to it. Test STYLE is deliberately unpoliced; the silent-failure family
+  still applies there, because a test that swallows an error passes while
+  proving nothing. **The intention, the evidence behind each family, what was
+  deliberately excluded, and the procedure for re-evaluating it all live in
+  `docs/agent-maintainability.md` — read that before adding or removing a
+  rule, and run a pass whenever a round loses time to something the gate did
+  not catch.** Two facts worth carrying without opening it: cyclomatic
+  complexity adds +0.16 over file size as a predictor of where fixes land here
+  (size alone: +0.93), so it is a ceiling on new monsters and not the point;
+  and the gate FAILS OPEN on every error, so a broken gate and a clean commit
+  look identical — which is exactly how its JavaScript half stayed dead for an
+  hour (2026-08-28).
 - **Exit-code honesty:** run verification through the Bash tool. Never pipe
   native exes into `Select-Object` or use `2>&1` on them in PS 5.1 (false
   failures).
