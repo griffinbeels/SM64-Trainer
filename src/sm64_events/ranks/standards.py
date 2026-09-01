@@ -84,6 +84,56 @@ def _reconcile(stored: dict, seed: dict) -> dict:
     return out
 
 
+# A strategy an OLDER seed filed under the WRONG entity, and where the seed
+# files it now: (old entity, strategy) -> (new entity, the exact ladder the old
+# seed published there). `_reconcile` cannot tell "the seed moved this" from
+# "the user created this" -- both are simply absent from the seed's entity --
+# so the v6 reconcile (the 2026-08-31 Princess's Secret Slide split) preserved
+# the stale "Under 21" under the plain Slide Star as user data, and a file
+# already AT v6 never reconciles again, so no version bump can reach it.
+# Measured 2026-09-01 on all three live files (this worktree v6, main v5, the
+# installed exe v5): each held the stale copy, byte-equal to the ladder pinned
+# here. The pinned value IS the guard -- a ladder he has since typed over is
+# his, whatever its name, and stays. Pinned rather than compared against the
+# seed's CURRENT new-home ladder because a user who skips from v5 straight to
+# a seed where xcams has moved the Under-21 cutoffs would keep the stale copy
+# forever. `tests/test_ranks_standards.py` checks every row against the
+# bundled seed, so a row cannot outlive the move it describes.
+SEED_MOVES = {
+    ("star:19:0", "Under 21"): ("star:19:1", {
+        "Mario": 20.73, "Grandmaster": 20.8, "Master": 20.9, "Diamond": 21.0,
+        "Platinum": 21.13, "Gold": 21.4, "Silver": 21.6, "Bronze": 22.26}),
+}
+
+
+def _repair_moved_strats(data: dict) -> bool:
+    """Drop each SEED_MOVES strategy from its old entity while its ladder is
+    still the pinned stale one, taking the community data filed under that
+    name (JP overlay, videos, clips) with it and carrying a hand-attached
+    video to the new home. Runs on EVERY load, after any reconcile, because
+    the stale copy survives an equal-version load untouched. Mutates `data`;
+    True when anything changed, so the caller writes the file back once."""
+    changed = False
+    entities = data.get("entities", {})
+    for (old_ek, strat), (new_ek, stale_ladder) in SEED_MOVES.items():
+        old = entities.get(old_ek) or {}
+        if old.get("strategies", {}).get(strat) != stale_ladder:
+            continue
+        del old["strategies"][strat]
+        for community in ("jp_strategies", "videos", "clips"):
+            old.get(community, {}).pop(strat, None)
+        carried = old.get("user_videos", {}).pop(strat, None)
+        if carried:
+            home = entities.setdefault(new_ek, {}).setdefault("user_videos", {})
+            home.setdefault(strat, carried)
+        if "user_videos" in old and not old["user_videos"]:
+            del old["user_videos"]
+        _log.info("rank standards: dropped %r from %s -- the seed files it under %s",
+                  strat, old_ek, new_ek)
+        changed = True
+    return changed
+
+
 class RankStandards:
     def __init__(self, path, seed_path=None, sheet_path=None):
         self.path = Path(path)
@@ -141,12 +191,17 @@ class RankStandards:
         # existing install: refresh community data from a NEWER bundled seed,
         # preserving user-created entities/strategies. (Without this an upgraded
         # install keeps a stale seed — no videos, old times — forever.)
-        if seed is not None and _seed_version(data) < _seed_version(seed):
-            self._data = _reconcile(data, seed)
-            self._materialize()
+        reconciled = seed is not None and _seed_version(data) < _seed_version(seed)
+        if reconciled:
+            data = _reconcile(data, seed)
             _log.info("rank standards reconciled to seed v%d", _seed_version(seed))
-            return
+        # ...and then, whatever the version says, drop what an older seed filed
+        # under the wrong entity (SEED_MOVES) -- the reconcile above is what
+        # preserves it, and an already-current file never gets here otherwise.
+        repaired = _repair_moved_strats(data)
         self._data = data
+        if reconciled or repaired:
+            self._materialize()
 
     def _materialize(self) -> None:
         try:
