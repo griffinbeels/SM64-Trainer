@@ -487,3 +487,61 @@ for an untouched course, `(17, 0)`, appearing where none existed).
 `tracking/segments.py::hundred_coin_entity(start_triggers, waypoints)` is THE resolver (spec 2026-07-28-multi-step-segments, "the 100-coin star IS the segment," superseding the redirect-based design of `2026-07-28`): (course_id, 6) when a def's own sequence -- start_triggers or any waypoint's clause-set -- includes grabbing a main course's 100-coin star, else None. Same structural clause-search the retired `service.py::_hundred_coin_redirect` used (deliberately NOT a category/seed_key lookup, so a user-reshaped or user-built def keeps matching by what it DOES), run in reverse and with THREE callers instead of one: `projection.py`'s `feed()` reattributes every closed HUNDRED_COIN_EXIT-family attempt (success, death, hard_reset -- every outcome) to the star entity (course_id/star_id, `segment_id` cleared, strat sourced from `strat_by_star` not `strat_by_segment`) BEFORE `_auto_ignored`/cleared-stamping run, so validity bounds and strat memory take the exact path an ordinary `star_collected` closure would; `_close_by_grab` SUPPRESSES the plain star-6 attempt it would otherwise record on the grab itself when an ENABLED engine covers that course (falls back to recording it when none does -- deleted/disabled def, same fallback philosophy the retired redirect used), while still updating `_last_star_grabbed`/`_last_star_attempted` directly (caveat 15's "the grab happened physically" applies even when no attempt records it); `views.py`'s `build_session_view` excludes every matching def (enabled or not) from `segments`/`segment_targets` entirely, and stamps the FIRST matching def's `armed_arms()` state onto the star section's own `armed_detail` (via the SAME `_armed_detail_for` helper segment sections use) -- so the progress line ("Step 1 of 2 · Waiting for Grab 100 Coins") survives the presentation change and reads as the star's own progress, and, since 2026-08-05, the star section is added to `seen` (rendered with zero attempts) only when it is ALSO the live target -- arming alone no longer publishes a card for this family (see [the CARD escalation](#and-one-card-only-when-the-entity-is-the-target--the-escalation-to-sections) above); mirroring an ordinary armed segment's section was the bug. `views.stamp_origins` also stamps a plain boolean, `is_hundred_coin_engine`, onto every `GET /api/segments` row from the SAME resolver, so `ui/components/targetpicker.js` (the course-union picker grid) and `ui/components/routes.js` (route step candidates) can exclude the family without re-deriving the clause-search in JS -- a route step referencing this segment directly could never complete, since its attempts no longer carry `segment_id`. `service.py::request_target` ALSO redirects the opposite direction defensively: an explicit `kind="segment"` pick naming a hundred-coin def (a route candidate, a raw API call) commits the STAR instead, since nothing may set a visible target on this family any more. **Existing recorded attempts resolve themselves on replay** (projection is replay-derived): a star-6 attempt recorded under the old redirect design is simply not regenerated the next time the journal replays, since `_close_by_grab` now suppresses it given the SAME (already-reshaped) def; no migration was written or needed. Stars 0-5 are untouched by this family end to end (only star 6 changes). **The reattributed attempt's `igt_frames` is stamped from the CLOSING event's own payload** (`ev.payload.get("igt_frames")`, read at reattribution time) -- a segment's own `igt_frames` is always `None` (segments are RTA-only by design), but the reattributed row IS a star now and stars display/grade on IGT; without this it rendered with no time at all and could not be graded (live report: a WF exit-star grab closed both the reattributed row and the ordinary exit-star row on the SAME event, and only the exit star's row carried the real value). Never derived from `rta_frames` -- a frame-delta, not the Usamune IGT this project's timestamps rule requires; `rta`/`igt` coincide for this family only because the span starts at the reset, which is a coincidence of the shape, not a substitute source. Confirmed this backfills EXISTING historical rows for free on the next reproject (measured against a `sqlite3.Connection.backup` copy of the live db: the exact attempt id from the live report, `750000022095`, came back `igt_frames=2983` — 99.43s, matching the paired exit-star row's own igt exactly) and confirmed no PB or strategy was lost in the process (queried the raw `pbs` table and the journal for any `strat_set`/`target_set` naming one of the 15 seeded segment ids -- zero PBs, and every historical `strat_set` on them was an explicit-null clear, so "no strat yet" for the star entity is the honest state, not data loss). **`segments.arms_ambiently(start_triggers)`** is the sibling resolver for a DIFFERENT question -- "does this def arm merely by the player being present, not by a deliberate action" -- measured against the real corpus at exactly 21 of 84 seeded defs (15 hundred-coin + 3 `seg:reds->pipe:*` + 3 legacy pipe-entry trio, all sharing the `[level_enter, attempt_anchor]`-into-a-course idiom; NOT LBLJ, which enters the castle interior, a place with no course, and NOT the three Bowser fights, which auto-select on entry BY DESIGN so an ambient pin there is not a bug). `views.py` stamps it onto every segment SECTION (the 100-coin family has none left to stamp); `practice.js`'s pinned-card gate reads `sec.arms_ambiently` rather than a category string, which could never have covered `seg:reds->pipe:*` (its own corpus category is `Castle Movement`, indistinguishable by name from an ordinary movement). **projection.py's caveat 12 fix, GENERALIZED**: `Projector._clears_star_target(segment_id)` replaced an earlier version scoped to "only star 6, only its own engine" -- that fix was correct but left every OTHER star (0-5) losing its target the instant its OWN course's ambient engine armed, confirmed live (a `target_set` star (2,3) wiped to `None` by a bare `level_changed` into WF) and confirmed in the user's own journal (replayed `session_id >= 167` against both the fix and the retired unconditional rule: 575 of 3352 events diverge across 41 distinct episodes spanning 13 sessions and several hours of real play, each one a star target the old code held as `None` throughout a whole span of resets/attempts that the fix correctly keeps set). The real question is not "which family" but "is the arming def practiced FROM the same course the target star lives in" -- `origin_course(segment_origin(...))`, the SAME reader the segment-target half of this rule already used -- applied to the star half for the first time; arming from a different course (or the castle/a hub, origin `None`) still retires the target unchanged, and is unreachable in the "leaving" case regardless (the course-change rule in `_dispatch` already retired it on the SAME `level_changed`, before this check runs)
 
 
+
+## The 100-coin grab is proof, and one run is one row (task 0110, 2026-09-01)
+
+Two live-report failures, one theme he named: *"during a run if we ever get
+a 100 coins star, then now we're doing 100 coins, and then run should only be
+attributed to the 100 coins star."*
+
+**The engine now arms on the GRAB, not only on course entry.** The section
+above arms the family through `start_triggers` (`level_enter`/`attempt_anchor`
+into the course) -- which a savestate loaded MID-COURSE never fires. His
+2026-08-28 TTC session (journal ids 4126-4265) loaded a state, grabbed the
+100-coin star and an exit star, and reloaded, eleven times: nothing armed the
+engine and every exit grab recorded as a plain Stomp on the Thwomp. Two new
+arm shapes in `SegmentEngine.feed`, both AFTER the armed branch and neither a
+`start_trigger` (so `arms_ambiently`/`hooks_on_arm`/the origin readers see the
+definition exactly as before):
+
+* **`_hundred_coin_proof_arm`** -- the 100-coin star's OWN grab arms the def
+  with the waypoint already consumed (the retry loop reloads a state saved
+  just before the hundredth coin, so the grab is the first thing the engine
+  ever sees). Running after the armed branch is what makes a SECOND grab
+  restart at the newer one: while armed past the waypoint the re-grab is a
+  major action (silent cancel), then this re-arms in the same tick.
+* **`_proven_hundred_coin_exit`** -- an exit-star grab in the family's course
+  made holding at least `HUNDRED_COIN_STAR_COINS` (100) arms AND closes in one
+  tick, as a success anchored at the grab. A state loaded AFTER the 100-coin
+  grab shows no grab edge at all; the coin counter is the only evidence left.
+  It also lets an already-armed engine that missed the grab still complete on
+  the exit (the `complete` test in `_feed_waypoint` reads it too).
+
+**The coin count is a new memory read**: `MARIO_NUM_COINS_OFF` (0xA8, the s16
+right before `numStars`), sampled by `core/snapshot.py` as `coins` and stamped
+on every `star_collected` payload by `detectors/star_grab.py`. Live-read once
+beside the HUD's own coin field (`gHudDisplay + 0x2`, `HUD_COINS_OFF`) -- both
+2, idle in the castle -- and `tools/verify_addresses.py` now holds the two
+witnesses against each other every run. **VERIFY** pending the on-screen
+human confirmation.
+
+**The exit star's OWN row is now DROPPED** -- the reversal of decision #1
+("the exit star keeps its OWN attempt too"), which the section above and
+`test_hundred_coin_completion_attributes_to_the_star_not_the_segment` still
+described until this task. `projection.py`'s `seg_closed` loop, right after
+`_auto_ignored`, removes the plain exit-star row `_close_by_grab` recorded on
+the same grab whenever the closing event is a `star_collected` on a star OTHER
+than 6. Decided off the engine's own closure (`hc is not None`), never a
+second predicate, so a reshaped definition's end clauses cannot disagree with
+it. A plain exit grab under 100 coins in the course is untouched -- it never
+closes the family, so its row stands.
+
+**Measured** by replaying every journal under main and the fix
+(`tools/measure_target_queue.py --before main`): repo **+8** rows (new 100-coin
+runs the engine used to miss), installed exe **0** changes, the TTC savestate
+worktree journal **-8** redundant exit rows / **+7** new 100-coin rows -- the
+eighth run already carried its 100-coin row via ordinary re-entry arming, so
+only its now-duplicate exit-star row dropped. **0** rows lost that were not a
+redundant exit-star twin, **0** PBs referenced a dropped row, **0** rows
+changed. Both new rules mutation-proved (proof never fires -> the exit-holding
+tests red; drop removed -> the completion/savestate tests red).
