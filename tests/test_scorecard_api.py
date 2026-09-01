@@ -943,3 +943,63 @@ def test_a_multi_goal_mixes_a_division_with_a_per_entity_source(tmp_path):
                      if key != "star:1:0" and tile["goal_cs"] is not None)
         assert mixed[other]["goal_cs"] == alone[other]["goal_cs"]
         assert mixed[other]["goal_source"] == 1
+
+
+def test_a_runner_goal_walks_the_sheet_once_and_reuses_it_until_something_moves(tmp_path, monkeypatch):
+    """`runner_times` walks EVERY target, approach, subsection and entry on
+    the sheet and returns every runner's map, of which a runner goal keeps
+    one. Measured 2026-09-01 on a snapshot of his own db through the real
+    endpoint: 7.6 ms with no goal, 23.8 ms against one runner, 49.6 ms
+    against his stored goal (a division + three runners) and 68.9 ms against
+    four runners -- a multi goal walked the sheet once per runner SOURCE,
+    and since round 20 that fetch runs on every completed attempt, on the
+    same process as the 30 fps poller. So: one walk per (sheet payload,
+    adoptions, grading version), reused across sources AND across fetches,
+    and thrown away the moment any of the three moves."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from import_fixture import bundled_standards_seed
+    from sm64_events.core.paths import bundled_sheet_library
+    from sm64_events.library.store import LibraryStore
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.server import scorecard_api
+    from sm64_events.server.broadcaster import Broadcaster
+    from sm64_events.storage.db import Database
+    from sm64_events.tracking.service import TrackerService
+
+    store = LibraryStore(bundled_path=bundled_sheet_library()); store.load()
+    ranks = RankStandards(tmp_path / "rs.json", seed_path=bundled_standards_seed()); ranks.load()
+    service = TrackerService(Database(tmp_path / "t.db"), Broadcaster(), ranks=ranks)
+
+    class StubAdoptions:
+        def __init__(self): self.linked = {}
+        def rows(self): return dict(self.linked)
+    adoptions = StubAdoptions()
+
+    walks = []
+    real_runner_times = scorecard_api.runner_times
+    def counting_runner_times(*args, **kwargs):
+        walks.append(kwargs.get("version"))
+        return real_runner_times(*args, **kwargs)
+    monkeypatch.setattr(scorecard_api, "runner_times", counting_runner_times)
+
+    app = FastAPI()
+    app.include_router(scorecard_api.create_scorecard_router(
+        service, library=store, adoptions=adoptions))
+    with TestClient(app) as client:
+        client.put("/api/scorecard/goal", json={"kind": "multi", "sources": [
+            {"kind": "runner", "runner": "ikori"}, {"kind": "runner", "runner": "RONC3NA"},
+            {"kind": "runner", "runner": "Suigi"}]})
+        first = client.get("/api/scorecard").json()
+        assert walks == ["us"], "three runner sources are ONE walk"
+        again = client.get("/api/scorecard").json()
+        assert walks == ["us"], "nothing moved, so nothing is walked again"
+        assert again["rows"] == first["rows"]
+        ranks.grading_version = "jp"
+        client.get("/api/scorecard")
+        assert walks == ["us", "jp"], "the grading version is part of the key"
+        adoptions.linked["some-row"] = "segment:1"
+        client.get("/api/scorecard")
+        assert len(walks) == 3, "a new adoption is a new key"
+        client.get("/api/scorecard")
+        assert len(walks) == 3

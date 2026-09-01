@@ -360,6 +360,32 @@ def create_scorecard_router(service, library=None, adoptions=None,
                 goal[key] = cs
         return goal
 
+    # `runner_times` walks EVERY target, approach, subsection and entry on the
+    # sheet and answers for every runner at once, of which a runner goal keeps
+    # one map. Measured 2026-09-01 on a snapshot of his own db through the real
+    # endpoint (TestClient, median of 5): GET /api/scorecard costs 7.6 ms with
+    # no goal, 10.8 ms against a division, 23.8 ms against one runner, 49.6 ms
+    # against his stored goal (a division + three runners) and 68.9 ms against
+    # four runners -- a multi goal walked the sheet once per runner SOURCE.
+    # Since round 20 that fetch runs on every completed attempt, on the same
+    # process as the 30 fps poller, so the walk is memoised: one per (payload,
+    # adoptions, grading version), reused across sources and across fetches.
+    # The memo HOLDS the payload object, so its id cannot be recycled under
+    # the key while it is cached; a sheet refresh replaces the object, an
+    # adoption changes the rows tuple, a version flip changes the string.
+    _runner_times_memo: dict = {}
+
+    def runner_times_for(version: str) -> dict[str, dict[str, int]]:
+        payload = library.payload
+        adopted_rows = adoptions.rows() if adoptions is not None else {}
+        key = (id(payload), payload.get("sheet_revision"), payload.get("fetched_at"),
+               version, tuple(sorted(adopted_rows.items())))
+        if _runner_times_memo.get("key") != key:
+            _runner_times_memo.update(
+                key=key, payload=payload,
+                value=runner_times(payload, adopted_rows, version=version))
+        return _runner_times_memo["value"]
+
     def runner_goal_map(runner: str, version: str) -> dict[str, int]:
         """Every entity key `runner` has a sheet time for -> that time,
         already centiseconds -- straight off `library.ratings.runner_times`,
@@ -370,9 +396,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
         honest about how much of the card this goal actually reaches."""
         if library is None:
             return {}
-        adopted_rows = adoptions.rows() if adoptions is not None else {}
-        return runner_times(library.payload, adopted_rows,
-                            version=version).get(runner, {})
+        return runner_times_for(version).get(runner, {})
 
     def custom_goal_store() -> dict[str, dict[str, int]]:
         # A corrupt KV (wrong type, from a schema this store never wrote)
