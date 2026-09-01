@@ -8,6 +8,7 @@ db + standards, and the coverage/pending flags the UI reads.
 from import_fixture import make_client
 from sm64_events.library.export_column import sheet_time
 from sm64_events.ranks.classify import display_cs
+from sm64_events.ranks.scorecard import SPECIALS_LABEL
 
 
 def test_goal_round_trip(tmp_path):
@@ -806,10 +807,11 @@ def test_castle_stars_are_off_the_card_until_included(tmp_path):
         client.post("/api/marelo/exclude",
                     json={"entity": "star:0:0", "excluded": False})
         card = client.get("/api/scorecard").json()
-        secret = next(row for row in card["rows"] if row["label"] == "Secret")
+        secret = next(row for row in card["rows"]
+                      if row["label"] == SPECIALS_LABEL)
         secret_keys = [tile["key"] for tile in secret["tiles"]]
         assert "star:0:0" in secret_keys, (
-            "an included castle star must land back in the Secret section")
+            "an included castle star must land back in the specials card")
         assert "star:0:1" not in secret_keys, "the include is per star"
 
 

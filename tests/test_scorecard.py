@@ -80,9 +80,13 @@ def test_card_keys_shape():
                            "star:0:0", "star:0:1", "star:0:2",
                            "star:0:3", "star:0:4"]
 
+    # Round 20 merged the two specials cards into one -- the fights join the
+    # END of the secrets, so the sheet-faithful ten keep their order and the
+    # key count is unchanged.
     with_fights = scorecard.template_rows([("segment:9", "Bowser Battle 1")])
-    assert [row["label"] for row in with_fights[-2:]] == [
-        scorecard.FIGHTS_LABEL, "Secret"]
+    assert [row["label"] for row in with_fights[-1:]] == [
+        scorecard.SPECIALS_LABEL]
+    assert scorecard.card_keys(with_fights)[-1] == "segment:9"
     assert len(scorecard.card_keys(with_fights)) == 15 * 6 + 15 + 1
 
 
@@ -92,7 +96,8 @@ def test_secret_row_is_all_stars_with_the_bowser_reds():
     MOVEMENTS left the Secret row; the three Bowser reds stars carry the
     template's own labels."""
     secret = scorecard.template_rows()[-1]
-    assert secret["course_id"] is None and secret["label"] == "Secret"
+    assert secret["course_id"] is None
+    assert secret["label"] == scorecard.SPECIALS_LABEL
     keys = [key for key, _label, _clock in secret["entries"]]
     # Round 9 restored the five castle secrets ("all 120 stars"); they close
     # the row so the sheet-faithful ten keep their order.
@@ -138,6 +143,39 @@ def _route(steps):
     return {"steps": steps}
 
 
+def test_a_route_card_runs_in_course_order_however_the_route_runs():
+    """Round 20, 2026-09-01, on a live route card: "the order of the cards is
+    wrong... the order should be displayed in COURSE order. That is Bob -> WF
+    -> JRB -> CCM -> BBH -> HMC -> LLL -> SSL -> DDD -> SL -> WDW -> TTM ->
+    THI -> TTC -> RR -> Secret -> Bowser".
+
+    This reverses round 9's first-touch order deliberately, so the route walks
+    its courses BACKWARDS here -- the card must not follow it.
+    """
+    backwards = [15, 13, 9, 5, 1]
+    route = _route([{"need": 1, "candidates": [
+        {"type": "star", "course": course_id, "star": 0}]}
+        for course_id in backwards])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    assert [row["course_id"] for row in rows] == sorted(backwards)
+
+
+def test_the_specials_card_is_one_card_holding_secrets_then_fights():
+    """Round 20: "[Secrets + Bowser combined into a single card]". Merged in
+    the BUILDER, so the Sigma, the CSV and the ignore button all read one
+    row -- a display-only merge would need a second Sigma in JS."""
+    rows = scorecard.template_rows([("segment:9", "Bowser Battle 1"),
+                                    ("segment:10", "Bowser Battle 2")])
+    assert sum(1 for row in rows if row["course_id"] is None) == 1
+    specials = rows[-1]
+    assert specials["label"] == scorecard.SPECIALS_LABEL
+    keys = [key for key, _label, _clock in specials["entries"]]
+    assert keys[:2] == ["star:19:0", "star:19:1"]      # the secrets lead
+    assert keys[-2:] == ["segment:9", "segment:10"]    # the fights close
+    clocks = {key: clock for key, _label, clock in specials["entries"]}
+    assert clocks["star:19:0"] == "igt" and clocks["segment:9"] == "rta"
+
+
 def test_route_rows_apply_the_cell_rule_and_wear_the_course_name():
     """A 120-star-style course visit holding both the 100c and its companion
     merges them into ONE combined cell; the row wears the course's name."""
@@ -176,12 +214,13 @@ def test_route_segments_bucket_by_kind():
         segment_labels={41: "LBLJ", 9: "Bowser Battle 1", 77: "DDD Entry"},
         segment_courses={77: 9},
         fight_segment_ids={9})
+    # COURSE order since round 20 (WF is course 2, DDD is 9), and ONE
+    # specials card carrying the courseless movement and the fight.
     assert [row["label"] for row in rows] == [
-        "Dire, Dire Docks", "Whomp's Fortress",
-        scorecard.FIGHTS_LABEL, "Secret"]
+        "Whomp's Fortress", "Dire, Dire Docks", scorecard.SPECIALS_LABEL]
     by_label = {row["label"]: row for row in rows}
-    assert by_label["Secret"]["entries"] == [("segment:41", "LBLJ", "rta")]
-    assert by_label[scorecard.FIGHTS_LABEL]["entries"] == [
+    assert by_label[scorecard.SPECIALS_LABEL]["entries"] == [
+        ("segment:41", "LBLJ", "rta"),
         ("segment:9", "Bowser Battle 1", "rta")]
     assert by_label["Dire, Dire Docks"]["entries"] == [
         ("segment:77", "DDD Entry", "rta")]
@@ -241,8 +280,8 @@ def test_a_route_secret_card_runs_in_template_order():
 
 def test_route_revisits_merge_into_one_course_card():
     """Round 9: "BOB is all of the bobomb battlefield stars" -- a course
-    visited twice is ONE card at its first-touch position, duplicate
-    entities kept once."""
+    visited twice is ONE card, duplicate entities kept once. Round 20 moved
+    that card from its first-touch position to its COURSE position."""
     route = _route([
         {"need": 1, "candidates": [{"type": "star", "course": 6, "star": 0}]},
         {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]},
@@ -251,8 +290,8 @@ def test_route_revisits_merge_into_one_course_card():
             {"type": "star", "course": 6, "star": 1}]}])
     rows = scorecard.rows_for_route(route, segment_labels={})
     assert [row["label"] for row in rows] == [
-        "Hazy Maze Cave", "Whomp's Fortress"]
-    assert [key for key, _l, _c in rows[0]["entries"]] == [
+        "Whomp's Fortress", "Hazy Maze Cave"]
+    assert [key for key, _l, _c in rows[1]["entries"]] == [
         "star:6:0", "star:6:1"]
 
 
@@ -261,7 +300,7 @@ def test_route_castle_secrets_and_bowser_reds_share_the_secret_card():
         {"need": 1, "candidates": [{"type": "star", "course": 0, "star": 3}]},
         {"need": 1, "candidates": [{"type": "star", "course": 16, "star": 0}]}])
     rows = scorecard.rows_for_route(route, segment_labels={})
-    assert len(rows) == 1 and rows[0]["label"] == "Secret"
+    assert len(rows) == 1 and rows[0]["label"] == scorecard.SPECIALS_LABEL
     labels = {key: label for key, label, _c in rows[0]["entries"]}
     assert labels["star:0:3"] == "MIPS 1st Star"
     assert labels["star:16:0"] == "Bowser in the Dark World Red Coins"

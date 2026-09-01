@@ -7334,31 +7334,26 @@
      specials column packs to the top (its two cards are honestly
      different sizes). Steps 4 -> 2 -> 1 columns on the CARD's own pane
      (@container, never @media, per the container law). */
+  /* The track count is the COMPONENT's call, not a container query's
+     (`scorecardgoal.js::columnCountFor`), and `data-cols` is how it says so.
+     Round 12 established the reason and round 20 made it load-bearing: the
+     cards are chunked COLUMN-MAJOR, so reading down a column is only course
+     order if the number of stacks chunked equals the number of tracks drawn.
+     A container query could change the tracks without telling the chunker.
+     The floors themselves are round 11's: 4-up only where each card gets
+     ~320px+ (below that the NAME column wrapped every long star name —
+     "the cards need to be a bit bigger"), one column below 560. */
   .score-cards {
     display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 10px; align-items: stretch;
   }
-  /* Round 11 raised the 4-column floor 1080 -> 1320: the time columns now
-     reserve ~152px per card, so at 1080/4 the NAME was left ~110px and
-     wrapped every long star name — "the cards need to be a bit bigger".
-     Four-up only where each card gets ~320px+; otherwise two wide
-     columns. */
-  /* Round 12's wide shape, chosen by the COMPONENT from its measured width
-     (the bucket count has to change with the track count, which no CSS
-     query can do): 5 course columns + the specials column on a full
-     monitor. */
-  .score-cards[data-cols="6"] {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+  .score-cards[data-cols="2"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  @container (max-width: 1320px) {
-    .score-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .score-cards[data-cols="1"] { grid-template-columns: minmax(0, 1fr); }
+  .score-col {
+    display: grid; gap: 10px; min-width: 0; grid-auto-rows: 1fr;
   }
-  @container (max-width: 560px) {
-    .score-cards { grid-template-columns: minmax(0, 1fr); }
-  }
-  .score-col { display: grid; gap: 10px; min-width: 0; }
-  .score-col-courses { grid-auto-rows: 1fr; }
-  .score-col-specials { align-content: start; grid-auto-rows: max-content; }
   /* Each card wears its course's own tint (round 10: "a unique background
      color... so each pops better") via --card-tint from the component; the
      fallback keeps an untinted card legible rather than transparent (the

@@ -825,9 +825,10 @@ pill]], the [[scope]] control, and your [[rank]]s across everything.
 
 The [[Rank tab]]'s grid of course cards — the reference sheet's own shape,
 compact enough that one landscape screenshot shows your whole progress:
-three aligned columns of course cards in order, with the Secret card and
-the Bowser Fights card in a fourth. Each card belongs to one course (plus
-those two, together holding all 120 [[star]]s and the Bowser fights),
+four aligned columns you read DOWN, so the cards follow the game's own
+course order, closing with one card that holds the castle secrets and the
+Bowser fights together. Each card belongs to one course (plus that last
+one, the four together holding all 120 [[star]]s and the Bowser fights),
 wears its course's own colour and art, and prints one line per [[star]] or
 [[segment]]: its icon, its full name, your [[personal best]], the current
 [[Goal]]'s time, and the gap between the two — the icon and name together

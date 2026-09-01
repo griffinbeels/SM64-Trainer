@@ -710,9 +710,19 @@ PROJECT = Project(
     # narrow in real container terms (~741-742px, comfortably inside the
     # Column band already) and happen to have surfaced an unrelated,
     # already-owed stagebanner defect instead (see known_defects, below).
+    # 1320/1321 are the SCORECARD's 4-up step. They used to arrive in the
+    # derived matrix for free, off a `@container (max-width: 1320px)` rule;
+    # round 20 (2026-09-01) moved that decision into the component
+    # (`scorecardgoal.js::columnCountFor`, because the column-major chunk
+    # count and the drawn track count must be one number), so the CSS no
+    # longer declares the threshold and nothing would sweep it. Declared
+    # here instead: a step nobody measures is a step that can break quietly,
+    # and dropping these two widths would ALSO have deleted two honest
+    # exemption rows below by making their defect unreachable rather than
+    # fixed.
     extra_viewports=((850, 1180), (851, 1000), (900, 1180), (912, 1000),
                      (913, 1000), (1019, 1000), (1020, 1000),
-                     (979, 1000), (980, 1000),
+                     (979, 1000), (980, 1000), (1320, 1000), (1321, 1000),
                      (1500, 900), (1280, 720)),
     # OWED, not exempted. These became VISIBLE on 2026-07-28 when the
     # fixture finally rendered a populated practice page -- a stage, an
@@ -735,7 +745,9 @@ PROJECT = Project(
             'overlap 7x2px inside button.starcell',
         # Two more samples of the SAME owed defect, surfaced 2026-08-28
         # when the scorecard's 4-column breakpoint added 1320/1321 to
-        # the matrix (round 11 moved it up from 1080).
+        # the matrix (round 11 moved it up from 1080). Round 20 moved that
+        # threshold into JS, so these widths are now declared explicitly in
+        # `extra_viewports` above -- the defect is unchanged either way.
         '1320x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1321x1000 [page] overlap :: span.starholder x span.starrank':

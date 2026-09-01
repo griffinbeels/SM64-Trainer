@@ -33,10 +33,11 @@ import { h } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
+import { useIdentityFetch } from "../refetch.js";
 import { useMeasuredWidth } from "../viewport.js";
 import { attainableCs, fmtSeconds } from "../format.js";
-import { applyGoalOverrides, divisionOptions, fmtGapCs, goalGroups,
-         parseGapTime } from "../scorecardgoal.js";
+import { applyGoalOverrides, cardColumns, columnCountFor, divisionOptions,
+         fmtGapCs, goalGroups, parseGapTime } from "../scorecardgoal.js";
 import { capName, divisionDigit } from "./caps.js";
 import { entityIconSrc } from "./entityicons.js";
 import { Icon } from "./icons.js";
@@ -49,7 +50,8 @@ const html = htm.bind(h);
 // Re-exported at this path too -- ui/scorecardgoal.js's own header comment
 // says why the pure logic lives in a separate, genuinely import-free file
 // rather than here.
-export { applyGoalOverrides, divisionOptions, fmtGapCs, goalGroups, parseGapTime };
+export { applyGoalOverrides, cardColumns, columnCountFor, divisionOptions,
+         fmtGapCs, goalGroups, parseGapTime };
 
 function goalToValue(goal) {
   if (!goal) return "";
@@ -342,36 +344,15 @@ const FIGHTS_TINT = "#b03a3a";  // Bowser red
 
 function cardTint(row) {
   if (row.course_id != null) return CARD_TINTS[row.course_id] || SECRET_TINT;
-  return row.label === "Secret" ? SECRET_TINT : FIGHTS_TINT;
+  // One specials card since round 20 (the castle secrets AND the fights), so
+  // it wears the castle gold its stars have always worn; FIGHTS_TINT stays
+  // for the fight LINES' own icons.
+  return SECRET_TINT;
 }
 
-// Round 10's placement, his words as geometry: "3 columns of 5 cards (for
-// each of the courses, in order), and then a 4th column on the far right
-// for the remainder (secret stars card, followed by bowser fights card)" —
-// and round 12's wide shape for a full monitor: "Maybe it should be 5
-// columns of 3 for the main courses, and then the two secret/bowser
-// fights cards as the 6th column." Course cards chunk into
-// `courseColumns` stacks in payload order; the specials column reorders
-// Secret ahead of Fights for DISPLAY only — the payload and the CSV keep
-// the builder's order. A route scope with fewer course cards chunks the
-// same way; empty columns simply don't render.
-function cardColumns(rows, courseColumns = 3) {
-  const courses = rows.filter((row) => row.course_id != null);
-  const specials = rows.filter((row) => row.course_id == null)
-    .sort((a, b) => (a.label === "Secret" ? 0 : 1)
-                  - (b.label === "Secret" ? 0 : 1));
-  const perColumn = Math.ceil(courses.length / courseColumns) || 1;
-  const columns = [];
-  for (let start = 0; start < courses.length; start += perColumn)
-    columns.push({ kind: "courses", rows: courses.slice(start, start + perColumn) });
-  if (specials.length) columns.push({ kind: "specials", rows: specials });
-  return columns;
-}
-
-// The pane width at which the card switches to round 12's wide shape (5
-// course columns + specials = 6 tracks). 1900px gives every one of the six
-// columns at least ~310px — the same floor the 4-up step guarantees.
-const WIDE_CARDS_MIN_PX = 1900;
+// Round 20's placement (`cardColumns`/`columnCountFor`) lives in
+// scorecardgoal.js so node can drive it -- that file's own header says why --
+// and is re-exported at the top of this one.
 
 function ScoreCard({ t, row, showCaps, removing,
                      onRemove, onGoalOverride, onOpenLibrary,
@@ -547,21 +528,21 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
   const [removing, setRemoving] = useState(false);
   const [saveError, setSaveError] = useState(null);
 
-  // Fetches on mount and on t.mareloRev, the Rank tab's own staleness key
-  // (RankPage's own useEffect does the same -- an attempt or a PB save must
-  // not leave this card showing a stale gap while open during play).
-  useEffect(() => {
+  // Fetches on mount, on a scope switch, and on t.mareloRev -- the Rank
+  // tab's own staleness key (an attempt or a PB save must not leave this
+  // card showing a stale gap while open during play). Only the SCOPE switch
+  // clears the card first: blanking it on a staleness bump is what he saw as
+  // the page "randomly refreshing" (round 20; ui/refetch.js carries the
+  // measurement).
+  useIdentityFetch(scopeId, t.mareloRev, (cleared) => {
     let alive = true;
-    // A scope switch clears the OLD scope's card up front, the same rule
-    // RankPage's own fetch follows: a 404 on a stale route id must never
-    // leave the previous scope's rows under the new scope's label.
     setError(null);
-    setData(null);
+    if (cleared) setData(null);
     getJSON(`/api/scorecard?scope=${encodeURIComponent(scopeId)}`)
       .then((response) => alive && setData(response))
       .catch((err) => alive && setError(err));
     return () => { alive = false; };
-  }, [t.mareloRev, scopeId]);
+  });
 
   function loadRunnersOnce() {
     if (runners != null) return;
@@ -671,13 +652,10 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
               : ""}
             <${GoalLegend} goal=${data.goal} />
             <div class="score-cards" ref=${setCardsElement}
-                data-cols=${cardsWidth >= WIDE_CARDS_MIN_PX ? "6" : "4"}>
-              ${cardColumns(displayData.rows,
-                            cardsWidth >= WIDE_CARDS_MIN_PX ? 5 : 3)
+                data-cols=${String(columnCountFor(cardsWidth))}>
+              ${cardColumns(displayData.rows, columnCountFor(cardsWidth))
                 .map((column, columnIndex) => html`<div
-                  key=${columnIndex}
-                  class="score-col ${column.kind === "courses"
-                    ? "score-col-courses" : "score-col-specials"}">
+                  key=${columnIndex} class="score-col">
                 ${column.rows.map((row) => html`<${ScoreCard} key=${row.label}
                     t=${t} row=${row} showCaps=${showCaps} removing=${removing}
                     onRemove=${removeRow} onGoalOverride=${handleGoalOverride}

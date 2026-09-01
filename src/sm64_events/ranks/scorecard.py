@@ -37,6 +37,7 @@ from sm64_events.ranks.scoring import (
     tier_band, time_for_score)
 
 __all__ = ["SECRET_ROW", "SPECIAL_STAR_LABELS", "FIGHTS_LABEL",
+           "SPECIALS_LABEL",
            "hundred_coin_companion", "template_rows",
            "rows_for_course", "rows_for_route", "without_keys", "card_keys",
            "division_goal_cs", "build_card"]
@@ -176,21 +177,30 @@ def _course_row(course_id: int) -> dict:
 
 
 FIGHTS_LABEL = "Bowser Fights"
+# The one card that is not a course: the castle secrets and the Bowser
+# fights together. Two cards until round 20, when his own grid left exactly
+# 16 slots for 17 things -- "[Secrets + Bowser combined into a single card]".
+# Merged HERE rather than in the browser so the Sigma, the CSV and the card's
+# own ignore button all keep reading one row through one path; a display-only
+# merge would need a second implementation of `_sum_tiles` in JS.
+SPECIALS_LABEL = "Secret + Bowser"
+
+
+def _specials_row(entries) -> dict:
+    return {"course_id": None, "label": SPECIALS_LABEL, "entries": entries}
 
 
 def template_rows(fight_segments=()) -> list[dict]:
-    """The Overall card set: 15 course cards (6 cells each -- the 100c cell
-    combined with its companion), a Bowser-fights card when the caller
-    resolves any (round 9: "all 120 stars, plus the bowser fights" -- the
-    fights are segments, so the ROUTER finds them by category and this stays
-    pure), then the Secret card. `fight_segments` is [(entity_key, label)]."""
+    """The Overall card set: 15 course cards in COURSE order (6 cells each --
+    the 100c cell combined with its companion), then ONE specials card
+    holding the castle secrets followed by the Bowser fights the caller
+    resolved (round 9: "all 120 stars, plus the bowser fights" -- the fights
+    are segments, so the ROUTER finds them by category and this stays pure).
+    `fight_segments` is [(entity_key, label)]."""
     rows = [_course_row(course_id) for course_id in range(1, 16)]
-    if fight_segments:
-        rows.append({"course_id": None, "label": FIGHTS_LABEL,
-                     "entries": [(key, label, "rta")
-                                 for key, label in fight_segments]})
-    rows.append({"course_id": None, "label": "Secret",
-                 "entries": [(key, label, "igt") for key, label in SECRET_ROW]})
+    entries = [(key, label, "igt") for key, label in SECRET_ROW]
+    entries += [(key, label, "rta") for key, label in fight_segments]
+    rows.append(_specials_row(entries))
     return rows
 
 
@@ -214,16 +224,23 @@ def rows_for_route(route: dict, *, segment_labels: dict[int, str],
                    fight_segment_ids=()) -> list[dict]:
     """Round 9 (2026-08-28): a route scope composes CARDS, not step rows --
     "Each cell is a card representing a course / category of stars /
-    segments. It goes in Route order (e.g., BOB is all of the bobomb
-    battlefield stars...)". One card per COURSE with repeat visits MERGED,
-    ordered by when the route first touches the course; the Bowser FIGHTS
-    (identified by the caller, by category) get their own card; every other
-    one-off -- castle secrets, cap stages, Bowser reds, and any in-scope
-    segment with no course of its own -- collects into one Secret card.
-    Fights, then Secret, close the set, like the reference sheet's own
-    Secret column. Duplicate entities (a route can revisit) keep their first
-    appearance; the 100c companion merge applies per card. A candidate
-    `segment_labels` cannot name (a deleted segment) draws no cell."""
+    segments... BOB is all of the bobomb battlefield stars". One card per
+    COURSE with repeat visits MERGED, in COURSE order; every one-off --
+    castle secrets, cap stages, Bowser reds, the Bowser FIGHTS the caller
+    identifies by category, and any in-scope segment with no course of its
+    own -- collects into the single specials card that closes the set.
+
+    Round 9 ordered the course cards by when the route first TOUCHES each
+    course, in his words at the time. Round 20 reversed that on his report
+    against a live route card: "the order of the cards is wrong... the order
+    should be displayed in COURSE order. That is Bob -> WF -> JRB -> CCM ->
+    ..." The sheet he grades himself against is laid out that way, so a card
+    that reorders itself per route cannot be read beside it. The lines
+    INSIDE a card still follow the template (round 17).
+
+    Duplicate entities (a route can revisit) keep their first appearance;
+    the 100c companion merge applies per card. A candidate `segment_labels`
+    cannot name (a deleted segment) draws no cell."""
     segment_courses = segment_courses or {}
     fight_ids = set(fight_segment_ids)
     order: list[tuple] = []
@@ -273,13 +290,22 @@ def rows_for_route(route: dict, *, segment_labels: dict[int, str],
         if bucket[0] == "course":
             return {"course_id": bucket[1], "label": COURSE_NAMES[bucket[1]],
                     "entries": entries}
-        label = FIGHTS_LABEL if bucket[0] == "fights" else "Secret"
-        return {"course_id": None, "label": label, "entries": entries}
+        return _specials_row(entries)
 
-    course_buckets = [b for b in order if b[0] == "course"]
-    tail = ([("fights",)] if ("fights",) in buckets else []) \
-        + ([("secret",)] if ("secret",) in buckets else [])
-    return [row_of(bucket) for bucket in course_buckets + tail]
+    # COURSE order, not the order the route first touches each course --
+    # round 20, 2026-09-01, reversing round 9's "It goes in Route order".
+    # His report, looking at a route card: "the order of the cards is wrong.
+    # As seen in this sheet, the order should be displayed in COURSE order.
+    # That is Bob -> WF -> JRB -> CCM -> ..." The reference sheet he grades
+    # himself against is laid out that way, so a card that reorders itself
+    # per route cannot be read against it. The lines INSIDE a card still
+    # follow the template (round 17).
+    course_buckets = sorted((b for b in order if b[0] == "course"),
+                            key=lambda bucket: bucket[1])
+    specials = _merge_hundred_coins(_template_order(
+        buckets.get(("secret",), []) + buckets.get(("fights",), [])))
+    return ([row_of(bucket) for bucket in course_buckets]
+            + ([_specials_row(specials)] if specials else []))
 
 
 def without_keys(rows_spec: list[dict], excluded) -> list[dict]:

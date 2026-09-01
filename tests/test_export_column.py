@@ -224,5 +224,33 @@ def test_a_lone_candidate_wins_on_its_name_alone():
     assert column_lines(rows, payload, lambda *a: 4370) == ["43.70"]
 
 
+def test_the_column_runs_to_the_sheets_last_data_row_blanks_and_all():
+    """Round 20, his report: "it seems like it didn't paste over ALL rows in
+    the spreadsheet... it should paste all the way to 803."
+
+    The column always spans row 2 through the LAST row `read_rows` returns,
+    trailing blanks included -- on the live sheet that is 803 lines ending at
+    worksheet row 804, and its last 187 lines are blank because they are
+    castle movements he holds no time for. Trimming them would shorten the
+    column whenever the tail happens to be empty, which is a length that
+    depends on his data rather than on the sheet."""
+    rows = [
+        _row(2, "Approach A", "approach", True, ids=("1",)),
+        _row(9, "Nothing Here", "approach", True, ids=("1",)),
+    ]
+    payload = {"targets": [
+        {"entity_key": "star:1:0", "label": "Some Star",
+         "approaches": [{"name": "Approach A", "ids": ["1"]}],
+         "subsections": []},
+        {"entity_key": None, "label": "A Castle Movement",
+         "approaches": [{"name": "Real Name", "ids": ["1"]}],
+         "subsections": []},
+    ]}
+    lines = column_lines(rows, payload, lambda *a: 4370)
+    assert len(lines) == 8                      # rows 2..9, the last data row
+    assert lines[0] == "43.70"
+    assert lines[1:] == [""] * 7                # the tail survives being empty
+
+
 def test_no_rows_is_no_lines():
     assert column_lines([], {"targets": []}, lambda *a: None) == []

@@ -152,3 +152,42 @@ export function applyGoalOverrides(payload, overrides) {
 export function fmtGapCs(cs) {
   return `${cs < 0 ? "-" : "+"}${(Math.abs(cs) / 100).toFixed(2)}`;
 }
+
+// -- where a card sits in the grid -------------------------------------------
+
+// Round 20's placement, his words as geometry: "We should fill columns top
+// to bottom, then left to right... [BOB] [BBH] [DDD] [THI] / [WF] [HMC] [SL]
+// [TTC] / [JRB] [LLL] [WDW] [RR] / [CCM] [SSL] [TTM] [Secrets + Bowser
+// combined into a single card]". The payload already arrives in COURSE
+// order with the one specials card last (ranks/scorecard.py), so the whole
+// job here is to chunk it COLUMN-MAJOR: read down a column and you are
+// reading the course list in order, which is how the sheet he grades
+// himself against is laid out.
+//
+// This replaced round 10's three-columns-of-five-plus-a-specials-column and
+// round 12's six-track wide shape. Both gave the specials a track of their
+// own, and there is one specials card now.
+export function cardColumns(rows, columnCount = 4) {
+  if (!rows || !rows.length) return [];
+  const perColumn = Math.ceil(rows.length / Math.max(1, columnCount)) || 1;
+  const columns = [];
+  for (let start = 0; start < rows.length; start += perColumn)
+    columns.push({ rows: rows.slice(start, start + perColumn) });
+  return columns;
+}
+
+// How many columns that measured pane gets. The COMPONENT picks, not a
+// container query, for round 12's reason restated: column-major chunking
+// and the rendered track count must be the same number, and CSS cannot tell
+// the chunker anything. Reading down a column is only course order if the
+// stack it drew is the stack it chunked.
+//
+// The two floors are round 11's, unchanged: 4-up only where each card gets
+// ~320px+, one column below 560.
+export const CARD_COLUMN_FLOORS = [[1320, 4], [560, 2]];
+
+export function columnCountFor(paneWidth) {
+  for (const [floor, count] of CARD_COLUMN_FLOORS)
+    if (paneWidth > floor) return count;
+  return 1;
+}

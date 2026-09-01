@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { requestTarget } from "../target.js";
+import { useIdentityFetch } from "../refetch.js";
 import { useMeasuredWidth } from "../viewport.js";
 import { fmtSeconds } from "../format.js";
 import { rankColor } from "./ranks.js";
@@ -1027,16 +1028,18 @@ export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null }) {
   // while open during play (spec 2026-07-24 Step 2b) — the rating, chart
   // and breakdown kept showing pre-run numbers with nothing to indicate
   // they were old.
-  useEffect(() => {
+  useIdentityFetch(scopeId, t.mareloRev, (cleared) => {
     if (!scopeId) return undefined;
     let alive = true;
-    // Clear the old scope's state up front: a 404 on the NEW scope must never
+    // Clear the old SCOPE's state up front: a 404 on the NEW scope must never
     // leave the OLD scope's card/chart/breakdown on screen under the new
     // scope's label — that is exactly the "silently becomes a different
-    // rating" failure the deliberate 404 exists to prevent.
+    // rating" failure the deliberate 404 exists to prevent. A staleness bump
+    // is NOT a scope switch and clears nothing: doing both is what dropped
+    // this tab to its loading states once a minute while he played (round
+    // 20, measured — ui/refetch.js).
     setDataErr(null);
-    setData(null);
-    setPoints([]);
+    if (cleared) { setData(null); setPoints([]); }
     const query = `?scope=${encodeURIComponent(scopeId)}`;
     getJSON(`/api/marelo${query}`).then((response) => alive && setData(response))
       .catch((error) => alive && setDataErr(error));
@@ -1050,7 +1053,7 @@ export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null }) {
       .then((response) => { if (alive) { setPoints(response.points); setPointsLoaded(true); } })
       .catch(() => { if (alive) { setPoints([]); setPointsLoaded(true); } });
     return () => { alive = false; };
-  }, [scopeId, t.mareloRev]);
+  });
 
   // The scope chips (see the gate above). Scope-independent, so it follows
   // `t.mareloRev` alone -- the same key ScopeChips used for itself.

@@ -18,6 +18,15 @@ REPO = Path(__file__).resolve().parent.parent
 UI = REPO / "src" / "sm64_events" / "ui"
 SCORECARDGOAL_JS = (UI / "scorecardgoal.js").as_uri()
 
+# The card labels the Overall scope draws, in the order round 20 fixed them
+# in -- read off the BUILDER rather than restated, so a course rename or a
+# reordering cannot leave this file quietly asserting the old world.
+from sm64_events.memory.addresses import COURSE_NAMES  # noqa: E402
+from sm64_events.ranks.scorecard import SPECIALS_LABEL  # noqa: E402
+
+CARD_ORDER = [COURSE_NAMES[course_id] for course_id in range(1, 16)] \
+    + [SPECIALS_LABEL]
+
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node not on PATH")
 
@@ -925,16 +934,17 @@ def test_the_caps_toggle_defaults_off_and_enabling_persists():
                 "the enabled preference must survive a reload")
 
 
-def test_the_cards_sit_in_aligned_columns_with_secret_before_fights():
-    """Round 10's placement, his words as geometry: "3 columns of 5 cards
-    (for each of the courses, in order), and then a 4th column on the far
-    right for the remainder (secret stars card, followed by bowser fights
-    card)... The tops and bottoms of each card should end in the same
-    place." Course columns of equal card count must agree on every card's
-    top AND bottom; the specials column leads with Secret. Driven at
-    1920px: round 11 raised the 4-column floor to a 1320px pane, and only
-    the 4-up layout puts all three course columns in ONE grid row — at
-    2-up they wrap, and cross-row tops legitimately differ."""
+def test_the_cards_sit_in_four_aligned_columns_reading_down_in_course_order():
+    """Round 20's placement, his words as geometry: "We should fill columns
+    top to bottom, then left to right... [BOB] [BBH] [DDD] [THI] / [WF] [HMC]
+    [SL] [TTC] / [JRB] [LLL] [WDW] [RR] / [CCM] [SSL] [TTM] [Secrets + Bowser
+    combined into a single card]", with round 10's alignment claim intact:
+    "The tops and bottoms of each card should end in the same place."
+
+    RENDERED, not chunked: the node tests above already prove `cardColumns`
+    chunks column-major, and this is the other half — that the browser draws
+    the stacks it chunked, in that order, with their rows in register.
+    Driven at 1920px, where the 4-up track count applies."""
     with serve_ui() as base:
         _put_division_goal(base, "Bronze", "V")
 
@@ -947,37 +957,32 @@ def test_the_cards_sit_in_aligned_columns_with_secret_before_fights():
 
             columns = page.evaluate(
                 "Array.from(document.querySelectorAll('.rank-page "
-                ".scorecard-card .score-cards > .score-col')).map((col) => ({"
-                "  kind: col.className.includes('score-col-courses')"
-                "    ? 'courses' : 'specials',"
-                "  cards: Array.from(col.querySelectorAll('.score-card'))"
+                ".scorecard-card .score-cards > .score-col')).map((col) => ("
+                "  Array.from(col.querySelectorAll('.score-card'))"
                 "    .map((card) => ({"
                 "      label: card.querySelector('.score-card-name')"
                 "        .textContent.trim(),"
                 "      top: card.getBoundingClientRect().top,"
                 "      bottom: card.getBoundingClientRect().bottom,"
-                "    })),"
-                "}))")
+                "    }))"
+                "))")
 
-        course_cols = [col for col in columns if col["kind"] == "courses"]
-        special_cols = [col for col in columns if col["kind"] == "specials"]
-        assert len(course_cols) == 3, (
-            f"the overall card chunks its courses into 3 columns, got "
-            f"{len(course_cols)}")
-        assert len(special_cols) == 1
-        assert special_cols[0]["cards"][0]["label"] == "Secret", (
-            "the specials column leads with Secret ('secret stars card, "
-            "followed by bowser fights card')")
-        assert columns[-1]["kind"] == "specials", (
-            "the specials column sits on the far right")
+        assert len(columns) == 4, (
+            f"his grid is four columns wide, drew {len(columns)}")
+        drawn = [card["label"] for column in columns for card in column]
+        assert drawn == sorted(drawn, key=CARD_ORDER.index), (
+            "reading down each column in turn must walk the course list in "
+            f"order; drew {drawn}")
+        assert drawn[-1] == SPECIALS_LABEL, (
+            "the one specials card closes the last column")
 
-        counts = {len(col["cards"]) for col in course_cols}
-        assert counts == {len(course_cols[0]["cards"])}, (
-            f"the fixture's course columns should chunk evenly, got {counts}"
+        counts = {len(column) for column in columns}
+        assert counts == {len(columns[0])}, (
+            f"the fixture's columns should chunk evenly, got {counts}"
             " — re-derive this test's alignment claim if the seed changed")
-        for card_index in range(len(course_cols[0]["cards"])):
-            tops = [col["cards"][card_index]["top"] for col in course_cols]
-            bottoms = [col["cards"][card_index]["bottom"] for col in course_cols]
+        for card_index in range(len(columns[0])):
+            tops = [column[card_index]["top"] for column in columns]
+            bottoms = [column[card_index]["bottom"] for column in columns]
             assert max(tops) - min(tops) <= 1.5, (
                 f"card {card_index}'s tops drift across columns: {tops}")
             assert max(bottoms) - min(bottoms) <= 1.5, (
@@ -1030,12 +1035,13 @@ def test_every_card_labels_its_columns_and_keeps_them_in_register():
                     f"the {column} column drifts within one card: {edges}")
 
 
-def test_a_full_monitor_gets_the_five_course_column_shape():
-    """Round 12, his 4K read: "Maybe it should be 5 columns of 3 for the
-    main courses, and then the two secret/bowser fights cards as the 6th
-    column. Need enough width to support that." The component measures its
-    own pane and rebuckets — the same cards, five course stacks wide, the
-    specials column still last."""
+def test_a_full_monitor_still_gets_four_columns():
+    """Round 20 RETIRED round 12's six-track 4K shape ("5 columns of 3 for
+    the main courses, and then the two secret/bowser fights cards as the 6th
+    column"): there is one specials card now, and his own grid is four
+    columns wide at any width — "We can also compact it a bit more". So a
+    2860px pane must draw the same four tracks a 1920px one does, or the
+    column-major chunking would read down five stacks nobody asked for."""
     with serve_ui() as base:
         _put_division_goal(base, "Bronze", "V")
 
@@ -1055,24 +1061,25 @@ def test_a_full_monitor_gets_the_five_course_column_shape():
                 "  return {"
                 "    dataCols: cards.dataset.cols,"
                 "    width: cards.getBoundingClientRect().width,"
-                "    kinds: cols.map((col) => col.className.includes("
-                "'score-col-courses') ? 'courses' : 'specials'),"
-                "    courseCounts: cols.filter((col) => col.className"
-                ".includes('score-col-courses')).map((col) =>"
+                "    tracks: getComputedStyle(cards).gridTemplateColumns"
+                "      .split(' ').length,"
+                "    counts: cols.map((col) =>"
                 " col.querySelectorAll('.score-card').length),"
+                "    last: cols[cols.length - 1].querySelector("
+                "'.score-card:last-child .score-card-name').textContent.trim(),"
                 "  };"
                 "})()")
 
         assert state["width"] >= 1900, (
             f"the pane itself is only {state['width']}px wide — the "
             "workspace cap is back")
-        assert state["dataCols"] == "6", state
-        course_count = sum(state["courseCounts"])
-        per_column = -(-course_count // 5)          # ceil
-        expected_columns = -(-course_count // per_column)
-        assert len(state["courseCounts"]) == expected_columns, state
-        assert state["kinds"][-1] == "specials", (
-            "the Secret/Fights column stays on the far right")
+        assert state["dataCols"] == "4", state
+        assert state["tracks"] == 4, (
+            f"the grid drew {state['tracks']} tracks for 4 chunked stacks "
+            "— the CSS and the component disagree")
+        assert len(state["counts"]) == 4, state
+        assert state["last"] == SPECIALS_LABEL, (
+            "the one specials card closes the last column")
 
 
 def test_every_line_is_a_door_to_that_stars_library_page():
@@ -1360,3 +1367,151 @@ def test_no_star_name_leaves_a_blank_line_under_itself():
             "the text: "
             + ", ".join(f"{row['text']!r} (+{row['slack']:.1f}px)"
                         for row in blank_tailed[:6]))
+
+
+# -- round 20: where a card sits in the grid ---------------------------------
+
+COURSE_ORDER = ["BOB", "WF", "JRB", "CCM", "BBH", "HMC", "LLL", "SSL",
+                "DDD", "SL", "WDW", "TTM", "THI", "TTC", "RR", "Specials"]
+
+
+def test_the_grid_reads_down_each_column_in_course_order():
+    """His grid, verbatim: "We should fill columns top to bottom, then left
+    to right... [BOB] [BBH] [DDD] [THI] / [WF] [HMC] [SL] [TTC] / [JRB] [LLL]
+    [WDW] [RR] / [CCM] [SSL] [TTM] [Secrets + Bowser combined into a single
+    card]". Sixteen cards, four columns, COLUMN-MAJOR."""
+    rows = [{"label": name} for name in COURSE_ORDER]
+    columns = call("cardColumns", rows, 4)
+    drawn = [[card["label"] for card in column["rows"]] for column in columns]
+    assert drawn == [["BOB", "WF", "JRB", "CCM"],
+                     ["BBH", "HMC", "LLL", "SSL"],
+                     ["DDD", "SL", "WDW", "TTM"],
+                     ["THI", "TTC", "RR", "Specials"]]
+
+
+def test_a_scope_with_fewer_cards_still_reads_down_in_order():
+    """A route scope holds fewer cards; the last column simply holds fewer,
+    and reading down still walks the list in order."""
+    rows = [{"label": name} for name in ["BOB", "WF", "JRB", "CCM", "BBH"]]
+    columns = call("cardColumns", rows, 4)
+    assert [card["label"] for column in columns for card in column["rows"]] == [
+        "BOB", "WF", "JRB", "CCM", "BBH"]
+    assert [len(column["rows"]) for column in columns] == [2, 2, 1]
+
+
+def test_no_cards_draws_no_columns():
+    assert call("cardColumns", [], 4) == []
+
+
+def test_the_track_count_follows_the_measured_pane():
+    """The COMPONENT picks the track count, not a container query: the
+    chunker and the drawn grid have to be the same number or reading down a
+    column stops being course order. Floors are round 11's."""
+    assert call("columnCountFor", 2600) == 4
+    assert call("columnCountFor", 1321) == 4
+    assert call("columnCountFor", 1320) == 2
+    assert call("columnCountFor", 561) == 2
+    assert call("columnCountFor", 560) == 1
+    assert call("columnCountFor", 0) == 1
+
+
+def test_the_css_declares_a_track_rule_for_every_count_the_component_picks():
+    """A count the component picks with no matching `data-cols` rule draws
+    the default four tracks over two chunked stacks -- silently, and only at
+    that one width."""
+    css = (UI / "index.html").read_text(encoding="utf-8")
+    counts = {call("columnCountFor", width)
+              for width in (0, 560, 561, 1320, 1321, 2600)}
+    for count in counts:
+        if count == 4:
+            continue                      # the bare `.score-cards` default
+        assert f'.score-cards[data-cols="{count}"]' in css, (
+            f"columnCountFor can pick {count} columns and the CSS has no "
+            f"rule for it")
+
+
+def test_a_completed_attempt_does_not_blank_the_card_he_is_reading():
+    """Round 20, his report: "the page... is randomly refreshing? It keeps
+    refreshing without me doing anything, and I fear we have made a mistake
+    somewhere that accidentally prompts this type of autorefreshing."
+
+    Measured on his own live server: while he played, an `attempt_completed`
+    landed on the event socket every minute or so, and that event is in
+    store.js's REFRESH_ON set. Every Rank-tab fetch answered the resulting
+    `mareloRev` bump by CLEARING its state first, so the card dropped to
+    "Loading your scorecard..." with no gesture of his anywhere on the page.
+
+    Driven through the REAL service, because the whole claim is about what a
+    server-PUSHED event does to a mounted page -- a fresh load can never
+    reach this state. The card must keep its rows on screen ACROSS the
+    refetch: sampled EVERY FRAME while the event travels, the count never
+    drops to zero. Per-frame matters — the blank this catches is two frames
+    long on localhost, and a 60ms timer stepped straight over it.
+    """
+    import asyncio
+    import threading
+    from datetime import datetime, timezone
+
+    from sm64_events.core.events import Event
+    from ui_fixture import serve_ui_live
+
+    with serve_ui_live() as (base, service):
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_ms(300)
+
+            # Sample the card's own row count on a timer, so a blank that
+            # lasts one fetch is caught rather than missed between two reads.
+            page.evaluate(
+                "(() => {"
+                "  window.__samples = [];"
+                "  window.__fetches = 0;"
+                "  const real = window.fetch;"
+                "  window.fetch = function (...args) {"
+                "    if (String(args[0]).includes('/api/scorecard'))"
+                "      window.__fetches += 1;"
+                "    return real.apply(this, args);"
+                "  };"
+                "  const tick = () => {"
+                "    window.__samples.push(document.querySelectorAll("
+                "      '.rank-page .scorecard-card .score-card').length);"
+                "    window.__raf = requestAnimationFrame(tick);"
+                "  };"
+                "  tick();"
+                "})()")
+
+            def publish():
+                async def go():
+                    await service.publish(Event(
+                        type="attempt_completed", frame=99000,
+                        timestamp_utc=datetime(2026, 9, 1, 5, 19,
+                                               tzinfo=timezone.utc),
+                        payload={"course_id": 1, "star_id": 0,
+                                 "outcome": "success"}))
+                worker = threading.Thread(target=lambda: asyncio.run(go()))
+                worker.start()
+                worker.join(timeout=10)
+
+            publish()
+            page.wait_ms(1500)
+            measured = page.evaluate(
+                "(() => { cancelAnimationFrame(window.__raf);"
+                " return {samples: window.__samples,"
+                "         fetches: window.__fetches}; })()")
+            samples = measured["samples"]
+            refetches = measured["fetches"]
+
+    assert samples, "the sampler never ran"
+    assert samples[0] > 0, "the card was not drawn before the event"
+    # Without this the guard is vacuous: a card that never refetched cannot
+    # blank, so a page that ignored the event entirely would pass it.
+    assert refetches >= 1, (
+        "the published attempt never reached the card -- it did not refetch, "
+        "so this run proves nothing about blanking")
+    blanks = [index for index, count in enumerate(samples) if count == 0]
+    assert not blanks, (
+        "the card blanked while a completed attempt refetched it -- that is "
+        f"the flicker he reported; row counts were {samples}")
