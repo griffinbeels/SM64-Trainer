@@ -338,7 +338,8 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           CASTLE_SECRET_STAR_AREAS,
                                           COURSE_BY_LEVEL, COURSE_NAMES,
                                           course_for_level,
-                                          DOOR_ACTIONS, LEVEL_CASTLE_INSIDE,
+                                          DOOR_ACTIONS, HUNDRED_COIN_STAR_COINS,
+                                          LEVEL_CASTLE_INSIDE,
                                           LEVEL_NAMES, node_key, node_label,
                                           node_short_label,
                                           region_for_node, star_count,
@@ -1770,6 +1771,22 @@ def hundred_coin_entity(start_triggers: list,
     return None
 
 
+def _hundred_coin_waypoint(d, hc: tuple[int, int]) -> int | None:
+    """Index of the waypoint whose clause-set IS grabbing `hc`, or None when
+    the grab lives in the start triggers (a definition that arms ON the
+    grab needs no proof rule -- it already arms). The seeded family has one
+    waypoint and it is this one; a reshaped definition with a step before
+    it still resolves, and the proof arm then consumes every step up to and
+    including the grab, since a 100-coin star in hand proves them all."""
+    for index, clause_set in enumerate(d.waypoints):
+        for clause in clause_set:
+            if (clause.get("type") == "star_grabbed"
+                    and clause.get("star") == hc[1]
+                    and clause.get("course") == hc[0]):
+                return index
+    return None
+
+
 def arms_ambiently(start_triggers: list) -> bool:
     """True when a definition arms merely by the player being present in a
     star-bearing stage -- entering it, or already standing in it via an
@@ -2831,6 +2848,17 @@ class SegmentEngine:
         self._defs = [d for d in defs if d.enabled]
         self._def_by_id = {d.id: d for d in self._defs}
         self._armed: dict[int, _Arm] = {}
+        # The 100-coin family, resolved ONCE: {def id: (its star, the index
+        # of the waypoint that IS grabbing that star, or None when the grab
+        # sits in the start triggers instead)}. Read by the two proof rules
+        # (`_hundred_coin_proof_arm`, `_proven_hundred_coin_exit`) -- task
+        # 0110, 2026-09-01. Same resolver projection.py and views.py use, so
+        # a user-reshaped definition keeps matching by what it DOES.
+        self._hundred_coin: dict[int, tuple[tuple[int, int], int | None]] = {}
+        for d in self._defs:
+            hc = hundred_coin_entity(d.start_triggers, d.waypoints)
+            if hc is not None:
+                self._hundred_coin[d.id] = (hc, _hundred_coin_waypoint(d, hc))
         # Deferred destination-subarea entries (see _Arm.required_area): a
         # level edge into Castle Inside matched the level+from, but the
         # destination interior area only settles a poll later (the lobby loads
@@ -3287,6 +3315,22 @@ class SegmentEngine:
                     notices.append({"event": "segment_armed",
                                     "segment_id": d.id, "name": d.name,
                                     "frame": ev.frame})
+            # THE 100-COIN GRAB IS PROOF (task 0110, 2026-09-01). His savestate
+            # loop loads a state mid-course, grabs the 100-coin star and the
+            # exit star, and reloads: no level_enter, no anchor, so nothing
+            # above ever arms this family and every exit grab recorded as a
+            # plain exit star -- eleven times in one TTC session (journal
+            # 2026-08-28, ids 4126-4265). His ruling: "during a run if we
+            # ever get a 100 coins star, then now we're doing 100 coins".
+            # Runs AFTER the armed branch on purpose: a re-grab of the star
+            # while armed past it is a major action there (silent cancel),
+            # and this re-arms at the newer grab in the same tick -- the run
+            # he finishes is the latest one. Kept out of `start_triggers`
+            # so `arms_ambiently`/`hooks_on_arm`/the origin readers see the
+            # definition exactly as before.
+            if d.id not in self._armed and d.id in self._hundred_coin:
+                closed.extend(self._hundred_coin_proof_arm(
+                    Attempt, d, ev, ctx, notices))
         # THE GRAND STAR ENDS THE RUN, so nothing may still be running after
         # it. Griffin, 2026-08-05, on the credits screen with "CCM -> BBH"
         # still showing a live timer: "at the end of the game (i.e., after
@@ -3661,7 +3705,12 @@ class SegmentEngine:
         # own echo classification (self._anchor_echo) and never disarms on
         # a bare level_changed/session_started, so it needs neither.
         closed = []
-        complete = arm.progress >= len(d.waypoints)
+        # An exit grab made holding a hundred coins completes a 100-coin run
+        # whether or not the grab edge was ever seen -- a savestate loaded
+        # AFTER the 100-coin grab skips the waypoint, and the coin counter is
+        # the evidence the edge cannot carry (task 0110).
+        complete = (arm.progress >= len(d.waypoints)
+                    or self._proven_hundred_coin_exit(d, ev))
         if complete and self._matches(d.end_triggers, ev, ctx):
             a = self._close(Attempt, d, arm, ev, "success", None)
             if a:
@@ -3961,6 +4010,66 @@ class SegmentEngine:
                 return None
             distances.append(distance)
         return min(distances) if distances else None
+
+    def _proven_hundred_coin_exit(self, d, ev) -> bool:
+        """True when `ev` is an exit-star grab in this 100-coin definition's
+        course made while holding at least HUNDRED_COIN_STAR_COINS -- the
+        state that says the 100-coin star spawned this visit, whether or
+        not its grab edge was seen. False for the 100-coin star itself, for
+        a grab with no coin count (every row journaled before 2026-09-01),
+        and for a definition outside the family."""
+        found = self._hundred_coin.get(d.id)
+        if found is None or ev.type != "star_collected":
+            return False
+        hc = found[0]
+        coins = ev.payload.get("coins")
+        return (ev.payload.get("course_id") == hc[0]
+                and ev.payload.get("star_id") != hc[1]
+                and coins is not None and coins >= HUNDRED_COIN_STAR_COINS)
+
+    def _hundred_coin_proof_arm(self, Attempt, d, ev, ctx, notices) -> list:
+        """The arm-phase half of "the 100-coin grab is proof", for an UNARMED
+        100-coin definition (task 0110). Two shapes, both from his 2026-08-28
+        savestate loops:
+
+        * the 100-coin star's own grab arms the definition with every step
+          up to and including that grab consumed -- the practice-retry loop
+          re-loads a state saved just before the hundredth coin, so the grab
+          is the first thing the engine ever sees of the run;
+        * an exit grab made holding a hundred coins (`_proven_hundred_coin_
+          exit`) arms AND closes in one tick, as a success anchored at the
+          grab itself -- a state loaded after the 100-coin grab shows no
+          grab edge at all, and the coin counter is the only evidence left.
+
+        Neither shape is a start trigger: `arms_ambiently`, `hooks_on_arm`
+        and every origin reader keep seeing the definition as it ships.
+        Route scoping still applies, as it does to any arm."""
+        hc, star_index = self._hundred_coin[d.id]
+        if not _route_allows(d, ctx):
+            return []
+        if (star_index is not None and ev.type == "star_collected"
+                and (ev.payload.get("course_id"),
+                     ev.payload.get("star_id")) == hc):
+            self._cancelled.pop(d.id, None)
+            self._armed[d.id] = _Arm(
+                jid=ev.id, start_frame=ev.frame,
+                started_utc=ev.wall_time_utc, anchor_type=ev.type,
+                session_id=ev.session_id, level=ctx.level, area=ctx.area,
+                progress=star_index + 1,
+                deadline_frame=self._deadline_for(d, ev))
+            notices.append({"event": "segment_armed", "segment_id": d.id,
+                            "name": d.name, "frame": ev.frame})
+            return []
+        if (self._proven_hundred_coin_exit(d, ev)
+                and self._matches(d.end_triggers, ev, ctx)):
+            self._cancelled.pop(d.id, None)
+            arm = _Arm(jid=ev.id, start_frame=ev.frame,
+                       started_utc=ev.wall_time_utc, anchor_type=ev.type,
+                       session_id=ev.session_id, level=ctx.level,
+                       area=ctx.area, progress=len(d.waypoints))
+            a = self._close(Attempt, d, arm, ev, "success", None)
+            return [a] if a else []
+        return []
 
     def _disarm(self, d, ev, notices) -> None:
         if self._armed.pop(d.id, None) is not None:

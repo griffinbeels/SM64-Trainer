@@ -42,7 +42,7 @@ from sm64_events.detectors.spawn import SpawnDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
 from sm64_events.memory.addresses import (
-    KEY_GRAB_LEVELS, LEVEL_NAMES, PARTICLE_DUST, SPAWN_ACTIONS,
+    HUD_COINS_OFF, KEY_GRAB_LEVELS, LEVEL_NAMES, PARTICLE_DUST, SPAWN_ACTIONS,
     WARP_ENTRY_ACTIONS,
 )
 from sm64_events.memory.layout import layout_for, version_from_argv
@@ -80,6 +80,15 @@ def main() -> None:
                 f"delta over 1s = {delta}")
     ok &= check("MARIO_NUM_STARS plausible", 0 <= s2.num_stars <= 182,
                 f"numStars = {s2.num_stars} (compare with the in-game counter)")
+    # VERIFY (2026-09-01, task 0110): the coin count the 100-coin engine reads
+    # off an exit grab. Two independent witnesses must agree -- Mario's own
+    # numCoins and the HUD's copy -- and both must be the number beside the
+    # coin icon on screen. Grab a few coins first so the value is not 0.
+    hud_coins = mem.read_s16(LAYOUT.hud_display + HUD_COINS_OFF)
+    ok &= check("MARIO_NUM_COINS matches the HUD's coin count",
+                s2.coins == hud_coins and 0 <= s2.coins <= 999,
+                f"numCoins = {s2.coins}, gHudDisplay.coins = {hud_coins} "
+                f"(both must equal the coin counter on screen)")
     ok &= check("MARIO_ACTION nonzero", s2.mario_action != 0,
                 f"action = {s2.mario_action:#010x}")
     ok &= check("LAST_COMPLETED plausible",

@@ -1665,8 +1665,8 @@ def test_hundred_coin_grab_alone_creates_no_star_attempt():
 
 def test_hundred_coin_completion_attributes_to_the_star_not_the_segment():
     # Enter, grab 100 coins, grab the exit star -- the ENGINE's own
-    # completion is what closes the 100-coin star's attempt (measured
-    # shape: STAR course-6 success + the exit star's own success, one run).
+    # completion is what closes the 100-coin star's attempt, and it is the
+    # ONLY row the run leaves.
     attempts = project([
         jev(1, "level_changed", 900, {"from": 16, "to": 24}),
         star(2, 1000, course=2, star_id=6, igt=1000),
@@ -1681,13 +1681,15 @@ def test_hundred_coin_completion_attributes_to_the_star_not_the_segment():
     # design), but the reattributed attempt IS a star now and stars
     # display/grade on IGT -- without this it renders with no time and
     # cannot be graded. The closing star_collected event's OWN igt_frames
-    # (the same value the exit star's own attempt gets, since one event
-    # closes both) is the authoritative source, never rta_frames.
+    # is the authoritative source, never rta_frames.
     assert hundred[0].igt_frames == 1200
-    # decision #1: the exit star keeps its OWN attempt too -- a real grab,
-    # never suppressed by this change (only star 6 changes).
-    assert len(exit_star) == 1 and exit_star[0].segment_id is None
-    assert exit_star[0].igt_frames == 1200
+    # Decision #1 (2026-07-28) let the exit star keep its own row too. His
+    # ruling of 2026-08-29 (task 0110) reverses it: "during a run if we ever
+    # get a 100 coins star, then now we're doing 100 coins, and then run
+    # should only be attributed to the 100 coins star" -- the exit grab is
+    # the 100-coin run's finish, not a second thing he did.
+    assert exit_star == []
+    assert attempts == hundred
 
 
 def test_hundred_coin_strat_tag_comes_from_the_star_not_the_segment():
@@ -2701,3 +2703,61 @@ def test_the_game_ending_banks_no_failure_rows():
                         {"level": 34, "which": "grand", "igt_frames": 1306}))
     strays = [(a.segment_id, a.outcome) for a in closed if a.segment_id == 401]
     assert not strays, f"winning the game banked a phantom failure: {strays}"
+
+
+# --- One run, one row, on the 100-coin star (task 0110, 2026-09-01) ---------
+
+def _exit(id, frame, coins=None, star_id=3):
+    payload = {"course_id": 2, "star_id": star_id, "igt_frames": frame}
+    if coins is not None:
+        payload["coins"] = coins
+    return jev(id, "star_collected", frame, payload)
+
+
+def test_a_savestate_loop_records_every_100_coin_run_it_replays():
+    # The 2026-08-28 TTC journal shape: one anchored run, then a state
+    # loaded before the hundredth coin, grab, exit -- three times, with no
+    # level_enter and no anchor between them. Every one is a 100-coin run.
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 24}),
+        star(2, 1000, course=2, star_id=6, igt=1000),
+        star(3, 1200, course=2, star_id=3, igt=1200),
+        star(4, 2000, course=2, star_id=6, igt=1010),
+        star(5, 2200, course=2, star_id=3, igt=1210),
+        star(6, 3000, course=2, star_id=6, igt=1020),
+        star(7, 3200, course=2, star_id=3, igt=1220),
+    ], segments=[_hc_def()])
+    assert [(a.course_id, a.star_id, a.outcome, a.segment_id)
+            for a in attempts] == [(2, 6, "success", None)] * 3
+    assert [a.igt_frames for a in attempts] == [1200, 1210, 1220]
+
+
+def test_an_exit_grab_holding_100_coins_is_a_100_coin_run_with_no_grab_seen():
+    # A state loaded from AFTER the 100-coin grab, then the exit: the grab
+    # edge never comes, the coin counter on the exit grab is the evidence.
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 24}),
+        star(2, 1000, course=2, star_id=6, igt=1000),
+        _exit(3, 1200),
+        _exit(4, 2200, coins=105),
+    ], segments=[_hc_def()])
+    assert [(a.star_id, a.outcome) for a in attempts] == [(6, "success")] * 2
+    assert all(a.segment_id is None for a in attempts)
+
+
+def test_a_plain_exit_grab_in_a_100_coin_course_still_records_the_exit_star():
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 24}),
+        _exit(2, 1200, coins=40),
+    ], segments=[_hc_def()])
+    assert [(a.course_id, a.star_id, a.outcome) for a in attempts] == [
+        (2, 3, "success")]
+
+
+def test_the_100_coin_exit_moves_the_target_onto_the_100_coin_star():
+    _, proj = replay([
+        jev(1, "level_changed", 900, {"from": 16, "to": 24}),
+        star(2, 1000, course=2, star_id=6, igt=1000),
+        star(3, 1200, course=2, star_id=3, igt=1200),
+    ], segments=[_hc_def()])
+    assert proj.target == ("star", 2, 6)

@@ -35,6 +35,19 @@ MARIO_PARTICLE_FLAGS_OFF = 0x08  # u32 particleFlags, re-zeroed every frame;
 MARIO_ACTION_OFF = 0x0C          # u32; live-verified 2026-06-10
 MARIO_ACTION_TIMER_OFF = 0x1A    # u16, resets to 0 on action change
 MARIO_NUM_STARS_OFF = 0xAA       # s16, total star count; live-verified 2026-06-10
+# s16 numCoins -- the coins Mario holds THIS course visit, the number beside
+# the coin icon on the HUD. The decomp's MarioState lays it out immediately
+# before numStars (0xA8 / 0xAA), and the live-verified star field above is
+# the evidence for its neighbour. Read live 2026-09-01 beside gHudDisplay's
+# own coin field (hud_display + 2): both said 2 with Mario idle in the castle,
+# both said 120 stars beside them. VERIFY: tools/verify_addresses.py prints
+# it next to the HUD's copy -- they must agree while you play. Task 0110's
+# 100-coin engine reads it off the exit grab (`star_collected.coins`).
+MARIO_NUM_COINS_OFF = 0xA8
+# The coin count that spawns a course's 100-coin star (star 6). Holding at
+# least this many at an exit grab proves the visit was a 100-coin run even
+# when a savestate loaded AFTER the star skipped its grab edge.
+HUNDRED_COIN_STAR_COINS = 100
 # The pointers that say WHICH object Mario is engaged with. Live-verified
 # 2026-08-05 and DISCOVERED rather than asserted: tools/probe_objects.py
 # scanned every word of the struct's first 0xC0 bytes for a value landing on an
@@ -85,6 +98,10 @@ PARTICLE_DUST = 1 << 0
 # s8) stay 0 under Usamune's practice timers — verified live. Vanilla races
 # (KtQ etc.) still use them.
 HUD_TIMER_OFF = 0xC          # gHudDisplay + 0xC is the u16 timer
+HUD_COINS_OFF = 0x2          # gHudDisplay + 0x2 is the s16 coin count the HUD
+                             # draws -- the second witness verify_addresses.py
+                             # holds MARIO_NUM_COINS_OFF against (both read 2,
+                             # live, 2026-09-01); nothing shipped reads it
 
 # SM64 object pool (used by diagnostic tools and timer location).
 # 240 slots of 0x260 bytes at `layout.object_pool`; Usamune's practice

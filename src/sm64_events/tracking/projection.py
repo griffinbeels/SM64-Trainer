@@ -1185,6 +1185,24 @@ class Projector:
                             cleared=a.id in self._cleared,
                             cleared_reason=self._cleared.get(a.id))
             a = self._auto_ignored(a)
+            if (hc is not None and a.outcome == "success"
+                    and ev.type == "star_collected"
+                    and ev.payload.get("star_id") != hc[1]):
+                # ONE run, ONE row (task 0110, his ruling 2026-08-29): "during
+                # a run if we ever get a 100 coins star, then now we're doing
+                # 100 coins, and then run should only be attributed to the
+                # 100 coins star." The exit grab that closed this run is its
+                # FINISH, not a second thing he did, so the plain exit-star
+                # row `_close_by_grab` recorded a moment ago is dropped here
+                # -- decided off the engine's own closure rather than a
+                # second predicate, so a reshaped definition's end clauses
+                # cannot disagree with it. Its target move is overwritten by
+                # the auto-follow below (onto the 100-coin star); its
+                # last-star memory by the block right after this one.
+                exit_star = (hc[0], ev.payload.get("star_id"))
+                closed = [row for row in closed
+                          if row.segment_id is not None
+                          or (row.course_id, row.star_id) != exit_star]
             if not a.cleared and hc is not None:
                 # last-star memory (caveat 15): the grab-time suppression in
                 # _close_by_grab skips this update for the SAME reason a
