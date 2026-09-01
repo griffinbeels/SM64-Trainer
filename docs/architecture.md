@@ -86,7 +86,11 @@ commands, a definition edit and a Usamune time correction — not on the poll
 path). Measured: ~6.5 ms @ 100 events, ~23 ms @ 1,000 events, ~97 ms
 @ 5,000 events — and **0.7–1.0 s @ 18,247 events** on his own journal
 (2026-09-01, `_reproject()` timed in-process; 90 % of it is the segment
-engine re-judging every event against every definition). It blocks the event
+engine re-judging every event against every definition — `segments.py`'s
+`_first_match` ran 1.5 M times over 18k events × 84 definitions, and
+`addresses.world_connections()` rebuilt the whole world graph 1,294 times in
+one replay, 108k `add_edge` calls; both are the leads for the next perf pass,
+which clear/restore and definition edits still owe). It blocks the event
 loop for that long, so the browser cannot even receive the broadcast the same
 command sent. Acceptable for a command he issues rarely; **not for one he
 issues per row**: reclassifying an attempt's strategy took this path until
