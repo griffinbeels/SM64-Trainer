@@ -280,9 +280,29 @@ export function mappedTimeAtFrame(frame, frameMap, clipFps, stretches) {
   return null;
 }
 
+// The pad reader's verdict on the clip (replay/padread.py): how many video
+// frames the game's OWN input display could be read on, and on how many of
+// those the timeline's pad is exactly what the screen shows. His acceptance
+// test ("100% or it can't be relied on") as a number he can see, on the
+// surface he judges it from; the tool that lists each disagreement is named
+// in the hover.
+function screenCheck(reading, attemptId) {
+  if (!reading || !reading.sure) return null;
+  const off = reading.sure - reading.agree;
+  const label = off === 0
+    ? `screen-checked ${reading.agree}/${reading.sure}`
+    : `screen-checked ${reading.agree}/${reading.sure} · ${off} disagree`;
+  const title = `The game's own input display was read on ${reading.sure} video `
+    + `frames; the timeline's pad matches it on ${reading.agree}`
+    + (off ? `. Each disagreement: tools/score_pad_read.py --attempt ${attemptId} --disagreements`
+           : ". Every checkable frame agrees.");
+  return html`<span class=${`input-screen-check ${off ? "is-off" : "is-clean"}`}
+      title=${title}>${label}</span>`;
+}
+
 export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
                                 frameMap = null, clipFps = 60,
-                                compact = false }) {
+                                padReading = null, compact = false }) {
   const [state, setState] = useState({ phase: "loading" });
   const [frame, setFrame] = useState(0);
   // The pointer and the playhead both work in the TRACK column's own box,
@@ -488,6 +508,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         <h4>${timeLabel(total - lead)}${" "}·${" "}${total - lead} frames${" "}·${" "}${data.fps} fps</h4>
         ${lead > 0 && html`<span class="input-lead-note">+${lead}f lead-in
           before the reset</span>`}
+        ${screenCheck(padReading, attemptId)}
       </div>
     </header>
 

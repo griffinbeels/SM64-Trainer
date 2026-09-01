@@ -131,6 +131,15 @@ class ReplayService:
     #: 2026-08-28 and what four rounds of live checks found wrong.
     map_aligner = None
 
+    #: READS Usamune's input display out of the clip, glyph cell by glyph
+    #: cell, and pins the map to what it read (`replay/padread.py::
+    #: read_clip`), signature (clip, frame_map, attempt) -> PadReading |
+    #: None. Injected like the aligner. When it answers, the ink anchor
+    #: and the digit refit below are skipped -- the display has been read
+    #: rather than weighed -- and the sidecar carries its verdict: how
+    #: many slots the display confirmed and every one it contradicts.
+    pad_reader = None
+
     #: Holds the map to ONE answer per distinct picture in the footage
     #: (`replay/mapalign.py::quantised`). Injected like the aligner, and
     #: independent of it: a clip whose display cannot be read still gets
@@ -350,6 +359,10 @@ class ReplayService:
                 "anchor_offset_s": self._anchor_offset(a, m),
                 "frame_map": m.get("frame_map"),
                 "frame_map_source": m.get("frame_map_source"),
+                # The pad reader's verdict (sure / agree / nowhere /
+                # disagreements): how many pictures the game's own display
+                # confirmed the map on. None for a clip it could not read.
+                "pad_reading": m.get("pad_reading"),
                 "saved_path": str(saved) if saved is not None else None}
 
     # A frame and a half of slack: the clip's own first-frame stamp and the
@@ -470,6 +483,8 @@ class ReplayService:
         or no clear winner: the map stands as built and says so.
         """
         self._hold_one_answer_per_picture(meta, clip)
+        if self._read_the_display(meta, clip, attempt):
+            return
         if self.map_aligner is None:
             return
         try:
@@ -518,6 +533,38 @@ class ReplayService:
         log.info("frame map aligned to the footage: %+d slots "
                  "(fit %.3f, margin %.3f, %d slots paired)",
                  found.offset, found.fit, found.margin, found.paired)
+
+    def _read_the_display(self, meta: dict, clip: Path, attempt) -> bool:
+        """Pin the map to the pad Usamune drew into every picture.
+
+        The pad reader (round 32, 2026-09-01) reads the display's six
+        glyph cells per video frame and aligns the track to them, so the
+        map is RIGHT wherever the display can be checked and no worse
+        than the clocks' answer where it cannot. True when it answered:
+        the map is replaced, and `pad_reading` in the sidecar says how
+        many slots the display confirmed, how many it contradicts, and
+        which. A refusal (display off, too little read) or any failure
+        leaves the built map for the ink anchor, as before.
+        """
+        if self.pad_reader is None:
+            return False
+        try:
+            reading = self.pad_reader(clip, meta["frame_map"], attempt)
+        except Exception:
+            log.exception("pad reader failed; keeping the built map")
+            return False
+        if reading is None:
+            meta["frame_map_read"] = False
+            return False
+        meta["frame_map"] = list(reading.frame_map)
+        meta["frame_map_read"] = True
+        meta["pad_reading"] = reading.verdict.as_dict()
+        verdict = reading.verdict
+        log.info("frame map READ off the display: %d of %d slots confirmed "
+                 "(%.2f%%), %d contradicted, %d matched nothing nearby",
+                 verdict.agree, verdict.sure, 100 * verdict.agreement,
+                 verdict.sure - verdict.agree, verdict.nowhere)
+        return True
 
     def _refit_to_the_digits(self, meta: dict, clip: Path, attempt) -> None:
         """Give every picture its OWN frame (round 32 item 55).

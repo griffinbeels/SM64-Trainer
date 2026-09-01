@@ -451,6 +451,31 @@ def build():
 
         replay.map_aligner = _align_map_to_footage
 
+        # THE PAD READER (round 32, 2026-09-01) runs BEFORE the ink anchor
+        # and supersedes it when it answers: it reads the display's six
+        # glyph cells per video frame (`replay/padread.py`) and pins the
+        # map to the pad the game drew, with a per-slot verdict in the
+        # sidecar. The track is taken over the clip's WHOLE span (the
+        # lead-in included), since every picture with the display on is
+        # evidence, not only the attempt's own.
+        from sm64_events.inputs.track import track_with_lead
+        from sm64_events.replay.padread import BAND, read_clip
+
+        def _read_pad_off_the_footage(clip, frame_map, attempt):
+            seen = [raw for raw in frame_map if raw is not None]
+            if not seen:
+                return None
+            frames, _lead = track_with_lead(
+                db.inputs, attempt, span=(min(seen) - BAND, max(seen) + BAND))
+            if not frames:
+                return None
+            pads = {number: (frame.stick_x, frame.stick_y)
+                    for number, frame in frames}
+            return read_clip(clip, frame_map, pads,
+                             str(bundled_ffmpeg() or "ffmpeg"))
+
+        replay.pad_reader = _read_pad_off_the_footage
+
         # THE DIGIT REFIT IS BUILT AND NOT WIRED (round 32 item 57).
         # `mapalign.digit_fitted` assigns every picture its own frame by
         # ink, which fixed one of his clips (5146) and BROKE another

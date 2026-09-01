@@ -26,7 +26,8 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
   const [anchorOffsetS, setAnchorOffsetS] = useState(0);
   // The clip's own frame map (which game frame each video frame shows) and
   // its encode rate -- the timeline's exact clock; the offset is its fallback.
-  const [clipClock, setClipClock] = useState({ frameMap: null, fps: 60 });
+  const [clipClock, setClipClock] = useState({ frameMap: null, fps: 60,
+                                              padReading: null });
   const [marking, setMarking] = useState(null);   // null | "busy" | a message
 
   async function markTemplate() {
@@ -51,12 +52,14 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
         onView=${(view) => {
           setAnchorOffsetS(view.anchor_offset_s || 0);
           setClipClock({ frameMap: view.frame_map || null,
-                         fps: view.fps || 60 });
+                         fps: view.fps || 60,
+                         padReading: view.pad_reading || null });
         }} />
     <div class="attempt-drawer-inputs">
       <${InputTimeline} attemptId=${attemptId} video=${video}
           anchorOffsetS=${anchorOffsetS}
-          frameMap=${clipClock.frameMap} clipFps=${clipClock.fps} />
+          frameMap=${clipClock.frameMap} clipFps=${clipClock.fps}
+          padReading=${clipClock.padReading} />
       <div class="attempt-drawer-tools">
         <button onclick=${markTemplate} disabled=${marking === "busy"}
             title="Compare every future run against THIS one">

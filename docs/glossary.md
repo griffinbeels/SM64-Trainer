@@ -553,13 +553,12 @@ maps twice and one it skipped never maps -- the duplicates and skips a
 single offset cannot describe. Each map names what built it: the
 [[picture ledger]] first (capture's own record of each picture), then the
 timing series -- presents (the screen's own updates), the tagged capture
-feed, the [[frame]]-edge stamps. **Then the trainer checks that answer against
-the clip itself**: with the game's own input display on, every picture
-shows the pad the game drew into it, so the trainer compares the map
-against what the pictures show and slides it onto them, stretch by
-stretch -- the gap between the game and the footage steps mid-clip, so
-one slide cannot serve a whole clip — and a clip whose
-display it cannot read keeps the answer the clocks gave, and says so. The [[input timeline]]
+feed, the [[frame]]-edge stamps. **Then the [[pad reader]] pins that answer to the clip
+itself**: with the game's own input display on, every picture shows the
+pad the game drew into it, the reader reads it glyph by glyph, and the
+map moves onto what it read, picture by picture -- so the map is right
+wherever the reader can check the display, and a clip whose display it
+cannot read keeps the answer the clocks gave, and says so. The [[input timeline]]
 and every [[overlay layer]] read the clip through its map; a clip cut
 before maps existed falls back to a fixed offset.
 
@@ -605,6 +604,30 @@ ticks, where it belongs, rather than inside the map's answers.
 - **Not** -- a [[memory layout]] row: those name fixed addresses inside the
   game's memory, and this counter has no fixed address and sits outside it.
   Reading it stays read-only, like every other read.
+
+### Pad reader
+
+The part of extraction that reads Usamune's input display out of every
+picture of a clip and pins the [[frame map]] to what it read. The game
+paints the pad into each picture as six glyph cells -- a direction
+letter and up to two digits on the up-down line, the same on the
+left-right line -- and paints each glyph identically every time, so a
+cell either matches one known glyph by a clear margin or the reader
+calls it unknown, never a guess. The [[input track]] knows the pad on
+every [[frame]]; the reader lines the track up with what the pictures
+show, one [[frame]] per picture, and the [[input timeline]] then shows
+on each picture exactly the pad the screen shows. Its verdict rides the
+clip's own metadata: how many pictures the display confirmed and every
+one it contradicts, so "in sync" is a number per clip rather than a
+feeling. A clip recorded with the display off refuses, and the clocks'
+map stands.
+
+- **Lives** -- `src/sm64_events/replay/padread.py`; extraction runs it
+  (`src/sm64_events/replay/service.py`) and `tools/score_pad_read.py`
+  prints its verdict for one clip
+- **Not** -- the [[picture ledger]] or the [[present counter]]: those
+  infer which [[frame]] a picture shows from WHEN it appeared; the reader
+  reads it off WHAT the picture shows.
 
 ### Overlay layer
 

@@ -173,8 +173,11 @@ A clip with a frame map now gets a MAPPED export (`mapped_concat_script`): one
 line per clip video frame through the map, dropped at 0:00 over that clip with
 no offset.
 
-**Still owed, and it is the one no test here can stand in for:** the overlay's
-alignment against real footage. The clip is captured on a wall clock and the
-inputs on the game's frame counter. Record a clip with Usamune's own input
-display ON and score our overlay against Usamune's pixels in that same
-footage — the same move `tools/derive_xcam.py` makes for star times.
+**The alignment against real footage is now MEASURED per clip, by the pad
+reader** (`replay/padread.py`, 2026-09-01): with Usamune's input display ON,
+every picture carries the game's own drawing of the pad, the reader reads it
+cell by cell, the map is pinned to what it read, and `tools/score_pad_read.py`
+prints how many video frames the display confirms and every one it
+contradicts. The overlay rides the same map, so its alignment is that number.
+A clip recorded with the display OFF refuses and keeps the clocks' map — that
+is the one case no instrument here can score.

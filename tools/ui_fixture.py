@@ -1441,11 +1441,19 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
         frame_map = []
         for raw in range(first - pre, close + post):
             frame_map.extend([raw, raw])          # 30 fps game, 60 fps video
+        # The pad reader's verdict rides the view too (2026-09-01): the
+        # timeline header shows how many pictures the game's own display
+        # confirmed, so the chip is reachable by the sweeps. One contradicted
+        # slot, so the "disagree" wording is the one that renders.
+        sure = len(frame_map) - 200
         return {"clip_url": None,
                 "duration_s": len(frame_map) / 60,
                 "fps": 60, "game_fps": 30, "frame_map": frame_map,
                 "source": "buffer", "anchor_offset_s": pre / 30,
-                "truncated": False, "saved_path": None}
+                "truncated": False, "saved_path": None,
+                "pad_reading": {"sure": sure, "agree": sure - 1, "nowhere": 0,
+                                "known_cells": sure * 5, "slots": len(frame_map),
+                                "disagreements": [[pre * 2 + 40, "y", "U71", "U70"]]}}
 
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(

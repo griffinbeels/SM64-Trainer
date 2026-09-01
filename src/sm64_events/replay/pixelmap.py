@@ -1,5 +1,10 @@
 # src/sm64_events/replay/pixelmap.py
-"""The frame map, rebuilt from the FOOTAGE'S OWN PIXELS (map v3, round 32
+"""SUPERSEDED 2026-09-01 by `replay/padread.py` (the pad reader): per-GLYPH
+templates instead of the per-VALUE fingerprints below, which is what took
+the reading from 84%/49% to 13,524 of 13,525 slots agreeing. Nothing wires
+this module; it stays only until its deletion is his call.
+
+The frame map, rebuilt from the FOOTAGE'S OWN PIXELS (map v3, round 32
 item 26).
 
 Why, measured: the chain is logic write -> render/present -> capture ->

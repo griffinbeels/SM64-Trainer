@@ -1317,3 +1317,21 @@ def test_the_timeline_reaches_a_LEAD_IN_and_frame_zero_stays_the_attempt(page):
         "document.querySelector('.input-timeline-head h4').textContent")
     assert f"{total} frames" in frames_head, (
         "the header and the readout disagree on the attempt's length")
+
+
+def test_the_screen_check_chip_reaches_the_timeline_header(page):
+    """2026-09-01: the pad reader's verdict -- how many video frames the
+    game's own input display confirmed the timeline on -- is a chip in the
+    timeline header, so his 100% test is a number on the surface he judges
+    it from. The fixture's synthetic view carries one contradicted frame,
+    so the wording that renders is the one that names a disagreement and
+    the tool that lists it."""
+    reach(page, "input-timeline")
+    page.wait_for(".input-screen-check", timeout_ms=8000)
+    text, title, is_off = page.evaluate(
+        "(() => { const chip = document.querySelector('.input-screen-check');"
+        " return [chip.textContent, chip.getAttribute('title'),"
+        "  chip.classList.contains('is-off')]; })()")
+    assert text.startswith("screen-checked ") and "1 disagree" in text, text
+    assert is_off, "one contradicted frame must read as off, not clean"
+    assert "score_pad_read.py --attempt" in title, title

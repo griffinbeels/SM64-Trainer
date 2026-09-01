@@ -969,3 +969,70 @@ def test_the_digit_refit_replaces_the_map_and_says_so(tmp_path):
     crashed = wired(tmp_path / "c")
     crashed.map_digit_fit = broken
     assert crashed.view(42)["frame_map"][2] == 7000
+
+
+def test_a_read_display_replaces_the_map_and_the_ink_anchor_stands_down(tmp_path):
+    """Round 32, 2026-09-01. The pad reader READS Usamune's display cell by
+    cell and pins the map to it; when it answers, the ink anchor (one
+    number per slot, too weak to pin a picture) is not consulted, and the
+    sidecar carries the reader's own verdict -- how many slots the display
+    confirmed and which it contradicts -- so 100% is a number per clip."""
+    import json as _json
+
+    from sm64_events.replay.frameclock import FrameClock
+    from sm64_events.replay.padread import PadReading, Verdict
+
+    clock = FrameClock(now=lambda: 0.0)
+    base = (T0 - timedelta(seconds=3)).timestamp()
+    for n in range(17 * 30):
+        clock._now = lambda t=base + n / 30: t
+        clock.mark(7000 + n)
+    svc = make_service(tmp_path, [attempt()])
+    svc._frame_clock = clock
+    consulted = []
+    svc.map_aligner = lambda clip, frame_map, a: consulted.append("ink") or None
+
+    def reader(clip, frame_map, a):
+        read = [None if raw is None else raw + 5 for raw in frame_map]
+        verdict = Verdict(sure=400, agree=399, nowhere=0, known_cells=2000,
+                          slots=len(frame_map), disagreements=[(12, "y", "U71", "U70")])
+        return PadReading(read, verdict, {("y", "d1"): ["7", "8"]})
+
+    svc.pad_reader = reader
+    res = svc.view(42)
+    assert res["frame_map"][2] == 7000 + 5, "the map is what the display read"
+    assert consulted == [], "the ink anchor is not consulted once the display is read"
+    sidecar = _json.loads(
+        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
+    assert sidecar["frame_map_read"] is True
+    assert sidecar["pad_reading"]["agree"] == 399 and sidecar["pad_reading"]["sure"] == 400
+    assert sidecar["pad_reading"]["disagreements"] == [[12, "y", "U71", "U70"]]
+    assert "frame_map_aligned" not in sidecar
+
+
+def test_a_refusing_or_broken_reader_leaves_the_ink_anchor_in_charge(tmp_path):
+    import json as _json
+
+    from sm64_events.replay.frameclock import FrameClock
+    from sm64_events.replay.mapalign import Alignment
+
+    for reader in (lambda clip, frame_map, a: None,
+                   lambda clip, frame_map, a: (_ for _ in ()).throw(RuntimeError("boom"))):
+        clock = FrameClock(now=lambda: 0.0)
+        base = (T0 - timedelta(seconds=3)).timestamp()
+        for n in range(17 * 30):
+            clock._now = lambda t=base + n / 30: t
+            clock.mark(7000 + n)
+        svc = make_service(tmp_path, [attempt()])
+        svc._frame_clock = clock
+        svc.pad_reader = reader
+        svc.map_aligner = lambda clip, frame_map, a: Alignment(
+            offset=-2, fit=0.6, margin=0.05, paired=700)
+        res = svc.view(42)
+        assert res["frame_map"][2] == 7000 - 1        # the ink anchor's -2 slots = -1 frame
+        sidecar = _json.loads(
+            (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
+        assert sidecar["frame_map_aligned"] is True
+        assert sidecar.get("frame_map_read") is not True
+        (svc.clips_dir / "clip_attempt_42.mp4").unlink()
+        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").unlink()
