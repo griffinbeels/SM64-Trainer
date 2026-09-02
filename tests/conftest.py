@@ -73,6 +73,26 @@ def _isolate_rank_standards(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "bundled_rank_standards", lambda: None)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_ui_log(tmp_path, monkeypatch):
+    """No test may append to the checkout's own UI log.
+
+    A browser-driven test serves the REAL page, and the page posts what it
+    painted back to the app, which appends to the log at the data root -- from
+    source, this checkout's `data/`. Measured 2026-09-01: one full suite run
+    left 856 fixture paints in the dev log that `tools/what_happened.py` then
+    interleaved with real play. Under 16 parallel workers it is also a race
+    between appends and the log's own trim.
+
+    `uilog` holds `data_root` as an import-time alias, so the alias is what is
+    rebound (the KNOWN LIMIT above, read the other way round: patching
+    `paths.data_root` would never reach it). `tests/test_uilog.py::
+    test_no_test_can_reach_the_checkouts_own_ui_log` proves this is active.
+    """
+    from sm64_events.core import uilog
+    monkeypatch.setattr(uilog, "data_root", lambda: tmp_path)
+
+
 @pytest.fixture
 def service(tmp_path):
     """A fully-started TrackerService over a fresh throwaway db -- same
