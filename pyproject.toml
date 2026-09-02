@@ -21,7 +21,9 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "httpx>=0.27", "pyinstaller>=6.0", "playwright>=1.49"]
+dev = ["pytest>=8.0", "pytest-xdist>=3.8", "pytest-testmon>=2.1",
+       "pytest-rerunfailures>=15.0", "httpx>=0.27",
+       "pyinstaller>=6.0", "playwright>=1.49"]
 
 # playwright is declared HERE, not inherited from uilab, and that is on purpose.
 # uilab is resolved by PATH (see tests/test_responsive.py) because `uv sync`
@@ -79,6 +81,11 @@ packages = ["src/sm64_events"]
 # a commit actually adds can block it. That is why a 312-finding backlog can
 # sit here without anyone declaring bankruptcy.
 # ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+markers = [
+    "spread: each case of this test is its own worker group under pytest-xdist loadgroup instead of staying with its file (tests/conftest.py::pytest_collection_modifyitems)",
+]
+
 [tool.ruff]
 target-version = "py312"
 extend-exclude = ["build", "dist", "ds-bundle", ".design-sync", "replays", "logs"]

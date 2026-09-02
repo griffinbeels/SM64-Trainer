@@ -4,6 +4,7 @@ import inspect
 import json
 from datetime import datetime, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 from sm64_events.core.events import Event
@@ -16,6 +17,12 @@ from sm64_events.storage.db import Database
 from sm64_events.tracking.eventlabel import TRIGGER_JOURNAL_TYPES
 from sm64_events.tracking.segments import TRIGGERS
 from sm64_events.tracking.service import TrackerService
+
+# No module-scoped fixture here: every test builds its own client over its own
+# tmp db, so the 146 tests are independent -- and as ONE worker group they were
+# the second-longest unit in the parallel suite (129 s under 16 workers,
+# 2026-09-01). `spread` lets each land on whichever worker is free.
+pytestmark = pytest.mark.spread
 
 T0 = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
 
