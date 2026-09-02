@@ -1291,3 +1291,16 @@ US ROM and the game-version setting's automatic mode has something to detect
 from.
 
 - **Lives** — the version probe (`src/sm64_events/memory/version_probe.py`)
+
+### Chain file
+
+One value's whole path through the trainer, hop by hop: where the value holds
+true at each hop, which module owns it there, the probe that reads it, the way
+to force a known-good value in, and what that probe prints when the hop breaks.
+A bug report names the last hop — what he saw — so the cause sits at the
+earliest hop where the value stops holding true, and a fix below that hop
+cannot hold.
+
+- **Lives** — the chain files (`.claude/rules/chain-star-grab-time.md`) → the
+  test running the machine-wide chain checker over them
+  (`tests/test_chains.py`)
