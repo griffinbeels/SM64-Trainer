@@ -661,7 +661,12 @@ def _seed_level_entries(service, level: int) -> None:
                 type="level_changed", frame=frame, timestamp_utc=now,
                 payload=_place_time({"from": level, "to": level}, 0)))
 
-    asyncio.run(go())
+    # Through the helper, never asyncio.run directly: this seeder was written
+    # on this branch before main grew _run_coro, and under xdist it ran on
+    # workers whose browser loop was already up (2026-09-02: 6 failed + 4
+    # errors per full door, green alone, "cannot be called from a running
+    # event loop" seven times).
+    _run_coro(go())
 
 
 def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
@@ -1551,6 +1556,10 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                 "truncated": False, "saved_path": None,
                 "pad_reading": {"sure": sure, "agree": sure - 1, "nowhere": 0,
                                 "known_cells": sure * 5, "slots": len(frame_map),
+                                "frames_total": len(frame_map) // 2,
+                                "frames_checked": len(frame_map) // 2 - 100,
+                                "frames_agree": len(frame_map) // 2 - 101,
+                                "unpinned_longest": 41,
                                 "disagreements": [[pre * 2 + 40, "y", "U71", "U70"]]}}
 
     port = _free_port()

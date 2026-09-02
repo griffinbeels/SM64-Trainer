@@ -1341,6 +1341,9 @@ def test_the_screen_check_chip_reaches_the_timeline_header(page):
         "(() => { const chip = document.querySelector('.input-screen-check');"
         " return [chip.textContent, chip.classList.contains('is-off')]; })()")
     assert text.startswith("screen-checked ") and "1 disagree" in text, text
+    # Honest units (2026-09-01): "N of M frames" plus the longest unpinned
+    # run -- never "N/N", which read as "every frame checked".
+    assert " of " in text and "frames" in text and "unpinned 41f" in text, text
     assert is_off, "one contradicted frame must read as off, not clean"
     # The chip is a DOOR (his rule: a datum on a summary surface leads to
     # its evidence): click it and every disagreeing frame is listed as the

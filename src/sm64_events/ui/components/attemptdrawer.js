@@ -28,6 +28,13 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
   // its encode rate -- the timeline's exact clock; the offset is its fallback.
   const [clipClock, setClipClock] = useState({ frameMap: null, fps: 60,
                                               padReading: null });
+  // The timeline appears only once the replay has ANSWERED (his ruling
+  // 2026-09-01: "it should be hidden until we extract the replay, after
+  // which it's shown") -- extraction is where the map is read off the
+  // footage, so a timeline drawn before it is a track nobody has checked,
+  // and its header changed under him once the clip arrived. A clip that
+  // cannot be cut is an answer too: the timeline then shows unchecked.
+  const [replaySettled, setReplaySettled] = useState(false);
   const [marking, setMarking] = useState(null);   // null | "busy" | a message
 
   async function markTemplate() {
@@ -50,16 +57,24 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
     <${ReplayPlayer} attemptId=${attemptId} onCompare=${onCompare}
         onVideoEl=${setVideo}
         onView=${(view) => {
-          setAnchorOffsetS(view.anchor_offset_s || 0);
-          setClipClock({ frameMap: view.frame_map || null,
-                         fps: view.fps || 60,
-                         padReading: view.pad_reading || null });
+          if (view) {
+            setAnchorOffsetS(view.anchor_offset_s || 0);
+            setClipClock({ frameMap: view.frame_map || null,
+                           fps: view.fps || 60,
+                           clipStart: view.video_start_s || 0,
+                           padReading: view.pad_reading || null });
+          }
+          setReplaySettled(true);
         }} />
     <div class="attempt-drawer-inputs">
-      <${InputTimeline} attemptId=${attemptId} video=${video}
-          anchorOffsetS=${anchorOffsetS}
-          frameMap=${clipClock.frameMap} clipFps=${clipClock.fps}
-          padReading=${clipClock.padReading} />
+      ${replaySettled
+        ? html`<${InputTimeline} attemptId=${attemptId} video=${video}
+              anchorOffsetS=${anchorOffsetS}
+              frameMap=${clipClock.frameMap} clipFps=${clipClock.fps}
+              clipStart=${clipClock.clipStart || 0}
+              padReading=${clipClock.padReading} />`
+        : html`<div class="input-timeline-waiting">The input timeline appears
+            once the replay is cut and checked against its footage.</div>`}
       <div class="attempt-drawer-tools">
         <button onclick=${markTemplate} disabled=${marking === "busy"}
             title="Compare every future run against THIS one">

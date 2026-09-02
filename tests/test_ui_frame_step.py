@@ -25,8 +25,8 @@ FRAME_JS = (Path(__file__).resolve().parents[1]
 def run(expression: str):
     code = strip_comments(FRAME_JS.read_text(encoding="utf-8"))
     parts = []
-    for name in ("gameFrameOf", "nextMappedTime", "stepGameFrame",
-                 "clampToFrames"):
+    for name in ("gameFrameOf", "slotAtTime", "timeOfSlot", "nextMappedTime",
+                 "stepGameFrame", "clampToFrames"):
         match = re.search(rf"^export function {name}\(.*?^\}}\s*$",
                           code, re.MULTILINE | re.DOTALL)
         assert match, f"no top-level `export function {name}` in frame.js"
@@ -117,3 +117,27 @@ def test_no_map_answers_null_and_the_time_step_stands():
     assert mapped_step(1.0, None, 1) is None
     assert mapped_step(1.0, [], 1) is None
     assert mapped_step(1.0, [None, None], 1) is None
+
+
+def test_a_clip_whose_first_frame_is_not_at_zero_steps_onto_its_own_slots():
+    """His Log Rolling report (2026-09-01): clip 5782's frames sit at
+    k/60 + 0.011003 s, so a seek to (k + 0.5)/60 lands 2.7 ms before frame k
+    begins and Chromium presents k - 1 -- every step one picture early
+    (measured with a Chromium probe on the real clip; on a clip whose first
+    frame sits at 0.000 the same arithmetic is exact). The slot arithmetic
+    counts from the clip's own first timestamp, in both directions."""
+    start = 0.011003
+    frame_map = "[" + ",".join(str(1000 + k // 2) for k in range(600)) + "]"
+    # A time that is INSIDE slot 496 on this clip: its own pts.
+    inside_496 = start + 496 / 60 + 0.001
+    assert run(f"slotAtTime({inside_496}, 60, {start})") == 496
+    # The READ side survives a small offset (the instant is still inside the
+    # slot); it is the SEEK side that lands early, which is what the next
+    # assertions pin.
+    # Stepping from frame 1248 (slots 496-497) forward lands in slot 498 and
+    # AFTER its first pts, never before it.
+    landed = run(f"nextMappedTime({inside_496}, {frame_map}, 60, 1, {start})")
+    assert landed > start + 498 / 60 and landed < start + 499 / 60, landed
+    naive = run(f"nextMappedTime({inside_496 - start}, {frame_map}, 60, 1)")
+    assert naive < start + 498 / 60, "the old arithmetic lands before frame 498 begins"
+

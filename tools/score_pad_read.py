@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from sm64_events.core.paths import bundled_ffmpeg  # noqa: E402
 from sm64_events.inputs.track import track_with_lead  # noqa: E402
+from sm64_events.memory import addresses as A  # noqa: E402
 from sm64_events.replay import padread  # noqa: E402
 from sm64_events.storage.db import Database  # noqa: E402
 
@@ -66,12 +67,13 @@ def main() -> int:
     pads = {number: (frame.stick_x, frame.stick_y) for number, frame in frames}
     resets = ([attempt.anchor_frame] if attempt.anchor_type == "practice_reset"
               and attempt.anchor_frame is not None else [])
+    held = {number: frame.buttons & A.BUTTON_VALID_MASK for number, frame in frames}
     fps = float(meta.get("fps") or 60.0)
     print(f"attempt {args.attempt}: {len(frame_map)} video slots, map built by "
           f"{meta.get('frame_map_source') or 'the fixed offset'}"
           + (", already READ at extraction" if meta.get("frame_map_read") else ""))
     reading = padread.read_clip(clip, frame_map, pads, str(bundled_ffmpeg() or "ffmpeg"),
-                                resets=resets)
+                                held=held, resets=resets)
     if reading is None:
         print("REFUSED: the display could not be read on enough frames "
               "(input display off, or covered) -- the clocks' map stands")
@@ -82,6 +84,10 @@ def main() -> int:
     print(f"  AGREE    {v.agree:6d}  ({100 * v.agreement:.2f}%) show exactly the pad the timeline holds")
     print(f"  NOWHERE  {v.nowhere:6d}  reads matching no frame within +-10 (misreads)")
     print(f"  MOVED    {moved:6d}  slots the reading moved off the sidecar's map")
+    names = {bit: name for bit, name in A.BUTTON_BITS}
+    print(f"  ICONS    {v.icons_agree:6d} of {v.icons_checked} slots with a lit icon hold that button "
+          f"on the aligned frame; icons the clip taught itself: "
+          + ", ".join(names.get(bit, hex(bit)) for bit in v.icons_learned))
     for slot, (reset, chosen) in sorted(v.anchors.items()):
         print(f"  FLASH    slot {slot} is the reset's white picture: reset frame {reset}, "
               f"map {'agrees' if chosen == reset else f'says {chosen}'}")

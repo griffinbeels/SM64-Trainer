@@ -255,11 +255,12 @@ def test_the_lit_icon_count_pins_a_press_while_the_stick_rests():
     slots = 600
     truth = [FIRST + k // 2 for k in range(slots)]
     pads = {f: (0, 0) for f in range(FIRST - 40, FIRST + slots // 2 + 40)}   # resting throughout
-    held = {f: (1 if FIRST + 120 <= f < FIRST + 140 else 0) for f in pads}    # one press, held 20 frames
+    A_BIT = 0x8000
+    held = {f: (A_BIT if FIRST + 120 <= f < FIRST + 140 else 0) for f in pads}   # one press, held 20 frames
     cells = cells_for(truth, pads)
     alphabet = alphabet_from(truth, pads, cells)
     reads = P.read(cells, alphabet)
-    icons = [held[f] for f in truth]                                          # what the strip shows
+    icons = [({A_BIT} if held[f] else set()) for f in truth]                      # what the strip shows lit
     prior = [f + 2 for f in truth]                                            # the clocks, two frames out
     blind = P.align(reads, prior, pads)
     assert blind[240:280] != truth[240:280], "with the stick at rest the digits cannot correct it"

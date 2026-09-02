@@ -87,10 +87,28 @@ def test_extract_produces_scrubbable_av_mp4(tmp_path):
     assert res.truncated is False
     assert abs(res.duration_s - 4.0) < 0.2
     assert _stream_kinds(out) == {"video", "audio"}
+    # The clip's own first video timestamp rides the result (chain hop 6):
+    # a real number the browser will count slots from, never a guess.
+    assert isinstance(res.video_start_s, float) and 0.0 <= res.video_start_s < 0.05
+    from sm64_events.replay.extract import video_start_of
+    assert video_start_of(None, out) == 0.0, "no ffprobe: the old assumption, not a crash"
     # faststart: moov atom must precede mdat for instant browser scrubbing
     head = out.read_bytes()[:8192]
     assert head.find(b"moov") != -1 and (
         head.find(b"mdat") == -1 or head.find(b"moov") < head.find(b"mdat"))
+
+
+def test_ffprobe_is_found_beside_an_ffmpeg_that_lives_in_a_folder_named_ffmpeg(tmp_path):
+    """The standard layout is <root>/ffmpeg/bin/ffmpeg.exe; a whole-path
+    replace renamed the FOLDER too and the clip's first pts silently read
+    0.0 on the one clip that had one (5782)."""
+    from sm64_events.replay.extract import ffprobe_beside
+    binaries = tmp_path / "ffmpeg" / "bin"
+    binaries.mkdir(parents=True)
+    (binaries / "ffmpeg.EXE").write_bytes(b"")
+    (binaries / "ffprobe.EXE").write_bytes(b"")
+    assert ffprobe_beside(str(binaries / "ffmpeg.EXE")) == str(binaries / "ffprobe.EXE")
+    assert ffprobe_beside(None) is None
 
 
 def test_extract_av_stay_in_sync(tmp_path):
@@ -204,7 +222,10 @@ def test_cut_command_pins_a_quality_target(tmp_path, monkeypatch):
     captured = {}                                 # the stub below is global
 
     def fake_run(args, **kwargs):
-        captured["args"] = args
+        # The CUT is the call that encodes; the probe that follows it
+        # (ffprobe for the clip's first timestamp) must not overwrite it.
+        if "-c:v" in args:
+            captured["args"] = args
         return subprocess.CompletedProcess(args, 0, b"", b"")
 
     monkeypatch.setattr("sm64_events.replay.extract.subprocess.run", fake_run)

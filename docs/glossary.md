@@ -631,6 +631,24 @@ ticks, where it belongs, rather than inside the map's answers.
   game's memory, and this counter has no fixed address and sits outside it.
   Reading it stays read-only, like every other read.
 
+### Clip start
+
+The time of a clip's first picture, in the clip's own clock. A cut
+lands on a picture boundary of the ring, never on a whole 60 Hz slot,
+so the first picture of a clip sits up to one slot after zero (his
+Log Rolling clip: 0.011 s). Every slot arithmetic in the [[input
+timeline]] counts from it: the time it seeks to for a slot, and the
+slot it reads back from the picture the browser presents. Assumed zero
+until 2026-09-01, which put every seek one picture early on such a clip
+while the [[frame map]] and the [[pad reader]] were right.
+
+- **Lives** -- `src/sm64_events/replay/extract.py` measures it off the cut
+  (video_start_of), `src/sm64_events/replay/service.py` carries it in
+  the view as video_start_s (and measures it once for a clip cut before
+  it existed), `src/sm64_events/ui/frame.js` counts from it
+  (slotAtTime, timeOfSlot); `tools/probe_clip_seek.py` proves the
+  browser lands where the timeline asked.
+
 ### Pad reader
 
 The part of extraction that reads Usamune's input display out of every

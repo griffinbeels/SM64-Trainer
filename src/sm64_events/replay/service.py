@@ -18,6 +18,7 @@ from pathlib import Path
 from sm64_events.core.timefmt import GAME_FPS, format_igt
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.replay import mapalign
+from sm64_events.replay.extract import video_start_of
 from sm64_events.replay.config import (ReplayConfig, save_settings,
                                        validate_settings)
 
@@ -309,6 +310,13 @@ class ReplayService:
         if clip.exists() and meta.exists():
             m = json.loads(meta.read_text())
             url, source = f"/api/replay/clips/{name}", "buffer"
+            if "video_start_s" not in m:
+                # A clip cut before 2026-09-01 carries no first pts in its
+                # sidecar; measured once here rather than assumed 0, which is
+                # the assumption that put every seek one picture early.
+                m["video_start_s"] = video_start_of(
+                    getattr(self.extractor, "ffmpeg", None), clip)
+                meta.write_text(json.dumps(m))
         elif saved is not None:
             m = self._saved_meta(saved)
             url, source = f"/api/replay/saved/{attempt_id}", "saved"
@@ -317,6 +325,11 @@ class ReplayService:
             self._wait_for_tail(end)
             res = self.extractor.extract(self.recorder.ring, start, end, clip)
             m = {"duration_s": res.duration_s, "truncated": res.truncated}
+            # The clip's own first video timestamp: a cut leaves its
+            # sub-frame remainder on the first picture (5782: 0.011 s), and
+            # every seek and every panel read must count from it or they
+            # land one picture early (chain-input-timeline-frame, hop 6).
+            m["video_start_s"] = res.video_start_s
             if res.start_utc is not None:
                 m["start_utc"] = res.start_utc.isoformat()
                 if res.duration_s:
@@ -363,6 +376,7 @@ class ReplayService:
                 # disagreements): how many pictures the game's own display
                 # confirmed the map on. None for a clip it could not read.
                 "pad_reading": m.get("pad_reading"),
+                "video_start_s": m.get("video_start_s", 0.0),
                 "saved_path": str(saved) if saved is not None else None}
 
     # A frame and a half of slack: the clip's own first-frame stamp and the

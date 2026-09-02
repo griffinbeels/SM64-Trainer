@@ -17,7 +17,7 @@
 // which CROPS whatever the container's aspect does not cover.
 import { h } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { clampToFrames } from "../frame.js";
+import { clampToFrames, slotAtTime, timeOfSlot } from "../frame.js";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { fmtIgtShort } from "../format.js";
@@ -252,10 +252,11 @@ export function gameFrameOf(axis, stretches) {
 // (null before the clock's coverage); `clipFps` is the clip's encode rate.
 // Answers null when the map cannot say, and the caller falls back to the
 // offset arithmetic -- never a silent guess.
-export function mappedFrameAtTime(seconds, frameMap, clipFps, stretches, frames) {
+export function mappedFrameAtTime(seconds, frameMap, clipFps, stretches, frames,
+                                  clipStart = 0) {
   if (!frameMap || !frameMap.length) return null;
   const slot = Math.max(0, Math.min(frameMap.length - 1,
-    Math.floor(seconds * clipFps + 1e-4)));
+    slotAtTime(seconds, clipFps, clipStart)));
   const raw = frameMap[slot];
   if (raw == null) return null;
   const axis = trackFrameOf(raw, stretches);
@@ -266,7 +267,8 @@ export function mappedFrameAtTime(seconds, frameMap, clipFps, stretches, frames)
   }
   return Math.max(0, Math.min(Math.max(frames - 1, 0), axis));
 }
-export function mappedTimeAtFrame(frame, frameMap, clipFps, stretches) {
+export function mappedTimeAtFrame(frame, frameMap, clipFps, stretches,
+                                  clipStart = 0) {
   if (!frameMap || !frameMap.length) return null;
   const raw = gameFrameOf(frame, stretches);
   if (raw === null) return null;
@@ -275,7 +277,7 @@ export function mappedTimeAtFrame(frame, frameMap, clipFps, stretches) {
   // frame 28's picture never existed, so its inputs show over 29's slot).
   for (let slot = 0; slot < frameMap.length; slot += 1) {
     const shown = frameMap[slot];
-    if (shown != null && shown >= raw) return (slot + 0.5) / clipFps;
+    if (shown != null && shown >= raw) return timeOfSlot(slot, clipFps, clipStart);
   }
   return null;
 }
@@ -289,13 +291,28 @@ export function mappedTimeAtFrame(frame, frameMap, clipFps, stretches) {
 function screenCheck(reading, attemptId, open, toggle) {
   if (!reading || !reading.sure) return null;
   const off = reading.sure - reading.agree;
-  const label = off === 0
-    ? `screen-checked ${reading.agree}/${reading.sure}`
-    : `screen-checked ${reading.agree}/${reading.sure} · ${off} disagree`;
-  const title = `The game's own input display was read on ${reading.sure} video `
-    + `frames; the timeline's pad matches it on ${reading.agree}`
-    + (off ? ". Click to list each disagreeing frame."
-           : ". Every checkable frame agrees.");
+  // Three honest numbers in the timeline's own unit (his 2026-09-01
+  // ruling that "checked 1207/1207" was "literally and objectively
+  // wrong"): how many of the clip's FRAMES the display could be checked
+  // on, how many of those disagree, and the longest run the display
+  // cannot tell apart (inside a hold every neighbour reads the same, so
+  // nothing on screen pins which one a picture is). Never "N/N".
+  const total = reading.frames_total || 0;
+  const checked = reading.frames_checked || 0;
+  const gap = reading.unpinned_longest || 0;
+  const gapText = gap ? ` · longest unpinned ${gap}f` : "";
+  const label = total
+    ? (off === 0
+        ? `screen-checked ${checked} of ${total} frames${gapText}`
+        : `screen-checked ${checked} of ${total} frames · ${off} disagree${gapText}`)
+    : (off === 0
+        ? `screen-checked ${reading.agree}/${reading.sure}`
+        : `screen-checked ${reading.agree}/${reading.sure} · ${off} disagree`);
+  const title = `Of the clip's ${total || "?"} game frames the game's own input display `
+    + `could be checked on ${checked}; the timeline's pad matches on all but ${off}. `
+    + (gap ? `The longest stretch nothing on screen can pin is ${gap} frames. ` : "")
+    + (off ? "Click to list each disagreeing frame."
+           : "Every checkable frame agrees.");
   // A datum on a summary surface is a DOOR to its evidence (his standing
   // rule): the chip opens the list when there is one to open.
   return html`<button type="button"
@@ -334,7 +351,7 @@ function DisagreementList({ reading, frameMap, stretches, seek, lead }) {
 }
 
 export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
-                                frameMap = null, clipFps = 60,
+                                frameMap = null, clipFps = 60, clipStart = 0,
                                 padReading = null, compact = false }) {
   const [state, setState] = useState({ phase: "loading" });
   const [frame, setFrame] = useState(0);
@@ -392,7 +409,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
     const lead = state.data.lead_frames || 0;
     const readAt = (seconds) => {
       const mapped = mappedFrameAtTime(seconds, frameMap, clipFps,
-        stretches, frames);
+        stretches, frames, clipStart);
       // The fallback arithmetic counts from the ANCHOR (the attempt's own
       // frame 0), which sits `lead` slots into the axis when a buffer is
       // drawn; the mapped path lands on the axis directly.
@@ -481,7 +498,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       // disagree even for a frame.
       if (!video.paused) video.pause();
       const mapped = mappedTimeAtFrame(clamped, frameMap, clipFps,
-        data.stretches);
+        data.stretches, clipStart);
       // Inside the clip, always: a seek to the very edge leaves the element
       // reporting itself ended, and the panel then reads whatever it
       // presents (his 2026-08-31 jump from frame 770 to 591).

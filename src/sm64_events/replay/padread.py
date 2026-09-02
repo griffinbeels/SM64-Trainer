@@ -362,14 +362,15 @@ def align(reads: dict, frame_map: list, pads, same_picture=None,
                 cost += HOLE_COST
             elif truth[key] != cell.names[slot]:
                 cost += 1.0
-        # The button icons: how many are lit on this picture must be how
-        # many buttons the candidate frame holds (`held[raw]`).
-        if icons is not None and held is not None and icons[slot] is not None:
-            count = held.get(raw)
-            if count is None:
-                cost += HOLE_COST
-            elif count != icons[slot]:
-                cost += 1.0
+        # The button icons: every button read LIT on this picture must be
+        # held on the candidate frame (`held[raw]` is its button bits).
+        if icons is not None and held is not None and icons[slot]:
+            bits = held.get(raw)
+            for bit in icons[slot]:
+                if bits is None:
+                    cost += HOLE_COST
+                elif not bits & bit:
+                    cost += 1.0
         # The reset's white flash: its first picture shows the reset frame.
         if anchors and slot in anchors and anchors[slot] != raw:
             cost += ANCHOR_COST
@@ -434,9 +435,14 @@ class Verdict:
     known_cells: int = 0     # cells read across all slots
     slots: int = 0
     disagreements: list = field(default_factory=list)   # (slot, row, read, map says)
-    icons_checked: int = 0   # slots where the lit-icon count was clear
-    icons_agree: int = 0     # ...and equals the held-button count on the aligned frame
+    icons_checked: int = 0   # slots with at least one icon read lit
+    icons_agree: int = 0     # ...and every lit button is held on the aligned frame
+    icons_learned: list = field(default_factory=list)   # button bits the clip taught
     anchors: dict = field(default_factory=dict)   # white-flash slot -> [reset frame, frame chosen]
+    frames_total: int = 0    # distinct game frames the clip shows
+    frames_checked: int = 0  # ...on which the display could be checked
+    frames_agree: int = 0    # ...and agreed on every checkable picture
+    unpinned_longest: int = 0  # longest run of frames the display cannot tell apart
 
     @property
     def agreement(self) -> float:
@@ -446,6 +452,10 @@ class Verdict:
         return {"sure": self.sure, "agree": self.agree, "nowhere": self.nowhere,
                 "known_cells": self.known_cells, "slots": self.slots,
                 "icons_checked": self.icons_checked, "icons_agree": self.icons_agree,
+                "icons_learned": list(self.icons_learned),
+                "frames_total": self.frames_total, "frames_checked": self.frames_checked,
+                "frames_agree": self.frames_agree,
+                "unpinned_longest": self.unpinned_longest,
                 "anchors": {str(k): v for k, v in self.anchors.items()},
                 "disagreements": [list(d) for d in self.disagreements[:200]]}
 
@@ -454,22 +464,71 @@ def score(reads: dict, path: list, pads) -> Verdict:
     """How many slots the display confirms, and which it contradicts."""
     verdict = Verdict(slots=len(path))
     verdict.known_cells = int(sum(cell.known.sum() for cell in reads.values()))
-    for row in ROWS:
-        letter, d1, d2 = (reads[(row, col)] for col in COLS)
-        for slot, raw in enumerate(path):
-            if not (letter.known[slot] and d1.known[slot] and d2.known[slot]):
+    # A picture is CHECKABLE on a row when its magnitude digit read; the
+    # letter and the second digit are compared where they read and pass
+    # where they did not (a bare '0' and a single digit have blank cells,
+    # which no template can read -- and until 2026-09-01 those rows never
+    # counted at all, so a screen showing R2 over a track holding 0 was
+    # "checked" by omission; his Log Rolling report). Counted per VIDEO
+    # frame, never per row: two rows on one picture are one check.
+    frames_checked: set = set()
+    frames_agreed: set = set()
+    for slot, raw in enumerate(path):
+        checked = False
+        for row in ROWS:
+            letter, d1, d2 = (reads[(row, col)] for col in COLS)
+            if not d1.known[slot]:
                 continue
-            seen = (letter.names[slot], d1.names[slot], d2.names[slot])
-            verdict.sure += 1
-            if truth_glyphs(pads.get(raw), row) == seen:
-                verdict.agree += 1
+            truth = truth_glyphs(pads.get(raw), row)
+            seen = (letter.names[slot] if letter.known[slot] else None,
+                    d1.names[slot],
+                    d2.names[slot] if d2.known[slot] else None)
+            checked = True
+            matches = truth is not None and all(
+                want is None or want == got for want, got in zip(seen, truth, strict=True))
+            if matches:
                 continue
-            near = {truth_glyphs(pads.get(raw + k), row) for k in range(-10, 11)}
-            if seen not in near:
+            near = [truth_glyphs(pads.get(raw + k), row) for k in range(-10, 11)]
+            anywhere = any(t is not None and all(w is None or w == g for w, g in zip(seen, t, strict=True))
+                           for t in near)
+            if not anywhere:
                 verdict.nowhere += 1
-            says = truth_glyphs(pads.get(raw), row)
+            shown = "".join(g for g in seen if g)
             verdict.disagreements.append(
-                (slot, row, "".join(seen), "".join(says) if says else "no capture"))
+                (slot, row, shown, "".join(truth) if truth else "no capture"))
+            frames_checked.add(slot)
+            break
+        else:
+            if checked:
+                frames_checked.add(slot)
+                frames_agreed.add(slot)
+    verdict.sure = len(frames_checked)
+    verdict.agree = len(frames_agreed)
+    # The same verdict in the TIMELINE's unit -- game frames -- so the chip
+    # and the header count the same thing (his 2026-09-01 question: three
+    # different frame numbers on one surface).
+    shown = {raw for raw in path if raw is not None}
+    verdict.frames_total = len(shown)
+    verdict.frames_checked = len({path[slot] for slot in frames_checked})
+    verdict.frames_agree = len({path[slot] for slot in frames_agreed}
+                               - {path[slot] for slot in frames_checked - frames_agreed})
+    # EXPOSURE (fresh-context review, 2026-09-01): a frame is PINNED only
+    # when the display could be checked on it AND its pad differs from the
+    # frame before -- inside a hold every neighbour reads the same, so the
+    # display cannot say which of them a picture is, and a map shifted
+    # inside the hold reads exactly as well as the right one (measured:
+    # +2 across 120 slots, verdict unchanged). The longest unpinned run is
+    # the number the chip owes him beside the agreement.
+    checked_frames = {path[slot] for slot in frames_checked}
+    longest = run = 0
+    previous = None
+    for raw in sorted(shown):
+        pad = pads.get(raw)
+        pinned = raw in checked_frames and pad is not None and pad != previous
+        run = 0 if pinned else run + 1
+        longest = max(longest, run)
+        previous = pad
+    verdict.unpinned_longest = longest
     return verdict
 
 
@@ -512,36 +571,39 @@ def flash_anchors(cells: np.ndarray, frame_map: list, resets) -> dict:
 
 
 # -- the button icons ---------------------------------------------------------------
-# Usamune draws one icon per HELD button, packed left to right in a strip
-# to the right of the digits, and MEASURED on his clip 5534 (2026-09-01) the
-# icons are on/off with the pad -- a press paints the icon in full on the
-# press frame and a release removes it on the release frame, no fade. So
-# the number of lit icons on a picture is the number of buttons held on
-# its frame: evidence that would pin a press or a release even while the
-# stick rests. `align` accepts that evidence (`held`, `icons`) and it is
-# tested; `icon_counts` below is the first INSTRUMENT for it and it is NOT
-# wired: measured on clip 5534 it agreed with the track on 858 of 1,034
-# clear slots (83%) -- scenery behind the strip lit every position (a
-# bob-omb, a wall: held none, "4 lit" x35), and an orange C icon over
-# orange sand read as empty (held C-right, "0 lit" x15). A background-
-# difference test cannot tell an icon from the world; the next instrument
-# needs the icons' own templates, learned like the digits, and the wire-in
-# gate is the same 99% the digits met.
-ICON_STRIP = (0.2475, 0.830, 0.4975, 0.902)       # x0, y0, x1, y1 fractions
-ICON_PITCH = 95 / 1600                             # one packed position to the next
-ICON_WIDTH = 80 / 1600
+# Usamune lights one icon per HELD button in a strip right of the digits,
+# packed left to right, and MEASURED on his clip 5534 (2026-09-01) the icons
+# are on/off with the pad: full paint on the press frame, gone on the release
+# frame, no fade. A lit icon is therefore evidence that its button is held on
+# the picture's frame -- evidence that pins a press while the stick rests or
+# holds still, which is exactly where the digits say nothing (his C-down on
+# the frame after a reset; his A and B inside the pyramid at frames 746/771,
+# the stick pinned at U84 the whole time).
+#
+# Read like the digits: one template per BUTTON, learned from the clip's own
+# single-button frames at the first position (the icon is the same bitmap at
+# every position), weighted where the exemplars agree and the colour is the
+# icon's own; a position reads a button only by a clear margin, else nothing.
+# Only LIT icons are evidence. An empty position is not read -- the first
+# instrument tried that with a background-difference test and scored 83%
+# (scenery lit every position; an orange C over sand read empty) -- so a
+# release pins nothing and the next press or stick change does.
+ICON_STRIP = (0.2475, 0.830, 0.485, 0.902)         # x0, y0, x1, y1 fractions of the frame
+ICON_W, ICON_H = 190, 44                            # the strip at 2.5 px per game px
+ICON_PITCH, ICON_WIDTH = 47, 40                     # packed positions, at that scale
 ICON_POSITIONS = 4
-ICON_REF_BAND = (0.2475, 0.820, 0.4975, 0.828)     # the strip's own background, same frame
-ICON_LIT_MIN = 0.30       # share of a position differing from the background: lit
-ICON_EMPTY_MAX = 0.04     # ...below this: empty; between = unknown
-ICON_DIFF = 40            # per-pixel mean |RGB diff| that counts as icon paint
+ICON_DIST_MAX = 40.0
+ICON_MARGIN_MIN = 8.0
+ICON_MIN_EXEMPLARS = 24   # sightings a button needs before its icon is trusted...
+ICON_MIN_HOLDS = 3        # ...spread over this many separate presses (backgrounds)
+ICON_MIN_WEIGHT = 400     # painted pixels a template must own...
+ICON_MIN_SATURATED = 200  # ...of which this many are the icon's own fill colour
+ICON_REFERENCE = "pad_icons_us.npz"
 
 
-def icon_counts(ffmpeg: str, clip: Path, width: int | None = None,
-                height: int | None = None) -> list:
-    """Per video frame: how many button icons are lit, or None when a
-    position is neither clearly lit nor clearly empty (a wash-out, a fade
-    from white). Counted left to right until the first empty position."""
+def decode_icons(ffmpeg: str, clip: Path, width: int | None = None,
+                 height: int | None = None) -> np.ndarray:
+    """Every video frame's icon strip, scaled to ICON_W x ICON_H."""
     if width is None or height is None:
         probe = subprocess.run(
             [ffmpeg.replace("ffmpeg", "ffprobe"), "-v", "error",
@@ -550,43 +612,146 @@ def icon_counts(ffmpeg: str, clip: Path, width: int | None = None,
         first = probe.stdout.strip().splitlines()[0]
         width, height = (int(v) for v in first.split(",")[:2])
     x0, y0, x1, y1 = ICON_STRIP
-    rx0, ry0, rx1, ry1 = ICON_REF_BAND
-    x, y = round(width * x0), round(height * ry0)
-    w, h = round(width * (x1 - x0)), round(height * (y1 - ry0))
+    x, y = round(width * x0), round(height * y0)
+    w, h = round(width * (x1 - x0)), round(height * (y1 - y0))
     out = subprocess.run(
         [ffmpeg, "-v", "error", "-i", str(clip),
-         "-vf", f"crop={w}:{h}:{x}:{y}", "-f", "rawvideo", "-pix_fmt", "rgb24",
-         "pipe:1"], capture_output=True).stdout
-    stride = w * h * 3
+         "-vf", f"crop={w}:{h}:{x}:{y},scale={ICON_W}:{ICON_H}:flags=area",
+         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+        capture_output=True).stdout
+    stride = ICON_W * ICON_H * 3
     count = len(out) // stride
-    if count == 0:
-        return []
-    strip = np.frombuffer(out[:count * stride], dtype=np.uint8).reshape(
-        count, h, w, 3).astype(np.int16)
-    band_h = round(height * (ry1 - ry0))
-    reference = np.median(strip[:, :band_h].reshape(count, -1, 3), axis=1)   # (N, 3)
-    icons_y0 = round(height * (y0 - ry0))
-    pitch, wide = round(width * ICON_PITCH), round(width * ICON_WIDTH)
-    counts: list = []
-    for k in range(count):
-        lit = 0
-        verdict: int | None = None
-        for position in range(ICON_POSITIONS):
-            cx = position * pitch
-            cell = strip[k, icons_y0:, cx:cx + wide]
-            if cell.shape[1] < wide // 2:
-                break
-            share = float((np.abs(cell - reference[k]).mean(axis=-1) > ICON_DIFF).mean())
-            if share >= ICON_LIT_MIN:
-                lit += 1
-                continue
-            if share <= ICON_EMPTY_MAX:
-                verdict = lit
+    return np.frombuffer(out[:count * stride], dtype=np.uint8).reshape(
+        count, ICON_H, ICON_W, 3)
+
+
+def icon_cell(strip: np.ndarray, position: int) -> np.ndarray:
+    left = position * ICON_PITCH
+    return strip[..., :, left:left + ICON_WIDTH, :]
+
+
+def icon_paint(img: np.ndarray) -> np.ndarray:
+    """Pixels an icon paints: a saturated fill (A blue, B green, the C
+    buttons orange), a white core, or the dark outline every icon wears."""
+    r, g, b = img[..., 0], img[..., 1], img[..., 2]
+    top, bottom = np.maximum(np.maximum(r, g), b), np.minimum(np.minimum(r, g), b)
+    # No "dark outline" clause: a dark corridor is dark everywhere, and six
+    # Z sightings from one such stretch agreed on the background, so the
+    # template read the corridor as Z on 982 slots (measured on 5574).
+    return (top - bottom > 70) | (bottom > 190)
+
+
+def icon_labels_from(path: list, held) -> list:
+    """Per slot: the ONE button bit held on the aligned frame (and its
+    neighbours), else None -- the frames whose first position shows a
+    known icon."""
+    labels = [None] * len(path)
+    for index, raw in enumerate(path):
+        if raw is None:
+            continue
+        bits = held.get(raw)
+        if not bits or bits & (bits - 1):                 # none, or more than one
+            continue
+        if any(held.get(raw + k) != bits for k in (-1, 1)):
+            continue
+        labels[index] = bits
+    return labels
+
+
+def learn_icons(strip: np.ndarray, labels: list) -> dict:
+    """button bit -> Template, from single-button frames at position 0."""
+    cells = icon_cell(strip, 0)
+    groups: dict = {}
+    for index, bit in enumerate(labels):
+        if bit:
+            groups.setdefault(bit, []).append(index)
+    out: dict = {}
+    for bit, members in groups.items():
+        holds = 1 + sum(1 for a, b in zip(members, members[1:], strict=False) if b - a > 1)
+        if len(members) < ICON_MIN_EXEMPLARS or holds < ICON_MIN_HOLDS:
+            continue                  # one long press teaches its background, not the icon
+        chosen = np.array(members)
+        if len(chosen) > MAX_EXEMPLARS:
+            chosen = chosen[np.linspace(0, len(chosen) - 1, MAX_EXEMPLARS).astype(int)]
+        stack = cells[chosen].astype(np.float32)
+        median = np.median(stack, axis=0)
+        spread = np.median(np.abs(stack - median), axis=0).mean(axis=-1) * 1.4826
+        weight = ((spread < SPREAD_MAX) & icon_paint(median)).astype(np.float32)
+        # An icon template must be MOSTLY its saturated fill: the grey Z
+        # left only its white core (327 px) and that matched sand and walls
+        # on 452 slots of 5782 where Z was not held. A weak template is no
+        # template -- the button stays unread rather than misread.
+        top = np.maximum(np.maximum(median[..., 0], median[..., 1]), median[..., 2])
+        bottom = np.minimum(np.minimum(median[..., 0], median[..., 1]), median[..., 2])
+        saturated = float(((top - bottom > 70) & (weight > 0)).sum())
+        if weight.sum() < ICON_MIN_WEIGHT or saturated < ICON_MIN_SATURATED:
+            continue
+        out[bit] = Template(median, weight, len(chosen))
+    return out
+
+
+def save_icons(templates: dict, path: Path) -> None:
+    from sm64_events.memory import addresses as A
+    names = {bit: name for bit, name in A.BUTTON_BITS}
+    arrays = {}
+    for bit, t in templates.items():
+        arrays[f"{names[bit]}/median"] = t.median.astype(np.float16)
+        arrays[f"{names[bit]}/weight"] = t.weight.astype(bool)
+        arrays[f"{names[bit]}/n"] = np.array(t.exemplars)
+    np.savez_compressed(path, **arrays)
+
+
+def load_icons(path: Path | None = None) -> dict:
+    """The reference icon templates shipped with the package: learned off
+    his clips 5574 + 5782 (2026-09-01) and verified against their tracks."""
+    if path is None:
+        path = resources.files("sm64_events.data") / ICON_REFERENCE
+    # Keys are button NAMES ("A/median"), resolved to bits through the one
+    # table that names them -- a bit-keyed loader read "A" with int() and
+    # the swallowed ValueError meant this channel had never once run
+    # (fresh-context review, 2026-09-01, test T6).
+    from sm64_events.memory import addresses as A
+    bits = {name: bit for bit, name in A.BUTTON_BITS}
+    out: dict = {}
+    try:
+        with np.load(path) as data:
+            for key in data.files:
+                name, part = key.split("/")
+                if part != "median" or name not in bits:
+                    continue
+                out[bits[name]] = Template(data[key].astype(np.float32),
+                                           data[f"{name}/weight"].astype(np.float32),
+                                           int(data[f"{name}/n"]))
+    except FileNotFoundError:
+        return {}
+    return out
+
+
+def read_icons(strip: np.ndarray, templates: dict) -> list:
+    """Per slot: the set of button bits whose icon is lit, read by a clear
+    margin at any position. An empty set is no evidence."""
+    count = len(strip)
+    lit = [set() for _ in range(count)]
+    if not templates:
+        return lit
+    bits = list(templates)
+    for position in range(ICON_POSITIONS):
+        cells = icon_cell(strip, position).astype(np.float32)
+        if cells.shape[2] < ICON_WIDTH:
             break
-        else:
-            verdict = lit
-        counts.append(verdict)
-    return counts
+        dists = np.zeros((count, len(bits)), np.float32)
+        for gi, bit in enumerate(bits):
+            t = templates[bit]
+            diff = np.abs(cells - t.median).mean(axis=-1) * t.weight
+            dists[:, gi] = diff.sum(axis=(1, 2)) / max(float(t.weight.sum()), 1.0)
+        order = np.argsort(dists, axis=1)
+        best = dists[np.arange(count), order[:, 0]]
+        second = (dists[np.arange(count), order[:, 1]] if len(bits) > 1
+                  else np.full(count, np.inf))
+        known = (best <= ICON_DIST_MAX) & (second - best >= ICON_MARGIN_MIN)
+        for index in np.where(known)[0]:
+            lit[index].add(bits[order[index, 0]])
+    return lit
 
 
 # -- one clip, end to end -----------------------------------------------------------
@@ -618,7 +783,7 @@ def picture_flags(ffmpeg: str, clip: Path, cells: np.ndarray):
 
 def read_clip(clip: Path, frame_map: list, pads, ffmpeg: str,
               reference: Alphabet | None = None,
-              held=None, icons=None, resets=None) -> PadReading | None:
+              held=None, resets=None) -> PadReading | None:
     """Read the clip's display and pin its map to it. None = refused.
 
     Two passes: the reference alphabet reads first (no labels needed, so
@@ -634,10 +799,9 @@ def read_clip(clip: Path, frame_map: list, pads, ffmpeg: str,
     count = min(len(cells), len(frame_map))
     cells, frame_map = cells[:count], list(frame_map[:count])
     same, changed = picture_flags(ffmpeg, clip, cells)
-    if icons is not None:
-        icons = list(icons[:count]) + [None] * max(0, count - len(icons))
     anchors = flash_anchors(cells, frame_map, resets)
     alphabet = reference if reference is not None else load_alphabet()
+    icons = None                      # the digits align first; icons join the final pass
     path = frame_map
     learned: dict = {}
     for _ in range(2):
@@ -649,14 +813,30 @@ def read_clip(clip: Path, frame_map: list, pads, ffmpeg: str,
         learned = {key: sorted(table) for key, table in own.items() if table}
         alphabet = merge(alphabet, own)
     reads = read(cells, alphabet)
+    icons = None
+    icon_alphabet: dict = {}
+    if held is not None:
+        # The digits' own path labels the single-button frames; the clip
+        # teaches its icons from them and the final pass reads every
+        # position -- a press inside a held-stick stretch then pins.
+        try:
+            strip = decode_icons(ffmpeg, clip)[:count]
+            icon_alphabet = dict(load_icons())
+            icon_alphabet.update(learn_icons(strip, icon_labels_from(path, held)))
+            icons = read_icons(strip, icon_alphabet)
+        except Exception:
+            log.exception("icon read failed; aligning on the digits alone")
+            icons = None
     path = align(reads, path, pads, same, changed, held, icons, anchors)
     verdict = score(reads, path, pads)
     verdict.anchors = {int(slot): [int(raw), int(path[slot])] for slot, raw in anchors.items()}
     if icons is not None and held is not None:
-        checked = [(slot, raw) for slot, raw in enumerate(path)
-                   if icons[slot] is not None and held.get(raw) is not None]
+        checked = [(slot, raw) for slot, raw in enumerate(path) if icons[slot]]
         verdict.icons_checked = len(checked)
-        verdict.icons_agree = sum(1 for slot, raw in checked if icons[slot] == held[raw])
+        verdict.icons_agree = sum(
+            1 for slot, raw in checked
+            if held.get(raw) is not None and all(held[raw] & bit for bit in icons[slot]))
+        verdict.icons_learned = sorted(icon_alphabet)
     if verdict.sure < MIN_SURE_SLOTS:
         log.info("pad reader refused: %d sure slots of %d", verdict.sure, count)
         return None

@@ -54,6 +54,50 @@ class ClipResult:
     # counter (the input track) line up with the clip: the attempt's anchor
     # sits at `started_utc - start_utc` seconds into the video.
     start_utc: datetime | None = None
+    # The clip's OWN first video timestamp, in its media timeline. An
+    # accurate cut leaves the sub-frame remainder on the first picture
+    # (5782: frames at k/60 + 0.011003 s), and a seek to (k + 0.5)/60 then
+    # lands before frame k begins, so the browser presents k - 1 -- every
+    # step one picture early (measured in Chromium, 2026-09-01). Everything
+    # that turns a time into a slot counts from this number.
+    video_start_s: float = 0.0
+
+
+def ffprobe_beside(ffmpeg: str | None) -> str | None:
+    """The ffprobe that ships beside `ffmpeg` -- by FILE name only. A plain
+    replace on the whole path turned D:/ffmpeg/bin/ffmpeg.EXE into
+    D:/ffprobe/bin/ffprobe.EXE (the standard install layout), so the first
+    version of this read 0.0 on the very clip it was written for and the
+    shipped fix would have done nothing; tools/probe_clip_seek.py caught it
+    on its first run (2026-09-01). PATH's ffprobe is the fallback."""
+    if not ffmpeg:
+        return None
+    binary = Path(ffmpeg)
+    sibling = binary.with_name(binary.name.replace("ffmpeg", "ffprobe"))
+    if binary.parent != Path(".") or sibling.exists():
+        if sibling.exists():
+            return str(sibling)
+    return shutil.which("ffprobe")
+
+
+def video_start_of(ffmpeg: str | None, clip: Path) -> float:
+    """The video stream's first pts, in seconds; 0.0 when it cannot be read
+    (no ffprobe, an unreadable file) -- the pre-2026-09-01 assumption."""
+    ffprobe = ffprobe_beside(ffmpeg)
+    if not ffprobe:
+        return 0.0
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=start_time", "-of", "csv=p=0", str(clip)],
+            capture_output=True, text=True, timeout=30, check=False,
+            **quiet_spawn_kwargs())
+        first = out.stdout.strip().splitlines()[0]
+        value = float(first.split(",")[0])
+        return value if value >= 0 else 0.0
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        # no ffprobe, a timeout, an unreadable file, an empty answer
+        return 0.0
 
 
 def _joinable(prev, seg) -> bool:
@@ -103,6 +147,12 @@ class ClipExtractor:
         self._cfg = cfg
         self._codec = codec
         self._ffmpeg = ffmpeg or bundled_ffmpeg() or shutil.which("ffmpeg")
+
+    @property
+    def ffmpeg(self) -> str | None:
+        """The binary this extractor cuts with -- the service reads a cached
+        clip's first pts with the ffprobe beside it."""
+        return self._ffmpeg
 
     def extract(self, ring: SegmentRing, start: datetime, end: datetime,
                 out_path: Path) -> ClipResult:
@@ -172,7 +222,8 @@ class ClipExtractor:
             ) from exc
 
         return ClipResult(path=out_path, duration_s=dur, truncated=truncated,
-                          start_utc=s)
+                          start_utc=s,
+                          video_start_s=video_start_of(self._ffmpeg, out_path))
 
     def _codec_opts(self) -> list[str]:
         """Quality settings for the cut, from the ONE registry in config.py.

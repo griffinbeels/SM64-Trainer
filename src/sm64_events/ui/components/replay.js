@@ -70,7 +70,13 @@ export function ReplayPlayer({ attemptId, onCompare, onVideoEl, onView }) {
         // the Save button correctly shows "Saved" for clips saved last week
         setSavedPath(r.saved_path || null);
       })
-      .catch((e) => alive && setState({ phase: "error", message: String(e) }));
+      .catch((e) => {
+        if (!alive) return;
+        setState({ phase: "error", message: String(e) });
+        // The drawer waits for this answer before it shows the timeline
+        // (his 2026-09-01 ruling): a clip that cannot be cut is an answer.
+        if (onView) onView(null);
+      });
     return () => { alive = false; };
   }, [attemptId]);
 
@@ -92,7 +98,8 @@ export function ReplayPlayer({ attemptId, onCompare, onVideoEl, onView }) {
   // single press lands on a duplicate; the next press recovers.
   function step(dir) {
     stepGameFrame(videoEl.current, dir, state.game_fps || 30,
-                  state.frame_map || null, state.fps || 60);
+                  state.frame_map || null, state.fps || 60,
+                  state.video_start_s || 0);
   }
   // A press remembers whether the clip was playing; the release hands that
   // back, so a hold mid-playback scrubs and then plays on, while a step on

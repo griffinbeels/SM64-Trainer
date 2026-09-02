@@ -42,6 +42,7 @@ after:
 | Ranks (classify, standards, scraper) | `ranks/`, `tools/scrape_ranks.py` | `.claude/rules/ranks.md` |
 | The Ultimate Sheet library (read, classify, map, snapshot) | `library/`, `tools/scrape_sheet.py` | `.claude/rules/library.md` |
 | The 100-coin star (its exit-star variants, and why one reset is one row) | `tracking/hundred_coin.py`, `ranks/standards.py` | `.claude/rules/hundred-coin.md` |
+| Which game frame a paused video picture shows, and the pad the panel draws for it -- a debugging CHAIN: read it before editing any module it names | `inputs/sampler.py`, `inputs/track.py`, `inputs/service.py`, `replay/ledger.py`, `replay/extract.py`, `replay/padread.py`, `replay/service.py`, `ui/frame.js`, `ui/components/inputtimeline.js` | `.claude/rules/chain-input-timeline-frame.md` |
 | What a saved time MEANS, what a row may DO about a PB, which strategy is ACTIVE | `tracking/caveats.py`, `tracking/pbaction.py`, `tracking/activestrat.py` | `.claude/rules/pb-strategy.md` |
 
 Tests mirror modules: `tests/test_<module>.py` — read the test file first, it

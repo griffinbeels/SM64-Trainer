@@ -50,7 +50,17 @@ def run_function(name, expression: str):
         assert match, (
             f"no top-level `export function {one}(...)` in inputtimeline.js")
         parts.append(match.group(0).replace("export ", "", 1))
-    script = ("\n".join(parts)
+    # The mapped clock counts slots from the clip's own first timestamp
+    # through frame.js's two helpers (2026-09-01); the component imports
+    # them, so the evaluated script carries the real declarations too.
+    frame_js = strip_comments((TIMELINE.parents[1] / "frame.js").read_text(encoding="utf-8"))
+    helpers = []
+    for one in ("slotAtTime", "timeOfSlot"):
+        match = re.search(rf"^export function {one}\(.*?^\}}\s*$", frame_js,
+                          re.M | re.S)
+        assert match, f"no top-level `export function {one}(...)` in frame.js"
+        helpers.append(match.group(0).replace("export ", "", 1))
+    script = ("\n".join(helpers + parts)
               + f"\nconsole.log(JSON.stringify({expression}));")
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True,
@@ -78,7 +88,10 @@ def test_before_the_first_moment_there_is_nothing_to_read():
 # own measured shape: a duplicate (100 shown twice) and a skip (103 never
 # shown) -- the 26, 27, 27, 29 counter he photographed. Track: anchor at raw
 # 90, so raw 100 is axis 10. Clip encodes at 60 fps.
-MAPPED = ("[null, 100, 100, 101, 102, 102, 104, 104], 60, [[0, 90, 20]], 20")
+MAP = "[null, 100, 100, 101, 102, 102, 104, 104], 60, [[0, 90, 20]]"
+MAPPED = MAP + ", 20"          # mappedFrameAtTime also clamps to the track
+# mappedTimeAtFrame takes no track length: its fifth argument is the clip's
+# own first timestamp (2026-09-01), so it gets MAP, never MAPPED.
 BOTH = ("trackFrameOf", "gameFrameOf", "mappedFrameAtTime", "mappedTimeAtFrame")
 
 
@@ -98,15 +111,27 @@ def test_before_the_maps_coverage_the_caller_falls_back():
 def test_seeking_a_skipped_game_frame_lands_on_the_first_slot_past_it():
     # axis 13 = raw 103, which the footage never shows: the seek lands on
     # the first slot showing anything at or past it (slot 6, raw 104).
-    assert run_function(BOTH, f"mappedTimeAtFrame(13, {MAPPED})") == 6.5 / 60
-    assert run_function(BOTH, f"mappedTimeAtFrame(10, {MAPPED})") == 1.5 / 60
+    assert run_function(BOTH, f"mappedTimeAtFrame(13, {MAP})") == 6.5 / 60
+    assert run_function(BOTH, f"mappedTimeAtFrame(10, {MAP})") == 1.5 / 60
+
+
+def test_a_clip_whose_first_picture_is_not_at_zero_seeks_later_by_that_much():
+    """His Log Rolling clip (5782): first video pts 0.011 s, so the seek for
+    slot k at (k + 0.5) / 60 presented slot k - 1 in Chromium. Both
+    directions count from the clip's own start."""
+    seek = run_function(BOTH, f"mappedTimeAtFrame(10, {MAP}, 0.011)")
+    assert seek == 0.011 + 1.5 / 60
+    assert run_function(BOTH, f"mappedFrameAtTime({seek}, {MAPPED}, 0.011)") == 10
+    # The OLD seek time for slot 1 (no start) presents slot 0 on this clip --
+    # the picture before the map's coverage: one slot early, exactly his report.
+    assert run_function(BOTH, f"mappedFrameAtTime({1.5 / 60}, {MAPPED}, 0.011)") is None
 
 
 def test_the_two_mapped_directions_agree_on_every_shown_frame():
     got = run_function(BOTH, f"""(() => {{
       const out = [];
       for (let axis = 10; axis <= 14; axis += 1) {{
-        const t = mappedTimeAtFrame(axis, {MAPPED});
+        const t = mappedTimeAtFrame(axis, {MAP});
         out.push(t === null ? null : mappedFrameAtTime(t, {MAPPED}));
       }}
       return out;

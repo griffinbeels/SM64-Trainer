@@ -459,6 +459,7 @@ def build():
         # lead-in included), since every picture with the display on is
         # evidence, not only the attempt's own.
         from sm64_events.inputs.track import track_with_lead
+        from sm64_events.memory import addresses as A
         from sm64_events.replay.padread import BAND, read_clip
 
         def _read_pad_off_the_footage(clip, frame_map, attempt):
@@ -479,8 +480,14 @@ def build():
             resets = ([attempt.anchor_frame]
                       if getattr(attempt, "anchor_type", None) == "practice_reset"
                       and attempt.anchor_frame is not None else [])
+            # Every frame's held buttons: a lit icon on a picture must be a
+            # button held on its frame, which pins a press while the stick
+            # holds still (his A and B inside the pyramid, frames 746/771).
+            held = {number: frame.buttons & A.BUTTON_VALID_MASK
+                    for number, frame in frames}
             return read_clip(clip, frame_map, pads,
-                             str(bundled_ffmpeg() or "ffmpeg"), resets=resets)
+                             str(bundled_ffmpeg() or "ffmpeg"), held=held,
+                             resets=resets)
 
         replay.pad_reader = _read_pad_off_the_footage
 
