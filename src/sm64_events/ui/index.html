@@ -7480,19 +7480,17 @@
     width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
     background: var(--pill-colour, #5bb8ff);
   }
-  /* The pill's × (round 23): always laid out, only VISIBLE on hover or
-     keyboard focus, so a pill never changes width as the pointer crosses
-     it -- the same reserved-slot rule as the line's library glyph. */
+  /* The pill's × (round 23). First shipped hover-revealed; his next look:
+     "Pills look weird if the X is hidden by default. Let's just show it at
+     all times. Red X." So it is always drawn, in the app's red. */
   .goal-pill-remove {
     display: inline-flex; align-items: center; justify-content: center;
     width: 14px; height: 14px; margin-left: 2px; padding: 0;
     border: 0; border-radius: 50%; background: transparent;
-    color: var(--text); font: inherit; font-size: .9rem; font-weight: 700;
-    line-height: 1; cursor: pointer; visibility: hidden;
+    color: var(--coral); font: inherit; font-size: .9rem; font-weight: 700;
+    line-height: 1; cursor: pointer;
   }
-  .goal-pill:hover .goal-pill-remove,
-  .goal-pill:focus-within .goal-pill-remove { visibility: visible; }
-  .goal-pill-remove:hover { color: var(--text); background: rgba(255,255,255,.12); }
+  .goal-pill-remove:hover { background: rgba(255,255,255,.14); }
   /* The dot after a star's name: the colour of the PICK that set that
      star's goal, so a number can be traced to whoever is behind it. Rides
      inside the nowrap tail with the library glyph (round 13's rule: a mark

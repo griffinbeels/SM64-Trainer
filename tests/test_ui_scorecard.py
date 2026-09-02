@@ -1279,7 +1279,9 @@ def test_a_pills_cross_removes_that_pick_and_regrades_the_card():
     should be an X on the right side that appears. I should be able to
     click this to remove that specific player / rank standard from my
     scorecard immediately. Everything should update accordingly." Two
-    divisions picked; the × is hidden at rest and visible under the pointer;
+    divisions picked; the × is visible at rest (his follow-up: "Pills look
+    weird if the X is hidden by default. Let's just show it at all times.
+    Red X.") and still visible under the pointer;
     clicking the SECOND pill's × (Gold I -- the faster offer, which a multi
     goal takes per tile) leaves Bronze V as a SINGLE goal (no legend), and
     every goal time on the card moves to Bronze V's slower cutoff."""
@@ -1313,7 +1315,7 @@ def test_a_pills_cross_removes_that_pick_and_regrades_the_card():
             after = page.evaluate(first_goal)
         goal = json.loads(urllib.request.urlopen(
             f"{base}/api/scorecard", timeout=10).read())["goal"]
-    assert at_rest == "hidden", at_rest
+    assert at_rest == "visible", at_rest
     assert under_pointer == "visible", under_pointer
     assert goal == {"kind": "division", "tier": "Bronze", "division": "V"}, goal
     assert pills_after == 0, "one pick left is a single goal, and a single goal draws no legend"

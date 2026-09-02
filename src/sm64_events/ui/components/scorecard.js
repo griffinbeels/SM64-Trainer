@@ -145,11 +145,11 @@ export function sourceColour(index) {
 // picked'... otherwise, it's very hard to understand which of the options
 // you've selected." Round 23 gave each pill an × at its right: "I should
 // be able to click this to remove that specific player / rank standard
-// from my scorecard immediately." The × is always in the layout and only
-// VISIBLE on hover/focus (round 13's rule for the library glyph: a control
-// that appears must not reflow the row it appears in); clicking it hands
-// the pick's index up, and the card writes the goal back without it
-// through the same door the picker uses.
+// from my scorecard immediately." It shipped hover-revealed and he ruled
+// it out on sight -- "Pills look weird if the X is hidden by default.
+// Let's just show it at all times. Red X." -- so it is always drawn, red;
+// clicking it hands the pick's index up, and the card writes the goal
+// back without it through the same door the picker uses.
 function GoalLegend({ goal, onRemove }) {
   if (!goal || goal.kind !== "multi") return "";
   const sources = goal.sources || [];
