@@ -7326,14 +7326,24 @@
   /* ---- The scorecard's card grid (rounds 9-10, 2026-08-28) -------------
      Round 10 replaced CSS multi-column with DETERMINISTIC columns: the
      balancer staggered card edges ("this weird spacing that feels
-     unsettling"). Three column stacks of course cards plus a specials
-     column (Secret, then Bowser Fights) — the component buckets them.
-     The outer grid stretches every column to one height and a course
-     column divides into EQUAL rows, which is what "the tops and bottoms
-     of each card should end in the same place" means as geometry; the
-     specials column packs to the top (its two cards are honestly
-     different sizes). Steps 4 -> 2 -> 1 columns on the CARD's own pane
-     (@container, never @media, per the container law). */
+     unsettling"). Column stacks of course cards, the component buckets
+     them. Round 10 also stretched every column to one height and split
+     it into EQUAL rows to keep card edges in register; round 21 (2026-
+     09-02) removed that: with the merged specials card twice a course
+     card's height, every card took its column's AVERAGE — six lines of
+     content in a card three times as tall, "impossible to take a
+     screenshot of everything in a single page". Cards are CONTENT
+     height now; edges align because every course card has six lines,
+     not because anything stretches -- except across a ROW: the outer grid
+     declares its row tracks (`--score-rows`, the tallest stack's length,
+     from the component) and each column stack is a SUBGRID on them, so
+     the four cards sharing a row share its height. A wrapped star name
+     or the seven-line Secret card lengthens its own row by one line and
+     nothing else, and card edges stay in register across columns.
+     Five tracks (round 21) is the wide shape: his four course columns
+     untouched plus the two specials cards in a column of their own, so
+     the page is four rows tall and fits his window in one screenshot
+     (five rows did not, by 19px, measured). */
   /* The track count is the COMPONENT's call, not a container query's
      (`scorecardgoal.js::columnCountFor`), and `data-cols` is how it says so.
      Round 12 established the reason and round 20 made it load-bearing: the
@@ -7345,14 +7355,19 @@
      "the cards need to be a bit bigger"), one column below 560. */
   .score-cards {
     display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: repeat(var(--score-rows, 1), auto);
     gap: 10px; align-items: stretch;
+  }
+  .score-cards[data-cols="5"] {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
   .score-cards[data-cols="2"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .score-cards[data-cols="1"] { grid-template-columns: minmax(0, 1fr); }
   .score-col {
-    display: grid; gap: 10px; min-width: 0; grid-auto-rows: 1fr;
+    display: grid; min-width: 0; grid-row: 1 / -1;
+    grid-template-rows: subgrid;
   }
   /* Each card wears its course's own tint (round 10: "a unique background
      color... so each pops better") via --card-tint from the component; the

@@ -719,11 +719,14 @@ PROJECT = Project(
     # here instead: a step nobody measures is a step that can break quietly,
     # and dropping these two widths would ALSO have deleted two honest
     # exemption rows below by making their defect unreachable rather than
-    # fixed.
+    # fixed. 2403/2404 are the scorecard's FIVE-track step (round 21,
+    # 2026-09-02: a 2120px pane, the specials cards' own column), declared
+    # here for the same reason; a viewport is the pane plus 283px of
+    # sidebar and padding at these widths (measured).
     extra_viewports=((850, 1180), (851, 1000), (900, 1180), (912, 1000),
                      (913, 1000), (1019, 1000), (1020, 1000),
                      (979, 1000), (980, 1000), (1320, 1000), (1321, 1000),
-                     (1500, 900), (1280, 720)),
+                     (1500, 900), (1280, 720), (2403, 1000), (2404, 1000)),
     # OWED, not exempted. These became VISIBLE on 2026-07-28 when the
     # fixture finally rendered a populated practice page -- a stage, an
     # active target, a strategy and a PB. Everything on the star row and
@@ -751,6 +754,12 @@ PROJECT = Project(
         '1320x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1321x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        # The same owed defect at the scorecard's FIVE-track step (round 21,
+        # 2026-09-02, 2403/2404 declared in `extra_viewports` above).
+        '2403x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '2404x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1250x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
@@ -943,6 +952,15 @@ BOWSER_PROJECT = dataclasses.replace(
         '1320x1000 [bowser-row] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1321x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        # Round 21's five-track step, same defect (see the first list).
+        '2403x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '2404x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '2403x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '2404x1000 [bowser-row] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1180x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
@@ -1142,6 +1160,15 @@ SUBSECTION_PROJECT = dataclasses.replace(
         '1320x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1321x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        # Round 21's five-track step (2403/2404), same owed defect.
+        '2403x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '2404x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '2403x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '2404x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1180x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',

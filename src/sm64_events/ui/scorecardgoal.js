@@ -159,20 +159,38 @@ export function fmtGapCs(cs) {
 // to bottom, then left to right... [BOB] [BBH] [DDD] [THI] / [WF] [HMC] [SL]
 // [TTC] / [JRB] [LLL] [WDW] [RR] / [CCM] [SSL] [TTM] [Secrets + Bowser
 // combined into a single card]". The payload already arrives in COURSE
-// order with the one specials card last (ranks/scorecard.py), so the whole
-// job here is to chunk it COLUMN-MAJOR: read down a column and you are
-// reading the course list in order, which is how the sheet he grades
-// himself against is laid out.
+// order with the specials cards last (ranks/scorecard.py; two of them
+// again since round 21), so the whole job here is to chunk it
+// COLUMN-MAJOR: read down a column and you are reading the course list in
+// order, which is how the sheet he grades himself against is laid out.
 //
-// This replaced round 10's three-columns-of-five-plus-a-specials-column and
-// round 12's six-track wide shape. Both gave the specials a track of their
-// own, and there is one specials card now.
+// Round 21 split the specials into two cards again (Secret, Bowser), so
+// there are 17 cards for a 16-slot grid, and his ask was an arrangement
+// "so that (1) we can easily screenshot all of them at once, (2) and it
+// feels reasonably uniform". Measured at his window (a ~2214px pane at
+// his zoom): four rows of cards fit one screenshot, five do not. So the
+// COURSE cards keep his grid exactly -- chunked column-major on their own
+// count -- and the two specials go in a track of their OWN when the pane
+// has room for five (`SPECIALS_TRACK_FROM`), else they are appended to
+// the last course column, so "Secret -> Bowser" closes the reading
+// order either way. Chunking all 17 together would have put five in the
+// first column and moved BBH to the bottom of it.
+export const SPECIALS_TRACK_FROM = 5;
+
 export function cardColumns(rows, columnCount = 4) {
   if (!rows || !rows.length) return [];
-  const perColumn = Math.ceil(rows.length / Math.max(1, columnCount)) || 1;
+  const courses = rows.filter((row) => row.course_id != null);
+  const specials = rows.filter((row) => row.course_id == null);
+  const ownTrack = columnCount >= SPECIALS_TRACK_FROM && specials.length > 0;
+  const courseColumns = ownTrack ? columnCount - 1 : columnCount;
+  const perColumn = Math.ceil(courses.length / Math.max(1, courseColumns)) || 1;
   const columns = [];
-  for (let start = 0; start < rows.length; start += perColumn)
-    columns.push({ rows: rows.slice(start, start + perColumn) });
+  for (let start = 0; start < courses.length; start += perColumn)
+    columns.push({ rows: courses.slice(start, start + perColumn) });
+  if (specials.length) {
+    if (ownTrack || !columns.length) columns.push({ rows: [...specials] });
+    else columns[columns.length - 1].rows.push(...specials);
+  }
   return columns;
 }
 
@@ -182,9 +200,13 @@ export function cardColumns(rows, columnCount = 4) {
 // the chunker anything. Reading down a column is only course order if the
 // stack it drew is the stack it chunked.
 //
-// The two floors are round 11's, unchanged: 4-up only where each card gets
-// ~320px+, one column below 560.
-export const CARD_COLUMN_FLOORS = [[1320, 4], [560, 2]];
+// Round 11's two floors, unchanged: 4-up only where each card gets ~320px+,
+// one column below 560. Round 21 adds the five-track step for the
+// specials' own column, MEASURED (2026-09-02, the real card at his zoom):
+// five tracks wrap no star name from a 2117px pane (415px cards) upward,
+// and five names wrap at 2067px, so the floor sits just above the last
+// wrap. His own window measures ~2214px.
+export const CARD_COLUMN_FLOORS = [[2120, 5], [1320, 4], [560, 2]];
 
 export function columnCountFor(paneWidth) {
   for (const [floor, count] of CARD_COLUMN_FLOORS)

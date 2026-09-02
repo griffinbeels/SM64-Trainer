@@ -248,17 +248,19 @@ def create_scorecard_router(service, library=None, adoptions=None,
         if service.db is None:
             raise HTTPException(503, "scorecard unavailable")
 
-    def _fight_segments() -> list[tuple[str, str]]:
-        """[(entity_key, name)] for every Bowser fight -- BY CATEGORY, the
-        same fact `ranks/scopes.py::ranks_by_default` keys on, so the card
-        and the default-ranking rule can never disagree about what counts as
-        a fight (round 9: "all 120 stars, plus the bowser fights")."""
-        return [(f"segment:{row['id']}", row["name"])
+    def _fight_segments() -> list[tuple[str, str, str | None]]:
+        """[(entity_key, name, seed_key)] for every Bowser fight -- BY
+        CATEGORY, the same fact `ranks/scopes.py::ranks_by_default` keys on,
+        so the card and the default-ranking rule can never disagree about
+        what counts as a fight (round 9: "all 120 stars, plus the bowser
+        fights"). The seed key is what pairs a fight with its Bowser's reds
+        star on the Bowser card (round 21)."""
+        return [(f"segment:{row['id']}", row["name"], row.get("seed_key"))
                 for row in service.db.segment_defs()
                 if row.get("category") == "Bowser Fights"]
 
-    def _fight_ids() -> set[int]:
-        return {row["id"] for row in service.db.segment_defs()
+    def _fight_ids() -> dict[int, str | None]:
+        return {row["id"]: row.get("seed_key") for row in service.db.segment_defs()
                 if row.get("category") == "Bowser Fights"}
 
     def _grade_tiles(card: dict) -> None:

@@ -17,6 +17,7 @@ open a file they own:**
 |---|---|
 | practice / stage banner / pickers / segments / routes / runs / strategies / graphs | `.claude/rules/ui-practice.md` |
 | rank icons + caps, banners, the Rank tab, the MARELO pill | `.claude/rules/ui-ranks.md` |
+| the Scorecard card + its goal picker | `.claude/rules/ui-scorecard.md` |
 | celebrations, the level-up climb, the tuning inspector | `.claude/rules/ui-climb.md` |
 | replay player, compare, failure compilation | `.claude/rules/replay-compare.md` (same file as the backend zone) |
 

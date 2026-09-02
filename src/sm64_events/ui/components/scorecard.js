@@ -344,10 +344,10 @@ const FIGHTS_TINT = "#b03a3a";  // Bowser red
 
 function cardTint(row) {
   if (row.course_id != null) return CARD_TINTS[row.course_id] || SECRET_TINT;
-  // One specials card since round 20 (the castle secrets AND the fights), so
-  // it wears the castle gold its stars have always worn; FIGHTS_TINT stays
-  // for the fight LINES' own icons.
-  return SECRET_TINT;
+  // Two specials cards again since round 21: the Secret card wears the
+  // castle gold its stars have always worn, the Bowser card its red. The
+  // server says which is which (`kind`) so nothing here matches a label.
+  return row.kind === "bowser" ? FIGHTS_TINT : SECRET_TINT;
 }
 
 // Round 20's placement (`cardColumns`/`columnCountFor`) lives in
@@ -652,7 +652,10 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
               : ""}
             <${GoalLegend} goal=${data.goal} />
             <div class="score-cards" ref=${setCardsElement}
-                data-cols=${String(columnCountFor(cardsWidth))}>
+                data-cols=${String(columnCountFor(cardsWidth))}
+                style=${`--score-rows:${Math.max(1, ...cardColumns(
+                  displayData.rows, columnCountFor(cardsWidth))
+                  .map((column) => column.rows.length))}`}>
               ${cardColumns(displayData.rows, columnCountFor(cardsWidth))
                 .map((column, columnIndex) => html`<div
                   key=${columnIndex} class="score-col">

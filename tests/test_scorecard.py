@@ -49,7 +49,7 @@ def test_every_companion_matches_his_list_verbatim():
 
 def test_template_rows_have_six_cells_with_the_combined_100c_cell_in_place():
     rows = scorecard.template_rows()
-    assert len(rows) == 16
+    assert len(rows) == 17          # 15 courses + Secret + Bowser (round 21)
     for row in rows[:15]:
         assert len(row["entries"]) == 6, row["label"]
         course_id = row["course_id"]
@@ -74,48 +74,47 @@ def test_card_keys_shape():
     assert len(keys) == 15 * 6 + 15
     assert keys[:6] == ["star:1:0", "star:1:1", "star:1:2", "star:1:6",
                         "star:1:4", "star:1:5"]
+    # Round 21 split the specials into Secret (seven secret-stage stars, then
+    # the castle stars) and Bowser (the three reds), Secret first.
     assert keys[-15:] == ["star:19:0", "star:19:1", "star:24:0",
-                           "star:16:0", "star:17:0", "star:18:0",
                            "star:21:0", "star:22:0", "star:20:0", "star:23:0",
                            "star:0:0", "star:0:1", "star:0:2",
-                           "star:0:3", "star:0:4"]
+                           "star:0:3", "star:0:4",
+                           "star:16:0", "star:17:0", "star:18:0"]
 
-    # Round 20 merged the two specials cards into one -- the fights join the
-    # END of the secrets, so the sheet-faithful ten keep their order and the
-    # key count is unchanged.
+    # A fight joins the Bowser card; with no seed key it follows the reds,
+    # and the key count grows by exactly one.
     with_fights = scorecard.template_rows([("segment:9", "Bowser Battle 1")])
-    assert [row["label"] for row in with_fights[-1:]] == [
-        scorecard.SPECIALS_LABEL]
+    assert [row["label"] for row in with_fights[-2:]] == [
+        scorecard.SECRET_LABEL, scorecard.BOWSER_LABEL]
     assert scorecard.card_keys(with_fights)[-1] == "segment:9"
     assert len(scorecard.card_keys(with_fights)) == 15 * 6 + 15 + 1
 
 
-def test_secret_row_is_all_stars_with_the_bowser_reds():
-    """Round 6: "Bowser stages should also should have goals based on red
-    coins times, not the BITS entry for now" -- the two course-entry
-    MOVEMENTS left the Secret row; the three Bowser reds stars carry the
-    template's own labels."""
-    secret = scorecard.template_rows()[-1]
+def test_the_secret_card_holds_the_seven_secrets_then_the_castle_stars():
+    """Round 21, his list: "The Princess' Secret Slide, The Princess' Secret
+    Slide (Under 21 Seconds), The Secret Aquarium, Tower of the Wing Cap,
+    Vanish Cap Under The Moat, Cavern of the Metal Cap, Wing Mario Over the
+    Rainbow" -- in that order; the three Bowser reds moved to the Bowser
+    card. Round 9's five castle secrets ("all 120 stars") still close the
+    card, and the whole card is igt."""
+    secret = scorecard.template_rows()[-2]
     assert secret["course_id"] is None
-    assert secret["label"] == scorecard.SPECIALS_LABEL
+    assert secret["label"] == scorecard.SECRET_LABEL
+    assert secret["kind"] == "secret"
     keys = [key for key, _label, _clock in secret["entries"]]
-    # Round 9 restored the five castle secrets ("all 120 stars"); they close
-    # the row so the sheet-faithful ten keep their order.
     assert keys == ["star:19:0", "star:19:1", "star:24:0",
-                    "star:16:0", "star:17:0", "star:18:0",
                     "star:21:0", "star:22:0", "star:20:0", "star:23:0",
                     "star:0:0", "star:0:1", "star:0:2",
                     "star:0:3", "star:0:4"]
     assert all(clock == "igt" for _key, _label, clock in secret["entries"])
     labels = {key: label for key, label, _clock in secret["entries"]}
-    assert labels["star:16:0"] == "Bowser in the Dark World Red Coins"
-    assert labels["star:17:0"] == "Bowser in the Fire Sea Red Coins"
-    assert labels["star:18:0"] == "Bowser in the Sky Red Coins"
     assert labels["star:20:0"] == "Cavern of the Metal Cap"
     assert labels["star:21:0"] == "Tower of the Wing Cap"
     assert labels["star:22:0"] == "Vanish Cap Under the Moat"
     assert labels["star:23:0"] == "Wing Mario Over the Rainbow"
     assert labels["star:24:0"] == "The Secret Aquarium"
+    assert "star:16:0" not in labels
 
 
 def test_missing_side_leaves_both_sums():
@@ -160,20 +159,41 @@ def test_a_route_card_runs_in_course_order_however_the_route_runs():
     assert [row["course_id"] for row in rows] == sorted(backwards)
 
 
-def test_the_specials_card_is_one_card_holding_secrets_then_fights():
-    """Round 20: "[Secrets + Bowser combined into a single card]". Merged in
-    the BUILDER, so the Sigma, the CSV and the ignore button all read one
-    row -- a display-only merge would need a second Sigma in JS."""
-    rows = scorecard.template_rows([("segment:9", "Bowser Battle 1"),
-                                    ("segment:10", "Bowser Battle 2")])
-    assert sum(1 for row in rows if row["course_id"] is None) == 1
-    specials = rows[-1]
-    assert specials["label"] == scorecard.SPECIALS_LABEL
-    keys = [key for key, _label, _clock in specials["entries"]]
-    assert keys[:2] == ["star:19:0", "star:19:1"]      # the secrets lead
-    assert keys[-2:] == ["segment:9", "segment:10"]    # the fights close
-    clocks = {key: clock for key, _label, clock in specials["entries"]}
-    assert clocks["star:19:0"] == "igt" and clocks["segment:9"] == "rta"
+def test_the_bowser_card_pairs_each_reds_star_with_its_fight():
+    """Round 21, his list: "Bowser in the Dark World Red Coins, Bowser 1,
+    Bowser in the Fire Sea Red Coins, Bowser 2, Bowser in the Sky Red Coins,
+    Bowser 3". A fight finds its Bowser by SEED KEY, so the caller's order
+    and the fights' names do not matter; a fight with no seed key (his
+    own) follows the three pairs."""
+    rows = scorecard.template_rows([
+        ("segment:12", "Bowser 3", "seg:bowser-3"),
+        ("segment:10", "Bowser 1", "seg:bowser-1"),
+        ("segment:11", "Bowser 2", "seg:bowser-2"),
+        ("segment:40", "Bowser 1 (no BLJ)", None)])
+    assert sum(1 for row in rows if row["course_id"] is None) == 2
+    bowser = rows[-1]
+    assert bowser["label"] == scorecard.BOWSER_LABEL
+    assert bowser["kind"] == "bowser"
+    assert [key for key, _label, _clock in bowser["entries"]] == [
+        "star:16:0", "segment:10", "star:17:0", "segment:11",
+        "star:18:0", "segment:12", "segment:40"]
+    labels = {key: label for key, label, _clock in bowser["entries"]}
+    assert labels["star:16:0"] == "Bowser in the Dark World Red Coins"
+    assert labels["star:17:0"] == "Bowser in the Fire Sea Red Coins"
+    assert labels["star:18:0"] == "Bowser in the Sky Red Coins"
+    clocks = {key: clock for key, _label, clock in bowser["entries"]}
+    assert clocks["star:16:0"] == "igt" and clocks["segment:10"] == "rta"
+
+
+def test_the_two_specials_cards_are_built_here_not_in_the_browser():
+    """Round 21 split round 20's merged card; like the merge, the split
+    lives in the BUILDER so the Sigma, the CSV and the ignore button read
+    two rows through one path. Secret closes before Bowser."""
+    rows = scorecard.template_rows([("segment:9", "Bowser 1", "seg:bowser-1")])
+    assert [row["label"] for row in rows[-2:]] == [
+        scorecard.SECRET_LABEL, scorecard.BOWSER_LABEL]
+    assert [row.get("kind") for row in rows[-2:]] == ["secret", "bowser"]
+    assert all("kind" not in row for row in rows[:-2])
 
 
 def test_route_rows_apply_the_cell_rule_and_wear_the_course_name():
@@ -214,13 +234,16 @@ def test_route_segments_bucket_by_kind():
         segment_labels={41: "LBLJ", 9: "Bowser Battle 1", 77: "DDD Entry"},
         segment_courses={77: 9},
         fight_segment_ids={9})
-    # COURSE order since round 20 (WF is course 2, DDD is 9), and ONE
-    # specials card carrying the courseless movement and the fight.
+    # COURSE order since round 20 (WF is course 2, DDD is 9); the courseless
+    # movement lands on the Secret card and the fight on the Bowser card
+    # (round 21), Secret first.
     assert [row["label"] for row in rows] == [
-        "Whomp's Fortress", "Dire, Dire Docks", scorecard.SPECIALS_LABEL]
+        "Whomp's Fortress", "Dire, Dire Docks",
+        scorecard.SECRET_LABEL, scorecard.BOWSER_LABEL]
     by_label = {row["label"]: row for row in rows}
-    assert by_label[scorecard.SPECIALS_LABEL]["entries"] == [
-        ("segment:41", "LBLJ", "rta"),
+    assert by_label[scorecard.SECRET_LABEL]["entries"] == [
+        ("segment:41", "LBLJ", "rta")]
+    assert by_label[scorecard.BOWSER_LABEL]["entries"] == [
         ("segment:9", "Bowser Battle 1", "rta")]
     assert by_label["Dire, Dire Docks"]["entries"] == [
         ("segment:77", "DDD Entry", "rta")]
@@ -295,15 +318,30 @@ def test_route_revisits_merge_into_one_course_card():
         "star:6:0", "star:6:1"]
 
 
-def test_route_castle_secrets_and_bowser_reds_share_the_secret_card():
+def test_route_castle_secrets_go_to_secret_and_bowser_reds_to_bowser():
     route = _route([
-        {"need": 1, "candidates": [{"type": "star", "course": 0, "star": 3}]},
-        {"need": 1, "candidates": [{"type": "star", "course": 16, "star": 0}]}])
+        {"need": 1, "candidates": [{"type": "star", "course": 16, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 0, "star": 3}]}])
     rows = scorecard.rows_for_route(route, segment_labels={})
-    assert len(rows) == 1 and rows[0]["label"] == scorecard.SPECIALS_LABEL
-    labels = {key: label for key, label, _c in rows[0]["entries"]}
-    assert labels["star:0:3"] == "MIPS 1st Star"
-    assert labels["star:16:0"] == "Bowser in the Dark World Red Coins"
+    assert [row["label"] for row in rows] == [
+        scorecard.SECRET_LABEL, scorecard.BOWSER_LABEL]
+    secret = {key: label for key, label, _c in rows[0]["entries"]}
+    bowser = {key: label for key, label, _c in rows[1]["entries"]}
+    assert secret == {"star:0:3": "MIPS 1st Star"}
+    assert bowser == {"star:16:0": "Bowser in the Dark World Red Coins"}
+
+
+def test_route_fights_pair_with_their_reds_by_seed_key():
+    route = _route([
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": 11}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 17, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 16, "star": 0}]}])
+    rows = scorecard.rows_for_route(
+        route, segment_labels={11: "Bowser 2"},
+        fight_segment_ids={11: "seg:bowser-2"})
+    assert [row["label"] for row in rows] == [scorecard.BOWSER_LABEL]
+    assert [key for key, _l, _c in rows[0]["entries"]] == [
+        "star:16:0", "star:17:0", "segment:11"]
 
 
 def test_route_rows_drop_a_deleted_segments_cell_and_an_empty_step():

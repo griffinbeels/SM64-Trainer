@@ -36,8 +36,8 @@ from sm64_events.ranks.scoring import (
     DIVISION_NUMERALS, DIVISIONS_PER_TIER, defined_tiers, progress_for_time,
     tier_band, time_for_score)
 
-__all__ = ["SECRET_ROW", "SPECIAL_STAR_LABELS", "FIGHTS_LABEL",
-           "SPECIALS_LABEL",
+__all__ = ["SECRET_ROW", "BOWSER_REDS", "SPECIAL_STAR_LABELS", "FIGHTS_LABEL",
+           "SECRET_LABEL", "BOWSER_LABEL", "bowser_number",
            "hundred_coin_companion", "template_rows",
            "rows_for_course", "rows_for_route", "without_keys", "card_keys",
            "division_goal_cs", "build_card"]
@@ -84,9 +84,6 @@ SECRET_ROW: list[tuple[str, str]] = [
     ("star:19:0", star_name(19, 0)),
     ("star:19:1", star_name(19, 1)),
     ("star:24:0", COURSE_NAMES[24]),
-    ("star:16:0", f"{COURSE_NAMES[16]} Red Coins"),
-    ("star:17:0", f"{COURSE_NAMES[17]} Red Coins"),
-    ("star:18:0", f"{COURSE_NAMES[18]} Red Coins"),
     ("star:21:0", COURSE_NAMES[21]),
     ("star:22:0", COURSE_NAMES[22]),
     ("star:20:0", COURSE_NAMES[20]),
@@ -103,10 +100,35 @@ SECRET_ROW: list[tuple[str, str]] = [
     ("star:0:4", star_name(0, 4)),
 ]
 
-# One dict for "this star's card label is not star_name" -- the Secret row's
-# own overrides, reused by the route grouping below so a Bowser reds star is
-# labelled identically whichever scope drew it.
-SPECIAL_STAR_LABELS = dict(SECRET_ROW)
+# The Bowser card's stars (round 21, 2026-09-02, his list: "Bowser in the
+# Dark World Red Coins, Bowser 1, Bowser in the Fire Sea Red Coins, Bowser 2,
+# Bowser in the Sky Red Coins, Bowser 3"): the three reds stars, each
+# followed by its fight. They left the Secret card with that list -- the
+# template's own labels append "Red Coins" to the course name because the
+# star is named "8 Red Coins" in-game for all three. `_BOWSER_INDEX` is
+# which Bowser a reds star belongs to; a FIGHT says which Bowser it is by
+# its seed key (`seg:bowser-N`, `bowser_number`), never by its name.
+BOWSER_REDS: list[tuple[str, str]] = [
+    ("star:16:0", f"{COURSE_NAMES[16]} Red Coins"),
+    ("star:17:0", f"{COURSE_NAMES[17]} Red Coins"),
+    ("star:18:0", f"{COURSE_NAMES[18]} Red Coins"),
+]
+_BOWSER_INDEX = {key: index + 1 for index, (key, _label) in enumerate(BOWSER_REDS)}
+
+
+def bowser_number(seed_key) -> int | None:
+    """`seg:bowser-2` -> 2; anything else (a user-built fight, no seed) ->
+    None, which the Bowser card orders after the three pairs."""
+    if not isinstance(seed_key, str) or not seed_key.startswith("seg:bowser-"):
+        return None
+    tail = seed_key[len("seg:bowser-"):]
+    return int(tail) if tail.isdigit() else None
+
+
+# One dict for "this star's card label is not star_name" -- both specials
+# cards' own overrides, reused by the route grouping below so a Bowser reds
+# star is labelled identically whichever scope drew it.
+SPECIAL_STAR_LABELS = dict(SECRET_ROW) | dict(BOWSER_REDS)
 
 
 # Where an entry sits in a card, whatever order the scope reached it in
@@ -177,30 +199,71 @@ def _course_row(course_id: int) -> dict:
 
 
 FIGHTS_LABEL = "Bowser Fights"
-# The one card that is not a course: the castle secrets and the Bowser
-# fights together. Two cards until round 20, when his own grid left exactly
-# 16 slots for 17 things -- "[Secrets + Bowser combined into a single card]".
-# Merged HERE rather than in the browser so the Sigma, the CSV and the card's
-# own ignore button all keep reading one row through one path; a display-only
-# merge would need a second implementation of `_sum_tiles` in JS.
-SPECIALS_LABEL = "Secret + Bowser"
+# The two cards that are not courses. Round 20 merged them into one so his
+# 4x4 grid held 16 things; round 21 (2026-09-02) split them again on his
+# list -- the merged card was twice a course card's height and the grid
+# stretched every card to match it, "impossible to take a screenshot of
+# everything in a single page". Composed HERE rather than in the browser,
+# for the reason the merge was: the Sigma, the CSV and the card's own
+# ignore button all read one row through one path. `kind` is how the
+# browser tells them apart (tint, art) without matching on a label.
+SECRET_LABEL = "Secret"
+BOWSER_LABEL = "Bowser"
 
 
-def _specials_row(entries) -> dict:
-    return {"course_id": None, "label": SPECIALS_LABEL, "entries": entries}
+def _secret_row(entries) -> dict:
+    return {"course_id": None, "kind": "secret", "label": SECRET_LABEL,
+            "entries": entries}
+
+
+def _bowser_row(entries) -> dict:
+    return {"course_id": None, "kind": "bowser", "label": BOWSER_LABEL,
+            "entries": entries}
+
+
+def _bowser_order(entries, seed_keys: dict) -> list:
+    """Reds star, then its fight, per Bowser in order; a fight whose seed
+    key names no Bowser, or any other entry, follows the pairs in arrival
+    order. `seed_keys` maps a segment entity key to its seed key."""
+    def sort_key(pair):
+        arrival, (key, _label, _clock) = pair
+        number = _BOWSER_INDEX.get(key)
+        if number is not None:
+            return (number, 0, arrival)
+        number = bowser_number(seed_keys.get(key))
+        if number is not None:
+            return (number, 1, arrival)
+        return (_SEGMENT_ORDER_BASE + arrival, 0, arrival)
+    return [entry for _key, entry in
+            sorted(enumerate(entries), key=sort_key)]
+
+
+def _fight_entries(fight_segments) -> tuple[list, dict]:
+    """`fight_segments` rows are `(entity_key, label)` or
+    `(entity_key, label, seed_key)`; returns the rta entries and the
+    seed-key map `_bowser_order` wants."""
+    entries, seed_keys = [], {}
+    for fight in fight_segments:
+        key, label = fight[0], fight[1]
+        seed_keys[key] = fight[2] if len(fight) > 2 else None
+        entries.append((key, label, "rta"))
+    return entries, seed_keys
 
 
 def template_rows(fight_segments=()) -> list[dict]:
     """The Overall card set: 15 course cards in COURSE order (6 cells each --
-    the 100c cell combined with its companion), then ONE specials card
-    holding the castle secrets followed by the Bowser fights the caller
-    resolved (round 9: "all 120 stars, plus the bowser fights" -- the fights
-    are segments, so the ROUTER finds them by category and this stays pure).
-    `fight_segments` is [(entity_key, label)]."""
+    the 100c cell combined with its companion), then the Secret card (the
+    seven secret-stage stars, the castle stars after them) and the Bowser
+    card (each reds star followed by its fight -- round 9: "all 120 stars,
+    plus the bowser fights"; the fights are segments, so the ROUTER finds
+    them by category and this stays pure). `fight_segments` is
+    [(entity_key, label)] or [(entity_key, label, seed_key)]; the seed key
+    is what pairs a fight with its Bowser."""
     rows = [_course_row(course_id) for course_id in range(1, 16)]
-    entries = [(key, label, "igt") for key, label in SECRET_ROW]
-    entries += [(key, label, "rta") for key, label in fight_segments]
-    rows.append(_specials_row(entries))
+    rows.append(_secret_row([(key, label, "igt") for key, label in SECRET_ROW]))
+    fights, seed_keys = _fight_entries(fight_segments)
+    reds = [(key, label, "igt") for key, label in BOWSER_REDS]
+    rows.append(_bowser_row(_bowser_order(reds + fights, seed_keys)))
     return rows
 
 
@@ -211,7 +274,7 @@ def rows_for_course(course_id: int) -> list[dict]:
     for a course the card has no cells for at all."""
     if 1 <= course_id <= 15:
         return [_course_row(course_id)]
-    entries = [(key, label, "igt") for key, label in SECRET_ROW
+    entries = [(key, label, "igt") for key, label in SECRET_ROW + BOWSER_REDS
                if key.startswith(f"star:{course_id}:")]
     if not entries:
         raise LookupError(f"no scorecard cells for course {course_id}")
@@ -222,13 +285,17 @@ def rows_for_course(course_id: int) -> list[dict]:
 def rows_for_route(route: dict, *, segment_labels: dict[int, str],
                    segment_courses: dict[int, int] | None = None,
                    fight_segment_ids=()) -> list[dict]:
+    # `fight_segment_ids`: the fight segments' ids, as a set, or as a dict
+    # {segment_id: seed_key} so the Bowser card can pair each fight with
+    # its reds star (round 21).
     """Round 9 (2026-08-28): a route scope composes CARDS, not step rows --
     "Each cell is a card representing a course / category of stars /
     segments... BOB is all of the bobomb battlefield stars". One card per
     COURSE with repeat visits MERGED, in COURSE order; every one-off --
     castle secrets, cap stages, Bowser reds, the Bowser FIGHTS the caller
     identifies by category, and any in-scope segment with no course of its
-    own -- collects into the single specials card that closes the set.
+    own -- collects into the Secret card; the Bowser reds and the fights
+    into the Bowser card. Both close the set, Secret first (round 21).
 
     Round 9 ordered the course cards by when the route first TOUCHES each
     course, in his words at the time. Round 20 reversed that on his report
@@ -242,7 +309,9 @@ def rows_for_route(route: dict, *, segment_labels: dict[int, str],
     the 100c companion merge applies per card. A candidate `segment_labels`
     cannot name (a deleted segment) draws no cell."""
     segment_courses = segment_courses or {}
-    fight_ids = set(fight_segment_ids)
+    fight_seed_keys = (dict(fight_segment_ids) if isinstance(fight_segment_ids, dict)
+                       else {segment_id: None for segment_id in fight_segment_ids})
+    fight_ids = set(fight_seed_keys)
     order: list[tuple] = []
     buckets: dict[tuple, list] = {}
     seen: set[str] = set()
@@ -267,6 +336,7 @@ def rows_for_route(route: dict, *, segment_labels: dict[int, str],
                 label = SPECIAL_STAR_LABELS.get(
                     key, star_name(course_id, star_id))
                 bucket = (("course", course_id) if 1 <= course_id <= 15
+                          else ("bowser",) if key in _BOWSER_INDEX
                           else ("secret",))
                 add(bucket, (key, label, "igt"))
             else:
@@ -276,7 +346,7 @@ def rows_for_route(route: dict, *, segment_labels: dict[int, str],
                     continue
                 course_id = segment_courses.get(segment_id)
                 if segment_id in fight_ids:
-                    bucket = ("fights",)
+                    bucket = ("bowser",)
                 elif course_id is not None and 1 <= course_id <= 15:
                     bucket = ("course", course_id)
                 else:
@@ -287,10 +357,8 @@ def rows_for_route(route: dict, *, segment_labels: dict[int, str],
         # Route order decides which CARDS exist and in what order; the
         # TEMPLATE decides the order of the lines inside one (round 17).
         entries = _merge_hundred_coins(_template_order(buckets[bucket]))
-        if bucket[0] == "course":
-            return {"course_id": bucket[1], "label": COURSE_NAMES[bucket[1]],
-                    "entries": entries}
-        return _specials_row(entries)
+        return {"course_id": bucket[1], "label": COURSE_NAMES[bucket[1]],
+                "entries": entries}
 
     # COURSE order, not the order the route first touches each course --
     # round 20, 2026-09-01, reversing round 9's "It goes in Route order".
@@ -302,10 +370,13 @@ def rows_for_route(route: dict, *, segment_labels: dict[int, str],
     # follow the template (round 17).
     course_buckets = sorted((b for b in order if b[0] == "course"),
                             key=lambda bucket: bucket[1])
-    specials = _merge_hundred_coins(_template_order(
-        buckets.get(("secret",), []) + buckets.get(("fights",), [])))
+    secret = _merge_hundred_coins(_template_order(buckets.get(("secret",), [])))
+    seed_keys = {f"segment:{segment_id}": seed_key
+                 for segment_id, seed_key in fight_seed_keys.items()}
+    bowser = _bowser_order(buckets.get(("bowser",), []), seed_keys)
     return ([row_of(bucket) for bucket in course_buckets]
-            + ([_specials_row(specials)] if specials else []))
+            + ([_secret_row(secret)] if secret else [])
+            + ([_bowser_row(bowser)] if bowser else []))
 
 
 def without_keys(rows_spec: list[dict], excluded) -> list[dict]:
@@ -424,6 +495,7 @@ def build_card(rows_spec: list[dict], *, you: dict[str, int],
         tiles = [_tile(you, goal, key, label, clock)
                  for key, label, clock in row["entries"]]
         rows.append({"course_id": row["course_id"], "label": row["label"],
+                      "kind": row.get("kind", "course"),
                       "tiles": tiles, "sum": _sum_tiles(tiles)})
     all_tiles = [tile for row in rows for tile in row["tiles"]]
     return {"rows": rows, "total": _sum_tiles(all_tiles)}

@@ -22,10 +22,10 @@ SCORECARDGOAL_JS = (UI / "scorecardgoal.js").as_uri()
 # in -- read off the BUILDER rather than restated, so a course rename or a
 # reordering cannot leave this file quietly asserting the old world.
 from sm64_events.memory.addresses import COURSE_NAMES  # noqa: E402
-from sm64_events.ranks.scorecard import SPECIALS_LABEL  # noqa: E402
+from sm64_events.ranks.scorecard import BOWSER_LABEL, SECRET_LABEL  # noqa: E402
 
 CARD_ORDER = [COURSE_NAMES[course_id] for course_id in range(1, 16)] \
-    + [SPECIALS_LABEL]
+    + [SECRET_LABEL, BOWSER_LABEL]
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node not on PATH")
@@ -962,6 +962,7 @@ def test_the_cards_sit_in_four_aligned_columns_reading_down_in_course_order():
                 "    .map((card) => ({"
                 "      label: card.querySelector('.score-card-name')"
                 "        .textContent.trim(),"
+                "      lines: card.querySelectorAll('.score-line').length,"
                 "      top: card.getBoundingClientRect().top,"
                 "      bottom: card.getBoundingClientRect().bottom,"
                 "    }))"
@@ -973,20 +974,32 @@ def test_the_cards_sit_in_four_aligned_columns_reading_down_in_course_order():
         assert drawn == sorted(drawn, key=CARD_ORDER.index), (
             "reading down each column in turn must walk the course list in "
             f"order; drew {drawn}")
-        assert drawn[-1] == SPECIALS_LABEL, (
-            "the one specials card closes the last column")
+        assert drawn[-2:] == [SECRET_LABEL, BOWSER_LABEL], (
+            "Secret then Bowser close the last column (round 21)")
 
-        counts = {len(column) for column in columns}
-        assert counts == {len(columns[0])}, (
-            f"the fixture's columns should chunk evenly, got {counts}"
-            " — re-derive this test's alignment claim if the seed changed")
-        for card_index in range(len(columns[0])):
+        # Round 21: 15 course cards chunk [4, 4, 4, 3] and the two specials
+        # cards append to the last column, so it holds five. Rows register
+        # across columns (the column stacks are subgrids on the outer grid's
+        # row tracks), but no COLUMN stretches to the tallest one any more --
+        # round 20's merged card made every card its column's average, 272px
+        # for six lines of content.
+        counts = [len(column) for column in columns]
+        assert counts == [4, 4, 4, 5], counts
+        for card_index in range(4):
             tops = [column[card_index]["top"] for column in columns]
             bottoms = [column[card_index]["bottom"] for column in columns]
             assert max(tops) - min(tops) <= 1.5, (
                 f"card {card_index}'s tops drift across columns: {tops}")
             assert max(bottoms) - min(bottoms) <= 1.5, (
                 f"card {card_index}'s bottoms drift across columns: {bottoms}")
+        six_line = [card["bottom"] - card["top"]
+                    for column in columns for card in column
+                    if card["lines"] == 6]
+        assert len(six_line) >= 15, "every course card has six lines"
+        assert max(six_line) - min(six_line) <= 20, (
+            "a six-line card may be one line taller than another (its row"
+            " holds a wrapped name or the seven-line Secret card), never a"
+            f" column's average: {six_line}")
 
 
 def test_every_card_labels_its_columns_and_keeps_them_in_register():
@@ -1035,13 +1048,14 @@ def test_every_card_labels_its_columns_and_keeps_them_in_register():
                     f"the {column} column drifts within one card: {edges}")
 
 
-def test_a_full_monitor_still_gets_four_columns():
-    """Round 20 RETIRED round 12's six-track 4K shape ("5 columns of 3 for
-    the main courses, and then the two secret/bowser fights cards as the 6th
-    column"): there is one specials card now, and his own grid is four
-    columns wide at any width — "We can also compact it a bit more". So a
-    2860px pane must draw the same four tracks a 1920px one does, or the
-    column-major chunking would read down five stacks nobody asked for."""
+def test_a_full_monitor_gives_the_specials_their_own_column():
+    """Round 21's wide shape, rendered: at a 2860px viewport the grid draws
+    FIVE tracks -- his four course columns untouched and the two specials
+    cards in a fifth -- so the page is four rows tall and fits one
+    screenshot. (Round 20 had retired round 12's six-track shape for one
+    merged specials card; round 21 split it again, and a sixth track was
+    measured to wrap most star names, so five it is.) The chunked stacks
+    and the drawn tracks must be the same number."""
     with serve_ui() as base:
         _put_division_goal(base, "Bronze", "V")
 
@@ -1073,13 +1087,13 @@ def test_a_full_monitor_still_gets_four_columns():
         assert state["width"] >= 1900, (
             f"the pane itself is only {state['width']}px wide — the "
             "workspace cap is back")
-        assert state["dataCols"] == "4", state
-        assert state["tracks"] == 4, (
-            f"the grid drew {state['tracks']} tracks for 4 chunked stacks "
+        assert state["dataCols"] == "5", state
+        assert state["tracks"] == 5, (
+            f"the grid drew {state['tracks']} tracks for 5 chunked stacks "
             "— the CSS and the component disagree")
-        assert len(state["counts"]) == 4, state
-        assert state["last"] == SPECIALS_LABEL, (
-            "the one specials card closes the last column")
+        assert state["counts"] == [4, 4, 4, 3, 2], state
+        assert state["last"] == BOWSER_LABEL, (
+            "the Bowser card closes the specials column")
 
 
 def test_every_line_is_a_door_to_that_stars_library_page():
@@ -1380,19 +1394,49 @@ def test_the_grid_reads_down_each_column_in_course_order():
     to right... [BOB] [BBH] [DDD] [THI] / [WF] [HMC] [SL] [TTC] / [JRB] [LLL]
     [WDW] [RR] / [CCM] [SSL] [TTM] [Secrets + Bowser combined into a single
     card]". Sixteen cards, four columns, COLUMN-MAJOR."""
-    rows = [{"label": name} for name in COURSE_ORDER]
+    rows = [{"label": name, "course_id": index + 1}
+            for index, name in enumerate(COURSE_ORDER[:15])]
+    rows += [{"label": "Secret", "course_id": None},
+             {"label": "Bowser", "course_id": None}]
     columns = call("cardColumns", rows, 4)
+    drawn = [[card["label"] for card in column["rows"]] for column in columns]
+    # Round 21: two specials cards again, appended to the last column so
+    # the 15 courses keep his grid exactly and "Secret -> Bowser" still
+    # closes the reading order.
+    assert drawn == [["BOB", "WF", "JRB", "CCM"],
+                     ["BBH", "HMC", "LLL", "SSL"],
+                     ["DDD", "SL", "WDW", "TTM"],
+                     ["THI", "TTC", "RR", "Secret", "Bowser"]]
+
+
+def test_a_wide_pane_gives_the_specials_their_own_column():
+    """Round 21's wide shape, his ask: an arrangement "so that (1) we can
+    easily screenshot all of them at once, (2) and it feels reasonably
+    uniform". Five tracks: his 4x4 course grid untouched, and the two
+    specials in a fifth column -- four rows tall, which fits his window
+    where five rows (the specials appended) did not."""
+    rows = [{"label": name, "course_id": index + 1}
+            for index, name in enumerate(COURSE_ORDER[:15])]
+    rows += [{"label": "Secret", "course_id": None},
+             {"label": "Bowser", "course_id": None}]
+    columns = call("cardColumns", rows, 5)
     drawn = [[card["label"] for card in column["rows"]] for column in columns]
     assert drawn == [["BOB", "WF", "JRB", "CCM"],
                      ["BBH", "HMC", "LLL", "SSL"],
                      ["DDD", "SL", "WDW", "TTM"],
-                     ["THI", "TTC", "RR", "Specials"]]
+                     ["THI", "TTC", "RR"],
+                     ["Secret", "Bowser"]]
+    # A scope with no specials card (a single course) does not draw an
+    # empty fifth track.
+    only_courses = call("cardColumns", rows[:15], 5)
+    assert [len(column["rows"]) for column in only_courses] == [3, 3, 3, 3, 3]
 
 
 def test_a_scope_with_fewer_cards_still_reads_down_in_order():
     """A route scope holds fewer cards; the last column simply holds fewer,
     and reading down still walks the list in order."""
-    rows = [{"label": name} for name in ["BOB", "WF", "JRB", "CCM", "BBH"]]
+    rows = [{"label": name, "course_id": index + 1}
+            for index, name in enumerate(["BOB", "WF", "JRB", "CCM", "BBH"])]
     columns = call("cardColumns", rows, 4)
     assert [card["label"] for column in columns for card in column["rows"]] == [
         "BOB", "WF", "JRB", "CCM", "BBH"]
@@ -1407,7 +1451,9 @@ def test_the_track_count_follows_the_measured_pane():
     """The COMPONENT picks the track count, not a container query: the
     chunker and the drawn grid have to be the same number or reading down a
     column stops being course order. Floors are round 11's."""
-    assert call("columnCountFor", 2600) == 4
+    assert call("columnCountFor", 2600) == 5
+    assert call("columnCountFor", 2121) == 5   # round 21: the specials' own column
+    assert call("columnCountFor", 2120) == 4
     assert call("columnCountFor", 1321) == 4
     assert call("columnCountFor", 1320) == 2
     assert call("columnCountFor", 561) == 2
@@ -1421,7 +1467,7 @@ def test_the_css_declares_a_track_rule_for_every_count_the_component_picks():
     that one width."""
     css = (UI / "index.html").read_text(encoding="utf-8")
     counts = {call("columnCountFor", width)
-              for width in (0, 560, 561, 1320, 1321, 2600)}
+              for width in (0, 560, 561, 1320, 1321, 2120, 2121, 2600)}
     for count in counts:
         if count == 4:
             continue                      # the bare `.score-cards` default

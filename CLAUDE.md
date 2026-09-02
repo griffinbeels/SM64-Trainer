@@ -107,7 +107,8 @@ automatically when you touch matching files. Zones:
 | UI shell, shared primitives, **verification norms** (loads for all of `ui/`) | `ui/` | `.claude/rules/ui-core.md` |
 | The SELECTOR — quick-select row, cells and art | `ui/components/stagebanner.js`, `practicecell.js`, `entityicons.js`, `cellrow.js`, `ui/entities.js`, `ui/subsections.js` | `.claude/rules/ui-selector.md` |
 | Practice cards + the practice log, pickers, segments, routes, runs, strategies, graphs | `ui/components/practice*`, `ui/components/attemptlog.js`, `ui/entitysection.js`, `ui/focustarget.js`, `entitymodal.js`, `segments.js`, `routes.js`, `runview.js`, `strat*`, `links.py` | `.claude/rules/ui-practice.md` |
-| Rank icons + caps, banners, Rank tab, MARELO pill, the Scorecard | `ui/components/caps.js`, `rankicon.js`, `hat.js`, `ranks.js`, `rankpage.js`, `marelo.js`, `standards.js`, `scorecard.js`, `ui/scorecardgoal.js` | `.claude/rules/ui-ranks.md` |
+| Rank icons + caps, banners, Rank tab, MARELO pill | `ui/components/caps.js`, `rankicon.js`, `hat.js`, `ranks.js`, `rankpage.js`, `marelo.js`, `standards.js` | `.claude/rules/ui-ranks.md` |
+| The Scorecard card + its goal picker (the Rank tab mounts it) | `ui/components/scorecard.js`, `ui/scorecardgoal.js` | `.claude/rules/ui-scorecard.md` |
 | Celebrations, the level-up climb, the tuning inspector | `ui/celebrations.js`, `rankclimb.js`, `climb*.js`, `tune*`, `components/celebrate.js`, `server/tuning_api.py` | `.claude/rules/ui-climb.md` |
 | Replay capture/encode/extract, compare, compilation + **their UI** | `replay/`, `compare/`, `core/recorder_lock.py`, `ui/components/replay.js`, `compare.js`, `videosync.js`, `failcomp.js` | `.claude/rules/replay-compare.md` |
 | Desktop shell, self-update, build, release | `desktop/`, `bootstrap/`, `core/update*`, `tools/build_exe.py`, `tools/release.py` | `.claude/rules/desktop-update-release.md` |
