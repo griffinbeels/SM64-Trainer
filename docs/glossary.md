@@ -635,9 +635,9 @@ still govern other sessions' [[attempt]]s.
 
 ### Exit star
 
-A [[star]] you collect only to leave a course, not the one you set out for —
-which makes its time comparable only with other [[attempt]]s that left the
-same way.
+A [[star]] you collect to leave a course rather than as the goal — which makes
+its time comparable only with other [[attempt]]s that left the same way. Its
+grab finishes the [[100-coin star]]'s [[attempt]] and records none of its own.
 
 - **Lives** — the 100-coin rules
   (`src/sm64_events/tracking/hundred_coin.py`)
@@ -646,7 +646,10 @@ same way.
 
 The [[star]] a course gives you for one hundred coins. Because you can finish
 that collection anywhere, which [[exit star]] you ended on defines which
-[[strategy]] the [[attempt]] belongs to.
+[[strategy]] the [[attempt]] belongs to. Grabbing it, or holding a hundred
+coins at the [[exit star]], proves the visit — even one a savestate cut
+short — so the trainer files the [[attempt]] here and never on the
+[[exit star]].
 
 - **Lives** — the 100-coin rules
   (`src/sm64_events/tracking/hundred_coin.py`)
@@ -1383,3 +1386,16 @@ US ROM and the game-version setting's automatic mode has something to detect
 from.
 
 - **Lives** — the version probe (`src/sm64_events/memory/version_probe.py`)
+
+### Chain file
+
+One value's whole path through the trainer, hop by hop: where the value holds
+true at each hop, which module owns it there, the probe that reads it, the way
+to force a known-good value in, and what that probe prints when the hop breaks.
+A bug report names the last hop — what he saw — so the cause sits at the
+earliest hop where the value stops holding true, and a fix below that hop
+cannot hold.
+
+- **Lives** — the chain files (`.claude/rules/chain-star-grab-time.md`) → the
+  test running the machine-wide chain checker over them
+  (`tests/test_chains.py`)

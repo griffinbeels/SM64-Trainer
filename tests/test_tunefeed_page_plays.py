@@ -13,6 +13,7 @@ card in plays a real Web Animation on the cards it displaces (`useFeedMotion`),
 and opening one plays a real height animation (`Disclose`). The page is only
 how they are reached without a live emulator.
 """
+import socket
 import subprocess
 import sys
 import time
@@ -51,17 +52,37 @@ COUNT_RUNNING = """
 """
 
 
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _wait_listening(port: int, timeout: float = 15.0) -> None:
+    """Block until the server accepts a connection. A fixed 1.2 s sleep here
+    missed under 16 parallel workers (2026-09-01: ERR_CONNECTION_REFUSED on
+    the first goto) -- readiness is a fact to observe, not a duration."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                return
+        except OSError:
+            time.sleep(0.05)
+    raise RuntimeError(f"http.server never listened on port {port}")
+
+
 @pytest.fixture(scope="module")
 def page_server(tmp_path_factory):
     """A plain static server over `ui/`. The inspector talks to no API except
     SAVE, which this deliberately does not provide -- a test that could write
     the registry would rewrite the shipped defaults as a side effect."""
-    port = 8471
+    port = _free_port()
     proc = subprocess.Popen(
         [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
         cwd=str(UI.parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        time.sleep(1.2)
+        _wait_listening(port)
         yield f"http://127.0.0.1:{port}/ui/tunefeed.html"
     finally:
         proc.terminate()

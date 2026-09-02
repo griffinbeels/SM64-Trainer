@@ -9,7 +9,7 @@ never been rendered by any gate, before or after that rewrite.
 
 `stage` is SERVER state, seeded once when a fixture starts, and all of the
 main PROJECT's stories share ONE page and ONE server — no story there can
-move the app into `bowser_course` mid-sweep. uilab's `uilab_sweep` fixture
+move the app into `bowser_course` mid-sweep. uilab's `uilab_sweep_at` fixture
 reads `uilab_project` off the TEST MODULE (`uilab/pytest_plugin.py`), so a
 second module gets its own sweep with its own `Project`: that is the seam,
 and it needed no uilab change. See `tools/uilab_project.py::BOWSER_PROJECT`
@@ -41,16 +41,18 @@ if _MISSING:
     pytest.skip(_MISSING, allow_module_level=True)
 
 from uilab.driver import get_driver  # noqa: E402
+from uilab import sweep  # noqa: E402
 from uilab.pytest_plugin import (  # noqa: E402,F401
-    assert_no_new_defects, assert_no_stale_exemptions, uilab_sweep)
+    assert_exemptions_name_live_viewports, assert_no_new_defects,
+    assert_no_stale_exemptions, uilab_sweep_at)
 from uilab_project import BOWSER_PROJECT  # noqa: E402
 
-# `uilab_sweep` is IMPORTED, not inherited from the pytest11 entry point —
+# `uilab_sweep_at` is IMPORTED, not inherited from the pytest11 entry point —
 # same reasoning as tests/test_responsive.py: `uv sync` prunes the editable
 # install (uilab is absent from the lockfile), so importing the fixture is
 # the one thing a package manager cannot revoke.
 
-# The plugin's `uilab_sweep` fixture reads this off the module.
+# The plugin's `uilab_sweep_at` fixture reads this off the module.
 uilab_project = BOWSER_PROJECT
 
 
@@ -61,20 +63,32 @@ def test_the_sweep_is_not_silently_disabled():
         pytest.skip("UILAB_SKIP=1 — layout sweep deliberately disabled")
 
 
-def test_no_layout_defects_across_the_matrix(uilab_sweep):
-    assert_no_new_defects(BOWSER_PROJECT, uilab_sweep)
+@pytest.mark.spread
+@pytest.mark.parametrize("viewport", sweep.derived_matrix(BOWSER_PROJECT),
+                         ids=sweep.viewport_key)
+def test_no_layout_defects_at_each_viewport(uilab_sweep_at, viewport):
+    """One case per viewport, each its own worker group (`spread`): the
+    whole-matrix sweep was ONE test -- every viewport x every story with a
+    320 ms settle before each probe, 179 s for the main page -- and the floor
+    under the parallel suite (2026-09-01). A stale exemption is a lie about
+    what is broken, and the list stops meaning anything the moment one is
+    allowed to sit there, so each case also judges the exemptions naming its
+    own viewport."""
+    result = uilab_sweep_at(viewport)
+    assert_no_new_defects(BOWSER_PROJECT, result)
+    assert_no_stale_exemptions(BOWSER_PROJECT, result, viewport=viewport)
 
 
-def test_the_known_defect_list_does_not_outlive_its_defects(uilab_sweep):
-    """A stale exemption is a lie about what is broken, and the list stops
-    meaning anything the moment one is allowed to sit there."""
-    assert_no_stale_exemptions(BOWSER_PROJECT, uilab_sweep)
+def test_every_exemption_names_a_viewport_in_the_matrix():
+    """The one row shape no per-viewport case can reach. Browser-free."""
+    assert_exemptions_name_live_viewports(BOWSER_PROJECT)
+
 
 
 # --- the fixture must actually REACH the row --------------------------------
 # tests/test_fixture_reaches_the_real_page.py's own lesson, a fourth instance
 # of the failure it names three of: a sweep that never reaches its target
-# state reports a clean page nobody is looking at. `uilab_sweep` above proves
+# state reports a clean page nobody is looking at. `uilab_sweep_at` above proves
 # the row doesn't OVERFLOW/clip/overlap; it says nothing about whether the
 # row it measured is the real, three-cell BowserCourseRow or an empty/one-cell
 # stand-in the `at=".stagebanner"` selector matched anyway. This is that

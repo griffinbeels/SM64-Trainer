@@ -634,8 +634,8 @@ Three tests, none of which can be satisfied by a comment:
 | Test | Fails when |
 |---|---|
 | `test_component_layout_gates_on_the_container` | a `@media` rule styles a component selector |
-| `test_no_layout_defects_across_the_matrix` | the rendered app overflows, clips inside a fixed-height box, truncates an opted-in element, overlaps a flow sibling, **or paints a `::before`/`::after` onto a box it does not own**, at any declared breakpoint |
-| `test_the_known_defect_list_does_not_outlive_its_defects` | a row in `known_defects` describes a defect that no longer occurs |
+| `test_no_layout_defects_at_each_viewport[<WxH>]` | the rendered app overflows, clips inside a fixed-height box, truncates an opted-in element, overlaps a flow sibling, **or paints a `::before`/`::after` onto a box it does not own**, at that viewport -- or a `known_defects` row naming that viewport describes a defect that no longer occurs. One case per viewport, each its own worker group (`spread`), so the sweep spreads across workers instead of being one three-minute test |
+| `test_every_exemption_names_a_viewport_in_the_matrix` | a `known_defects` row names a viewport no case would ever judge (browser-free) |
 
 All three live in `tests/test_responsive.py` and are three lines each, because
 the machinery is **uilab** — a machine-level module at `Desktop/code/uilab`,
