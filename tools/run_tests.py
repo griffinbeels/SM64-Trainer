@@ -37,6 +37,24 @@ Two instruments, and why each is shaped as it is (all numbers 2026-09-01,
   the full run is what refreshes the map, and it is the one command that
   says "this merges".
 
+  **testmon reorders, and the suite puts the order back.** `--testmon-
+  noselect` is documented as "reorder and prioritize the tests most likely
+  to fail first", and it does, once a map exists -- a `trylast` collection
+  hook that sorts every module's tests by recorded failures and duration.
+  A module that shares one browser page across its tests (the fixture-
+  reach file, the collapse story, every `scope="module"` page) then runs
+  its practice-tab tests after its story tests, on a page left on the
+  Segments tab, and its two viewport params interleave so the page is
+  rebuilt dozens of times. Measured 2026-09-02, one worker, no other
+  load: 38 page builds and 3 failed + 7 reruns under the flag; 2 builds
+  and 81 green without it. The first full run in a fresh worktree has no
+  map and keeps file order, which is why the first gate in a worktree was
+  green and every later one red on a different set -- it read as load
+  flake for a day. `tests/conftest.py`'s collection hookwrapper restores
+  raw order plus pytest's own param grouping after every plugin, and
+  `tests/test_worker_groups.py` checks the live session against that
+  recipe on every run.
+
 The door closes the blind spot it can: after every full run it records a
 content hash of every non-Python file git knows about (tracked or untracked,
 not ignored), and `--changed` refuses to select when any of them differs --

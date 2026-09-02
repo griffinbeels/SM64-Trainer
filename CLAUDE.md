@@ -305,7 +305,12 @@ Contract changes land on main first, then dependent work fans out. Merge with
   test, coverage map refreshed) and `--changed` (pytest-testmon reruns only
   tests whose executed Python changed). `tests/conftest.py` gives each test
   its file as an xdist group, so a module's one-server-one-browser fixture
-  is built once; a test marked `spread` is its own group and leaves the
+  is built once, and puts every file back in its OWN order after the
+  plugins have had their say -- testmon's `--testmon-noselect` reorders a
+  module's tests "most likely to fail first" once its map exists, which
+  scrambled shared-page files and read as load flake for a day
+  (2026-09-02, `tests/test_worker_groups.py` pins the order); a test marked
+  `spread` is its own group and leaves the
   file, which is how the responsive sweep went from one 179 s test to 26
   cases. Two things to carry: testmon is BLIND to anything that is not
   Python executed in-process (JS, HTML, CSS, seed data, docs, code that
