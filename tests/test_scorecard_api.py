@@ -121,6 +121,108 @@ def test_a_runner_goal_resolves_against_the_sheet(tmp_path):
         assert 0 < card["goal_coverage"]["covered"] < card["goal_coverage"]["tiles"]
 
 
+def _sheet_times(version):
+    """{runner: {entity_key: time_cs}} off the BUNDLED snapshot, in one
+    region -- the same reader the router grades a runner goal through, so an
+    expectation here comes from today's shipped sheet rather than from a
+    number copied out of a past run."""
+    from sm64_events.core.paths import bundled_sheet_library
+    from sm64_events.library.ratings import runner_times
+    from sm64_events.library.store import LibraryStore
+
+    store = LibraryStore(bundled_path=bundled_sheet_library())
+    store.load()
+    return runner_times(store.payload, {}, version=version)
+
+
+def _runner_whose_regions_disagree():
+    """A runner with a star time in BOTH regions where the two differ, plus
+    the entity they differ on and the faster of the two. This is the only
+    shape that can tell "both regions" apart from either single region --
+    without it, a broken merge that silently kept one side would pass."""
+    us_times, jp_times = _sheet_times("us"), _sheet_times("jp")
+    for runner, by_entity in us_times.items():
+        their_jp = jp_times.get(runner) or {}
+        for key, us_cs in by_entity.items():
+            jp_cs = their_jp.get(key)
+            if jp_cs is not None and jp_cs != us_cs and key.startswith("star:"):
+                return {"runner": runner, "key": key, "us": us_cs, "jp": jp_cs,
+                        "faster": min(us_cs, jp_cs)}
+    return None
+
+
+def _tile(card, key):
+    for row in card["rows"]:
+        for tile in row["tiles"]:
+            if tile["key"] == key:
+                return tile
+    return None
+
+
+def test_the_scorecard_starts_on_the_detected_region(tmp_path):
+    """Round 24, his words: "we should define their scorecard based on their
+    detected region (e.g., US in my case). BUT it should be a deliberate
+    choice." Untouched means FOLLOWING the detection, which is why the KV is
+    absent rather than pre-seeded with ["us"] -- a mode flip still moves it."""
+    with make_client(tmp_path) as (client, _db, service):
+        card = client.get("/api/scorecard").json()
+        assert card["regions"] == [service.ranks.grading_version]
+        assert card["detected_region"] == service.ranks.grading_version
+
+        service.ranks.grading_version = "jp"
+        card = client.get("/api/scorecard").json()
+        assert card["regions"] == ["jp"], (
+            "an untouched scorecard must follow the detected region, not a "
+            "region frozen at first read")
+        assert card["detected_region"] == "jp"
+
+
+def test_at_least_one_region_stays_on(tmp_path):
+    with make_client(tmp_path) as (client, _db, _svc):
+        assert client.put("/api/scorecard/regions",
+                          json={"regions": []}).status_code == 422
+        assert client.put("/api/scorecard/regions",
+                          json={"regions": ["eu"]}).status_code == 422
+        # ...and the refusal changed nothing.
+        assert client.get("/api/scorecard").json()["regions"] == ["us"]
+
+
+def test_a_deliberate_region_pick_survives_a_detection_change(tmp_path):
+    with make_client(tmp_path) as (client, _db, service):
+        assert client.put("/api/scorecard/regions",
+                          json={"regions": ["us"]}).status_code == 200
+        service.ranks.grading_version = "jp"
+        assert client.get("/api/scorecard").json()["regions"] == ["us"], (
+            "a region he picked on purpose must outlive a detection change")
+
+
+def test_both_regions_take_the_faster_time_per_star(tmp_path):
+    """His round-24 rule, verbatim: "When combined for the scorecard, we
+    simply take the faster time across both regions." Proved on a star where
+    the two regions actually DISAGREE, so a merge that quietly kept one side
+    cannot pass -- each single-region reading is asserted too."""
+    case = _runner_whose_regions_disagree()
+    assert case, ("no runner in the bundled snapshot has two DIFFERENT region "
+                  "times on one star -- this test's premise no longer holds")
+    with make_client(tmp_path) as (client, _db, _svc):
+        assert client.put("/api/scorecard/goal", json={
+            "kind": "runner", "runner": case["runner"]}).status_code == 200
+
+        for region in ("us", "jp"):
+            assert client.put("/api/scorecard/regions",
+                              json={"regions": [region]}).status_code == 200
+            tile = _tile(client.get("/api/scorecard").json(), case["key"])
+            assert tile is not None, case
+            assert tile["goal_cs"] == case[region], (region, tile, case)
+
+        assert client.put("/api/scorecard/regions",
+                          json={"regions": ["us", "jp"]}).status_code == 200
+        card = client.get("/api/scorecard").json()
+        assert card["regions"] == ["us", "jp"]
+        tile = _tile(card, case["key"])
+        assert tile["goal_cs"] == case["faster"], (tile, case)
+
+
 def test_a_runner_goal_needs_a_name(tmp_path):
     with make_client(tmp_path) as (client, _db, _svc):
         response = client.put("/api/scorecard/goal", json={"kind": "runner"})

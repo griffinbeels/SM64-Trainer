@@ -61,6 +61,20 @@ _GOAL_KEY = "scorecard_goal"
 # (round-tripped through the card's own live edit, never re-derived) and
 # simply looked up here, which is why it needs no resolver of its own below.
 _CUSTOM_KEY = "scorecard_custom_goals"
+# Which ROM regions a RUNNER goal is allowed to offer a time from -- round 24,
+# his mechanism verbatim: "we should define their scorecard based on their
+# detected region (e.g., US in my case). BUT it should be a deliberate choice
+# ... There must be at least one region enabled at all times. This gives 3
+# valid states: US only, JP only, or JP and US combined. When combined for the
+# scorecard, we simply take the faster time across both regions."
+#
+# Server-side beside the goal for the same reason `_GOAL_KEY` is: two clients
+# (browser + desktop GUI) reading one choice. ABSENT means "follow the
+# detected region", which is not the same as `["us"]` -- an untouched
+# scorecard keeps tracking `ranks.grading_version` as a mode flip or a
+# detection moves it, and only a deliberate pick freezes it.
+_REGIONS_KEY = "scorecard_regions"
+_VALID_REGIONS = ("us", "jp")
 _VALID_TIERS = [tier for tier in RANK_NAMES if tier != "Iron"]
 
 
@@ -83,6 +97,10 @@ class GoalBody(BaseModel):
     # the same parser written in JS and again in Python, and the one thing
     # this project does not allow is a second door onto one rule.
     sources: list[dict] | None = None
+
+
+class RegionsBody(BaseModel):
+    regions: list[str]
 
 
 def _fetch_column_source(overrides):
@@ -358,17 +376,47 @@ def create_scorecard_router(service, library=None, adoptions=None,
                 value=runner_times(payload, adopted_rows, version=version))
         return _runner_times_memo["value"]
 
-    def runner_goal_map(runner: str, version: str) -> dict[str, int]:
+    def scorecard_regions(ranks) -> list[str]:
+        """The regions a runner goal may offer times from, in `_VALID_REGIONS`
+        order and never empty. A missing or corrupt KV reads as "follow the
+        detected region" -- `ranks.grading_version`, the same value
+        `core/modes.py::effective_version` feeds `GET /api/mode` as
+        `effective` -- rather than as a hard-coded US, so an untouched
+        scorecard tracks a mode flip the way it always has."""
+        stored = service.db.get_state(_REGIONS_KEY, None)
+        picked = [region for region in (stored or [])
+                  if region in _VALID_REGIONS] if isinstance(stored, list) else []
+        if not picked:
+            detected = ranks.grading_version if ranks is not None else "us"
+            picked = [detected if detected in _VALID_REGIONS else "us"]
+        return [region for region in _VALID_REGIONS if region in picked]
+
+    def runner_goal_map(runner: str, regions: list[str]) -> dict[str, int]:
         """Every entity key `runner` has a sheet time for -> that time,
         already centiseconds -- straight off `library.ratings.runner_times`,
         the exact shape `_tile`'s `goal.get(key)` lookup wants (a key the
         card never asks about costs nothing to carry). Absent, never zero,
         the same rule the reader itself follows: a runner with no time on an
         entity is simply not a key here, which is what keeps `goal_coverage`
-        honest about how much of the card this goal actually reaches."""
+        honest about how much of the card this goal actually reaches.
+
+        With BOTH regions on, the FASTER of the two wins per entity -- his
+        round-24 words, "we simply take the faster time across both regions"
+        -- which is the same minimise-then-merge shape `resolve_multi`
+        already applies across goal SOURCES, one level further in. Read once
+        per region (the memo below is keyed by region, so the second read is
+        free after the first fetch), never by widening `ratings.py`'s own
+        single-region contract: `_visible_entries` answers "what does this
+        row look like on THIS ROM", and a row's JP ladder is a different
+        ladder, not a longer list."""
         if library is None:
             return {}
-        return runner_times_for(version).get(runner, {})
+        best: dict[str, int] = {}
+        for region in regions:
+            for key, time_cs in runner_times_for(region).get(runner, {}).items():
+                if key not in best or time_cs < best[key]:
+                    best[key] = time_cs
+        return best
 
     def custom_goal_store() -> dict[str, dict[str, int]]:
         # A corrupt KV (wrong type, from a schema this store never wrote)
@@ -423,7 +471,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
             return division_goal_map(keys, goal_value["tier"],
                                      goal_value["division"])
         if kind == "runner":
-            return runner_goal_map(goal_value["runner"], ranks.grading_version)
+            return runner_goal_map(goal_value["runner"], scorecard_regions(ranks))
         return {}
 
     def resolve_multi(goal_value, keys: list[str], ranks):
@@ -495,8 +543,12 @@ def create_scorecard_router(service, library=None, adoptions=None,
         # (grouped ahead of Divisions) without a second round trip -- the
         # active one, if any, is already carried in `goal` above.
         custom_names = sorted(custom_goal_store().keys())
+        ranks = service.ranks
         return {**card, "scope": scope, "goal": goal_value,
-                "goal_coverage": coverage, "custom_goals": custom_names}
+                "goal_coverage": coverage, "custom_goals": custom_names,
+                "regions": scorecard_regions(ranks),
+                "detected_region": (ranks.grading_version
+                                    if ranks is not None else "us")}
 
     @router.put("/goal")
     async def set_goal(body: GoalBody | None = Body(default=None)):
@@ -584,6 +636,25 @@ def create_scorecard_router(service, library=None, adoptions=None,
             raise HTTPException(422, f"unknown goal kind {body.kind!r}")
         service.db.set_state(_GOAL_KEY, value)
         return {"goal": value}
+
+    @router.put("/regions")
+    async def set_regions(body: RegionsBody):
+        """Which regions a runner goal may offer times from. At least one --
+        an empty list is a 422 rather than a silent fall back to the detected
+        region, because "show me nothing" and "follow my ROM" are different
+        intentions and the control never sends the first. Stored in
+        `_VALID_REGIONS` order so the KV cannot hold two spellings of the
+        same choice."""
+        _require_db()
+        picked = [region for region in _VALID_REGIONS if region in body.regions]
+        unknown = [region for region in body.regions
+                   if region not in _VALID_REGIONS]
+        if unknown:
+            raise HTTPException(422, f"unknown region(s) {unknown!r}")
+        if not picked:
+            raise HTTPException(422, "at least one region stays on")
+        service.db.set_state(_REGIONS_KEY, picked)
+        return {"regions": picked}
 
     @router.get("/column")
     async def get_column():

@@ -44,6 +44,7 @@ import { applyGoalOverrides, cardColumns, columnCountFor, divisionOptions,
 import { capName, divisionDigit } from "./caps.js";
 import { entityIconSrc } from "./entityicons.js";
 import { Icon } from "./icons.js";
+import { RegionSwitch } from "./versionswitch.js";
 import { SearchSelect } from "./searchselect.js";
 import { InlineState } from "./states.js";
 
@@ -486,9 +487,25 @@ function ScorecardSaveBar({ pendingCount, initialName, busy, error, onSave, onDi
   </div>`;
 }
 
-function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange, scopeId }) {
+// The regions a runner goal may offer a time from -- the SAME control the
+// Library wears ("We should reuse the JP/US selector in the library"), with a
+// different default: the Library shows both, this follows his DETECTED region
+// until he picks otherwise. Its note says what that choice is doing, since
+// the region a goal comes from is invisible in the times themselves.
+function regionNote(regions, detected) {
+  if (regions.length > 1) return "Both regions · faster time wins";
+  const only = regions[0] || detected;
+  return only === detected
+    ? `${only.toUpperCase()} only · your detected region`
+    : `${only.toUpperCase()} only · you are graded on ${detected.toUpperCase()}`;
+}
+
+function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange, scopeId,
+                         regions, detectedRegion, onRegionsChange }) {
   return html`<div class="scorecard-head">
     <h3>Scorecard</h3>
+    <${RegionSwitch} values=${regions} onChange=${onRegionsChange}
+        label="Goal regions" note=${regionNote(regions, detectedRegion)} />
     <${SearchSelect} value=${goalToValues(goal)} valueLabel=${goalToLabel(goal)}
         title="Pick one or more goals" groups=${groups} onOpen=${onOpen}
         onChange=${onGoalChange} align="right" multi />
@@ -600,6 +617,22 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
     } catch (err) { setError(err); }
   }
 
+  // The region pick is the server's, not this component's: it decides which
+  // of a runner's times a goal may offer, so it has to be the same choice the
+  // desktop GUI reads (the KV `scorecard_regions`, beside `scorecard_goal`).
+  // The whole card re-derives on the way back rather than being patched here,
+  // for the same reason the goal write does: the goal tiles, the coverage
+  // count and the per-tile attribution all move together or not at all.
+  async function onRegionsChange(next) {
+    setSaveError(null);
+    try {
+      await send("PUT", "/api/scorecard/regions", { regions: next });
+      setData(await getJSON(`/api/scorecard?scope=${encodeURIComponent(scopeId)}`));
+    } catch (err) {
+      setSaveError(err.message || String(err));
+    }
+  }
+
   // A legend pill's ×: the same write the picker makes, minus that pick --
   // one pick left stores as that single goal, none left clears it, and the
   // refetch re-grades every tile ("Everything should update accordingly").
@@ -643,6 +676,9 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
         ? html`<${InlineState}>Loading your scorecard…<//>`
         : html`<${ScorecardHead} goal=${data.goal} groups=${groups}
               onOpen=${loadRunnersOnce} scopeId=${scopeId}
+              regions=${data.regions || ["us"]}
+              detectedRegion=${data.detected_region || "us"}
+              onRegionsChange=${onRegionsChange}
               coverage=${data.goal_coverage} onGoalChange=${onGoalChange} />
             ${pendingCount > 0
               ? html`<${ScorecardSaveBar} pendingCount=${pendingCount}
