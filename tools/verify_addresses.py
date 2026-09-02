@@ -83,12 +83,18 @@ def main() -> None:
     # VERIFY (2026-09-01, task 0110): the coin count the 100-coin engine reads
     # off an exit grab. Two independent witnesses must agree -- Mario's own
     # numCoins and the HUD's copy -- and both must be the number beside the
-    # coin icon on screen. Grab a few coins first so the value is not 0.
-    hud_coins = mem.read_s16(LAYOUT.hud_display + HUD_COINS_OFF)
-    ok &= check("MARIO_NUM_COINS matches the HUD's coin count",
-                s2.coins == hud_coins and 0 <= s2.coins <= 999,
-                f"numCoins = {s2.coins}, gHudDisplay.coins = {hud_coins} "
-                f"(both must equal the coin counter on screen)")
+    # coin icon on screen. The HUD counts UP toward numCoins one per frame
+    # after a pickup, so stand still a second before reading; a gap of up to
+    # one second's animation is tolerated, a larger one is a wrong address.
+    if LAYOUT.hud_display is None:
+        print("  [SKIP] MARIO_NUM_COINS vs HUD: hud_display not in this "
+              "version's layout yet (the sync loop finds it first)")
+    else:
+        hud_coins = mem.read_s16(LAYOUT.hud_display + HUD_COINS_OFF)
+        ok &= check("MARIO_NUM_COINS matches the HUD's coin count",
+                    abs(s2.coins - hud_coins) <= 30 and 0 <= s2.coins <= 999,
+                    f"numCoins = {s2.coins}, gHudDisplay.coins = {hud_coins} "
+                    f"(both must equal the coin counter on screen)")
     ok &= check("MARIO_ACTION nonzero", s2.mario_action != 0,
                 f"action = {s2.mario_action:#010x}")
     ok &= check("LAST_COMPLETED plausible",

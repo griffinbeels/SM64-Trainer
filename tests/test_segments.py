@@ -4741,9 +4741,10 @@ def test_an_exit_grab_holding_100_coins_completes_an_armed_engine_that_never_saw
            ctx(level=24, prev_level=16))
     assert e.armed_ids() == {7} and e.armed_items()[7].progress == 0
     closed, _ = e.feed(_grab(10, 1300, star=3, coins=100), ctx(level=24))
-    assert closed[0].outcome == "success"
+    assert [a.outcome for a in closed] == ["success"], "ONE row, not two"
     assert closed[0].anchor_type == "level_changed"
     assert closed[0].anchor_frame == 900
+    assert e.armed_ids() == set()
 
 
 @pytest.mark.parametrize("payload", [{}, {"coins": 99}, {"coins": None}])
@@ -4756,4 +4757,49 @@ def test_an_exit_grab_without_100_coins_leaves_an_unarmed_engine_alone(payload):
 def test_a_100_coin_grab_in_another_course_arms_nothing_here():
     e = SegmentEngine([_hundred_coin_def(course=2)])
     closed, _ = e.feed(_grab(10, 1000, course=14, star=6), ctx(level=14))
+    assert closed == [] and e.armed_ids() == set()
+
+
+def test_an_ordinary_run_whose_exit_grab_holds_100_coins_records_exactly_one_row():
+    # THE forward-play shape (every real exit grab carries a hundred coins):
+    # the armed branch closes the run, and the arm-phase proof must not
+    # arm-and-close it a second time on the same event. Caught in review
+    # 2026-09-01: two success rows, rta 400 and rta 0, for one run.
+    e = SegmentEngine([_hundred_coin_def()])
+    e.feed(jev(9, "level_changed", 900, {"from": 16, "to": 24}),
+           ctx(level=24, prev_level=16))
+    e.feed(_grab(10, 1000, star=6, coins=101), ctx(level=24))
+    closed, _ = e.feed(_grab(11, 1300, star=3, coins=137), ctx(level=24))
+    assert [(a.outcome, a.anchor_frame) for a in closed] == [("success", 900)]
+    assert e.armed_ids() == set()
+
+
+def test_a_run_proven_only_at_its_exit_has_no_rta_and_banks_no_best():
+    # Its start was never observed: the row counts on the star's IGT, the
+    # RTA is unknowable, and a zero must not become this def's best.
+    e = SegmentEngine([_hundred_coin_def()])
+    closed, _ = e.feed(_grab(10, 1000, star=3, coins=104), ctx(level=24))
+    assert [a.rta_frames for a in closed] == [None]
+    assert e._best_success.get(7) is None, "a zero must not become the best"
+
+
+def test_a_proof_arm_respects_the_arm_phase_guards():
+    guarded = dataclasses.replace(
+        _hundred_coin_def(), guards=[{"type": "in_active_route"}])
+    e = SegmentEngine([guarded])
+    # An active route that does NOT include this def: the guard refuses the
+    # proof arm exactly as it refuses an ordinary one. (No route at all is
+    # no restriction -- his 2026-08-02 "Overall" ruling -- so that shape arms.)
+    closed, _ = e.feed(_grab(10, 1000, star=6),
+                       ctx(level=24, route_segments=frozenset({99})))
+    assert closed == [] and e.armed_ids() == set(), "outside the route: no arm"
+    closed, _ = e.feed(_grab(11, 1000, star=6),
+                       ctx(level=24, route_segments=frozenset({7})))
+    assert e.armed_ids() == {7}
+
+
+def test_an_exit_grab_holding_100_coins_in_another_course_proves_nothing_here():
+    e = SegmentEngine([_hundred_coin_def(course=2)])
+    closed, _ = e.feed(_grab(10, 1000, course=14, star=3, coins=120),
+                       ctx(level=14))
     assert closed == [] and e.armed_ids() == set()

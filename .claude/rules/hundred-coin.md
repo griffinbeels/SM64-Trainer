@@ -512,10 +512,25 @@ definition exactly as before):
   major action (silent cancel), then this re-arms in the same tick.
 * **`_proven_hundred_coin_exit`** -- an exit-star grab in the family's course
   made holding at least `HUNDRED_COIN_STAR_COINS` (100) arms AND closes in one
-  tick, as a success anchored at the grab. A state loaded AFTER the 100-coin
-  grab shows no grab edge at all; the coin counter is the only evidence left.
-  It also lets an already-armed engine that missed the grab still complete on
-  the exit (the `complete` test in `_feed_waypoint` reads it too).
+  tick, as a success anchored at the grab with NO RTA (`_close(...,
+  span_known=False)`: the start was never seen, and a zero must not bank as
+  the def's best). A state loaded AFTER the 100-coin grab shows no grab edge
+  at all; the coin counter is the only evidence left. It also lets an
+  already-armed engine that missed the grab still complete on the exit (the
+  `complete` test in `_feed_waypoint` AND `_feed_loose` reads it). **Gated
+  on the def being UNARMED as the event arrived** (`was_armed`), and the
+  review is why: every real exit grab holds a hundred coins, so on an
+  ordinary run the armed branch closed it and the arm-phase proof then
+  armed-and-closed the same event AGAIN -- two success rows per run, on the
+  main path, invisible to a test that indexed `closed[0]`. The grab shape is
+  deliberately not gated (a re-grab while armed past the star is cancelled
+  by the armed branch on that very event, and re-arming at the newer grab is
+  the point). Both shapes honour route scoping and the arm-phase guards.
+  **Passing 100 coins WITHOUT touching the spawned star still files the
+  exit as a 100-coin run** -- his ruling in the task ("If the user passes
+  100 coins, they're clearly doing the 100 coins star"), taken over the
+  reviewer's stricter reading; the spawned star lands on Mario, so the case
+  is not one practice produces.
 
 **The coin count is a new memory read**: `MARIO_NUM_COINS_OFF` (0xA8, the s16
 right before `numStars`), sampled by `core/snapshot.py` as `coins` and stamped
@@ -525,16 +540,30 @@ beside the HUD's own coin field (`gHudDisplay + 0x2`, `HUD_COINS_OFF`) -- both
 witnesses against each other every run. **VERIFY** pending the on-screen
 human confirmation.
 
-**The exit star's OWN row is now DROPPED** -- the reversal of decision #1
+**The exit star's OWN row is now HIDDEN** -- the reversal of decision #1
 ("the exit star keeps its OWN attempt too"), which the section above and
 `test_hundred_coin_completion_attributes_to_the_star_not_the_segment` still
 described until this task. `projection.py`'s `seg_closed` loop, right after
-`_auto_ignored`, removes the plain exit-star row `_close_by_grab` recorded on
-the same grab whenever the closing event is a `star_collected` on a star OTHER
-than 6. Decided off the engine's own closure (`hc is not None`), never a
-second predicate, so a reshaped definition's end clauses cannot disagree with
-it. A plain exit grab under 100 coins in the course is untouched -- it never
-closes the family, so its row stands.
+`_auto_ignored`, notes the plain exit-star row `_close_by_grab` recorded on
+the same grab (`hidden_exit_ids`) whenever the closing event is a
+`star_collected` on a star OTHER than 6, and `feed()` omits it from what it
+RETURNS -- so it is never inserted, broadcast, or shown. Decided off the
+engine's own closure (`hc is not None`), never a second predicate, so a
+reshaped definition's end clauses cannot disagree with it. **Hidden, not
+deleted from `closed`, and the review caught why**: `RunTracker` is fed the
+same list at the end of `feed()`, and every one of the 68 seeded route steps
+naming a 100-coin star lists ALL the course's stars as candidates and needs
+every one -- a 120 run through TTC stalled on the exit star it never saw.
+The physical grab still reaches the run tracker; only the recorded row is
+gone (`test_a_route_step_still_credits_the_exit_star_a_100_coin_finish_hides`,
+mutation-proved). A plain exit grab under 100 coins in the course is
+untouched -- it never closes the family, so its row stands. **A HISTORICAL
+exit-star row he had saved a PB or a clip on would lose that PB on the next
+reprojection** (`delete_orphaned_pbs` runs on it): measured across all five
+journals on 2026-09-01, ZERO such rows and ZERO such PBs, and going forward
+the row is never recorded, so the case cannot arise anew. The coin proof
+also reaches a LOOSE-mode reshaped def's completion check (`_feed_loose`),
+the same one-line `complete` clause `_feed_waypoint` carries.
 
 **Measured** by replaying every journal under main and the fix
 (`tools/measure_target_queue.py --before main`): repo **+8** rows (new 100-coin

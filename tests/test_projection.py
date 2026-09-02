@@ -2761,3 +2761,50 @@ def test_the_100_coin_exit_moves_the_target_onto_the_100_coin_star():
         star(3, 1200, course=2, star_id=3, igt=1200),
     ], segments=[_hc_def()])
     assert proj.target == ("star", 2, 6)
+
+
+def test_a_route_step_still_credits_the_exit_star_a_100_coin_finish_hides():
+    # Every seeded 100-coin route step lists all of the course's stars as
+    # candidates and needs every one (68 of 68 measured 2026-09-01), so the
+    # exit star's PHYSICAL grab must still reach the run tracker even though
+    # its practice-log row is hidden by the one-run-one-row rule. Caught in
+    # review before shipping: with the row deleted rather than hidden, a 120
+    # run stalled on the exit star it never saw.
+    steps = [{"need": 2, "candidates": [
+        {"type": "star", "course": 2, "star": 3},
+        {"type": "star", "course": 2, "star": 6}]}]
+    attempts, proj = replay([
+        jev(1, "run_started", 0, {"route_id": 1, "route_name": "R",
+                                  "route_steps": steps, "mode": "forgiving",
+                                  "start_offset_ms": 0}),
+        jev(2, "game_reset", 0, {}),
+        jev(3, "level_changed", 900, {"from": 16, "to": 24}),
+        star(4, 1000, course=2, star_id=6, igt=1000),
+        star(5, 1200, course=2, star_id=3, igt=1200),
+    ], segments=[_hc_def()])
+    assert [(a.star_id, a.outcome) for a in attempts] == [(6, "success")]
+    runs = proj.finished_runs()
+    assert len(runs) == 1 and runs[0].status == "finished"
+
+
+def test_an_ordinary_100_coin_run_with_coins_on_every_grab_is_one_row():
+    # Forward play: every grab now carries the coin count. One run, one row.
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 24}),
+        _exit(2, 1000, coins=100, star_id=6),
+        _exit(3, 1200, coins=131),
+    ], segments=[_hc_def()])
+    assert [(a.star_id, a.outcome, a.rta_frames) for a in attempts] == [
+        (6, "success", 300)]
+
+
+def test_a_disabled_100_coin_engine_leaves_the_exit_star_its_own_row():
+    # No engine covers the course: the coin count proves nothing to nobody,
+    # and the exit star records as itself (the pre-existing fallback).
+    attempts = project([
+        jev(1, "level_changed", 900, {"from": 16, "to": 24}),
+        _exit(2, 1000, coins=100, star_id=6),
+        _exit(3, 1200, coins=131),
+    ], segments=[_hc_def(enabled=False)])
+    assert [(a.star_id, a.outcome) for a in attempts] == [
+        (6, "success"), (3, "success")]

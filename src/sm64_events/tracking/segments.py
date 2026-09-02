@@ -3328,9 +3328,11 @@ class SegmentEngine:
             # he finishes is the latest one. Kept out of `start_triggers`
             # so `arms_ambiently`/`hooks_on_arm`/the origin readers see the
             # definition exactly as before.
-            if d.id not in self._armed and d.id in self._hundred_coin:
+            if (ev.type == "star_collected" and d.id not in self._armed
+                    and d.id in self._hundred_coin):
                 closed.extend(self._hundred_coin_proof_arm(
-                    Attempt, d, ev, ctx, notices))
+                    Attempt, d, ev, ctx, notices,
+                    was_armed=arm is not None))
         # THE GRAND STAR ENDS THE RUN, so nothing may still be running after
         # it. Griffin, 2026-08-05, on the credits screen with "CCM -> BBH"
         # still showing a live timer: "at the end of the game (i.e., after
@@ -3837,7 +3839,8 @@ class SegmentEngine:
         if arm.deadline_frame is not None and ev.frame >= arm.deadline_frame:
             self._disarm(d, ev, notices)   # silent: no row, stats stay clean
             return closed
-        complete = arm.progress >= len(d.waypoints)
+        complete = (arm.progress >= len(d.waypoints)
+                    or self._proven_hundred_coin_exit(d, ev))  # task 0110
         if complete and self._matches(d.end_triggers, ev, ctx):
             a = self._close(Attempt, d, arm, ev, "success", None)
             if a:
@@ -4027,7 +4030,8 @@ class SegmentEngine:
                 and ev.payload.get("star_id") != hc[1]
                 and coins is not None and coins >= HUNDRED_COIN_STAR_COINS)
 
-    def _hundred_coin_proof_arm(self, Attempt, d, ev, ctx, notices) -> list:
+    def _hundred_coin_proof_arm(self, Attempt, d, ev, ctx, notices,
+                                was_armed: bool) -> list:
         """The arm-phase half of "the 100-coin grab is proof", for an UNARMED
         100-coin definition (task 0110). Two shapes, both from his 2026-08-28
         savestate loops:
@@ -4043,40 +4047,54 @@ class SegmentEngine:
 
         Neither shape is a start trigger: `arms_ambiently`, `hooks_on_arm`
         and every origin reader keep seeing the definition as it ships.
-        Route scoping still applies, as it does to any arm."""
+        Route scoping and the arm-phase guards still apply, as to any arm.
+
+        `was_armed` is the def's state AS THE EVENT ARRIVED, and it gates the
+        exit shape only: a def that was armed has already had this event in
+        its armed branch -- on an ordinary run that branch just CLOSED it
+        (every real exit grab carries a hundred coins), and arming-and-
+        closing again here recorded the same run twice (caught in review,
+        2026-09-01). The grab shape is deliberately NOT gated: a re-grab of
+        the star while armed past it is cancelled by the armed branch on
+        this very event, and re-arming at the newer grab is the point."""
         hc, star_index = self._hundred_coin[d.id]
-        if not _route_allows(d, ctx):
+        is_the_grab = (star_index is not None
+                       and (ev.payload.get("course_id"),
+                            ev.payload.get("star_id")) == hc)
+        is_a_proven_exit = (not is_the_grab and not was_armed
+                            and self._proven_hundred_coin_exit(d, ev)
+                            and self._matches(d.end_triggers, ev, ctx))
+        if not (is_the_grab or is_a_proven_exit):
             return []
-        if (star_index is not None and ev.type == "star_collected"
-                and (ev.payload.get("course_id"),
-                     ev.payload.get("star_id")) == hc):
-            self._cancelled.pop(d.id, None)
-            self._armed[d.id] = _Arm(
-                jid=ev.id, start_frame=ev.frame,
-                started_utc=ev.wall_time_utc, anchor_type=ev.type,
-                session_id=ev.session_id, level=ctx.level, area=ctx.area,
-                progress=star_index + 1,
-                deadline_frame=self._deadline_for(d, ev))
+        if not _route_allows(d, ctx) or not all(
+                GUARDS[g["type"]].check(g, ctx) for g in d.guards
+                if GUARDS[g["type"]].phase == "arm"):
+            return []
+        self._cancelled.pop(d.id, None)
+        arm = _Arm(jid=ev.id, start_frame=ev.frame,
+                   started_utc=ev.wall_time_utc, anchor_type=ev.type,
+                   session_id=ev.session_id, level=ctx.level, area=ctx.area,
+                   progress=(star_index + 1 if is_the_grab
+                             else len(d.waypoints)),
+                   deadline_frame=self._deadline_for(d, ev))
+        if is_the_grab:
+            self._armed[d.id] = arm
             notices.append({"event": "segment_armed", "segment_id": d.id,
                             "name": d.name, "frame": ev.frame})
             return []
-        if (self._proven_hundred_coin_exit(d, ev)
-                and self._matches(d.end_triggers, ev, ctx)):
-            self._cancelled.pop(d.id, None)
-            arm = _Arm(jid=ev.id, start_frame=ev.frame,
-                       started_utc=ev.wall_time_utc, anchor_type=ev.type,
-                       session_id=ev.session_id, level=ctx.level,
-                       area=ctx.area, progress=len(d.waypoints))
-            a = self._close(Attempt, d, arm, ev, "success", None)
-            return [a] if a else []
-        return []
+        # The run's start was never seen: its RTA is unknowable and the row
+        # must not bank a zero as this def's best (`span_known=False`).
+        a = self._close(Attempt, d, arm, ev, "success", None,
+                        span_known=False)
+        return [a] if a else []
 
     def _disarm(self, d, ev, notices) -> None:
         if self._armed.pop(d.id, None) is not None:
             notices.append({"event": "segment_disarmed", "segment_id": d.id,
                             "name": d.name, "frame": ev.frame})
 
-    def _close(self, Attempt, d, arm: _Arm, ev, outcome, detail):
+    def _close(self, Attempt, d, arm: _Arm, ev, outcome, detail, *,
+               span_known: bool = True):
         # A close event carrying Usamune's own IGT (star/key grab, pipe touch,
         # death) is used verbatim — pause-safe, display-tick aligned, and free
         # of the arm-frame alignment error the wall-frame delta carries; see
@@ -4187,6 +4205,11 @@ class SegmentEngine:
                 if outcome == "success":
                     return None  # genuine anomaly: end before arm (self-heal)
                 rta = None       # backward jump (game_reset boot frame, earlier savestate): row counts, time unknowable
+        if not span_known:
+            # The span's START was never observed (a 100-coin run proven only
+            # by the coins in hand at its exit, task 0110): the row counts,
+            # its RTA is unknowable, and a zero must never bank as a best.
+            rta = None
         if outcome == "success" and rta is not None:
             # Feeds a loose def's staleness budget (spec 2026-07-28-multi-
             # step-segments, see _deadline_for/budget_frames): a MINIMUM, so
