@@ -1074,7 +1074,9 @@ leaves your settings exactly as they were.
 
 ### Strategy picker
 
-The control for choosing which [[strategy]] your next [[attempt]] uses.
+The control for choosing which [[strategy]] your next [[attempt]] uses. It
+keeps your pick on screen from the instant you make it until the trainer's own
+answer carries it, so nothing that repaints in between can show the old value.
 
 - **Lives** — the picker
   (`src/sm64_events/ui/components/stratpicker.js`)

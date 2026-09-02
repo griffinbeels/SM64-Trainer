@@ -51,20 +51,34 @@ export function StratPicker({ entity, identity, strategies, active, onChanged,
   // remount. Bumping the key snaps it back to the server's truth.
   const [nonce, setNonce] = useState(0);
   const [showModal, setShowModal] = useState(false);
+  // THE PICK, held until the server agrees (task 0113, 2026-09-01). `active`
+  // is the server's value, and a native <select> drawn from it alone reverts
+  // the instant anything re-renders before the write's own response: Preact
+  // sets `value` whenever the DOM disagrees with the prop, and the first
+  // re-render is the WebSocket event the write itself broadcasts, which
+  // arrives BEFORE that response. Sampled every frame on a copy of his
+  // journal: `TJ Owlless -> Sideflip (6 ms) -> TJ Owlless (22 ms) -> Sideflip
+  // (1055 ms)` -- his "glitches between no strategy and the new strategy".
+  // `undefined` = nothing pending; `null` is a real pending pick of "no strat".
+  const [pending, setPending] = useState(undefined);
+  const shown = pending !== undefined ? pending : active;
   // `strategies` is the server's CURRENT list — a purged/tombstoned name is
   // filtered out of it — but `active` on a historical attempt row can still
   // carry a now-purged name. A <select> whose `value` matches no <option>
   // renders with selectedIndex -1, i.e. BLANK, which is indistinguishable
   // from the "— no strat —" sentinel and is exactly the "unlabeled looks
   // like a rendering gap" bug this component exists to fix. So the current
-  // value always stays listed, same rule as segments.js's dropdowns.
-  const options = active && !(strategies || []).includes(active)
-    ? [...(strategies || []), active]
+  // value always stays listed, same rule as segments.js's dropdowns. `shown`
+  // rather than `active` so a name the modal just created is listed while
+  // its write is in flight, before the server's list carries it.
+  const options = shown && !(strategies || []).includes(shown)
+    ? [...(strategies || []), shown]
     : (strategies || []);
 
   async function setStrat(value) {
     if (value === "__new") { setShowModal(true); return; }
     const tag = value || null;
+    setPending(tag);
     try {
       // `submit` lets a caller redirect the write without forking the
       // component: the practice cards set the ACTIVE strategy, an attempt row
@@ -76,11 +90,16 @@ export function StratPicker({ entity, identity, strategies, active, onChanged,
       // A dropped write (tracker reconnecting, or a second copy running) must
       // NOT silently leave a phantom selection that later reverts. Tell the
       // user and force the dropdown back to the real, still-unset value.
+      setPending(undefined);
       window.alert("Couldn't save the strategy — the tracker may be reconnecting "
         + "or a second copy of it is running. Please try again.");
       setNonce((n) => n + 1);
     }
-    onChanged();   // resync the dropdown to the server's truth either way
+    // Resync to the server's truth either way. `onChanged` is the store's
+    // coalesced refresh (store.js), whose promise settles only once a view
+    // fetched AFTER this write has landed -- so when the hold lifts, `active`
+    // already IS the pick and nothing on screen moves.
+    try { await onChanged(); } finally { setPending(undefined); }
   }
 
   // A grouped list must still be able to show a value the groups do not cover
@@ -103,11 +122,11 @@ export function StratPicker({ entity, identity, strategies, active, onChanged,
   // out would be the other half of his dead-control rule -- it just goes
   // quiet. `options` rather than `strategies` is deliberate: a historical
   // attempt carrying a purged name has exactly one option and it IS the
-  // active one, which this expression already covers through `!active`.
+  // active one, which this expression already covers through `!shown`.
   const nothingToPick = options.length === 0;
   return html`<select key=${`strat-${nonce}`}
-      class="meta ${!active && highlightUnset && !nothingToPick ? "needs-strat" : ""}"
-      value=${active || ""}
+      class="meta ${!shown && highlightUnset && !nothingToPick ? "needs-strat" : ""}"
+      value=${shown || ""}
       onchange=${(changeEvent) => setStrat(changeEvent.target.value)}>
     ${allowBlank ? html`<option value="">${blankLabel}</option>` : null}
     ${grouped.length

@@ -384,6 +384,14 @@ export function useTracker() {
   // firing per event meant two /api/session + two /api/marelo fetches back to
   // back, racing each other home. Built once — refresh, refreshMarelo and
   // setMareloRev are all stable across renders.
+  //
+  // It is ALSO the `refresh` every component sees on the store (below): a
+  // component that just POSTed asks for the view through the same door the
+  // server's own broadcast of that write comes in by, so the two requests
+  // join one run instead of racing. Until 2026-09-01 components held the raw
+  // `refresh` above, and one strategy pick cost three /api/session fetches
+  // with two in flight together (task 0113). The raw one stays for the paths
+  // that own freshness outright: mount, socket open, the never-loaded retry.
   const requestRefresh = useRef(null);
   if (requestRefresh.current === null) {
     requestRefresh.current = coalesce(async () => {
@@ -565,7 +573,7 @@ export function useTracker() {
            starIcons, pickStarIcons, rankIcons, pickRankIcons,
            showDust, pickShowDust, courseIcons,
            segments, vocab, loadSegments,
-           refresh, paused: pauseState.paused,
+           refresh: requestRefresh.current, paused: pauseState.paused,
            pauseReason: pauseState.reason, togglePause,
            armedSegs, armedOrder, armedNames, lastPinnedSeg, stage,
            run, refreshRun, endRun,

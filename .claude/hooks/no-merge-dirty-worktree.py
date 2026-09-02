@@ -29,7 +29,11 @@ import sys
 
 # `git merge`, allowing a leading `cd ... &&` and any flags. Deliberately does
 # NOT match `git merge --abort/--continue/--quit` (no branch operand at all).
-_MERGE = re.compile(r"\bgit\s+(?:-C\s+\S+\s+)?merge\b(?P<rest>[^&|;]*)")
+# `(?![-\w])` rather than `\b`: a word boundary sits between `merge` and `-`,
+# so `\b` read `git merge-base main <branch>` -- a READ-ONLY query -- as a
+# merge of <branch> and blocked it on that branch's dirty worktree
+# (2026-09-01). Same for merge-file/merge-tree/merge-ours.
+_MERGE = re.compile(r"\bgit\s+(?:-C\s+\S+\s+)?merge(?![-\w])(?P<rest>[^&|;]*)")
 _TERMINAL = {"--abort", "--continue", "--quit", "--no-commit"}
 
 
