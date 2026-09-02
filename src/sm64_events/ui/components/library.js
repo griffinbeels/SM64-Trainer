@@ -25,7 +25,7 @@ import { LibraryNav } from "./librarynav.js";
 import { LibraryTarget } from "./librarytarget.js";
 import { LibraryTray, LibraryGrid } from "./librarytray.js";
 import { Icon } from "./icons.js";
-import { VersionSwitch } from "./versionswitch.js";
+import { RegionSwitch, primaryRegion } from "./versionswitch.js";
 
 const html = htm.bind(h);
 
@@ -168,6 +168,26 @@ function pollImportJob(jobId) {
  *              rows. Never opened by this file itself — this is only where
  *              the outside door is received and handed down.
  */
+// What the region switch says under itself. Silent in the one case that
+// needs no explanation -- both regions on, which is the default and shows
+// everything. Otherwise it names what is HIDDEN or which ladder the bands
+// come from, because a page quietly showing less than it holds is the shape
+// he reported this round ("information about runners / approaches feels
+// hidden"). Built as plain strings, not markup: `RegionSwitch` renders the
+// note as text and the flags are already on the buttons beside it.
+export function versionNote(versions, version, gradingVersion) {
+  const shown = (versions || []).map((value) => String(value).toUpperCase());
+  if (shown.length > 1) {
+    return version !== gradingVersion
+      ? `Both regions · ranked on the ${version.toUpperCase()} ladder`
+      : "Both regions shown";
+  }
+  const only = shown[0] || gradingVersion.toUpperCase();
+  return only === gradingVersion.toUpperCase()
+    ? `${only} only · hiding the other region`
+    : `${only} only · you are graded on ${gradingVersion.toUpperCase()}`;
+}
+
 export function Library({ t, active, intent, clearIntent, enterCompare, openRunner }) {
   const [index, setIndex] = useState(null);
   const [status, setStatus] = useState(null);
@@ -206,19 +226,28 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
   // import into Compare).
   const [tray, setTray] = useState([]);
   const [showGrid, setShowGrid] = useState(false);
-  // The page-level JP/US switch (his 2026-08-15 ruling, retiring the old
+  // The page-level region switch (his 2026-08-15 ruling, retiring the old
   // per-section `library-jp-toggle` chip): ONE switch, and every section
-  // reads it. `pickedVersion` is null until he touches the switch, so an
-  // UNTOUCHED page keeps following the session's effective version even as
-  // it changes underneath it (a mode flip, a detection landing) -- the same
-  // "stays live unless he overrides it" shape `version` already names in the
-  // spec. Once he clicks a segment, `pickedVersion` wins for the rest of
-  // this mount; the Library stays mounted behind `display:none` when he
-  // leaves the tab, so that choice survives a tab switch too.
-  const [pickedVersion, setPickedVersion] = useState(null);
+  // reads it. Since round 24 it holds a SET, and the Library's default is
+  // BOTH regions -- his words: "By default, in the Library, we should show
+  // BOTH rank standards combined... Right now, information about runners /
+  // approaches feels hidden, which is not the intent." (The Scorecard's own
+  // copy of this control defaults to his DETECTED region instead; the
+  // control is shared, the default is per-surface.)
+  //
+  // `pickedVersions` is null until he touches the switch. An UNTOUCHED page
+  // therefore keeps following BOTH, and `version` -- the one region whose
+  // LADDER the bands are drawn from, since a set of cutoffs is one region's
+  // or it is nothing -- keeps following the session's effective version even
+  // as it changes underneath it (a mode flip, a detection landing). Once he
+  // clicks a segment, his pick wins for the rest of this mount; the Library
+  // stays mounted behind `display:none` when he leaves the tab, so that
+  // choice survives a tab switch too.
+  const [pickedVersions, setPickedVersions] = useState(null);
   const effectiveVersion = (t && t.view && t.view.game_version
     && t.view.game_version.effective) || "us";
-  const version = pickedVersion || effectiveVersion;
+  const versions = pickedVersions || ["us", "jp"];
+  const version = primaryRegion(versions, effectiveVersion);
   const trayKeys = new Set(tray.map((item) => item.key));
   const addToTray = (item) => setTray((prev) =>
     prev.some((existing) => existing.key === item.key) ? prev : [...prev, item]);
@@ -511,10 +540,8 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
         </div>
       </div>
       <div class="workshop-hero-actions">
-        <${VersionSwitch} value=${version} onChange=${setPickedVersion}
-            note=${version !== effectiveVersion
-              ? `Viewing ${version.toUpperCase()} standards · you are graded on ${effectiveVersion.toUpperCase()}`
-              : null} />
+        <${RegionSwitch} values=${versions} onChange=${setPickedVersions}
+            label="Regions shown" note=${versionNote(versions, version, effectiveVersion)} />
         <button type="button" class="primary-button" onclick=${refresh}
             disabled=${refreshState === "loading"}>
           <${Icon} name="restart" size=${15} />
@@ -541,7 +568,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
             <${Icon} name="chevron" size=${15} /> Back
           </button>
           <${LibraryTarget} t=${t} targets=${entry ? entry.rows : []}
-              version=${version} gradingVersion=${effectiveVersion}
+              version=${version} versions=${versions} gradingVersion=${effectiveVersion}
               onAdd=${addToTray} trayKeys=${trayKeys} onOpenRunner=${openRunner}
               focusStrat=${entry ? entry.focusStrat : null}
               focusTier=${entry ? entry.focusTier : null}

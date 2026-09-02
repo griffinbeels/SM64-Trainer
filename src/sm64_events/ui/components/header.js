@@ -4,6 +4,7 @@ import htm from "htm";
 import { send } from "../api.js";
 import { RANK_MODE_OPTIONS } from "./ranks.js";
 import { Icon } from "./icons.js";
+import { RegionFlag } from "./regionflag.js";
 import { ContextSelect } from "./contextselect.js";
 import { RouteRankCard } from "./marelo.js";
 import { Modal } from "./modal.js";
@@ -164,12 +165,16 @@ export function Header({ t, settingsOpen, closeSettings }) {
             `Session ${s.id}${s.id === active ? " ●" : ""} · ${s.attempts}`],
   )] : [];
 
-  // Built as plain JS, not inline htm interpolation: a text run meeting an
-  // interpolation across a line break fuses words together (ui-core.md), and
-  // this sentence has to wrap in the drawer's narrow column.
+  // Round 24 item 3: the region is a FLAG here, not the two letters, so this
+  // is markup rather than the plain string it used to be -- the surrounding
+  // prose is still built as plain JS for the reason it always was (a text run
+  // meeting an interpolation across a line break fuses words together,
+  // ui-core.md), and only the region itself interpolates. The flag's own
+  // `alt`/`title` still say "US"/"JP", so nothing here depends on seeing it.
+  const gameVersionTail = gameMode && gameMode.version === "auto"
+    ? " standards. Auto-detect is US on the emulator." : " standards.";
   const gameVersionNote = gameMode
-    ? `Graded on ${gameMode.effective.toUpperCase()} standards.`
-      + (gameMode.version === "auto" ? " Auto-detect is US on the emulator." : "")
+    ? html`Graded on ${" "}<${RegionFlag} version=${gameMode.effective} size=${14} />${gameVersionTail}`
     : null;
 
   return html`<header class="context-shell">

@@ -62,8 +62,14 @@ def _read_switch_js():
         if (!tools) return null;
         const switches = tools.querySelectorAll('.version-switch');
         const sw = switches[0] || null;
+        // Round 24 draws each segment as its country's FLAG, so the
+        // region reads off the image rather than off the text node --
+        // `alt` is the same word, and is what a screen reader gets.
         const segs = sw ? Array.from(sw.querySelectorAll('.version-switch-seg'))
-          .map((b) => ({ text: b.textContent.trim(), pressed: b.getAttribute('aria-pressed') }))
+          .map((b) => ({
+            text: (b.querySelector('img.region-flag') || {}).alt
+                  || b.textContent.trim(),
+            pressed: b.getAttribute('aria-pressed') }))
           : null;
         const note = sw ? sw.querySelector('.version-switch-note') : null;
         const commDefaults = Array.from(tools.children)
@@ -86,7 +92,7 @@ def _click_segment_js(text):
       (() => {{
         const sw = document.querySelector('.stdpanel .stdtools .version-switch');
         const btn = Array.from(sw.querySelectorAll('.version-switch-seg'))
-          .find((b) => b.textContent.trim() === {text!r});
+          .find((b) => b.getAttribute('aria-label') === {text!r});
         btn.click();
         return true;
       }})()

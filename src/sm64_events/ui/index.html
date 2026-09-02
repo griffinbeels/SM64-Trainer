@@ -426,12 +426,18 @@
     appearance: none; border: 1px solid var(--border-soft);
     background: var(--surface-2); color: var(--muted);
     font: inherit; font-weight: 700; letter-spacing: .02em;
-    padding: .32rem .85rem; line-height: 1.1; cursor: pointer;
+    padding: .3rem .8rem; line-height: 1.1; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: .35rem;
   }
-  .version-switch-seg:first-child {
+  /* `-of-type`, not `-child`: the optional `.version-switch-note` span is
+     also a child, so `:last-child` silently stopped rounding the right-hand
+     segment the moment a note appeared. Both segments are buttons and the
+     note is a span, so the type selector picks the right pair either way. */
+  .version-switch-seg:first-of-type {
     border-radius: 999px 0 0 999px; border-right: none;
   }
-  .version-switch-seg:last-child { border-radius: 0 999px 999px 0; }
+  .version-switch-seg:last-of-type { border-radius: 0 999px 999px 0; }
   .version-switch-seg:hover { color: var(--text); }
   .version-switch-seg[aria-pressed="true"] {
     background: var(--gold); border-color: var(--gold-soft); color: #1b1607;
@@ -439,7 +445,44 @@
   .version-switch-seg:focus-visible {
     outline: 2px solid var(--gold); outline-offset: 2px;
   }
+  /* Round 24: a segment that is the ONLY region left on is disabled, so the
+     reason lands where the click does rather than in a message afterwards
+     (his "or do not disable it" ruling cuts the other way here -- the control
+     genuinely applies, it just cannot go below one). It keeps the pressed
+     look; only the cursor says it will not move. */
+  .version-switch-seg:disabled { cursor: default; opacity: 1; }  /* opacity: 1 undoes the app-wide `button:disabled { opacity: .48 }` on purpose.
+     The sole-on segment is the region that IS showing; dimming it would draw
+     the ON half as off, which is the inverse of what the state means. */
   .version-switch-note { color: var(--muted); font-size: .78rem; }
+
+  /* A game region drawn as its flag (regionflag.js, round 24: "everywhere we
+     say 'JP' or 'US', just use the flag ... that's kinda more swag"). The
+     white plate matters: the JP flag is almost entirely white and the US
+     flag has a white field, so on this navy surface -- and on the gold fill
+     of a pressed segment -- an unbacked flag either vanishes or reads as a
+     smudge. The plate + hairline gives both a consistent edge on either. */
+  .region-flag {
+    display: inline-block; vertical-align: -.15em; border-radius: 2px;
+    background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, .3);
+    flex: none; user-select: none;
+  }
+  /* An UNPRESSED segment's flag holds its colour and only steps back. The
+     gold fill already carries on/off unmistakably, and a grayscaled JP flag
+     is an unreadable gray square -- the de-emphasised half has a floor of
+     its own (his ladder ruling, 2026-07-27: "they all basically look black.
+     I think we should at least show a little bit of color for each of
+     them!!"), and you must still be able to see WHICH region you are about
+     to switch on. */
+  .version-switch-seg[aria-pressed="false"] .region-flag { opacity: .6; }
+  /* The per-entry region tag in the Library. Small on purpose: it annotates
+     a name, it is not a control, and the runner is still the thing being
+     read (`title` carries "JP time" / "US time"). */
+  .library-runner-wrap { display: inline-flex; align-items: baseline; gap: .3rem; }
+  .library-entry-flag { margin-left: .3rem; }
+  .library-runner-wrap .library-entry-flag { margin-left: 0; }
+  .library-ladder-version-chip {
+    display: inline-flex; align-items: center; gap: .3rem;
+  }
 
   /* Round 5 -- the link door: assigning a movement / subsection row to a
      segment the user built. One strip per linkable row; the menu replaces

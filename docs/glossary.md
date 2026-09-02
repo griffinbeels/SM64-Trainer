@@ -1025,6 +1025,26 @@ once, no restart.
   door (`src/sm64_events/server/mode_api.py`); the Settings drawer's Game
   section (`src/sm64_events/ui/components/header.js`)
 
+### Region switch
+
+The two-flag control that says which regional releases a surface shows at
+once — JP, US, or both, and never neither. It draws each release as its
+country's flag rather than the two letters, and it means something different
+on each surface that wears it: on the [[library tab]] it decides which
+[[sheet entry]] rows appear (both by default, so no community time hides),
+and on the [[scorecard]] it decides which regions a [[runner]] [[goal]] may
+offer a time from (your [[effective version]] by default, and the faster of
+the two when both are on).
+
+- **Not** — the [[game version]]. The [[game version]] decides what the
+  trainer grades YOUR [[attempt]]s on; a region switch only widens or narrows
+  what a surface shows you of other people's.
+
+- **Lives** — the control itself
+  (`src/sm64_events/ui/components/versionswitch.js`) and the flags it draws
+  (`src/sm64_events/ui/components/regionflag.js`)
+  → the [[library tab]] and the [[scorecard]]
+
 ### Effective version
 
 What the [[game version]] resolves to — always JP or US, never Auto-detect.
@@ -1049,16 +1069,18 @@ never moves it.
 
 The JP / US toggle — JP on the left, US on the right — that shows the other
 version's [[ladder]]s without changing which one the trainer grades you on.
-One on the [[library tab]]'s hero re-files every [[approach]] under that
-version's [[ladder]]; one on the [[standards ladder]]'s toolbar re-fetches
-that [[target]]'s [[ladder]]s under it. Both default to the
-[[effective version]], and the toolbar one names the graded version
-whenever it shows the other.
+It picks exactly ONE version, because a [[ladder]] table draws one version's
+cutoffs or none: the [[standards ladder]]'s toolbar wears it and re-fetches
+that [[target]]'s [[ladder]]s under the version you press. It defaults to
+the [[effective version]] and names the graded version whenever it shows the
+other.
+
+- **Not** — the [[region switch]], which picks one version or BOTH and
+  changes what a surface LISTS rather than which cutoffs it draws.
 
 - **Lives** — the shared control
-  (`src/sm64_events/ui/components/versionswitch.js`); mounted by the Library
-  page (`src/sm64_events/ui/components/library.js`) and the standards panel
-  (`src/sm64_events/ui/components/standards.js`)
+  (`src/sm64_events/ui/components/versionswitch.js`); mounted by the
+  standards panel (`src/sm64_events/ui/components/standards.js`)
 
 ### Rank icon
 
