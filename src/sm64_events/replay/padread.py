@@ -108,28 +108,52 @@ def truth_glyphs(pad, row: str) -> tuple[str, str, str] | None:
 
 
 # -- pixels -----------------------------------------------------------------
-def decode_cells(ffmpeg: str, clip: Path, width: int | None = None,
-                 height: int | None = None) -> np.ndarray:
-    """Every video frame's readout region, scaled to CELL_W x CELL_H."""
+def _clip_dims(ffmpeg: str, clip: Path) -> tuple[int, int]:
+    """The clip's pixel size off the ffprobe that ships beside `ffmpeg` -- by
+    FILE name, never a whole-path replace (that renamed the D:/ffmpeg install
+    FOLDER and read nothing; the same catalogued hop-6 bug, and it reached
+    here too)."""
+    from sm64_events.replay.extract import ffprobe_beside
+    ffprobe = ffprobe_beside(ffmpeg) or "ffprobe"
+    probe = subprocess.run(
+        [ffprobe, "-v", "error", "-select_streams", "v",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0", str(clip)],
+        capture_output=True, text=True, check=False)
+    first = probe.stdout.strip().splitlines()[0]        # a .ts lists a stream per line
+    width, height = (int(v) for v in first.split(",")[:2])
+    return width, height
+
+
+def _decode_region(ffmpeg: str, clip: Path, region, out_w: int, out_h: int,
+                   width: int | None, height: int | None) -> np.ndarray:
+    """One scaled cell per STORED video frame -- `-fps_mode passthrough` so a
+    VFR picture-feed clip (item 38) is NOT re-timed onto its r_frame_rate
+    grid. Without it ffmpeg duplicated 8 frames of a 718-frame clip (726 out),
+    the reader kept the first 718, and every cell past the first duplicate was
+    shifted -- a uniform ~2-frame lag between the panel and the screen
+    (diagnosed 2026-09-02: the reader's cell axis must BE the clip's frame
+    axis, which is the browser's slot axis)."""
     if width is None or height is None:
-        probe = subprocess.run(
-            [ffmpeg.replace("ffmpeg", "ffprobe"), "-v", "error",
-             "-select_streams", "v", "-show_entries", "stream=width,height",
-             "-of", "csv=p=0", str(clip)], capture_output=True, text=True)
-        first = probe.stdout.strip().splitlines()[0]        # a .ts lists a stream per line
-        width, height = (int(v) for v in first.split(",")[:2])
-    x0, y0, x1, y1 = REGION
+        width, height = _clip_dims(ffmpeg, clip)
+    x0, y0, x1, y1 = region
     x, y = round(width * x0), round(height * y0)
     w, h = round(width * (x1 - x0)), round(height * (y1 - y0))
     out = subprocess.run(
         [ffmpeg, "-v", "error", "-i", str(clip),
-         "-vf", f"crop={w}:{h}:{x}:{y},scale={CELL_W}:{CELL_H}:flags=area",
+         "-vf", f"crop={w}:{h}:{x}:{y},scale={out_w}:{out_h}:flags=area",
+         "-fps_mode", "passthrough",
          "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
         capture_output=True).stdout
-    stride = CELL_W * CELL_H * 3
+    stride = out_w * out_h * 3
     count = len(out) // stride
     return np.frombuffer(out[:count * stride], dtype=np.uint8).reshape(
-        count, CELL_H, CELL_W, 3)
+        count, out_h, out_w, 3)
+
+
+def decode_cells(ffmpeg: str, clip: Path, width: int | None = None,
+                 height: int | None = None) -> np.ndarray:
+    """Every stored video frame's readout region, scaled to CELL_W x CELL_H."""
+    return _decode_region(ffmpeg, clip, REGION, CELL_W, CELL_H, width, height)
 
 
 def cut(cells: np.ndarray, row: str, col: str) -> np.ndarray:
@@ -603,26 +627,8 @@ ICON_REFERENCE = "pad_icons_us.npz"
 
 def decode_icons(ffmpeg: str, clip: Path, width: int | None = None,
                  height: int | None = None) -> np.ndarray:
-    """Every video frame's icon strip, scaled to ICON_W x ICON_H."""
-    if width is None or height is None:
-        probe = subprocess.run(
-            [ffmpeg.replace("ffmpeg", "ffprobe"), "-v", "error",
-             "-select_streams", "v", "-show_entries", "stream=width,height",
-             "-of", "csv=p=0", str(clip)], capture_output=True, text=True)
-        first = probe.stdout.strip().splitlines()[0]
-        width, height = (int(v) for v in first.split(",")[:2])
-    x0, y0, x1, y1 = ICON_STRIP
-    x, y = round(width * x0), round(height * y0)
-    w, h = round(width * (x1 - x0)), round(height * (y1 - y0))
-    out = subprocess.run(
-        [ffmpeg, "-v", "error", "-i", str(clip),
-         "-vf", f"crop={w}:{h}:{x}:{y},scale={ICON_W}:{ICON_H}:flags=area",
-         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
-        capture_output=True).stdout
-    stride = ICON_W * ICON_H * 3
-    count = len(out) // stride
-    return np.frombuffer(out[:count * stride], dtype=np.uint8).reshape(
-        count, ICON_H, ICON_W, 3)
+    """Every stored video frame's icon strip, scaled to ICON_W x ICON_H."""
+    return _decode_region(ffmpeg, clip, ICON_STRIP, ICON_W, ICON_H, width, height)
 
 
 def icon_cell(strip: np.ndarray, position: int) -> np.ndarray:

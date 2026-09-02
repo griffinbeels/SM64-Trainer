@@ -46,6 +46,22 @@ from sm64_events.storage.db import Database
 
 CLIP_FPS = 60.0
 
+def slot_time(slot, frame_times):
+    """The wall-media time of video slot `slot`. A picture-feed clip
+    (item 38) is VFR and carries every frame's own time; only a CFR
+    clip sits on the 60 Hz grid. Reading a VFR clip on the grid was
+    the tool artifact that faked a ~55-frame stamp gap (2026-09-02)."""
+    if frame_times and 0 <= slot < len(frame_times):
+        return frame_times[slot]
+    return (slot + 0.5) / CLIP_FPS
+
+def slot_of_time(ts, frame_times):
+    """The video slot whose span contains media time `ts`."""
+    if frame_times:
+        import bisect
+        return max(0, bisect.bisect_right(frame_times, ts) - 1)
+    return int(ts * CLIP_FPS)
+
 
 def parse_frames(spec: str) -> list[int]:
     out: list[int] = []
@@ -115,6 +131,7 @@ def picture_spans(frame_map) -> list[tuple[int, int, int]]:
 
 def detail(attempt_id, side, track, seams, panel_frames) -> None:
     frame_map = side.get("frame_map") or []
+    frame_times = side.get("frame_times")
     rows = side.get("picture_ledger") or []
     pads = dict(track)
     print(f"attempt {attempt_id}: map source {side.get('frame_map_source')}"
@@ -139,11 +156,11 @@ def detail(attempt_id, side, track, seams, panel_frames) -> None:
         print(f"   map: slots {slots} show f{raw}")
         if not slots:
             continue
-        lo = (slots[0] - 1) / CLIP_FPS
-        hi = (slots[-1] + 2) / CLIP_FPS
+        lo = slot_time(slots[0] - 1, frame_times)
+        hi = slot_time(slots[-1] + 2, frame_times)
         near = [row for row in rows if lo <= row["ts"] <= hi]
         for row in near:
-            slot_of_row = int(row["ts"] * CLIP_FPS)
+            slot_of_row = slot_of_time(row["ts"], frame_times)
             mapped_there = (frame_map[slot_of_row]
                             if slot_of_row < len(frame_map) else None)
             drift = (row["frame"] - mapped_there
@@ -173,7 +190,8 @@ def audit(attempt_id, side, track, seams) -> None:
     print(f"pictures in the encode (map spans): {len(spans)}; expected "
           f"~{duration * 30:.0f} game frames minus capture drops")
     residuals, mode, wobble_spans = _stamp_residuals(
-        spans, rows, side.get("frame_map_offset", 0))
+        spans, rows, side.get("frame_map_offset", 0),
+        side.get("frame_times"))
     print(f"stamp-vs-map residuals per picture: "
           f"{dict(sorted(residuals.items()))}  (mode {mode:+d})")
     axis0 = seams[0][1] if seams else 0
@@ -181,7 +199,7 @@ def audit(attempt_id, side, track, seams) -> None:
         lo_axis = axis_of(frame_map[lo_slot], seams)
         print(f"  wobble {residual:+d} over slots {lo_slot}..{hi_slot}"
               f"  (panel frame ~{lo_axis if lo_axis is not None else '?'}"
-              f", video {lo_slot / CLIP_FPS:.2f}s)")
+              f", video {slot_time(lo_slot, side.get('frame_times')):.2f}s)")
     if len(wobble_spans) > 40:
         print(f"  ... and {len(wobble_spans) - 40} more")
     print(f"(residual 0 = the ledger row agrees with the aligned map; a "
@@ -189,7 +207,7 @@ def audit(attempt_id, side, track, seams) -> None:
           f"frames off the screen)   [axis starts at raw f{axis0}]")
 
 
-def _stamp_residuals(spans, rows, map_offset):
+def _stamp_residuals(spans, rows, map_offset, frame_times=None):
     """Per picture: the nearest ledger stamp minus the aligned map's answer
     (after the clip's own median clock bias), plus the runs of non-modal
     residual -- the wobble stretches the global anchor cannot see."""
@@ -205,13 +223,13 @@ def _stamp_residuals(spans, rows, map_offset):
         return best
 
     deltas = sorted(
-        times[found] - (first_slot + 0.5) / CLIP_FPS
+        times[found] - slot_time(first_slot, frame_times)
         for first_slot, _count, _raw in spans
-        if (found := nearest((first_slot + 0.5) / CLIP_FPS)) is not None)
+        if (found := nearest(slot_time(first_slot, frame_times))) is not None)
     bias = deltas[len(deltas) // 2] if deltas else 0.0
     per_picture = []
     for first_slot, count, raw in spans:
-        found = nearest((first_slot + 0.5) / CLIP_FPS + bias)
+        found = nearest(slot_time(first_slot, frame_times) + bias)
         if found is not None:
             per_picture.append(
                 (first_slot, count, stamps[found] - map_offset - raw))
