@@ -16,7 +16,7 @@ visible to the 17 node-driven rule tests in `tests/test_ui_subsections.py`:
   * `.selector-expanded` was on the section and styled nowhere, so the
     expanded row was pixel-identical to an ordinary one.
 
-Same seam as `tests/test_responsive_bowser.py`: uilab's `uilab_sweep` fixture
+Same seam as `tests/test_responsive_bowser.py`: uilab's `uilab_sweep_at` fixture
 reads `uilab_project` off the TEST MODULE, so a second module gets its own
 sweep with its own `Project`. Deliberately does NOT repeat
 `test_component_layout_gates_on_the_container` -- that law is a project-wide
@@ -39,12 +39,14 @@ if _MISSING:
     pytest.skip(_MISSING, allow_module_level=True)
 
 from uilab.driver import get_driver  # noqa: E402
+from uilab import sweep  # noqa: E402
 from uilab.pytest_plugin import (  # noqa: E402,F401
-    assert_no_new_defects, assert_no_stale_exemptions, uilab_sweep)
+    assert_exemptions_name_live_viewports, assert_no_new_defects,
+    assert_no_stale_exemptions, uilab_sweep_at)
 from uilab_project import SUBSECTION_PROJECT, BOWSER_COURSE, BOWSER_LEVEL  # noqa: E402
 from ui_fixture import serve_ui, _disable_segment, _target_segment  # noqa: E402
 
-# The plugin's `uilab_sweep` fixture reads this off the module.
+# The plugin's `uilab_sweep_at` fixture reads this off the module.
 uilab_project = SUBSECTION_PROJECT
 
 
@@ -53,12 +55,25 @@ def test_the_sweep_is_not_silently_disabled():
         pytest.skip("UILAB_SKIP=1 — layout sweep deliberately disabled")
 
 
-def test_no_layout_defects_across_the_matrix(uilab_sweep):
-    assert_no_new_defects(SUBSECTION_PROJECT, uilab_sweep)
+@pytest.mark.spread
+@pytest.mark.parametrize("viewport", sweep.derived_matrix(SUBSECTION_PROJECT),
+                         ids=sweep.viewport_key)
+def test_no_layout_defects_at_each_viewport(uilab_sweep_at, viewport):
+    """One case per viewport, each its own worker group (`spread`): the
+    whole-matrix sweep was ONE test -- every viewport x every story with a
+    320 ms settle before each probe, 179 s for the main page -- and the floor
+    under the parallel suite (2026-09-01). A stale exemption is a lie about
+    what is broken, and the list stops meaning anything the moment one is
+    allowed to sit there, so each case also judges the exemptions naming its
+    own viewport."""
+    result = uilab_sweep_at(viewport)
+    assert_no_new_defects(SUBSECTION_PROJECT, result)
+    assert_no_stale_exemptions(SUBSECTION_PROJECT, result, viewport=viewport)
 
 
-def test_the_known_defect_list_does_not_outlive_its_defects(uilab_sweep):
-    assert_no_stale_exemptions(SUBSECTION_PROJECT, uilab_sweep)
+def test_every_exemption_names_a_viewport_in_the_matrix():
+    """The one row shape no per-viewport case can reach. Browser-free."""
+    assert_exemptions_name_live_viewports(SUBSECTION_PROJECT)
 
 
 # --- the fixture must actually REACH the star row with pieces attached ------

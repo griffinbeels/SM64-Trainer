@@ -36,18 +36,20 @@ _MISSING = find_uilab()
 if _MISSING:
     pytest.skip(_MISSING, allow_module_level=True)
 
+from uilab import sweep  # noqa: E402
 from uilab.pytest_plugin import (  # noqa: E402,F401
-    assert_components_use_container_queries, assert_no_new_defects,
-    assert_no_stale_exemptions, uilab_sweep)
+    assert_components_use_container_queries,
+    assert_exemptions_name_live_viewports, assert_no_new_defects,
+    assert_no_stale_exemptions, uilab_sweep_at)
 from uilab_project import PROJECT  # noqa: E402
 
-# `uilab_sweep` is IMPORTED, not inherited from the pytest11 entry point, and
+# `uilab_sweep_at` is IMPORTED, not inherited from the pytest11 entry point, and
 # that is deliberate: an entry point only exists for an installed package, and
 # `uv sync` prunes the editable install because it is absent from the lockfile.
 # Importing the fixture makes the gate depend on uilab being on sys.path and
 # nothing else, which is the one property a package manager cannot revoke.
 
-# The plugin's `uilab_sweep` fixture reads this off the module.
+# The plugin's `uilab_sweep_at` fixture reads this off the module.
 uilab_project = PROJECT
 
 
@@ -58,14 +60,25 @@ def test_the_sweep_is_not_silently_disabled():
         pytest.skip("UILAB_SKIP=1 — layout sweep deliberately disabled")
 
 
-def test_no_layout_defects_across_the_matrix(uilab_sweep):
-    assert_no_new_defects(PROJECT, uilab_sweep)
+@pytest.mark.spread
+@pytest.mark.parametrize("viewport", sweep.derived_matrix(PROJECT),
+                         ids=sweep.viewport_key)
+def test_no_layout_defects_at_each_viewport(uilab_sweep_at, viewport):
+    """One case per viewport, each its own worker group (`spread`): the
+    whole-matrix sweep was ONE test -- every viewport x every story with a
+    320 ms settle before each probe, 179 s for the main page -- and the floor
+    under the parallel suite (2026-09-01). A stale exemption is a lie about
+    what is broken, and the list stops meaning anything the moment one is
+    allowed to sit there, so each case also judges the exemptions naming its
+    own viewport."""
+    result = uilab_sweep_at(viewport)
+    assert_no_new_defects(PROJECT, result)
+    assert_no_stale_exemptions(PROJECT, result, viewport=viewport)
 
 
-def test_the_known_defect_list_does_not_outlive_its_defects(uilab_sweep):
-    """A stale exemption is a lie about what is broken, and the list stops
-    meaning anything the moment one is allowed to sit there."""
-    assert_no_stale_exemptions(PROJECT, uilab_sweep)
+def test_every_exemption_names_a_viewport_in_the_matrix():
+    """The one row shape no per-viewport case can reach. Browser-free."""
+    assert_exemptions_name_live_viewports(PROJECT)
 
 
 def test_component_layout_gates_on_the_container():

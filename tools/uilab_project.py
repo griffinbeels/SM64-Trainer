@@ -814,7 +814,7 @@ BOWSER_PROJECT = dataclasses.replace(
     # THIS row before), the keys are story-scoped ("[page]"/"[bowser-row]")
     # and this project's own stories produce a different set than PROJECT's
     # -- inheriting PROJECT's dict verbatim would fail
-    # test_the_known_defect_list_does_not_outlive_its_defects on the first
+    # test_no_layout_defects_at_each_viewport's stale half on the first
     # run (its ~40 rows are keyed against selectors/stories this project's
     # own sweep also produces, but not identically -- e.g. PROJECT has no
     # "[bowser-row]" story and this project's "[page]" story never sees a
