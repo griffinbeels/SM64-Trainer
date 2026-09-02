@@ -2,6 +2,10 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+# pytest-testmon's per-checkout coverage map and tools/run_tests.py's
+# record of the last full run; a full run rebuilds both, nothing shares them.
+.testmondata
+.run_tests.json
 logs/
 .superpowers/
 # `data/*` rather than `data/`: git cannot re-include a child of an EXCLUDED
