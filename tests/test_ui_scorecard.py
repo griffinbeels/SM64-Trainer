@@ -1614,3 +1614,29 @@ def test_a_completed_attempt_does_not_blank_the_card_he_is_reading():
     assert not blanks, (
         "the card blanked while a completed attempt refetched it -- that is "
         f"the flicker he reported; row counts were {samples}")
+
+
+def test_the_scorecard_sits_between_the_scope_rank_card_and_progress():
+    """Round 24: "move the scorecard to be directly below the scope rank
+    card, above the Progress card." Read off the Rank page's own children,
+    in DOM order: the scope rank card, then the scorecard, then the Progress
+    card -- and nothing between the first two."""
+    with serve_ui() as base:
+        _put_division_goal(base, "Bronze", "V")
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_ms(300)
+            order = page.evaluate(
+                "Array.from(document.querySelector('.rank-page').children)"
+                ".map((el) => el.classList.contains('rank-card') ? 'scope'"
+                "  : el.classList.contains('scorecard-card') ? 'scorecard'"
+                "  : (el.querySelector(':scope > h3') || {}).textContent === 'Progress' ? 'progress'"
+                "  : 'other')")
+    assert "scope" in order and "scorecard" in order and "progress" in order, order
+    assert order.index("scorecard") == order.index("scope") + 1, (
+        f"the scorecard must sit directly below the scope rank card: {order}")
+    assert order.index("progress") > order.index("scorecard"), (
+        f"Progress must come after the scorecard: {order}")

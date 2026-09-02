@@ -1194,6 +1194,10 @@ export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null }) {
             ${data.n < 5 && html`<p class="meta">Small scope — ${data.n} rated ${
               data.n === 1 ? "entry" : "entries"}.</p>`}`}
     </div>
+    ${/* Directly below the scope rank card and above Progress (round 24:
+        "move the scorecard to be directly below the scope rank card, above
+        the Progress card"). It mounted last until then. */ ""}
+    <${Scorecard} t=${t} scopeId=${scopeId} openLibrary=${openLibrary} />
     ${data && !dataErr && html`
       <div class="practice-card">
         <h3>Progress</h3>
@@ -1208,6 +1212,5 @@ export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null }) {
             ? (entity) => openLibrary({ kind: "target", entity: entity.key, you: true })
             : null} />
       </div>`}
-    <${Scorecard} t=${t} scopeId=${scopeId} openLibrary=${openLibrary} />
   </div>`;
 }
