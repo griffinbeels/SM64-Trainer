@@ -13,10 +13,13 @@
 // Fights, stepping 4 → 2 → 1 columns as the pane narrows. Each card wears
 // its course's own tint and art (`CARD_TINTS`, `.score-card-art`).
 //
-// A line's caps (`you_rank`/`goal_rank`) are SERVER-graded — the server
-// picks, the client draws — and the "Show rank caps" toggle under the grid
-// (localStorage `sm64.scorecardCaps`, OFF by default since round 10) adds
-// both on top of the lean sheet look. A goal time is editable IN PLACE (`GoalCell`, the round
+// The caps a line used to wear (server-graded `you_rank`/`goal_rank` behind
+// a "Show rank caps" toggle, OFF by default) were DELETED in round 23 —
+// "Not going to use it ever" — toggle, draw and server grading together,
+// so no fetch grades 200 tiles for a cap nobody can switch on. Each legend
+// pill carries an × (round 23) that writes the goal back without that
+// pick, and the Copy button flashes "Copied ✓" for `COPIED_FLASH_MS`
+// before returning to its label. A goal time is editable IN PLACE (`GoalCell`, the round
 // 5-6 editor moved onto the line): edits live in `pendingOverrides` until
 // the "N edited → save as a named goal" bar writes them through
 // `PUT /api/scorecard/goal {kind:"custom", name, times}`.
@@ -41,7 +44,6 @@ import { applyGoalOverrides, cardColumns, columnCountFor, divisionOptions,
 import { capName, divisionDigit } from "./caps.js";
 import { entityIconSrc } from "./entityicons.js";
 import { Icon } from "./icons.js";
-import { RankIcon } from "./rankicon.js";
 import { SearchSelect } from "./searchselect.js";
 import { InlineState } from "./states.js";
 
@@ -141,8 +143,14 @@ export function sourceColour(index) {
 // The legend: every pick, in the order they were picked, each wearing the
 // colour its dots use. His ask -- "it should show pills underneath the '4
 // picked'... otherwise, it's very hard to understand which of the options
-// you've selected."
-function GoalLegend({ goal }) {
+// you've selected." Round 23 gave each pill an × at its right: "I should
+// be able to click this to remove that specific player / rank standard
+// from my scorecard immediately." The × is always in the layout and only
+// VISIBLE on hover/focus (round 13's rule for the library glyph: a control
+// that appears must not reflow the row it appears in); clicking it hands
+// the pick's index up, and the card writes the goal back without it
+// through the same door the picker uses.
+function GoalLegend({ goal, onRemove }) {
   if (!goal || goal.kind !== "multi") return "";
   const sources = goal.sources || [];
   if (!sources.length) return "";
@@ -151,19 +159,13 @@ function GoalLegend({ goal }) {
         key=${`${index}:${goalToValue(source)}`}
         style=${`--pill-colour:${sourceColour(index)}`}>
       <span class="goal-pill-dot" aria-hidden="true"></span>
-      ${goalToLabel(source)}
+      <span class="goal-pill-label">${goalToLabel(source)}</span>
+      <button type="button" class="goal-pill-remove"
+          title=${`Remove ${goalToLabel(source)} from the goal`}
+          aria-label=${`Remove ${goalToLabel(source)} from the goal`}
+          onclick=${() => onRemove && onRemove(index)}>×</button>
     </span>`)}
   </div>`;
-}
-
-// One cap, drawn only when the server graded that side and the toggle is
-// on. 14px — big enough that the tier colour and division numeral read,
-// small enough that 120 lines of them stay a texture rather than a wall.
-function LineCap({ rank, show }) {
-  if (!show || !rank) return "";
-  return html`<span class="score-line-cap">
-    <${RankIcon} tier=${rank.tier} division=${rank.division} size=${14} />
-  </span>`;
 }
 
 // The in-place goal editor — the round 5-6 editor moved onto the LINE
@@ -233,7 +235,7 @@ function GoalCell({ tile, onGoalOverride }) {
 // library glyph appears appended to it; the glyph reserves its space
 // always (visibility, not display) so hovering never reflows a wrapped
 // name.
-function ScoreLine({ t, tile, showCaps, onGoalOverride, onOpenLibrary,
+function ScoreLine({ t, tile, onGoalOverride, onOpenLibrary,
                      sourceTitle = null }) {
   const gapCls = tile.delta_cs != null
     ? (tile.delta_cs <= 0 ? "good" : "bad") : "";
@@ -277,12 +279,10 @@ function ScoreLine({ t, tile, showCaps, onGoalOverride, onOpenLibrary,
     </button>` : html`<img class="score-line-icon" alt="" src=${iconSrc} />
     <span class="score-line-name">${tile.label}${dot}</span>`}
     <span class="score-line-you">
-      <${LineCap} rank=${tile.you_rank} show=${showCaps} />
       <span class="score-line-time">${tile.you_cs != null
         ? fmtSeconds(tile.you_cs / 100) : "—"}</span>
     </span>
     <span class="score-line-goal">
-      <${LineCap} rank=${tile.goal_rank} show=${showCaps} />
       <${GoalCell} tile=${tile} onGoalOverride=${onGoalOverride} />
     </span>
     <span class="score-gap ${gapCls}">${tile.delta_cs != null
@@ -354,7 +354,7 @@ function cardTint(row) {
 // scorecardgoal.js so node can drive it -- that file's own header says why --
 // and is re-exported at the top of this one.
 
-function ScoreCard({ t, row, showCaps, removing,
+function ScoreCard({ t, row, removing,
                      onRemove, onGoalOverride, onOpenLibrary,
                      sourceNames = [] }) {
   // The remove control writes the SAME exclusion the Rank tab's own
@@ -387,13 +387,23 @@ function ScoreCard({ t, row, showCaps, removing,
     </div>
     <div class="score-lines">
       ${row.tiles.map((tile) => html`<${ScoreLine} key=${tile.key} t=${t}
-          tile=${tile} showCaps=${showCaps}
+          tile=${tile}
           sourceTitle=${sourceNames[tile.goal_source] || null}
           onGoalOverride=${onGoalOverride} onOpenLibrary=${onOpenLibrary} />`)}
     </div>
     <${CardFoot} row=${row} />
   </section>`;
 }
+
+// How long the button reads "Copied ✓" before returning to its label -- a
+// transient success state, so the control reads as usable again (round 23:
+// "should *briefly* be displayed as 'Copied' and then go back"). The
+// constant lived here from the first export button, was lost in round 9's
+// rewrite while its one use survived, and every click since threw
+// `COPIED_FLASH_MS is not defined` into the error slot AFTER the copy had
+// already succeeded -- the browser tests read the clipboard and never the
+// label, and the lint gate's JavaScript half was silently skipping.
+const COPIED_FLASH_MS = 1500;
 
 function CopyButton({ className, label, onCopy, onError }) {
   const [copied, setCopied] = useState(false);
@@ -489,32 +499,12 @@ function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange, scopeId }
   </div>`;
 }
 
-// The caps preference — per BROWSER, like `sm64.rankIcons`: what a card
-// looks like is a display choice, not practice data. try/catch because a
-// blocked-storage context (thumbnail capture, hardened browser) must render
-// the default, never crash the card.
-const CAPS_KEY = "sm64.scorecardCaps";
-
-// OFF by default since round 10 ("No rank caps by default"); enabling
-// persists under the same key, so the lean sheet is what a fresh browser
-// sees and the caps are one remembered click away.
-function readCapsPreference() {
-  try { return localStorage.getItem(CAPS_KEY) === "on"; }
-  catch { return false; }
-}
-
-function writeCapsPreference(on) {
-  try { localStorage.setItem(CAPS_KEY, on ? "on" : "off"); }
-  catch { /* display preference only -- losing it costs a click */ }
-}
-
 export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   // null = not fetched yet (the Runners group is lazy, see the header
   // comment); [] once fetched even if the sheet somehow named nobody.
   const [runners, setRunners] = useState(null);
-  const [showCaps, setShowCaps] = useState(readCapsPreference);
   const [setCardsElement, cardsWidth] = useMeasuredWidth(0);
   // The picks' own names, by the index the server attributes tiles with --
   // so a dot's tooltip says WHICH pick set that star without any surface
@@ -610,6 +600,16 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
     } catch (err) { setError(err); }
   }
 
+  // A legend pill's ×: the same write the picker makes, minus that pick --
+  // one pick left stores as that single goal, none left clears it, and the
+  // refetch re-grades every tile ("Everything should update accordingly").
+  function removeSource(index) {
+    const values = goalToValues(data && data.goal);
+    if (index < 0 || index >= values.length) return;
+    values.splice(index, 1);
+    onGoalChange(values);
+  }
+
   async function saveCustomGoal(name) {
     if (!name || !displayData) return;
     setSaveBusy(true);
@@ -650,7 +650,7 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
                     busy=${saveBusy} error=${saveError}
                     onSave=${saveCustomGoal} onDiscard=${discardOverrides} />`
               : ""}
-            <${GoalLegend} goal=${data.goal} />
+            <${GoalLegend} goal=${data.goal} onRemove=${removeSource} />
             <div class="score-cards" ref=${setCardsElement}
                 data-cols=${String(columnCountFor(cardsWidth))}
                 style=${`--score-rows:${Math.max(1, ...cardColumns(
@@ -660,19 +660,10 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
                 .map((column, columnIndex) => html`<div
                   key=${columnIndex} class="score-col">
                 ${column.rows.map((row) => html`<${ScoreCard} key=${row.label}
-                    t=${t} row=${row} showCaps=${showCaps} removing=${removing}
+                    t=${t} row=${row} removing=${removing}
                     onRemove=${removeRow} onGoalOverride=${handleGoalOverride}
                     onOpenLibrary=${openLibrary} sourceNames=${sourceNames} />`)}
               </div>`)}
-            </div>
-            <label class="scorecard-caps-toggle">
-              <input type="checkbox" checked=${showCaps}
-                  onchange=${(changeEvent) => {
-                    const on = changeEvent.target.checked;
-                    setShowCaps(on);
-                    writeCapsPreference(on);
-                  }} />
-              ${" "}Show rank caps
-            </label>`}
+            </div>`}
   </div>`;
 }

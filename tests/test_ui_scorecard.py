@@ -729,9 +729,25 @@ def test_copy_sheet_column_writes_every_line_to_the_clipboard(monkeypatch):
             # captured text in the same call as the click would race the
             # button's own async fetch-then-copy chain.
             copied = page.evaluate("window.__scorecardCopied")
+            # Round 23, his report: the button read "Copied ✓" AND the error
+            # slot read `COPIED_FLASH_MS is not defined` -- the copy had
+            # succeeded and the flash timer threw. This test read the
+            # clipboard and never the button, so the throw was invisible.
+            # Now: the label flashes, nothing lands in the error slot, and
+            # the label RETURNS so the control reads as usable again.
+            label_now = page.evaluate(
+                "document.querySelector('.scorecard-copy-column').textContent.trim()")
+            errors = page.count(".rank-page .scorecard-exports .inline-state.error")
+            page.wait_ms(1500)
+            label_later = page.evaluate(
+                "document.querySelector('.scorecard-copy-column').textContent.trim()")
 
         assert len(copied) == 1
         assert len(copied[0].split("\n")) == column["total_rows"]
+        assert label_now == "Copied ✓", label_now
+        assert errors == 0, "a successful copy must leave the error slot empty"
+        assert label_later == "Copy sheet column", (
+            f"the confirmation must be transient, still reads {label_later!r}")
 
 
 def test_copy_sheet_column_shows_the_doors_own_sentence_inline_on_a_503(monkeypatch):
@@ -900,11 +916,11 @@ def test_the_row_x_removes_that_row_and_ignores_it_in_ranking():
             f"wear a flag: n={marelo['n']}")
 
 
-def test_the_caps_toggle_defaults_off_and_enabling_persists():
-    """Round 10 flipped round 9's default — "No rank caps by default
-    (disable by default)" — so a fresh browser sees the lean sheet and
-    turning caps ON is what persists (same key). Persistence is proved by a
-    RELOAD -- the preference must survive the page, not just the render."""
+def test_there_is_no_caps_toggle_and_no_cap_on_any_line():
+    """Round 23 (his call): "Let's remove the 'Show rank caps' button. Not
+    going to use it ever. Should just get rid of it." Gone with it: the
+    per-line cap draw and the server grading behind it -- a control with no
+    door is dead code here, not a hidden feature."""
     with serve_ui() as base:
         _put_division_goal(base, "Bronze", "V")
 
@@ -914,24 +930,12 @@ def test_the_caps_toggle_defaults_off_and_enabling_persists():
             page.evaluate(_OPEN_RANK_TAB)
             page.wait_for(".rank-page .scorecard-card .score-card")
             page.wait_ms(200)
-
-            assert page.count(".rank-page .scorecard-card .score-line-cap") == 0, (
-                "a fresh browser must see the lean sheet — no caps")
-
-            page.evaluate(
-                "document.querySelector('.rank-page .scorecard-card "
-                ".scorecard-caps-toggle input').click()")
-            page.wait_ms(200)
-            caps_on = page.count(".rank-page .scorecard-card .score-line-cap")
-            assert caps_on >= 1, "with a goal set and PBs seeded, the toggle must draw caps"
-
-            page.goto(f"{base}/ui/index.html")
-            page.wait_for(".log-list-card")
-            page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
-            page.wait_ms(200)
-            assert page.count(".rank-page .scorecard-card .score-line-cap") >= 1, (
-                "the enabled preference must survive a reload")
+            counts = page.evaluate(
+                "({ toggles: document.querySelectorAll('.rank-page "
+                ".scorecard-caps-toggle').length,"
+                "   caps: document.querySelectorAll('.rank-page "
+                ".scorecard-card .score-line-cap').length })")
+        assert counts == {"toggles": 0, "caps": 0}, counts
 
 
 def test_the_cards_sit_in_four_aligned_columns_reading_down_in_course_order():
@@ -1236,7 +1240,7 @@ def test_the_legend_names_every_pick_and_each_dot_wears_its_pick_colour():
                 "  const pills = Array.from(document.querySelectorAll("
                 "    '.rank-page .scorecard-card .goal-pill'));"
                 "  const legend = pills.map((pill) => ({"
-                "    label: pill.textContent.trim(),"
+                "    label: pill.querySelector('.goal-pill-label').textContent.trim(),"
                 "    colour: getComputedStyle("
                 "      pill.querySelector('.goal-pill-dot')).backgroundColor,"
                 "  }));"
@@ -1268,6 +1272,53 @@ def test_the_legend_names_every_pick_and_each_dot_wears_its_pick_colour():
         # both picks really do own tiles, or the attribution is untested
         assert len({dot["colour"] for dot in dots}) == 2, (
             f"only one source owns anything: {set(d['colour'] for d in dots)}")
+
+
+def test_a_pills_cross_removes_that_pick_and_regrades_the_card():
+    """Round 23: "when i hover over each name / pill in the scorecard, there
+    should be an X on the right side that appears. I should be able to
+    click this to remove that specific player / rank standard from my
+    scorecard immediately. Everything should update accordingly." Two
+    divisions picked; the × is hidden at rest and visible under the pointer;
+    clicking the SECOND pill's × (Gold I -- the faster offer, which a multi
+    goal takes per tile) leaves Bronze V as a SINGLE goal (no legend), and
+    every goal time on the card moves to Bronze V's slower cutoff."""
+    with serve_ui() as base:
+        body = json.dumps({"kind": "multi", "sources": [
+            {"kind": "division", "tier": "Bronze", "division": "V"},
+            {"kind": "division", "tier": "Gold", "division": "I"}]}).encode()
+        urllib.request.urlopen(urllib.request.Request(
+            f"{base}/api/scorecard/goal", data=body, method="PUT",
+            headers={"Content-Type": "application/json"})).read()
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .goal-pill")
+            page.wait_ms(200)
+            first_goal = "document.querySelector('.rank-page .scorecard-card "
+            first_goal += ".score-line .score-line-goal').textContent.trim()"
+            before = page.evaluate(first_goal)
+            at_rest = page.evaluate(
+                "getComputedStyle(document.querySelector('.rank-page "
+                ".scorecard-card .goal-pill .goal-pill-remove')).visibility")
+            page.hover(".rank-page .scorecard-card .goal-legend .goal-pill:nth-child(2)")
+            under_pointer = page.evaluate(
+                "getComputedStyle(document.querySelector('.rank-page "
+                ".scorecard-card .goal-pill:nth-child(2) .goal-pill-remove')).visibility")
+            page.click(".rank-page .scorecard-card .goal-legend "
+                       ".goal-pill:nth-child(2) .goal-pill-remove")
+            page.wait_ms(600)
+            pills_after = page.count(".rank-page .scorecard-card .goal-pill")
+            after = page.evaluate(first_goal)
+        goal = json.loads(urllib.request.urlopen(
+            f"{base}/api/scorecard", timeout=10).read())["goal"]
+    assert at_rest == "hidden", at_rest
+    assert under_pointer == "visible", under_pointer
+    assert goal == {"kind": "division", "tier": "Bronze", "division": "V"}, goal
+    assert pills_after == 0, "one pick left is a single goal, and a single goal draws no legend"
+    assert before != after, (
+        f"the card must re-grade against the remaining pick: {before!r} -> {after!r}")
 
 
 def test_a_single_goal_draws_no_legend_and_no_dots():

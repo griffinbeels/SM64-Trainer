@@ -288,41 +288,19 @@ def card_keys_of(card):
     return [tile["key"] for row in card["rows"] for tile in row["tiles"]]
 
 
-def test_tiles_carry_server_graded_ranks(tmp_path):
-    """Round 9: a card line wears caps -- `you_rank`/`goal_rank`, graded by
-    the SERVER against the entity's best ladder (the server picks, the
-    client draws). A side with no time, or an entity with no ladder (the
-    castle secrets), stays None."""
+def test_tiles_carry_no_rank_fields_since_the_caps_went(tmp_path):
+    """Round 23 deleted the caps a line wore -- toggle, draw and the server's
+    per-tile grading together ("Not going to use it ever"). A tile is the
+    builder's own shape and nothing more; a fetch no longer grades 200
+    tiles for an icon nobody can switch on."""
     with make_client(tmp_path) as (client, _db, _svc):
-        client.post("/api/import/manual", json={
-            "entity_key": "star:1:0", "strat_tag": "Standard",
-            "time_cs": 4370})
         client.put("/api/scorecard/goal", json={
             "kind": "division", "tier": "Bronze", "division": "V"})
         card = client.get("/api/scorecard").json()
-        tiles = {tile["key"]: tile
-                 for row in card["rows"] for tile in row["tiles"]}
-        graded = tiles["star:1:0"]
-        assert graded["you_rank"] is not None
-        assert set(graded["you_rank"]) == {"tier", "division"}
-        assert graded["goal_rank"] == {"tier": "Bronze", "division": "V"}
-        # no PB on this one -> no you cap; goal still grades
-        assert tiles["star:1:1"]["you_rank"] is None
-        # An entity with NO ladder grades neither side. Every star the
-        # community publishes standards for now HAS one -- Slide Star
-        # (Under 21 Seconds) was the last exception and got its own
-        # entity on 2026-08-31 -- so the ladder-less case is reached
-        # through a castle star, which is off the card by default and
-        # comes back through the ordinary include door.
-        client.post("/api/marelo/exclude",
-                    json={"entity": "star:0:0", "excluded": False})
-        included = {tile["key"]: tile
-                    for row in client.get("/api/scorecard").json()["rows"]
-                    for tile in row["tiles"]}
-        assert included["star:0:0"]["you_rank"] is None
-        assert included["star:0:0"]["goal_rank"] is None
-        # ...and the star this round fixed grades from both sides now.
-        assert tiles["star:19:1"]["goal_rank"] is not None
+        tile = card["rows"][0]["tiles"][0]
+        assert {"key", "label", "clock", "you_cs", "goal_cs", "delta_cs",
+                "strat"} <= set(tile), tile
+        assert "you_rank" not in tile and "goal_rank" not in tile, tile
 
 
 def test_the_card_ignores_the_same_segments_the_route_ranking_ignores(tmp_path):

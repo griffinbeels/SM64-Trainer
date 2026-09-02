@@ -7480,6 +7480,19 @@
     width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
     background: var(--pill-colour, #5bb8ff);
   }
+  /* The pill's × (round 23): always laid out, only VISIBLE on hover or
+     keyboard focus, so a pill never changes width as the pointer crosses
+     it -- the same reserved-slot rule as the line's library glyph. */
+  .goal-pill-remove {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px; margin-left: 2px; padding: 0;
+    border: 0; border-radius: 50%; background: transparent;
+    color: var(--muted); font: inherit; font-size: .8rem; line-height: 1;
+    cursor: pointer; visibility: hidden;
+  }
+  .goal-pill:hover .goal-pill-remove,
+  .goal-pill:focus-within .goal-pill-remove { visibility: visible; }
+  .goal-pill-remove:hover { color: var(--text); background: rgba(255,255,255,.12); }
   /* The dot after a star's name: the colour of the PICK that set that
      star's goal, so a number can be traced to whoever is behind it. Rides
      inside the nowrap tail with the library glyph (round 13's rule: a mark
@@ -7502,11 +7515,6 @@
     font-variant-numeric: tabular-nums; white-space: nowrap;
   }
   .score-line-time { color: var(--text); }
-  /* The cap sits inline before its time; RankIcon's own wing spill is
-     horizontal and small at 14px, and the shared .rank-icon-slot reserve
-     would double this line's height for wings no 14px cap makes legible --
-     a plain slot with its own tiny margin reads better at this density. */
-  .score-line-cap { display: inline-flex; align-items: center; }
   .score-gap {
     justify-self: end; font-variant-numeric: tabular-nums;
     font-size: .72rem; white-space: nowrap; color: var(--muted);
@@ -7565,10 +7573,6 @@
   }
   .score-detail-input.is-invalid { border-color: var(--coral); }
   .score-detail-hint { font-size: .66rem; color: var(--coral); }
-  .scorecard-caps-toggle {
-    display: inline-flex; align-items: center; gap: 6px; margin-top: 8px;
-    font-size: .76rem; color: var(--muted); cursor: pointer;
-  }
 </style></head>
 <body>
 <div id="app"></div>

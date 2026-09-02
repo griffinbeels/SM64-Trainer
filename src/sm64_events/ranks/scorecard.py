@@ -417,15 +417,12 @@ def _tile(you: dict, goal: dict, key: str, label: str, clock: str) -> dict:
     you_cs = you.get(key)
     goal_cs = goal.get(key)
     delta_cs = (you_cs - goal_cs) if you_cs is not None and goal_cs is not None else None
-    # `you_rank`/`goal_rank` are the caps a card line wears (round 9). None
-    # HERE, always: this module is pure and a rank needs the standards
-    # store, so the ROUTER grades them in after build (`_grade_tiles`).
-    # Emitting the keys from birth keeps the tile shape constant, which is
-    # what lets the JS live-edit recompute null a stale goal_rank without
-    # the parity comparison seeing two different shapes.
+    # No `you_rank`/`goal_rank` since round 23: the caps a line wore were
+    # deleted with their toggle ("Not going to use it ever"), and with them
+    # the router's per-tile grading. `scorecardgoal.js::_recomputeTile`
+    # mirrors exactly this shape.
     return {"key": key, "label": label, "clock": clock,
-            "you_cs": you_cs, "goal_cs": goal_cs, "delta_cs": delta_cs,
-            "you_rank": None, "goal_rank": None}
+            "you_cs": you_cs, "goal_cs": goal_cs, "delta_cs": delta_cs}
 
 
 def _sum_tiles(tiles: list[dict]) -> dict:
