@@ -19,7 +19,9 @@ FastAPI + uvicorn, pymem, pytest.
 
 ```
 uv sync
-uv run pytest -q                                     # MUST pass before any merge
+uv run python tools/run_tests.py                     # MUST pass before any merge: the whole suite on 16 workers (~2 min; 19½ serial), and it refreshes the coverage map
+uv run python tools/run_tests.py --changed           # the inner loop: only the tests whose Python your change touched -- or everything, when a JS/HTML/CSS/data/doc file changed, because nothing can see what those affect
+uv run pytest tests/test_<module>.py -q              # one file, serially, as always
 uv run python -m sm64_events.main                    # run from repo root (data/ is cwd-relative); canonical — binds the CTRL+C shutdown deadline
 uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM); --version jp reads the JP layout
 uv run python tools/sync_version.py --version us     # THE version-sync loop (runbook: docs/version-sync.md): walks every gate (address/behaviour/calibration/feature) against the loaded ROM, writes data/version_sync/<v>.json as it goes, posts to a running server so /ui/sync.html fills live. On US = the regression proof (every gate verified); on JP = how JP support is discovered (--only <gate|feature> reruns one; read-only, safe beside a live session)
@@ -309,6 +311,20 @@ Contract changes land on main first, then dependent work fans out. Merge with
   and the gate FAILS OPEN on every error, so a broken gate and a clean commit
   look identical — which is exactly how its JavaScript half stayed dead for an
   hour (2026-08-28).
+- **The suite runs on 16 workers, and every test says which worker group it
+  belongs to.** `tools/run_tests.py` is the one door: the merge gate (every
+  test, coverage map refreshed) and `--changed` (pytest-testmon reruns only
+  tests whose executed Python changed). `tests/conftest.py` gives each test
+  its file as an xdist group, so a module's one-server-one-browser fixture
+  is built once; a test marked `spread` is its own group and leaves the
+  file, which is how the responsive sweep went from one 179 s test to 26
+  cases. Two things to carry: testmon is BLIND to anything that is not
+  Python executed in-process (JS, HTML, CSS, seed data, docs, code that
+  only runs in a spawned subprocess), so the door refuses to select when a
+  non-Python file changed since the last full run, and `--changed` is never
+  the gate; and `-s` does not print under workers, so a measurement test
+  (`test_ui_recorder_latency.py`) is still run alone. The numbers behind
+  every choice are in the runner's docstring (2026-09-01).
 - **Exit-code honesty:** run verification through the Bash tool. Never pipe
   native exes into `Select-Object` or use `2>&1` on them in PS 5.1 (false
   failures).
@@ -317,7 +333,7 @@ Contract changes land on main first, then dependent work fans out. Merge with
 
 ## Definition of done — every merge
 
-- `uv run pytest -q` passes; new behavior has tests
+- `uv run python tools/run_tests.py` passes; new behavior has tests
 - **glossary current** — a change that adds, renames or redefines a domain noun
   updates its `docs/glossary.md` row in the SAME commit. The glossary is what we
   both call things by; a name that only exists in code is not shared language.

@@ -153,13 +153,19 @@ def test_the_endpoint_records_and_never_raises_on_a_bad_body(log):
     assert uilog.read(log)[0]["frame"] is None
 
 
-def test_the_log_lives_beside_the_journal_it_belongs_to():
+def test_the_log_lives_beside_the_journal_it_belongs_to(tmp_path, monkeypatch):
     """Three journals exist on this machine and all are valid. The UI log sits
     in the SAME directory as the db so `tools/what_happened.py` picking the
     freshest journal picks the matching UI log for free — reading one
-    checkout's screen against another's events would be confidently wrong."""
-    from sm64_events.core.paths import db_path
-    assert uilog.log_path().parent == db_path().parent
+    checkout's screen against another's events would be confidently wrong.
+
+    Both are read under ONE root: conftest already points the log's root at
+    tmp_path (so no test writes the checkout's own log), and the db's root is
+    pointed at the same place here, which is exactly the contract -- wherever
+    the journal lives, the log lives beside it."""
+    from sm64_events.core import paths
+    monkeypatch.setattr(paths, "data_root", lambda: tmp_path)
+    assert uilog.log_path().parent == paths.db_path().parent == tmp_path / "data"
 
 
 def test_sanitize_is_pure_so_the_endpoint_has_no_shaping_of_its_own(tmp_path):
@@ -200,3 +206,14 @@ def test_a_hanging_post_cannot_wedge_the_channel():
         "release must be idempotent — the timer and the response both call it"
     assert ".then(release, release)" in source, \
         "the slot must be released on rejection as well as on success"
+
+
+def test_no_test_can_reach_the_checkouts_own_ui_log(tmp_path):
+    """Every full suite run used to leave ~850 fixture paints in the dev
+    checkout's `data/ui_log.jsonl` (measured 2026-09-01), the file
+    `tools/what_happened.py` interleaves with the journal -- so a debugging
+    session after a test run saw fixture stages among real play. The shared
+    conftest now roots the log under the test's own tmp dir, the same move it
+    makes for the recorder lock and the rank ladder. Mutation-proved: drop
+    that fixture and this test reads the repo path."""
+    assert uilog.log_path().is_relative_to(tmp_path), uilog.log_path()

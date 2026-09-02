@@ -33,6 +33,7 @@ after:
 | Tracking, storage, stats, routes/runs/segments, defaults corpus | `tracking/`, `storage/`, `stats/`, `data/`, `tools/corpus_*.py`, `tools/build_defaults_seed.py` | `.claude/rules/tracking-storage.md` |
 | The world-graph rules a movement is judged against (topological cancels, resurrection) | `tracking/topology.py`, `tracking/segments.py`, `tools/measure_topology_cancels.py`, `tools/why_cancelled.py`, `tools/topology_map.py` | `.claude/rules/segment-topology.md` |
 | When a segment's clock STARTS, and what number it records when it stops | `tracking/segments.py`, `detectors/igt_clock.py`, `detectors/counter_epoch.py` | `.claude/rules/segment-clock.md` |
+| The star grab's time drawn hop by hop, so a report is diagnosed not guessed | `detectors/igt_clock.py`, `detectors/star_grab.py`, `tracking/segments.py` | `.claude/rules/chain-star-grab-time.md` |
 | The segment recorder — the journal read back as pointable sentences | `tracking/eventlabel.py`, `tracking/synthesize.py`, `ui/components/segmenttimeline.js` | `.claude/rules/recorder.md` |
 | Server, REST/WS APIs, wiring, paths | `server/`, `main.py`, `core/paths.py`, `core/logging_setup.py` | `.claude/rules/server.md` |
 | UI — always `ui-core.md`, plus the narrowest that matches | `ui/`, `links.py`, `tests/test_ui_*.py` | `.claude/rules/ui-core.md` **and** one of `ui-selector.md` / `ui-practice.md` / `ui-ranks.md` / `ui-climb.md` / `replay-compare.md` |
@@ -42,7 +43,6 @@ after:
 | The Ultimate Sheet library (read, classify, map, snapshot) | `library/`, `tools/scrape_sheet.py` | `.claude/rules/library.md` |
 | The 100-coin star (its exit-star variants, and why one reset is one row) | `tracking/hundred_coin.py`, `ranks/standards.py` | `.claude/rules/hundred-coin.md` |
 | What a saved time MEANS, what a row may DO about a PB, which strategy is ACTIVE | `tracking/caveats.py`, `tracking/pbaction.py`, `tracking/activestrat.py` | `.claude/rules/pb-strategy.md` |
-| The star grab's TIME, hop by hop from Usamune's RAM to the practice-log row — a debugging CHAIN: read it before editing any module it names, and update it in the same commit when a hop moves | `memory/layout.py`, `core/snapshot.py`, `server/poller.py`, `detectors/igt_clock.py`, `detectors/star_grab.py`, `core/events.py`, `storage/db.py`, `tracking/projection.py`, `tracking/service.py`, `server/api.py`, `server/broadcaster.py`, `ui/components/practicelog.js`, `ui/components/attemptlog.js`, `ui/uilog.js`, `core/uilog.py` | `.claude/rules/chain-star-grab-time.md` |
 
 Tests mirror modules: `tests/test_<module>.py` — read the test file first, it
 is the executable spec.

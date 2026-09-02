@@ -1,5 +1,6 @@
 """Session-wide test guards."""
 import asyncio
+import re
 import sys
 from pathlib import Path
 
@@ -20,6 +21,28 @@ from sm64_events.core import perfmon, recorder_lock
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items):
+    """Every test carries a WORKER GROUP for pytest-xdist's `loadgroup`
+    scheduler: its own file by default, so a module's one-server-one-browser
+    fixture is built once and its tests keep their order -- exactly what
+    `--dist loadfile` gives, which is why the full suite passed under 16
+    workers on the first try (2026-09-01). A test marked `spread` is its own
+    group instead, so its cases leave the file and land on whichever worker
+    is free: that is how a sweep parametrised per viewport stops being one
+    three-minute unit. Group names must carry no `@` or `]` -- xdist appends
+    `@<group>` to the nodeid and splits it back on those two characters.
+    `tryfirst` because xdist's worker reads the marks in ITS hook of the same
+    name, and this conftest registers before that worker plugin does -- so
+    without it the marks arrive one hook too late and every file spreads."""
+    for item in items:
+        if item.get_closest_marker("spread"):
+            group = re.sub(r"[^A-Za-z0-9_./:-]", "_", item.nodeid)
+        else:
+            group = item.nodeid.split("::")[0]
+        item.add_marker(pytest.mark.xdist_group(group))
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -71,6 +94,26 @@ def _isolate_rank_standards(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "rank_standards_path",
                         lambda: tmp_path / "rank_standards.json")
     monkeypatch.setattr(paths, "bundled_rank_standards", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_ui_log(tmp_path, monkeypatch):
+    """No test may append to the checkout's own UI log.
+
+    A browser-driven test serves the REAL page, and the page posts what it
+    painted back to the app, which appends to the log at the data root -- from
+    source, this checkout's `data/`. Measured 2026-09-01: one full suite run
+    left 856 fixture paints in the dev log that `tools/what_happened.py` then
+    interleaved with real play. Under 16 parallel workers it is also a race
+    between appends and the log's own trim.
+
+    `uilog` holds `data_root` as an import-time alias, so the alias is what is
+    rebound (the KNOWN LIMIT above, read the other way round: patching
+    `paths.data_root` would never reach it). `tests/test_uilog.py::
+    test_no_test_can_reach_the_checkouts_own_ui_log` proves this is active.
+    """
+    from sm64_events.core import uilog
+    monkeypatch.setattr(uilog, "data_root", lambda: tmp_path)
 
 
 @pytest.fixture

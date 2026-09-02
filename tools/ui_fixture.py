@@ -47,6 +47,38 @@ from sm64_events.storage.db import Database
 from sm64_events.tracking.defaults import reconcile_defaults
 from sm64_events.tracking.service import TrackerService
 
+
+def _run_coro(coro):
+    """`asyncio.run`, from inside an open Playwright session too.
+
+    Playwright's sync API runs its event loop in a greenlet on the CALLING
+    thread, so while any browser is open there `asyncio.run()` raises
+    "cannot be called from a running event loop". Under one worker this
+    never bit: pytest runs a module's plain `serve_ui()` tests before its
+    module-scoped browser opens. Under pytest-xdist the same module's tests
+    reached the worker in a different order (2026-09-01, seen on gw9: the
+    three plain tests ran 15th, 16th and 26th of 79, after page[850] was up),
+    and every seeding call on that worker failed for the rest of the run --
+    one order change became 26 setup errors. Seeding must not care whether a
+    browser is open on this thread: when one is, the coroutine runs on its
+    own loop in a helper thread, which is the same shape the server thread
+    already drives the service from."""
+    if asyncio._get_running_loop() is None:
+        return asyncio.run(coro)
+    outcome = {}
+
+    def go():
+        try:
+            outcome["value"] = asyncio.run(coro)
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on the caller's thread below
+            outcome["error"] = exc
+    worker = threading.Thread(target=go, name="ui_fixture-seed")
+    worker.start()
+    worker.join()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome.get("value")
+
 REPO = Path(__file__).resolve().parents[1]
 DEV_DB = REPO / "data" / "tracker.db"
 
@@ -448,7 +480,7 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
             payload={"course_id": course_id, "star_id": star_id,
                      "igt_frames": 784, "igt_timed_at": "grab"}))
 
-    asyncio.run(go())
+    _run_coro(go())
 
 
 def _seed_target(base: str, course_id: int = FIXTURE_COURSE,
@@ -597,7 +629,7 @@ def _pad_log_with_more_entities(service) -> None:
             frame += 100
             previous_level = level
 
-    asyncio.run(go())
+    _run_coro(go())
 
 
 def _seed_level_entries(service, level: int) -> None:
@@ -786,7 +818,7 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
     # are keyed on.
     post("/api/strat", {"kind": "segment", "segment_id": segment_id,
                         "strat_tag": FIXTURE_SEGMENT_STRAT})
-    asyncio.run(arm_and_close())
+    _run_coro(arm_and_close())
     # rta_frames == 85 (5085 - 5000), not just outcome == "success": a
     # from_dev_db=True fixture snapshots the REAL journal, which may already
     # hold other successful attempts for this segment from actual play -- the
@@ -801,7 +833,7 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
             if a.get("outcome") == "success" and a.get("rta_frames") == 85]
     if rows:
         post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "rta"})
-    asyncio.run(rearm())
+    _run_coro(rearm())
 
 
 def _target_segment(base: str, segment_id: int) -> None:
@@ -886,7 +918,7 @@ def _publish_bowser_stage(service, course_id: int, level: int) -> None:
             payload={"course_id": course_id, "level": level, "area": 1,
                      "mode": "bowser_course"}))
 
-    asyncio.run(go())
+    _run_coro(go())
 
 
 def _publish_castle_stage(service, area: int) -> None:
@@ -914,7 +946,7 @@ def _publish_castle_stage(service, area: int) -> None:
             payload={"course_id": None, "level": 6, "area": area,
                      "mode": "castle", "settling": False}))
 
-    asyncio.run(go())
+    _run_coro(go())
 
 
 def _enter_level(service, level: int, frame: int = 9000) -> None:
@@ -935,7 +967,7 @@ def _enter_level(service, level: int, frame: int = 9000) -> None:
             type="level_changed", frame=frame, timestamp_utc=now,
             payload=_place_time({"from": 0, "to": level}, 271)))
 
-    asyncio.run(go())
+    _run_coro(go())
 
 
 def _arm_hundred_coin_star(base: str, service, course_id: int, level: int) -> None:
@@ -1174,7 +1206,7 @@ def _seed_castle_pieces(base: str, service, area: int,
                                      "landmark": None, "level": CASTLE_LEVEL,
                                      "area": area, "action": 0}, 272 + ordinal)))
 
-    asyncio.run(go())
+    _run_coro(go())
 
 
 def _seed_reds_run(service, course_id: int) -> None:
@@ -1203,7 +1235,7 @@ def _seed_reds_run(service, course_id: int) -> None:
             payload={"course_id": course_id, "star_id": 0,
                      "igt_frames": 400, "igt_timed_at": "xcam"}))
 
-    asyncio.run(go())
+    _run_coro(go())
 
 
 def _pad_journal(db_path: Path, count: int) -> None:
