@@ -39,10 +39,13 @@ MARIO_NUM_STARS_OFF = 0xAA       # s16, total star count; live-verified 2026-06-
 # the coin icon on the HUD. The decomp's MarioState lays it out immediately
 # before numStars (0xA8 / 0xAA), and the live-verified star field above is
 # the evidence for its neighbour. Read live 2026-09-01 beside gHudDisplay's
-# own coin field (hud_display + 2): both said 2 with Mario idle in the castle,
-# both said 120 stars beside them. VERIFY: tools/verify_addresses.py prints
-# it next to the HUD's copy -- they must agree while you play. Task 0110's
-# 100-coin engine reads it off the exit grab (`star_collected.coins`).
+# own coin field (hud_display + 2): both said 2 with Mario idle in the castle.
+# LIVE-VERIFIED 2026-09-02 by the game itself: his WF run's 100-coin
+# `star_collected` carried coins == 100 on the very frame the hundredth coin
+# spawned the star (journal event 39 on the fix-100-coins server), and the
+# reds exit grab seven seconds later still read 100. tools/verify_addresses.py
+# prints it on every live line beside the HUD's copy. Task 0110's 100-coin
+# engine reads it off the exit grab (`star_collected.coins`).
 MARIO_NUM_COINS_OFF = 0xA8
 # The coin count that spawns a course's 100-coin star (star 6). Holding at
 # least this many at an exit grab proves the visit was a 100-coin run even

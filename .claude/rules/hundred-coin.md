@@ -536,9 +536,13 @@ definition exactly as before):
 right before `numStars`), sampled by `core/snapshot.py` as `coins` and stamped
 on every `star_collected` payload by `detectors/star_grab.py`. Live-read once
 beside the HUD's own coin field (`gHudDisplay + 0x2`, `HUD_COINS_OFF`) -- both
-2, idle in the castle -- and `tools/verify_addresses.py` now holds the two
-witnesses against each other every run. **VERIFY** pending the on-screen
-human confirmation.
+2, idle in the castle -- and `tools/verify_addresses.py` holds the two
+witnesses against each other every run and prints the count on every live
+line. **LIVE-VERIFIED 2026-09-02** by his own WF run on this branch's
+server: the 100-coin star's `star_collected` carried `coins: 100` on the
+frame the hundredth coin spawned it (journal event 39), the reds exit
+carried 100 too, and the run recorded as ONE row on the 100-coin star with
+`100c + Reds · Half Cycle Skip` and no reds row beside it.
 
 **The exit star's OWN row is now HIDDEN** -- the reversal of decision #1
 ("the exit star keeps its OWN attempt too"), which the section above and

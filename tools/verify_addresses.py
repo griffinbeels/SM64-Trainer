@@ -213,6 +213,7 @@ def main() -> None:
                 continue
             print(f"  >> star_collected: {p['course_name']} / {p['star_name']}"
                   f"  igt {p['igt']} ({p['igt_frames']}f)"
+                  f"  coins {p.get('coins')}"
                   f"  frame {ev.frame}{recon}")
         for ev in dust_det.process(prev_snap, s):
             p = ev.payload
@@ -248,6 +249,7 @@ def main() -> None:
             print(f"frame {s.global_timer:>8}  action {s.mario_action:#010x}  "
                   f"stars {s.num_stars:>3}  igt {s.igt_overall:>6} "
                   f"result {s.igt_result:>6}"
+                  f"  coins {s.coins:>3}"
                   f"  level {s.curr_level}{area_str}{dust}")
             prev_action = s.mario_action
         prev_snap = s
@@ -255,4 +257,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nstopped.")
