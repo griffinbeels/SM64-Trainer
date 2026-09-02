@@ -71,7 +71,10 @@ def test_both_modes_share_the_scheduler_flags():
     full = run_tests.pytest_args("full", 16, [])
     select = run_tests.pytest_args("select", 16, ["-x"])
     for args in (full, select):
-        assert args[:5] == ["-n", "16", "--dist", "loadgroup", "-q"]
+        assert args[:4] == ["-n", "16", "--dist", "loadgroup"]
+        # `--reruns` retries only failed tests, so a load-contention browser
+        # flake does not redden the merge gate while a real failure still does.
+        assert "--reruns" in args
     assert "--testmon-noselect" in full and "--testmon" not in full
     assert "--testmon" in select and select[-1] == "-x"
 

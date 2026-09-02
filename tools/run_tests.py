@@ -15,6 +15,17 @@ Two instruments, and why each is shaped as it is (all numbers 2026-09-01,
   rather than 32 because each browser test is several Chrome processes plus
   a server, and the sweep floor made 32 pointless until the sweep was split.
 
+* **Rerun of only-failed** (pytest-rerunfailures, `--reruns 2`). Sixteen
+  browsers saturate the CPU, and a render check with a fixed settle window
+  misses it under that load: one worker runs the browser modules green,
+  16 flaked 9 render assertions on pages that render fine unloaded
+  (2026-09-01). A rerun retries only the tests that failed, on the same
+  worker, so a flake passes on the retry and a real failure fails all
+  three attempts and is still reported. This is not a fixed constant to
+  tune -- it is the standard answer to browser flake under parallelism,
+  and it replaces the repo's standing "one browser test flakes per full
+  run" tax.
+
 * **Selection** (pytest-testmon). A run records, per test, the source lines it
   executed; the next `--changed` run reruns only tests that executed a block
   that has since changed, plus tests whose own file changed or that failed
@@ -95,7 +106,15 @@ def base_args(workers: int) -> list[str]:
     gate and the inner loop can never drift onto different schedulers -- the
     nodeids testmon keys its map by carry the worker group as a suffix under
     loadgroup, so a run without it would look like 8,763 brand-new tests."""
-    return ["-n", str(workers), "--dist", "loadgroup", "-q"]
+    # `--reruns 2` reruns ONLY the tests that failed, on the same worker: a
+    # browser render that missed its settle window under 16-way CPU contention
+    # passes on the retry, while a real failure fails all three attempts and
+    # is still reported failed. Measured 2026-09-01: a single worker runs the
+    # browser modules green, 16 workers flaked 9 render checks (0 elements
+    # found on a page that renders fine unloaded) -- load, not breakage. The
+    # 1 s delay gives the machine a breath before the retry.
+    return ["-n", str(workers), "--dist", "loadgroup",
+            "--reruns", "2", "--reruns-delay", "1", "-q"]
 
 
 def pytest_args(mode: str, workers: int, extra: list[str]) -> list[str]:
