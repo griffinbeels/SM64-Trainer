@@ -70,6 +70,12 @@ Every WebSocket message is a versioned envelope:
   `[[offset, value], …]`. The row leaves as soon as Usamune's own answer
   agrees with our derivation of the same moment, so these two say how long
   that took on each real grab — the evidence for tuning it further
+- `coins` *(star_collected only, added 2026-09-01)*: the coins Mario held at
+  the grab — the HUD's coin counter. Holding 100 or more at a main course's
+  exit star proves the visit was a 100-coin run, and the 100-coin engine
+  reads it for exactly that: a savestate loaded after the 100-coin grab
+  leaves no grab edge to see, and this is the evidence that survives it.
+  Absent on rows journaled before the field existed
 
 **A star's time may be revised once, shortly after the grab** (2026-08-01).
 `star_collected` is published as soon as Usamune answers — 0-12 frames after

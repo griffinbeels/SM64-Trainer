@@ -592,7 +592,8 @@ still govern other sessions' [[attempt]]s.
 ### Exit star
 
 A [[star]] you collect to leave a course rather than as the goal — which makes
-its time comparable only with other [[attempt]]s that left the same way.
+its time comparable only with other [[attempt]]s that left the same way. Its
+grab finishes the [[100-coin star]]'s [[attempt]] and records none of its own.
 
 - **Lives** — the 100-coin rules
   (`src/sm64_events/tracking/hundred_coin.py`)
@@ -601,7 +602,10 @@ its time comparable only with other [[attempt]]s that left the same way.
 
 The [[star]] a course gives you for one hundred coins. Because you can finish
 that collection anywhere, which [[exit star]] you ended on defines which
-[[strategy]] the [[attempt]] belongs to.
+[[strategy]] the [[attempt]] belongs to. Grabbing it, or holding a hundred
+coins at the [[exit star]], proves the visit — even one a savestate cut
+short — so the trainer files the [[attempt]] here and never on the
+[[exit star]].
 
 - **Lives** — the 100-coin rules
   (`src/sm64_events/tracking/hundred_coin.py`)
