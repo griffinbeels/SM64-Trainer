@@ -76,6 +76,42 @@ def test_both_modes_share_the_scheduler_flags():
     assert "--testmon" in select and select[-1] == "-x"
 
 
+def _rec(name, created, parent=None, cmd=(), cwd=None):
+    return {"name": name, "pid": 1, "cmdline": list(cmd), "create_time": created,
+            "cwd": cwd, "parent": parent}
+
+
+def test_only_orphans_are_strays_and_a_live_siblings_run_is_never_touched(tmp_path):
+    """A live parent means somebody owns it -- another session's run, his own
+    browser. A dead parent, or a parent pid reused by a younger process, means
+    nobody does."""
+    live_parent = {"create_time": 100.0}
+    reused_pid = {"create_time": 900.0}
+    procs = [
+        _rec("chrome.exe", 500.0, live_parent, ["chrome", "--headless"]),          # sibling's
+        _rec("chrome.exe", 500.0, None, ["chrome", "--headless"]),                 # orphan
+        _rec("chrome.exe", 500.0, None, ["chrome", "--type=renderer"]),            # his browser, not headless
+        _rec("chrome.exe", 500.0, reused_pid, ["chrome", "--headless"]),           # orphan via pid reuse
+        _rec("ffmpeg.exe", 500.0, None),                                           # orphan
+        _rec("ffmpeg.exe", 500.0, live_parent),                                    # OBS's
+        _rec("python.exe", 500.0, None, cwd=str(tmp_path / "tests")),              # our dead worker
+        _rec("python.exe", 500.0, None, cwd=str(tmp_path.parent / "elsewhere")),   # another repo's
+        _rec("python.exe", 500.0, live_parent, cwd=str(tmp_path)),                 # sibling's live worker
+    ]
+    strays = run_tests.stray_processes(procs, tmp_path)
+    assert [(s["name"], s["create_time"], s["parent"]) for s in strays] == [
+        ("chrome.exe", 500.0, None), ("chrome.exe", 500.0, reused_pid),
+        ("ffmpeg.exe", 500.0, None), ("python.exe", 500.0, None)]
+
+
+def test_a_profile_dir_named_by_a_live_browser_is_kept(tmp_path):
+    kept = tmp_path / "playwright_chromiumdev_profile-AAA"
+    orphan = tmp_path / "playwright_chromiumdev_profile-BBB"
+    other = tmp_path / "somebody_elses_dir"
+    live = [f"chrome.exe --headless --user-data-dir={kept}"]
+    assert run_tests.stray_profile_dirs([kept, orphan, other], live) == [orphan]
+
+
 def test_only_a_completed_unfiltered_full_run_is_recorded():
     """A run narrowed by `-k` or a path never covered the rest, and an
     interrupted one (pytest exit 2) left the map half-written."""

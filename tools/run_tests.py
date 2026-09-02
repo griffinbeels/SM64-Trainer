@@ -36,16 +36,43 @@ edit reads as green on zero tests, which is the failure `CLAUDE.md` names as
 State: `.testmondata` (testmon's map) and `.run_tests.json` (the last full
 run's hash), both per checkout, both gitignored; a fresh worktree's first
 run is a full one because it has neither.
+
+**What the run does to the machine, during and after.** Sixteen workers each
+launching Chrome saturate the CPU -- summed test time inflates 2.2x under
+load -- and he reported the desktop lagging while a run was on (2026-09-01).
+So the whole test tree runs at BELOW-NORMAL priority: Chrome inherits the
+class from the worker that launched it, his foreground work is scheduled
+first, and on an otherwise idle machine the run loses nothing. And every run
+ends with a sweep that reports what it left behind, so "sludge" is a number
+on screen rather than a feeling: orphaned headless browsers (parent gone),
+orphaned workers and ffmpeg from THIS checkout, and Playwright profile dirs
+in TEMP that no live browser references. Measured before this existed: ten
+full runs in a day left zero processes and zero profile dirs; the 69 empty
+profile dirs in TEMP dated from March to August, from browsers killed
+mid-run in earlier sessions. Only orphans are touched -- a sibling session's
+live run has live parents and referenced dirs, and is never a target.
+
+**Two tells worth knowing when a run goes red under load.** `net::
+ERR_NO_BUFFER_SPACE` on a goto means Windows ran out of socket buffers --
+seen once when two extra pytest collections ran beside the door -- and every
+later test in that worker then fails with "asyncio.run() cannot be called
+from a running event loop", because the browser's loop was left running in
+the worker's thread. That cascade is environmental: rerun the door alone.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+import psutil
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE_PATH = ROOT / ".run_tests.json"
@@ -128,6 +155,103 @@ def records_full_run(mode: str, extra: list[str], exit_code: int) -> bool:
     return mode == "full" and not extra and exit_code in COMPLETED_EXIT_CODES
 
 
+def is_orphan(created_at: float, parent: dict | None) -> bool:
+    """A process whose parent is gone, or whose parent pid was reused by a
+    process YOUNGER than it, belongs to nobody. A live sibling session's
+    workers and browsers have live, older parents and never match."""
+    return parent is None or parent["create_time"] > created_at
+
+
+def stray_processes(procs: list[dict], root: Path) -> list[dict]:
+    """Which of these process records a finished run should not have left.
+
+    Each record: name, pid, cmdline (list), create_time, cwd (or None), parent
+    (a record or None). Orphaned HEADLESS chrome; orphaned ffmpeg; orphaned
+    python whose cwd is under this checkout (an xdist worker or a spawned
+    server whose controller died). Never a process with a live parent."""
+    strays = []
+    for proc in procs:
+        name = proc["name"].lower()
+        cmdline = " ".join(proc.get("cmdline") or [])
+        orphan = is_orphan(proc["create_time"], proc.get("parent"))
+        if not orphan:
+            continue
+        if name == "chrome.exe" and "--headless" in cmdline:
+            strays.append(proc)
+        elif name == "ffmpeg.exe":
+            strays.append(proc)
+        elif name == "python.exe" and proc.get("cwd") and _under(Path(proc["cwd"]), root):
+            strays.append(proc)
+    return strays
+
+
+def _under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def stray_profile_dirs(temp_dirs: list[Path], live_cmdlines: list[str]) -> list[Path]:
+    """Playwright makes one `playwright*` profile dir per browser in TEMP and
+    removes it on close; a browser killed mid-run leaves it. A dir no live
+    browser names in its command line is nobody's."""
+    referenced = " ".join(live_cmdlines).lower()
+    return [path for path in temp_dirs
+            if path.name.lower().startswith("playwright") and str(path).lower() not in referenced]
+
+
+def _process_records() -> list[dict]:
+    records = {}
+    for proc in psutil.process_iter(["pid", "ppid", "name", "cmdline", "create_time"]):
+        info = proc.info
+        if not info["name"]:
+            continue
+        record = {"pid": info["pid"], "ppid": info["ppid"], "name": info["name"],
+                  "cmdline": info["cmdline"] or [], "create_time": info["create_time"],
+                  "cwd": None, "parent": None, "_proc": proc}
+        if info["name"].lower() == "python.exe":
+            try:
+                record["cwd"] = proc.cwd()
+            except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+                pass
+        records[info["pid"]] = record
+    for record in records.values():
+        parent = records.get(record["ppid"])
+        record["parent"] = ({"create_time": parent["create_time"]}
+                            if parent and parent["pid"] != record["pid"] else None)
+    return list(records.values())
+
+
+def sweep_leftovers(label: str) -> None:
+    """Kill orphaned test processes and delete unreferenced profile dirs, then
+    say what was found -- every run, so a clean machine is a printed fact."""
+    records = _process_records()
+    strays = stray_processes(records, ROOT)
+    for stray in strays:
+        try:
+            stray["_proc"].kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    live_chrome = [" ".join(rec["cmdline"]) for rec in records
+                   if rec["name"].lower() == "chrome.exe" and rec not in strays]
+    temp = Path(tempfile.gettempdir())
+    dirs = [path for path in temp.iterdir() if path.is_dir()] if temp.is_dir() else []
+    orphan_dirs = stray_profile_dirs(dirs, live_chrome)
+    for path in orphan_dirs:
+        shutil.rmtree(path, ignore_errors=True)
+    browsers = sum(1 for stray in strays if stray["name"].lower() == "chrome.exe")
+    others = len(strays) - browsers
+    if strays or orphan_dirs:
+        print(f"run_tests: {label} -- swept {browsers} orphaned headless browser(s), "
+              f"{others} orphaned worker/ffmpeg process(es), {len(orphan_dirs)} unreferenced "
+              f"Playwright profile dir(s)", flush=True)
+    elif label == "after":
+        print("run_tests: nothing left behind (orphaned browsers, workers, ffmpeg, "
+              "profile dirs all zero)", flush=True)
+
+
 def load_state() -> dict | None:
     try:
         return json.loads(STATE_PATH.read_text(encoding="utf-8"))
@@ -162,8 +286,14 @@ def main(argv: list[str] | None = None) -> int:
         mode, why = "full", "the merge gate: every test, and the coverage map refreshed"
     print(f"run_tests: {mode} -- {why}", flush=True)
 
+    sweep_leftovers("before")
     command = [sys.executable, "-m", "pytest", *pytest_args(mode, args.workers, extra)]
-    exit_code = subprocess.run(command, cwd=ROOT).returncode
+    # Below-normal priority for the whole tree (Chrome inherits it from the
+    # worker that launches it): his foreground work is scheduled first, and an
+    # idle machine gives the run everything anyway.
+    priority = {"creationflags": subprocess.BELOW_NORMAL_PRIORITY_CLASS} if os.name == "nt" else {}
+    exit_code = subprocess.run(command, cwd=ROOT, **priority).returncode
+    sweep_leftovers("after")
     if records_full_run(mode, extra, exit_code):
         save_state(current, args.workers, exit_code)
         print(f"run_tests: recorded a full run against {len(current)} non-Python files "
