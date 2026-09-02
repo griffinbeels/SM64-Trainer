@@ -635,9 +635,10 @@ still govern other sessions' [[attempt]]s.
 
 ### Exit star
 
-A [[star]] you collect to leave a course rather than as the goal — which makes
-its time comparable only with other [[attempt]]s that left the same way. Its
-grab finishes the [[100-coin star]]'s [[attempt]] and records none of its own.
+A [[star]] you collect only to leave a course, not the one you set out for —
+which makes its time comparable only with other [[attempt]]s that left the
+same way. Its grab finishes the [[100-coin star]]'s [[attempt]] and records
+none of its own.
 
 - **Lives** — the 100-coin rules
   (`src/sm64_events/tracking/hundred_coin.py`)
