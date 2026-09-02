@@ -4792,20 +4792,34 @@
     background: rgba(126, 152, 184, .22); pointer-events: none;
     border-right: 1px dashed rgba(170, 192, 216, .7);
   }
-  .input-lead-note { font-size: .7rem; color: #8fa3b8; margin-left: .55rem; }
   /* The pad reader's verdict: green when every checkable frame agrees with
-     the game's own display, amber when any disagree. Same weight as the
-     lead note -- a fact beside the header, not a banner. */
+     the game's own display, amber when any disagree -- and then a DOOR:
+     it opens the list of the frames that disagree. */
   .input-screen-check {
-    display: inline-block; font-size: .7rem; margin-left: .55rem;
-    padding: .05rem .45rem; border-radius: 999px;
+    display: inline-block; font: inherit; font-size: .7rem; margin-left: .55rem;
+    padding: .05rem .45rem; border-radius: 999px; line-height: 1.4;
     border: 1px solid rgba(120, 200, 150, .55); color: #9fe0b8;
     background: rgba(60, 140, 90, .18); cursor: help; white-space: nowrap;
   }
   .input-screen-check.is-off {
     border-color: rgba(230, 180, 90, .6); color: #f0c877;
-    background: rgba(160, 110, 30, .2);
+    background: rgba(160, 110, 30, .2); cursor: pointer;
   }
+  .input-screen-check.is-off:hover, .input-screen-check.is-open {
+    background: rgba(160, 110, 30, .35);
+  }
+  .input-screen-check-list {
+    list-style: none; margin: .2rem 0 .5rem; padding: 0;
+    display: flex; flex-wrap: wrap; gap: .3rem .5rem;
+  }
+  .input-screen-check-row {
+    font: inherit; font-size: .72rem; color: #e6d9b8; cursor: pointer;
+    background: rgba(160, 110, 30, .12); border: 1px solid rgba(230, 180, 90, .35);
+    border-radius: .4rem; padding: .15rem .5rem; display: inline-flex; gap: .5rem;
+  }
+  .input-screen-check-row:hover { background: rgba(160, 110, 30, .3); }
+  .input-screen-check-row .frame { font-weight: 600; color: #f0c877; }
+  .input-screen-check-row .axis { color: #8fa3b8; }
 
   .input-inspector {
     display: flex; align-items: center; gap: .8rem; flex-wrap: wrap;

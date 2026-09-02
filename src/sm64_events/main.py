@@ -471,8 +471,16 @@ def build():
                 return None
             pads = {number: (frame.stick_x, frame.stick_y)
                     for number, frame in frames}
+            # The reset's white flash shows the reset frame the journal
+            # recorded -- the one anchor a reset's washed-out, resting
+            # neighbourhood offers (his C-down on the frame after a reset,
+            # read one frame late). Button icons would pin more; their
+            # instrument is not yet at the wire-in gate (padread.py).
+            resets = ([attempt.anchor_frame]
+                      if getattr(attempt, "anchor_type", None) == "practice_reset"
+                      and attempt.anchor_frame is not None else [])
             return read_clip(clip, frame_map, pads,
-                             str(bundled_ffmpeg() or "ffmpeg"))
+                             str(bundled_ffmpeg() or "ffmpeg"), resets=resets)
 
         replay.pad_reader = _read_pad_off_the_footage
 

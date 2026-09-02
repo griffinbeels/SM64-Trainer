@@ -182,6 +182,15 @@ class InputsService:
             "strategy": attempt.strat_tag,
             "fps": GAME_FPS,
             "frames": axis[-1][0] + 1 if axis else 0,
+            # The attempt's OWN length -- Usamune's number, the one the row
+            # shows -- for the header. `frames` is what the track holds,
+            # which with a clip's buffers is longer, and before the
+            # settling flush can be a frame short; neither is the time he
+            # is graded on (his report 2026-09-01: 19"16 before the clip,
+            # 21"30 after, against a 0'19"20 row).
+            "attempt_frames": (getattr(attempt, "igt_frames", None)
+                               or getattr(attempt, "rta_frames", None)
+                               or (axis[-1][0] + 1 if axis else 0)),
             "runs": runs_of(frames),
             "actions": actions_of(frames),
             "markers": self._markers(attempt, frames),

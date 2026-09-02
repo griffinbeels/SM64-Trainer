@@ -64,11 +64,14 @@ def main() -> int:
     frames, _lead = track_with_lead(
         db.inputs, attempt, span=(min(seen) - padread.BAND, max(seen) + padread.BAND))
     pads = {number: (frame.stick_x, frame.stick_y) for number, frame in frames}
+    resets = ([attempt.anchor_frame] if attempt.anchor_type == "practice_reset"
+              and attempt.anchor_frame is not None else [])
     fps = float(meta.get("fps") or 60.0)
     print(f"attempt {args.attempt}: {len(frame_map)} video slots, map built by "
           f"{meta.get('frame_map_source') or 'the fixed offset'}"
           + (", already READ at extraction" if meta.get("frame_map_read") else ""))
-    reading = padread.read_clip(clip, frame_map, pads, str(bundled_ffmpeg() or "ffmpeg"))
+    reading = padread.read_clip(clip, frame_map, pads, str(bundled_ffmpeg() or "ffmpeg"),
+                                resets=resets)
     if reading is None:
         print("REFUSED: the display could not be read on enough frames "
               "(input display off, or covered) -- the clocks' map stands")
@@ -79,6 +82,9 @@ def main() -> int:
     print(f"  AGREE    {v.agree:6d}  ({100 * v.agreement:.2f}%) show exactly the pad the timeline holds")
     print(f"  NOWHERE  {v.nowhere:6d}  reads matching no frame within +-10 (misreads)")
     print(f"  MOVED    {moved:6d}  slots the reading moved off the sidecar's map")
+    for slot, (reset, chosen) in sorted(v.anchors.items()):
+        print(f"  FLASH    slot {slot} is the reset's white picture: reset frame {reset}, "
+              f"map {'agrees' if chosen == reset else f'says {chosen}'}")
     print(f"  cells read {v.known_cells} of {v.slots * 6}; glyphs the clip taught itself: "
           + ", ".join(f"{row}/{col}:{''.join(glyphs)}" for (row, col), glyphs in reading.learned.items()))
     if v.disagreements and args.disagreements:

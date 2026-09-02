@@ -1234,13 +1234,10 @@ def test_the_drawer_reaches_a_MOMENT_on_the_track(page):
         " const button = document.querySelector('.moment-mark');"
         " const lane = document.querySelector("
         "  '.input-lane.is-moments .input-lane-track').getBoundingClientRect();"
-        " const head = document.querySelector('.input-timeline-head h4')"
-        "  .textContent.match(/(\\d+) frames/);"
-        " const note = document.querySelector('.input-lead-note');"
-        " const lead = note"
-        "  ? Number(note.textContent.match(/\\+(\\d+)f/)[1]) : 0;"
+        " const head = document.querySelector('.input-timeline-head h4');"
         " return [tick.left, button.getBoundingClientRect().left, lane,"
-        "  Number(button.getAttribute('data-frame')), Number(head[1]) + lead];"
+        "  Number(button.getAttribute('data-frame')),"
+        "  Number(head.getAttribute('data-total'))];"
         "})()")
     expected = track["x"] + (marker_frame / total) * track["width"]
     assert abs(tick_at - expected) < track["width"] / total, (
@@ -1306,17 +1303,24 @@ def test_the_timeline_reaches_a_LEAD_IN_and_frame_zero_stays_the_attempt(page):
     assert count(page, ".input-lead-shade") == 1, (
         "no lead band rendered -- the fixture seeded no level entry before "
         "the anchor, so the lead-in layout is unreachable by every sweep")
-    assert count(page, ".input-lead-note") == 1
-    note = page.evaluate(
-        "document.querySelector('.input-lead-note').textContent")
-    assert "lead-in" in note
-    readout = page.evaluate(
-        "document.querySelector('.input-inspector-frame strong').textContent")
-    total = int(readout.split("/")[1].strip())
+    # The lead-in NOTE is gone (his 2026-09-01 ruling: "we just shouldn't
+    # display the lead-in at all" -- the band stays, the numbers do not);
+    # the drawn span rides the header as data attributes for the sweeps.
+    assert count(page, ".input-lead-note") == 0
+    total, lead = page.evaluate(
+        "(() => { const h = document.querySelector('.input-timeline-head h4');"
+        " return [Number(h.getAttribute('data-total')),"
+        "  Number(h.getAttribute('data-lead'))]; })()")
+    assert lead > 0 and total > lead
+    # The header prints the ATTEMPT's own length -- the number on the row
+    # above it -- never the track's, which carries the clip's buffers.
     frames_head = page.evaluate(
         "document.querySelector('.input-timeline-head h4').textContent")
-    assert f"{total} frames" in frames_head, (
-        "the header and the readout disagree on the attempt's length")
+    shown = int(frames_head.split("frames")[0].split("·")[-1].strip())
+    assert shown < total, (frames_head, total)
+    readout = page.evaluate(
+        "document.querySelector('.input-inspector-frame strong').textContent")
+    assert int(readout.split("/")[1].strip()) == total - lead
 
 
 def test_the_screen_check_chip_reaches_the_timeline_header(page):
@@ -1328,10 +1332,24 @@ def test_the_screen_check_chip_reaches_the_timeline_header(page):
     the tool that lists it."""
     reach(page, "input-timeline")
     page.wait_for(".input-screen-check", timeout_ms=8000)
-    text, title, is_off = page.evaluate(
+    text, is_off = page.evaluate(
         "(() => { const chip = document.querySelector('.input-screen-check');"
-        " return [chip.textContent, chip.getAttribute('title'),"
-        "  chip.classList.contains('is-off')]; })()")
+        " return [chip.textContent, chip.classList.contains('is-off')]; })()")
     assert text.startswith("screen-checked ") and "1 disagree" in text, text
     assert is_off, "one contradicted frame must read as off, not clean"
-    assert "score_pad_read.py --attempt" in title, title
+    # The chip is a DOOR (his rule: a datum on a summary surface leads to
+    # its evidence): click it and every disagreeing frame is listed as the
+    # panel frame it sits on, with what the screen read and what the
+    # timeline holds; click a row and the panel goes there.
+    page.click(".input-screen-check")
+    page.wait_for(".input-screen-check-row", timeout_ms=4000)
+    row_text, frame_text = page.evaluate(
+        "(() => { const row = document.querySelector('.input-screen-check-row');"
+        " return [row.textContent, row.querySelector('.frame').textContent]; })()")
+    assert frame_text.startswith("frame ") and "U71" in row_text and "U70" in row_text, row_text
+    page.click(".input-screen-check-row")
+    page.wait_ms(200)
+    readout = page.evaluate(
+        "document.querySelector('.input-inspector-frame strong').textContent")
+    listed = int(frame_text.split()[1])
+    assert int(readout.split("/")[0].strip()) == listed, (readout, frame_text)

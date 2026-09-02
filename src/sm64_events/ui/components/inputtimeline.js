@@ -286,7 +286,7 @@ export function mappedTimeAtFrame(frame, frameMap, clipFps, stretches) {
 // test ("100% or it can't be relied on") as a number he can see, on the
 // surface he judges it from; the tool that lists each disagreement is named
 // in the hover.
-function screenCheck(reading, attemptId) {
+function screenCheck(reading, attemptId, open, toggle) {
   if (!reading || !reading.sure) return null;
   const off = reading.sure - reading.agree;
   const label = off === 0
@@ -294,10 +294,43 @@ function screenCheck(reading, attemptId) {
     : `screen-checked ${reading.agree}/${reading.sure} · ${off} disagree`;
   const title = `The game's own input display was read on ${reading.sure} video `
     + `frames; the timeline's pad matches it on ${reading.agree}`
-    + (off ? `. Each disagreement: tools/score_pad_read.py --attempt ${attemptId} --disagreements`
+    + (off ? ". Click to list each disagreeing frame."
            : ". Every checkable frame agrees.");
-  return html`<span class=${`input-screen-check ${off ? "is-off" : "is-clean"}`}
-      title=${title}>${label}</span>`;
+  // A datum on a summary surface is a DOOR to its evidence (his standing
+  // rule): the chip opens the list when there is one to open.
+  return html`<button type="button"
+      class=${`input-screen-check ${off ? "is-off" : "is-clean"} ${open ? "is-open" : ""}`}
+      title=${title} disabled=${off === 0} aria-expanded=${open}
+      onclick=${toggle}>${label}</button>`;
+}
+
+// The frames the screen contradicts, each as the PANEL frame it sits on --
+// "which 2 frames disagree?" answered on the surface, and a click goes
+// there. `disagreements` rows are [slot, row, screen reads, map says].
+function DisagreementList({ reading, frameMap, stretches, seek, lead }) {
+  const rows = (reading && reading.disagreements) || [];
+  if (!rows.length) return null;
+  const seen = new Set();
+  const items = [];
+  for (const [slot, row, screen, says] of rows) {
+    const raw = frameMap ? frameMap[slot] : null;
+    const axis = raw == null ? null : trackFrameOf(raw, stretches);
+    const key = `${axis}:${row}`;
+    if (seen.has(key)) continue;                  // both slots of one picture
+    seen.add(key);
+    items.push({ axis, row, screen, says, slot });
+  }
+  return html`<ul class="input-screen-check-list">
+    ${items.map((item) => html`<li key=${item.slot}>
+      <button type="button" class="input-screen-check-row"
+          disabled=${item.axis == null}
+          onclick=${() => item.axis != null && seek(item.axis + lead)}>
+        <span class="frame">${item.axis == null ? "outside the track" : `frame ${item.axis}`}</span>
+        <span class="axis">${item.row === "y" ? "up/down" : "left/right"}</span>
+        <span>screen <strong>${item.screen}</strong> · timeline <strong>${item.says}</strong></span>
+      </button>
+    </li>`)}
+  </ul>`;
 }
 
 export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
@@ -305,6 +338,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
                                 padReading = null, compact = false }) {
   const [state, setState] = useState({ phase: "loading" });
   const [frame, setFrame] = useState(0);
+  const [checkOpen, setCheckOpen] = useState(false);   // the screen-check list
   // The pointer and the playhead both work in the TRACK column's own box,
   // never the lane row's: the row starts with the label column, and a
   // playhead measured against it could be dragged over the words "Stick"
@@ -437,6 +471,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   // negative numbers and a shaded band, so the attempt's own length (the
   // number his PB is graded on) reads unchanged.
   const lead = data.lead_frames || 0;
+  const attemptFrames = data.attempt_frames || (total - lead);
   const seek = (next) => {
     const clamped = Math.max(0, Math.min(total - 1, next));
     setFrame(clamped);
@@ -505,12 +540,19 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
     <header class="input-timeline-head">
       <div>
         <span class="eyebrow">Inputs</span>
-        <h4>${timeLabel(total - lead)}${" "}·${" "}${total - lead} frames${" "}·${" "}${data.fps} fps</h4>
-        ${lead > 0 && html`<span class="input-lead-note">+${lead}f lead-in
-          before the reset</span>`}
-        ${screenCheck(padReading, attemptId)}
+        ${/* The attempt's OWN time -- the number on the row above -- never
+              the track's length, which carries the clip's buffers (his
+              2026-09-01 report: 19"16 before the clip, 21"30 after, against
+              a 0'19"20 row). data-total/data-lead keep the drawn span
+              readable by the sweeps. */""}
+        <h4 data-total=${total} data-lead=${lead}>${timeLabel(attemptFrames)}${" "}·${" "}${attemptFrames} frames${" "}·${" "}${data.fps} fps</h4>
+        ${screenCheck(padReading, attemptId, checkOpen,
+                      () => setCheckOpen((open) => !open))}
       </div>
     </header>
+    ${checkOpen && html`<${DisagreementList} reading=${padReading}
+        frameMap=${frameMap} stretches=${data.stretches} seek=${seek}
+        lead=${lead} />`}
 
     ${data.template && html`<div class="input-template-note">
       <${Icon} name="bookmark" size=${13} />

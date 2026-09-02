@@ -69,8 +69,9 @@ def _frames_around(store, attempt) -> list[tuple[int, InputFrame]]:
     return tight
 
 
-def _dance_start(frames: list[tuple[int, InputFrame]], close: int) -> int:
-    """The FIRST frame of the star dance that ends this attempt.
+def _dance_start(frames: list[tuple[int, InputFrame]], close: int) -> int | None:
+    """The FIRST frame of the star dance that ends this attempt (None: no
+    dance follows the close -- a reset, an abandon).
 
     His rule (2026-08-22) was always "stop only AFTER mario enters the star
     grab", and the end anchors the whole track: the start is derived from
@@ -91,21 +92,37 @@ def _dance_start(frames: list[tuple[int, InputFrame]], close: int) -> int:
     No such run: the close stands, which is what a reset or an abandon
     gets.
     """
-    runs: list[list[int]] = []
+    runs: list[list[tuple[int, int]]] = []
     for number, frame in frames:
         if frame.action not in A.STAR_GRAB_ACTIONS:
             continue
-        if runs and number == runs[-1][-1] + 1:
-            runs[-1].append(number)
+        if runs and number == runs[-1][-1][0] + 1:
+            runs[-1].append((number, frame.action))
         else:
-            runs.append([number])
+            runs.append([(number, frame.action)])
+
+    def dance_of(run):
+        # THE TIMER RUNS THROUGH THE FALL (2026-09-01, attempt 5534): a
+        # midair grab falls (ACT_FALL_AFTER_STAR_GRAB) for a few frames
+        # before the dance begins, and Usamune keeps counting until the
+        # DANCE. His 0'19"20 = 576 frames reached from the spawn frame
+        # exactly to the last fall frame; counting from the fall's first
+        # frame would have started the run four frames before the reset
+        # was even pressed. So the dance is the first dance ACTION of the
+        # run; a run the capture cut short before the dance began ends
+        # where the capture did.
+        for number, action in run:
+            if action in A.STAR_DANCE_ACTIONS:
+                return number
+        return run[-1][0] + 1
+
     for run in runs:
-        if run[0] <= close <= run[-1]:
-            return run[0]
+        if run[0][0] <= close <= run[-1][0]:
+            return dance_of(run)
     for run in runs:
-        if close < run[0] <= close + GRAB_SEARCH_FRAMES:
-            return run[0]
-    return close
+        if close < run[0][0] <= close + GRAB_SEARCH_FRAMES:
+            return dance_of(run)
+    return None
 
 
 def track_for_attempt(store, attempt,
@@ -157,7 +174,12 @@ def track_with_lead(store, attempt, span: tuple[int, int] | None = None
         return [(number, frame) for number, frame in frames
                 if number >= first], 0
     close = first + attempt.rta_frames
-    last = _dance_start(frames, close)
+    # The dance's own first frame is the first UNTIMED frame: Usamune's
+    # clock stops as the dance begins, so the run's last frame is the one
+    # before it (2026-09-01, attempt 5534 -- the spawn frame plus 576
+    # lands exactly there, and his frame 0 is the reset's white frame).
+    dance = _dance_start(frames, close)
+    last = dance - 1 if dance is not None else close
     if attempt.igt_frames:
         first = last - (attempt.igt_frames - 1)
     # THE CLIP'S OWN WINDOW (round 32 item 53, 2026-08-31). `span` is the

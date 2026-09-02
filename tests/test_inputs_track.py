@@ -190,11 +190,16 @@ def test_the_end_is_the_DANCE_S_OWN_FIRST_FRAME_not_the_close(monkeypatch):
     from sm64_events.inputs.track import _dance_start
     from sm64_events.memory import addresses as A
 
-    grab = next(iter(A.STAR_GRAB_ACTIONS))
-    def rows(spans):
+    dance = A.ACT_STAR_DANCE_EXIT
+    def rows(spans, fall=0):
+        # `fall` leading frames of each span are the midair fall that
+        # precedes a dance (ACT_FALL_AFTER_STAR_GRAB); the rest dance.
         out = []
         for number in range(1000, 1400):
-            action = grab if any(lo <= number <= hi for lo, hi in spans) else 0
+            action = 0
+            for lo, hi in spans:
+                if lo <= number <= hi:
+                    action = A.ACT_FALL_AFTER_STAR_GRAB if number < lo + fall else dance
             out.append((number, InputFrame(0, 0, 0, 0, action)))
         return out
 
@@ -204,6 +209,14 @@ def test_the_end_is_the_DANCE_S_OWN_FIRST_FRAME_not_the_close(monkeypatch):
     assert _dance_start(rows([(1150, 1300)]), 1125) == 1150
     # A PREVIOUS star's dance, far behind, may never be chosen.
     assert _dance_start(rows([(1000, 1010), (1200, 1300)]), 1190) == 1200
-    assert _dance_start(rows([(1000, 1010)]), 1300) == 1300
-    # No dance at all (a reset, an abandon): the close stands.
-    assert _dance_start(rows([]), 1234) == 1234
+    assert _dance_start(rows([(1000, 1010)]), 1300) is None
+    # No dance at all (a reset, an abandon): nothing to anchor on.
+    assert _dance_start(rows([]), 1234) is None
+    # THE TIMER RUNS THROUGH THE FALL (2026-09-01, attempt 5534): a midair
+    # grab falls five frames before the dance, and Usamune counts them --
+    # his 576 frames reached from the spawn frame exactly to the last fall
+    # frame. So the dance is the first DANCE action, not the first grab one.
+    assert _dance_start(rows([(1100, 1300)], fall=5), 1104) == 1105
+    # A run the capture cut short before the dance began ends where the
+    # capture did.
+    assert _dance_start(rows([(1100, 1104)], fall=5), 1102) == 1105

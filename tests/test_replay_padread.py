@@ -244,3 +244,47 @@ def test_the_reference_alphabet_ships_with_the_package():
     for table in alphabet.values():
         for template in table.values():
             assert template.weight.sum() >= P.MIN_WEIGHT
+
+
+def test_the_lit_icon_count_pins_a_press_while_the_stick_rests():
+    """His report 2026-09-01: a C-down pressed on the frame after a reset
+    showed up one frame late -- the stick was at rest, so the digits said
+    nothing there and the map kept the clocks' answer. Usamune lights one
+    icon per held button, on/off with the pad (measured, no fade), so the
+    COUNT of lit icons per picture is evidence with no template at all."""
+    slots = 600
+    truth = [FIRST + k // 2 for k in range(slots)]
+    pads = {f: (0, 0) for f in range(FIRST - 40, FIRST + slots // 2 + 40)}   # resting throughout
+    held = {f: (1 if FIRST + 120 <= f < FIRST + 140 else 0) for f in pads}    # one press, held 20 frames
+    cells = cells_for(truth, pads)
+    alphabet = alphabet_from(truth, pads, cells)
+    reads = P.read(cells, alphabet)
+    icons = [held[f] for f in truth]                                          # what the strip shows
+    prior = [f + 2 for f in truth]                                            # the clocks, two frames out
+    blind = P.align(reads, prior, pads)
+    assert blind[240:280] != truth[240:280], "with the stick at rest the digits cannot correct it"
+    seeing = P.align(reads, prior, pads, held=held, icons=icons)
+    assert seeing[220:300] == truth[220:300], "the press and release edges pin the frames around them"
+
+
+def test_the_reset_s_white_flash_pins_the_reset_frame():
+    """His frames 0-7 on 5534: through the white flash and the resting fall
+    after it nothing is readable, and the map stayed a frame behind. The
+    first white picture is the spawn frame the journal recorded (measured
+    there, the C-down on the first faded-in picture confirming it), so it
+    anchors the path where nothing else can."""
+    slots = 600
+    truth = [FIRST + k // 2 for k in range(slots)]
+    pads = {f: (0, 0) for f in range(FIRST - 40, FIRST + slots // 2 + 40)}
+    cells = cells_for(truth, pads)
+    cells[300:306] = 250                              # three white frames from the reset
+    reset = truth[300]
+    anchors = P.flash_anchors(cells, [f + 2 for f in truth], [reset])
+    assert anchors == {300: reset}, anchors
+    reads = P.read(cells, alphabet_from(truth, pads, cells))
+    blind = P.align(reads, [f + 2 for f in truth], pads)
+    assert blind[300] != reset
+    pinned = P.align(reads, [f + 2 for f in truth], pads, anchors=anchors)
+    assert pinned[300] == reset and pinned[280:340] == truth[280:340]
+    assert P.flash_anchors(cells, [f + 2 for f in truth], []) == {}
+    assert P.flash_anchors(cells, [f + 40 for f in truth], [reset]) == {}, "a reset far from the prior is not this flash"

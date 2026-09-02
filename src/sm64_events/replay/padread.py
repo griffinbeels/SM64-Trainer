@@ -317,7 +317,7 @@ def _filled(frame_map: list) -> list:
 
 
 def align(reads: dict, frame_map: list, pads, same_picture=None,
-          changed=None) -> list | None:
+          changed=None, held=None, icons=None, anchors=None) -> list | None:
     """The monotone path of game frames the read cells vote for.
 
     States per slot: raw frames within BAND of the prior. Moving from one
@@ -362,6 +362,17 @@ def align(reads: dict, frame_map: list, pads, same_picture=None,
                 cost += HOLE_COST
             elif truth[key] != cell.names[slot]:
                 cost += 1.0
+        # The button icons: how many are lit on this picture must be how
+        # many buttons the candidate frame holds (`held[raw]`).
+        if icons is not None and held is not None and icons[slot] is not None:
+            count = held.get(raw)
+            if count is None:
+                cost += HOLE_COST
+            elif count != icons[slot]:
+                cost += 1.0
+        # The reset's white flash: its first picture shows the reset frame.
+        if anchors and slot in anchors and anchors[slot] != raw:
+            cost += ANCHOR_COST
         return cost
 
     best_prev = states_prev = None
@@ -423,6 +434,9 @@ class Verdict:
     known_cells: int = 0     # cells read across all slots
     slots: int = 0
     disagreements: list = field(default_factory=list)   # (slot, row, read, map says)
+    icons_checked: int = 0   # slots where the lit-icon count was clear
+    icons_agree: int = 0     # ...and equals the held-button count on the aligned frame
+    anchors: dict = field(default_factory=dict)   # white-flash slot -> [reset frame, frame chosen]
 
     @property
     def agreement(self) -> float:
@@ -431,6 +445,8 @@ class Verdict:
     def as_dict(self) -> dict:
         return {"sure": self.sure, "agree": self.agree, "nowhere": self.nowhere,
                 "known_cells": self.known_cells, "slots": self.slots,
+                "icons_checked": self.icons_checked, "icons_agree": self.icons_agree,
+                "anchors": {str(k): v for k, v in self.anchors.items()},
                 "disagreements": [list(d) for d in self.disagreements[:200]]}
 
 
@@ -455,6 +471,122 @@ def score(reads: dict, path: list, pads) -> Verdict:
             verdict.disagreements.append(
                 (slot, row, "".join(seen), "".join(says) if says else "no capture"))
     return verdict
+
+
+# -- the reset's white flash --------------------------------------------------------
+# A Usamune reset reloads the level behind a white flash, and MEASURED on
+# his clip 5534 (2026-09-01) the first white picture IS the spawn frame --
+# the attempt's anchor: three white frames from the spawn, then the fade-in,
+# with his C-down on the first faded-in picture pinning the count. Nothing
+# else in a reset's neighbourhood is readable (the digits are washed out,
+# the stick rests through the fall), which is exactly where the clocks'
+# answer drifted a frame (his frames 6/7). So each white run's first slot
+# is evidence that it shows the reset frame the journal recorded.
+WHITE_MIN = 235            # every channel of the readout region above this: the flash
+ANCHOR_COST = 2.0          # a candidate frame that is not the reset's, on its white slot
+
+
+def white_slots(cells: np.ndarray) -> np.ndarray:
+    """Per frame: is the readout region a wash of white (the reset flash)."""
+    return cells.min(axis=(1, 2, 3)) > WHITE_MIN
+
+
+def flash_anchors(cells: np.ndarray, frame_map: list, resets) -> dict:
+    """slot -> reset frame, for the first slot of each white run whose prior
+    lies within BAND of a reset frame the journal recorded."""
+    anchors: dict = {}
+    if not resets:
+        return anchors
+    prior = _filled(list(frame_map))
+    white = white_slots(cells)
+    for slot in range(len(white)):
+        if not white[slot] or (slot > 0 and white[slot - 1]):
+            continue
+        guess = prior[slot] if slot < len(prior) else None
+        if guess is None:
+            continue
+        nearest = min(resets, key=lambda raw: abs(raw - guess))
+        if abs(nearest - guess) <= BAND:
+            anchors[slot] = nearest
+    return anchors
+
+
+# -- the button icons ---------------------------------------------------------------
+# Usamune draws one icon per HELD button, packed left to right in a strip
+# to the right of the digits, and MEASURED on his clip 5534 (2026-09-01) the
+# icons are on/off with the pad -- a press paints the icon in full on the
+# press frame and a release removes it on the release frame, no fade. So
+# the number of lit icons on a picture is the number of buttons held on
+# its frame: evidence that would pin a press or a release even while the
+# stick rests. `align` accepts that evidence (`held`, `icons`) and it is
+# tested; `icon_counts` below is the first INSTRUMENT for it and it is NOT
+# wired: measured on clip 5534 it agreed with the track on 858 of 1,034
+# clear slots (83%) -- scenery behind the strip lit every position (a
+# bob-omb, a wall: held none, "4 lit" x35), and an orange C icon over
+# orange sand read as empty (held C-right, "0 lit" x15). A background-
+# difference test cannot tell an icon from the world; the next instrument
+# needs the icons' own templates, learned like the digits, and the wire-in
+# gate is the same 99% the digits met.
+ICON_STRIP = (0.2475, 0.830, 0.4975, 0.902)       # x0, y0, x1, y1 fractions
+ICON_PITCH = 95 / 1600                             # one packed position to the next
+ICON_WIDTH = 80 / 1600
+ICON_POSITIONS = 4
+ICON_REF_BAND = (0.2475, 0.820, 0.4975, 0.828)     # the strip's own background, same frame
+ICON_LIT_MIN = 0.30       # share of a position differing from the background: lit
+ICON_EMPTY_MAX = 0.04     # ...below this: empty; between = unknown
+ICON_DIFF = 40            # per-pixel mean |RGB diff| that counts as icon paint
+
+
+def icon_counts(ffmpeg: str, clip: Path, width: int | None = None,
+                height: int | None = None) -> list:
+    """Per video frame: how many button icons are lit, or None when a
+    position is neither clearly lit nor clearly empty (a wash-out, a fade
+    from white). Counted left to right until the first empty position."""
+    if width is None or height is None:
+        probe = subprocess.run(
+            [ffmpeg.replace("ffmpeg", "ffprobe"), "-v", "error",
+             "-select_streams", "v", "-show_entries", "stream=width,height",
+             "-of", "csv=p=0", str(clip)], capture_output=True, text=True)
+        first = probe.stdout.strip().splitlines()[0]
+        width, height = (int(v) for v in first.split(",")[:2])
+    x0, y0, x1, y1 = ICON_STRIP
+    rx0, ry0, rx1, ry1 = ICON_REF_BAND
+    x, y = round(width * x0), round(height * ry0)
+    w, h = round(width * (x1 - x0)), round(height * (y1 - ry0))
+    out = subprocess.run(
+        [ffmpeg, "-v", "error", "-i", str(clip),
+         "-vf", f"crop={w}:{h}:{x}:{y}", "-f", "rawvideo", "-pix_fmt", "rgb24",
+         "pipe:1"], capture_output=True).stdout
+    stride = w * h * 3
+    count = len(out) // stride
+    if count == 0:
+        return []
+    strip = np.frombuffer(out[:count * stride], dtype=np.uint8).reshape(
+        count, h, w, 3).astype(np.int16)
+    band_h = round(height * (ry1 - ry0))
+    reference = np.median(strip[:, :band_h].reshape(count, -1, 3), axis=1)   # (N, 3)
+    icons_y0 = round(height * (y0 - ry0))
+    pitch, wide = round(width * ICON_PITCH), round(width * ICON_WIDTH)
+    counts: list = []
+    for k in range(count):
+        lit = 0
+        verdict: int | None = None
+        for position in range(ICON_POSITIONS):
+            cx = position * pitch
+            cell = strip[k, icons_y0:, cx:cx + wide]
+            if cell.shape[1] < wide // 2:
+                break
+            share = float((np.abs(cell - reference[k]).mean(axis=-1) > ICON_DIFF).mean())
+            if share >= ICON_LIT_MIN:
+                lit += 1
+                continue
+            if share <= ICON_EMPTY_MAX:
+                verdict = lit
+            break
+        else:
+            verdict = lit
+        counts.append(verdict)
+    return counts
 
 
 # -- one clip, end to end -----------------------------------------------------------
@@ -485,7 +617,8 @@ def picture_flags(ffmpeg: str, clip: Path, cells: np.ndarray):
 
 
 def read_clip(clip: Path, frame_map: list, pads, ffmpeg: str,
-              reference: Alphabet | None = None) -> PadReading | None:
+              reference: Alphabet | None = None,
+              held=None, icons=None, resets=None) -> PadReading | None:
     """Read the clip's display and pin its map to it. None = refused.
 
     Two passes: the reference alphabet reads first (no labels needed, so
@@ -501,20 +634,29 @@ def read_clip(clip: Path, frame_map: list, pads, ffmpeg: str,
     count = min(len(cells), len(frame_map))
     cells, frame_map = cells[:count], list(frame_map[:count])
     same, changed = picture_flags(ffmpeg, clip, cells)
+    if icons is not None:
+        icons = list(icons[:count]) + [None] * max(0, count - len(icons))
+    anchors = flash_anchors(cells, frame_map, resets)
     alphabet = reference if reference is not None else load_alphabet()
     path = frame_map
     learned: dict = {}
     for _ in range(2):
         reads = read(cells, alphabet)
-        path = align(reads, path, pads, same, changed)
+        path = align(reads, path, pads, same, changed, held, icons, anchors)
         if path is None:
             return None
         own = learn(cells, labels_from(path, pads))
         learned = {key: sorted(table) for key, table in own.items() if table}
         alphabet = merge(alphabet, own)
     reads = read(cells, alphabet)
-    path = align(reads, path, pads, same, changed)
+    path = align(reads, path, pads, same, changed, held, icons, anchors)
     verdict = score(reads, path, pads)
+    verdict.anchors = {int(slot): [int(raw), int(path[slot])] for slot, raw in anchors.items()}
+    if icons is not None and held is not None:
+        checked = [(slot, raw) for slot, raw in enumerate(path)
+                   if icons[slot] is not None and held.get(raw) is not None]
+        verdict.icons_checked = len(checked)
+        verdict.icons_agree = sum(1 for slot, raw in checked if icons[slot] == held[raw])
     if verdict.sure < MIN_SURE_SLOTS:
         log.info("pad reader refused: %d sure slots of %d", verdict.sure, count)
         return None
