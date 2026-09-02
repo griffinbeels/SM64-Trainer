@@ -40,10 +40,13 @@ run is a full one because it has neither.
 **What the run does to the machine, during and after.** Sixteen workers each
 launching Chrome saturate the CPU -- summed test time inflates 2.2x under
 load -- and he reported the desktop lagging while a run was on (2026-09-01).
-So the whole test tree runs at BELOW-NORMAL priority: Chrome inherits the
-class from the worker that launched it, his foreground work is scheduled
-first, and on an otherwise idle machine the run loses nothing. And every run
-ends with a sweep that reports what it left behind, so "sludge" is a number
+The first answer was below-normal priority for the whole tree, and it was
+wrong: two full runs at that class went red (6 failed + 51 errors, then 11 +
+13) where the same tree at normal priority ran green, because this machine
+always carries normal-priority load beside a run (sibling Claude sessions
+and their servers) and a starved worker times out its browsers. So the lag
+lever is `--workers`: 16 is the measured sweet spot on an idle machine, and
+`--workers 8` while he is actively using it. And every run ends with a sweep that reports what it left behind, so "sludge" is a number
 on screen rather than a feeling: orphaned headless browsers (parent gone),
 orphaned workers and ffmpeg from THIS checkout, and Playwright profile dirs
 in TEMP that no live browser references. Measured before this existed: ten
@@ -64,7 +67,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -288,11 +290,13 @@ def main(argv: list[str] | None = None) -> int:
 
     sweep_leftovers("before")
     command = [sys.executable, "-m", "pytest", *pytest_args(mode, args.workers, extra)]
-    # Below-normal priority for the whole tree (Chrome inherits it from the
-    # worker that launches it): his foreground work is scheduled first, and an
-    # idle machine gives the run everything anyway.
-    priority = {"creationflags": subprocess.BELOW_NORMAL_PRIORITY_CLASS} if os.name == "nt" else {}
-    exit_code = subprocess.run(command, cwd=ROOT, **priority).returncode
+    # NOT below-normal priority, though that was the first answer to the lag:
+    # two full runs at BELOW_NORMAL_PRIORITY_CLASS went red (6+51 and 11+13)
+    # where the same tree at normal priority ran green, because this machine
+    # always has normal-priority load beside a run (sibling Claude sessions,
+    # their servers) and a starved worker times out its browsers. Lag is
+    # answered with `--workers` instead; see the docstring.
+    exit_code = subprocess.run(command, cwd=ROOT).returncode
     sweep_leftovers("after")
     if records_full_run(mode, extra, exit_code):
         save_state(current, args.workers, exit_code)
