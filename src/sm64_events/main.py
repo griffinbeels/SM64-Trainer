@@ -462,7 +462,7 @@ def build():
         from sm64_events.memory import addresses as A
         from sm64_events.replay.padread import BAND, read_clip
 
-        def _read_pad_off_the_footage(clip, frame_map, attempt):
+        def _read_pad_off_the_footage(clip, frame_map, attempt, repeats=None):
             seen = [raw for raw in frame_map if raw is not None]
             if not seen:
                 return None
@@ -487,7 +487,7 @@ def build():
                     for number, frame in frames}
             return read_clip(clip, frame_map, pads,
                              str(bundled_ffmpeg() or "ffmpeg"), held=held,
-                             resets=resets)
+                             resets=resets, repeats=repeats)
 
         replay.pad_reader = _read_pad_off_the_footage
 

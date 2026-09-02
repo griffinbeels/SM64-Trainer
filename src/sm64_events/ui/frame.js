@@ -8,6 +8,61 @@ export function gameFrameOf(video, gameFps = 30) {
   return Math.floor((video.currentTime || 0) * gameFps + 1e-4);
 }
 
+// THE CLIP CLOCK: how a time in the <video> and a video frame index (a
+// "slot") convert into each other. Built once from the replay view.
+//
+// A CFR clip (the pre-2026-09-02 ring) sits on a grid: slot k spans
+// [start + k/fps, start + (k+1)/fps), where `start` is the clip's OWN first
+// video timestamp -- a cut leaves its sub-frame remainder on the first
+// picture (clip 5782: frames at k/60 + 0.011 s), so a seek to (k + 0.5)/60
+// lands 2.7 ms BEFORE frame k begins and Chromium presents k-1. Measured on
+// the real clip (2026-09-01): every step landed one picture early; with the
+// offset, every step landed on its slot.
+//
+// A picture-feed clip (item 38) is VFR: one video frame per captured
+// picture, each at its own timestamp, so there is no grid at all and
+// `times[k]` IS the moment frame k begins. Slot k spans [times[k],
+// times[k+1]); a seek lands mid-span. Everything that turns a time into a
+// slot, or a slot into a time, goes through these two functions -- no
+// caller may write k / fps itself.
+export function clipClock(view) {
+  const times = view && Array.isArray(view.frame_times) && view.frame_times.length
+    ? view.frame_times : null;
+  return { fps: (view && view.fps) || 60,
+           start: (view && view.video_start_s) || 0,
+           times };
+}
+
+export function slotAtTime(seconds, clock) {
+  if (clock && clock.times) {
+    const times = clock.times;
+    // The last frame whose start is at or before `seconds` (binary search).
+    let lo = 0, hi = times.length - 1;
+    if (seconds + 1e-4 < times[0]) return -1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (times[mid] <= seconds + 1e-4) lo = mid; else hi = mid - 1;
+    }
+    return lo;
+  }
+  const fps = (clock && clock.fps) || 60;
+  const start = (clock && clock.start) || 0;
+  return Math.floor((seconds - start) * fps + 1e-4);
+}
+
+export function timeOfSlot(slot, clock) {
+  if (clock && clock.times) {
+    const times = clock.times;
+    const at = Math.max(0, Math.min(times.length - 1, slot));
+    // Mid-span; the last frame has no successor, so half a game frame in.
+    const next = at + 1 < times.length ? times[at + 1] : times[at] + 1 / 30;
+    return (times[at] + next) / 2;
+  }
+  const fps = (clock && clock.fps) || 60;
+  const start = (clock && clock.start) || 0;
+  return start + (slot + 0.5) / fps;
+}
+
 // A step lands INSIDE a frame, never on the clip's own edge. Seeking to
 // exactly `duration` is past the last frame's interval -- the element
 // reports itself ended and presents whatever it likes, and a panel reading
@@ -18,11 +73,10 @@ export function gameFrameOf(video, gameFps = 30) {
 // at the beginning)" -- so both ends clamp to the middle of the last and
 // first frames, and a step that would leave the clip stays put.
 export function stepGameFrame(video, dir, gameFps = 30,
-                              frameMap = null, clipFps = 60, clipStart = 0) {
+                              frameMap = null, clock = null) {
   if (!video) return;
   if (!video.paused) video.pause();
-  const mapped = nextMappedTime(video.currentTime || 0, frameMap, clipFps,
-                                dir, clipStart);
+  const mapped = nextMappedTime(video.currentTime || 0, frameMap, clock, dir);
   if (mapped !== null) {
     video.currentTime = clampToFrames(mapped, video.duration || 0, gameFps);
     return;
@@ -46,31 +100,16 @@ export function stepGameFrame(video, dir, gameFps = 30,
 // the emulator was doing: find this slot's frame, take the first slot of
 // the next distinct one. Returns null when the map cannot answer and the
 // caller falls back to time.
-//
-// `clipStart` is the clip's OWN first video timestamp (2026-09-01, his
-// Log Rolling report). A cut leaves its sub-frame remainder on the first
-// picture -- clip 5782's frames sit at k/60 + 0.011 s -- so a seek to the
-// middle of slot k, (k + 0.5)/60, lands 2.7 ms BEFORE frame k begins and
-// Chromium presents k-1. Measured on the real clip: every step landed one
-// picture early; with the offset added, every step landed on its slot, and
-// on a clip whose first frame sits at 0.000 (5574) the two agree. The
-// slot arithmetic therefore counts from `clipStart`, in both directions.
-export function slotAtTime(seconds, clipFps, clipStart = 0) {
-  return Math.floor((seconds - clipStart) * clipFps + 1e-4);
-}
-export function timeOfSlot(slot, clipFps, clipStart = 0) {
-  return clipStart + (slot + 0.5) / clipFps;
-}
-export function nextMappedTime(seconds, frameMap, clipFps, dir, clipStart = 0) {
+export function nextMappedTime(seconds, frameMap, clock, dir) {
   if (!frameMap || !frameMap.length) return null;
   const at = Math.max(0, Math.min(frameMap.length - 1,
-    slotAtTime(seconds, clipFps, clipStart)));
+    slotAtTime(seconds, clock)));
   const here = frameMap[at];
   if (here == null) return null;
   if (dir > 0) {
     for (let slot = at + 1; slot < frameMap.length; slot += 1) {
       const value = frameMap[slot];
-      if (value != null && value > here) return timeOfSlot(slot, clipFps, clipStart);
+      if (value != null && value > here) return timeOfSlot(slot, clock);
     }
     return null;                       // already on the last game frame
   }
@@ -82,7 +121,7 @@ export function nextMappedTime(seconds, frameMap, clipFps, dir, clipStart = 0) {
   }
   if (target === null) return null;    // already on the first game frame
   for (let slot = 0; slot < frameMap.length; slot += 1) {
-    if (frameMap[slot] === target) return timeOfSlot(slot, clipFps, clipStart);
+    if (frameMap[slot] === target) return timeOfSlot(slot, clock);
   }
   return null;
 }

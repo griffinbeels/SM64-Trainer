@@ -55,7 +55,7 @@ def run_function(name, expression: str):
     # them, so the evaluated script carries the real declarations too.
     frame_js = strip_comments((TIMELINE.parents[1] / "frame.js").read_text(encoding="utf-8"))
     helpers = []
-    for one in ("slotAtTime", "timeOfSlot"):
+    for one in ("clipClock", "slotAtTime", "timeOfSlot"):
         match = re.search(rf"^export function {one}\(.*?^\}}\s*$", frame_js,
                           re.M | re.S)
         assert match, f"no top-level `export function {one}(...)` in frame.js"
@@ -88,10 +88,13 @@ def test_before_the_first_moment_there_is_nothing_to_read():
 # own measured shape: a duplicate (100 shown twice) and a skip (103 never
 # shown) -- the 26, 27, 27, 29 counter he photographed. Track: anchor at raw
 # 90, so raw 100 is axis 10. Clip encodes at 60 fps.
-MAP = "[null, 100, 100, 101, 102, 102, 104, 104], 60, [[0, 90, 20]]"
+CFR = "{fps: 60, start: 0, times: null}"
+MAP = "[null, 100, 100, 101, 102, 102, 104, 104], " + CFR + ", [[0, 90, 20]]"
 MAPPED = MAP + ", 20"          # mappedFrameAtTime also clamps to the track
-# mappedTimeAtFrame takes no track length: its fifth argument is the clip's
-# own first timestamp (2026-09-01), so it gets MAP, never MAPPED.
+# The clip clock object (frame.js::clipClock) is the third argument of both
+# directions: the encode rate and first timestamp of a CFR clip, or every
+# frame's own time for a picture-feed clip. mappedTimeAtFrame takes no
+# track length, so it gets MAP, never MAPPED.
 BOTH = ("trackFrameOf", "gameFrameOf", "mappedFrameAtTime", "mappedTimeAtFrame")
 
 
@@ -119,12 +122,33 @@ def test_a_clip_whose_first_picture_is_not_at_zero_seeks_later_by_that_much():
     """His Log Rolling clip (5782): first video pts 0.011 s, so the seek for
     slot k at (k + 0.5) / 60 presented slot k - 1 in Chromium. Both
     directions count from the clip's own start."""
-    seek = run_function(BOTH, f"mappedTimeAtFrame(10, {MAP}, 0.011)")
+    late = "{fps: 60, start: 0.011, times: null}"
+    map_late = MAP.replace(CFR, late)
+    mapped_late = MAPPED.replace(CFR, late)
+    seek = run_function(BOTH, f"mappedTimeAtFrame(10, {map_late})")
     assert seek == 0.011 + 1.5 / 60
-    assert run_function(BOTH, f"mappedFrameAtTime({seek}, {MAPPED}, 0.011)") == 10
+    assert run_function(BOTH, f"mappedFrameAtTime({seek}, {mapped_late})") == 10
     # The OLD seek time for slot 1 (no start) presents slot 0 on this clip --
     # the picture before the map's coverage: one slot early, exactly his report.
-    assert run_function(BOTH, f"mappedFrameAtTime({1.5 / 60}, {MAPPED}, 0.011)") is None
+    assert run_function(BOTH, f"mappedFrameAtTime({1.5 / 60}, {mapped_late})") is None
+
+
+def test_a_picture_feed_clip_maps_through_its_own_frame_times():
+    """Item 38: one video frame per captured picture, each at its own
+    time. The map is one entry per frame and the clock is the frame
+    times themselves -- no grid, so a long hold is one slot however long
+    it lasted."""
+    times = "[0.011, 0.045, 0.078, 0.512, 0.545]"
+    vfr = f"{{fps: 60, start: 0.011, times: {times}}}"
+    args = f"[100, 101, 102, 103, 104], {vfr}, [[0, 90, 20]]"
+    # Inside the long hold (frame 102's span runs 0.078 -> 0.512).
+    assert run_function(BOTH, f"mappedFrameAtTime(0.3, {args}, 20)") == 12
+    assert run_function(BOTH, f"mappedFrameAtTime(0.511, {args}, 20)") == 12
+    assert run_function(BOTH, f"mappedFrameAtTime(0.512, {args}, 20)") == 13
+    # The seek for axis 13 lands INSIDE frame 3's span, never on a grid.
+    seek = run_function(BOTH, f"mappedTimeAtFrame(13, {args})")
+    assert 0.512 <= seek < 0.545
+    assert run_function(BOTH, f"mappedFrameAtTime({seek}, {args}, 20)") == 13
 
 
 def test_the_two_mapped_directions_agree_on_every_shown_frame():

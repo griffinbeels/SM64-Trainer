@@ -101,6 +101,11 @@ class ReplayRecorder:
         # and every registered stamp. Extraction reads it back through
         # ReplayService._map_from_ledger.
         self.ledger = PictureLedger()
+        # The picture feed (config.picture_feed, item 38): with the ffmpeg
+        # sink, a grab reaches the encoder only when the ledger says it is
+        # a NEW picture, and every write the sink completes lands in the
+        # ledger's feed log -- one video frame, one row.
+        self._picture_feed = bool(getattr(cfg, "picture_feed", False))
         self._codec: str | None = codec
         # ffmpeg-subprocess video path: when set, frames bypass the in-process
         # writer entirely (sink.submit is a lock-free reference swap; pacing,
@@ -260,6 +265,7 @@ class ReplayRecorder:
             self._video_sink = self._video_sink_factory(self._cfg,
                                                         self._on_segment,
                                                         self._codec)
+            self._video_sink.on_fed = self._on_fed
             self._video_sink.start()
         else:
             with self._lock:
@@ -513,20 +519,30 @@ class ReplayRecorder:
             # CaptureClock, not the moment this callback happened to run --
             # which is what the frame map's present series keys on (v4).
             tag = None
+            clock = self._clock
+            capture_ts = (clock.utc_of(ts_100ns).timestamp()
+                          if clock is not None else None)
             if self._frame_clock is not None:
-                clock = self._clock
-                capture_ts = (clock.utc_of(ts_100ns).timestamp()
-                              if clock is not None else None)
                 tag = self._frame_clock.capture_tag(capture_ts)
             # The picture ledger notices each NEW picture among the grabs
             # (item 40) -- before submit so the sample reads the buffer this
             # callback was handed. observe() never raises.
+            new_picture = False
             if tag is not None:
-                phase = (self._frame_clock.edge_phase(tag[1])
-                         if self._frame_clock is not None else None)
-                self.ledger.observe(
+                phase = self._frame_clock.edge_phase(tag[1])
+                new_picture = self.ledger.observe(
                     bgra, tag[1], tag[0],
                     {"phase": phase} if phase is not None else None)
+            elif capture_ts is not None:
+                new_picture = self.ledger.observe(bgra, capture_ts, None)
+            if self._picture_feed:
+                # ONE frame per DISTINCT picture (item 38): a grab that
+                # changed nothing feeds nothing. The tag's second field is
+                # the row's own ts, which the feed log keys on.
+                if new_picture:
+                    sink.submit(bgra, tag if tag is not None
+                                else (None, capture_ts))
+                return
             sink.submit(bgra, tag)
             return
         # M1: _last_frame and _last_index are written here only; WGC guarantees
@@ -577,6 +593,11 @@ class ReplayRecorder:
 
         self._last_frame = bgra
         self._last_index = target
+
+    def _on_fed(self, tag, wrote_at: float) -> None:
+        """The sink completed one write (feeder thread): file it under the
+        row the tag names, or as a heartbeat repeat when there is none."""
+        self.ledger.mark_fed(tag[1] if tag is not None else None, wrote_at)
 
     # -- audio callback (library thread) -------------------------------------
 

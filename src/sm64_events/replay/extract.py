@@ -61,6 +61,30 @@ class ClipResult:
     # step one picture early (measured in Chromium, 2026-09-01). Everything
     # that turns a time into a slot counts from this number.
     video_start_s: float = 0.0
+    # Every video frame's own timestamp, in the clip's media timeline --
+    # present when the ring was fed one frame per picture (the picture
+    # feed, config.picture_feed): the clip is then VFR and NOTHING may
+    # count slots as k / fps. None for a CFR clip.
+    frame_times: list[float] | None = None
+
+
+def frame_times_of(ffmpeg: str | None, clip: Path) -> list[float] | None:
+    """Every video frame's pts, in seconds, off ffprobe; None when it cannot
+    be read. One call per cut (~100 ms for a 30 s clip)."""
+    ffprobe = ffprobe_beside(ffmpeg)
+    if not ffprobe:
+        return None
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(clip)],
+            capture_output=True, text=True, timeout=120, check=False,
+            **quiet_spawn_kwargs())
+        times = [float(line.split(",")[0]) for line in out.stdout.split()
+                 if line.strip()]
+        return times or None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
 
 
 def ffprobe_beside(ffmpeg: str | None) -> str | None:
@@ -147,6 +171,7 @@ class ClipExtractor:
         self._cfg = cfg
         self._codec = codec
         self._ffmpeg = ffmpeg or bundled_ffmpeg() or shutil.which("ffmpeg")
+        self._picture_feed = bool(getattr(cfg, "picture_feed", False))
 
     @property
     def ffmpeg(self) -> str | None:
@@ -209,6 +234,13 @@ class ClipExtractor:
             "-force_key_frames", "expr:gte(t,n_forced*0.5)",
             *self._codec_opts(),
             "-c:a", "copy",
+            # The picture feed's ring is VFR -- one frame per picture -- and
+            # the cut must keep every frame at its own time: a CFR conform
+            # here would put the 60 Hz grid's jitter straight back.
+            # ... in the segment's own 90 kHz time base: the encoder would
+            # otherwise round every stamp onto 1/r_frame_rate (see the sink).
+            *(["-fps_mode", "passthrough", "-enc_time_base", "demux"]
+              if self._picture_feed else []),
             "-fflags", "+genpts", "-avoid_negative_ts", "make_zero",
             "-movflags", "+faststart", "-y", str(out_path),
         ]
@@ -221,9 +253,13 @@ class ClipExtractor:
                 f"ffmpeg extract failed: {exc.stderr.decode('utf-8', 'replace')[-500:]}"
             ) from exc
 
+        times = (frame_times_of(self._ffmpeg, out_path)
+                 if self._picture_feed else None)
         return ClipResult(path=out_path, duration_s=dur, truncated=truncated,
                           start_utc=s,
-                          video_start_s=video_start_of(self._ffmpeg, out_path))
+                          video_start_s=(times[0] if times else
+                                         video_start_of(self._ffmpeg, out_path)),
+                          frame_times=times)
 
     def _codec_opts(self) -> list[str]:
         """Quality settings for the cut, from the ONE registry in config.py.

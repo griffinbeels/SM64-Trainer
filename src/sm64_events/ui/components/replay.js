@@ -3,7 +3,7 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
-import { stepGameFrame, jumpToStart } from "../frame.js";
+import { clipClock, stepGameFrame, jumpToStart } from "../frame.js";
 import { holdIsRunning, holdRepeat, startHold,
          stopHold } from "../holdrepeat.js";
 import { Icon } from "./icons.js";
@@ -98,8 +98,7 @@ export function ReplayPlayer({ attemptId, onCompare, onVideoEl, onView }) {
   // single press lands on a duplicate; the next press recovers.
   function step(dir) {
     stepGameFrame(videoEl.current, dir, state.game_fps || 30,
-                  state.frame_map || null, state.fps || 60,
-                  state.video_start_s || 0);
+                  state.frame_map || null, clipClock(state));
   }
   // A press remembers whether the clip was playing; the release hands that
   // back, so a hold mid-playback scrubs and then plays on, while a step on

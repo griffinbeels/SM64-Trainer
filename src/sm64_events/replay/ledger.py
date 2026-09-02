@@ -68,6 +68,15 @@ class PictureLedger:
         # THE extension point: name -> zero-arg callable, sampled at the
         # moment each new picture is noticed. Register at wiring time.
         self.stamps: dict[str, Callable[[], object]] = {}
+        # THE FEED LOG (item 38): what the sink's feeder actually WROTE to
+        # the encoder, one entry per video frame -- (wall time the write
+        # completed, the row's ts it carried, or None for a heartbeat repeat
+        # of the previous picture). ffmpeg stamps a frame at the read this
+        # write satisfies, so a clip's frame k matches an entry by wall
+        # time within a few ms, and the entry names the row. Bounded like
+        # the rows.
+        self._feeds: deque[tuple[float, float | None]] = deque(
+            maxlen=int(retention_s * _ROWS_CEILING))
 
     def observe(self, bgra, capture_ts: float | None,
                 frame: int | None, extras: dict | None = None) -> bool:
@@ -110,6 +119,19 @@ class PictureLedger:
                 log.exception("picture ledger observe failed; capture "
                               "continues without it")
             return False
+
+    def mark_fed(self, row_ts: float | None, wrote_at: float) -> None:
+        """The sink wrote one video frame: the picture of row `row_ts`
+        (None = a heartbeat repeat of the last picture) at wall time
+        `wrote_at`. Called on the feeder thread; deque.append is atomic."""
+        self._feeds.append((float(wrote_at),
+                            None if row_ts is None else float(row_ts)))
+
+    def feeds_between(self, t0: float, t1: float) -> list[dict]:
+        """The frames fed in [t0, t1], oldest first: {"at": write wall
+        time, "ts": the row's composition time or None for a repeat}."""
+        return [{"at": at, "ts": ts} for at, ts in list(self._feeds)
+                if t0 <= at <= t1]
 
     def rows_between(self, t0: float, t1: float) -> list[dict]:
         """The distinct pictures composed in [t0, t1], oldest first, as

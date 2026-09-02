@@ -584,7 +584,10 @@ itself**: with the game's own input display on, every picture shows the
 pad the game drew into it, the reader reads it glyph by glyph, and the
 map moves onto what it read, picture by picture -- so the map is right
 wherever the reader can check the display, and a clip whose display it
-cannot read keeps the answer the clocks gave, and says so. The [[input timeline]]
+cannot read keeps the answer the clocks gave, and says so. A clip cut from
+the [[picture feed]] carries a map the trainer reads off the [[feed log]]
+instead: picture k IS a row, so no matching of picture stretches and no
+quantising happens, and the [[pad reader]] audits it. The [[input timeline]]
 and every [[overlay layer]] read the clip through its map; a clip cut
 before maps existed falls back to a fixed offset.
 
@@ -594,6 +597,44 @@ before maps existed falls back to a fixed offset.
 - **Not** -- the [[input track]]'s own axis. The track says what you DID on
   each [[frame]]; the map says which [[frame]] the footage SHOWS.
 
+### Picture feed
+
+The way the [[recorder]] hands pictures to the encoder since 2026-09-02:
+one encoded picture per distinct picture the [[picture ledger]] noticed,
+written as soon as it arrives and stamped with the picture's own
+composition time, with the game's audio in the same stream on the same
+clock. A clip cut from it holds every picture once, at its own time, so
+the trainer reads which [[frame]] a picture shows off the [[feed log]]
+rather than inferring it from how long the picture stayed on a 60 Hz
+grid -- the duplicates and skips that no offset could describe are gone
+because the feed duplicates nothing. A picture that stays on screen
+feeds nothing; after a second of silence the feed writes the last one
+again so the recording keeps rolling. His approved trade-off (item 38):
+a clip's picture rate follows the game's pictures instead of a fixed 60.
+
+- **Lives** -- `src/sm64_events/replay/ffmpeg_sink.py` (the feed itself:
+  the NUT stream, the heartbeat, the audio on the same clock); the
+  [[recorder]] decides what feeds (`src/sm64_events/replay/recorder.py`);
+  `src/sm64_events/replay/config.py` switches it (picture_feed)
+- **Not** -- the earlier feed, which re-sent the latest grab sixty times a
+  second onto a wall-clock grid and stamped it at the encoder's read;
+  that shape still serves clips cut before it and the in-process fallback.
+
+### Feed log
+
+The [[picture ledger]]'s record of what the [[picture feed]] actually
+wrote: one entry per encoded picture -- the time the feed stamped it
+with and the ledger row it carried, or none for a repeat of the last
+picture. Extraction matches a clip's pictures to it by time, entry by
+entry, and reads the [[frame map]] off it; the match's own numbers ride
+the clip's metadata so a verdict is answerable from the file.
+
+- **Lives** -- `src/sm64_events/replay/ledger.py` (the log),
+  `src/sm64_events/replay/feedmap.py` (the reading),
+  `src/sm64_events/replay/service.py` (at extraction)
+- **Not** -- the [[picture ledger]]'s rows. A row is a picture the capture
+  saw; a log entry is a picture the feed gave the encoder.
+
 ### Picture ledger
 
 The record the [[recorder]] keeps of every distinct picture it grabs from
@@ -602,7 +643,9 @@ was computing, and every extra fact a wiring line registers. His spec:
 capture holds all the information, so each picture of the video carries it
 for any future analysis. At extraction the trainer matches the clip's
 pictures to these rows by time and the rows become the [[frame map]]
-directly -- one answer per picture by construction -- and the clip's own
+directly -- one answer per picture by construction (the [[picture feed]]
+goes further: it writes one encoded picture per row and files each write
+in the ledger's [[feed log]]) -- and the clip's own
 metadata keeps its slice of the rows after the recording buffer forgets
 the footage. Registering one more per-picture fact takes one line.
 
@@ -640,7 +683,9 @@ Log Rolling clip: 0.011 s). Every slot arithmetic in the [[input
 timeline]] counts from it: the time it seeks to for a slot, and the
 slot it reads back from the picture the browser presents. Assumed zero
 until 2026-09-01, which put every seek one picture early on such a clip
-while the [[frame map]] and the [[pad reader]] were right.
+while the [[frame map]] and the [[pad reader]] were right. A [[picture
+feed]] clip carries every picture's own time instead, and the clip start
+is the first of them.
 
 - **Lives** -- `src/sm64_events/replay/extract.py` measures it off the cut
   (video_start_of), `src/sm64_events/replay/service.py` carries it in

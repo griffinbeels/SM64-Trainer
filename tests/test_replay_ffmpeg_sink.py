@@ -27,6 +27,8 @@ def _ffmpeg():
 
 
 def test_spawn_args_pin_av_single_mux_contract(tmp_path, monkeypatch):
+    """The CFR feed's contract (picture_feed=False): the pre-2026-09-02
+    ring, still the shape the in-process fallback and older clips have."""
     """Pins the ffmpeg arg contract — each flag is load-bearing for the
     single-clock sync model (see ffmpeg_sink docstring / the drift memory):
     wallclock BEFORE each input, cfr video, aresample=async audio, both
@@ -48,7 +50,8 @@ def test_spawn_args_pin_av_single_mux_contract(tmp_path, monkeypatch):
         "sm64_events.replay.ffmpeg_sink.subprocess.Popen", fake_popen)
     monkeypatch.setattr(
         "sm64_events.replay.ffmpeg_sink._assign_kill_on_close", lambda p: None)
-    cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=2.0)
+    cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=2.0,
+                       picture_feed=False)
     sink = FfmpegAvSink(cfg, lambda s: None, ffmpeg="ffmpeg")
     sink._spawn(320, 240)
     for t in sink._readers:
@@ -163,7 +166,9 @@ def test_av_sink_produces_synced_av_segments(tmp_path):
     whose audio and video durations match (one clock) and whose wall spans
     are ~2 s each."""
     import av
-    cfg = ReplayConfig(scratch_dir=tmp_path, fps=60)
+    # The CFR feed's own proof; the picture feed has its own in
+    # test_replay_picture_feed.py (one frame per picture, ~30/s).
+    cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, picture_feed=False)
     segs = []
     sink = FfmpegAvSink(cfg, segs.append, ffmpeg=_ffmpeg())
     sink.start()

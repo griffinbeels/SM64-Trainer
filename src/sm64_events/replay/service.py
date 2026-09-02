@@ -18,6 +18,7 @@ from pathlib import Path
 from sm64_events.core.timefmt import GAME_FPS, format_igt
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.replay import mapalign
+from sm64_events.replay.feedmap import feed_map
 from sm64_events.replay.extract import video_start_of
 from sm64_events.replay.config import (ReplayConfig, save_settings,
                                        validate_settings)
@@ -330,6 +331,12 @@ class ReplayService:
             # every seek and every panel read must count from it or they
             # land one picture early (chain-input-timeline-frame, hop 6).
             m["video_start_s"] = res.video_start_s
+            if res.frame_times is not None:
+                # The picture feed (item 38): the clip is VFR, one frame
+                # per captured picture, and every consumer counts slots
+                # through these times, never as k / fps.
+                m["frame_times"] = [round(t, 6) for t in res.frame_times]
+                m["encode"] = "picture_feed"
             if res.start_utc is not None:
                 m["start_utc"] = res.start_utc.isoformat()
                 if res.duration_s:
@@ -342,8 +349,15 @@ class ReplayService:
                     # fallback for clips from before it, and the display lag
                     # rides INSIDE the map either way; anchor_offset_s stays
                     # the fallback for a clip that has none.
-                    self._map_from_ledger(m, clip, res)
+                    if res.frame_times is not None:
+                        # One frame per picture: the feed log SAYS which
+                        # row each frame is; nothing is inferred from
+                        # runs, and the CFR series cannot describe it.
+                        self._map_from_feeds(m, res)
+                    else:
+                        self._map_from_ledger(m, clip, res)
                     if (m.get("frame_map") is None
+                            and res.frame_times is None
                             and self._frame_clock is not None):
                         mapped = self._frame_clock.frame_map(
                             res.start_utc, res.duration_s, self.cfg.fps,
@@ -377,6 +391,12 @@ class ReplayService:
                 # confirmed the map on. None for a clip it could not read.
                 "pad_reading": m.get("pad_reading"),
                 "video_start_s": m.get("video_start_s", 0.0),
+                # Per-frame timestamps of a picture-feed clip (VFR); None
+                # for a CFR clip, whose slots are k / fps from
+                # video_start_s.
+                "frame_times": m.get("frame_times"),
+                "encode": m.get("encode", "cfr"),
+                "feed_match": m.get("feed_match"),
                 "saved_path": str(saved) if saved is not None else None}
 
     # A frame and a half of slack: the clip's own first-frame stamp and the
@@ -451,6 +471,44 @@ class ReplayService:
         meta["frame_map"] = built
         meta["frame_map_source"] = "ledger"
         meta["frame_map_quantised"] = True
+
+    def _map_from_feeds(self, meta: dict, res) -> None:
+        """The frame map READ off the picture feed's log (item 38).
+
+        Frame k of the clip sits at start_utc + frame_times[k]; the
+        ledger's feed log names the row the sink wrote at that moment,
+        and the row's RAM stamp names the game frame. The rows ride the
+        sidecar as `picture_ledger` and the match statistics as
+        `feed_match`, so a verdict is answerable from the file. Any
+        failure leaves the meta without a map (the CFR series cannot
+        describe a VFR clip, so nothing else answers)."""
+        ledger = getattr(self.recorder, "ledger", None)
+        if ledger is None or not hasattr(ledger, "feeds_between"):
+            return
+        start = res.start_utc.timestamp()
+        end = start + res.duration_s
+        try:
+            rows = ledger.rows_between(start - 1.5, end + 1.0)
+            feeds = ledger.feeds_between(start - 1.0, end + 1.0)
+            if not rows or not feeds:
+                return
+            built, repeats, stats = feed_map(
+                res.frame_times, start, rows, feeds, DISPLAY_LAG_FRAMES)
+        except Exception:
+            log.exception("feed-log mapping failed; the clip carries no map")
+            return
+        meta["picture_ledger"] = [
+            {**row, "ts": round(row["ts"] - start, 4)} for row in rows]
+        meta["feed_match"] = stats
+        if built is None:
+            log.warning("feed log covers too little of the clip: %s", stats)
+            return
+        meta["frame_map"] = built
+        meta["repeats"] = repeats
+        meta["frame_map_source"] = "feed_log"
+        # One frame IS one picture here: nothing for the quantiser.
+        meta["frame_map_quantised"] = True
+        log.info("frame map read off the feed log: %s", stats)
 
     def _hold_one_answer_per_picture(self, meta: dict, clip: Path) -> None:
         """One timeline frame per PICTURE, however many video frames it
@@ -563,7 +621,15 @@ class ReplayService:
         if self.pad_reader is None:
             return False
         try:
-            reading = self.pad_reader(clip, meta["frame_map"], attempt)
+            # A picture-feed clip knows which frames are heartbeat repeats
+            # (the feed log said so); the reader takes them as its picture
+            # flags instead of guessing them from pixels. A CFR clip has
+            # none, and the hook keeps its three-argument shape for it.
+            repeats = meta.get("repeats")
+            reading = (self.pad_reader(clip, meta["frame_map"], attempt,
+                                       repeats=repeats)
+                       if repeats is not None
+                       else self.pad_reader(clip, meta["frame_map"], attempt))
         except Exception:
             log.exception("pad reader failed; keeping the built map")
             return False

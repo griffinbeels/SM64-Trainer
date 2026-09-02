@@ -15,6 +15,7 @@ import htm from "htm";
 import { Icon } from "./icons.js";
 import { ReplayPlayer } from "./replay.js";
 import { InputTimeline } from "./inputtimeline.js";
+import { clipClock as buildClipClock } from "../frame.js";
 
 const html = htm.bind(h);
 
@@ -26,7 +27,8 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
   const [anchorOffsetS, setAnchorOffsetS] = useState(0);
   // The clip's own frame map (which game frame each video frame shows) and
   // its encode rate -- the timeline's exact clock; the offset is its fallback.
-  const [clipClock, setClipClock] = useState({ frameMap: null, fps: 60,
+  const [clipClock, setClipClock] = useState({ frameMap: null,
+                                              clock: null,
                                               padReading: null });
   // The timeline appears only once the replay has ANSWERED (his ruling
   // 2026-09-01: "it should be hidden until we extract the replay, after
@@ -60,8 +62,7 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
           if (view) {
             setAnchorOffsetS(view.anchor_offset_s || 0);
             setClipClock({ frameMap: view.frame_map || null,
-                           fps: view.fps || 60,
-                           clipStart: view.video_start_s || 0,
+                           clock: buildClipClock(view),
                            padReading: view.pad_reading || null });
           }
           setReplaySettled(true);
@@ -70,8 +71,7 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
       ${replaySettled
         ? html`<${InputTimeline} attemptId=${attemptId} video=${video}
               anchorOffsetS=${anchorOffsetS}
-              frameMap=${clipClock.frameMap} clipFps=${clipClock.fps}
-              clipStart=${clipClock.clipStart || 0}
+              frameMap=${clipClock.frameMap} clock=${clipClock.clock}
               padReading=${clipClock.padReading} />`
         : html`<div class="input-timeline-waiting">The input timeline appears
             once the replay is cut and checked against its footage.</div>`}

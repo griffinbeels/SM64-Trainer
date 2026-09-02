@@ -45,14 +45,14 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from sm64_events.core.paths import bundled_ffmpeg  # noqa: E402
 from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
-from sm64_events.replay.extract import ffprobe_beside, video_start_of  # noqa: E402
+from sm64_events.replay.extract import ffprobe_beside, frame_times_of, video_start_of  # noqa: E402
 
 FRAME_JS = ROOT / "src" / "sm64_events" / "ui" / "frame.js"
 
 PAGE = """<!doctype html>
 <video id=v src="/clip.mp4" muted preload="auto"></video>
 <script type="module">
-import { slotAtTime, timeOfSlot } from "/frame.js";
+import { clipClock, slotAtTime, timeOfSlot } from "/frame.js";
 const video = document.getElementById("v");
 // A seek that lands on the picture already shown never fires rVFC (it
 // fires only when a NEW picture is presented), so race it with `seeked`.
@@ -66,17 +66,23 @@ async function seekTo(target) {
   video.currentTime = target;
   return Promise.race([presented, seeked]);
 }
-window.probeSlot = async (slot, fps, start) => {
-  const oldTarget = timeOfSlot(slot, fps, 0);
+// `view` is the replay view's own shape: {fps, video_start_s, frame_times};
+// the "old" seek is the pre-2026-09-01 grid from t = 0, the "fixed" one is
+// the shipped clipClock (a CFR clip counts from its first pts; a
+// picture-feed clip seeks into each frame's own span).
+window.probeSlot = async (slot, view) => {
+  const naive = { fps: view.fps || 60, start: 0, times: null };
+  const clock = clipClock(view);
+  const oldTarget = timeOfSlot(slot, naive);
   const oldTime = await seekTo(oldTarget);
-  const newTarget = timeOfSlot(slot, fps, start);
+  const newTarget = timeOfSlot(slot, clock);
   const newTime = await seekTo(newTarget);
   return {
     slot,
     old: { target: oldTarget, mediaTime: oldTime,
-           presented: slotAtTime(oldTime, fps, start) },
+           presented: slotAtTime(oldTime, clock) },
     fixed: { target: newTarget, mediaTime: newTime,
-             presented: slotAtTime(newTime, fps, start) },
+             presented: slotAtTime(newTime, clock) },
   };
 };
 window.probeReady = new Promise((resolve) => {
@@ -200,10 +206,18 @@ def main() -> int:
     start = video_start_of(ffmpeg, clip)
     fps = clip_fps(ffmpeg, clip)
     stored = meta.get("video_start_s")
+    # A picture-feed clip (item 38) is VFR: the view carries every frame's
+    # own time and the browser seeks into each frame's span. The sidecar
+    # says so; a CFR clip's view carries none and the grid stands.
+    times = meta.get("frame_times")
+    if times is None and meta.get("encode") == "picture_feed":
+        times = frame_times_of(ffmpeg, clip)
     print(f"clip {clip.name}: {len(frame_map)} mapped slots, {fps:g} fps, "
           f"first video pts {start:.6f} s"
           + (f" (sidecar holds {stored:.6f})" if stored is not None
-             else " (sidecar predates video_start_s; the view assumes 0)"))
+             else " (sidecar predates video_start_s; the view assumes 0)")
+          + (f"; picture feed: {len(times)} frame times" if times else "; CFR grid"))
+    view = {"fps": fps, "video_start_s": start, "frame_times": times}
 
     try:
         from playwright.sync_api import sync_playwright
@@ -234,8 +248,7 @@ def main() -> int:
             early_old = early_fixed = 0
             for slot in slots:
                 result = page.evaluate(
-                    "([slot, fps, start]) => window.probeSlot(slot, fps, start)",
-                    [slot, fps, start])
+                    "([slot, view]) => window.probeSlot(slot, view)", [slot, view])
                 old, fixed = result["old"], result["fixed"]
                 early_old += old["presented"] != slot
                 early_fixed += fixed["presented"] != slot

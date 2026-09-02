@@ -466,7 +466,10 @@ def test_capture_tags_carry_the_frame_and_the_composition_time(tmp_path):
                         video_sink_factory=lambda cfg, on_seg, codec: sink)
     rec.start()
     assert wait_for(lambda: video.on_frame is not None)
-    push_frames(video, 2)                    # qpc ticks 0 and 1/30 s
+    push_frames(video, 1)                    # qpc tick 0
+    # A SECOND picture: the picture feed (item 38) hands the sink only what
+    # the ledger calls new, so an identical grab would feed nothing.
+    video.on_frame(np.full((480, 640, 4), 90, dtype=np.uint8), int(1 / 30 * 1e7))
     assert wait_for(lambda: len(getattr(sink, "tags", [])) >= 2)
     assert sink.tags[0] == (4242, T0.timestamp())
     frame_tag, capture_ts = sink.tags[1]
@@ -478,7 +481,9 @@ def test_capture_tags_carry_the_frame_and_the_composition_time(tmp_path):
 
 def test_the_picture_ledger_rides_the_capture_path(tmp_path):
     """Item 40: every grab passes the picture ledger; identical grabs of one
-    presented picture land ONE row, a changed picture lands the next."""
+    presented picture land ONE row, a changed picture lands the next. And
+    item 38: the sink is fed ONE frame per row -- the three identical grabs
+    reach it once, and every write lands in the ledger's feed log."""
     from sm64_events.replay.frameclock import FrameClock
     video, audio = FakeVideoSource(), SystemFakeAudioSource()
     sink = FakeAvSink()
@@ -491,8 +496,15 @@ def test_the_picture_ledger_rides_the_capture_path(tmp_path):
     push_frames(video, 3)                    # the same zeros picture, thrice
     changed = np.full((480, 640, 4), 200, dtype=np.uint8)
     video.on_frame(changed, int(3 / 30 * 1e7))
-    assert wait_for(lambda: len(getattr(sink, "tags", [])) >= 4)
+    assert wait_for(lambda: len(getattr(sink, "tags", [])) >= 2)
     rows = rec.ledger.rows_between(0.0, 1e12)
     assert [row["frame"] for row in rows] == [4242, 4242]
     assert rows[1]["ts"] - rows[0]["ts"] > 0
+    time.sleep(0.05)
+    assert len(sink.frames) == 2, "one fed frame per distinct picture"
+    assert [tag[1] for tag in sink.tags] == [row["ts"] for row in rows]
+    # The sink's feed callback is the ledger's feed log.
+    sink.on_fed(sink.tags[0], rows[0]["ts"] + 0.004)
+    assert rec.ledger.feeds_between(0.0, 1e12) == [
+        {"at": rows[0]["ts"] + 0.004, "ts": rows[0]["ts"]}]
     rec.stop()

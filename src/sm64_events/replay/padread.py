@@ -783,8 +783,13 @@ def picture_flags(ffmpeg: str, clip: Path, cells: np.ndarray):
 
 def read_clip(clip: Path, frame_map: list, pads, ffmpeg: str,
               reference: Alphabet | None = None,
-              held=None, resets=None) -> PadReading | None:
+              held=None, resets=None, repeats=None) -> PadReading | None:
     """Read the clip's display and pin its map to it. None = refused.
+
+    `repeats` (per video frame, True = the sink re-fed the previous
+    picture unchanged) comes from the picture feed's log: every other
+    frame IS a new picture, so the picture flags are known rather than
+    guessed from pixels, and the alignment may dwell only on a repeat.
 
     Two passes: the reference alphabet reads first (no labels needed, so
     a prior that is frames out cannot mislead the first templates), the
@@ -798,7 +803,14 @@ def read_clip(clip: Path, frame_map: list, pads, ffmpeg: str,
         return None
     count = min(len(cells), len(frame_map))
     cells, frame_map = cells[:count], list(frame_map[:count])
-    same, changed = picture_flags(ffmpeg, clip, cells)
+    if repeats is not None:
+        same = np.zeros(count, bool)
+        known = min(count, len(repeats))
+        same[:known] = np.asarray(list(repeats)[:known], bool)
+        changed = ~same
+        changed[0] = False
+    else:
+        same, changed = picture_flags(ffmpeg, clip, cells)
     anchors = flash_anchors(cells, frame_map, resets)
     alphabet = reference if reference is not None else load_alphabet()
     icons = None                      # the digits align first; icons join the final pass

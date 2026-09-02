@@ -249,14 +249,15 @@ export function gameFrameOf(axis, stretches) {
 }
 
 // The mapped clock. `frameMap[k]` is the raw game frame video frame k shows
-// (null before the clock's coverage); `clipFps` is the clip's encode rate.
-// Answers null when the map cannot say, and the caller falls back to the
-// offset arithmetic -- never a silent guess.
-export function mappedFrameAtTime(seconds, frameMap, clipFps, stretches, frames,
-                                  clipStart = 0) {
+// (null before the clock's coverage); `clock` is the clip clock
+// (frame.js::clipClock -- the encode rate and first timestamp of a CFR
+// clip, or every frame's own time for a picture-feed clip). Answers null
+// when the map cannot say, and the caller falls back to the offset
+// arithmetic -- never a silent guess.
+export function mappedFrameAtTime(seconds, frameMap, clock, stretches, frames) {
   if (!frameMap || !frameMap.length) return null;
   const slot = Math.max(0, Math.min(frameMap.length - 1,
-    slotAtTime(seconds, clipFps, clipStart)));
+    slotAtTime(seconds, clock)));
   const raw = frameMap[slot];
   if (raw == null) return null;
   const axis = trackFrameOf(raw, stretches);
@@ -267,8 +268,7 @@ export function mappedFrameAtTime(seconds, frameMap, clipFps, stretches, frames,
   }
   return Math.max(0, Math.min(Math.max(frames - 1, 0), axis));
 }
-export function mappedTimeAtFrame(frame, frameMap, clipFps, stretches,
-                                  clipStart = 0) {
+export function mappedTimeAtFrame(frame, frameMap, clock, stretches) {
   if (!frameMap || !frameMap.length) return null;
   const raw = gameFrameOf(frame, stretches);
   if (raw === null) return null;
@@ -277,7 +277,7 @@ export function mappedTimeAtFrame(frame, frameMap, clipFps, stretches,
   // frame 28's picture never existed, so its inputs show over 29's slot).
   for (let slot = 0; slot < frameMap.length; slot += 1) {
     const shown = frameMap[slot];
-    if (shown != null && shown >= raw) return timeOfSlot(slot, clipFps, clipStart);
+    if (shown != null && shown >= raw) return timeOfSlot(slot, clock);
   }
   return null;
 }
@@ -351,7 +351,7 @@ function DisagreementList({ reading, frameMap, stretches, seek, lead }) {
 }
 
 export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
-                                frameMap = null, clipFps = 60, clipStart = 0,
+                                frameMap = null, clock = null,
                                 padReading = null, compact = false }) {
   const [state, setState] = useState({ phase: "loading" });
   const [frame, setFrame] = useState(0);
@@ -408,8 +408,8 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
     const { fps, frames, stretches } = state.data;
     const lead = state.data.lead_frames || 0;
     const readAt = (seconds) => {
-      const mapped = mappedFrameAtTime(seconds, frameMap, clipFps,
-        stretches, frames, clipStart);
+      const mapped = mappedFrameAtTime(seconds, frameMap, clock,
+        stretches, frames);
       // The fallback arithmetic counts from the ANCHOR (the attempt's own
       // frame 0), which sits `lead` slots into the axis when a buffer is
       // drawn; the mapped path lands on the axis directly.
@@ -455,7 +455,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [video, state, anchorOffsetS, frameMap, clipFps]);
+  }, [video, state, anchorOffsetS, frameMap, clock]);
 
   const data = state.phase === "ready" ? state.data : null;
   const lanes = useMemo(
@@ -497,8 +497,8 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       // reads the new time back on the next frame, so the two cannot
       // disagree even for a frame.
       if (!video.paused) video.pause();
-      const mapped = mappedTimeAtFrame(clamped, frameMap, clipFps,
-        data.stretches, clipStart);
+      const mapped = mappedTimeAtFrame(clamped, frameMap, clock,
+        data.stretches);
       // Inside the clip, always: a seek to the very edge leaves the element
       // reporting itself ended, and the panel then reads whatever it
       // presents (his 2026-08-31 jump from frame 770 to 591).
