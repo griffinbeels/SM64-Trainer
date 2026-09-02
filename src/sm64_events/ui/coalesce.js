@@ -32,28 +32,51 @@ function nextTask(fn) {
 //   * one in flight at a time — a trigger arriving mid-run queues EXACTLY one
 //     follow-up however many arrive, so a long fetch under a fast event stream
 //     can never stack requests or let two race each other home.
+//
+// request() returns a promise that settles when the run that OBSERVED the
+// request has completed — the scheduled one, or the follow-up if a run was
+// already in flight, since that run may have fetched the world from before
+// the caller's own write landed. A component that just POSTed awaits it to
+// know the view now carries the write (stratpicker.js holds the user's pick
+// until then). Until 2026-09-01 those components called the store's raw
+// refresh directly, beside this coalescer rather than through it, so one
+// strategy pick cost three view fetches with two in flight together (task
+// 0113: a stale one landing last is a flicker).
 export function coalesce(run, schedule = nextTask) {
   let scheduled = false;
   let inFlight = false;
   let againWhenDone = false;
+  let waiting = [];     // settle with the run that has not started yet
+  let running = [];     // settle with the run in flight
 
   function start() {
     scheduled = false;
     inFlight = true;
+    running = waiting;
+    waiting = [];
     Promise.resolve()
       .then(run)
       .catch(() => {})        // a failed run must never wedge the coalescer
       .then(() => {
         inFlight = false;
-        if (againWhenDone) { againWhenDone = false; request(); }
+        const settled = running;
+        running = [];
+        settled.forEach((resolve) => resolve());
+        if (againWhenDone) { againWhenDone = false; kick(); }
       });
   }
 
-  function request() {
+  function kick() {
     if (inFlight) { againWhenDone = true; return; }
     if (scheduled) return;
     scheduled = true;
     schedule(start);
+  }
+
+  function request() {
+    const settled = new Promise((resolve) => { waiting.push(resolve); });
+    kick();
+    return settled;
   }
 
   return request;

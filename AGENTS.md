@@ -41,6 +41,8 @@ after:
 | Ranks (classify, standards, scraper) | `ranks/`, `tools/scrape_ranks.py` | `.claude/rules/ranks.md` |
 | The Ultimate Sheet library (read, classify, map, snapshot) | `library/`, `tools/scrape_sheet.py` | `.claude/rules/library.md` |
 | The 100-coin star (its exit-star variants, and why one reset is one row) | `tracking/hundred_coin.py`, `ranks/standards.py` | `.claude/rules/hundred-coin.md` |
+| What a saved time MEANS, what a row may DO about a PB, which strategy is ACTIVE | `tracking/caveats.py`, `tracking/pbaction.py`, `tracking/activestrat.py` | `.claude/rules/pb-strategy.md` |
+| The star grab's TIME, hop by hop from Usamune's RAM to the practice-log row — a debugging CHAIN: read it before editing any module it names, and update it in the same commit when a hop moves | `memory/layout.py`, `core/snapshot.py`, `server/poller.py`, `detectors/igt_clock.py`, `detectors/star_grab.py`, `core/events.py`, `storage/db.py`, `tracking/projection.py`, `tracking/service.py`, `server/api.py`, `server/broadcaster.py`, `ui/components/practicelog.js`, `ui/components/attemptlog.js`, `ui/uilog.js`, `core/uilog.py` | `.claude/rules/chain-star-grab-time.md` |
 
 Tests mirror modules: `tests/test_<module>.py` — read the test file first, it
 is the executable spec.

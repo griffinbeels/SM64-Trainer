@@ -3,13 +3,13 @@
 // rank-standards TOC over community examples banded slowest -> fastest.
 // Scrolling down IS the climb (spec 2026-08-07-library-page, section 3).
 //
-// SECOND-DOOR RULING (task-4-caveats.md point 1): sections are ordered by
+// SECOND-DOOR RULING: sections are ordered by
 // `librarymodel.js::sectionOrder`, not `ladderorder.js::slowestFirst` --
 // deliberately, not by omission. The two rules disagree about where an
 // unproven (no-ladder) strategy belongs, and the reasoning for keeping them
 // as two doors rather than unifying them lives on `sectionOrder`'s own
 // docstring, where the next person choosing between them will look first.
-import { h } from "preact";
+import { h, Fragment } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
@@ -26,7 +26,7 @@ import { SegmentTimeline } from "./segmenttimeline.js";
 import {
   sectionOrder, autoExpandName, bandsOf, bandRangeLabel, divisionRangeLabel,
   matchesRunner, videoSource, linkable, standingOn, matchedStanding, bandFor, divisionWithin,
-  ladderCsOf,
+  ladderCsOf, leaderboardOf,
 } from "./librarymodel.js";
 
 const html = htm.bind(h);
@@ -208,8 +208,15 @@ function assocFor(row, standings, resolveLabel) {
 // button. The version pill this card used to wear is GONE (round 1 item 4
 // superseded it: the section's mode now filters entries, so every visible
 // run is the mode's own version).
-function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd }) {
-  const [playing, setPlaying] = useState(false);
+// The media half of an entry -- thumb/branded tile -> inline embed on
+// click, native <video> for a file, an honest "watch on <site>" for the
+// unembeddable -- lifted out of `ExampleCard` (round 1, third read,
+// 2026-08-23) so the [[Runner page]]'s breakdown can play the SAME entry
+// the SAME way beneath its row: one YouTube/Twitch/bsky/file path, never a
+// second player that drifts. `autoplay` starts in the playing state -- the
+// caller's own press (the practice-log-style ▶) was the gesture.
+export function ExampleMedia({ entry, autoplay = false }) {
+  const [playing, setPlaying] = useState(autoplay);
   // Bluesky's embed host takes a DID, and most sheet links carry a handle --
   // resolved with ONE public-API fetch on the first click (videoSource's own
   // bsky comment has the measurement). Failure degrades to the link-out door.
@@ -224,7 +231,7 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd 
     && (embedSrc || (src.kind === "bsky" && !bskyFailed)));
   const label = `${entry.runner} — ${fmtSeconds(entry.time_cs / 100)}`;
 
-  function startPlaying() {
+  function resolveBsky() {
     if (src.kind === "bsky" && !src.embed && !bskyEmbed && !bskyFailed) {
       fetch("https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle"
             + `?handle=${enc(src.actor)}`)
@@ -235,6 +242,11 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd 
         })
         .catch(() => setBskyFailed(true));
     }
+  }
+  useEffect(() => { if (autoplay) resolveBsky(); }, []);
+
+  function startPlaying() {
+    resolveBsky();
     setPlaying(true);
   }
 
@@ -275,21 +287,26 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd 
     </div>`;
   }
 
-  return html`<div class="library-example" data-video=${entry.video}>
-    <div class="library-example-media ${canEmbed ? "is-clickable" : ""}"
-        onclick=${canEmbed && playing ? () => setPlaying(false) : null}
-        title=${canEmbed ? (playing ? "Close" : "Play inline") : ""}>
-      ${media()}
-      ${src.kind !== "youtube" && src.kind !== "file" && src.kind !== "image"
-        ? html`<a class="library-example-external" href=${entry.video}
-            target="_blank" rel="noopener" title=${`open on ${src.site}`}>
-            <${Icon} name="upload" size=${13} /></a>` : null}
-    </div>
+  return html`<div class="library-example-media ${canEmbed ? "is-clickable" : ""}"
+      onclick=${canEmbed && playing ? () => setPlaying(false) : null}
+      title=${canEmbed ? (playing ? "Close" : "Play inline") : ""}>
+    ${media()}
+    ${src.kind !== "youtube" && src.kind !== "file" && src.kind !== "image"
+      ? html`<a class="library-example-external" href=${entry.video}
+          target="_blank" rel="noopener" title=${`open on ${src.site}`}>
+          <${Icon} name="upload" size=${13} /></a>` : null}
+  </div>`;
+}
+
+function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd, onOpenRunner }) {
+  return html`<div class="library-example" data-video=${entry.video}
+      data-runner=${entry.runner} data-time-cs=${entry.time_cs}>
+    <${ExampleMedia} entry=${entry} />
     <div class="library-example-meta">
       <span class="rank-icon-slot library-example-tier" style="--icon-size: 20px">
         ${tier ? html`<${RankIcon} tier=${tier} division=${division} size=${20} />` : "–"}</span>
       <span class="library-example-runner-wrap">
-        <span class="library-example-runner">${entry.runner}</span>
+        <${RunnerName} entry=${entry} className="library-example-runner" onOpenRunner=${onOpenRunner} />
       </span>
       <span class="library-example-time">${fmtSeconds(entry.time_cs / 100)}</span>
       <button type="button" class="library-example-plus"
@@ -304,14 +321,30 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd 
   </div>`;
 }
 
+// A runner's name, wherever an entry draws one (ExampleCard and PlainEntry,
+// in both the ladder reading and [[Leaderboard mode]]): the door onto their
+// [[Runner page]] when `onOpenRunner` is wired, plain text otherwise. The
+// synthetic "You" row (`entry._isYou`) never gets a door -- no runner stands
+// behind that name, and it is the page you are already reading. The click
+// stops propagating so a name inside a video card never also plays it.
+// `.library-runner-link` resets the button to flowing text (index.html):
+// the global `button` rule would otherwise grow every row it sits in.
+function RunnerName({ entry, className, onOpenRunner }) {
+  if (!onOpenRunner || entry._isYou) return html`<span class=${className}>${entry.runner}</span>`;
+  return html`<button type="button" class="${className} library-runner-link textlink"
+      title=${`View ${entry.runner}'s ratings`}
+      onclick=${(clickEvent) => { clickEvent.stopPropagation(); onOpenRunner(entry.runner); }}
+      >${entry.runner}</button>`;
+}
+
 // A run nobody filmed: still evidence (a real runner, a real time, a real
 // subdivision), never a video card. No "+" -- the tray imports videos, and a
 // row with nothing to import must not offer the gesture.
-function PlainEntry({ entry, tier, division }) {
-  return html`<span class="library-plain-entry">
+function PlainEntry({ entry, tier, division, onOpenRunner }) {
+  return html`<span class="library-plain-entry" data-runner=${entry.runner} data-time-cs=${entry.time_cs}>
     ${tier ? html`<span class="rank-icon-slot" style="--icon-size: 15px">
       <${RankIcon} tier=${tier} division=${division} size=${15} /></span>` : ""}
-    <span class="library-plain-runner">${entry.runner}</span>
+    <${RunnerName} entry=${entry} className="library-plain-runner" onOpenRunner=${onOpenRunner} />
     <span class="library-plain-time">${fmtSeconds(entry.time_cs / 100)}</span>
   </span>`;
 }
@@ -325,7 +358,7 @@ function PlainEntry({ entry, tier, division }) {
 // control that expands to nothing is a dead control, and the reason ("no
 // examples") sits where the click would land.
 function DivisionGroup({ approach, band, division, query, isYou, trayKeys,
-                         entityKey, onAdd, autoOpen = false }) {
+                         entityKey, onAdd, autoOpen = false, onOpenRunner }) {
   const [open, setOpen] = useState(false);
   // A standards-table deep link names THIS subdivision (round 3, task 0098):
   // open once per arrival, during render (the openedPage pattern below — an
@@ -362,7 +395,7 @@ function DivisionGroup({ approach, band, division, query, isYou, trayKeys,
   }
   const withVideo = visible.filter((entry) => entry.video);
   const plain = visible.filter((entry) => !entry.video);
-  return html`<div class="library-division ${effectiveOpen ? "open" : ""}">
+  return html`<div class="library-division ${effectiveOpen ? "open" : ""} ${isYou ? "is-you" : ""}">
     <button type="button" class="library-division-head" aria-expanded=${effectiveOpen}
         onclick=${() => setOpen((prev) => !prev)}>
       <span class="library-division-label">
@@ -388,13 +421,14 @@ function DivisionGroup({ approach, band, division, query, isYou, trayKeys,
                 entry=${entry} tier=${band.tier} division=${division.numeral}
                 trayKey=${trayKey} entityKey=${entityKey}
                 inTray=${trayKeys.has(trayKey)}
-                onAdd=${onAdd} />`;
+                onAdd=${onAdd} onOpenRunner=${onOpenRunner} />`;
           })}
         </div>` : ""}
         ${plain.length ? html`<div class="library-plain-rows">
           ${plain.map((entry) => html`<${PlainEntry}
               key=${`${entry.runner}:${entry.time_cs}`}
-              entry=${entry} tier=${band.tier} division=${division.numeral} />`)}
+              entry=${entry} tier=${band.tier} division=${division.numeral}
+              onOpenRunner=${onOpenRunner} />`)}
         </div>` : ""}
       </div>
     <//>
@@ -438,6 +472,84 @@ function TocRow({ band, count, you, onJump }) {
     <td class="library-toc-cutoff">${band.tier ? bandRangeLabel(band) : "—"}</td>
     <td class="library-toc-count">${count}</td>
   </tr>`;
+}
+
+// LEADERBOARD MODE (task 1, spec 2026-08-20-ranked-leaderboard): one row of
+// `leaderboardOf`'s flat list -- since round 1's fifth read (2026-08-23) a
+// CONDENSED line, his words: "Each row should be the rank achieved, the
+// runner, the time, and then a button for opening the video. The videos
+// should be collapsed by default, so the leaderboard display is very
+// condensed by default." The ▶ is the practice log's own `icon-button`
+// (play/chevron, `aria-expanded`), the fold is `Disclose`, and the player
+// is `ExampleMedia` -- the same block the ladder's cards and the Rank tab's
+// runner page play through, never a second embed. The tray's "+" stays on
+// the Ladder reading's cards; a leaderboard row holds the four things he
+// listed. The synthetic "you" row (`_isYou`) carries no video and wears the
+// SAME ◀ you marker TocRow and DivisionGroup already wear for the identical
+// fact. `data-runner`/`data-time-cs` on the row root is what the runner
+// page's arrival lands on (the blink rides the whole row).
+function LeaderboardRow({ row, onOpenRunner }) {
+  const { position, entry, tier, division } = row;
+  const isYou = !!entry._isYou;
+  const [showVideo, setShowVideo] = useState(false);
+  return html`<div class="library-leaderboard-row ${isYou ? "is-you" : ""}"
+      data-runner=${entry.runner} data-time-cs=${entry.time_cs}>
+    <div class="library-leaderboard-line">
+      <span class="library-leaderboard-position">#${position}</span>
+      <span class="rank-icon-slot library-leaderboard-tier" style="--icon-size: 18px">
+        ${tier ? html`<${RankIcon} tier=${tier} division=${division} size=${18} />` : "–"}</span>
+      <${RunnerName} entry=${entry} className="library-plain-runner" onOpenRunner=${onOpenRunner} />
+      ${isYou ? html`<span class="library-toc-you"
+            title="your current standing on this strategy"> ◀ you</span>` : ""}
+      <span class="library-leaderboard-time">${fmtSeconds(entry.time_cs / 100)}</span>
+      ${entry.video
+        ? html`<button type="button" class="icon-button library-leaderboard-play"
+            onclick=${() => setShowVideo(!showVideo)}
+            title=${showVideo ? "Close the video" : `Watch ${entry.runner}'s run`}
+            aria-label=${showVideo ? "Close the video" : `Watch ${entry.runner}'s run`}
+            aria-expanded=${showVideo ? "true" : "false"}>
+            <${Icon} name=${showVideo ? "chevron" : "play"} size=${16} /></button>`
+        : html`<span class="library-leaderboard-noplay"></span>`}
+    </div>
+    <${Disclose} open=${showVideo} className="library-leaderboard-disclose">
+      <div class="library-leaderboard-video"><${ExampleMedia} entry=${entry} autoplay /></div>
+    <//>
+  </div>`;
+}
+
+// The flat list itself -- `query` applies here exactly as it does to the
+// bands (round 4's rule, extended rather than re-derived): a live search
+// hides every non-matching row EXCEPT the reader's own (L5, below).
+function LeaderboardList({ leaderboard, query, onOpenRunner }) {
+  // The reader's own row is never filtered out (fix wave, final review,
+  // L5) -- it used to fall through to `matchesRunner`'s ordinary text
+  // match on the literal string "You" like any other row, which is the
+  // Rank tab's own leaderboard.js's exact opposite ruling for the SAME
+  // gesture ("a search that hid the one row he came here to find would
+  // defeat the jump control"). One rule, both boards: `row.entry._isYou`
+  // always survives a query, matching leaderboard.js's `row.you ||`.
+  const shown = query
+    ? leaderboard.filter((row) => row.entry._isYou || matchesRunner(row.entry, query))
+    : leaderboard;
+  if (!shown.length) {
+    // 2026-08-31 retired L6's second sentence rather than keeping it dead. Two
+    // empty causes did need two sentences -- "no community times recorded
+    // here yet" blamed a live search that simply matched nothing exactly the
+    // same as it blamed a genuinely empty leaderboard (fix wave, final
+    // review, L6) -- but that judgement now happens ONE LEVEL UP: a section
+    // with no matching runner never renders at all while a query is live, so
+    // a list that survives to here always holds the match that saved it, and
+    // `!shown.length` can only mean an actually empty board. The section's
+    // own disappearance is what a fruitless search says now, and the page
+    // says "No runner here matches" once instead of per section.
+    return html`<p class="meta library-leaderboard-empty">
+      No community times recorded here yet.</p>`;
+  }
+  return html`<div class="library-leaderboard">
+    ${shown.map((row) => html`<${LeaderboardRow}
+        key=${`${row.position}-${row.entry.runner}-${row.entry.time_cs}-${row.entry.video || ""}`}
+        row=${row} onOpenRunner=${onOpenRunner} />`)}
+  </div>`;
 }
 
 /**
@@ -617,17 +729,24 @@ function TargetLinkControl({ rows, approaches, linkCtx }) {
  * (a strategy's linking is target-level, round 7).
  */
 function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
-                      onAdd, linkCtx, version, gradingVersion }) {
-  if (!pieces.length) return null;
+                      onAdd, linkCtx, version, gradingVersion, onOpenRunner }) {
+  // 2026-08-31: the same query filter each Section applies to itself, applied
+  // here too -- otherwise a search with no matching piece leaves the "Pieces
+  // of this run" heading standing over nothing, which reads as a section that
+  // failed to load rather than as one with no results.
+  const shown = query
+    ? pieces.filter((piece) => hasRunnerMatch(piece, version, query))
+    : pieces;
+  if (!shown.length) return null;
   return html`<div class="library-pieces">
     <h4 class="library-pieces-head">Pieces of this run</h4>
-    ${pieces.map((piece) => html`<${Section} key=${approachIdentity(piece)}
+    ${shown.map((piece) => html`<${Section} key=${approachIdentity(piece)}
         approach=${piece} open=${expanded === approachIdentity(piece)}
         onOpen=${() => onOpen(approachIdentity(piece))}
         query=${query} stratInfo=${null} version=${version} gradingVersion=${gradingVersion}
         trayKeys=${trayKeys}
         entityKey=${piece.entity_key || entityKey} onAdd=${onAdd}
-        linkCtx=${linkCtx}
+        linkCtx=${linkCtx} onOpenRunner=${onOpenRunner}
         door=${html`<${LinkControl} row=${piece} kind="subsection"
             entityKey=${piece._entityKey} adoptable=${piece._adoptable}
             ...${linkCtx} />`} />`)}
@@ -644,27 +763,56 @@ function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
  * favour of one switch in the Library hero (`library.js`) that every section
  * on the page reads, "for fun exploration of the differences."
  */
+// ROUND 1 (2026-08-07), superseding the round-2 version-badge ruling: the
+// JP/US control is a MODE, and a mode FILTERS -- "We should have 2 modes: JP
+// (shows only JP entries), US (shows only US entries)." An entry tagged with
+// the other version disappears; an entry never annotated with a version
+// shows in both modes (the combined-unless-annotated rule, applied to
+// display). Bands and counts are computed AFTER the filter, so every number
+// on screen describes what is actually shown.
+//
+// Pulled out of Section as its own top-level, Preact-free function (fix
+// wave, final review, L1) so tests/test_cross_language_parity.py can extract
+// and drive its REAL source text -- it mirrors library/ratings.py::
+// _visible_entries EXACTLY: a row is version-FILTERED AT ALL only when
+// there's something to distinguish (its own ladder_jp, or entries carrying
+// more than one distinct tag); otherwise every entry shows in both modes.
+// That second clause is not a corner case (see _visible_entries's own
+// docstring for the count), and the two had drifted apart before with no
+// test able to notice.
+function visibleEntriesFor(item, version) {
+  const entries = item.entries || [];
+  const hasJp = !!item.ladder_jp;
+  const tags = new Set(entries.map((entry) => entry.version).filter(Boolean));
+  const versioned = hasJp || tags.size > 1;
+  return versioned
+    ? entries.filter((entry) => !entry.version || entry.version === version)
+    : entries;
+}
+
+// 2026-08-31, his report: "when searching a user in the Library for a specific
+// star, it should automatically expand all of the dropdowns that are relevant,
+// and hide any dropdowns that are not relevant". ONE predicate, read by both
+// the surfaces that act on it -- Section (which of us disappears) and
+// LibraryTarget (did the whole page come up empty) -- so the page can never
+// hide every section and still claim there is something to look at.
+// Equivalent to `shownBands.length` by construction, and deliberately not
+// derived from it: `bandsOf` files EVERY entry into some band (`bandFor`
+// always answers, Capless included) and drops only bands that end up with
+// neither an entry nor a cutoff, so "some visible entry matches" and "some
+// band survives the query" are the same statement about the same list.
+function hasRunnerMatch(item, version, query) {
+  return visibleEntriesFor(item, version)
+    .some((entry) => matchesRunner(entry, query));
+}
+
 function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey, onAdd,
                    linkCtx, door = null, focusMark = null, version = "us",
-                   gradingVersion = "us" }) {
-  // ROUND 1 (2026-08-07), superseding the round-2 version-badge ruling: the
-  // JP/US control is a MODE, and a mode FILTERS -- "We should have 2 modes:
-  // JP (shows only JP entries), US (shows only US entries)." An entry tagged
-  // with the other version disappears; an entry never annotated with a
-  // version shows in both modes (the combined-unless-annotated rule, applied
-  // to display). With every visible run being the mode's own version, the
-  // per-entry version pill that used to badge mixed sections had nothing
-  // left to say and is deleted. Bands and counts are computed AFTER the
-  // filter, so every number on screen describes what is actually shown.
+                   gradingVersion = "us", onOpenRunner, focusYou = false }) {
   const hasJp = !!approach.ladder_jp;
-  const mixedVersions = useMemo(() => new Set(
-    (approach.entries || []).map((entry) => entry.version).filter(Boolean),
-  ).size > 1, [approach.entries]);
-  const versioned = hasJp || mixedVersions;
   const ladder = (hasJp && version === "jp" ? approach.ladder_jp : approach.ladder) || {};
-  const visibleEntries = useMemo(() => (versioned
-    ? (approach.entries || []).filter((entry) => !entry.version || entry.version === version)
-    : (approach.entries || [])), [approach.entries, versioned, version]);
+  const visibleEntries = useMemo(() => visibleEntriesFor(approach, version),
+    [approach, version]);
   const bands = useMemo(() => bandsOf(ladder, visibleEntries),
     [ladder, visibleEntries]);
   // ROUND 4: a live query hides every band with no matching runner -- TOC
@@ -673,6 +821,16 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
   const shownBands = query
     ? bands.filter((band) => band.entries.some((entry) => matchesRunner(entry, query)))
     : bands;
+  // 2026-08-31: round 4's rule, one level up. A section with no matching runner
+  // disappears for the query's duration; every section that HAS one is forced
+  // open, so a search lands on the answer instead of on a wall of collapsed
+  // headers (his report, 2026-08-31). The page's single-open accordion still
+  // owns `open` underneath -- `expanded` is never written here, so the manual
+  // choice is exactly where he left it the moment the box clears. The actual
+  // `return null` cannot happen until every hook below has run.
+  const searching = !!query;
+  const hidden = searching && !hasRunnerMatch(approach, version, query);
+  const effectiveOpen = searching || open;
   const marioKey = approach.ladder && approach.ladder.Mario != null
     ? approach.ladder.Mario : -1;   // presentational echo of sectionOrder's own key; -1 (not -Infinity) so it survives JSON round-trips a render probe takes
 
@@ -695,12 +853,60 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
   // (`matchedStanding`) where node can prove it, with the why.
   const standing = matchedStanding(stratInfo, ladder, version, gradingVersion) || assocInfo;
 
-  return html`<div class=${`library-section ${open ? "open" : ""}`
+  // LEADERBOARD MODE (task 1, spec 2026-08-20-ranked-leaderboard): a second
+  // reading of the SAME entries, per-SECTION state that forgets itself the
+  // moment you leave -- his ruling adds a reading, it never touches the one
+  // above that already works, so `bands`/`shownBands`/`standing` stay
+  // exactly as they were. `standingPbCs` is the raw centisecond PB already
+  // BEHIND `standing` -- `stratInfo.pb_cs` for a matched strategy (the same
+  // number regardless of which version's ladder is displayed, since a
+  // personal best does not change with the ladder graded against; only its
+  // rank does) or the associated row's own `assoc.pbCs` -- read, never
+  // recomputed, so this can place YOUR row at the position it actually
+  // earns among the community's without a second fetch.
+  const [mode, setMode] = useState("ladder");
+  // His own Rank tab's door (2026-08-23, "doors to the Library, landing on
+  // your own PB's entry"): when the page arrived with `focusYou` and THIS
+  // is the open section, the subdivision his standing sits in auto-opens
+  // (same `autoOpen` a standards-table deep link uses) and, once its fold
+  // has mounted, the ◀ you group scrolls into view and blinks -- the same
+  // `.library-arrival` an entry gets. One landing per page: the ref stands
+  // down when `focusYou` drops, so a later arrival lands again.
+  const landOnYou = !!(focusYou && open && standing && standing.rank);
+  const sectionRef = useRef(null);
+  const landedRef = useRef(false);
+  useEffect(() => {
+    if (!focusYou) { landedRef.current = false; return undefined; }
+    if (!landOnYou || landedRef.current) return undefined;
+    landedRef.current = true;
+    const timer = setTimeout(() => {
+      const group = sectionRef.current
+        && sectionRef.current.querySelector(".library-division.is-you");
+      if (!group) return;
+      group.scrollIntoView({ block: "center", behavior: "smooth" });
+      group.classList.add("library-arrival");
+      setTimeout(() => group.classList.remove("library-arrival"), 2200);
+    }, 550);
+    return () => clearTimeout(timer);
+  }, [focusYou, landOnYou]);
+  const standingPbCs = stratInfo ? (stratInfo.pb_cs ?? null)
+    : (assoc ? assoc.pbCs : null);
+  const leaderboardEntries = useMemo(() => (standingPbCs == null
+    ? visibleEntries
+    : [...visibleEntries,
+       { runner: "You", time_cs: standingPbCs, video: null, _isYou: true }]),
+    [visibleEntries, standingPbCs]);
+  const leaderboard = useMemo(() => leaderboardOf(ladder, leaderboardEntries),
+    [ladder, leaderboardEntries]);
+
+  if (hidden) return null;
+
+  return html`<div class=${`library-section ${effectiveOpen ? "open" : ""}`
         + (approach._piece ? " library-piece-section" : "")}
-      data-mario=${marioKey}
+      data-mario=${marioKey} ref=${sectionRef}
       id=${sectionAnchorId(approach)}>
     <button type="button" class="library-section-head" onclick=${onOpen}
-        aria-expanded=${open}>
+        aria-expanded=${effectiveOpen}>
       <div class="library-section-text">
         <div class="library-section-identity">
           <span class="library-section-name">${approach.name}</span>
@@ -744,7 +950,7 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
          may not contain a button. Approaches pass no door (round 7: the
          whole-target control owns theirs). */""}
     ${door ? html`<div class="library-section-door">${door}</div>` : ""}
-    <${Disclose} open=${open} className="library-section-disclose">
+    <${Disclose} open=${effectiveOpen} className="library-section-disclose">
       <div class="library-section-body">
         ${/* Round 7: approaches carry NO row-level door -- the whole-target
              control beside the page's name owns linking now ("moved near
@@ -763,6 +969,21 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
               ${approach.ladder_version === "jp" ? "JP" : "US"} ladder only
             </span>`
           : ""}
+        ${/* LEADERBOARD MODE (task 1): a second reading of the same entries
+             -- his ruling, add a reading, never touch the one that already
+             works. Per-SECTION state (not page state, never persisted);
+             Ladder stays the default and its own markup below is entirely
+             unchanged from before this task. */""}
+        <div class="library-mode-switch" role="group" aria-label="Section reading">
+          <button type="button" class="library-mode-seg"
+              aria-pressed=${mode === "ladder"} onclick=${() => setMode("ladder")}>Ladder</button>
+          <button type="button" class="library-mode-seg"
+              aria-pressed=${mode === "leaderboard"}
+              onclick=${() => setMode("leaderboard")}>Leaderboard</button>
+        </div>
+        ${mode === "leaderboard" ? html`<${LeaderboardList}
+            leaderboard=${leaderboard} query=${query}
+            onOpenRunner=${onOpenRunner} />` : html`<${Fragment}>
         <table class="library-toc"><tbody>
           ${shownBands.map((band) => html`<${TocRow} key=${bandAnchorId(approach, band.tier || "unranked")} band=${band}
               count=${band.entries.filter((entry) => matchesRunner(entry, query)).length}
@@ -783,10 +1004,13 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
                 key=${`${bandAnchorId(approach, band.tier)}-${division.numeral}`}
                 approach=${approach} band=${band} division=${division} query=${query}
                 autoOpen=${!!(focusMark && focusMark.tier === band.tier
-                              && focusMark.division === division.numeral)}
+                              && focusMark.division === division.numeral)
+                           || (landOnYou && standing.rank === band.tier
+                               && standing.division === division.numeral)}
                 isYou=${!!(standing && standing.rank === band.tier
                            && standing.division === division.numeral)}
-                trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd} />`)
+                trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
+                onOpenRunner=${onOpenRunner} />`)
             : html`<div class="library-division-body">
                 <div class="library-examples">
                   ${band.entries.filter((entry) => matchesRunner(entry, query) && entry.video)
@@ -795,17 +1019,20 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
                       return html`<${ExampleCard} key=${trayKey}
                           entry=${entry} tier=${band.tier} division=${null}
                           trayKey=${trayKey} entityKey=${entityKey}
-                          inTray=${trayKeys.has(trayKey)} onAdd=${onAdd} />`;
+                          inTray=${trayKeys.has(trayKey)} onAdd=${onAdd}
+                          onOpenRunner=${onOpenRunner} />`;
                     })}
                 </div>
                 <div class="library-plain-rows">
                   ${band.entries.filter((entry) => matchesRunner(entry, query) && !entry.video)
                     .map((entry) => html`<${PlainEntry}
                         key=${`${entry.runner}:${entry.time_cs}`}
-                        entry=${entry} tier=${band.tier} division=${null} />`)}
+                        entry=${entry} tier=${band.tier} division=${null}
+                        onOpenRunner=${onOpenRunner} />`)}
                 </div>
               </div>`}
         </div>`)}
+        <//>`}
       </div>
     <//>
   </div>`;
@@ -815,16 +1042,16 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
  * `targets` — every FULL library target for the entity (several for a
  * 100-coin star's exit variants); `library.js` resolves both the
  * entity door (`/api/library/entity/{key}`) and the numeric-index door
- * (`/api/library/target/{index}`, owed to this task by task-3-caveats.md
- * point 4) to this same full shape before mounting this component, so it
- * never has to branch on which door it came through.
+ * (`/api/library/target/{index}`) to this same full shape before mounting
+ * this component, so it never has to branch on which door it came through.
  */
 export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us",
                                onAdd, trayKeys, focusStrat, focusTier,
                                focusDivision = null, focusEntryUrl = null,
-                               focusRow = null,
+                               focusRunner = null, focusTimeCs = null,
+                               focusYou = false, focusRow = null,
                                fallbackLabel = null, onRelink = () => {},
-                               resolveEntityLabel = null }) {
+                               resolveEntityLabel = null, onOpenRunner = null }) {
   const [query, setQuery] = useState("");
   // The OPEN approach's `approachIdentity` — target-scoped, not just its
   // name, so two sibling targets whose approaches share a name (fix round 1)
@@ -1038,8 +1265,8 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
   }
 
   // A deep link (Task 7: the standards ladder's own tier rows, and the
-  // book mark) moves you once per LINK, then goes quiet — task-7-caveats.md
-  // point 2's own ruling. The effect's dependency list includes `approaches`
+  // book mark) moves you once per LINK, then goes quiet — deliberate.
+  // The effect's dependency list includes `approaches`
   // (needed to resolve the `hit`), and `approaches` is a `useMemo` over
   // `rows` — so with no guard, ANY later `rows` change (a library refresh, a
   // re-fetch, a second intent landing on this same entity) re-runs this
@@ -1095,10 +1322,33 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
   const [focusMark, setFocusMark] = useState(null);
   const rootRef = useRef(null);
   useEffect(() => {
-    if (!focusStrat) return undefined;
-    const focusId = `${pageIdentity}::${focusStrat}::${focusTier || ""}`
-      + `::${focusDivision || ""}::${focusEntryUrl || ""}`;
+    if (!focusStrat && !focusRunner) return undefined;
+    const focusId = `${pageIdentity}::${focusStrat || ""}::${focusTier || ""}`
+      + `::${focusDivision || ""}::${focusEntryUrl || ""}`
+      + `::${focusRunner || ""}::${focusTimeCs ?? ""}`;
     if (consumedFocusRef.current === focusId) return undefined;
+    // A RUNNER focus (2026-08-22, the [[Runner page]]'s door): the entry is
+    // the one the breakdown GRADED -- the runner's best visible time on this
+    // entity -- named by runner + time_cs rather than by strategy. The
+    // approach that holds it is found here, not trusted from the caller:
+    // `visibleEntriesFor` is the same mode filter `ratings.py` grades by,
+    // and the exact time wins; if the mode filter hides it (a JP-only entry
+    // viewed in US mode), the runner's fastest VISIBLE time stands in.
+    let runnerEntry = null;
+    if (focusRunner) {
+      for (const approach of approaches) {
+        for (const entry of visibleEntriesFor(approach, version)) {
+          if (entry.runner !== focusRunner) continue;
+          const exact = entry.time_cs === focusTimeCs;
+          if (!runnerEntry || exact || (!runnerEntry.exact
+                && entry.time_cs < runnerEntry.entry.time_cs)) {
+            runnerEntry = { approach, entry, exact };
+          }
+          if (exact) break;
+        }
+        if (runnerEntry && runnerEntry.exact) break;
+      }
+    }
     // `approaches.find` here still resolves by NAME alone and can still land
     // on the first of two sibling sections that share one `matched_strategy`
     // (the 100-coin case, caveat 4) — that is not this fix's bug to close:
@@ -1106,7 +1356,7 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
     // design ("your rank on a strategy is the same fact wherever it
     // appears"), so a strategy-named link has no third piece of information
     // to disambiguate WHICH sibling with, and landing on either is correct.
-    const hit = approaches.find((approach) =>
+    const hit = runnerEntry ? runnerEntry.approach : approaches.find((approach) =>
       approach.matched_strategy === focusStrat || approach.name === focusStrat);
     if (!hit) return undefined;  // approaches not loaded yet -- stay
                                   // unconsumed, try again next render
@@ -1122,16 +1372,15 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
     // intent's tier/division survive only as the fallback when the URL
     // matches no entry (a vetted-only example, a JP-filtered one).
     let mark = null;
-    if (focusEntryUrl) {
-      const entry = (hit.entries || []).find(
-        (one) => one.video === focusEntryUrl);
-      if (entry) {
-        const ladder = hit.ladder || {};
-        const tier = bandFor(ladder, entry.time_cs);
-        mark = { approachId: approachIdentity(hit), tier,
-                 division: divisionWithin(ladderCsOf(ladder), tier, entry.time_cs),
-                 entryUrl: focusEntryUrl };
-      }
+    const landedEntry = runnerEntry ? runnerEntry.entry
+      : focusEntryUrl ? (hit.entries || []).find((one) => one.video === focusEntryUrl)
+      : null;
+    if (landedEntry) {
+      const ladder = hit.ladder || {};
+      const tier = bandFor(ladder, landedEntry.time_cs);
+      mark = { approachId: approachIdentity(hit), tier,
+               division: divisionWithin(ladderCsOf(ladder), tier, landedEntry.time_cs),
+               entryUrl: focusEntryUrl || null };
     }
     if (!mark && focusTier && focusDivision) {
       mark = { approachId: approachIdentity(hit), tier: focusTier,
@@ -1154,17 +1403,21 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
     // band scroll above has already landed somewhere honest.
     const helloTimer = setTimeout(() => {
       const root = rootRef.current;
-      const card = root && focusEntryUrl
-        ? root.querySelector(`[data-video="${CSS.escape(focusEntryUrl)}"]`)
-        : null;
+      const card = !root ? null
+        : landedEntry && runnerEntry
+          ? root.querySelector(`[data-runner="${CSS.escape(landedEntry.runner)}"]`
+              + `[data-time-cs="${landedEntry.time_cs}"]`)
+          : focusEntryUrl
+            ? root.querySelector(`[data-video="${CSS.escape(focusEntryUrl)}"]`)
+            : null;
       if (!card) return;
       card.scrollIntoView({ block: "center", behavior: "smooth" });
       card.classList.add("library-arrival");
       setTimeout(() => card.classList.remove("library-arrival"), 2200);
     }, 550);
     return () => { clearTimeout(timer); clearTimeout(helloTimer); };
-  }, [focusStrat, focusTier, focusDivision, focusEntryUrl, approaches,
-      pageIdentity]);
+  }, [focusStrat, focusTier, focusDivision, focusEntryUrl, focusRunner,
+      focusTimeCs, approaches, pageIdentity, version]);
 
   const iconSrc = entityKey ? entityIconSrc(t, entityKey) : genericStarSrc();
   const activeStratInfo = activeStrat ? stratByName[activeStrat] : null;
@@ -1213,8 +1466,21 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
          linked or name-matched to. An entity-less, unlinked movement passes
          null and the section says so rather than not rendering — a page that
          looks identical after a change reads as the change not working. */""}
-    <${OverallStandards} entity=${gradingEntity} label=${gradingLabel}
-        pbCs=${gradingPbCs} version=${version} />
+    ${/* 2026-08-31: this one holds no runner times at all, so under a runner
+         search it can never be a result -- it stands down for the query's
+         duration alongside every strategy section that has no match, and
+         comes straight back when the box clears. */""}
+    ${query ? "" : html`<${OverallStandards} entity=${gradingEntity} label=${gradingLabel}
+        pbCs=${gradingPbCs} version=${version} />`}
+    ${/* 2026-08-31: a query that matches nobody hides every section, and a page
+         that empties itself reads as broken rather than as an honest "no
+         results". It is said ONCE for the page rather than once per section,
+         which is what let LeaderboardList's own search-blame sentence go.
+         Uses the SAME predicate the sections hide themselves by, so the two
+         can never disagree about whether anything is on screen. */""}
+    ${query && (approaches.length > 0 || pieces.length > 0)
+      && ![...approaches, ...pieces].some((item) => hasRunnerMatch(item, version, query))
+      ? html`<p class="library-target-empty">No runner here matches "${query}".</p>` : ""}
     ${approaches.length === 0
       ? html`<p class="library-target-empty">
           ${missReason === "castle_movement" ? "Browse only — no segment adopts this movement yet."
@@ -1234,13 +1500,15 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
             ? focusMark : null}
           stratInfo=${approach.matched_strategy ? stratByName[approach.matched_strategy] : null}
           trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
-          linkCtx=${linkCtx} version=${version} gradingVersion=${gradingVersion} />`)}
+          linkCtx=${linkCtx} version=${version} gradingVersion=${gradingVersion}
+          onOpenRunner=${onOpenRunner} focusYou=${focusYou} />`)}
     <${PiecesList} pieces=${pieces} query=${query}
         expanded=${expanded}
         onOpen=${(identity) => setExpanded((prev) =>
           prev === identity ? null : identity)}
         trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
-        linkCtx=${linkCtx} version=${version} gradingVersion=${gradingVersion} />
+        linkCtx=${linkCtx} version=${version} gradingVersion=${gradingVersion}
+        onOpenRunner=${onOpenRunner} />
     ${/* Task 0096: the record door's recorder — the IDENTICAL surface the
          Segments tab opens (one implementation, his own requirement), seeded
          with the row's name and its target's entity. The save's own

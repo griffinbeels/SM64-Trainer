@@ -215,7 +215,7 @@ function entryNextSentence(entry, nextStepMode) {
 
 export function RankBanner({ label, banner, hint = null, identity = null,
                              atFloor: atFloorProp = false,
-                             lane = null, order = 0, replayKey = null,
+                             lane = null, order = 0,
                              layout = "row", showNext = true, iconSize = 24,
                              nextStepMode = "classic", swapKey = null }) {
   const ranked = !!(banner && banner.rank);
@@ -261,14 +261,13 @@ export function RankBanner({ label, banner, hint = null, identity = null,
     // bar is simply full — the same sentinel the old tween used.
     fill: banner.next_tier ? (banner.fill || 0) : 1,
   } : atFloor ? { ...rankAt(0), fill: 0 } : null;
-  // Practice-log Strategy/Overall changes are the same kind of event as a
-  // route change: a different measurement nobody earned. Reuse the route
-  // exchange whole -- its pre-paint first frame, squash/pop, exchange pivot,
-  // sequential fade and bar clock. `exchangeKey` gives that gesture priority
-  // inside useRankClimb even though the Strategy-only `replayKey` necessarily
-  // changes when the button changes; otherwise that replay request starts a
-  // second, false Capless-floor climb underneath the swap. Callers that omit
-  // `swapKey` keep the original RankBanner path byte-for-byte.
+  // Practice-log Strategy/Overall changes -- and, since 2026-08-23, a change
+  // of the active STRATEGY itself -- are the same kind of event as a route
+  // change: a different measurement nobody earned. Reuse the route exchange
+  // whole -- its pre-paint first frame, squash/pop, exchange pivot,
+  // sequential fade and bar clock. `exchangeKey` hands that gesture to
+  // useRankClimb so it snaps under the swap rather than climbing. Callers
+  // that omit `swapKey` keep the original RankBanner path byte-for-byte.
   const rankSwap = useRouteSwap(swapKey, {
     // Stable primitive for routeswap's snapshot resync. The kicker itself is
     // a freshly-created Preact node every render, and using it as a dependency
@@ -288,7 +287,7 @@ export function RankBanner({ label, banner, hint = null, identity = null,
   // caller. The practice log now passes neither because it paints one banner;
   // a lone banner and the MARELO bar start immediately.
   const climb = useRankClimb(graded, identity, {
-    lane, order, replayKey, exchangeKey: swapKey,
+    lane, order, exchangeKey: swapKey,
   });
   // The next-step sentence currently ON SCREEN, and the one before it. A
   // fade-out has to show the sentence the reader was ALREADY reading: `banner`

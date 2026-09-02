@@ -3,9 +3,9 @@
 Task 6, spec 2026-08-07-library-page. A render test, per this project's own
 rule: unit tests plus `node --check` once shipped an invisible feature.
 
-task-6-caveats.md point 3 is WHY these assertions look the way they do: the
-brief's own words describe a "Study" stage rendering `Compare` INSIDE the
-Library, which the caveats file overrules -- Compare's pane never moves (it
+Task 6's own ruling is WHY these assertions look the way they do: the
+original brief's words describe a "Study" stage rendering `Compare` INSIDE
+the Library, which that ruling overrules -- Compare's pane never moves (it
 stays mounted in app.js exactly where it always was, so loaded media and sync
 survive leaving and returning). Task 6 is a pure ROUTING change: the Compare
 nav entry is deleted, and both the Library's own "Study in Compare" button and

@@ -33,6 +33,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).parent))
+from source_scan import python_code, strip_comments  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from find_uilab import find_uilab  # noqa: E402
@@ -86,11 +89,11 @@ _BY_NAME = {story.name: story for story in STORIES}
 # not opened yet, so there is nothing for either of these to collide with.
 
 def test_the_bowser_reds_pipe_pairing_renders_its_family_naming():
-    """`pipe_star_entity`/`pipe_segment_id` (views.py's `_reds_pipe_segments`)
+    """`pipe_star_entity`/`pipe_segment_id` (activestrat.py's `reds_pipe_segments`)
     drive the "(Pipe)"/"(Star)" suffixed naming a Bowser Reds star and its
     paired `seg:reds->pipe:<abbrev>` segment borrow from each other
     (redsfamily.js::familyLabel) -- and until now no fixture ever loaded the
-    corpus segment this needs (`_reds_pipe_segments` matches by `seed_key`,
+    corpus segment this needs (`reds_pipe_segments` matches by `seed_key`,
     which only a real reconcile stamps) or armed it, so this naming path had
     only ever been verified by reading source, never by a render.
 
@@ -146,7 +149,7 @@ def test_the_bowser_reds_pipe_pairing_renders_its_family_naming():
             f"no log card reads \"…(Pipe)\" after targeting the reds->pipe "
             f"segment -- names were {names!r}. Either it never armed (check "
             "ui_fixture.py's enter_level) or views.py's pipe_star_entity "
-            "stopped resolving it (tracking-storage.md's _reds_pipe_segments)")
+            "stopped resolving it (pb-strategy.md's reds_pipe_segments)")
 
         # Task 7 fix round 1's own precondition: the ACTIVE card is a PAIRED
         # segment (`pipe_star_entity` set), the one shape whose book mark must
@@ -327,11 +330,13 @@ def test_one_rank_banner_with_both_mode_buttons_renders(page):
 def test_rank_mode_button_runs_the_shared_swap_and_remembers_the_entity(page):
     """A mode pick is only an exchange, never a second earned-rank climb.
 
-    Strategy alone carries a climb `replayKey`, so changing to Overall changes
-    that key at the same moment as the rank. That used to outrank the ordinary
-    identity guard and start a full Capless-5 climb underneath MARELO's short
-    exchange. Once the exchange finished, the floor climb became visible and
-    made a measurement swap feel like another rank-up.
+    Strategy used to carry a climb `replayKey`, so changing to Overall changed
+    that key at the same moment as the rank. That outranked the ordinary
+    identity guard and started a full Capless-5 climb underneath MARELO's
+    short exchange; once the exchange finished, the floor climb became
+    visible and made a measurement swap feel like another rank-up. The replay
+    is gone altogether since 2026-08-23 (a strategy swap is an exchange too),
+    and this still pins that the exchange never runs a climb underneath.
     """
     page.evaluate(
         "Array.from(document.querySelectorAll("
@@ -1070,8 +1075,8 @@ def fresh_db_page():
     """An UNSEEDED instance -- no stage, no target, no attempts anywhere --
     so `librarymodel.js::lastPracticed` has nothing to resolve and the
     Library tab's auto-open must fall back to the course grid rather than
-    erroring or rendering nothing (task-3-caveats.md point 3: null is the
-    empty-log case). A fresh fixture rather than a state reached by clicking
+    erroring or rendering nothing (null is the empty-log case). A fresh
+    fixture rather than a state reached by clicking
     around `page` -- that fixture's own default seeding is exactly what the
     OTHER new test below needs present."""
     with serve_ui(seed=False) as base, get_driver().launch() as opened:
@@ -1353,3 +1358,164 @@ def test_the_screen_check_chip_reaches_the_timeline_header(page):
         "document.querySelector('.input-inspector-frame strong').textContent")
     listed = int(frame_text.split()[1])
     assert int(readout.split("/")[0].strip()) == listed, (readout, frame_text)
+
+
+# --- and it must not leave the state it reached behind ---------------------
+
+_SHARED_STORE_READ = re.compile(r"\brank_standards_path\b")
+
+
+def test_the_fixture_never_reaches_for_the_shared_ladder_store():
+    """`serve_ui` gives every fixture its OWN scratch rank-standards file, and
+    that has to stay structural rather than remembered.
+
+    Measured 2026-08-21. One new test cleared four of `star:2:4`'s five
+    strategies through the real endpoint and did not put them back; the next
+    full suite returned **6 failures and 4 errors across four unrelated
+    files** -- the JP toggles, the Library's overall ladder, the rank-mode
+    swap, the you-marker -- every one of them a test that simply needed that
+    star to still have its strategies. Not one of them could name the culprit:
+    the damage was in a gitignored file no assertion mentions.
+
+    `conftest.py` HAS an autouse `_isolate_rank_standards` for exactly this,
+    and it never reached any of it. It rebinds the attribute on the `paths`
+    MODULE, while `ui_fixture.py` held a `from ... import rank_standards_path`
+    alias taken at import time -- so the patch moved a name the fixture was
+    not looking at. An isolation fixture that protects nothing looks identical
+    to one that works, which is what makes this worth a check of its own
+    rather than a comment on the import.
+
+    Hence the invariant is stated where it can be enforced, in two halves.
+    The fixture may not NAME the shared path at all -- it serves from its own
+    scratch store. And NOTHING under src/ or tools/ may hold a MODULE-LEVEL
+    alias of it (`main.py`'s is function-local, which re-resolves on every
+    call and is therefore inside the monkeypatch's reach), so the conftest
+    fixture is honest again for every caller that remains, and the next
+    driven harness nobody has written yet cannot reopen the hole. Restoring
+    the store by hand is not an accepted alternative -- it works only when
+    the test passes, and the run that most needs the store intact is the run
+    where something failed halfway."""
+    repo = Path(__file__).resolve().parents[1]
+    fixture = repo / "tools" / "ui_fixture.py"
+    # `python_code`, not `strip_comments` -- the latter removes JS/CSS comment
+    # styles and leaves Python `#` lines standing, so this guard would have
+    # tripped on a comment explaining the very absence it checks for. Caught by
+    # its own probe below, which is why both directions get asserted and not
+    # just the one that was failing.
+    source = python_code(fixture.read_text(encoding="utf-8"))
+    assert not _SHARED_STORE_READ.search(source), (
+        "tools/ui_fixture.py names rank_standards_path again, so every driven "
+        "test is once more writing the worktree's own data/rank_standards.json "
+        "-- and conftest's autouse isolation cannot help, because a "
+        "`from paths import` alias is invisible to its monkeypatch.")
+    # ... and it must still hand RankStandards a path under a scratch dir,
+    # rather than simply having dropped the store.
+    assert "rank_standards.json" in source
+
+    aliased = [str(path.relative_to(repo)).replace("\\", "/")
+               for folder in ("src", "tools")
+               for path in (repo / folder).rglob("*.py")
+               if path.name != "paths.py" and _module_level_alias(path)]
+    assert not aliased, (
+        f"{aliased} import rank_standards_path at module level, which takes "
+        "the name at import time and is invisible to conftest's "
+        "_isolate_rank_standards monkeypatch. Call paths.rank_standards_path() "
+        "through the module, or import it inside the function that needs it.")
+
+
+def _module_level_alias(path: Path) -> bool:
+    """Does this file hold `rank_standards_path` as a MODULE-level import
+    alias? A function-local `from ... import` re-resolves at call time and is
+    fine; a top-level one is a copy the monkeypatch cannot reach."""
+    import ast
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return any(isinstance(node, ast.ImportFrom)
+               and any(alias.name == "rank_standards_path" for alias in node.names)
+               for node in tree.body)
+
+
+def test_the_shared_store_guard_can_still_fail():
+    """Both directions through the same `python_code` the guard uses: real code
+    must trip it, and a Python comment naming the function must not.
+
+    The second half is not ceremony -- it failed on its first run, because the
+    guard was reaching for `strip_comments`, which only knows JS and CSS
+    comment styles. A `#` line naming `rank_standards_path` survived it, so the
+    guard would have gone red at the mere mention of what it forbids."""
+    real = python_code("ranks = RankStandards(rank_standards_path())\n")
+    prose = python_code("# never call rank_standards_path() from here\n")
+    assert _SHARED_STORE_READ.search(real)
+    assert not _SHARED_STORE_READ.search(prose)
+
+
+def test_the_alias_scan_can_still_fail(tmp_path):
+    """The module-level alias is the whole mechanism of the 2026-08-21 leak,
+    so the scan has to tell it from the function-local import main.py holds."""
+    top = tmp_path / "top.py"
+    top.write_text("from sm64_events.core.paths import rank_standards_path\n")
+    local = tmp_path / "local.py"
+    local.write_text("def build():\n"
+                     "    from sm64_events.core.paths import rank_standards_path\n"
+                     "    return rank_standards_path()\n")
+    assert _module_level_alias(top)
+    assert not _module_level_alias(local)
+
+
+# --- the Rank tab's leaderboard (Task 4, spec 2026-08-20-ranked-leaderboard) -
+# This file's own canary lesson, a sixth time: no story ever navigated to the
+# Rank tab at all before this, so a whole tab -- not just one card on it --
+# was invisible to the responsive sweep. `uilab_project.py`'s new
+# "rank-leaderboard" story is what tests/test_responsive.py now drives; this
+# reuses the SAME named story on the SAME shared `page`, so the sweep and this
+# assertion can never quietly disagree about whether the state is reachable.
+
+def test_the_rank_tab_story_reaches_a_real_leaderboard(page):
+    """The default fixture needs no extra seeding for this -- `serve_ui()`'s
+    app builds its LibraryStore off the bundled Ultimate Sheet snapshot
+    unconditionally, so the default "overall" scope already carries hundreds
+    of real community rows plus the user's own. Confirmed directly before
+    writing this file (443 rows, one `you` row, never omitted from it)."""
+    reach(page, "rank-leaderboard")
+    rows = page.evaluate(
+        "document.querySelectorAll('.leaderboard-row').length")
+    assert rows > 20, f"the leaderboard drew only {rows} rows"
+    you_rows = page.evaluate(
+        "document.querySelectorAll('.leaderboard-row.is-you').length")
+    assert you_rows == 1, (
+        f"expected exactly one .is-you row, found {you_rows} -- the user's "
+        "own row must always place, even on a fresh fixture")
+    # Leave the tab as the "page" story's own self-heal expects to find it —
+    # it only clicks Practice if aria-current says otherwise, so this just
+    # confirms that guard actually sees the Rank tab as active.
+    on_rank = page.evaluate(
+        'document.querySelector(\'button.nav-item[title="Rank"]\')'
+        ".getAttribute('aria-current')")
+    assert on_rank == "page", (
+        "the rank-leaderboard story left the tab in an unexpected state")
+
+
+# --- the runner page (Task 5, spec 2026-08-20-ranked-leaderboard) ----------
+# Same lesson as the leaderboard story above, one layer deeper: a story that
+# reaches the BOARD does not thereby reach the PAGE it opens. `uilab_project`'s
+# new "runner-page" story clicks the gesture leaderboard.js itself wires
+# (Task 5) and this reuses that SAME named story on the SAME shared `page`.
+
+def test_the_runner_page_story_reaches_a_real_runner(page):
+    reach(page, "runner-page")
+    heading = page.evaluate(
+        "document.querySelector('.runner-page h2')?.textContent || ''")
+    assert heading, "the runner page rendered with no name in its heading"
+    assert page.count(".runner-page .scope-chip") > 0, (
+        "the runner page drew no scope chips")
+    headers = page.evaluate(
+        "Array.from(document.querySelectorAll('.runner-page .rank-breakdown th'))"
+        ".map(e => e.textContent.trim())")
+    assert "Their time" in headers and "Gap" in headers, headers
+    # `.rank-entity-link` is the entity name's door into the Library (round
+    # 1) -- a button that navigates, not one that edits -- so it is excluded.
+    ignore_buttons = page.evaluate(
+        "document.querySelectorAll('.runner-page .rank-breakdown tbody "
+        "button:not(.rank-entity-link):not(.rank-row-play)').length")
+    assert ignore_buttons == 0, (
+        f"found {ignore_buttons} button(s) in the runner page's breakdown -- "
+        "read-only means no Ignore/Include control")

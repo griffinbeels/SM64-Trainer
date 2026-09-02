@@ -143,19 +143,32 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   const entity = a.segment_id != null ? `segment:${a.segment_id}`
     : (sec ? `star:${sec.course_id}:${sec.star_id}` : null);
   const strat = a.strat_tag || (sec && sec.last_strat) || null;
-  // The server's answer to "may this be saved as a PB", as a caveat key we
-  // already know how to draw. Never re-derived here: save_pb refuses on the
-  // same predicate, and a button that offers what the server rejects is the
-  // drift this shares one door to prevent.
-  const blockedPb = caveatOf(a.pb_blocked_by);
+  // The server's own resolved answer for this row's action column: "save" |
+  // "undo" | null, and when null, why. Never re-derived here -- save_pb and
+  // undo_pb refuse on the SAME resolver (tracking/pbaction.py), and a button
+  // that offers what the server rejects is the drift one door prevents. Of
+  // the two shapes of "why", only a caveat key (the TIME is not a legal
+  // quantity) draws anything: the disabled button it always was. A STRATEGY
+  // reason draws NOTHING -- the row belongs to another strategy, or no
+  // strategy is picked, and his ruling (2026-08-22) is that the button is
+  // simply absent: "the button / text just shouldn't be there & should be
+  // hidden entirely for a strategy that isn't the one selected". The
+  // printed "<strat> only" chip of 2026-08-20 is gone with it.
+  const blockedPb = caveatOf(a.pb_blocked && a.pb_blocked.reason);
   // The mark on the TIME, not on the save button: this row's number is not
   // the quantity it looks like ("if you've been practicing all wrong, you
   // should know", 2026-08-02). Same key vocabulary, same badge, one door —
   // the server decides which rows earn it (tracking/caveats.py's PROVEN-only
   // rule, measured), this only draws it.
   const timeMark = caveatOf(a.caveat);
+  // `other-strat` dims the row (index.html, tuned by logtuning.js's
+  // otherStratDim/otherStratFade): the row is keyed by id, so a strategy
+  // change keeps the same <tr> and the opacity TRANSITIONS rather than
+  // snapping -- "the dimming should naturally animate to the correct
+  // states" (2026-08-23). The server decides which rows are other
+  // (`other_strat`, the same gate that withholds the button).
   const row = html`<tr ref=${(el) => { rowRef.current = el; }}
-      class="${a.cleared ? "cleared" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""}">
+      class="${a.cleared ? "cleared" : ""} ${a.other_strat ? "other-strat" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""}">
     <td class="meta attempt-index">#${idx + 1}</td>
     <td class="attempt-medal">${a.rank
       ? html`<${RankIcon} tier=${a.rank.rank} division=${a.rank.division} size=${22} />` : ""}</td>
@@ -189,29 +202,34 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
       <button class="icon-button" onclick=${() => setShowReplay(!showReplay)}
           title="View replay" aria-label="View replay">
         <${Icon} name=${showReplay ? "chevron" : "play"} size=${16} /></button>
-      ${a.outcome === "success" && !a.cleared
-        ? (a.is_current_pb
-          ? html` <button onclick=${undoPb}
-              title="delete this save — the previous PB becomes current again">Undo PB</button>`
-          : blockedPb
-            // Not a slow PB — a different quantity, which no leaderboard
-            // accepts (2026-08-02: "these fake PBs just shouldn't be
-            // allowed"). Shown rather than hidden, and carrying the SAME
-            // badge a PB already saved with this problem wears, so the row
-            // explains itself instead of leaving a button that silently
-            // stopped working. The server refuses it too — this is the
-            // affordance, not the rule (tracking/caveats.py::pb_blocked_by).
-            ? html` <button class="pb-blocked" disabled
-                title=${`Cannot be saved as a PB — ${blockedPb.sentence}`}
-                aria-label=${`Cannot be saved as a PB — ${blockedPb.sentence}`}>
-                <${Icon} name="bookmark" size=${14} />
-                <span class="save-pb-wide">Save as PB</span>
-                <span class="save-pb-narrow">Save PB</span>
-                ${cardBadge(blockedPb)}</button>`
-            : html` <button class=${pbBeat ? "pb-glow" : ""} onclick=${savePb}>
-                <${Icon} name="bookmark" size=${14} />
-                <span class="save-pb-wide">Save as PB</span>
-                <span class="save-pb-narrow">Save PB</span></button>`)
+      ${/* THE action column, a straight cascade over the server's own
+           resolved answer (tracking/pbaction.py). Three drawn states and no
+           client-side precedence: undo, save, "the time is not a legal
+           quantity". Everything else -- a failure, a cleared row, an attempt
+           with no entity, a row on another strategy, a card with no strategy
+           picked -- draws nothing (the last two by his 2026-08-22 ruling:
+           hide the button until the action is valid again). */""}
+      ${a.pb_action === "undo"
+        ? html` <button onclick=${undoPb}
+            title="delete this save — the previous PB on this strategy becomes current again">Undo PB</button>`
+        : a.pb_action === "save"
+        ? html` <button class=${pbBeat ? "pb-glow" : ""} onclick=${savePb}>
+            <${Icon} name="bookmark" size=${14} />
+            <span class="save-pb-wide">Save as PB</span>
+            <span class="save-pb-narrow">Save PB</span></button>`
+        : blockedPb
+          // Not a slow PB — a different quantity, which no leaderboard
+          // accepts (2026-08-02: "these fake PBs just shouldn't be allowed").
+          // Shown rather than hidden, and carrying the SAME badge a PB
+          // already saved with this problem wears, so the row explains itself
+          // instead of leaving a button that silently stopped working.
+        ? html` <button class="pb-blocked" disabled
+            title=${`Cannot be saved as a PB — ${blockedPb.sentence}`}
+            aria-label=${`Cannot be saved as a PB — ${blockedPb.sentence}`}>
+            <${Icon} name="bookmark" size=${14} />
+            <span class="save-pb-wide">Save as PB</span>
+            <span class="save-pb-narrow">Save PB</span>
+            ${cardBadge(blockedPb)}</button>`
         : ""}
       ${a.cleared
         ? html` <button onclick=${restore}>undo</button>`
@@ -315,8 +333,23 @@ export function useGraphPick(rows, visible, setVisible) {
 // own answer to "does this saved time mean what the rank beside it implies".
 // Derived in tracking/views.py from `timed_by`/`closed_by`/`timed_at`, so this
 // surface and the quick-select cell can never word the same fact two ways.
-export function PbTag({ pb, mode, rows, pick, t, showCaveat = true }) {
-  if (!pb) return html`<span class="pbtag">no PB yet</span>`;
+export function PbTag({ pb, mode, rows, pick, t, strat = null,
+    showCaveat = true }) {
+  // The tag names the ACTIVE STRATEGY's PB, which is what a personal best has
+  // always meant (the glossary; tracking/views.py::current_pbs_by_strat) and
+  // what this tag never showed -- it quoted the entity's best time whatever
+  // strategy was selected, so switching to 3x LJ kept a Standard number under
+  // a 3x LJ heading and read as the app losing track of his progress
+  // (2026-08-15). The empty states say WHICH answer is missing rather than a
+  // bare "no PB yet": no strategy chosen is a different situation from a
+  // strategy you have not banked a time on, and the fix is different too.
+  // The strategy name prints IN FULL and the card's pb track grows to fit it,
+  // pushing the picker left (his call, 2026-08-22; the track rule in
+  // index.html has the mechanics). `.pbtag-strat` is a hook for that rule,
+  // not a clamp.
+  if (!strat) return html`<span class="pbtag">no strategy</span>`;
+  if (!pb) return html`<span class="pbtag">no PB · <span
+    class="pbtag-strat">${strat}</span></span>`;
   function jump() {
     if (!pick) return;
     if (!rows.some((a) => a.id === pb.attempt_id) && t.scope !== "lifetime")

@@ -416,9 +416,13 @@ def strat_overrides(events) -> dict[int, str | None]:
     The compensating-event sibling of cleared_ids(). A strategy is declared
     BEFORE a run and is therefore often wrong after it ("I said Cannonless,
     then did something else"); the journal is append-only, so the correction
-    is appended and folded in here rather than written into the derived
-    attempts row. Last write wins, which makes re-picking the previous
-    strategy the undo — no restore event needed."""
+    is appended and folded in here on every replay. Last write wins, which
+    makes re-picking the previous strategy the undo — no restore event
+    needed. The LIVE command (service.set_attempt_strat) writes that same
+    one column directly and records the override through
+    `Projector.override_strat`, because a replay costs the whole journal
+    (0.7-1.0 s at 18k events, 2026-09-01) to move one row; the two doors are
+    held equal by test_set_attempt_strat_agrees_with_a_full_replay."""
     out: dict[int, str | None] = {}
     for ev in events:
         if ev.type == "attempt_strat_set":
@@ -778,6 +782,20 @@ class Projector:
         into privates."""
         return self._segments.armed_ids()
 
+    def override_strat(self, attempt_id: int, strat_tag: str | None) -> None:
+        """Record a reclassification the journal now carries, so this live
+        projector's override map equals the one `replay()` would rebuild
+        from the same journal (`strat_overrides(events)`, last write wins).
+
+        The service calls this beside `Database.retag_attempt` instead of
+        replaying the whole journal for one column of one row (measured
+        0.7-1.0 s over 18k events, 2026-09-01). The override's only readers
+        are the three `_strat_overrides.get(id, ...)` sites below, each
+        stamping `strat_tag` on the attempt with that id and nothing else --
+        no memory, no attribution, no clearing depends on it -- which is
+        what makes the direct write equivalent to the replay."""
+        self._strat_overrides[attempt_id] = strat_tag
+
     def settle(self, frame: int) -> list[dict]:
         """Let the CLOCK deliver a topological verdict the journal has no event
         for (`SegmentEngine.settle`), and hand back the notices.
@@ -1062,6 +1080,7 @@ class Projector:
                      and self.target[0] == "segment" else None)
         head_was_hooked = self._target_hooked
         head_popped = False  # a HOOKED head completing pops at the hold check
+        hidden_exit_ids: set[int] = set()  # exit-star rows a 100-coin finish hides
         for a in seg_closed:
             raw_segment_id = a.segment_id  # before the 100-coin reattribution
             # clears it -- the head-closure test below must see the def's own
@@ -1185,6 +1204,31 @@ class Projector:
                             cleared=a.id in self._cleared,
                             cleared_reason=self._cleared.get(a.id))
             a = self._auto_ignored(a)
+            if (hc is not None and a.outcome == "success"
+                    and ev.type == "star_collected"
+                    and ev.payload.get("star_id") != hc[1]):
+                # ONE run, ONE row (task 0110, his ruling 2026-08-29): "during
+                # a run if we ever get a 100 coins star, then now we're doing
+                # 100 coins, and then run should only be attributed to the
+                # 100 coins star." The exit grab that closed this run is its
+                # FINISH, not a second thing he did, so the plain exit-star
+                # row `_close_by_grab` recorded a moment ago is HIDDEN from
+                # what this call returns -- decided off the engine's own
+                # closure rather than a second predicate, so a reshaped
+                # definition's end clauses cannot disagree with it. Its
+                # target move is overwritten by the auto-follow below (onto
+                # the 100-coin star); its last-star memory by the block
+                # right after this one. HIDDEN, not deleted from `closed`:
+                # the run tracker below still needs the physical grab -- a
+                # seeded route step lists every star of the course as a
+                # candidate and needs all of them, so a 120 run through TTC
+                # would stall on the exit star it never saw (caught in
+                # review, 2026-09-01, before shipping).
+                exit_star = (hc[0], ev.payload.get("star_id"))
+                hidden_exit_ids.update(
+                    row.id for row in closed
+                    if row.segment_id is None
+                    and (row.course_id, row.star_id) == exit_star)
             if not a.cleared and hc is not None:
                 # last-star memory (caveat 15): the grab-time suppression in
                 # _close_by_grab skips this update for the SAME reason a
@@ -1367,11 +1411,15 @@ class Projector:
         # Run engine sees the same event + the attempts just closed (star AND
         # segment successes/failures); it owns the run lifecycle independently.
         # ctx is the same MatchContext already built for the segment engine.
+        # Every physical closure reaches the run tracker, a hidden exit-star
+        # row included (`hidden_exit_ids`); only what is RECORDED omits it.
         self._runs.feed(ev, closed, ctx)
         self.run_notices = self._runs.run_notices
         if ev.type in BOUNDARY_EVENT_TYPES:
             self._rollouts_total = self._rollouts_dustless = 0
             self._jumps_total = self._jumps_dustless = 0
+        if hidden_exit_ids:
+            return [row for row in closed if row.id not in hidden_exit_ids]
         return closed
 
     def _dispatch(self, ev) -> list[Attempt]:

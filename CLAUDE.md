@@ -69,6 +69,7 @@ uv run python tools/measure_entrance_sweep.py         # replay both journals und
 
 uv run python tools/measure_reset_stubs.py            # how often a reset's own interrupted action was re-read onto the NEXT attempt (exact), and how fast the reload's spawn ends the hold
 uv run python tools/measure_target_queue.py           # replay the journals under the pre-queue rule and the target queue: diff every target reading and every recorded row (round 19's own gate)
+uv run python tools/lint_changed.py                  # the AGENT-MAINTAINABILITY GATE by hand -- what a commit would be blocked on (--all = the standing backlog, read it during a re-evaluation pass; --warm = prime the npx eslint cache, once per machine or the JS half silently skips)
 node .design-sync/facade/build.mjs                   # rebuild the Claude Design bundle from .design-sync/components.mjs (the registry: one row per published component)
 uv run pytest tests/test_design_sync_registry.py -q  # that registry's own gate: does every declared prop still exist on the component
 ```
@@ -121,6 +122,7 @@ automatically when you touch matching files. Zones:
 | Ranks (classify, standards, scraper) | `ranks/`, `tools/scrape_ranks.py` | `.claude/rules/ranks.md` |
 | The Ultimate Sheet library (read, classify, map, snapshot) + the Library tab | `library/`, `tools/scrape_sheet.py`, `ui/components/library*.js` | `.claude/rules/library.md` |
 | The 100-coin star (its exit-star variants, and why one reset is one row) | `tracking/hundred_coin.py`, `ranks/standards.py` | `.claude/rules/hundred-coin.md` |
+| What a saved time MEANS, what a row may DO about a PB, which strategy is ACTIVE | `tracking/caveats.py`, `tracking/pbaction.py`, `tracking/activestrat.py` | `.claude/rules/pb-strategy.md` |
 
 (All paths under `src/sm64_events/` unless noted.) Tests mirror modules:
 `tests/test_<module>.py` — read the test file first; it's the executable spec.
@@ -290,6 +292,23 @@ Contract changes land on main first, then dependent work fans out. Merge with
   Hunt a specific reported row by VALUE across all three instead: the displayed
   time converts at 30fps, so `0'26"13` is `igt_frames` 784, and one read-only
   query over the three files names the owner in one shot.
+- **A `git commit` runs the AGENT-MAINTAINABILITY GATE, and it is curated for
+  one question: does this change make the NEXT agent fail?** Not style. The
+  rule sets live in `pyproject.toml` (`[tool.ruff.lint]`) and
+  `eslint.config.mjs`; `.claude/hooks/lint-gate.py` fires them on the lines a
+  commit ADDS, so the ~400-finding backlog blocks nothing and new work cannot
+  add to it. Test STYLE is deliberately unpoliced; the silent-failure family
+  still applies there, because a test that swallows an error passes while
+  proving nothing. **The intention, the evidence behind each family, what was
+  deliberately excluded, and the procedure for re-evaluating it all live in
+  `docs/agent-maintainability.md` — read that before adding or removing a
+  rule, and run a pass whenever a round loses time to something the gate did
+  not catch.** Two facts worth carrying without opening it: cyclomatic
+  complexity adds +0.16 over file size as a predictor of where fixes land here
+  (size alone: +0.93), so it is a ceiling on new monsters and not the point;
+  and the gate FAILS OPEN on every error, so a broken gate and a clean commit
+  look identical — which is exactly how its JavaScript half stayed dead for an
+  hour (2026-08-28).
 - **Exit-code honesty:** run verification through the Bash tool. Never pipe
   native exes into `Select-Object` or use `2>&1` on them in PS 5.1 (false
   failures).
@@ -304,6 +323,9 @@ Contract changes land on main first, then dependent work fans out. Merge with
   both call things by; a name that only exists in code is not shared language.
   `tools/check_glossary.py` keeps it closed and active-voice, and it cannot
   notice a word missing from the file entirely — that part is yours
+- **chain file current** — a change that adds, moves or renames a hop updates
+  `.claude/rules/chain-star-grab-time.md` in the SAME commit. `tests/test_chains.py`
+  catches a hop that stopped resolving; it cannot notice a hop nobody drew
 - **responsive sweep clean** (`uv run pytest tests/test_responsive.py -q`) — a
   new defect is fixed, or owed in `tools/uilab_project.py::known_defects` with a
   reason. Component layout gates on `@container`, never `@media`; the law and

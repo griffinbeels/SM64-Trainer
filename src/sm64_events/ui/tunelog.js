@@ -57,15 +57,25 @@ const STORE_KEY = "sm64.logTuneDraft";
 // enforces for tuning pages: no test may assert a preview's CONTENTS) --
 // these numbers exist purely to give the real components something to draw.
 
+// The action column (`pb_action`/`pb_blocked`) is SERVER-resolved
+// (tracking/pbaction.py, 2026-08-20) and this file hand-builds the payload,
+// so each row STATES its action as data rather than deriving it -- a
+// derivation here would be a second copy of the server's precedence that
+// nothing compares, and the first version of this fixture was exactly that
+// (it read an `is_current_pb` flag that no longer exists). A plain success
+// defaults to Save; a row that is the PB says "undo", a row on another
+// strategy says null with its reason.
 let nextAttemptId = 1;
 function mkAttempt(overrides = {}) {
   const id = nextAttemptId++;
+  const outcome = overrides.outcome || "success";
   return {
-    id, journal_id: id, outcome: "success",
+    id, journal_id: id, outcome,
     igt: "0'24\"11", igt_frames: 733, rta: "0'25\"02", rta_frames: 750,
     pb_delta_frames: null, cleared: false, cleared_reason: null,
-    strat_tag: "Standard", rank: null, caveat: null, pb_blocked_by: null,
-    segment_id: null, is_current_pb: false, outcome_detail: null,
+    strat_tag: "Standard", rank: null, caveat: null,
+    segment_id: null, outcome_detail: null, other_strat: false,
+    pb_action: outcome === "success" ? "save" : null, pb_blocked: null,
     rollouts_total: 0, jumps_total: 0, rollouts_dustless: 0, jumps_dustless: 0,
     ...overrides,
   };
@@ -73,11 +83,20 @@ function mkAttempt(overrides = {}) {
 
 const OPEN_ATTEMPTS = [
   mkAttempt({ outcome: "success", igt: "0'22\"41", igt_frames: 673,
-    is_current_pb: true, pb_delta_frames: -34 }),
+    pb_action: "undo", pb_delta_frames: -34 }),
   mkAttempt({ outcome: "reset", igt: "0'06\"10" }),
   mkAttempt({ outcome: "death", outcome_detail: "fell", igt: "0'14\"02" }),
   mkAttempt({ outcome: "success", igt: "0'25\"77", igt_frames: 773, pb_delta_frames: 100 }),
   mkAttempt({ outcome: "success", igt: "0'23\"90", igt_frames: 717, pb_delta_frames: 44 }),
+  // A row belonging to ANOTHER strategy: no Save button and no delta (his
+  // 2026-08-22 ruling -- nothing of the active strategy's applies to it), so
+  // the actions cell holds only the replay and × controls. Kept on the page
+  // because the card's row heights are tuned against every row shape,
+  // including the one with the emptiest actions cell.
+  mkAttempt({ outcome: "success", igt: "0'26\"05", igt_frames: 782,
+    strat_tag: "Cannonless", pb_delta_frames: null, pb_action: null,
+    pb_blocked: { reason: "foreign_strat", strat: "Standard" },
+    other_strat: true }),
 ];
 
 // A graded strategy rank, shared shape between the star and segment secs.
@@ -96,6 +115,14 @@ const GRADED = (tier, division, fillPct) => ({
   reason: null,
 });
 
+// Every section below carries `pb_by_strat` beside `pb`, and the card's
+// tag reads the FIRST of those (2026-08-20: a personal best belongs to
+// one strategy). They hold the same times here on purpose -- each card
+// has a single strategy in play, so the entity's best and that
+// strategy's best are the same run, and a fixture where they diverged
+// would be posing a question this page is not for. Drop `pb_by_strat`
+// and every card reads "no PB · Standard" instead of its time, which
+// is how this file would go quietly wrong.
 const SECTIONS = [
   // 1. Two DIFFERENT rank ladders -- one banner with both rank-view buttons.
   //    Long name +
@@ -110,6 +137,8 @@ const SECTIONS = [
     entity_rank: GRADED("Silver", "IV", 70),
     one_ladder: false, armed_detail: null,
     pb: { igt: { display: "0'22\"41", attempt_id: 1, caveat: null },
+          rta: { display: "0'23\"90", attempt_id: 1, caveat: null } },
+    pb_by_strat: { igt: { display: "0'22\"41", attempt_id: 1, caveat: null },
           rta: { display: "0'23\"90", attempt_id: 1, caveat: null } },
     last_activity: 5,
   },
@@ -137,6 +166,7 @@ const SECTIONS = [
     entity_rank: null, one_ladder: false, armed_detail: null,
     pb: { igt: { display: null, attempt_id: null, caveat: null },
           rta: { display: null, attempt_id: null, caveat: null } },
+    pb_by_strat: { igt: null, rta: null },   // no time on this strategy: the tag reads the empty state
     last_activity: 4.5,
   },
   // 3. ONE shared ladder (`one_ladder: true`) -- the strategy ladder IS the
@@ -149,6 +179,8 @@ const SECTIONS = [
     rank: GRADED("Mario", "V", 12), entity_rank: null,
     one_ladder: true, armed_detail: null,
     pb: { igt: { display: "1'02\"33", attempt_id: null, caveat: null },
+          rta: { display: "1'04\"90", attempt_id: null, caveat: null } },
+    pb_by_strat: { igt: { display: "1'02\"33", attempt_id: null, caveat: null },
           rta: { display: "1'04\"90", attempt_id: null, caveat: null } },
     last_activity: 4,
   },
@@ -169,6 +201,7 @@ const SECTIONS = [
     entity_rank: null, one_ladder: false, armed_detail: null,
     pb: { igt: { display: null, attempt_id: null, caveat: null },
           rta: { display: null, attempt_id: null, caveat: null } },
+    pb_by_strat: { igt: null, rta: null },   // no time on this strategy: the tag reads the empty state
     last_activity: 3,
   },
 ];
@@ -183,6 +216,8 @@ const SEGMENT_SECTIONS = [
     rank: GRADED("Bronze", "III", 55), entity_rank: null, one_ladder: true,
     armed_detail: null,
     pb: { rta: { display: "0'41\"09", attempt_id: null, caveat: null },
+          igt: { display: null, attempt_id: null, caveat: null } },
+    pb_by_strat: { rta: { display: "0'41\"09", attempt_id: null, caveat: null },
           igt: { display: null, attempt_id: null, caveat: null } },
     last_activity: 2,
   },
@@ -200,6 +235,8 @@ const MORE_SECTIONS = [
     rank: GRADED("Grandmaster", "I", 95), entity_rank: GRADED("Diamond", "II", 30),
     one_ladder: false, armed_detail: null,
     pb: { igt: { display: "0'18\"04", attempt_id: null, caveat: null },
+          rta: { display: "0'18\"90", attempt_id: null, caveat: null } },
+    pb_by_strat: { igt: { display: "0'18\"04", attempt_id: null, caveat: null },
           rta: { display: "0'18\"90", attempt_id: null, caveat: null } },
     last_activity: 1,
   },

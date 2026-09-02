@@ -7,7 +7,7 @@ matched (vetted) name or its own, and NEVER an unadopted subsection — a piece'
 time banded against the whole target's ladder would file every clip several
 tiers too fast."""
 from sm64_events.library.audit import row_key
-from sm64_events.library.examples import example_clips
+from sm64_events.library.examples import example_clips, sheet_best
 
 NO_JP = lambda entity, strat: False
 
@@ -99,3 +99,54 @@ def test_jp_entries_drop_only_where_a_jp_difference_is_annotated():
     assert [1100, "https://v/jp"] not in annotated["TJ Owlless"]
     # the other strategies on the same entity keep their entries
     assert annotated["Own Name Way"] == [[1400, "https://v/own"]]
+
+
+# --- Sheet Best: the fastest recorded time, not the best FILMED one --------
+
+def test_sheet_best_takes_the_fastest_entry_even_with_no_video():
+    """The row answers "what IS the fastest recorded time", so a videoless
+    faster run beats a slower filmed one and `video` is simply None. That is
+    the one way it differs from example_clips, which needs a URL to be worth
+    anything."""
+    payload = _payload()
+    payload["targets"][0]["approaches"][0]["entries"].append(_entry(1050))
+    best = sheet_best(payload, {}, "star:2:4", NO_JP)
+    assert best["TJ Owlless"] == {"time_cs": 1050, "runner": "r", "video": None}
+    # ... and it still carries the video when the fastest run has one.
+    assert best["Own Name Way"] == {"time_cs": 1400, "runner": "r",
+                                    "video": "https://v/own"}
+
+
+def test_sheet_best_resolves_through_the_same_three_doors_as_the_clips():
+    """Same walk, so a strategy's Sheet Best and its example videos can never
+    come from different rows: adoption wins, an unadopted approach files under
+    its matched or own name, and an unadopted subsection never reaches its
+    target's entity (its time measures a PIECE)."""
+    payload = _payload()
+    rows = {_key(payload, 1, "Lobby door (L) - BoB door"): "segment:42"}
+    assert sheet_best(payload, rows, "segment:42", NO_JP)["Standard"][
+        "time_cs"] == 276
+    unadopted = sheet_best(payload, {}, "star:2:4", NO_JP)
+    assert set(unadopted) == {"TJ Owlless", "Own Name Way"}   # no subsection
+    assert 300 not in [b["time_cs"] for b in unadopted.values()]
+
+
+def test_sheet_best_drops_a_jp_run_only_where_a_jp_difference_is_annotated():
+    """The same JP rule the clips apply, which matters more here: an annotated
+    JP ladder means the JP times grade elsewhere, so letting one set the row
+    would print an unreachable target under a US ladder."""
+    payload = _payload()
+    payload["targets"][0]["approaches"][0]["entries"].append(
+        _entry(900, version="JP"))
+    assert sheet_best(payload, {}, "star:2:4", NO_JP)["TJ Owlless"][
+        "time_cs"] == 900
+    split = sheet_best(payload, {}, "star:2:4",
+                       lambda entity, strat: strat == "TJ Owlless")
+    assert split["TJ Owlless"]["time_cs"] == 1180
+    assert split["Own Name Way"]["time_cs"] == 1400   # unaffected
+
+
+def test_sheet_best_is_absent_for_a_strategy_with_no_sheet_row():
+    """An empty cell, never a guess: the table draws a dash where the sheet
+    has nothing to say about that strategy."""
+    assert sheet_best(_payload(), {}, "star:99:9", NO_JP) == {}

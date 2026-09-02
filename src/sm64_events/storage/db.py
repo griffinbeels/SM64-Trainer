@@ -1445,6 +1445,22 @@ class Database:
                                    [(i,) for i in attempt_ids])
             self._conn.commit()
 
+    def retag_attempt(self, attempt_id: int, strat_tag: str | None) -> None:
+        """Write ONE attempt's reclassified strategy into its derived row.
+
+        The same single column a full replay stamps from the journal's
+        `attempt_strat_set` (projection.py's three `_strat_overrides.get`
+        sites are the whole of that event's reach), so the live command and
+        a restart agree row for row -- pinned by tests/test_tracker_service.py
+        ::test_set_attempt_strat_agrees_with_a_full_replay. Exists because
+        the alternative, replaying the whole journal to move one column, cost
+        0.7-1.0 s of blocked event loop over his 18k-event journal
+        (2026-09-01) and grows with it."""
+        with self._lock:
+            self._conn.execute("UPDATE attempts SET strat_tag=? WHERE id=?",
+                               (strat_tag, attempt_id))
+            self._conn.commit()
+
     def retag_pbs_for_attempt(self, attempt_id: int,
                               strat_tag: str | None) -> None:
         """Follow an attempt's reclassification into the PBs it saved.

@@ -36,8 +36,9 @@ from sm64_events.compare.service import CompareService
 from sm64_events.core.events import Event
 from sm64_events.memory.behaviours import pointer_of
 from sm64_events.core.timefmt import format_igt
-from sm64_events.core.paths import (bundled_defaults_seed, bundled_rank_standards, bundled_sheet_ladders,
-                                    rank_standards_path)
+from sm64_events.core.paths import (bundled_defaults_seed,
+                                    bundled_rank_standards,
+                                    bundled_sheet_ladders)
 from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.app import create_app
 from sm64_events.server.broadcaster import Broadcaster
@@ -66,8 +67,8 @@ class _OfflineMemory:
         pass
 
 
-# Task 6 fix round 2 (task-6-caveats.md's own root cause, cited three times
-# in ui-core.md): the fixture had NO Compare backend at all, so
+# Task 6 fix round 2 (the root cause is cited three times in
+# ui-core.md): the fixture had NO Compare backend at all, so
 # `/api/compare/view` 404d under it no matter what the code did and a
 # content-asserting render test could only prove itself against a hand-built
 # harness. `serve_ui` now wires a REAL `CompareService` -- real sqlite
@@ -137,6 +138,12 @@ FIXTURE_COURSE = 2
 FIXTURE_LEVEL = 24
 FIXTURE_STAR = 4
 FIXTURE_STRAT = "TJ Owlless"
+# A SECOND strategy for the same star, so one seeded attempt can be foreign to
+# the active one and the practice log's PB gate chip has something to draw
+# (2026-08-20). Must also exist in the bundled standards for this star, for
+# FIXTURE_STRAT's own reason -- otherwise the standards table gains a column
+# with no ladder and the sweep measures a different table.
+FIXTURE_FOREIGN_STRAT = "Sideflip"
 
 # Castle Inside, the level every castle subarea (lobby / upstairs / basement)
 # belongs to -- `_publish_castle_stage` and `_seed_castle_pieces` both name it.
@@ -495,10 +502,37 @@ def _seed_target(base: str, course_id: int = FIXTURE_COURSE,
                         "strat_tag": FIXTURE_STRAT})
     attempts = json.loads(urllib.request.urlopen(
         f"{base}/api/session?clock=igt&scope=session", timeout=10).read())
+    # THIS star's rows only: the session view lists every star's section, and
+    # both the PB save and the foreign retag below must land on the target
+    # (`_seed_target` is called with other stars too).
     rows = [a for star in attempts.get("stars", [])
+            if star.get("course_id") == course_id and star.get("star_id") == star_id
             for a in star.get("attempts", []) if a.get("outcome") == "success"]
     if rows:
         post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "igt"})
+    # A SECOND strategy on one of the rows, so the practice log renders the
+    # MIXED action column the 2026-08-20 gate produces: some rows offering
+    # Save/Undo, at least one printing "TJ Owlless only" where its button
+    # would be. Without it every seeded row carries the active strategy and
+    # the chip is unreachable -- the "a wrong fixture state reports a clean
+    # page nobody is looking at" failure this file has now paid for five
+    # times. Retagged rather than run under a second strategy because the
+    # attempt's tag is stamped at CLOSE time from the then-active strategy,
+    # so a retag is the only way to make an EXISTING row foreign.
+    # NOT the PB row and NOT a caveated one: the fixture's deliberate
+    # grab-timed row is the one that draws the disabled grab-timed button, and
+    # a foreign row draws nothing at all (2026-08-22), so retagging that one
+    # would take the button off the page instead of adding the empty shape.
+    foreign = next((row for row in rows[1:] if not row.get("caveat")), None)
+    if foreign:
+        post(f"/api/attempts/{foreign['id']}/strat",
+             {"strat_tag": FIXTURE_FOREIGN_STRAT})
+        # ... and put the original strategy back: retagging the NEWEST row
+        # moves the entity's active strategy (service.set_attempt_strat's
+        # documented exception), which would make every OTHER row foreign
+        # instead and render the opposite half of the same screen.
+        post("/api/strat", {"course_id": course_id, "star_id": star_id,
+                            "strat_tag": FIXTURE_STRAT})
 
 
 # Padding for the practice LOG's own pagination (practicelog.js's
@@ -1188,6 +1222,12 @@ def _pad_journal(db_path: Path, count: int) -> None:
     type "padding" is unknown to every detector, projector branch and label
     rule, so the replay and the timeline walks pay for them (the cost being
     simulated) and no derived state changes.
+
+    That makes it honest for the WALK and about 4x too cheap for a REPLAY:
+    the segment engine still visits every padded row but matches none, so a
+    command that reprojects cost 268 ms here against 1003 ms on a snapshot of
+    his real 18k-event journal (2026-09-01, task 0113). For anything that
+    replays, measure on `snapshot_db(<his journal>)` with `seed=True` instead.
     """
     with contextlib.closing(sqlite3.connect(db_path)) as conn:
         cursor = conn.execute(
@@ -1256,7 +1296,11 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     survive that.
 
     `from_dev_db=True` still snapshots, for exploratory work where you want
-    whatever is really in there. Never for a gate.
+    whatever is really in there. Never for a gate. With a real journal, keep
+    `seed=True`: the fixture opens a NEW session and the practice log is
+    session-scoped, so `seed=False` on his 18k-event journal renders nothing
+    but the Unassigned card (2026-09-01) -- the seed lays known rows on top of
+    the real replay cost, which is the combination a timing bug needs.
 
     A fresh clone has no dev database at all, so the default also happens to be
     the only mode that works everywhere.
@@ -1378,8 +1422,30 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     # sweep run made exactly that mistake and under-reported the one card it
     # was built to measure (2026-07-28), which is the failure mode
     # .claude/rules/ui-core.md warns reads as a broken builder.
-    ranks = RankStandards(rank_standards_path(), bundled_rank_standards(),
-                          bundled_sheet_ladders())
+    # ALWAYS a scratch store, exactly like `adoptions_path` and `mode_path`
+    # below, and for the same reason: a driven test that EDITS a cutoff --
+    # through the panel's own PUT, or by clearing a strategy -- otherwise
+    # writes the worktree's real `data/rank_standards.json` and leaves it
+    # edited for every later run. `data/` is gitignored, so nothing reports it
+    # and nothing puts it back.
+    #
+    # The scratch file does not exist yet, which is the POINT: `RankStandards`
+    # seeds an absent store from the bundle, so every fixture reads the shipped
+    # community defaults rather than whatever this worktree happens to have
+    # been left holding.
+    #
+    # Measured 2026-08-21, which is why this is unconditional rather than a
+    # parameter a careful test remembers to pass: one new test cleared four of
+    # star:2:4's five strategies and did not restore them, and the next full
+    # suite came back with 6 failures and 4 errors across four unrelated files
+    # (the JP toggles, the Library's overall ladder, the rank-mode swap, the
+    # you-marker) -- every one of them a test that simply needed that star to
+    # still have its strategies, and not one of them able to name the cause.
+    # An opt-in would have to be remembered by whoever writes the NEXT such
+    # test, which is precisely the person who does not know yet.
+    ranks = RankStandards(
+        Path(compare_cache_scratch.name) / "rank_standards.json",
+        bundled_rank_standards(), bundled_sheet_ladders())
     ranks.load()
     service = TrackerService(database, broadcaster, ranks=ranks)
     poller = Poller(_OfflineMemory(), [], service)

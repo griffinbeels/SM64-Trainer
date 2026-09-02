@@ -193,9 +193,13 @@ def test_an_uncorrected_grab_is_untouched():
 
 def test_the_hundred_coin_row_closed_by_the_same_grab_is_corrected_too():
     # The 100-coin star IS the segment, and its time is stamped from the
-    # CLOSING grab's payload — so it is the second reader of the number a
-    # correction changes, and the reason the fold-in happens at the event
-    # rather than at the attempt (projection.py caveat 19).
+    # CLOSING grab's payload — so it is a reader of the number a correction
+    # changes, and the reason the fold-in happens at the event rather than at
+    # the attempt (projection.py caveat 19). Since task 0110 the exit grab's
+    # OWN row is dropped (one run, one row on the 100-coin star), so the
+    # 100-coin row is the only reader left — which makes folding the
+    # correction into the grab's payload, not into a per-attempt table,
+    # load-bearing rather than merely tidy.
     hundred_coin = SegmentDef(
         id=100, name="course 8 100 Coins -> Exit", enabled=True,
         start_triggers=[{"type": "level_enter", "to": 8},
@@ -212,8 +216,10 @@ def test_the_hundred_coin_row_closed_by_the_same_grab_is_corrected_too():
         correction(4),
     ], segments=[hundred_coin])
     hundred = next(a for a in attempts if (a.course_id, a.star_id) == (8, 6))
-    exit_star = next(a for a in attempts if (a.course_id, a.star_id) == (8, 2))
-    assert hundred.igt_frames == THE_WHOLE_STAR == exit_star.igt_frames
+    assert hundred.igt_frames == THE_WHOLE_STAR
+    # The exit star's own row no longer exists — the run is the 100-coin
+    # star's, and its finish records nothing of its own (task 0110).
+    assert not any((a.course_id, a.star_id) == (8, 2) for a in attempts)
 
 
 # --- entering a subarea is not a reset --------------------------------------

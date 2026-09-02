@@ -17,6 +17,14 @@ state_loaded — savestate / Usamune section-state load: gGlobalTimer jumps
   backward to a mid-game value (a full-RAM restore rewinds it). Backward
   jumps into the boot range are console resets and belong to game_reset
   (lifecycle.py shares BOOT_TIMER_MAX so exactly one of the two fires).
+  NOT EVERY LOAD MOVES IT (measured 2026-09-01): his 2026-08-28 TTC loop
+  loaded a state eleven times mid-course (input-timeline journal, session
+  19, ids 4126-4265) and gGlobalTimer stayed monotonic throughout while
+  only Usamune's IGT counter went backward (3645 -> 3319 -> 3331), so this
+  never fired and no anchor or level_enter marked those loads at all. That
+  is why the 100-coin engine arms on the grab itself rather than on any
+  anchor (.claude/rules/hundred-coin.md). Which load mechanism leaves the
+  timer alone is unmeasured; the journal shape is the fact.
 
 Both anchor payloads carry mario_acted: whether Mario entered any non-passive
   action since the last anchor. The tracking layer discards reset-closures of

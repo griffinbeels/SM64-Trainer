@@ -49,6 +49,7 @@ pointer to it).
 |---|---|
 | Library grouping (routes + segments) | `ui/group.js` (`buildTree` — the grouping ENGINE: `{of,label,order}` per level, `/`-joined node paths, numeric-aware and array-composite sort keys) + `ui/components/grouplist.js` (`GroupedList` + `useOpenGroups` — the collapsible chrome, ANY depth; indent is expressed by the DOM nesting itself — ONE `.lib-group` rule (margin + padding + guide line) that COMPOUNDS with depth, NOT a `--depth` custom property, which was dead CSS removed 2026-07-24. The depth-0 exception that cancelled the indent left sub-group HEADERS flush with their parent and was reverted 2026-07-25; the general rule — anything implying parent/child indents the child one level — lives in `.agents/skills/sm64-uiux/`). Consumers supply only their grouping POLICY and row renderer. Open state is an open-SET in localStorage per consumer key (`sm64.routeCatsOpen`, `sm64.segOriginsOpen`) so "nothing stored" = all collapsed; a new consumer MUST use a new key. Rows indent by margin with `width: auto` — `width: 100%` plus a margin overflowed the column and gave the library a horizontal scrollbar (live report 2026-07-24) |
 | Live event feed | `ui/components/feed.js` |
+| Refetching the session view — after a WebSocket event OR after a component's own write | `ui/store.js` + `ui/coalesce.js` — ONE door. Every `REFRESH_ON` event and every `t.refresh()` a component calls go through the same coalescer: a burst joins one run, one run is in flight at a time, and a request arriving mid-run settles with the FOLLOW-UP (the in-flight run may have read the world before the caller's write). `t.refresh()` returns that promise, which is how `stratpicker.js` knows when to let go of a held pick. Until 2026-09-01 components held the store's RAW `refresh`, so one strategy pick cost three `/api/session` fetches with two in flight together — a stale one landing last paints over a fresh one (task 0113). The raw `refresh` stays for mount, socket-open and the never-loaded retry only. Guards: `tests/test_ui_coalesce.py` (the promise contract, node) and `tests/test_ui_strat_pick_settles.py::test_a_pick_never_runs_two_view_fetches_at_once` (the wiring, in a real browser; mutation-proved by handing components the raw refresh again) |
 | What the page DREW, recorded for a live report | `ui/uilog.js` — reads the RENDERED page back and POSTs `/api/uilog` whenever the painted snapshot changes. TWO call sites since 2026-08-06, and the second is not a convenience: `components/practice.js`'s `useUiLog(pageRef)` covers the selector, the target cards and the practice log, and `components/segmenttimeline.js` passes its own root and its own reader for the RECORDER, because `app.js` renders one tab at a time — while the recorder is open the practice page is unmounted and the first effect does not run at all. Hence `useUiLog(rootRef, readers)`. A new surface is THREE edits, and the third fails silently: the reader, the call site, and `core/uilog.py::SURFACES`, which drops an unknown surface with no error anywhere (it ate every recorder record until the render gate went red). Store + why this is not a journaled event: `core/uilog.py`. It reads the DOM rather than the store DELIBERATELY — a model-based recorder logs what we believe is on screen, and the belief is what is in question whenever a "it was just there a couple frames ago" report arrives. The cost is that a class rename empties the log SILENTLY, which is indistinguishable from "nothing was on screen" — the one answer it exists to give — so `tests/test_ui_log_selectors.py` pins every class the reader looks for against the components that render it, and `tests/test_ui_log_records_the_real_page.py` renders the real app and fails if nothing lands. Dedupe is on the RENDERED snapshot, not on props: two states that paint identically are not a change the human saw. Posts are serialised through one queue because ORDER is the entire question these reports ask, and nothing is debounced because a state that lasted three frames IS the evidence |
 | Settings → Game → Game version (2026-08-15) | `ui/components/header.js` — one `select` (Auto-detect / JP / US — "JP", never "Japan") over `GET|PUT /api/mode`, fetched on drawer open like the rest; applies LIVE (no restart copy anywhere); the note names the graded version, and an "unsupported" note appears for emulator + explicit JP. Extracted from feature/console-support, whose Console section (Tracking mode + N64 setup) drops its own Game version dropdown when it merges main |
 | Top control bar | `ui/components/header.js` — **three cards, one row**: session / **the route rank card** / **Grading** (the rank MODE), plus the settings drawer. The CLOCK card left the bar 2026-08-08 (user: the default is always Usamune IGT -- x-cam timing -- so a control nobody changes should not spend a column); its select lives in the settings drawer's Display section, still wired to `store.js::pickClock`, and the rank card's column absorbed the clock column's fr at both remaining breakpoints. The `@media (max-width: 775px)` two-column override died with it -- its measured reason was four cards needing 684px, and three need 505. Slot 2 was the MARELO bar (a `<button>` jumping to the Rank tab) until 2026-07-28; it is now `RouteRankCard` and its one gesture is the ROUTE PICKER, because the practice toolbar's route select and this card's scope were already the same thing — see `.claude/rules/ui-ranks.md`. The PRACTICE TARGET card that used to sit in slot 2 was removed 2026-07-26 (user): it named a target the Active-target card and the quick-select row already name, and its own pick was mostly a dead end — you cannot practice Shifting Sand Land while loaded into Lethal Lava Land. Its picker moved to `ui/components/targetpicker.js` (see its own row below) and the MARELO bar took the freed column, which retired the separate `.marelo-row` second header row with NO change to `.context-bar`'s 4-column template at any of its three breakpoints. The card's cell is a `.marelo-slot` wrapper, which carries `container-type: inline-size` so the card's own `@container` rules measure THIS COLUMN and not the viewport (the sidebar's 1180px step makes a column's width non-monotonic in window width — `.claude/rules/ui-core.md`'s responsiveness law). It used to ALSO hold the grid cell open because `MareloBar` rendered `null` until `/api/marelo` landed, and a null grid child is no child at all; `RouteRankCard` never renders null — it hosts the route picker, and a control cannot wait for a rating to arrive — so `.marelo-slot:empty` went with that (2026-07-28). The rank-mode card is labelled **Grading**, not Rank, since it sits directly beside the thing that shows what your rank IS (id/name/endpoint unchanged). The tab-independent "⏱ <segment> running" armed chip rode the deleted card and was DROPPED with it (user's explicit call): armed state shows on the Practice tab via the stage banner's own running chip and the pinned segment card, and nowhere else. + Rank picker + Star icons control. **Every context card is ONE hit target** (user, 2026-07-25: the practice-target card highlighted and opened from anywhere because it IS a `<button>`; the three select cards only reacted on the select itself, and the mismatch read as a bug). All THREE cards now go through `ui/components/contextselect.js`, which is where that mechanism lives since 2026-07-28: `CardSelect` renders the chevron + the absolutely-stretched native `<select>` and nothing else, and `ContextSelect` (icon + copy + `CardSelect`) is what session/grading use. The rank card has its own richer body and calls `CardSelect` directly, so the rank card uses the SAME mechanism rather than a hand-rolled lookalike — which is also why the module exists at all: `marelo.js` needs it and `header.js` imports `marelo.js`, so keeping it in header.js would close an import cycle. `CardSelect` returns a FRAGMENT deliberately — `.context-select > select` is a child combinator, so wrapping the select in a div silently drops the whole rule and with it the hit target. Hidden with **`opacity: 0`, never transparent colours** — Chromium themes a select's popup off its computed background, and a transparent one gets a WHITE popup (see the dropdown row below); at opacity 0 the select keeps the shell's opaque dark background. An opacity-0 element also cannot show its own focus ring, so the CARD wears it via `:has(> select:focus-visible)`. Value and `<option>`s come from ONE `options` list, so the closed state can never disagree with the list; `title` rides the select — it covers the card, so a hover anywhere still answers, and it reaches the combobox as a description. Both halves pinned by `tests/test_header_ui.py` (dropping either silently restores the small hit target). The target picker itself now lives in `ui/components/targetpicker.js` — see its own row below |
@@ -524,6 +525,64 @@ and a row reshuffling four times in a tenth of a second is the flicker.
   is not a fallback — a hidden element cannot be hovered. Move the text onto
   an element that is always rendered (the rank banner folds its basis line
   into the progress track's tooltip).
+
+## A `<button>` carries the global rule with it (2026-08-21)
+
+`index.html`'s global `button` rule sets **`min-height: 34px; display:
+inline-flex`**. Every element that becomes a button inherits both, and neither
+is undone by the usual text-reset (`appearance: none; background: none; border:
+none; padding: 0; font: inherit`).
+
+**The measured cost.** The ranked-leaderboard branch turned a runner's name from
+a `<span>` into a `<button>` so the name could open that runner's page — inside
+the Library's *existing* ladder list, which the same branch was forbidden to
+change. `.library-plain-entry` went **24.75px → 41.75px** and
+`.library-example-meta` **40.38px → 48.38px**. A band holds dozens of plain
+rows, so the ladder grew about 70% taller in silence. `min-height: 0; display:
+inline` restored it exactly; the sibling `.library-example-plus` had carried
+`min-height: 0` since it was written.
+
+**Nothing caught it.** The responsive sweep hunts defects, not growth, and the
+ladder's own geometry test measures TOC→band gaps with divisions COLLAPSED. It
+took a whole-branch review measuring a baseline worktree to find.
+
+**It is now guarded**, by `tests/test_ui_button_flex.py::
+test_a_button_reset_to_inline_text_states_its_min_height` — beside the
+`justify-content` guard, because both enforce halves of the same global rule.
+The discriminator is the FULL text reset (background AND border AND all
+padding gone), which is what "this should flow as text" looks like in
+declarations. Deliberately narrow, and the exemptions are the point: a rule
+declaring its own `display` has taken control of its box (`.std-tier-btn`); one
+keeping background, border or padding is a chip-shaped control that wants the
+34px (`.version-switch-seg`, `.library-mode-seg`); and a PARTIAL padding reset
+leaves the element box-shaped (`.candx`, `.vidbtn`).
+
+Those last two sit just outside the guard and have **not** been judged by
+rendering — they strip background and border but keep horizontal padding, so
+they inherit the 34px and may carry the same latent bug. Widening the guard to
+cover them before judging them would trade one that fires reliably for one that
+gets switched off.
+
+## "Unchanged" is a measurement, not a claim (2026-08-21)
+
+Twice on one branch a surface that was supposed to stay untouched changed, and
+both times the implementer's report asserted it had not. One wrote
+"pixel-identical to before this task" about a page it had never rendered before
+its own change; the regression was a wrapper element collapsing a grid's gaps,
+15.98px → 6.39px between every band.
+
+**The method that actually settles it**: build a worktree at the pre-change
+commit, render the same selector in both, and diff real
+`getBoundingClientRect()` numbers — not a contact sheet against a memory of
+what the page used to look like.
+
+**The trap that makes the comparison lie**: this repo is installed editable, so
+importing `sm64_events` from a worktree can resolve to the MAIN checkout and
+both runs are then served the SAME code. The first attempt at this comparison
+reported identical numbers for exactly that reason. Give the baseline worktree
+its own venv, run with `PYTHONPATH="$PWD/src" .venv/Scripts/python.exe`, and
+**print `module.__file__` to prove which tree answered** before believing any
+before/after.
 
 ## Responsiveness — the law, and the three tests that hold it
 

@@ -1,6 +1,7 @@
 from sm64_events.ranks.classify import rank_for
 from sm64_events.ranks.scoring import (
     SCORE_ANCHORS, best_ladder, best_ladder_owners, defined_tiers,
+    sole_overall_owner,
     division_for, division_progress,
     next_tier_target, progress_for_time, progression_key, score_for, tier_band,
     tier_from_score, time_for_score)
@@ -262,3 +263,19 @@ def test_best_ladder_owners_names_every_winner_of_a_tie():
     # that is no better than the one beside it.
     ladders = {"A": {"Mario": 10.0}, "B": {"Mario": 10.0}, "C": {"Mario": 10.5}}
     assert best_ladder_owners(ladders) == {"Mario": ["A", "B"]}
+
+
+def test_sole_overall_owner_is_the_strategy_fastest_at_every_rank():
+    # The one-line answer to "why is Standard the same as Overall": the
+    # entity ladder is a pointwise minimum, so a strategy fastest at every
+    # rank IS it. A split ladder names nobody; a tie at any rank names nobody
+    # (someone matched it); a lone ladder names nobody (a race of one).
+    assert sole_overall_owner({"Standard": {"Mario": 14.03, "Gold": 14.53},
+                               "3x LJ": {"Mario": 14.36, "Gold": 14.86}}) == "Standard"
+    assert sole_overall_owner({"Sideflip": {"Mario": 10.93, "Gold": 12.00},
+                               "Owlless": {"Mario": 11.36, "Gold": 11.63}}) is None
+    assert sole_overall_owner({"A": {"Mario": 10.0, "Gold": 11.0},
+                               "B": {"Mario": 10.0, "Gold": 12.0}}) is None
+    assert sole_overall_owner({"Only": {"Mario": 10.0}}) is None
+    assert sole_overall_owner({"Only": {"Mario": 10.0}, "Empty": {}}) is None
+    assert sole_overall_owner({}) is None

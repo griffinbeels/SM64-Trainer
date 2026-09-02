@@ -3024,8 +3024,8 @@ def test_the_staleness_budget_never_clips_a_realistic_movement():
 
 
 def test_a_loose_def_armed_through_the_deferred_subarea_path_carries_a_deadline():
-    # THE GAP this task's brief missed (see task-3-report.md Item 0/1C): a
-    # destination-subarea start trigger (to_subarea) can't be confirmed on
+    # THE GAP this task's original brief missed: a destination-subarea
+    # start trigger (to_subarea) can't be confirmed on
     # the level edge — the castle interior loads the transient lobby before
     # the co-frame settle (module docstring's DESTINATION subarea section) —
     # so the engine holds a fresh _Arm in self._pending until the settled
@@ -4669,3 +4669,137 @@ def test_a_touch_step_names_the_place_it_leads_to():
     assert segments_module.step_node({"type": "entrance_touched", "to": 23}) \
         == segments_module.step_node({"type": "level_enter", "to": 23})
     assert segments_module.step_node({"type": "warp_entered", "level": 6}) is None
+
+
+# --- The 100-coin grab is proof (task 0110, 2026-09-01) ---------------------
+# Live journal 2026-08-28 (TTC): a state loaded mid-course fires no
+# level_enter and no anchor, so the engine sat unarmed through eleven
+# 100-coin grabs and every exit grab recorded as a plain Stomp on the Thwomp.
+# His ruling: "during a run if we ever get a 100 coins star, then now we're
+# doing 100 coins" -- the grab itself is the evidence, and so is holding a
+# hundred coins at the exit.
+
+def _hundred_coin_def(course=2, level=24, id=7):
+    return SegmentDef(
+        id=id, name="WF -- 100 Coins -> Exit", enabled=True,
+        start_triggers=[{"type": "level_enter", "to": level},
+                        {"type": "attempt_anchor", "level": level}],
+        end_triggers=[{"type": "star_grabbed", "course": course, "star": s}
+                      for s in range(6)],
+        waypoints=[[{"type": "star_grabbed", "course": course, "star": 6}]],
+        guards=[], match_mode="strict")
+
+
+def _grab(id, frame, course=2, star=6, **extra):
+    return jev(id, "star_collected", frame,
+               {"course_id": course, "star_id": star, "igt_frames": 1000,
+                **extra})
+
+
+def test_the_100_coin_grab_arms_its_engine_past_the_grab_when_nothing_armed_it():
+    e = SegmentEngine([_hundred_coin_def()])
+    closed, notices = e.feed(_grab(10, 1000, star=6), ctx(level=24))
+    assert closed == [] and e.armed_ids() == {7}
+    assert e.armed_items()[7].progress == 1, "the grab IS the waypoint"
+    assert [n["event"] for n in notices] == ["segment_armed"]
+    closed, _ = e.feed(_grab(11, 1300, star=3), ctx(level=24))
+    assert [a.outcome for a in closed] == ["success"]
+    assert closed[0].anchor_type == "star_collected"
+    assert closed[0].anchor_frame == 1000
+    assert e.armed_ids() == set()
+
+
+def test_a_second_100_coin_grab_restarts_the_run_at_the_latest_grab():
+    # The savestate loop re-grabs the 100-coin star from a state saved
+    # just before the hundredth coin; the run he finishes is the LATEST one.
+    e = SegmentEngine([_hundred_coin_def()])
+    e.feed(_grab(10, 1000, star=6), ctx(level=24))
+    closed, _ = e.feed(_grab(11, 1500, star=6), ctx(level=24))
+    assert closed == [], "silent: the abandoned run leaves no row"
+    assert e.armed_items()[7].progress == 1
+    assert e.armed_items()[7].start_frame == 1500
+    closed, _ = e.feed(_grab(12, 1800, star=3), ctx(level=24))
+    assert closed[0].outcome == "success" and closed[0].anchor_frame == 1500
+
+
+def test_an_exit_grab_holding_100_coins_completes_an_unarmed_engine_in_one_tick():
+    # A state loaded from AFTER the 100-coin grab: no grab edge will ever
+    # come, but the coin counter the exit grab carries says what this run is.
+    e = SegmentEngine([_hundred_coin_def()])
+    closed, _ = e.feed(_grab(10, 1000, star=3, coins=104), ctx(level=24))
+    assert [a.outcome for a in closed] == ["success"]
+    assert closed[0].closed_by == "star_collected"
+    assert closed[0].anchor_frame == 1000 and closed[0].segment_id == 7
+    assert e.armed_ids() == set()
+
+
+def test_an_exit_grab_holding_100_coins_completes_an_armed_engine_that_never_saw_the_grab():
+    # Entering the course armed it; the state loaded after the grab skipped
+    # the waypoint; the exit still closes THAT arm, keeping its anchor.
+    e = SegmentEngine([_hundred_coin_def()])
+    e.feed(jev(9, "level_changed", 900, {"from": 16, "to": 24}),
+           ctx(level=24, prev_level=16))
+    assert e.armed_ids() == {7} and e.armed_items()[7].progress == 0
+    closed, _ = e.feed(_grab(10, 1300, star=3, coins=100), ctx(level=24))
+    assert [a.outcome for a in closed] == ["success"], "ONE row, not two"
+    assert closed[0].anchor_type == "level_changed"
+    assert closed[0].anchor_frame == 900
+    assert e.armed_ids() == set()
+
+
+@pytest.mark.parametrize("payload", [{}, {"coins": 99}, {"coins": None}])
+def test_an_exit_grab_without_100_coins_leaves_an_unarmed_engine_alone(payload):
+    e = SegmentEngine([_hundred_coin_def()])
+    closed, _ = e.feed(_grab(10, 1000, star=3, **payload), ctx(level=24))
+    assert closed == [] and e.armed_ids() == set()
+
+
+def test_a_100_coin_grab_in_another_course_arms_nothing_here():
+    e = SegmentEngine([_hundred_coin_def(course=2)])
+    closed, _ = e.feed(_grab(10, 1000, course=14, star=6), ctx(level=14))
+    assert closed == [] and e.armed_ids() == set()
+
+
+def test_an_ordinary_run_whose_exit_grab_holds_100_coins_records_exactly_one_row():
+    # THE forward-play shape (every real exit grab carries a hundred coins):
+    # the armed branch closes the run, and the arm-phase proof must not
+    # arm-and-close it a second time on the same event. Caught in review
+    # 2026-09-01: two success rows, rta 400 and rta 0, for one run.
+    e = SegmentEngine([_hundred_coin_def()])
+    e.feed(jev(9, "level_changed", 900, {"from": 16, "to": 24}),
+           ctx(level=24, prev_level=16))
+    e.feed(_grab(10, 1000, star=6, coins=101), ctx(level=24))
+    closed, _ = e.feed(_grab(11, 1300, star=3, coins=137), ctx(level=24))
+    assert [(a.outcome, a.anchor_frame) for a in closed] == [("success", 900)]
+    assert e.armed_ids() == set()
+
+
+def test_a_run_proven_only_at_its_exit_has_no_rta_and_banks_no_best():
+    # Its start was never observed: the row counts on the star's IGT, the
+    # RTA is unknowable, and a zero must not become this def's best.
+    e = SegmentEngine([_hundred_coin_def()])
+    closed, _ = e.feed(_grab(10, 1000, star=3, coins=104), ctx(level=24))
+    assert [a.rta_frames for a in closed] == [None]
+    assert e._best_success.get(7) is None, "a zero must not become the best"
+
+
+def test_a_proof_arm_respects_the_arm_phase_guards():
+    guarded = dataclasses.replace(
+        _hundred_coin_def(), guards=[{"type": "in_active_route"}])
+    e = SegmentEngine([guarded])
+    # An active route that does NOT include this def: the guard refuses the
+    # proof arm exactly as it refuses an ordinary one. (No route at all is
+    # no restriction -- his 2026-08-02 "Overall" ruling -- so that shape arms.)
+    closed, _ = e.feed(_grab(10, 1000, star=6),
+                       ctx(level=24, route_segments=frozenset({99})))
+    assert closed == [] and e.armed_ids() == set(), "outside the route: no arm"
+    closed, _ = e.feed(_grab(11, 1000, star=6),
+                       ctx(level=24, route_segments=frozenset({7})))
+    assert e.armed_ids() == {7}
+
+
+def test_an_exit_grab_holding_100_coins_in_another_course_proves_nothing_here():
+    e = SegmentEngine([_hundred_coin_def(course=2)])
+    closed, _ = e.feed(_grab(10, 1000, course=14, star=3, coins=120),
+                       ctx(level=14))
+    assert closed == [] and e.armed_ids() == set()

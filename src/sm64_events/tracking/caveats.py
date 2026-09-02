@@ -194,3 +194,4 @@ def pb_blocked_by(attempt) -> str | None:
     Segments are never blocked: `timed_at` is None for every non-star closure
     (projection.py), and a segment has no x-cam to be legal about."""
     return "grab_timed" if _proven_grab_timed(attempt) else None
+

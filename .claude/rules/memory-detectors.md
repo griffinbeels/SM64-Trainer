@@ -491,7 +491,11 @@ defaulted GameSnapshot field → wire into `main.py` (order rationale lives in
 describing an EARLIER frame — a held emit — is published before every detector
 that closes an attempt, or one thing records as two) →
 render in the relevant `ui/components/*.js` (e.g. `feed.js`) if user-visible →
-document payload in README → full pytest + live check.
+document payload in README → **print the new field on `tools/verify_addresses.py`'s live
+frame line and star line** (his 2026-09-02 gate run could not confirm `coins`: the
+lines carried stars, igt and result but not the new number, and the Phase-1
+equality check had passed trivially on 0 == 0 idle in the castle -- the proof
+came from the branch server's journal instead) → full pytest + live check.
 
 **Add a dust trick** (landing-cancel chain like rollouts / double jumps):
 - *Same stat family* (another `jump`-type chain): ONE row in `TRICKS`

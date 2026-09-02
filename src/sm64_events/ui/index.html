@@ -333,8 +333,8 @@
   /* The Library tab (Task 3, spec 2026-08-07-library-page). Its course and
      target grids are `.entity-grid` + `PracticeCell` — the picker's own
      geometry and cell, reused rather than restyled, because the request was
-     literally "reuse the same exact design" (task-3-caveats.md point 1). Only
-     the bits the picker has no equivalent for get their own rule here: the
+     literally "reuse the same exact design". Only the bits the picker has
+     no equivalent for get their own rule here: the
      card frame is `.practice-card.workshop-card` (routes.js's own choice for
      a tab-level panel), so the two below are genuinely the whole addition. */
   .library-refresh-msg {
@@ -593,6 +593,64 @@
   }
   .library-plain-time { font-variant-numeric: tabular-nums; color: var(--muted); }
 
+  /* LEADERBOARD MODE (task 1, spec 2026-08-20-ranked-leaderboard): a second,
+     per-SECTION reading of the same entries -- every runner numbered,
+     fastest first, instead of banded by rank. The segmented switch borrows
+     `.version-switch`'s own visual recipe (same pill, same pressed-segment
+     fill) but is its OWN control -- per-section state that forgets your
+     pick the moment you leave, never the page-level JP/US switch. */
+  .library-mode-switch { display: inline-flex; align-items: center; gap: 0; }
+  .library-mode-seg {
+    appearance: none; border: 1px solid var(--border-soft);
+    background: var(--surface-2); color: var(--muted);
+    font: inherit; font-weight: 700; letter-spacing: .02em;
+    padding: .32rem .85rem; line-height: 1.1; cursor: pointer;
+  }
+  .library-mode-seg:first-child { border-radius: 999px 0 0 999px; border-right: none; }
+  .library-mode-seg:last-child { border-radius: 0 999px 999px 0; }
+  .library-mode-seg:hover { color: var(--text); }
+  .library-mode-seg[aria-pressed="true"] {
+    background: var(--gold); border-color: var(--gold-soft); color: #1b1607;
+  }
+  .library-mode-seg:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+  /* One CONDENSED line per runner (fifth read, 2026-08-23): position, rank
+     cap, runner, time, and -- when the entry has a video -- the practice
+     log's own ▶, which folds the Library card's media block open beneath
+     the line through `Disclose`. The position column must NEVER shrink or
+     wrap into the runner name at 850px, so it alone gets a fixed width; the
+     runner name is what gives, via ellipsis. The video box is capped like
+     the runner page's (480px): an uncapped 16/9 across a full row is a
+     screenful. */
+  .library-leaderboard { display: grid; gap: .25rem; margin-top: .3rem; }
+  .library-leaderboard-row {
+    border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-2);
+    min-width: 0;
+  }
+  .library-leaderboard-line { display: flex; align-items: center; gap: .6rem; padding: .3rem .55rem; min-width: 0; min-height: 41px; }
+  .library-leaderboard-position {
+    flex: 0 0 auto; width: 2.6rem; text-align: right;
+    font-variant-numeric: tabular-nums; font-weight: 700; color: var(--muted);
+  }
+  .library-leaderboard-tier { flex: 0 0 auto; }
+  .library-leaderboard-line .library-plain-runner {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .library-leaderboard-time {
+    flex: 0 0 auto; font-variant-numeric: tabular-nums; color: #dfe7ef; font-weight: 600;
+  }
+  .library-leaderboard-play, .library-leaderboard-noplay { flex: 0 0 31px; width: 31px; }
+  .library-leaderboard-line .icon-button { min-width: 31px; min-height: 31px; padding-inline: 0; }
+  .library-leaderboard-video { padding: 0 .55rem .55rem; max-width: 480px; }
+  .library-leaderboard-video .library-example-media { border-radius: 6px; overflow: hidden; }
+  /* Your own synthetic PB row -- the SAME gold "you" language TocRow and
+     DivisionGroup already wear for the identical fact (`.library-toc-you`),
+     applied to the row so it reads as the standout line in the list. */
+  .library-leaderboard-row.is-you {
+    border-color: var(--gold); background: rgba(240,189,50,.12);
+  }
+  .library-leaderboard-empty { margin: .3rem 0 0; }
+
   /* Video cards are sized to be WATCHED (round 1: "each grid element should
      be much bigger"; round 2 bounced 300px -- "still VERY hard to click on a
      video ... even bigger". A third bounce earns the tuning-page inspector,
@@ -654,6 +712,37 @@
   }
   .library-example-runner {
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Task 5's player-click door: a runner's name becomes a <button> wherever
+     `onOpenRunner` is wired (librarytarget.js's ExampleCard/PlainEntry),
+     ADDED to the existing `.library-example-runner`/`.library-plain-runner`
+     class rather than replacing it, so the ellipsis/overflow rules those
+     already carry keep applying with no second copy of them here. Button
+     chrome reset to plain text, styled up only on hover/focus -- the same
+     "looks clickable only once it is" law the leaderboard row above follows. */
+  /* ONE look for every text that is a DOOR -- a runner's name in the
+     Library (`.library-runner-link`), an entity's name in the runner page's
+     breakdown (`.rank-entity-link`), whatever comes next: the `.textlink`
+     class, which both wear. His ruling, 2026-08-22: "Anything that's a link
+     should be obvious that it's a link" -- so it is underlined and in the
+     palette's link blue AT REST, not only on hover, the same convention the
+     page's own `<a>`s follow; hover and keyboard focus turn it gold. It is a
+     <button> reset to flowing text: the global `button` rule sets
+     `min-height: 34px; display: inline-flex`, and a reset that left either
+     alone grew every row the name lives in ~17px (measured 2026-08-21:
+     `.library-plain-entry` 41.75px -> 24.75px once `min-height: 0; display:
+     inline` landed -- a band holds dozens of plain rows, so that was a
+     silent geometry change to the whole ladder). `.library-example-plus`
+     carries the same `min-height: 0` for the same reason. */
+  .textlink {
+    appearance: none; background: none; border: none; padding: 0; margin: 0;
+    font: inherit; text-align: left; cursor: pointer;
+    min-height: 0; display: inline;
+    color: var(--blue); text-decoration: underline; text-underline-offset: 2px;
+    text-decoration-color: color-mix(in srgb, var(--blue) 55%, transparent);
+  }
+  .textlink:hover, .textlink:focus-visible {
+    color: var(--gold); text-decoration-color: var(--gold);
   }
   .library-example-time {
     font-variant-numeric: tabular-nums; color: #dfe7ef; font-weight: 600;
@@ -720,8 +809,8 @@
 
   /* The grid overlay (Task 5): a plain fixed backdrop rather than the shared
      `Modal` -- every existing Modal call site snaps open/closed with no
-     transition, and this surface needed one (task-5-caveats.md point 5), so
-     copying Modal's shell would have copied the thing it needed to NOT copy.
+     transition, and this surface needed one, so copying Modal's shell would
+     have copied the thing it needed to NOT copy.
      `container-type` sits on the PANEL, not the page, because the panel is
      `position: fixed` and sized off the viewport (`min(94vw, …)`) -- gating
      `cols = min(cols, 2)` against `.view-pane` would measure a width the
@@ -1031,6 +1120,23 @@
   .std-sub-name{display:flex;align-items:center;justify-content:center;font-size:10px;white-space:nowrap}
   .std-sub-indent{padding-left:14px;box-sizing:border-box}
   @media (prefers-reduced-motion: reduce){.std-tier-chevron{transition:none}}
+  /* SHEET BEST -- the fastest time on the Ultimate Sheet, under the ladder
+     rather than in it. No cap art and no rank hue, because it grades nothing;
+     a hairline above the row says "past the top" without inventing a tier.
+     The runner sits under the time so the column keeps its numeric rhythm and
+     a long name (`Multiple [3]`, `FrostxBytex`) wraps downward instead of
+     widening a column shared with eight ladder rows. */
+  /* The one-line answer to "why is Standard the same as Overall" -- prose,
+     under the toolbar and above the table, where the question is asked. Quiet
+     by design: it explains a state rather than reporting a problem, so it
+     reads like the panel's own subtitle and not like a warning. */
+  .std-overall-note{margin:0 0 6px;font-size:11px;line-height:1.4;color:#8b95a1}
+  .std-overall-note b{color:#cdd3da;font-weight:600}
+  .stdtable tr.std-sheet-best td{border-top:2px solid #2c3440;background:#0f1319}
+  .std-sheet-best-name{font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#8b95a1}
+  .std-sheet-best-cell{line-height:1.25}
+  .std-sheet-best-runner{display:block;font-size:10px;color:#6f7883;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .stdtable td a{color:#6cb6ff;text-decoration:none}
   .stdtable td a:hover{text-decoration:underline}
   .stdtable th a{color:#cdd3da}
@@ -1622,8 +1728,7 @@
        ONE height budget serves every state without a resize when a segment
        arms/disarms (OBS-stable slot). Bumped from 122px (+28) for the room;
        a star card or an unarmed segment just gets a taller, still-centered
-       metrics row instead of an ugly gap -- measured by CDP geometry diff,
-       see task-6-report.md. */
+       metrics row instead of an ugly gap -- measured by CDP geometry diff. */
     grid-column: 1 / -1; height: 150px; min-height: 150px; overflow: visible;
     display: grid; grid-template-rows: auto 1fr auto; padding-block: 12px;
   }
@@ -2661,11 +2766,29 @@
   /* Coverage's unpracticed entries: the art stays (you have to recognise
      WHICH star you haven't touched), the tier ring and the colour go. */
   .entity-tile.is-unpracticed { opacity: .38; filter: grayscale(.75); }
-  .entity-tile.is-unpracticed:hover { opacity: .7; }
+  .entity-tile.is-unpracticed:not(.is-static):hover { opacity: .7; }
+  /* Fix round 1 (task 5 review): a tile with no `onToggle` behind it (the
+     runner page -- rankpage.js's own comment on `CoverageStrip`'s
+     `interactive` prop has the why) must not LOOK clickable. `cursor` alone
+     was NOT enough (fix wave, final review, H2): the global
+     `button:hover`/`:focus-visible` rules ((0,1,1) specificity) beat
+     `.entity-tile` ((0,1,0)) and repainted the background/border/outline on
+     hover and keyboard focus regardless -- which wipes the one thing a
+     coverage tile carries, its tier tint. `.is-static` adds a class each,
+     so `.entity-tile.is-static:hover`/`:focus-visible` ((0,3,0)) outrank the
+     global rule and hold the tile at its resting colours. */
+  .entity-tile.is-static { cursor: default; }
+  .entity-tile.is-static:hover, .entity-tile.is-static:focus-visible {
+    background: rgba(8, 20, 34, .4);
+    border-color: var(--tier-tint, var(--border-soft));
+    outline: none;
+  }
   /* The whole scope in one strip — 24 entries for a 16 Star route, 120+ for
-     a full run. The cap plus scroll is what stops a long route pushing the
-     chart and the breakdown off the screen; four rows fit before it engages. */
-  .rank-coverage-strip { max-height: 216px; overflow-y: auto; }
+     a full run — and ALL of it visible: this carried `max-height: 216px;
+     overflow-y: auto` until 2026-08-22, and his first read of a 117-tile
+     strip was "I shouldn't have to scroll" (acceptance.md: scrolling is a
+     symptom). The card grows instead; the chart and breakdown sit below it.
+     `.rank-coverage-strip` therefore has no rule of its own any more. */
   .rank-coverage { margin: 4px 0 3px; }
   .entity-tile-icon { width: 100%; height: 100%; object-fit: contain; }
   .entity-tile-icon.courseicon { width: 90%; height: 90%; }
@@ -3048,6 +3171,29 @@
     text-align: left; font-size: 11px; font-weight: 600; color: var(--muted);
     white-space: nowrap;
   }
+  /* Every breakdown row leads with the entity's own art (his second read,
+     2026-08-22: "to the left of all the names... their star/segment icons").
+     Same art the coverage tile draws, at the tile's 60% -- big enough to
+     read at a glance, small enough that the 30px rank cap beside it still
+     sets the row height. Inline, never flex: a `<td>` turned flex container
+     stops being a table cell and the column layout goes with it. */
+  .rank-row-icon {
+    width: 26px; height: 26px; object-fit: contain; vertical-align: middle; margin-right: 8px;
+  }
+  .rank-row-icon.courseicon { width: 24px; height: 24px; margin: 0 9px 0 1px; }
+  /* The runner breakdown's ▶ column and the player it opens beneath the row
+     (his third read, 2026-08-23). The ▶ is the practice log's own
+     `.icon-button`; the row under it is the practice log's own `.replay-row`
+     wearing the Library card's media block. Capped like the Library's own
+     flat list (`.library-leaderboard-row .library-example`, 420px): an
+     uncapped 16/9 box across a full table row is a screenful of video. */
+  .rank-cell-play { width: 34px; padding-inline: 4px; }
+  .rank-cell-play .icon-button { width: 31px; min-width: 31px; min-height: 31px; padding-inline: 0; }
+  .rank-video-box { max-width: 480px; }
+  /* His own PB's replay is the practice log's full player (transport, save,
+     compare) -- it needs the log's own width, not the 480px clip box. */
+  .rank-video-box.is-replay { max-width: none; }
+  .rank-video-box .library-example-media { border-radius: 6px; overflow: hidden; }
   .rank-table tr.unpracticed .rank-cell-name { opacity: .55; }
   /* Excluded dims the WHOLE row (it counts nowhere); unpracticed dims only the
      name (gain_for's docstring: it should still read as a quest, not dead
@@ -3058,8 +3204,112 @@
   /* The next-rank column (task C.3) can run "Diamond III → Diamond IV" —
      the longest string on the row; it gets the room a wrap would otherwise
      take from the name column, and shrinks its type rather than reflow at
-     narrow widths (swept 900px in the harness, see task-c-report.md). */
+     narrow widths (swept 900px in the harness). */
   .rank-cell-next { white-space: nowrap; font-size: 12px; }
+  /* The [[Rank board]] (leaderboard.js) -- draws GET /api/leaderboard's
+     rows as a scrolling list rather than a <table>: an HTML table's column
+     widths cannot compress under a @container query the way flex tracks
+     can, and this row is the densest one on the tab (position, icon, a long
+     runner name, three numbers, a coverage fraction).
+
+     FLEX, not grid, and that is load-bearing: `.rank-icon-slot` (the
+     ui-ranks.md "Rank icon SPACING" registry) reserves its wing spill with
+     its own MARGIN, which a flex parent counts toward each item's box on the
+     main axis -- a grid parent does not grow a track for a child's margin,
+     so the icon's ~42px rendered box (size 26, HAT_LAYOUT_WIDTH_RATIO
+     ~1.63) simply overflowed a 30px grid column into the name text. Caught
+     by the contact sheet, not by any assertion: every row read "arkdog47"
+     for "darkdog47". */
+  /* The board's own card (fourth read, 2026-08-23): a head button wearing
+     the Library section head's shape and chevron, the body behind the
+     project's `Disclose`. Padding lives on the head and body, not the card,
+     so the fold measures a box that closes to exactly 0. */
+  .leaderboard-card { padding: 0; overflow: hidden; }
+  /* `.practice-card` opts out of cross-axis stretch (`align-self: start`,
+     the collapse-transition section below) -- inside `.rank-page`'s flex
+     column that sizes a card to its CONTENT, and this card's closed content
+     is one line of text. Its siblings only look full-width because their
+     contents are wider than the pane. Stretch, explicitly, with the base
+     rule's own specificity plus one. */
+  .rank-page .leaderboard-card { align-self: stretch; }
+  .leaderboard-card-head {
+    width: 100%; display: flex; justify-content: flex-start; align-items: center; gap: .6rem;
+    text-align: left; padding: .7rem .9rem; border: none; border-radius: 0; background: transparent;
+    color: var(--text); min-height: 0;
+  }
+  .leaderboard-card-head:hover { background: rgba(240,189,50,.06); }
+  .leaderboard-card-title { font-weight: 700; font-size: 1.05rem; }
+  .leaderboard-card-hint { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .leaderboard-card-chevron { flex: 0 0 auto; margin-left: auto; color: var(--muted); transition: transform .15s ease; }
+  .leaderboard-card.open .leaderboard-card-chevron { transform: rotate(180deg); }
+  .leaderboard-card-body { padding: 0 .9rem .9rem; }
+  .leaderboard-head {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 6px;
+  }
+  .leaderboard-head .leaderboard-find { margin-right: auto; }
+  .leaderboard-find { position: relative; display: flex; align-items: center; }
+  .leaderboard-find-input {
+    width: 180px; padding: 5px 26px 5px 9px; border-radius: 6px;
+    border: 1px solid var(--border-soft); background: #0b1929; color: var(--text);
+    font-size: 12px;
+  }
+  .leaderboard-find-input::placeholder { color: var(--muted); }
+  .leaderboard-find-input::-webkit-search-cancel-button { display: none; }
+  .leaderboard-find-clear {
+    position: absolute; right: 4px; background: none; border: 0; color: var(--muted);
+    cursor: pointer; padding: 2px 4px; font-size: 11px;
+  }
+  .leaderboard-find-clear:hover { color: var(--text); }
+  .leaderboard-basis, .leaderboard-omitted { margin: 0 0 4px; }
+  .leaderboard-body {
+    max-height: min(520px, 55vh); overflow-y: auto; margin-top: 8px;
+    border: 1px solid var(--border-soft); border-radius: 8px;
+  }
+  /* A plain DIV, not a <button> -- Task 5 wired the click to the runner's
+     own page (leaderboard.js), so every OTHER runner's row now wears
+     `.is-clickable` and its own role/tabindex/keydown. Your own row STAYS a
+     dead control on purpose (it has no destination -- you are already
+     reading it), so it keeps the original no-pointer-cursor,
+     no-hover-affordance treatment this class carried since Task 4. */
+  .leaderboard-row {
+    display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+    border-bottom: 1px solid var(--border-soft);
+    transition: background-color .15s ease;
+  }
+  .leaderboard-row:last-child { border-bottom: 0; }
+  .leaderboard-row.is-clickable { cursor: pointer; }
+  .leaderboard-row.is-clickable:hover,
+  .leaderboard-row.is-clickable:focus-visible {
+    background: color-mix(in srgb, var(--gold) 8%, transparent);
+  }
+  .leaderboard-row.is-clickable:focus-visible {
+    outline: none; box-shadow: inset 0 0 0 2px var(--gold);
+  }
+  .leaderboard-row.is-you { background: color-mix(in srgb, var(--gold) 14%, transparent); }
+  .leaderboard-pos {
+    flex: 0 0 24px; font-variant-numeric: tabular-nums; color: var(--muted); text-align: right;
+  }
+  .leaderboard-name {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .leaderboard-row.is-you .leaderboard-name { color: var(--gold); font-weight: 700; }
+  .leaderboard-points {
+    flex: 0 0 auto; min-width: 50px; text-align: right; white-space: nowrap;
+    font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600;
+  }
+  .leaderboard-mastery, .leaderboard-coverage {
+    flex: 0 0 auto; min-width: 46px; text-align: right; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  /* No narrow-pane collapse rule here on purpose: measured directly, the
+     Rank tab's own pane never drops below 731px (the 850px supported floor,
+     sidebar collapsed to its rail -- this file's own "card 731" arithmetic
+     below, not a figure ui-core.md carries),
+     and the row -- including the corpus's actual longest name,
+     SullyLikesBigChungus at 20 characters -- fits there with room to spare
+     (contact sheet). A collapse threshold below that would
+     be unreachable at every supported width, which this project treats as
+     the same failure as a rule that never fires. */
   .objective-live-state {
     min-width: 0; min-height: 32px; display: flex; align-items: center; justify-content: center;
     gap: .4rem; color: var(--muted); border-inline: 1px solid var(--border-soft);
@@ -3216,7 +3466,14 @@
   .attempt-actions {
     width: 210px; text-align: right; white-space: nowrap;
   }
-  .attempt-actions button { min-height: 30px; padding: .25rem .45rem; font-size: .76rem; }
+  /* `vertical-align: middle`, because the cell lays its buttons out INLINE
+     and inline-blocks sit on the text baseline by default -- the replay
+     button's SVG, "Save as PB"'s text and the ×'s glyph each put that
+     baseline at a different height, so the three 30px boxes landed at
+     +0 / +1 / +3 px (measured 2026-08-23; his report: "the X button is
+     slightly lower than the others"). Middle-aligning every button puts
+     their centres on one line whatever each one contains. */
+  .attempt-actions button { min-height: 30px; padding: .25rem .45rem; font-size: .76rem; vertical-align: middle; }
   .attempt-actions .icon-button { width: 31px; padding-inline: 0; }
   .save-pb-narrow { display: none; }
   /* THE DISCLOSURE PRIMITIVE (components/collapsible.js::Disclose). Two
@@ -4816,6 +5073,7 @@
     font: inherit; font-size: .72rem; color: #e6d9b8; cursor: pointer;
     background: rgba(160, 110, 30, .12); border: 1px solid rgba(230, 180, 90, .35);
     border-radius: .4rem; padding: .15rem .5rem; display: inline-flex; gap: .5rem;
+    justify-content: flex-start; align-items: center;   /* a row anchors left */
   }
   .input-screen-check-row:hover { background: rgba(160, 110, 30, .3); }
   .input-screen-check-row .frame { font-weight: 600; color: #f0c877; }
@@ -6096,6 +6354,19 @@
     margin-left: var(--log-pb-offset, 0px);
     white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 700;
   }
+  /* The empty state names the strategy IN FULL, and the track GROWS to fit
+     it, pushing the strategy picker left (his call, 2026-08-22: "the text for
+     'no PB - Single J...' should expand horizontally so that the full
+     strategy name is displayed. It should push the strategy selector to the
+     left when expanding"). The first version clamped the name at 8ch
+     instead, because a longer tag overflowed LEFT into the picker -- and the
+     reason it overflowed is worth knowing before anyone re-adds a clamp: the
+     `min-width` floor above REPLACES the tag's automatic minimum size, so a
+     `minmax(auto, …)` track read that floor as the tag's minimum and never
+     grew past it. The pb track is `minmax(max-content, …)` now (the two
+     one-line grids below), which keeps the floor for short tags -- every row
+     still reads the same 100px and the pickers still line up -- and lets a
+     long name widen its own row's track. */
   /* Book mark (Task 7, spec 2026-08-07-library-page) sits BESIDE the fold
      button now, sharing its "fold" grid-area through this wrapper rather
      than claiming a fifth named area of its own -- see practicelog.js's own
@@ -6158,6 +6429,19 @@
      2026-08-23, "it gets totally messed up on a small enough screen
      width"). Above 760px the row was still a table row and grew. */
   .log-card-body .attempt-table tr:not(.replay-row) { height: var(--log-row-height, 40px); }
+  /* A row on a strategy OTHER than the one being practised is dimmed, so
+     the rows that belong to what you are doing are the ones that read
+     (his call, 2026-08-23: "slightly dim the row, so that it's very clear
+     that it's for a different strategy"). How much, and how long the fade
+     takes when the header's strategy changes, are logtuning.js rows
+     (otherStratDim / otherStratFade) -- judged by feel, so tuned rather
+     than guessed. ONE `transition` on the row and nowhere else: a second
+     declaration on `.other-strat` would REPLACE this one while the class
+     is on, and the fade would run in one direction only. A cleared row
+     keeps its own stronger dim (`.cleared`, above) whatever its strategy. */
+  .attempt-table tr { transition: opacity var(--log-other-strat-fade, 240ms) ease; }
+  .attempt-table tr.other-strat:not(.cleared) { opacity: var(--log-other-strat-dim, 0.5); }
+  @media (prefers-reduced-motion: reduce) { .attempt-table tr { transition: none; } }
   /* A STAR'S PIECES, inside its own card (round 22, 2026-08-08): "the
      subsection should appear WITHIN the star's practice log entry as a
      sub-entry... indented a bit so it's clear that it's owned by the parent
@@ -6883,7 +7167,7 @@
     grid-template-columns:
       minmax(var(--log-identity-floor, 220px), var(--log-identity-percent, 20fr))
       minmax(0, var(--log-ranks-percent, 70fr))
-      minmax(auto, var(--log-pb-percent, 8fr))
+      minmax(max-content, var(--log-pb-percent, 8fr))
       auto;
     grid-template-areas: "identity ranks pb fold";
   }
@@ -7058,7 +7342,7 @@
   .log-list-card.log-layout-oneline .log-card.log-card-ranks-in-body:not(.is-unassigned) .log-card-head {
     grid-template-columns:
       minmax(var(--log-identity-floor, 220px), 90fr)
-      minmax(auto, var(--log-pb-percent, 8fr))
+      minmax(max-content, var(--log-pb-percent, 8fr))
       auto;
     grid-template-areas: "identity pb fold";
   }

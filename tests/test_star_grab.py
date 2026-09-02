@@ -723,3 +723,17 @@ def test_a_reset_after_the_backstop_corrects_nothing():
                          igt_overall=0))
     events = run_pairs(StarGrabDetector(), snaps, settle=False)
     assert [e.type for e in events] == ["star_collected"]
+
+
+def test_the_grab_carries_the_coin_count_at_the_grab():
+    # The 100-coin engine reads it off the exit grab (task 0110): a state
+    # loaded after the 100-coin grab shows no grab edge, but Mario is still
+    # holding the coins that spawned the star.
+    prev = snap(num_stars=5, global_timer=1001, igt_overall=230, igt_result=0,
+                coins=104)
+    curr = snap(mario_action=A.ACT_STAR_DANCE_EXIT, mario_action_timer=2,
+                global_timer=1002, num_stars=6,
+                last_completed_course=1, last_completed_star=3,
+                igt_overall=232, igt_result=231, coins=104)
+    events = run_pairs(StarGrabDetector(), [prev, curr])
+    assert events[0].payload["coins"] == 104

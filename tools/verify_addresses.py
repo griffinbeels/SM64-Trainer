@@ -42,7 +42,7 @@ from sm64_events.detectors.spawn import SpawnDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
 from sm64_events.memory.addresses import (
-    KEY_GRAB_LEVELS, LEVEL_NAMES, PARTICLE_DUST, SPAWN_ACTIONS,
+    HUD_COINS_OFF, KEY_GRAB_LEVELS, LEVEL_NAMES, PARTICLE_DUST, SPAWN_ACTIONS,
     WARP_ENTRY_ACTIONS,
 )
 from sm64_events.memory.layout import layout_for, version_from_argv
@@ -80,6 +80,21 @@ def main() -> None:
                 f"delta over 1s = {delta}")
     ok &= check("MARIO_NUM_STARS plausible", 0 <= s2.num_stars <= 182,
                 f"numStars = {s2.num_stars} (compare with the in-game counter)")
+    # VERIFY (2026-09-01, task 0110): the coin count the 100-coin engine reads
+    # off an exit grab. Two independent witnesses must agree -- Mario's own
+    # numCoins and the HUD's copy -- and both must be the number beside the
+    # coin icon on screen. The HUD counts UP toward numCoins one per frame
+    # after a pickup, so stand still a second before reading; a gap of up to
+    # one second's animation is tolerated, a larger one is a wrong address.
+    if LAYOUT.hud_display is None:
+        print("  [SKIP] MARIO_NUM_COINS vs HUD: hud_display not in this "
+              "version's layout yet (the sync loop finds it first)")
+    else:
+        hud_coins = mem.read_s16(LAYOUT.hud_display + HUD_COINS_OFF)
+        ok &= check("MARIO_NUM_COINS matches the HUD's coin count",
+                    abs(s2.coins - hud_coins) <= 30 and 0 <= s2.coins <= 999,
+                    f"numCoins = {s2.coins}, gHudDisplay.coins = {hud_coins} "
+                    f"(both must equal the coin counter on screen)")
     ok &= check("MARIO_ACTION nonzero", s2.mario_action != 0,
                 f"action = {s2.mario_action:#010x}")
     ok &= check("LAST_COMPLETED plausible",
@@ -198,6 +213,7 @@ def main() -> None:
                 continue
             print(f"  >> star_collected: {p['course_name']} / {p['star_name']}"
                   f"  igt {p['igt']} ({p['igt_frames']}f)"
+                  f"  coins {p.get('coins')}"
                   f"  frame {ev.frame}{recon}")
         for ev in dust_det.process(prev_snap, s):
             p = ev.payload
@@ -233,6 +249,7 @@ def main() -> None:
             print(f"frame {s.global_timer:>8}  action {s.mario_action:#010x}  "
                   f"stars {s.num_stars:>3}  igt {s.igt_overall:>6} "
                   f"result {s.igt_result:>6}"
+                  f"  coins {s.coins:>3}"
                   f"  level {s.curr_level}{area_str}{dust}")
             prev_action = s.mario_action
         prev_snap = s
@@ -240,4 +257,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nstopped.")

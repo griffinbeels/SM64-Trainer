@@ -165,6 +165,7 @@ class _PendingGrab:
     star_id: int
     already_collected: bool
     num_stars: int
+    coins: int          # held at the grab -- the 100-coin engine's proof on an exit grab
     level: int
     grab_frame: int
     grab_igt: int
@@ -362,7 +363,7 @@ class StarGrabDetector:
         return _PendingGrab(
             course_id=curr.last_completed_course, star_id=star_id,
             already_collected=curr.num_stars == prev.num_stars,
-            num_stars=curr.num_stars, level=curr.curr_level,
+            num_stars=curr.num_stars, coins=curr.coins, level=curr.curr_level,
             grab_frame=grab_frame, grab_igt=igt_frames,
             grab_igt_source=source,
         )
@@ -578,6 +579,7 @@ class StarGrabDetector:
                 "igt_timed_at": timed_at,
                 "grab_frame": grab.grab_frame,
                 "num_stars": grab.num_stars,
+                "coins": grab.coins,
                 "published_after": grab.published_after,
                 "result_writes": grab.writes or [],
                 "carried_igt": grab.carried_igt,

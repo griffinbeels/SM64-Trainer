@@ -26,11 +26,12 @@ from sm64_events.core.modes import ModeConfig, effective_version
 from sm64_events.core.paths import bundled_defaults_seed
 from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, node_label, star_name
+from sm64_events.ranks import scopes
 from sm64_events.ranks.classify import RANK_MODES
 from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
 from sm64_events.tracking import practicable
-from sm64_events.tracking.caveats import pb_blocked_by
+from sm64_events.tracking.activestrat import ActiveStrats
 from sm64_events.tracking.defaults import remember_deletion, resolve_steps
 from sm64_events.tracking.hundred_coin import classify
 from sm64_events.tracking.prune import PRUNE_EVENT, prunable_ids
@@ -41,6 +42,7 @@ from sm64_events.tracking.segments import (SegmentDef, hundred_coin_entity,
                                            segment_origin, split_definition,
                                            stage_origin, star_origin,
                                            validate_definition)
+from sm64_events.tracking.pbaction import pb_action
 from sm64_events.tracking import routes as route_logic
 
 log = logging.getLogger("sm64.tracker")
@@ -836,9 +838,10 @@ class TrackerService:
         """Reclassify ONE recorded attempt's strategy (None = unlabeled).
 
         A strategy is declared before a run, so it is routinely wrong after
-        it. Journal-first like clear/restore: the correction is appended and
-        folded in by projection.strat_overrides, never written into the
-        derived attempts row. Editing an OLDER row does not touch the live
+        it. Journal-first like clear/restore: the correction is appended, and
+        every replay folds it in through projection.strat_overrides. Unlike
+        clear/restore it does NOT then replay the journal -- the row's one
+        column is written directly, see below. Editing an OLDER row does not touch the live
         per-target strategy memory. Reclassifying the entity's NEWEST
         non-cleared attempt is the exception (user request 2026-07-24): "my
         last run was actually strat X" means X is what's being practiced
@@ -888,6 +891,22 @@ class TrackerService:
             self._register_strategy(
                 db, entity_key(attempt.course_id, attempt.star_id,
                                attempt.segment_id), strat_tag)
+        # The row itself: ONE column, written directly, plus the projector's
+        # own override map so its picture matches what a replay of this
+        # journal would build. NOT `_reproject()` (until 2026-09-01 it was):
+        # a full replay is O(journal) -- 0.7-1.0 s over his 18,247-event
+        # journal, with the event loop blocked so the browser could not even
+        # receive the strat_set broadcast above -- and that second is exactly
+        # how long his strategy picker sat on the OLD value before snapping to
+        # the new one (task 0113). The override reaches one column of one row
+        # and nothing else (projection.py's three `.get` sites), which is what
+        # makes the direct write the same answer; the equivalence is pinned by
+        # test_set_attempt_strat_agrees_with_a_full_replay, and the door by
+        # test_set_attempt_strat_does_not_replay_the_journal. Written BEFORE
+        # the propagation below, so a client refreshing on its strat_set
+        # already sees the retagged row.
+        db.retag_attempt(attempt_id, strat_tag)
+        self._projector.override_strat(attempt_id, strat_tag)
         # Newest-attempt exception (docstring above): the active strategy
         # follows a reclassified top-of-log row.
         if (strat_tag and has_entity
@@ -897,7 +916,11 @@ class TrackerService:
             else:
                 await self.set_strat(attempt.course_id, attempt.star_id,
                                      strat_tag)
-        await self._reproject()
+        # The same bare refetch ping a reprojection ends with: an OLDER row's
+        # retag publishes no strat_set, and a second browser would otherwise
+        # keep drawing the old tag.
+        await self.publish(Event(type="attempts_invalidated", frame=0,
+                                 timestamp_utc=_now(), payload={}))
 
     @staticmethod
     def _newest_attempt_id(db, attempt) -> int | None:
@@ -1507,26 +1530,43 @@ class TrackerService:
 
     # ---- MARELO: rank exclusions + celebration watermarks -------------------
     def rank_excluded(self) -> set[str]:
-        """Entity keys the user has opted out of ranking entirely -- they
-        leave the numerator AND denominator of every scope. ui_state KV
-        `rank_excluded`, not the standards store: this is user preference,
-        and rank_standards.json is community data the bundled-seed reconcile
-        overwrites on upgrade, which would silently discard the opt-out."""
+        """Entity keys kept out of ranking entirely -- they leave the
+        numerator AND denominator of every scope. Two KVs on top of a
+        default (`ranks/scopes.py::default_excluded`: every segment outside
+        the Bowser-fight / 100-coin-exit categories, his fifth-read ruling):
+        `rank_excluded` holds what he explicitly excluded, `rank_included`
+        what he explicitly included back from the default. ui_state KVs,
+        not the standards store: this is user preference, and
+        rank_standards.json is community data the bundled-seed reconcile
+        overwrites on upgrade, which would silently discard the choice."""
         if self.db is None:
             return set()
-        return set(self.db.get_state("rank_excluded", []))
+        return scopes.effective_excluded(
+            scopes.default_excluded(self.db.segment_defs()),
+            self.db.get_state("rank_included", []),
+            self.db.get_state("rank_excluded", []))
 
     async def set_rank_excluded(self, entity_key: str, excluded: bool) -> None:
         """Broadcast-only like set_rank_mode/set_icon -- a display/scoring
-        preference, never journaled."""
+        preference, never journaled. Writes the ONE set that overrides the
+        default for this key: including a default-excluded segment lands in
+        `rank_included`, excluding a default-included entity in
+        `rank_excluded`; the opposite move just clears the override."""
         if self.db is None:
             raise RuntimeError("tracking database unavailable")
-        current = self.rank_excluded()
+        default = entity_key in scopes.default_excluded(self.db.segment_defs())
+        explicit_excluded = set(self.db.get_state("rank_excluded", []))
+        explicit_included = set(self.db.get_state("rank_included", []))
         if excluded:
-            current.add(entity_key)
+            explicit_included.discard(entity_key)
+            if not default:
+                explicit_excluded.add(entity_key)
         else:
-            current.discard(entity_key)
-        self.db.set_state("rank_excluded", sorted(current))
+            explicit_excluded.discard(entity_key)
+            if default:
+                explicit_included.add(entity_key)
+        self.db.set_state("rank_excluded", sorted(explicit_excluded))
+        self.db.set_state("rank_included", sorted(explicit_included))
         await self.broadcaster.publish(Event(
             type="marelo_changed", frame=0, timestamp_utc=_now(),
             payload={"entity": entity_key, "excluded": excluded}))
@@ -1877,25 +1917,52 @@ class TrackerService:
                                      timestamp_utc=_now(),
                                      payload=self.target_payload()))
 
-    async def save_pb(self, attempt_id: int, timer_mode: str) -> dict:
+    def pb_action(self, attempt, timer_mode: str) -> tuple[str | None, dict | None]:
+        """`pbaction.pb_action` asked of the DATABASE for one attempt: the
+        active strategy through the same `ActiveStrats` the session view
+        builds, and PB ownership through `db.current_pb` on the attempt's own
+        strategy. The commands below require the answer they need and refuse
+        on anything else, so the API can never accept what the button does
+        not offer -- the one resolver, entered from the command side."""
+        db = self._require_db()
+        active = ActiveStrats.from_db(db, self.strat_by_star, self.strat_by_segment)
+        row = db.current_pb(attempt.course_id, attempt.star_id, timer_mode,
+                            segment_id=attempt.segment_id,
+                            strat_tag=attempt.strat_tag)
+        owns = row is not None and row["attempt_id"] == attempt.id
+        return pb_action(attempt, active.for_attempt(attempt), owns)
+
+    def _pb_attempt(self, attempt_id: int, timer_mode: str):
         db = self._require_db()
         if timer_mode not in ("igt", "rta"):
             raise ValueError(f"bad timer_mode {timer_mode!r}")
         attempt = next((a for a in db.attempts() if a.id == attempt_id), None)
         if attempt is None:
             raise LookupError(f"no attempt {attempt_id}")
-        if attempt.outcome != "success" or attempt.cleared:
-            raise ValueError(f"attempt {attempt_id} is not a saveable success")
         if attempt.segment_id is not None and timer_mode != "rta":
             raise ValueError("segments are RTA-only")
-        blocked = pb_blocked_by(attempt)
-        if blocked is not None:
-            # The door, not the decoration: the button is drawn disabled from
-            # the same predicate, but a PB is reachable by API and a fake one
-            # keeps GRADING once it is in the pbs table (that is what made a
-            # cleared attempt's leftover PB read MARIO 1 for a week).
+        return attempt
+
+    @staticmethod
+    def _refusal(blocked, fallback: str) -> str:
+        return blocked["reason"] if blocked else fallback
+
+    async def save_pb(self, attempt_id: int, timer_mode: str) -> dict:
+        db = self._require_db()
+        attempt = self._pb_attempt(attempt_id, timer_mode)
+        action, blocked = self.pb_action(attempt, timer_mode)
+        if action != "save":
+            # The door, not the decoration: the button is drawn from the same
+            # resolver, but a PB is reachable by API and a fake one keeps
+            # GRADING once it is in the pbs table (that is what made a
+            # cleared attempt's leftover PB read MARIO 1 for a week). Since
+            # 2026-08-20 that covers the STRATEGY too: a time may only be
+            # banked under the strategy it was run with, and only while that
+            # strategy is the one being practised -- and "undo" here means
+            # it already IS that strategy's PB, so there is nothing to save.
             raise ValueError(
-                f"attempt {attempt_id} cannot be saved as a PB ({blocked})")
+                f"attempt {attempt_id} cannot be saved as a PB "
+                f"({self._refusal(blocked, 'already its strategy\'s current PB' if action == 'undo' else 'not a saveable success')})")
         frames = attempt.igt_frames if timer_mode == "igt" else attempt.rta_frames
         if frames is None:
             raise ValueError(f"attempt {attempt_id} has no {timer_mode} clock")
@@ -1920,19 +1987,24 @@ class TrackerService:
         user can't see. Like save_pb, the pbs table is mutated directly —
         the journaled pb_undone event is record/broadcast only."""
         db = self._require_db()
-        if timer_mode not in ("igt", "rta"):
-            raise ValueError(f"bad timer_mode {timer_mode!r}")
-        attempt = next((a for a in db.attempts() if a.id == attempt_id), None)
-        if attempt is None:
-            raise LookupError(f"no attempt {attempt_id}")
-        row = db.current_pb(attempt.course_id, attempt.star_id, timer_mode,
-                            segment_id=attempt.segment_id)
-        if row is None or row["attempt_id"] != attempt_id:
+        attempt = self._pb_attempt(attempt_id, timer_mode)
+        # PER STRATEGY since 2026-08-20, both halves. The row to undo is this
+        # attempt's own strategy's current PB -- a Standard save is no longer
+        # un-undoable because a 3x LJ save landed after it -- and the action is
+        # refused entirely while a DIFFERENT strategy is active, the same rule
+        # save_pb applies through the same resolver.
+        action, blocked = self.pb_action(attempt, timer_mode)
+        if action != "undo":
             raise ValueError(
-                f"attempt {attempt_id} is not the current {timer_mode} PB")
+                f"attempt {attempt_id} cannot undo a PB "
+                f"({self._refusal(blocked, f'not the current {timer_mode} PB')})")
+        row = db.current_pb(attempt.course_id, attempt.star_id, timer_mode,
+                            segment_id=attempt.segment_id,
+                            strat_tag=attempt.strat_tag)
         db.delete_pb(row["id"])
         restored = db.current_pb(attempt.course_id, attempt.star_id,
-                                 timer_mode, segment_id=attempt.segment_id)
+                                 timer_mode, segment_id=attempt.segment_id,
+                                 strat_tag=attempt.strat_tag)
         payload = {"course_id": attempt.course_id, "star_id": attempt.star_id,
                    "segment_id": attempt.segment_id,
                    "strat_tag": row["strat_tag"], "timer_mode": timer_mode,

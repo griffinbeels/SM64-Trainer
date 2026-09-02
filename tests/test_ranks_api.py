@@ -28,8 +28,31 @@ def make_client(tmp_path):
     b = Broadcaster()
     ranks = RankStandards(tmp_path / "rs.json", seed_path=_seed(tmp_path)); ranks.load()
     svc = TrackerService(db, b, ranks=ranks)
-    app = create_app(Poller(OfflineMemory(), [], svc), b, service=svc)
+    # `adoptions_path` MUST be scratch: create_app's default resolves the
+    # adoption store cwd-relative (`core.paths.library_adoptions_path()`),
+    # so a driven test adopting a row through the API was writing the
+    # CHECKOUT's own data/library_adoptions.json -- and every later test in
+    # the same checkout inherited that row as ambient board state (caught
+    # 2026-08-23 by the wrap's clean-worktree run: a leaderboard test that
+    # passed here for weeks failed there, because "here" had a leaked
+    # adoption and the clean tree did not).
+    app = create_app(Poller(OfflineMemory(), [], svc), b, service=svc,
+                     adoptions_path=tmp_path / "library_adoptions.json")
     return TestClient(app), svc
+
+def test_make_client_never_touches_the_checkouts_own_adoption_file(tmp_path):
+    """The wrap's clean-worktree run caught this (2026-08-23): without
+    `adoptions_path`, create_app resolves the adoption store cwd-relative,
+    so `_adopt_row_onto` tests WROTE the checkout's data/library_adoptions.json
+    and later tests inherited that row as ambient board state -- a
+    leaderboard test passed for weeks here and failed in a clean tree.
+    Mutation-proved: dropping the kwarg from make_client reds this."""
+    import pathlib
+    client, _svc = make_client(tmp_path)
+    with client:
+        store_path = pathlib.Path(client.app.state.library_adoptions.path)
+        assert store_path.is_relative_to(tmp_path), store_path
+
 
 def test_get_empty_then_put_then_read_back(tmp_path):
     client, svc = make_client(tmp_path)

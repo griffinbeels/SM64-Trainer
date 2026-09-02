@@ -13,6 +13,7 @@ def test_reader_populates_all_fields():
     mem.write_u32(US.mario_struct + A.MARIO_ACTION_OFF, A.ACT_STAR_DANCE_EXIT)
     mem.write_u16(US.mario_struct + A.MARIO_ACTION_TIMER_OFF, 2)
     mem.write_u16(US.mario_struct + A.MARIO_NUM_STARS_OFF, 57)
+    mem.write_u16(US.mario_struct + A.MARIO_NUM_COINS_OFF, 104)
     mem.write_u8(US.last_completed_course, 1)
     mem.write_u8(US.last_completed_star, 3)
     mem.write_u16(US.usamune_overall, 600)
@@ -26,6 +27,7 @@ def test_reader_populates_all_fields():
     assert snap.mario_action == A.ACT_STAR_DANCE_EXIT
     assert snap.mario_action_timer == 2
     assert snap.num_stars == 57
+    assert snap.coins == 104
     assert snap.last_completed_course == 1
     assert snap.last_completed_star == 3
     assert snap.igt_overall == 600

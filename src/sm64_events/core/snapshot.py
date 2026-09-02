@@ -70,6 +70,9 @@ class GameSnapshot:
     mario_action_state: int = 0
     igt_result: int = 0    # Usamune final star time, written at the grab
                            # (USAMUNE_STAR_RESULT); 0 before the first grab
+    coins: int = 0         # coins held this course visit (MARIO_NUM_COINS_OFF);
+                           # star_grab.py stamps it on every grab so the
+                           # 100-coin engine can read it off an exit grab
     curr_level: int = 0    # gCurrLevelNum: LEVEL ids (WF=24, SSL=8...), NOT course ids — see addresses.py trap note
     particle_flags: int = 0  # Mario particleFlags, re-zeroed each frame; PARTICLE_DUST corroborates dive-slide frames
     curr_area: int = 0     # gCurrAreaIndex: per-level area (castle lobby/upstairs/basement) — see addresses.py
@@ -130,6 +133,7 @@ class SnapshotReader:
             "mario_action_timer": L.mario_struct + A.MARIO_ACTION_TIMER_OFF,
             "mario_action_state": L.mario_struct + A.MARIO_ACTION_STATE_OFF,
             "num_stars": L.mario_struct + A.MARIO_NUM_STARS_OFF,
+            "coins": L.mario_struct + A.MARIO_NUM_COINS_OFF,
             "particle_flags": L.mario_struct + A.MARIO_PARTICLE_FLAGS_OFF,
             "pointers_block": L.mario_struct + _POINTERS_AT_OFF,
             "last_completed_course": L.last_completed_course,
@@ -234,6 +238,7 @@ class SnapshotReader:
             mario_action_timer=m.read_u16(at["mario_action_timer"]),
             mario_action_state=m.read_u16(at["mario_action_state"]),
             num_stars=m.read_s16(at["num_stars"]),
+            coins=m.read_s16(at["coins"]),
             last_completed_course=m.read_s8(at["last_completed_course"]),
             last_completed_star=m.read_s8(at["last_completed_star"]),
             igt_overall=m.read_u16(at["igt_overall"]),
