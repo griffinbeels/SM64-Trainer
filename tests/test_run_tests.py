@@ -50,6 +50,14 @@ def test_the_fingerprint_hashes_content_and_skips_python():
     assert run_tests.fingerprint(sorted(files), read=files.__getitem__) != prints
 
 
+def test_the_doors_own_state_never_enters_the_fingerprint():
+    """testmon's SQLite side files (`-wal`, `-shm`) come and go between runs;
+    counting them made every `--changed` a full run, forever."""
+    files = {".testmondata": b"db", ".testmondata-wal": b"w", ".testmondata-shm": b"s",
+             ".run_tests.json": b"{}", "ui/x.js": b"one"}
+    assert set(run_tests.fingerprint(sorted(files), read=files.__getitem__)) == {"ui/x.js"}
+
+
 def test_a_file_that_vanished_between_listing_and_reading_is_skipped():
     def read(path):
         raise FileNotFoundError(path)

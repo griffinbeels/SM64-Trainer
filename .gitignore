@@ -4,7 +4,7 @@ __pycache__/
 .pytest_cache/
 # pytest-testmon's per-checkout coverage map and tools/run_tests.py's
 # record of the last full run; a full run rebuilds both, nothing shares them.
-.testmondata
+.testmondata*
 .run_tests.json
 logs/
 .superpowers/

@@ -54,6 +54,11 @@ DEFAULT_WORKERS = 16
 # 0 all passed, 1 some failed. 2 is an interruption, 3/4 are pytest's own
 # errors, 5 collected nothing -- none of those leave a map worth stamping.
 COMPLETED_EXIT_CODES = (0, 1)
+# The door's own state never enters its fingerprint. testmon keeps its map
+# in SQLite, whose `-wal`/`-shm` side files appear and vanish between runs;
+# with them counted, every `--changed` read as "non-Python changed" and ran
+# everything, forever -- the safe failure, and a useless door (2026-09-01).
+OWN_STATE_PREFIXES = (".testmondata", ".run_tests.json")
 
 
 def base_args(workers: int) -> list[str]:
@@ -93,7 +98,7 @@ def fingerprint(paths: list[str], read=lambda path: (ROOT / path).read_bytes()) 
     a byte, and a spurious full run is safe but costs four minutes."""
     prints = {}
     for path in paths:
-        if is_python(path):
+        if is_python(path) or path.startswith(OWN_STATE_PREFIXES):
             continue
         try:
             data = read(path)
