@@ -52,7 +52,7 @@ export function VersionSwitch({ value, onChange, note = null, label = "Game vers
         class="version-switch-seg" aria-pressed=${value === region}
         aria-label=${regionLabel(region)} title=${`${regionLabel(region)} standards`}
         onclick=${() => pick(region)}>
-      <${RegionFlag} version=${region} size=${17} title="" />
+      <${RegionFlag} version=${region} size=${21} title="" />
     </button>`)}
     <${Note} note=${note} />
   </div>`;
@@ -90,7 +90,7 @@ export function RegionSwitch({ values, onChange, note = null, label = "Regions" 
             ? `${regionLabel(region)} only — at least one region stays on`
             : pressed ? `Hide ${regionLabel(region)}` : `Also show ${regionLabel(region)}`}
           onclick=${() => toggle(region)}>
-        <${RegionFlag} version=${region} size=${17} title="" />
+        <${RegionFlag} version=${region} size=${21} title="" />
       </button>`;
     })}
     <${Note} note=${note} />

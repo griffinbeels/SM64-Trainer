@@ -456,14 +456,16 @@
   .version-switch-note { color: var(--muted); font-size: .78rem; }
 
   /* A game region drawn as its flag (regionflag.js, round 24: "everywhere we
-     say 'JP' or 'US', just use the flag ... that's kinda more swag"). The
-     white plate matters: the JP flag is almost entirely white and the US
-     flag has a white field, so on this navy surface -- and on the gold fill
-     of a pressed segment -- an unbacked flag either vanishes or reads as a
-     smudge. The plate + hairline gives both a consistent edge on either. */
+     say 'JP' or 'US', just use the flag ... that's kinda more swag"). NO
+     plate, NO ring, NO corner radius: it shipped for an hour with a white
+     backing plate meant to keep a mostly-white flag legible on navy, and
+     what that actually drew was a border around every flag -- "US flag
+     having this weird white border is aesthetically displeasing. Both flags
+     should be rectangular, since that's what flag shaped means. No white
+     borders like that." The assets are the 4x3 rectangles now, so the image
+     IS the flag, edge to edge. */
   .region-flag {
-    display: inline-block; vertical-align: -.15em; border-radius: 2px;
-    background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, .3);
+    display: inline-block; vertical-align: -.15em;
     flex: none; user-select: none;
   }
   /* An UNPRESSED segment's flag holds its colour and only steps back. The

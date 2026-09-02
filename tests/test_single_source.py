@@ -493,7 +493,7 @@ INVARIANTS = (
             "tag). Two ingredients, both measured. The ASSET PATHS, because a "
             "flag has an authoritative form and a hand-drawn one is wrong "
             "three times in five (2026-07-28's brand-mark round); "
-            "regionflag.js holds the fetched Twemoji SVGs verbatim, and "
+            "regionflag.js holds the fetched flag-icons 4x3 SVGs verbatim, and "
             "every other surface asks it for a RegionFlag rather than naming "
             "a path. The flag EMOJI is the other way this goes wrong and the "
             "one this row cannot catch: Windows' Segoe UI Emoji carries no "

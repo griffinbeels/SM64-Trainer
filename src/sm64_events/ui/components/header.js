@@ -174,7 +174,7 @@ export function Header({ t, settingsOpen, closeSettings }) {
   const gameVersionTail = gameMode && gameMode.version === "auto"
     ? " standards. Auto-detect is US on the emulator." : " standards.";
   const gameVersionNote = gameMode
-    ? html`Graded on ${" "}<${RegionFlag} version=${gameMode.effective} size=${14} />${gameVersionTail}`
+    ? html`Graded on ${" "}<${RegionFlag} version=${gameMode.effective} size=${17} />${gameVersionTail}`
     : null;
 
   return html`<header class="context-shell">

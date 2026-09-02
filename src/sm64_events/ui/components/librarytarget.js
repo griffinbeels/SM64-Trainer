@@ -339,7 +339,7 @@ function RunnerName({ entry, className, onOpenRunner }) {
   // regions (`visibleEntriesFor` shows it in either mode), so a flag on it
   // would claim a distinction the sheet never made.
   const flag = entry.version && !entry._isYou
-    ? html`<${RegionFlag} version=${entry.version} size=${13}
+    ? html`<${RegionFlag} version=${entry.version} size=${16}
         className="library-entry-flag"
         title=${`${regionLabel(entry.version)} time`} />`
     : "";
@@ -851,14 +851,14 @@ function LadderRegionChip({ approach, version, versions }) {
     if (!approach.ladder_version) return null;
     return html`<span class="chip library-ladder-version-chip"
         title=${`Fitted from ${regionLabel(approach.ladder_version)}-only community times -- not enough of the other version's runs to fit a second ladder.`}>
-      <${RegionFlag} version=${approach.ladder_version} size=${14} title="" />
+      <${RegionFlag} version=${approach.ladder_version} size=${17} title="" />
       <span>ladder only</span>
     </span>`;
   }
   if (versions.length < 2) return null;
   return html`<span class="chip library-ladder-version-chip"
       title=${`Both regions are listed here; the rank bands below are cut from the ${regionLabel(version)} ladder.`}>
-    <${RegionFlag} version=${version} size=${14} title="" />
+    <${RegionFlag} version=${version} size=${17} title="" />
     <span>ladder</span>
   </span>`;
 }

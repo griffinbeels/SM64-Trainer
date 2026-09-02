@@ -130,10 +130,14 @@ through — and a row that HAS two ladders wears a chip naming which one cut
 the bands. An UNTAGGED entry wears no flag on purpose: it is real in both
 regions (`visibleEntriesFor` shows it in either mode), so a flag would
 claim a distinction the sheet never made. The flags themselves are
-`ui/components/regionflag.js` — fetched Twemoji SVGs held verbatim, never
+`ui/components/regionflag.js` — the flag-icons 4x3 SVGs held verbatim, never
 the emoji (Windows renders a flag emoji as the two letters) and never hand
 drawn; `tests/test_single_source.py`'s "a game region drawn as a flag" row
-keeps the asset paths in that one file. A
+keeps the asset paths in that one file. TRUE RECTANGLES and NO CSS around
+them: the round shipped Twemoji's rounded-in-a-square flags on a white
+backing plate for an hour and he rejected both in one line — "Both flags
+should be rectangular, since that's what flag shaped means. No white borders
+like that." A
 MATCHED strategy's standing is the SERVED one at the graded version and is
 re-walked against the section's displayed ladder only when the page shows
 the other (`librarymodel.js::matchedStanding`, node-proved) — the sheet's
