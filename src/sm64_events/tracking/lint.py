@@ -97,7 +97,9 @@ ships — see the `unfireable` docstring above for exactly that regression.
 from typing import Callable
 
 from sm64_events.memory.addresses import node_key, world_connections
-from sm64_events.tracking.segments import TRIGGERS, arm_level, can_run_from
+from sm64_events.tracking.segments import (TRIGGERS, arm_level,
+                                           can_run_from,
+                                           fires_identically)
 
 
 def _direct_edge(from_level: int, from_subarea: int | None,
@@ -257,10 +259,7 @@ def _rule_duplicate(d, all_defs) -> list[dict]:
     for other in all_defs:
         if other.id == d.id:
             continue
-        if (other.start_triggers == d.start_triggers
-                and other.end_triggers == d.end_triggers
-                and other.waypoints == d.waypoints
-                and other.guards == d.guards):
+        if fires_identically(d, other):
             return [{
                 "rule": "duplicate",
                 "severity": "warning",

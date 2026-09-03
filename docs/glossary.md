@@ -131,7 +131,12 @@ its own rows in the [[practice log]], drawn INSIDE its parent's own card and
 indented under it. The [[star]] owns the hand: a piece arms
 and records underneath its parent without ever taking the [[target]] slot
 by detection — its completion points the slot at the parent [[star]], never
-at itself. It has no switch on the [[selector]] — a piece always tracks and
+at itself. It points at nothing at all when two or more [[star]]s or
+[[segment]]s share it — LLL's volcano entry serves both volcano [[star]]s,
+whether one definition names them both or two identical definitions each name
+one — because finishing it proves you did one of them and never which. Such a
+piece keeps recording, and shows nothing until the [[star]] it belongs to
+earns a card of its own. It has no switch on the [[selector]] — a piece always tracks and
 always draws its card as soon as its parent has one, even with nothing
 recorded yet (empty, closed, never stealing the parent's auto-open slot) —
 so its history, its [[ladder]] and the fact that it exists at all are
