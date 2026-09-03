@@ -226,6 +226,10 @@ def test_cut_command_pins_a_quality_target(tmp_path, monkeypatch):
         # (ffprobe for the clip's first timestamp) must not overwrite it.
         if "-c:v" in args:
             captured["args"] = args
+            # A real ffmpeg writes the file it was given, and the extractor
+            # renames that temp file over the target (the atomic cut). The
+            # fake has to leave one behind or the rename has nothing to move.
+            Path(args[-1]).write_bytes(b"mp4")
         return subprocess.CompletedProcess(args, 0, b"", b"")
 
     monkeypatch.setattr("sm64_events.replay.extract.subprocess.run", fake_run)

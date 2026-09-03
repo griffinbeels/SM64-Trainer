@@ -797,7 +797,7 @@ def test_a_clip_with_a_ledger_maps_from_it_and_the_sidecar_keeps_the_rows(
     svc.map_quantiser = lambda clip, fm: quantiser_calls.append(clip) or fm
     aligned = {}
 
-    def mapper(clip, rows, start_ts, duration_s, fps):
+    def mapper(clip, rows, start_ts, duration_s, fps, frame_times=None):
         aligned["rows"] = rows
         aligned["fps"] = fps
         return [200, 200, 201, 201]
@@ -836,7 +836,7 @@ def test_a_ledger_refusal_falls_back_to_the_series_map(tmp_path):
     svc = make_service(tmp_path, [attempt()])
     svc._frame_clock = clock
     svc.recorder.ledger = FakeLedger()
-    svc.ledger_mapper = lambda *a: None
+    svc.ledger_mapper = lambda *a, **k: None
     res = svc.view(42)
     assert res["frame_map_source"] == "edges"
     sidecar = _json.loads(
@@ -867,7 +867,7 @@ def test_a_broken_ledger_mapper_never_costs_the_clip(tmp_path):
 
 def test_no_ledger_on_the_recorder_changes_nothing(tmp_path):
     svc = make_service(tmp_path, [attempt()])
-    svc.ledger_mapper = lambda *a: [1, 2]
+    svc.ledger_mapper = lambda *a, **k: [1, 2]
     res = svc.view(42)
     assert res["frame_map"] is None
 

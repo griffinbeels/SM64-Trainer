@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import shutil
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -178,6 +179,13 @@ class ReplayService:
         # (older wiring, tests) just means clips carry no map.
         self._frame_clock = frame_clock
         self._revealer = revealer or _open_explorer_select
+        # One cut per attempt at a time. Two `view()` calls for the same
+        # attempt used to run two ffmpeg processes over one output path --
+        # his 100-coin replay came back black, its H.264 stream shredded,
+        # after the LBLJ autodetect re-opened the drawer mid-extraction
+        # (2026-09-02). The second caller waits, then finds the cached clip.
+        self._cut_locks: dict[int, threading.Lock] = {}
+        self._cut_locks_guard = threading.Lock()
         # clips_dir lives inside scratch_dir; it is created in lifecycle_start
         # AFTER recorder.start() so any future recursive wipe by the recorder
         # doesn't evict a directory we created first.
@@ -186,6 +194,10 @@ class ReplayService:
         # what _span uses; update_settings replaces them.
         self.pre_pad_s = cfg.pre_pad_s
         self.post_pad_s = cfg.post_pad_s
+
+    def _cut_lock(self, attempt_id: int) -> threading.Lock:
+        with self._cut_locks_guard:
+            return self._cut_locks.setdefault(attempt_id, threading.Lock())
 
     # -- queries -------------------------------------------------------------
 
@@ -294,6 +306,11 @@ class ReplayService:
         return json.loads(meta.read_text())
 
     def view(self, attempt_id: int) -> dict:
+        """Clip metadata, cutting at most once per attempt at a time."""
+        with self._cut_lock(attempt_id):
+            return self._view(attempt_id)
+
+    def _view(self, attempt_id: int) -> dict:
         """Return clip metadata, extracting and caching on first call.
 
         Source order: scratch cache -> saved file -> ring extraction.
@@ -354,6 +371,20 @@ class ReplayService:
                         # row each frame is; nothing is inferred from
                         # runs, and the CFR series cannot describe it.
                         self._map_from_feeds(m, res)
+                        if m.get("frame_map") is None:
+                            # A loaded machine drops pictures at the sink's
+                            # queue and writes the rest late, so the log can
+                            # stop covering the clip: his Haunted Books run
+                            # captured 680 pictures, encoded 387, and matched
+                            # 178 -- and shipped with NO map, which the panel
+                            # answers by falling back to plain arithmetic
+                            # ("lots of incorrect frames", 2026-09-02). The
+                            # ledger path matches rows to the clip's own
+                            # picture runs and does not care how many frames
+                            # went missing, so it is the fallback, not none.
+                            log.warning("feed log did not cover the clip; "
+                                        "falling back to the picture ledger")
+                            self._map_from_ledger(m, clip, res)
                     else:
                         self._map_from_ledger(m, clip, res)
                     if (m.get("frame_map") is None
@@ -459,7 +490,8 @@ class ReplayService:
             if not rows:
                 return
             built = self.ledger_mapper(clip, rows, start, res.duration_s,
-                                       self.cfg.fps)
+                                       self.cfg.fps,
+                                       frame_times=res.frame_times)
         except Exception:
             log.exception("picture-ledger mapping failed; the frame-clock "
                           "series answer instead")

@@ -590,3 +590,73 @@ def test_the_pixels_hold_the_boundaries_after_the_reader_picks_the_values(tmp_pa
     shipped = res["frame_map"]
     assert shipped[11] == shipped[10], "a held picture kept two answers"
     assert shipped[21] == shipped[20], "a held picture kept two answers"
+
+
+# -- one cut per attempt, and a map even when the log cannot cover the clip ---
+
+def test_two_callers_for_one_attempt_cut_it_once(tmp_path):
+    """His 100-coin replay came back a black, undecodable video whose sidecar
+    counted 1921 frames of a 1380-frame file: he clicked extract, the LBLJ
+    autodetect re-opened the drawer, and TWO ffmpeg processes wrote one output
+    path (2026-09-02). The second caller must wait and take the cached clip."""
+    import threading
+
+    from test_replay_service import attempt, make_service
+
+    svc = make_service(tmp_path, [attempt()])
+    cuts = []
+    real_extract = svc.extractor.extract
+
+    def slow_extract(ring, start, end, out_path):
+        cuts.append(out_path)
+        time.sleep(0.3)                      # long enough for the racer to arrive
+        return real_extract(ring, start, end, out_path)
+
+    svc.extractor.extract = slow_extract
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(svc.view(42)))
+               for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+    assert len(cuts) == 1, f"the clip was cut {len(cuts)} times"
+    assert len(results) == 2 and results[0]["clip_url"] == results[1]["clip_url"]
+
+
+def test_a_feed_log_that_cannot_cover_the_clip_falls_back_to_the_ledger(tmp_path):
+    """A loaded machine drops pictures at the sink's queue and writes the rest
+    late, so the log stops covering the clip: his Haunted Books run captured
+    680 pictures, encoded 387, matched 178 -- and shipped with NO frame map,
+    which the panel answers with plain arithmetic ("lots of incorrect
+    frames"). The picture ledger matches rows to the clip's own picture runs
+    and does not care how many frames went missing, so it answers instead."""
+    from test_replay_service import T0, attempt, make_service
+
+    svc = make_service(tmp_path, [attempt()])
+    svc.extractor = _FeedExtractor(count=40)
+    origin = (T0 - timedelta(seconds=3)).timestamp()
+    # A ledger with rows but a feed log far from the clip's frames: nothing
+    # matches, so feed_map refuses.
+    ledger = _filled_ledger(origin, 40)
+    ledger._feeds.clear()
+    for index in range(40):
+        ledger.mark_fed(origin + index / 30, origin + 500 + index / 30)
+    svc.recorder.ledger = ledger
+    asked = {}
+
+    def ledger_mapper(clip, rows, start_ts, duration_s, fps, frame_times=None):
+        asked["frame_times"] = frame_times
+        return [900 + k for k in range(len(frame_times or []))]
+
+    svc.ledger_mapper = ledger_mapper
+    svc.pad_reader = None
+    res = svc.view(42)
+    assert res["frame_map"] is not None, "a loaded capture shipped no map"
+    assert res["frame_map"][0] == 900
+    assert res["frame_map_source"] == "ledger"
+    # The fallback is handed the clip's OWN times: a picture-feed clip is VFR
+    # and its runs do not sit on the 60 Hz grid.
+    assert asked["frame_times"] is not None
+    assert all(abs(a - b) < 1e-5 for a, b in
+               zip(asked["frame_times"], res["frame_times"], strict=True))

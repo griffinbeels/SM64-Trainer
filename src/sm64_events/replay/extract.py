@@ -28,6 +28,7 @@ resized the emulator window, so the encoder restarted) breaks a run the same
 way, for the same reason: ffmpeg would rescale the whole clip to the first
 segment's size and squash it if the aspect changed.
 """
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -225,6 +226,17 @@ class ClipExtractor:
         concat = "concat:" + "|".join(p.path.as_posix() for p in run)
         fps = self._cfg.fps
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        # Cut BESIDE the target and rename when the file is whole. Writing
+        # out_path directly means any second writer -- or any interruption --
+        # leaves a half-file that `view()`'s exists() check happily serves
+        # forever. His 100-coin clip came back as an unplayable black video
+        # whose H.264 stream was full of invalid NAL units, and whose sidecar
+        # counted 1921 frames where the file held 1380: two cuts wrote one
+        # path (2026-09-02). os.replace is atomic on Windows and POSIX.
+        # The suffix stays LAST: ffmpeg picks its muxer from the extension
+        # and refuses "clip.mp4.cut123" outright.
+        cut_path = out_path.with_name(
+            f"{out_path.stem}.cut{os.getpid()}{out_path.suffix}")
         args = [
             self._ffmpeg, "-hide_banner", "-loglevel", "error",
             "-i", concat, "-ss", f"{ss:.6f}", "-t", f"{dur:.6f}",
@@ -242,23 +254,27 @@ class ClipExtractor:
             *(["-fps_mode", "passthrough", "-enc_time_base", "demux"]
               if self._picture_feed else []),
             "-fflags", "+genpts", "-avoid_negative_ts", "make_zero",
-            "-movflags", "+faststart", "-y", str(out_path),
+            "-movflags", "+faststart", "-y", str(cut_path),
         ]
         try:
             subprocess.run(args, check=True, capture_output=True,
                            **quiet_spawn_kwargs())
         except subprocess.CalledProcessError as exc:
-            out_path.unlink(missing_ok=True)
+            cut_path.unlink(missing_ok=True)
             raise RuntimeError(
                 f"ffmpeg extract failed: {exc.stderr.decode('utf-8', 'replace')[-500:]}"
             ) from exc
 
-        times = (frame_times_of(self._ffmpeg, out_path)
+        # Probe the file we just wrote, THEN publish it. Probing after the
+        # rename let a racing writer change the file between the two, which is
+        # how a sidecar came to describe 1921 frames of a 1380-frame clip.
+        times = (frame_times_of(self._ffmpeg, cut_path)
                  if self._picture_feed else None)
+        start_s = (times[0] if times
+                   else video_start_of(self._ffmpeg, cut_path))
+        os.replace(cut_path, out_path)
         return ClipResult(path=out_path, duration_s=dur, truncated=truncated,
-                          start_utc=s,
-                          video_start_s=(times[0] if times else
-                                         video_start_of(self._ffmpeg, out_path)),
+                          start_utc=s, video_start_s=start_s,
                           frame_times=times)
 
     def _codec_opts(self) -> list[str]:

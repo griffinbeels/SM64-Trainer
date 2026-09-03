@@ -770,7 +770,7 @@ def _inject_orphans(entries, stamped, used, bias, start_ts, fps,
 
 def ledger_map(slot_count: int, runs: list[tuple[int, int]],
                rows: list[dict], start_ts: float, fps: float,
-               lag_frames: int = 0) -> list | None:
+               lag_frames: int = 0, frame_times: list | None = None) -> list | None:
     """The frame map built from the picture ledger: capture's own record
     of when each distinct picture appeared and what frame the game was on.
 
@@ -800,7 +800,13 @@ def ledger_map(slot_count: int, runs: list[tuple[int, int]],
     if not stamped or not runs:
         return None
     times = [ts for ts, _index in stamped]
-    walls = [start_ts + (start + 0.5) / fps for start, _length in runs]
+    # A picture-feed clip is VFR: a run's first slot sits at its own
+    # timestamp, never on the 60 Hz grid (reading a VFR clip on the grid is
+    # the same blindness that faked a 55-frame gap in inspect_timeline).
+    walls = [start_ts + (frame_times[start] if frame_times
+                         and start < len(frame_times)
+                         else (start + 0.5) / fps)
+             for start, _length in runs]
 
     def nearest(wall: float) -> int | None:
         at = bisect_right(times, wall)

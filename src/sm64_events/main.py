@@ -511,7 +511,8 @@ def build():
 
         replay.map_quantiser = _hold_one_answer_per_picture
 
-        def _map_from_picture_ledger(clip, rows, start_ts, duration_s, fps):
+        def _map_from_picture_ledger(clip, rows, start_ts, duration_s, fps,
+                                     frame_times=None):
             # Item 40: capture's own per-picture record becomes the map.
             # Same decode as the quantiser; the display-lag constant is the
             # one the feed series subtracts, so both map kinds land in one
@@ -526,9 +527,11 @@ def build():
             runs = picture_runs(grey)
             if not runs:
                 return None
-            slot_count = max(1, round(duration_s * fps))
+            slot_count = (len(frame_times) if frame_times
+                          else max(1, round(duration_s * fps)))
             return ledger_map(slot_count, runs, rows, start_ts, fps,
-                              lag_frames=DISPLAY_LAG_FRAMES)
+                              lag_frames=DISPLAY_LAG_FRAMES,
+                              frame_times=frame_times)
 
         replay.ledger_mapper = _map_from_picture_ledger
         from sm64_events.core.paths import data_root
