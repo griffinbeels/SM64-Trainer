@@ -110,16 +110,59 @@ def test_the_cfr_feed_is_one_switch_away(tmp_path, monkeypatch):
     assert "-force_key_frames" not in args
 
 
-def test_submit_queues_pictures_in_order_and_counts_an_overflow(tmp_path):
-    from sm64_events.replay.ffmpeg_sink import PICTURE_QUEUE
+def test_the_queue_keeps_every_picture_and_says_when_it_is_full(tmp_path):
+    """His rule, 2026-09-02: "We should always be encoding frames we
+    captured... If I see a frame in my replay, as a user, I would expect to
+    see the input capture for that frame as well." The queue used to be 16
+    deep and shed its OLDEST entry on overflow -- a picture the ledger had
+    already recorded, so the map described frames the video did not hold.
+    Nothing queued is dropped now; `has_room` is what the recorder asks
+    BEFORE it records a picture at all."""
+    from sm64_events.replay.ffmpeg_sink import PICTURE_QUEUE_BYTES
+
     sink = FfmpegAvSink(ReplayConfig(scratch_dir=tmp_path), lambda s: None,
                         ffmpeg="ffmpeg")
-    frame = np.zeros((4, 4, 4), np.uint8)
-    for index in range(PICTURE_QUEUE + 3):
+    frame = np.zeros((512, 512, 4), np.uint8)          # 1 MiB a picture
+    fits = PICTURE_QUEUE_BYTES // frame.nbytes
+    for index in range(fits):
+        assert sink.has_room(), f"no room after only {index} pictures"
         sink.submit(frame, (index, float(index)))
-    assert len(sink._queue) == PICTURE_QUEUE
-    assert sink._picture_drops == 3
-    assert [tag[0] for _f, tag in sink._queue] == list(range(3, PICTURE_QUEUE + 3))
+    assert not sink.has_room(), "the budget never filled"
+    assert sink.queue_depth() == (fits, fits * frame.nbytes)
+    # Past the budget nothing is thrown away -- the count is kept in order.
+    sink.submit(frame, (fits, float(fits)))
+    assert len(sink._queue) == fits + 1
+    assert [tag[0] for _f, tag in sink._queue] == list(range(fits + 1))
+
+
+def test_a_grab_the_sink_cannot_encode_never_enters_the_ledger(tmp_path):
+    """LOCKSTEP: captured and encoded are the same set. With no budget the
+    recorder drops the grab BEFORE the ledger sees it, so every row it holds
+    became a video frame."""
+    import numpy as _np
+
+    from sm64_events.replay.ledger import PictureLedger
+    from sm64_events.replay.recorder import _sink_has_room
+
+    class _Full:
+        def has_room(self):
+            return False
+
+    class _Open:
+        def has_room(self):
+            return True
+
+    assert _sink_has_room(_Full()) is False
+    assert _sink_has_room(_Open()) is True
+    assert _sink_has_room(object()) is True     # the CFR sink never refuses
+
+    # And the ledger only ever hears about a grab we would encode.
+    ledger = PictureLedger()
+    for index in range(4):
+        picture = _np.full((8, 8, 4), index, _np.uint8)
+        if _sink_has_room(_Full()):             # the recorder's own gate
+            ledger.observe(picture, 100.0 + index / 30, 500 + index)
+    assert ledger.rows_between(0, 1e12) == []
 
 
 # -- the real thing: sink -> ring -> cut -> feed map --------------------------

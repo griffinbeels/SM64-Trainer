@@ -88,10 +88,20 @@ log = logging.getLogger("sm64.replay")
 # segment muxer and the ring's coverage rolling (a segment closes on the
 # first keyframe past segment_s, and keyframes are forced by TIME here).
 PICTURE_HEARTBEAT_S = 1.0
-# Pictures waiting for the feeder. Arrivals are ~30/s and a write takes a
-# few ms, so this only fills when ffmpeg stalls; an overflow drops the
-# OLDEST and is counted, never silent.
-PICTURE_QUEUE = 16
+# Pictures waiting for the feeder, bounded by BYTES rather than count: one
+# grab of his window is 1600x1224 BGRA = 7.8 MB, so a count-based bound is a
+# memory bound in disguise. 512 MB is ~65 of his frames, over two seconds of
+# slack at the game's ~30 pictures/s.
+#
+# NOTHING IN HERE DROPS A QUEUED PICTURE. The old queue was 16 deep and shed
+# its OLDEST entry on overflow -- a picture the ledger had already recorded,
+# so "captured" and "encoded" silently diverged and the clip's map described
+# frames the video did not contain. His rule, 2026-09-02: "We should always
+# be encoding frames we captured... If I see a frame in my replay, as a user,
+# I would expect to see the input capture for that frame as well." The
+# recorder now asks `has_room()` BEFORE it records a picture at all, so a
+# loaded machine captures fewer pictures and encodes every one of them.
+PICTURE_QUEUE_BYTES = 512 * 1024 * 1024
 # The picture feed's video reaches ffmpeg as a NUT stream, muxed in this
 # process with EVERY FRAME CARRYING ITS OWN TIMESTAMP (microseconds on the
 # wall clock). `-use_wallclock_as_timestamps` stamps a frame when ffmpeg's
@@ -307,7 +317,8 @@ class FfmpegAvSink:
         # the feeder writes it once; otherwise the latest grab is re-sent
         # at fps onto the CFR grid (the pre-2026-09-02 shape).
         self._picture = bool(getattr(cfg, "picture_feed", False))
-        self._queue: deque = deque(maxlen=PICTURE_QUEUE)
+        self._queue: deque = deque()
+        self._queued_bytes = 0
         self._mux = None            # the NUT container over stdin (picture feed)
         self._mux_stream = None
         self._mux_audio = None
@@ -366,12 +377,27 @@ class FfmpegAvSink:
         array = bgra if bgra.flags["C_CONTIGUOUS"] \
             else np.ascontiguousarray(bgra)
         if self._picture:
-            if len(self._queue) == self._queue.maxlen:
+            # A caller that honoured has_room() always fits; one that did not
+            # is still never dropped, because a dropped picture is a lie in
+            # the ledger. The counter says the budget was exceeded.
+            if self._queued_bytes >= PICTURE_QUEUE_BYTES:
                 self._picture_drops += 1
             self._queue.append((array, tag))
+            self._queued_bytes += array.nbytes
             self._arrived.set()
             return
         self._latest = (array, tag)
+
+    def has_room(self) -> bool:
+        """Is there budget to encode one more picture? The recorder asks this
+        BEFORE recording a grab, so a picture it cannot encode is never
+        recorded as captured -- captured and encoded stay in lockstep."""
+        return self._queued_bytes < PICTURE_QUEUE_BYTES
+
+    def queue_depth(self) -> tuple[int, int]:
+        """(pictures waiting, bytes waiting) -- the recorder's status reads it
+        so a degraded capture is a number rather than a feeling."""
+        return len(self._queue), self._queued_bytes
 
     def submit_audio(self, pcm_bytes: bytes) -> None:
         """Enqueue interleaved s16le stereo PCM for the audio pipe. Non-blocking
@@ -895,6 +921,7 @@ class FfmpegAvSink:
                         frame, tag = self._queue.popleft()
                     except IndexError:
                         break
+                    self._queued_bytes = max(0, self._queued_bytes - frame.nbytes)
                     wms = self._write_frame(frame, tag)
                     if wms is None:
                         break

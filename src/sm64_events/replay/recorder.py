@@ -71,6 +71,13 @@ class AudioSource(Protocol):
     def stop(self) -> None: ...
 
 
+def _sink_has_room(sink) -> bool:
+    """Whether the sink can still encode a picture. A sink that does not
+    answer (the CFR fallback, a test's stand-in) is always willing."""
+    ask = getattr(sink, "has_room", None)
+    return True if ask is None else bool(ask())
+
+
 class ReplayRecorder:
     def __init__(self, cfg: ReplayConfig,
                  window_finder: Callable[[str], WindowInfo | None],
@@ -106,6 +113,10 @@ class ReplayRecorder:
         # a NEW picture, and every write the sink completes lands in the
         # ledger's feed log -- one video frame, one row.
         self._picture_feed = bool(getattr(cfg, "picture_feed", False))
+        # Grabs the sink had no budget to encode, so the ledger never saw
+        # them either. status() reports it: a degraded capture must be a
+        # number he can see, not a clip that merely looks thinner.
+        self._grabs_skipped = 0
         self._codec: str | None = codec
         # ffmpeg-subprocess video path: when set, frames bypass the in-process
         # writer entirely (sink.submit is a lock-free reference swap; pacing,
@@ -524,6 +535,16 @@ class ReplayRecorder:
                           if clock is not None else None)
             if self._frame_clock is not None:
                 tag = self._frame_clock.capture_tag(capture_ts)
+            if self._picture_feed and not _sink_has_room(sink):
+                # LOCKSTEP (item 88): no budget to encode this picture, so it
+                # is not recorded as captured either. The ledger keeps its
+                # promise -- every row it holds became a video frame -- and a
+                # loaded machine yields a sparser clip rather than a clip
+                # whose map describes frames the video does not contain. His
+                # rule: "If I see a frame in my replay ... I would expect to
+                # see the input capture for that frame as well."
+                self._grabs_skipped += 1
+                return
             # The picture ledger notices each NEW picture among the grabs
             # (item 40) -- before submit so the sample reads the buffer this
             # callback was handed. observe() never raises.
@@ -635,4 +656,11 @@ class ReplayRecorder:
             "retention_s": self.ring.retention_s,
             "max_buffer_bytes": self.ring.max_bytes,
             "idle": self._idle,
+            # A degraded capture is a NUMBER, not a thinner-looking clip:
+            # grabs the sink had no budget for (so the ledger never recorded
+            # them either) and how deep its queue is right now.
+            "grabs_skipped": self._grabs_skipped,
+            "encode_backlog": (self._video_sink.queue_depth()[0]
+                               if hasattr(self._video_sink, "queue_depth")
+                               else 0),
         }
