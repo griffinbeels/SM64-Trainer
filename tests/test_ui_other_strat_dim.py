@@ -36,17 +36,51 @@ if _MISSING:
 
 from uilab.driver import get_driver  # noqa: E402
 
-# The opacity of the first row tagged with a given strategy, read off the
-# computed style of the <tr> itself (the element that carries the class).
-OPACITY_OF = """
+# The row tagged with a given strategy -- re-found every frame, because the
+# switch re-renders the card and a handle taken once would go stale.
+FIND_ROW = """
   ((strat) => {
     const card = Array.from(document.querySelectorAll('.log-card'))
       .find((c) => c.querySelector('.attempt-actions'));
-    const tr = Array.from(card.querySelectorAll('tr')).find((tr) => {
+    if (!card) return null;
+    return Array.from(card.querySelectorAll('tr')).find((tr) => {
       const sel = tr.querySelector('.attempt-strategy select');
-      return sel && sel.value === strat; });
-    return tr ? Number(getComputedStyle(tr).opacity) : null;
+      return sel && sel.value === strat; }) || null;
   })
+"""
+
+# The opacity of that row, read off its computed style.
+OPACITY_OF = f"""
+  ((strat) => {{
+    const tr = {FIND_ROW}(strat);
+    return tr ? Number(getComputedStyle(tr).opacity) : null;
+  }})
+"""
+
+# Sampling happens INSIDE the page, one reading per animation frame into an
+# array the test collects afterwards in a single call.
+#
+# It used to poll from the driver -- one round trip per sample, 40 ms apart.
+# That reads the same on an idle machine and is worthless on a busy one: a
+# round trip can outlast the whole fade, so the trace goes 1.0 -> 0.5 with no
+# middle and the test reports a SNAP that never happened. It failed exactly
+# that way under the 16-worker gate (2026-09-02) and no rerun could save it,
+# because the trace lives in a module-scoped fixture and every retry re-read
+# the same bad measurement. requestAnimationFrame samples on the same clock
+# the transition is painted on, so the reading no longer depends on how busy
+# the machine outside the browser is.
+RECORD_OPACITY = f"""
+  ((strat, windowMs) => {{
+    window.__dimTrace = [];
+    const started = performance.now();
+    const step = () => {{
+      const tr = {FIND_ROW}(strat);
+      window.__dimTrace.push(tr ? Number(getComputedStyle(tr).opacity) : null);
+      if (performance.now() - started < windowMs) requestAnimationFrame(step);
+    }};
+    requestAnimationFrame(step);
+    return true;
+  }})
 """
 
 
@@ -62,12 +96,16 @@ def _set_active(base, strat):
                                "strat_tag": strat})
 
 
-def _sample(page, strat, count=16, every_ms=40):
-    out = []
-    for _ in range(count):
-        out.append(page.evaluate(f"{OPACITY_OF}({strat!r})"))
-        page.wait_ms(every_ms)
-    return out
+def _trace_through(page, base, watched, switch_to, window_ms=900):
+    """Arm the in-page recorder, make the switch, then collect the frames it
+    caught. The recorder is armed BEFORE the switch because the first frames
+    of the fade are the ones that prove it is a fade."""
+    page.evaluate(f"{RECORD_OPACITY}({watched!r}, {window_ms})")
+    _set_active(base, switch_to)
+    page.wait_ms(window_ms + 300)
+    trace = page.evaluate("window.__dimTrace")
+    assert trace, "the in-page recorder caught no frames at all"
+    return trace
 
 
 @pytest.fixture(scope="module")
@@ -85,10 +123,9 @@ def samples():
                 "own": page.evaluate(f"{OPACITY_OF}({FIXTURE_STRAT!r})"),
                 "other": page.evaluate(f"{OPACITY_OF}({FIXTURE_FOREIGN_STRAT!r})"),
             }
-            _set_active(base, FIXTURE_FOREIGN_STRAT)
-            out["down"] = _sample(page, FIXTURE_STRAT)
-            _set_active(base, FIXTURE_STRAT)
-            out["up"] = _sample(page, FIXTURE_STRAT)
+            out["down"] = _trace_through(page, base, FIXTURE_STRAT,
+                                         FIXTURE_FOREIGN_STRAT)
+            out["up"] = _trace_through(page, base, FIXTURE_STRAT, FIXTURE_STRAT)
     return out
 
 

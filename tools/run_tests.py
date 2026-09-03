@@ -78,29 +78,54 @@ and their servers) and a starved worker times out its browsers.
 The two levers that DO work are measured, by `tools/measure_run_load.py`,
 against what lag actually is: how long a normal-priority thread waits for a
 core after it is ready to run (its wake-latency probe; p95 of that wait, in
-ms, because a stutter is a tail event and the median never sees one). Three
-full green runs, 2026-09-02, with sibling sessions live as usual:
+ms, because a stutter is a tail event and the median never sees one).
+Thirteen full runs over the workers x reserve grid, 2026-09-02, each row
+carrying the ambient load it was measured against so a sibling session's own
+suite cannot skew one against another (the 24x8 row was measured at 98%
+ambient and is excluded for exactly that reason):
 
-    idle, no run                                p95  0.6 ms   p99  0.7 ms
-    16 workers, nothing reserved      216 s     p95 10.3 ms   p99 29.4 ms
-    16 workers, 8 cores reserved      234 s     p95  1.3 ms   p99 17.7 ms
-    8 workers, nothing reserved       326 s     p95  0.7 ms   p99  1.2 ms
+    workers  reserved     wall    p95      p99     note
+    idle       --           --    0.6 ms   0.7 ms
+    16          0         214 s   3.9 ms  16.9 ms  what the gate was before
+    16          4         208 s   1.5 ms   4.3 ms
+    16          8         234 s   1.3 ms  17.7 ms
+    16         12         212 s   0.6 ms   0.9 ms
+    16         16         212 s   0.6 ms   0.8 ms
+    24          0         195 s   2.6 ms   6.0 ms  RED
+    24         12         204 s   0.6 ms   1.0 ms  <-- the default
+    32          0         228 s  17.7 ms  52.8 ms
+    32          8         194 s   5.0 ms  12.8 ms
+    32         12         206 s   0.8 ms   2.1 ms
+    32         16         218 s   0.6 ms   0.7 ms
+    8           8         298 s   0.6 ms   0.8 ms
 
-**`--reserve` is on by default at 8, and that is why.** It is CPU affinity,
-not priority: the whole pytest tree is fenced off 8 of this machine's 32
-logical processors -- the top indices, so sibling threads go together and 4
-whole physical cores come free -- and the desktop always has somewhere to
-run rather than waiting behind a worker. It costs 18 s (8%) and takes the
-typical stall from 10.3 ms, which is dropped frames, to 1.3 ms, which is
-idle. Affinity is inherited at spawn and xdist's workers and their browsers
-appear over the run's first seconds, so it is re-applied to every new
-descendant on a 2 s sweep rather than set once. `--reserve 0` turns it off.
+Three things that table settles, and one it does not:
 
-`--workers 8` remains the lever for when he is actively using the machine
-and wants it untouched: idle-grade at both percentiles, for 110 s (51%)
-more wall time. Reserving cores does not substitute for it -- the p99 stays
-at 17.7 ms, so an occasional hitch survives -- and it does not need to,
-because the two compose.
+* **Reserving cores is close to FREE, and reserving 12 is where lag stops.**
+  At 16 workers the wall time is flat from 0 to 16 reserved (208-214 s, the
+  234 s row aside as noise) while p99 falls 16.9 -> 4.3 -> 0.9 ms. The knee
+  is at 12; 16 buys nothing more. This was the surprise: the first pass
+  reserved 8 because it looked like a trade, and it was not one.
+* **More workers than 16 still pays, once cores are reserved.** 24 and 32
+  both beat 16 by 6-8 s at reserve 12, and 24x12 matches the best lag on the
+  board. Without a reserve they do the opposite -- 32x0 is the WORST row for
+  both lag and, at 228 s, slower than 16 -- because the browsers and the
+  desktop are then fighting over the same 32 processors.
+* **Fewer workers is no longer the smoothness lever.** 8x8 is idle-grade and
+  94 s slower than 24x12, which is idle-grade too. `--workers 8` now only
+  makes sense to hand cores back to something heavy that is not the desktop.
+* What it does NOT settle: differences under ~8 s are inside this machine's
+  run-to-run spread, so 16x12, 24x12 and 32x12 are a three-way tie on speed
+  and the choice among them is not load-bearing. The reserve is.
+
+**So the default is 24 workers with 12 logical processors reserved.** The
+reserve is CPU affinity, not priority: the pytest tree is fenced off the TOP
+12 of this machine's 32 logical indices, so Windows' adjacent sibling
+threads mean six WHOLE physical cores come free and the desktop always has
+somewhere to run rather than waiting behind a worker. Affinity is inherited
+at spawn and xdist's workers and their browsers appear over the run's first
+seconds, so it is re-applied to every new descendant on a 2 s sweep rather
+than set once. `--reserve 0` turns it off.
 
 And every run ends with a sweep that reports what it left behind, so "sludge" is a number
 on screen rather than a feeling: orphaned headless browsers (parent gone),
@@ -137,11 +162,13 @@ from find_uilab import find_uilab
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE_PATH = ROOT / ".run_tests.json"
-DEFAULT_WORKERS = 16
+DEFAULT_WORKERS = 24
 # Logical processors kept OFF the test tree so the desktop always has one.
-# 8 of the 32 here -- measured at 8% more wall time for an 8x cut in the
-# typical stall; the docstring carries the table.
-DEFAULT_RESERVED_CORES = 8
+# 12 of the 32 here: the knee of the curve, where p99 stall reaches idle
+# (0.9 ms) and reserving more buys nothing. It costs no wall time at all --
+# 24 workers with 12 reserved is FASTER than 16 with none. The docstring
+# carries the whole grid.
+DEFAULT_RESERVED_CORES = 12
 AFFINITY_SWEEP_SECONDS = 2.0
 # pytest exit codes that mean the run COMPLETED and the coverage map is whole:
 # 0 all passed, 1 some failed. 2 is an interruption, 3/4 are pytest's own

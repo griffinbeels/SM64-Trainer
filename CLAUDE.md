@@ -19,7 +19,7 @@ FastAPI + uvicorn, pymem, pytest.
 
 ```
 uv sync
-uv run python tools/run_tests.py                     # MUST pass before any merge: the whole suite on 16 workers with 8 logical cores left free for his desktop (~4 min; 19½ serial), and it refreshes the coverage map. `--workers 8` while he is actively using the machine; `--reserve 0` to hand the run every core
+uv run python tools/run_tests.py                     # MUST pass before any merge: the whole suite on 24 workers with 12 of the 32 logical processors left free for his desktop (~3½ min; 19½ serial), and it refreshes the coverage map. That pair is the measured optimum -- it is FASTER than 16 workers with every core AND idle-grade on lag; `--reserve 0` hands the run everything and makes the machine stutter
 uv run python tools/measure_run_load.py              # what a run COSTS his desktop, against what it saves in time: idle baseline then one full run per configuration, scored by how long a normal-priority thread waits for a core (p95 ms) as well as by wall clock
 uv run python tools/run_tests.py --changed           # the inner loop: only the tests whose Python your change touched -- or everything, when a JS/HTML/CSS/data/doc file changed, because nothing can see what those affect
 uv run pytest tests/test_<module>.py -q              # one file, serially, as always
@@ -313,15 +313,20 @@ Contract changes land on main first, then dependent work fans out. Merge with
   (2026-09-02, `tests/test_worker_groups.py` pins the order); a test marked
   `spread` is its own group and leaves the
   file, which is how the responsive sweep went from one 179 s test to 26
-  cases. **The door also fences the whole pytest tree off 8 of the 32
-  logical processors** (`--reserve`, default 8), because 16 workers with
-  every core made his desktop stall 10.3 ms at p95 -- dropped frames --
-  where reserving four physical cores costs 8% wall time and takes that to
-  1.3 ms; `--workers 8` is idle-grade at both percentiles for 51% more time.
-  Priority is NOT a lever and is ruled out with evidence in the runner's
-  docstring. `tools/measure_run_load.py` is where those numbers come from
-  and how to re-derive them -- lag measured as the wait for a core, never as
-  CPU percent. Two things to carry: testmon is BLIND to anything that is not
+  cases. **The door also fences the whole pytest tree off 12 of the 32
+  logical processors** (`--reserve`, default 12, alongside 24 workers),
+  which a 13-run sweep of the workers x reserve grid says is the optimum
+  rather than a trade: reserving costs no wall time at all (208-214 s flat
+  from 0 to 16 reserved at 16 workers) while p99 stall falls 16.9 -> 0.9 ms,
+  and more workers than 16 pays only once cores ARE reserved -- 24x12 is
+  204 s and idle-grade, where 32x0 is both the laggiest row and slower than
+  16. Fewer workers is NOT the smoothness lever any more (8x8 is idle-grade
+  and 94 s slower). Priority is not a lever either and is ruled out with
+  evidence. `tools/measure_run_load.py` holds the grid and re-derives it --
+  lag measured as how long a normal-priority thread waits for a core, never
+  as CPU percent, and every row stamped with the ambient load it was
+  measured against so a sibling session's suite cannot skew the comparison
+  invisibly. Two things to carry: testmon is BLIND to anything that is not
   Python executed in-process (JS, HTML, CSS, seed data, docs, code that
   only runs in a spawned subprocess), so the door refuses to select when a
   non-Python file changed since the last full run, and `--changed` is never
