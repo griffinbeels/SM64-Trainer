@@ -314,3 +314,66 @@ def test_every_slot_after_a_pictures_first_is_flagged_as_the_same_picture(monkey
     for start, end in runs:
         wrong[start + 1:min(end + 1, 8)] = True
     assert list(wrong) != list(same)
+
+
+def test_a_letter_beside_magnitude_zero_is_impossible_and_is_corrected():
+    """THE READER'S OWN COMMONEST ERROR, and it was invisible because every
+    accuracy number was scored against a map the reader itself aligned.
+
+    Usamune prints one axis as either a bare `0` -- blank letter, `0`, blank
+    -- or a direction letter beside a magnitude of 1..99. A letter beside
+    magnitude 0 cannot happen: a zero has no direction. Measured map-free on
+    his Shoot into the Wild Blue clip (6510, 2026-09-02): 563 of 6316
+    axis-readings, 8.9%, were exactly that, because `ink_mask` counts any
+    bright pixel as font ink, so a blank cell over a white sky is all "ink"
+    and the silver U -- mostly white highlight -- matches it at distance 38.
+    Enforcing the grammar took that clip from 80.8% to 99.2% agreement and
+    cut its misreads from 595 to 17."""
+    from sm64_events.replay.padread import CellReads, enforce_grammar
+
+    def cell(names):
+        count = len(names)
+        return CellReads(list(names), np.zeros(count), np.full(count, 99.0),
+                         np.array([name != "" for name in names]))
+
+    # slot 0: "U0" -- impossible.     slot 1: "U84" -- fine.
+    # slot 2: bare "0" already right. slot 3: "D0" with a stray second digit.
+    reads = {
+        ("y", "letter"): cell(["U", "U", "", "D"]),
+        ("y", "d1"): cell(["0", "8", "0", "0"]),
+        ("y", "d2"): cell(["", "4", "", "7"]),
+        ("x", "letter"): cell(["", "", "", ""]),
+        ("x", "d1"): cell(["", "", "", ""]),
+        ("x", "d2"): cell(["", "", "", ""]),
+    }
+    corrected = enforce_grammar(reads)
+    letter, d1, d2 = (reads[("y", col)] for col in ("letter", "d1", "d2"))
+    assert corrected == 3, "the letter on slots 0 and 3, and slot 3's d2"
+    assert not letter.known[0], "'U0' kept its impossible letter"
+    assert not letter.known[3] and not d2.known[3]
+    # A real reading is untouched, and so is a magnitude the reader is sure of.
+    assert letter.known[1] and letter.names[1] == "U"
+    assert d1.known[1] and d1.names[1] == "8"
+    assert d2.known[1] and d2.names[1] == "4"
+    assert d1.known[0] and d1.names[0] == "0", "the magnitude is the trusted half"
+
+
+def test_the_grammar_leaves_a_clip_of_real_readings_alone():
+    """It must correct misreads, not shave real ones: a clip whose axis
+    readings are all well formed comes back untouched."""
+    from sm64_events.replay.padread import CellReads, enforce_grammar
+
+    def cell(names):
+        count = len(names)
+        return CellReads(list(names), np.zeros(count), np.full(count, 99.0),
+                         np.array([name != "" for name in names]))
+
+    reads = {
+        ("y", "letter"): cell(["U", "D", ""]),
+        ("y", "d1"): cell(["8", "1", "0"]),
+        ("y", "d2"): cell(["4", "", ""]),
+        ("x", "letter"): cell(["R", "", "L"]),
+        ("x", "d1"): cell(["7", "0", "2"]),
+        ("x", "d2"): cell(["", "", ""]),
+    }
+    assert enforce_grammar(reads) == 0

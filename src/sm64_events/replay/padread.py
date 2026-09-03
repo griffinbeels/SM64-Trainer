@@ -317,6 +317,49 @@ def read(cells: np.ndarray, alphabet: Alphabet) -> dict:
 
 
 # -- labels -----------------------------------------------------------------
+def enforce_grammar(reads: dict) -> int:
+    """Hold every reading to the DISPLAY'S OWN GRAMMAR, and return how many it
+    had to correct.
+
+    Usamune prints one axis as either a bare `0` -- blank letter cell, `0` in
+    the magnitude, blank second digit -- or a direction letter beside a
+    magnitude of 1..99. **A letter beside magnitude 0 cannot happen**: a zero
+    has no direction. So a reading of "U0" is a misread, provably, with no
+    frame map and no threshold involved.
+
+    It is the reader's own most common error, and it was invisible because
+    every accuracy number was scored against a map the reader itself aligned.
+    Measured map-free on his Shoot into the Wild Blue clip (6510, 2026-09-02):
+    **563 of 6316 axis-readings, 8.9%, were "letter beside magnitude 0"**.
+
+    The cause is `ink_mask`'s `bright` clause: a blank cell over a white sky
+    is all "ink", and the silver U -- which is mostly white highlight -- then
+    matches it at distance 38 with a wide margin. Two things followed, and
+    both are things he reported. The disagreement list filled with false
+    accusations against the timeline ("a lot of the screen checked frames
+    aren't actually even wrong"), and the aligner paid a cost of 1.0 for the
+    letter at EVERY candidate frame in exactly the resting stretches where it
+    has the most freedom to drift -- which is where his single wrong button
+    frames appear.
+
+    Resolving toward a blank letter is the right direction, not a coin flip:
+    a resting axis is the commonest thing on screen, while "U0" is impossible,
+    and on the measured frames the magnitude cell read `0` confidently
+    (distance 20, margin 18) while the letter was the invented one.
+    """
+    corrected = 0
+    for row in ROWS:
+        letter, d1, d2 = (reads[(row, col)] for col in ("letter", "d1", "d2"))
+        for slot in range(len(letter.known)):
+            if not (d1.known[slot] and d1.names[slot] == "0"):
+                continue
+            for cell in (letter, d2):
+                if cell.known[slot]:
+                    cell.known[slot] = False
+                    corrected += 1
+    return corrected
+
+
 def labels_from(frame_map: list, pads, hold: int = HOLD) -> dict:
     """Per cell, the glyph each frame SHOULD show under `frame_map`, or None
     where the pad was not held `hold` frames either side (a small map
@@ -486,6 +529,7 @@ class Verdict:
     offset: int = 0          # the ONE integer that best explains the display
     offset_agree: int = 0    # slots agreeing at it
     offset_margin: float = 0.0   # winner minus runner-up, as a fraction
+    ungrammatical: int = 0   # readings the display's grammar had to correct
 
     @property
     def agreement(self) -> float:
@@ -495,6 +539,7 @@ class Verdict:
         return {"sure": self.sure, "agree": self.agree, "nowhere": self.nowhere,
                 "offset": self.offset, "offset_agree": self.offset_agree,
                 "offset_margin": self.offset_margin,
+                "ungrammatical": self.ungrammatical,
                 "known_cells": self.known_cells, "slots": self.slots,
                 "icons_checked": self.icons_checked, "icons_agree": self.icons_agree,
                 "icons_learned": list(self.icons_learned),
@@ -904,6 +949,7 @@ def read_clip(clip: Path, frame_map: list, pads, ffmpeg: str,
     learned: dict = {}
     for _ in range(2):
         reads = read(cells, alphabet)
+        enforce_grammar(reads)
         path = align(reads, path, pads, same, changed, held, icons, anchors)
         if path is None:
             return None
@@ -911,6 +957,7 @@ def read_clip(clip: Path, frame_map: list, pads, ffmpeg: str,
         learned = {key: sorted(table) for key, table in own.items() if table}
         alphabet = merge(alphabet, own)
     reads = read(cells, alphabet)
+    ungrammatical = enforce_grammar(reads)
     icons = None
     icon_alphabet: dict = {}
     if held is not None:
@@ -934,6 +981,7 @@ def read_clip(clip: Path, frame_map: list, pads, ffmpeg: str,
     verdict.offset = sweep_offset
     verdict.offset_agree = sweep_agree
     verdict.offset_margin = round(sweep_margin, 4)
+    verdict.ungrammatical = ungrammatical
     verdict.anchors = {int(slot): [int(raw), int(path[slot])] for slot, raw in anchors.items()}
     if icons is not None and held is not None:
         checked = [(slot, raw) for slot, raw in enumerate(path) if icons[slot]]
