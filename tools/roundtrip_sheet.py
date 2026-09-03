@@ -45,6 +45,7 @@ from fastapi.testclient import TestClient                          # noqa: E402
 
 from import_fixture import OfflineMemory, bundled_standards_seed   # noqa: E402
 from sm64_events.library import source                             # noqa: E402
+from sm64_events.library.audit import row_key                   # noqa: E402
 from sm64_events.library.export_column import (                    # noqa: E402
     _blocks, _find_item, sheet_time)
 from sm64_events.library.sheet import read_rows                    # noqa: E402
@@ -105,7 +106,59 @@ def row_labels(rows, payload):
     return labels
 
 
-def roundtrip(runner, rows, payload, scratch):
+def link_refused_rows(client, rows, payload, runner, limit):
+    """Stand in for the segments he would build by hand, and LINK them.
+
+    His question (2026-09-02): "if I *did* set up some of those missing
+    subsections, and then we import, does it get detected correctly (imported
+    correctly, exported correctly)? We can probably prove by induction that
+    this would work for the rest."
+
+    So this builds one segment per refused row -- a definition with no
+    triggers, which is enough to exist and be adopted, since nothing here ever
+    plays the game -- and points the row at it through the SAME
+    `POST /api/library/adopt` door the Library tab's link control uses. What it
+    cannot stand in for is whether the segment he builds actually MATCHES that
+    stretch in game; it proves the plumbing from a linked row to a round-tripped
+    cell, which is the half he asked about.
+
+    Returns how many rows were linked."""
+    wanted = []
+    for _number, row, target, item in walk_rows(rows, payload):
+        if row is None or item is None:
+            continue
+        if not any(entry.get("runner") == runner and entry.get("time_cs")
+                   for entry in (item.get("entries") or [])):
+            continue
+        # Exactly the two classes the import refuses: a subsection, and an
+        # approach whose target the mapping never paired with an entity.
+        if row.kind == "subsection" or not (target.get("entity_key") or ""):
+            wanted.append((target, item))
+        if len(wanted) >= limit:
+            break
+
+    linked = 0
+    for target, item in wanted:
+        made = client.post("/api/segments", json={
+            "name": f"{target.get('label')} — {item['name']}"[:120],
+            # A definition needs at least one trigger to exist. Nothing here
+            # ever plays the game, so a plain level entry/exit is enough to
+            # be a real segment that a row can be adopted onto.
+            "start_triggers": [{"type": "level_enter", "to": 6}],
+            "end_triggers": [{"type": "level_exit", "from": 6}]})
+        if made.status_code != 200:
+            continue
+        segment_id = made.json().get("id") or made.json().get("segment", {}).get("id")
+        if segment_id is None:
+            continue
+        adopted = client.post("/api/library/adopt", json={
+            "row_key": row_key(target, item["name"], item["ids"]),
+            "entity_key": f"segment:{segment_id}"})
+        linked += adopted.status_code == 200
+    return linked
+
+
+def roundtrip(runner, rows, payload, scratch, link=0):
     """Import `runner` into a fresh database through the real endpoint, export
     the column back, and answer `(expected, actual, import summary)`."""
     db_path = scratch / f"{abs(hash(runner))}.db"
@@ -121,10 +174,11 @@ def roundtrip(runner, rows, payload, scratch):
                      mode_path=scratch / "mode.json",
                      library_path=scratch / "library.json.gz")
     with TestClient(app) as client:
+        linked = link_refused_rows(client, rows, payload, runner, link) if link else 0
         landed = client.post("/api/import/sheet", json={"runner": runner})
         if landed.status_code != 200:
             raise SystemExit(f"import of {runner!r} failed: {landed.text[:300]}")
-        summary = landed.json()
+        summary = dict(landed.json(), linked=linked)
         actual = client.get("/api/scorecard/column").json()["lines"]
     return expected_column(rows, payload, runner), actual, summary
 
@@ -172,7 +226,8 @@ def report(runner, expected, actual, summary, labels, verbose):
     verdict = "MATCH" if total == 0 else f"{total} rows differ"
     print(f"{runner:<22} sheet {sum(1 for line in expected if line):>4}  "
           f"exported {sum(1 for line in actual if line):>4}  "
-          f"landed {summary.get('imported', '?'):>4}  -> {verdict}")
+          f"landed {summary.get('imported', '?'):>4}  "
+          f"linked {summary.get('linked', 0):>3}  -> {verdict}")
     if not total:
         return 0
     print(f"    {dict(counts)}")
@@ -203,6 +258,11 @@ def main(argv=None):
                         help="test exactly this runner (repeatable)")
     parser.add_argument("--verbose", action="store_true",
                         help="print every mismatching row, not just six")
+    parser.add_argument("--link", type=int, default=0, metavar="N",
+                        help="before importing, build a segment for the first N "
+                             "rows the import would refuse and link them -- the "
+                             "induction test for the subsections he would set up "
+                             "by hand")
     args = parser.parse_args(argv)
 
     print("fetching the sheet…", flush=True)
@@ -220,7 +280,8 @@ def main(argv=None):
     scratch = Path(tempfile.mkdtemp(prefix="roundtrip-"))
     worst = 0
     for runner in runners:
-        expected, actual, summary = roundtrip(runner, rows, payload, scratch)
+        expected, actual, summary = roundtrip(runner, rows, payload,
+                                              scratch, link=args.link)
         worst = max(worst, report(runner, expected, actual, summary, labels,
                                   args.verbose))
     print(f"\nworst runner: {worst} differing rows")
