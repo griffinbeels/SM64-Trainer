@@ -186,6 +186,13 @@ def _ask(resolve, entity_key, strategy, timer_mode, version, blind):
     STRATEGY never falls back at all -- it means only times set that way."""
     cs = resolve(entity_key, strategy, timer_mode, version)
     if cs is None and blind:
+        # A row that names the THING is that thing's Standard strategy (his
+        # ruling, 2026-09-02: "Standard maps to any row that's just the star
+        # name / segment name"), which is also what the import files it under
+        # and what he practises under himself. Asked before the strategy-blind
+        # sweep, so a row can still print an exact answer rather than a best.
+        cs = resolve(entity_key, DEFAULT_STRATEGY, timer_mode, version)
+    if cs is None and blind:
         cs = resolve(entity_key, None, timer_mode, version)
     return cs
 

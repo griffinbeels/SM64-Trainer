@@ -300,7 +300,11 @@ def test_a_star_own_row_asks_for_his_best_however_he_got_it():
     # Round 27 put the row's OWN name first and the blind ask second, so the
     # star's row asks TWICE when nothing is filed under its name -- which is
     # what lets an imported column round-trip without costing a played one.
-    assert asked[:3] == ["Chip off Whomp's Block", None, "Triple jump strat"], asked
+    # Round 28 put STANDARD between the row's own name and the blind sweep:
+    # a row named after the star IS that star's Standard strategy (his rule),
+    # which is what the import files it under and what he practises under.
+    assert asked[:4] == ["Chip off Whomp's Block", "Standard", None,
+                         "Triple jump strat"], asked
 
 
 def test_a_strategy_row_still_only_prints_its_own_strategys_time():

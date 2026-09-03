@@ -37,6 +37,7 @@ Pure — takes a payload, returns candidates. The caller decides where the
 payload came from, which is what lets the picker fill from the bundled
 snapshot while the import itself reads a fresh fetch.
 """
+from sm64_events.library.adoptions import DEFAULT_STRATEGY, strategy_name
 from sm64_events.tracking.importing import ImportCandidate
 
 # Sheet approach times are STAR times measured the way Usamune measures them.
@@ -111,10 +112,28 @@ def candidates_for(payload: dict, runner: str, place=None):
                            if entry.get("runner") == runner]
                 if not entries:
                     continue
-                # The vetted name wins where the sheet's approach was paired
-                # with one; the sheet's own name is the honest fallback.
-                sheet_strategy = (item.get("matched_strategy")
-                                  or item.get("name"))
+                # A row whose name IS the target's own is that thing's
+                # STANDARD strategy, not a strategy called after the star --
+                # his ruling (2026-09-02): "if the name of the row is just the
+                # name of the star, then it should be given a Standard
+                # strategy... For the other sub rows, those are either
+                # subsections of the star, or they're genuine alternative
+                # strategies, which are always named."
+                #
+                # `adoptions.strategy_name` is that rule and already answered
+                # it this way for every row that goes through `place`; the
+                # star branch below kept its own answer and filed those times
+                # under "Big Bob-omb on the Summit". That is why a column he
+                # imported did not line up with the times he PLAYS, which are
+                # under Standard like everything else in this app.
+                #
+                # The vetted name still wins on a row that names a strategy;
+                # a target-named row has no strategy to be vetted against.
+                named = strategy_name(target.get("label") or "",
+                                      item.get("name") or "", kind=kind)
+                sheet_strategy = (named if named == DEFAULT_STRATEGY
+                                  else (item.get("matched_strategy")
+                                        or item.get("name")))
                 placed = place(target, item, kind) if place else None
                 if placed:
                     entity_key, timer_mode, strategy = placed

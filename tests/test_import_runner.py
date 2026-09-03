@@ -73,7 +73,11 @@ def test_the_bowser_rows_land_on_the_seeded_movement_by_seed_key():
     bowser = [c for c in candidates if c.entity_key.startswith("segment:")]
     assert {(c.entity_key, c.strat_tag, c.time_cs, c.timer_mode) for c in bowser} == {
         ("segment:60", "Zero Cycle", 3943, "rta"),
-        ("segment:70", "Bowser in the Sky Course", 4800, "rta"),
+        # 2026-09-02: a row named after its TARGET is that thing's STANDARD
+        # strategy, not a strategy called after the course -- his rule, and
+        # the same answer `adoptions.strategy_name` already gave every LINKED
+        # row. Only the seed-key branch had kept its own.
+        ("segment:70", "Standard", 4800, "rta"),
     }
     assert not any(row["reason"] == "segments" for row in rejected)
     assert len(candidates) == 16
