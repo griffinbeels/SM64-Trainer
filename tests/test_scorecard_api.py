@@ -745,19 +745,20 @@ def _bob_omb_rows(strategy_row=False):
     return rows, payload
 
 
-def test_a_stars_own_row_exports_his_best_on_it_however_he_set_it(tmp_path):
-    """ROUND 25. A row named after the STAR is about the star, so it prints
-    the best time on it whatever strategy set it -- the same number his
-    Scorecard already shows for that star.
+def test_a_stars_own_row_prefers_the_time_filed_under_its_own_name(tmp_path):
+    """ROUND 27. A star's own row asks for ITS OWN name first and only falls
+    back to "your best on this star, however you set it".
 
-    This test used to assert the opposite, and its old "decoy" is now the
-    expected answer. That was round 19's shape: the export asked every row
-    for the sheet's own name, which closed the round trip for an IMPORTED
-    column and missed almost everything he PLAYED, because a played time is
-    filed under the name HE picked. Measured through the real endpoint on his
-    live database (268 PBs): 399 asks, 3 answers. Round 19's guarantee is not
-    lost -- it moved to the named-strategy row below, where a name still
-    means only times set that way."""
+    Both halves are his, a round apart, and the order is what serves both.
+    Round 25: a column he PLAYED came back nearly empty, because his times
+    are filed under the names HE picked -- so the blind fallback exists.
+    Round 27: a column he IMPORTED must export back identically, and the
+    import files a star row under that row's OWN name -- so the name is asked
+    first. Measured over the live sheet through the real endpoints: with the
+    blind ask alone, 104 of one runner's 601 filled rows exported the wrong
+    number; asking by name first, 28.
+
+    Here both exist, and the row's own name must win."""
     from sm64_events.library.export_column import column_lines
     from sm64_events.server.import_api import sheet_row_placer
     from sm64_events.server.scorecard_api import _column_resolve
@@ -770,8 +771,26 @@ def test_a_stars_own_row_exports_his_best_on_it_however_he_set_it(tmp_path):
         rows, payload = _bob_omb_rows()
         place = sheet_row_placer(svc, None)
         lines = column_lines(rows, payload, _column_resolve(svc), place=place)
+        assert lines == [sheet_time(display_cs(1324))], (
+            "an imported star row must export the time it was imported with")
+
+
+def test_a_stars_own_row_falls_back_to_his_best_when_the_name_has_nothing(tmp_path):
+    """Round 25's half, kept: with NOTHING filed under the row's own name --
+    the ordinary shape of a time he played, since he names his own strategies
+    -- the star's row still carries his best on that star."""
+    from sm64_events.library.export_column import column_lines
+    from sm64_events.server.import_api import sheet_row_placer
+    from sm64_events.server.scorecard_api import _column_resolve
+
+    with make_client(tmp_path) as (_client, db, svc):
+        db.insert_pb(1, 0, "Standard", "igt", 900, None,
+                     "2026-08-24T00:00:00Z")
+        rows, payload = _bob_omb_rows()
+        place = sheet_row_placer(svc, None)
+        lines = column_lines(rows, payload, _column_resolve(svc), place=place)
         assert lines == [sheet_time(display_cs(900))], (
-            "the star's own row must carry his best time on that star")
+            "a played time must still reach the star's own row")
 
 
 def test_an_imported_strategy_row_exports_the_time_it_was_imported_with(tmp_path):

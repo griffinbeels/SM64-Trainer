@@ -297,7 +297,10 @@ def test_a_star_own_row_asks_for_his_best_however_he_got_it():
     lines = column_lines(rows, payload, resolve)
     assert lines[0] == "43.70", "the star's own row must print his best"
     assert lines[1] == "", "a strategy row must not print a time set another way"
-    assert asked[:2] == [None, "Triple jump strat"], asked
+    # Round 27 put the row's OWN name first and the blind ask second, so the
+    # star's row asks TWICE when nothing is filed under its name -- which is
+    # what lets an imported column round-trip without costing a played one.
+    assert asked[:3] == ["Chip off Whomp's Block", None, "Triple jump strat"], asked
 
 
 def test_a_strategy_row_still_only_prints_its_own_strategys_time():
@@ -333,3 +336,47 @@ def test_a_subsection_row_names_the_piece_so_it_asks_blind_too():
     lines = column_lines(rows, payload, resolve, place=place)
     assert lines[2] == "1:21.00"
     assert ("segment:9", None) in asked
+
+
+def test_an_imported_row_wins_over_your_faster_time_on_the_star():
+    """ROUND 27, and it is round 25's rule meeting his round-trip goal --
+    "we need to be able to IMPORT a column, and be able to EXPORT that exact
+    same column back into the sheet."
+
+    Round 25 made a star's own row ask with NO strategy, so it printed your
+    best on that star however you set it. For an IMPORTED column that broke
+    the round trip: the import files a star row's time under that row's OWN
+    name, and a blind ask answered with the runner's faster time from some
+    other row instead -- measured through the real endpoints over the live
+    sheet, 104 of one runner's 601 filled rows came back with the wrong
+    number.
+
+    Asking by NAME first settles both, and this is the case that tells them
+    apart: a PB exists under the row's own name AND a faster one exists under
+    another. The row must print its own."""
+    rows, payload = _primary_fixture()
+
+    def resolve(entity_key, strat_tag, timer_mode, version):
+        if strat_tag == "Chip off Whomp's Block":
+            return 4370                      # what the import landed here
+        if strat_tag is None:
+            return 2060                      # faster, set some other way
+        return None
+
+    lines = column_lines(rows, payload, resolve)
+    assert lines[0] == "43.70", (
+        "an imported star row must export the time it was imported with, not "
+        "a faster time from another row")
+
+
+def test_the_blind_fallback_still_carries_a_time_he_played():
+    """The other half, unchanged from round 25: with NOTHING filed under the
+    row's own name -- which is the ordinary case for times he PLAYED, since
+    they are filed under the names HE picked -- the star's own row still
+    prints his best on that star."""
+    rows, payload = _primary_fixture()
+
+    def resolve(entity_key, strat_tag, timer_mode, version):
+        return 2060 if strat_tag is None else None
+
+    assert column_lines(rows, payload, resolve)[0] == "20.60"

@@ -151,20 +151,43 @@ def _line_for(row, block, resolve, place) -> str:
     # already shows for that star, so those two surfaces cannot disagree
     # either. Same run after the change: 42 answers.
     blind = names_the_thing(target, item, row.kind)
-    sheet_strategy = None if blind else (item.get("matched_strategy")
-                                         or item.get("name"))
+    sheet_strategy = item.get("matched_strategy") or item.get("name")
     placed = place(target, item, row.kind) if place is not None else None
     if placed:
         placed_entity, timer_mode, strategy = placed
-        cs = resolve(placed_entity,
-                     None if blind else (strategy or sheet_strategy),
-                     timer_mode, row.version)
+        cs = _ask(resolve, placed_entity, strategy or sheet_strategy,
+                  timer_mode, row.version, blind)
     elif (row.kind == "approach"
             and (target.get("entity_key") or "").startswith("star:")):
-        cs = resolve(target["entity_key"], sheet_strategy, "igt", row.version)
+        cs = _ask(resolve, target["entity_key"], sheet_strategy, "igt",
+                  row.version, blind)
     else:
         return ""
     return sheet_time(cs) if cs is not None else ""
+
+
+def _ask(resolve, entity_key, strategy, timer_mode, version, blind):
+    """The row's own strategy FIRST, then -- only on a row that names the
+    thing -- your best on it however you set it.
+
+    The order is what lets one door serve two things he asked for a round
+    apart, and it took a measurement to see they were not in conflict. Round
+    25: a column he PLAYED came back nearly empty, because his times are
+    filed under the names HE picked and the export asked for the sheet's, so
+    a star's own row began asking with no strategy at all. Round 27: a column
+    he IMPORTED must export back IDENTICALLY -- and the import files a star
+    row's time under that row's OWN name, so a blind ask answered with his
+    fastest time on the star from some OTHER row and the round trip broke on
+    104 of one runner's rows.
+
+    Asking by name first settles both. An imported column has a PB under the
+    exact name, so it round-trips; a played one has none there, the name
+    misses, and the blind fallback still carries it. A row that names a
+    STRATEGY never falls back at all -- it means only times set that way."""
+    cs = resolve(entity_key, strategy, timer_mode, version)
+    if cs is None and blind:
+        cs = resolve(entity_key, None, timer_mode, version)
+    return cs
 
 
 def column_lines(rows, payload, resolve, place=None) -> list:
