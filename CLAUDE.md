@@ -19,7 +19,8 @@ FastAPI + uvicorn, pymem, pytest.
 
 ```
 uv sync
-uv run python tools/run_tests.py                     # MUST pass before any merge: the whole suite on 16 workers (~2 min; 19½ serial), and it refreshes the coverage map
+uv run python tools/run_tests.py                     # MUST pass before any merge: the whole suite on 16 workers with 8 logical cores left free for his desktop (~4 min; 19½ serial), and it refreshes the coverage map. `--workers 8` while he is actively using the machine; `--reserve 0` to hand the run every core
+uv run python tools/measure_run_load.py              # what a run COSTS his desktop, against what it saves in time: idle baseline then one full run per configuration, scored by how long a normal-priority thread waits for a core (p95 ms) as well as by wall clock
 uv run python tools/run_tests.py --changed           # the inner loop: only the tests whose Python your change touched -- or everything, when a JS/HTML/CSS/data/doc file changed, because nothing can see what those affect
 uv run pytest tests/test_<module>.py -q              # one file, serially, as always
 uv run python -m sm64_events.main                    # run from repo root (data/ is cwd-relative); canonical — binds the CTRL+C shutdown deadline
@@ -312,7 +313,15 @@ Contract changes land on main first, then dependent work fans out. Merge with
   (2026-09-02, `tests/test_worker_groups.py` pins the order); a test marked
   `spread` is its own group and leaves the
   file, which is how the responsive sweep went from one 179 s test to 26
-  cases. Two things to carry: testmon is BLIND to anything that is not
+  cases. **The door also fences the whole pytest tree off 8 of the 32
+  logical processors** (`--reserve`, default 8), because 16 workers with
+  every core made his desktop stall 10.3 ms at p95 -- dropped frames --
+  where reserving four physical cores costs 8% wall time and takes that to
+  1.3 ms; `--workers 8` is idle-grade at both percentiles for 51% more time.
+  Priority is NOT a lever and is ruled out with evidence in the runner's
+  docstring. `tools/measure_run_load.py` is where those numbers come from
+  and how to re-derive them -- lag measured as the wait for a core, never as
+  CPU percent. Two things to carry: testmon is BLIND to anything that is not
   Python executed in-process (JS, HTML, CSS, seed data, docs, code that
   only runs in a spawned subprocess), so the door refuses to select when a
   non-Python file changed since the last full run, and `--changed` is never

@@ -73,9 +73,36 @@ The first answer was below-normal priority for the whole tree, and it was
 wrong: two full runs at that class went red (6 failed + 51 errors, then 11 +
 13) where the same tree at normal priority ran green, because this machine
 always carries normal-priority load beside a run (sibling Claude sessions
-and their servers) and a starved worker times out its browsers. So the lag
-lever is `--workers`: 16 is the measured sweet spot on an idle machine, and
-`--workers 8` while he is actively using it. And every run ends with a sweep that reports what it left behind, so "sludge" is a number
+and their servers) and a starved worker times out its browsers.
+
+The two levers that DO work are measured, by `tools/measure_run_load.py`,
+against what lag actually is: how long a normal-priority thread waits for a
+core after it is ready to run (its wake-latency probe; p95 of that wait, in
+ms, because a stutter is a tail event and the median never sees one). Three
+full green runs, 2026-09-02, with sibling sessions live as usual:
+
+    idle, no run                                p95  0.6 ms   p99  0.7 ms
+    16 workers, nothing reserved      216 s     p95 10.3 ms   p99 29.4 ms
+    16 workers, 8 cores reserved      234 s     p95  1.3 ms   p99 17.7 ms
+    8 workers, nothing reserved       326 s     p95  0.7 ms   p99  1.2 ms
+
+**`--reserve` is on by default at 8, and that is why.** It is CPU affinity,
+not priority: the whole pytest tree is fenced off 8 of this machine's 32
+logical processors -- the top indices, so sibling threads go together and 4
+whole physical cores come free -- and the desktop always has somewhere to
+run rather than waiting behind a worker. It costs 18 s (8%) and takes the
+typical stall from 10.3 ms, which is dropped frames, to 1.3 ms, which is
+idle. Affinity is inherited at spawn and xdist's workers and their browsers
+appear over the run's first seconds, so it is re-applied to every new
+descendant on a 2 s sweep rather than set once. `--reserve 0` turns it off.
+
+`--workers 8` remains the lever for when he is actively using the machine
+and wants it untouched: idle-grade at both percentiles, for 110 s (51%)
+more wall time. Reserving cores does not substitute for it -- the p99 stays
+at 17.7 ms, so an occasional hitch survives -- and it does not need to,
+because the two compose.
+
+And every run ends with a sweep that reports what it left behind, so "sludge" is a number
 on screen rather than a feeling: orphaned headless browsers (parent gone),
 orphaned workers and ffmpeg from THIS checkout, and Playwright profile dirs
 in TEMP that no live browser references. Measured before this existed: ten
@@ -100,6 +127,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -108,6 +136,11 @@ import psutil
 ROOT = Path(__file__).resolve().parent.parent
 STATE_PATH = ROOT / ".run_tests.json"
 DEFAULT_WORKERS = 16
+# Logical processors kept OFF the test tree so the desktop always has one.
+# 8 of the 32 here -- measured at 8% more wall time for an 8x cut in the
+# typical stall; the docstring carries the table.
+DEFAULT_RESERVED_CORES = 8
+AFFINITY_SWEEP_SECONDS = 2.0
 # pytest exit codes that mean the run COMPLETED and the coverage map is whole:
 # 0 all passed, 1 some failed. 2 is an interruption, 3/4 are pytest's own
 # errors, 5 collected nothing -- none of those leave a map worth stamping.
@@ -141,6 +174,37 @@ def pytest_args(mode: str, workers: int, extra: list[str]) -> list[str]:
     if mode == "select":
         return [*base_args(workers), "--testmon", *extra]
     raise ValueError(mode)
+
+
+def reserved_affinity(reserve: int, total: int | None = None) -> list[int]:
+    """The logical processors the test tree may use when `reserve` are kept for
+    the desktop -- empty when nothing is reserved, which is how the caller knows
+    to leave affinity alone. The TOP indices are the ones handed back: Windows
+    numbers a core's two threads adjacently, so taking them off the end frees
+    whole physical cores rather than one thread of twice as many."""
+    if reserve <= 0:
+        return []
+    total = total or psutil.cpu_count()
+    return list(range(max(1, total - reserve)))
+
+
+def apply_affinity(root_pid: int, cpus: list[int], pinned: set[int]) -> None:
+    """Fence the run's whole process tree onto `cpus`, skipping what is already
+    fenced. Silent on a process that exited mid-walk or refuses -- a finished
+    worker is the normal case, and a run must never die of its own courtesy."""
+    try:
+        root = psutil.Process(root_pid)
+        family = [root, *root.children(recursive=True)]
+    except psutil.NoSuchProcess:
+        return
+    for proc in family:
+        if proc.pid in pinned:
+            continue
+        pinned.add(proc.pid)
+        try:
+            proc.cpu_affinity(cpus)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            pass
 
 
 def is_python(path: str) -> bool:
@@ -315,6 +379,9 @@ def main(argv: list[str] | None = None) -> int:
                              "change touched; runs everything if a non-Python file changed")
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS,
                         help=f"pytest-xdist workers (default {DEFAULT_WORKERS})")
+    parser.add_argument("--reserve", type=int, default=DEFAULT_RESERVED_CORES,
+                        help=f"logical processors kept free of the test tree so the desktop "
+                             f"stays responsive (default {DEFAULT_RESERVED_CORES}; 0 disables)")
     args, extra = parser.parse_known_args(argv)
 
     current = fingerprint(git_known_files())
@@ -333,7 +400,14 @@ def main(argv: list[str] | None = None) -> int:
     # always has normal-priority load beside a run (sibling Claude sessions,
     # their servers) and a starved worker times out its browsers. Lag is
     # answered with `--workers` instead; see the docstring.
-    exit_code = subprocess.run(command, cwd=ROOT).returncode
+    child = subprocess.Popen(command, cwd=ROOT)
+    cpus = reserved_affinity(args.reserve)
+    if cpus:
+        pinned: set[int] = set()
+        while child.poll() is None:
+            apply_affinity(child.pid, cpus, pinned)
+            time.sleep(AFFINITY_SWEEP_SECONDS)
+    exit_code = child.wait()
     sweep_leftovers("after")
     if records_full_run(mode, extra, exit_code):
         save_state(current, args.workers, exit_code)
