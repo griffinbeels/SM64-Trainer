@@ -71,6 +71,18 @@ def match_vetted(vetted: dict, approaches: list) -> dict:
     return out
 
 
+def _shares_its_entity(target: dict) -> bool:
+    """Is this target one of SEVERAL the sheet maps onto one entity?
+
+    True for every 100-coin star: mapping.py files every "+ 100c" row under
+    star:<course>:6, and a course opens one target per route ending on a
+    different star. Four targets cannot all be that entity's Standard, and
+    calling them all that put four distinct times in one PB slot -- the
+    import has the same guard, for the same measured reason."""
+    key = target.get("entity_key") or ""
+    return key.startswith("star:") and key.endswith(":6")
+
+
 def stamp_matches(payload: dict, vetted_by_entity: dict) -> dict:
     """Write each approach's vetted twin onto it. The page needs this to
     attach YOUR rank, PB and replays to the right section; recomputing the
@@ -90,8 +102,9 @@ def stamp_matches(payload: dict, vetted_by_entity: dict) -> dict:
         for index, approach in enumerate(approaches):
             if index in matched:
                 approach["matched_strategy"] = matched[index]
-            elif strategy_name(target.get("label") or "",
-                               approach.get("name") or "") == DEFAULT_STRATEGY:
+            elif (strategy_name(target.get("label") or "",
+                                approach.get("name") or "") == DEFAULT_STRATEGY
+                    and not _shares_its_entity(target)):
                 # A row named after its target IS that thing's Standard
                 # strategy (his ruling, 2026-09-02: "for the 'standard'
                 # strategy, we should make sure that this is also the name of

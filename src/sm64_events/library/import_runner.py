@@ -38,6 +38,7 @@ payload came from, which is what lets the picker fill from the bundled
 snapshot while the import itself reads a fresh fetch.
 """
 from sm64_events.library.adoptions import DEFAULT_STRATEGY, strategy_name
+from sm64_events.library.mapping import HUNDRED_COIN_STAR
 from sm64_events.tracking.importing import ImportCandidate
 
 # Sheet approach times are STAR times measured the way Usamune measures them.
@@ -90,6 +91,17 @@ def _drop_reason(target: dict, kind: str) -> str:
     return SEGMENT if entity_key.startswith("segment:") else NO_ENTITY
 
 
+def _shares_its_entity(target: dict) -> bool:
+    """Is this target one of SEVERAL the sheet maps onto one entity?
+
+    True for every 100-coin star: `library/mapping.py` files every "+ 100c"
+    row under `star:<course>:6`, and a course opens one target per route
+    ending on a different star. A target-named row cannot be that entity's
+    Standard when three siblings claim the same title."""
+    key = target.get("entity_key") or ""
+    return key.startswith("star:") and key.endswith(f":{HUNDRED_COIN_STAR}")
+
+
 def candidates_for(payload: dict, runner: str, place=None):
     """`([ImportCandidate, ...], [{text, reason}, ...])` — what lands,
     and one named row per entry that could not.
@@ -131,6 +143,21 @@ def candidates_for(payload: dict, runner: str, place=None):
                 # a target-named row has no strategy to be vetted against.
                 named = strategy_name(target.get("label") or "",
                                       item.get("name") or "", kind=kind)
+                if named == DEFAULT_STRATEGY and _shares_its_entity(target):
+                    # ...EXCEPT on a 100-coin star, where several sheet
+                    # targets map to ONE entity: CCM alone opens four ("Big
+                    # Penguin Race + 100c", "Slide + 100c No teleporter
+                    # route", ...), each of them a different run ending on a
+                    # different star. Calling all four Standard puts four
+                    # distinct times in one slot and keeps whichever is
+                    # fastest -- 21 of Raisn's 28 remaining star mismatches
+                    # were exactly this (measured 2026-09-02). The store
+                    # already knows: `ranks/standards.py` VARIANT-QUALIFIES a
+                    # 100-coin star's strategies for this reason. Until a
+                    # qualified name can be derived here that the standards
+                    # store also recognises, these keep the row's own name,
+                    # which is distinct and round-trips.
+                    named = None
                 sheet_strategy = (named if named == DEFAULT_STRATEGY
                                   else (item.get("matched_strategy")
                                         or item.get("name")))
