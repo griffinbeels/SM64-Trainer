@@ -13,6 +13,7 @@ adopt only what is left. Subsections are never adopted (they would clutter the
 segment list) and Castle Movements wait for a segment to exist — the user's
 ruling, 2026-08-05.
 """
+from sm64_events.library.adoptions import DEFAULT_STRATEGY, strategy_name
 from sm64_events.library.ladders import LADDER_PERCENTILES
 
 # Two ladders are the same strategy when their tiers agree this closely, taken
@@ -89,6 +90,21 @@ def stamp_matches(payload: dict, vetted_by_entity: dict) -> dict:
         for index, approach in enumerate(approaches):
             if index in matched:
                 approach["matched_strategy"] = matched[index]
+            elif strategy_name(target.get("label") or "",
+                               approach.get("name") or "") == DEFAULT_STRATEGY:
+                # A row named after its target IS that thing's Standard
+                # strategy (his ruling, 2026-09-02: "for the 'standard'
+                # strategy, we should make sure that this is also the name of
+                # the strategy in the library"). The import and the export
+                # already file it that way; without this the Library page
+                # called the same row by the star's own name, so the one row
+                # everyone practises had three names across three surfaces.
+                #
+                # A real vetted pairing still wins -- this is the fallback for
+                # a row the ladder matcher left unnamed, which is where the
+                # star's own row lands, since it has no distinct ladder to be
+                # paired against.
+                approach["matched_strategy"] = DEFAULT_STRATEGY
             else:
                 approach.pop("matched_strategy", None)
     return payload
