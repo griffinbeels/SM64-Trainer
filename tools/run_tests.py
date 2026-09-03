@@ -133,6 +133,8 @@ from pathlib import Path
 
 import psutil
 
+from find_uilab import find_uilab
+
 ROOT = Path(__file__).resolve().parent.parent
 STATE_PATH = ROOT / ".run_tests.json"
 DEFAULT_WORKERS = 16
@@ -371,6 +373,26 @@ def save_state(prints: dict[str, str], workers: int, exit_code: int) -> None:
     }, indent=0), encoding="utf-8")
 
 
+def say_if_the_rendered_gates_cannot_run() -> None:
+    """Announce a missing uilab, because a run without it looks GREEN.
+
+    Every layout, contact-sheet and rendered-behaviour gate skips when uilab
+    is unreachable, and a skip is not a failure: the run reports `8413 passed,
+    75 skipped` in 68 seconds and exits 0. Measured 2026-09-03, building a
+    baseline to compare a branch against -- a `git worktree` outside
+    `.claude/worktrees/` resolves the sibling checkout relative to ITSELF, so
+    the 62 browser tests silently left the run and the comparison was about to
+    be believed. `find_uilab`'s own docstring covers the other way this
+    vanishes (a `uv sync` pruning an editable install).
+
+    Prints and returns; it never blocks. The point is that a run missing its
+    rendered half cannot look identical to one that has it."""
+    if find_uilab() is not None:
+        print("run_tests: !! uilab NOT FOUND -- every rendered gate will SKIP, "
+              "and the run will still exit 0. Set UILAB_PATH to your uilab "
+              "checkout before trusting this result.", flush=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -391,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         mode, why = "full", "the merge gate: every test, and the coverage map refreshed"
     print(f"run_tests: {mode} -- {why}", flush=True)
+    say_if_the_rendered_gates_cannot_run()
 
     sweep_leftovers("before")
     command = [sys.executable, "-m", "pytest", *pytest_args(mode, args.workers, extra)]
