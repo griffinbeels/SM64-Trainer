@@ -289,3 +289,28 @@ def test_the_reset_s_white_flash_pins_the_reset_frame():
     assert pinned[300] == reset and pinned[280:340] == truth[280:340]
     assert P.flash_anchors(cells, [f + 2 for f in truth], []) == {}
     assert P.flash_anchors(cells, [f + 40 for f in truth], [reset]) == {}, "a reset far from the prior is not this flash"
+
+
+def test_every_slot_after_a_pictures_first_is_flagged_as_the_same_picture(monkeypatch):
+    """picture_runs yields (first slot, LENGTH). Unpacking it as (start, end)
+    made the flag `same[start + 1 : end + 1]` -- for a run of two at slot 100
+    that is `same[101:3]`, EMPTY -- so the "this picture is held, the map may
+    not advance" flag reached almost nothing and the aligner walked straight
+    across duplicated pictures (his pyramid clip: the map stepped +1 over 110
+    of its 115 held frames, 2026-09-02). Every slot after a run's first is the
+    same picture, wherever the run sits."""
+    import pathlib
+
+    from sm64_events.replay import mapalign, padread
+
+    runs = [(0, 1), (1, 3), (4, 1), (5, 2), (7, 1)]   # 8 slots, 5 pictures
+    monkeypatch.setattr(mapalign, "decode_grey", lambda ffmpeg, clip: np.zeros((8, 4), np.uint8))
+    monkeypatch.setattr(mapalign, "picture_runs", lambda grey: runs)
+    cells = np.zeros((8, padread.CELL_H, padread.CELL_W, 3), np.uint8)
+    same, _changed = padread.picture_flags("ffmpeg", pathlib.Path("nope.mp4"), cells)
+    assert list(same) == [False, False, True, True, False, False, True, False]
+    # Mutation proof: the (start, end) reading marks almost nothing.
+    wrong = np.zeros(8, bool)
+    for start, end in runs:
+        wrong[start + 1:min(end + 1, 8)] = True
+    assert list(wrong) != list(same)

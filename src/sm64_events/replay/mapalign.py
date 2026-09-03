@@ -580,11 +580,14 @@ def picture_runs(grey: np.ndarray) -> list[tuple[int, int]]:
 
 
 def decode_grey(ffmpeg: str, clip: Path) -> np.ndarray:
-    """Every video frame as a small grey image, for run detection."""
+    """Every STORED video frame as a small grey image, for run detection --
+    `-fps_mode passthrough`, or a VFR picture-feed clip is re-timed onto its
+    r_frame_rate grid and the runs no longer index the clip's frames (the
+    reader's decode had the same fault, 2026-09-02)."""
     out = subprocess.run(
         [ffmpeg, "-v", "error", "-i", str(clip),
-         "-vf", f"scale={RUN_WIDTH}:{RUN_HEIGHT}", "-f", "rawvideo",
-         "-pix_fmt", "gray", "pipe:1"], capture_output=True)
+         "-vf", f"scale={RUN_WIDTH}:{RUN_HEIGHT}", "-fps_mode", "passthrough",
+         "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"], capture_output=True)
     stride = RUN_WIDTH * RUN_HEIGHT
     count = len(out.stdout) // stride
     return np.frombuffer(out.stdout[:count * stride],

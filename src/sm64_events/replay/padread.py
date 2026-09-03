@@ -779,8 +779,16 @@ def picture_flags(ffmpeg: str, clip: Path, cells: np.ndarray):
         runs = picture_runs(decode_grey(ffmpeg, clip))
     except Exception:
         runs = []
-    for start, end in runs:
-        same[start + 1:min(end + 1, count)] = True
+    # picture_runs yields (first slot, LENGTH), not (start, end). Unpacking it
+    # as an end made this `same[start + 1 : end + 1]`, which for a run of two
+    # at slot 100 is `same[101:3]` -- EMPTY. So the "this picture is held, the
+    # map may not advance" flag reached almost nothing, and the aligner walked
+    # the map straight across duplicated pictures: his pyramid clip stepped +1
+    # over 110 of its 115 held frames, so the panel's pad changed while the
+    # screen did not (2026-09-02). Every slot after a run's first IS the same
+    # picture.
+    for start, length in runs:
+        same[start + 1:min(start + length, count)] = True
     diff = np.abs(cells[1:].astype(np.int16) - cells[:-1].astype(np.int16)).mean(axis=(1, 2, 3))
     changed = np.concatenate([[False], diff > 1.0])
     same &= ~changed
@@ -809,14 +817,22 @@ def read_clip(clip: Path, frame_map: list, pads, ffmpeg: str,
         return None
     count = min(len(cells), len(frame_map))
     cells, frame_map = cells[:count], list(frame_map[:count])
+    # The PICTURES decide what is the same picture -- never the feed log
+    # alone. A picture-feed clip still holds DUPLICATE pictures: the game's
+    # RAM frame advanced but the emulator re-presented the old render (a lag
+    # frame), the two grabs differed by a few dithered pixels, so the ledger
+    # filed two rows with advancing stamps for ONE picture. Measured on his
+    # pyramid clip (5946, 2026-09-02): 115 of 775 stored frames pixel-identical
+    # to their predecessor, 110 of which the map stepped +1 across -- the panel
+    # advanced while the screen held. With the pixel flag, the alignment may
+    # only dwell on such a slot, and the stepper (which walks to the next
+    # DISTINCT map value) never lands on it. The feed log's heartbeat repeats
+    # OR into the same flag.
+    same, changed = picture_flags(ffmpeg, clip, cells)
     if repeats is not None:
-        same = np.zeros(count, bool)
         known = min(count, len(repeats))
-        same[:known] = np.asarray(list(repeats)[:known], bool)
-        changed = ~same
-        changed[0] = False
-    else:
-        same, changed = picture_flags(ffmpeg, clip, cells)
+        same[:known] |= np.asarray(list(repeats)[:known], bool)
+        changed &= ~same
     anchors = flash_anchors(cells, frame_map, resets)
     alphabet = reference if reference is not None else load_alphabet()
     icons = None                      # the digits align first; icons join the final pass

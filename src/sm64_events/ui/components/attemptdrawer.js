@@ -72,24 +72,24 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
         ? html`<${InputTimeline} attemptId=${attemptId} video=${video}
               anchorOffsetS=${anchorOffsetS}
               frameMap=${clipClock.frameMap} clock=${clipClock.clock}
-              padReading=${clipClock.padReading} />`
+              padReading=${clipClock.padReading}
+              tools=${html`<div class="attempt-drawer-tools">
+                <button onclick=${markTemplate} disabled=${marking === "busy"}
+                    title="Compare every future run against THIS one">
+                  <${Icon} name="bookmark" size=${14} />
+                  ${marking === "marked" ? "This is your template" : "Make this my template"}
+                </button>
+                <a class="button-link"
+                   href=${`/api/attempts/${attemptId}/inputs/document`}
+                   target="_blank" rel="noopener"
+                   title="The inputs as a text file you can keep, edit, or send someone">
+                  <${Icon} name="save" size=${14} /> Export inputs
+                </a>
+                ${marking && marking !== "busy" && marking !== "marked"
+                  && html`<span class="is-error">${marking}</span>`}
+              </div>`} />`
         : html`<div class="input-timeline-waiting">The input timeline appears
             once the replay is cut and checked against its footage.</div>`}
-      <div class="attempt-drawer-tools">
-        <button onclick=${markTemplate} disabled=${marking === "busy"}
-            title="Compare every future run against THIS one">
-          <${Icon} name="bookmark" size=${14} />
-          ${marking === "marked" ? "This is your template" : "Make this my template"}
-        </button>
-        <a class="button-link"
-           href=${`/api/attempts/${attemptId}/inputs/document`}
-           target="_blank" rel="noopener"
-           title="The inputs as a text file you can keep, edit, or send someone">
-          <${Icon} name="save" size=${14} /> Export inputs
-        </a>
-        ${marking && marking !== "busy" && marking !== "marked"
-          && html`<span class="is-error">${marking}</span>`}
-      </div>
     </div>
   </div>`;
 }

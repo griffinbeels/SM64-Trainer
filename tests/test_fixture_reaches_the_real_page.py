@@ -1522,3 +1522,27 @@ def test_the_runner_page_story_reaches_a_real_runner(page):
     assert ignore_buttons == 0, (
         f"found {ignore_buttons} button(s) in the runner page's breakdown -- "
         "read-only means no Ignore/Include control")
+
+
+def test_the_template_and_export_buttons_live_inside_the_timeline_box(page):
+    """His report 2026-09-02: "the buttons ... are a bit silly, because the
+    input timeline doesn't exist yet... so they should be hidden until the
+    input timeline is available. Then they should be put at the bottom of the
+    actual Inputs timeline box". They ride the timeline as its `tools` slot,
+    so they cannot exist without it and they sit under the controller
+    panel."""
+    reach(page, "input-timeline")
+    inside, after_panel = page.evaluate(
+        "(() => { const t = document.querySelector('.input-timeline');"
+        " const tools = t && t.querySelector('.attempt-drawer-tools');"
+        " if (!tools) return [false, false];"
+        " const panel = t.querySelector('.input-inspector');"
+        " return [true, panel"
+        "   ? tools.getBoundingClientRect().top >= panel.getBoundingClientRect().top"
+        "   : false]; })()")
+    assert inside, "the tools are not inside the input timeline box"
+    assert after_panel, "the tools sit above the controller panel"
+    # And nothing renders them a second time outside the timeline.
+    stray = page.evaluate(
+        "document.querySelectorAll('.attempt-drawer-tools').length")
+    assert stray == 1, f"{stray} tool rows on the page"

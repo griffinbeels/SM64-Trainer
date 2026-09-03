@@ -352,7 +352,8 @@ function DisagreementList({ reading, frameMap, stretches, seek, lead }) {
 
 export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
                                 frameMap = null, clock = null,
-                                padReading = null, compact = false }) {
+                                padReading = null, compact = false,
+                                tools = null }) {
   const [state, setState] = useState({ phase: "loading" });
   const [frame, setFrame] = useState(0);
   const [checkOpen, setCheckOpen] = useState(false);   // the screen-check list
@@ -668,5 +669,6 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
           ${lastMoment.label}${" "}<span class="meta">at ${timeLabel(lastMoment.frame)}</span></span>`}
       </div>
     </footer>
+    ${tools}
   </div>`;
 }

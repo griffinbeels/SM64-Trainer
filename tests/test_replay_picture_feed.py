@@ -319,7 +319,17 @@ def test_the_service_reads_the_map_off_the_log_and_hands_the_reader_the_repeats(
     assert res["frame_map"] == [100 - DISPLAY_LAG_FRAMES + k for k in range(90)]
     assert res["feed_match"]["unmatched"] == 0
     assert res["video_start_s"] == 0.004
-    assert quantised == [], "one frame is one picture: nothing to hold"
+    # The quantiser DOES run on a picture-feed clip. One encoded frame is one
+    # CAPTURED picture, but when the game lags the emulator re-presents the
+    # same render: two grabs, two ledger rows with advancing RAM stamps, ONE
+    # picture on screen. Measured on his pyramid clip (5946, 2026-09-02): 115
+    # of 775 stored frames pixel-identical to their predecessor, and the map
+    # stepped +1 across 110 of them -- the panel advanced while the screen
+    # held. Only the PIXELS can see that, so the picture-run quantiser holds
+    # both frames to one answer.
+    assert quantised == [svc.clips_dir / "clip_attempt_42.mp4"], (
+        "a picture-feed clip still needs the pixel runs: the emulator "
+        "re-presents a render when the game lags")
     assert seen["repeats"] == [False] * 90
     sidecar = _json.loads(
         (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
@@ -540,3 +550,43 @@ def test_passthrough_is_load_bearing_on_a_vfr_clip(tmp_path):
     assert buggy_count > stored, (
         f"expected the un-passthrough decode to over-count a VFR clip; "
         f"got {buggy_count} for {stored} stored frames")
+
+
+def test_the_pixels_hold_the_boundaries_after_the_reader_picks_the_values(tmp_path):
+    """His standing rule: "when the user plays back their video, they NEVER
+    see a duplicate frame. They should step forward and never see duplicate
+    frames" (2026-09-02). The reader can still advance the map across a
+    picture the emulator merely re-presented, so the picture runs are applied
+    AGAIN after it answers -- one answer per picture is an invariant of what
+    ships, which is what makes the stepper (it walks to the next distinct map
+    value) unable to land on a held picture."""
+    from test_replay_service import attempt, make_service
+
+    svc = make_service(tmp_path, [attempt()])
+    svc.extractor = _FeedExtractor(count=40)
+    from test_replay_service import T0
+    origin = (T0 - timedelta(seconds=3)).timestamp()
+    svc.recorder.ledger = _filled_ledger(origin, 40)
+    quantiser_calls = []
+
+    def quantiser(clip, frame_map):
+        quantiser_calls.append(list(frame_map))
+        # Two pictures held: slots 10 and 11 show one picture, 20 and 21 another.
+        held = list(frame_map)
+        for slot in (11, 21):
+            if slot < len(held):
+                held[slot] = held[slot - 1]
+        return held
+
+    svc.map_quantiser = quantiser
+    # A reader that answers, and advances straight across both held pictures.
+    svc.pad_reader = lambda clip, fm, a, repeats=None: type(
+        "R", (), {"frame_map": list(range(500, 500 + len(fm))),
+                  "verdict": type("V", (), {
+                      "as_dict": lambda self: {}, "sure": 40, "agree": 40,
+                      "nowhere": 0, "agreement": 1.0})()})()
+    res = svc.view(42)
+    assert len(quantiser_calls) == 2, "the runs must hold the map AFTER the read"
+    shipped = res["frame_map"]
+    assert shipped[11] == shipped[10], "a held picture kept two answers"
+    assert shipped[21] == shipped[20], "a held picture kept two answers"

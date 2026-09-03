@@ -506,8 +506,12 @@ class ReplayService:
         meta["frame_map"] = built
         meta["repeats"] = repeats
         meta["frame_map_source"] = "feed_log"
-        # One frame IS one picture here: nothing for the quantiser.
-        meta["frame_map_quantised"] = True
+        # NOT marked quantised: one frame is one CAPTURED picture, but the
+        # emulator re-presents a render when the game lags, and those two
+        # grabs land as two frames with advancing RAM stamps -- the same
+        # picture twice (115 of 775 on his pyramid clip, 2026-09-02). The
+        # quantiser's pixel runs hold both to one answer, so a display-off
+        # clip is honest too, and the reader's own pixel flag does the rest.
         log.info("frame map read off the feed log: %s", stats)
 
     def _hold_one_answer_per_picture(self, meta: dict, clip: Path) -> None:
@@ -556,6 +560,17 @@ class ReplayService:
         """
         self._hold_one_answer_per_picture(meta, clip)
         if self._read_the_display(meta, clip, attempt):
+            # THE PIXELS OWN THE BOUNDARIES, the reader owns the VALUES. The
+            # reader may still advance the map across a picture the emulator
+            # merely re-presented, and then stepping forward lands on the same
+            # image twice with a different pad beside it -- his standing rule:
+            # "when the user plays back their video, they NEVER see a duplicate
+            # frame" (2026-09-02). Re-holding the read map to the picture runs
+            # makes one answer per picture an invariant of what SHIPS, so the
+            # stepper (which walks to the next distinct map value) cannot land
+            # on a held picture at all.
+            meta.pop("frame_map_quantised", None)
+            self._hold_one_answer_per_picture(meta, clip)
             return
         if self.map_aligner is None:
             return
