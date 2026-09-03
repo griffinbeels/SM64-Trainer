@@ -406,6 +406,40 @@ function ScoreCard({ t, row, removing,
 // label, and the lint gate's JavaScript half was silently skipping.
 const COPIED_FLASH_MS = 1500;
 
+// ROUND 26 item 2. What lands on the clipboard is the column as BOTH plain
+// text and an explicit one-column HTML table -- one `<tr><td>` per worksheet
+// row, empty ones included.
+//
+// The door returns every row and always has (measured on his live database:
+// 803 lines covering worksheet rows 2..804, zero sheet rows past the last
+// exported line). What stopped at his last VALUE was what reached the sheet:
+// "the paste literally ends at 617. I would expect it to end at 804, even if
+// we don't have entries. It should paste empty entries then." A plain-text
+// block ending in a long run of newlines is the ambiguous case for any paste
+// target; a table's rows are structure, and structure cannot be trimmed the
+// way a trailing newline can. Plain text rides along as the fallback for
+// anything that does not take HTML, so nothing is lost if the reading is
+// wrong -- which matters, because no test here can drive Google Sheets.
+function columnHtml(text) {
+  const cell = (line) => `<td>${line.replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;").replace(/>/g, "&gt;")}</td>`;
+  return "<table>" + text.split("\n")
+    .map((line) => `<tr>${cell(line)}</tr>`).join("") + "</table>";
+}
+
+async function writeColumn(text) {
+  // `ClipboardItem` is Chromium 76+, so both shells have it; the guard is for
+  // anything else, and it degrades to exactly what shipped before.
+  if (typeof ClipboardItem === "undefined" || !navigator.clipboard.write) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  await navigator.clipboard.write([new ClipboardItem({
+    "text/plain": new Blob([text], { type: "text/plain" }),
+    "text/html": new Blob([columnHtml(text)], { type: "text/html" }),
+  })]);
+}
+
 function CopyButton({ className, label, onCopy, onError }) {
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -428,7 +462,7 @@ function CopyButton({ className, label, onCopy, onError }) {
         throw new Error("clipboard access is not available here");
       }
       const text = await onCopy();
-      await navigator.clipboard.writeText(text);
+      await writeColumn(text);
       setCopied(true);
       setTimeout(() => setCopied(false), COPIED_FLASH_MS);
     } catch (err) {
@@ -450,19 +484,67 @@ function CopyButton({ className, label, onCopy, onError }) {
 // disabled control applies to a button whose action just failed. The CSV
 // column is the one door here now, and a live sheet fetch is exactly the
 // kind of thing that fails, so its message has a home.
+// ROUND 26 item 1: the copy NARRATES itself. His words -- "Right now it feels
+// like lag, but I know that's just how long it takes to confirm things. But
+// that's because I developed the tool. We should show a status line that
+// updates at every step of the process."
+//
+// The steps are the server's REAL boundaries (fetch the sheet, read its rows,
+// build the library, match your times), reported as they happen through the
+// job door rather than guessed from a timer -- which is why this polls
+// `POST /api/scorecard/column` instead of just showing three timed sentences.
+// The closing line names the row count, the worksheet range it covers and how
+// many carry a time, which is also what lets him confirm item 2 at a glance
+// instead of counting cells.
+function pollColumnJob(jobId, onStep) {
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      getJSON(`/api/scorecard/column/${jobId}`)
+        .then((status) => {
+          onStep(status);
+          if (status.state === "running") { setTimeout(tick, 250); return; }
+          if (status.state === "error") { reject(new Error(status.message)); return; }
+          resolve(status.result);
+        })
+        .catch(reject);
+    };
+    tick();
+  });
+}
+
 function ScorecardExports() {
   const [error, setError] = useState(null);
+  // `null` = idle and the line is absent entirely; a progress-bearing object
+  // while a copy is in flight; the closing sentence once it lands.
+  const [status, setStatus] = useState(null);
 
   // The sheet column deliberately takes NO scope: its whole contract is one
   // line per live worksheet row of the community sheet, whatever the card
   // above it is scoped to. The CSV button was removed in round 19 (his
   // call); `GET /api/scorecard/export.csv` stays reachable by URL for
   // anyone who wants the card as a file, it simply has no button now.
+  async function copyColumn() {
+    setStatus({ progress: 0, message: "Starting…", running: true });
+    const { job_id } = await send("POST", "/api/scorecard/column");
+    const body = await pollColumnJob(job_id, (step) =>
+      setStatus({ progress: step.progress, message: step.message,
+                  running: step.state === "running" }));
+    return body.lines.join("\n");
+  }
+
   return html`<div class="scorecard-exports">
     <${CopyButton} className="scorecard-copy-column" label="Copy sheet column"
-        onCopy=${async () => (await getJSON("/api/scorecard/column")).lines.join("\n")}
-        onError=${setError} />
+        onCopy=${copyColumn}
+        onError=${(message) => { setError(message); if (message) setStatus(null); }} />
     ${error ? html`<${InlineState} kind="error">${error}<//>` : ""}
+    ${status ? html`<p class="meta scorecard-status"
+        role="status" aria-live="polite"
+        data-running=${status.running ? "true" : "false"}>
+      <span class="scorecard-status-track" aria-hidden="true"
+          ><span class="scorecard-status-fill"
+            style=${`width:${Math.round((status.progress || 0) * 100)}%`} /></span>
+      ${status.message}
+    </p>` : ""}
   </div>`;
 }
 

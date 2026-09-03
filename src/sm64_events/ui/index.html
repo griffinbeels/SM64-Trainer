@@ -7357,6 +7357,27 @@
   .scorecard-exports { display: flex; align-items: center; flex-wrap: wrap;
     gap: 8px; padding-top: 10px; border-top: 1px solid var(--border-soft); }
   .scorecard-exports .inline-state { flex-basis: 100%; }
+  /* Round 26: the copy's own status line, under the button it explains.
+     Full-width so a long sentence never squeezes the button, and it carries
+     a thin progress track rather than a spinner -- his ask was "how close we
+     are to being done", which a spinner cannot answer. The track keeps its
+     lane once the copy lands (the fill simply sits at 100%), so the line
+     does not change height at the moment he reads it. */
+  .scorecard-status {
+    flex-basis: 100%; margin: 0; display: flex; align-items: center;
+    gap: .5rem; color: var(--muted);
+  }
+  .scorecard-status-track {
+    flex: none; width: 90px; height: 4px; border-radius: 3px;
+    background: var(--border-soft); overflow: hidden;
+  }
+  .scorecard-status-fill {
+    display: block; height: 100%; border-radius: 3px; background: var(--gold);
+    transition: width .25s ease-out;
+  }
+  .scorecard-status[data-running="false"] .scorecard-status-fill {
+    background: var(--green);
+  }
   /* The "unsaved custom edits" bar (round 8): a name field + Save/Discard,
      shown only while `pendingOverrides` is non-empty. A gold-tinted border
      rather than a plain card, so an edit in progress reads as a distinct

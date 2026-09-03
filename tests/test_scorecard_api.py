@@ -5,6 +5,8 @@
 top: reading/writing the KV, assembling `you`/`goal`/`fold` from the real
 db + standards, and the coverage/pending flags the UI reads.
 """
+import threading
+
 from import_fixture import make_client
 from sm64_events.library.export_column import sheet_time
 from sm64_events.ranks.classify import display_cs
@@ -569,6 +571,68 @@ def test_the_column_endpoint_serves_one_line_per_worksheet_row(tmp_path, monkeyp
         assert payload["sheet_revision"]
         assert isinstance(payload["mapped"], int)
         assert payload["mapped"] <= payload["total_rows"]
+
+
+def test_the_column_job_reports_its_real_steps_and_ends_on_the_same_body(
+        tmp_path, monkeypatch):
+    """ROUND 26 item 1. The job door beside the synchronous GET, so a copy can
+    say where it is: "We should show a status line that updates at every step
+    of the process."
+
+    Two claims. The steps are the export's OWN boundaries and must actually
+    DIFFER as it runs -- a single message with a moving number would satisfy a
+    weaker test while telling him nothing about which step he is on -- and the
+    finished `result` must be byte-identical to what the synchronous door
+    returns, because a second door onto one answer that can disagree with the
+    first is the divergence this project has a rule against."""
+    import time as _time
+
+    released = threading.Event()
+
+    def slow_workbook():
+        # Held open so the poll below lands MID-JOB rather than racing it.
+        released.wait(timeout=5)
+        return _bob_workbook()
+
+    monkeypatch.setattr("sm64_events.server.scorecard_api.fetch", slow_workbook)
+    with make_client(tmp_path) as (client, _db, _svc):
+        job_id = client.post("/api/scorecard/column").json()["job_id"]
+
+        first = client.get(f"/api/scorecard/column/{job_id}").json()
+        assert first["state"] == "running", first
+        released.set()
+
+        deadline = _time.monotonic() + 10
+        seen, final = [], None
+        while _time.monotonic() < deadline:
+            status = client.get(f"/api/scorecard/column/{job_id}").json()
+            if not seen or seen[-1] != status["message"]:
+                seen.append(status["message"])
+            if status["state"] != "running":
+                final = status
+                break
+            _time.sleep(0.02)
+
+    assert final is not None, f"the job never finished; saw {seen}"
+    assert final["state"] == "done", final
+    assert len(seen) >= 2, f"the job reported one message for its whole run: {seen}"
+    assert final["progress"] == 1.0
+    # The closing sentence is what the UI shows him, so it carries the three
+    # facts he asked about: how many rows, which worksheet rows they cover,
+    # and how many carry a time.
+    body = final["result"]
+    assert str(body["total_rows"]) in final["message"], final["message"]
+    assert str(body["total_rows"] + 1) in final["message"], final["message"]
+    assert str(body["mapped"]) in final["message"], final["message"]
+
+    monkeypatch.setattr("sm64_events.server.scorecard_api.fetch", _bob_workbook)
+    with make_client(tmp_path) as (client, _db, _svc):
+        assert client.get("/api/scorecard/column").json()["lines"] == body["lines"]
+
+
+def test_an_unknown_column_job_is_a_404(tmp_path):
+    with make_client(tmp_path) as (client, _db, _svc):
+        assert client.get("/api/scorecard/column/nope").status_code == 404
 
 
 def test_the_column_lands_each_time_on_the_row_it_came_from(tmp_path, monkeypatch):

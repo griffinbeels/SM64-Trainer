@@ -696,11 +696,38 @@ def _stub_workbook():
 # other clipboard method alone and proves the shim actually installed by
 # returning `true` rather than letting a missing `navigator.clipboard`
 # fail silently.
+def _wait_until(page, expression, timeout_ms=15000, step_ms=100):
+    """Poll a JS predicate. uilab's own `wait_for` takes a SELECTOR, and what
+    round 26's polled copy needs to wait on is a value on `window` -- a fixed
+    `wait_ms` here is the coin-flip this file has already paid for once."""
+    deadline = time.monotonic() + timeout_ms / 1000
+    while time.monotonic() < deadline:
+        if page.evaluate(expression):
+            return
+        page.wait_ms(step_ms)
+    raise AssertionError(f"timed out waiting for {expression!r}")
+
+
 _INSTALL_CLIPBOARD_SHIM = """(() => {
   window.__scorecardCopied = [];
+  window.__scorecardHtml = [];
   navigator.clipboard.writeText = (text) => {
     window.__scorecardCopied.push(text);
     return Promise.resolve();
+  };
+  // Round 26 writes BOTH flavours through `clipboard.write`, so the shim has
+  // to capture both or the plain-text assertion below silently stops seeing
+  // anything -- which is exactly how it failed the moment the flavour was
+  // added. Blob.text() is async, hence the awaited collection.
+  navigator.clipboard.write = async (items) => {
+    for (const item of items) {
+      if (item.types.includes("text/plain")) {
+        window.__scorecardCopied.push(await (await item.getType("text/plain")).text());
+      }
+      if (item.types.includes("text/html")) {
+        window.__scorecardHtml.push(await (await item.getType("text/html")).text());
+      }
+    }
   };
   return true;
 })()"""
@@ -725,11 +752,15 @@ def test_copy_sheet_column_writes_every_line_to_the_clipboard(monkeypatch):
             assert page.evaluate(_INSTALL_CLIPBOARD_SHIM) is True
             page.evaluate(
                 "document.querySelector('.scorecard-copy-column').click()")
-            page.wait_ms(400)
+            # Round 26 put a POLLED job behind the button, so the copy lands a
+            # poll interval or two after the click rather than on the first
+            # fetch's resolution.
+            _wait_until(page, "window.__scorecardCopied.length > 0")
             # A SEPARATE evaluate call, after the wait -- reading the
             # captured text in the same call as the click would race the
             # button's own async fetch-then-copy chain.
             copied = page.evaluate("window.__scorecardCopied")
+            html_copied = page.evaluate("window.__scorecardHtml")
             # Round 23, his report: the button read "Copied ✓" AND the error
             # slot read `COPIED_FLASH_MS is not defined` -- the copy had
             # succeeded and the flash timer threw. This test read the
@@ -745,6 +776,16 @@ def test_copy_sheet_column_writes_every_line_to_the_clipboard(monkeypatch):
 
         assert len(copied) == 1
         assert len(copied[0].split("\n")) == column["total_rows"]
+        # ROUND 26 item 2: the clipboard also carries one explicit `<tr>` per
+        # worksheet row, empty ones included -- "I would expect it to end at
+        # 804, even if we don't have entries. It should paste empty entries
+        # then." A plain-text block whose tail is a run of newlines is the
+        # ambiguous case; a table's rows are structure. This asserts the row
+        # COUNT rather than the markup, because the count is the claim.
+        assert len(html_copied) == 1, "no HTML flavour reached the clipboard"
+        assert html_copied[0].count("<tr>") == column["total_rows"], (
+            f"the HTML flavour carries {html_copied[0].count('<tr>')} rows, "
+            f"the column has {column['total_rows']}")
         assert label_now == "Copied ✓", label_now
         assert errors == 0, "a successful copy must leave the error slot empty"
         assert label_later == "Copy sheet column", (
@@ -791,6 +832,76 @@ def test_the_card_offers_only_the_sheet_column_button():
                 ".scorecard-exports .scorecard-copy-btn'))"
                 ".map((el) => el.textContent.trim())")
         assert buttons == ["Copy sheet column"], buttons
+
+
+def test_the_copy_narrates_its_real_steps_and_says_what_it_copied(monkeypatch):
+    """ROUND 26 item 1, his words: "Right now it feels like lag, but I know
+    that's just how long it takes to confirm things. But that's because I
+    developed the tool. We should show a status line that updates at every
+    step of the process."
+
+    Two claims, and both are about the line being REAL rather than decorative.
+    It must show MORE THAN ONE distinct sentence during one copy -- a single
+    "Working..." would satisfy a weaker assertion while telling him nothing
+    about which step he is on -- and its closing sentence must name what
+    actually landed: the row count, the worksheet range it covers, and how
+    many of those rows carry a time. That last part is also what lets him
+    confirm the paste reaches row 804 without counting cells."""
+    # A SLOW sheet read, deliberately: the fixture workbook is three rows and
+    # the whole job finishes inside one poll, so against it the line would
+    # show its closing sentence and nothing else -- and "it updated at every
+    # step" would be untestable exactly where he asked for it. Half a second
+    # is the real shape of his own copy (a ~5.6 MB fetch), compressed.
+    def slow_stub(*args, **kwargs):
+        time.sleep(0.5)
+        return _stub_workbook(*args, **kwargs)
+
+    monkeypatch.setattr("sm64_events.server.scorecard_api.fetch", slow_stub)
+    with serve_ui() as base:
+        column = json.loads(urllib.request.urlopen(
+            f"{base}/api/scorecard/column", timeout=20).read())
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-copy-column")
+            assert page.evaluate(_INSTALL_CLIPBOARD_SHIM) is True
+
+            # Collect every distinct sentence the line shows, sampled as the
+            # copy runs -- the steps are the point, so reading only the last
+            # one would pass through a line that never updated.
+            page.evaluate("""
+              (() => {
+                window.__steps = [];
+                const read = () => {
+                  const el = document.querySelector('.scorecard-status');
+                  if (!el) return;
+                  const text = el.textContent.trim();
+                  if (text && window.__steps[window.__steps.length - 1] !== text) {
+                    window.__steps.push(text);
+                  }
+                };
+                window.__stepTimer = setInterval(read, 30);
+              })()
+            """)
+            page.evaluate(
+                "document.querySelector('.scorecard-copy-column').click()")
+            _wait_until(page, "window.__scorecardCopied.length > 0")
+            page.wait_ms(300)
+            page.evaluate("clearInterval(window.__stepTimer)")
+            steps = page.evaluate("window.__steps")
+            fill = page.evaluate(
+                "document.querySelector('.scorecard-status-fill').style.width")
+
+    assert len(steps) >= 2, (
+        f"the status line showed one sentence for the whole copy: {steps}")
+    closing = steps[-1]
+    assert str(column["total_rows"]) in closing, (closing, column["total_rows"])
+    assert str(column["total_rows"] + 1) in closing, (
+        f"the closing line must name the last worksheet row it covers: {closing!r}")
+    assert str(column["mapped"]) in closing, (closing, column["mapped"])
+    assert fill == "100%", f"the progress track did not finish: {fill!r}"
 
 
 def test_the_export_sits_under_the_cards_not_in_the_head():

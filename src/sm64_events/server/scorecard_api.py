@@ -33,6 +33,8 @@ wants a time typed, ready to paste back in next to everyone else's.
 import csv
 import io
 import logging
+import threading
+import uuid
 
 from fastapi import APIRouter, Body, HTTPException, Response
 from fastapi.concurrency import run_in_threadpool
@@ -76,6 +78,10 @@ _CUSTOM_KEY = "scorecard_custom_goals"
 _REGIONS_KEY = "scorecard_regions"
 _VALID_REGIONS = ("us", "jp")
 _VALID_TIERS = [tier for tier in RANK_NAMES if tier != "Iron"]
+# How many finished column-export jobs to keep addressable. One client polls
+# one job to completion and never looks again, so this only has to outlive a
+# burst of clicks -- it is a leak guard, not a cache.
+_MAX_COLUMN_JOBS = 8
 
 
 class GoalBody(BaseModel):
@@ -103,7 +109,7 @@ class RegionsBody(BaseModel):
     regions: list[str]
 
 
-def _fetch_column_source(overrides):
+def _fetch_column_source(overrides, step=None):
     """Off the event loop, together: `read_rows` and `build_and_stamp`
     (`library/store.py` -- the SAME bytes-to-payload step `LibraryStore.
     refresh()` runs, minus the ladder fit `column_lines` never reads) must
@@ -111,9 +117,23 @@ def _fetch_column_source(overrides):
     out of step (a target-opening row lines up against the wrong target).
     Both are real CPU work over a ~5.6 MB document (`server/import_api.py`
     notes the same concern for its own refresh). Not persisted -- this is a
-    read, not a library refresh."""
+    read, not a library refresh.
+
+    `step(fraction, sentence)` is optional and is called BETWEEN the three
+    pieces of work, never inside them -- round 26 wanted a status line that
+    reports where the copy actually is, and these are the only boundaries
+    this function genuinely has. Guessing sub-progress inside the fetch would
+    be a timer wearing a measurement's clothes."""
+    if step:
+        step(0.05, "Reading the Ultimate Sheet…")
     data = fetch()
-    return read_rows(data), build_and_stamp(data, overrides)
+    if step:
+        step(0.45, "Reading the worksheet rows…")
+    rows = read_rows(data)
+    if step:
+        step(0.65, f"Building the library from {len(rows)} rows…")
+    payload = build_and_stamp(data, overrides)
+    return rows, payload
 
 
 def _column_resolve(service):
@@ -252,6 +272,10 @@ def create_scorecard_router(service, library=None, adoptions=None,
     refresh applies them, so a re-fetched sheet does not reintroduce a
     mistake the audit already fixed."""
     router = APIRouter(prefix="/api/scorecard", tags=["scorecard"])
+    # Column-export jobs, per router (so a test's app cannot see another's).
+    # `compare/service.py`'s shape verbatim: {state, progress, message} plus
+    # the finished body under `result`.
+    _column_jobs: dict[str, dict] = {}
 
     def _require_db():
         """`service.db` is `None` on a genuinely BROADCAST-ONLY instance --
@@ -673,11 +697,82 @@ def create_scorecard_router(service, library=None, adoptions=None,
             _log.warning("column export could not read the sheet: %r", err)
             raise HTTPException(
                 503, f"could not read the sheet: {err}") from err
+        return _column_body(*_resolve_column(rows, payload))
+
+    def _resolve_column(rows, payload):
         place = sheet_row_placer(service, adoptions)
         lines = column_lines(rows, payload, _column_resolve(service), place=place)
+        return lines, payload
+
+    def _column_body(lines, payload):
+        """The one shape both column doors answer with -- the synchronous GET
+        and the job's `result` -- so a client can be moved from one to the
+        other without learning a second payload."""
         return {"lines": lines, "sheet_revision": payload.get("sheet_revision"),
                 "mapped": sum(1 for line in lines if line),
                 "total_rows": len(lines)}
+
+    def _run_column_job(job_id: str):
+        """The same work `get_column` does, on a thread, reporting where it
+        is. Steps are the function's REAL boundaries (fetch, parse, build,
+        resolve) -- see `_fetch_column_source`. The final message is the one
+        that answers his other question in the same breath: how many rows,
+        which worksheet rows they cover, and how many carry a time."""
+        job = _column_jobs[job_id]
+
+        def step(fraction, message):
+            job["progress"] = fraction
+            job["message"] = message
+
+        try:
+            rows, payload = _fetch_column_source(overrides, step=step)
+            step(0.85, "Matching your times to the sheet's rows…")
+            lines, payload = _resolve_column(rows, payload)
+            body = _column_body(lines, payload)
+            job["result"] = body
+            job["progress"] = 1.0
+            job["message"] = (
+                f"Copied {body['total_rows']} rows (sheet rows 2–"
+                f"{body['total_rows'] + 1}) · {body['mapped']} carry a time")
+            job["state"] = "done"
+        except Exception as err:                        # noqa: BLE001
+            _log.warning("column export could not read the sheet: %r", err)
+            job["state"] = "error"
+            job["message"] = f"could not read the sheet: {err}"
+
+    @router.post("/column")
+    async def start_column():
+        """Start a column export and report it as it goes -- round 26, his
+        ask: "a status line that updates at every step of the process...
+        Right now it feels like lag, but I know that's just how long it takes
+        to confirm things."
+
+        A second door beside the synchronous GET rather than a replacement:
+        that URL is documented, browser-reachable and separately tested, and
+        the honest answer to a wait is to narrate it, not to move it. The job
+        shape is `compare/service.py`'s, verbatim in structure
+        (`{state, progress, message}` + a background thread + a status GET),
+        because a second progress vocabulary is a second thing to learn."""
+        _require_db()
+        if library is None:
+            raise HTTPException(503, "sheet library unavailable")
+        job_id = uuid.uuid4().hex
+        # Bounded: a session that copies all day must not grow this map
+        # forever, and a finished job nobody polled is of no use to anyone.
+        for stale in list(_column_jobs)[:-_MAX_COLUMN_JOBS]:
+            _column_jobs.pop(stale, None)
+        _column_jobs[job_id] = {"state": "running", "progress": 0.0,
+                                "message": "Starting…", "result": None}
+        threading.Thread(target=_run_column_job, name="scorecard-column",
+                         daemon=True, args=(job_id,)).start()
+        return {"job_id": job_id}
+
+    @router.get("/column/{job_id}")
+    async def column_status(job_id: str):
+        job = _column_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404, "no such column export job")
+        return dict(job)          # a shallow copy: callers never mutate it
 
     @router.get("/export.csv")
     async def export_csv(scope: str = "overall"):
