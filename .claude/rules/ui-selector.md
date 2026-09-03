@@ -111,11 +111,10 @@ Round 2 (live report 2026-07-30, five reports, then four more) added: (1) **item
 
 **Item 2's STAR half retired in round 31 (task 3, 2026-08-10).** `justCompletedStar` and "the remembered mode" above describe a star/pipe sub-toggle that no longer exists — there is no stand-alone star pick left on this row for a fresh star completion to disambiguate. What survives from item 2: `justCompletedSegment` on the reds->pipe segment and on No Reds, driving the ONE memory left (`bowserFamilyFor`, Reds-vs-No-Reds). Items 5 and 3 are otherwise untouched by round 31.
 
-## Subarea narrowing waits for the area to be his
+## The subarea never narrows the star row
 
-**SUBAREA NARROWING WAITS FOR THE AREA TO BE HIS** (round 23, 2026-08-08): `COURSE_SUBAREA_STARS` narrows the row to a subarea's own stars, but a course LOAD walks the area byte through a transient — entering LLL reads the volcano for 1.74 s, measured on his journal — and the course's own entry screen sits inside that window, so the row offered two stars where the route has five (*"On the star select, we should show the same options as when we spawn normally"*).
-`stage.settling` (detectors/stage.py) marks every emit inside `LEVEL_LOAD_TAIL_FRAMES` of a level change, and the filter is simply skipped while it is set.
-**It was ONE TICK wide first and that did nothing for him** (*"consistently, we show the SUBAREA stars on the star select menu...
-This is a bug"*): the load's area walk CONTINUES past the level edge — entering LLL from the basement emits (22, area 3) on the edge and (22, area 2) a beat later — and the star-select screen showed that second emit.
-The 60-frame window is the same measured one `counter_epoch.py` and `caused.py` use (across 911 level entries the load's last area edge lands at 44-47 frames; the earliest genuine warp deeper into a level appears at 60).
-Sitting on the star select past it costs nothing: the area has stopped moving, so no further emit fires — no wait anywhere, and showing everything is the same safe side the corpus already takes for a subarea it has no row for.
+**RETIRED 2026-09-03 (task 0122).** Standing inside a subarea used to narrow the row to that subarea's own stars (`COURSE_SUBAREA_STARS`, round 21 item 5), and three rounds went into the moments where the area byte is not HIS — a course load's transient (round 23), the star-select screen after a grab (round 26) — because each one flashed the subarea's cards where the route has five.
+The last report was a reset inside SSL/LLL flashing the pyramid's or volcano's stars, and his ruling retired the feature rather than the flash: *"I would expect to load into a course and see all the stars for that course at all times, regardless of which subarea im in."*
+What went with it: the `subarea_stars` vocab key, `stage.settling`, `stage.on_the_star_select` (and the view refetch on every `spawned` that fed it), and `curr_area` in the detector's COURSE context key — so an in-course area switch no longer re-emits `stage_changed` at all.
+**`stage.area` still ships**, and outside the castle it is now a REPORT rather than a key: whatever the area byte read on the frame the context resolved, never refreshed while he walks around inside the course. Only `SegmentRow` (castle mode) may read it.
+The route filter is the one thing left that can narrow this row.

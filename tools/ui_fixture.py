@@ -760,7 +760,7 @@ def _publish_castle_stage(service, area: int) -> None:
         await service.publish(Event(
             type="stage_changed", frame=5300, timestamp_utc=now,
             payload={"course_id": None, "level": 6, "area": area,
-                     "mode": "castle", "settling": False}))
+                     "mode": "castle"}))
 
     _run_coro(go())
 

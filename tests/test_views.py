@@ -989,7 +989,7 @@ def test_view_includes_current_stage(tmp_path):
                                 "mode": "stars"})))
     view = build_session_view(db, svc, clock="igt")
     # The fields this test owns, not the whole dict: `current_stage` stamps
-    # derived keys onto it (round 26's `on_the_star_select`).
+    # a derived key onto it (`node`).
     assert {k: view["stage"][k]
             for k in ("course_id", "level", "area", "mode")} == {
         "course_id": 8, "level": 8, "area": 1, "mode": "stars"}

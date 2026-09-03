@@ -222,13 +222,11 @@ neutral or handing to their star, the inversion applied retroactively —
 with **0 attempt rows lost, gained or changed** on either journal. Pinned
 by `tests/test_family_dance.py` (rewritten to these rulings).
 
-**The selector's subarea narrowing lives beside this** (round 21 item 5):
-`addresses.COURSE_SUBAREA_STARS` — measured off his own grabs' settled
-areas before it was authored; a subarea with no row filters NOTHING —
-ships as vocab `subarea_stars`, filtered in `stagebanner.js`'s star row
-with the route filter's own never-empty fallback. Rendered live by
-`tests/test_ui_subarea_stars.py` (7 cells outside the volcano, 3 inside,
-7 again on the way out).
+**The selector's subarea narrowing USED to live beside this** (round 21
+item 5) and was retired on 2026-09-03 (task 0122): a course now shows every
+one of its stars whatever subarea you stand in, so `COURSE_SUBAREA_STARS`,
+the `subarea_stars` vocab key and their tests are gone. What that removal
+touched, and why, is in `.claude/rules/ui-selector.md`.
 
 ## When a segment's clock starts and stops
 
