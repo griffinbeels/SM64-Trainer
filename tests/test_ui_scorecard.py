@@ -8,6 +8,7 @@ Preact card, driven through a real browser via tools/ui_fixture.py.
 """
 import json
 import shutil
+import time
 import subprocess
 import sys
 from pathlib import Path
@@ -790,6 +791,86 @@ def test_the_card_offers_only_the_sheet_column_button():
                 ".scorecard-exports .scorecard-copy-btn'))"
                 ".map((el) => el.textContent.trim())")
         assert buttons == ["Copy sheet column"], buttons
+
+
+def test_the_export_sits_under_the_cards_not_in_the_head():
+    """Round 25, his placement: "The button should go at the bottom,
+    underneath all the cards." Read as DOM order and as geometry -- a rule
+    about where something sits has to be checked where it is drawn, not
+    where it is declared."""
+    with serve_ui() as base:
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-copy-column")
+            page.wait_ms(300)
+            state = page.evaluate("""
+              (() => {
+                const card = document.querySelector('.rank-page .scorecard-card');
+                const kids = Array.from(card.children);
+                const exports = card.querySelector('.scorecard-exports');
+                const cards = card.querySelector('.score-cards');
+                return {
+                  inHead: !!card.querySelector('.scorecard-head .scorecard-exports'),
+                  lastChild: kids[kids.length - 1] === exports,
+                  belowCards: exports.getBoundingClientRect().top
+                              >= cards.getBoundingClientRect().bottom,
+                };
+              })()
+            """)
+    assert state["inHead"] is False, "the export is still inside the card's head"
+    assert state["lastChild"] is True, "the export is not the card's last child"
+    assert state["belowCards"] is True, "the export does not sit below the cards"
+
+
+def test_clicking_copy_again_clears_the_previous_error(monkeypatch):
+    """Round 25, his words: "If there's an error, and I click 'copy sheet
+    column' again, the error should disappear. If there's a new error, the
+    new error should show." A message that outlives the gesture it explains
+    reads as the retry having failed the same way.
+
+    Both halves, because clearing alone would be a message that never comes
+    back: the first click fails one way, the second fails DIFFERENTLY, and
+    the sentence on screen has to be the second one."""
+    calls = {"n": 0}
+
+    def boom(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            # The second attempt is SLOW on purpose: the cleared window is
+            # what this test is about, and a failure that resolves in a few
+            # milliseconds leaves nothing to sample. The column route runs
+            # its fetch in a threadpool, so sleeping here blocks that one
+            # request and nothing else.
+            time.sleep(0.8)
+            raise OSError("the sheet is a teapot")
+        raise OSError("no route to host")
+
+    monkeypatch.setattr("sm64_events.server.scorecard_api.fetch", boom)
+    with serve_ui() as base:
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-copy-column")
+
+            read = ("(document.querySelector('.rank-page .scorecard-exports "
+                    ".inline-state.error') || {}).textContent")
+            page.evaluate("document.querySelector('.scorecard-copy-column').click()")
+            page.wait_for(".rank-page .scorecard-exports .inline-state.error")
+            first = page.evaluate(read)
+
+            page.evaluate("document.querySelector('.scorecard-copy-column').click()")
+            page.wait_ms(250)
+            during = page.evaluate(read)
+            page.wait_for(".rank-page .scorecard-exports .inline-state.error")
+            page.wait_ms(300)
+            second = page.evaluate(read)
+
+    assert "no route to host" in first, first
+    assert not during, f"the old error survived the retry: {during!r}"
+    assert "teapot" in second, second
 
 
 def _fmt_seconds_like_js(seconds: float) -> str:

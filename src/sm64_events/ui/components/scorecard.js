@@ -413,6 +413,12 @@ function CopyButton({ className, label, onCopy, onError }) {
   async function handleClick() {
     if (busy) return;
     setBusy(true);
+    // Round 25: the LAST failure's message goes the moment he tries again --
+    // "If there's an error, and I click 'copy sheet column' again, the error
+    // should disappear. If there's a new error, the new error should show."
+    // A message that outlives the gesture it explains reads as the retry
+    // having failed the same way, which is the one thing it cannot tell him.
+    onError(null);
     try {
       // `routes.js:269`'s own `navigator.clipboard &&` guard, but this
       // button owns an inline error slot (routes.js's plain Copy JSON does
@@ -512,7 +518,6 @@ function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange, scopeId,
     ${goal && coverage.covered < coverage.tiles
       ? html`<p class="meta scorecard-note">goal covers ${coverage.covered}/${coverage.tiles}</p>`
       : ""}
-    <${ScorecardExports} />
   </div>`;
 }
 
@@ -700,6 +705,12 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
                     onRemove=${removeRow} onGoalOverride=${handleGoalOverride}
                     onOpenLibrary=${openLibrary} sourceNames=${sourceNames} />`)}
               </div>`)}
-            </div>`}
+            </div>
+            ${/* Round 25: the export sits UNDER the cards, not in the head --
+                 "The button should go at the bottom, underneath all the
+                 cards. I just think it would look better there." Its error
+                 slot travels with it, so the reason a copy failed still
+                 lands where the click did. */""}
+            <${ScorecardExports} />`}
   </div>`;
 }

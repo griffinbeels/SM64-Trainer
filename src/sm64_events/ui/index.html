@@ -7349,8 +7349,13 @@
   }
   .scorecard-head h3 { margin: 0; margin-right: auto; }
   .scorecard-note { margin: 0; flex-basis: 100%; }
+  /* Round 25: this sits UNDER the cards now, as a direct child of the card
+     grid rather than inside `.scorecard-head` -- "The button should go at
+     the bottom, underneath all the cards." So no `flex-basis` (inert on a
+     grid child, and it was only ever there to claim a full row inside the
+     head), and its own top rule separates it from the last card. */
   .scorecard-exports { display: flex; align-items: center; flex-wrap: wrap;
-    gap: 8px; flex-basis: 100%; }
+    gap: 8px; padding-top: 10px; border-top: 1px solid var(--border-soft); }
   .scorecard-exports .inline-state { flex-basis: 100%; }
   /* The "unsaved custom edits" bar (round 8): a name field + Save/Discard,
      shown only while `pendingOverrides` is non-empty. A gold-tinted border
