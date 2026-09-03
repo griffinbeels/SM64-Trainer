@@ -63,7 +63,8 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
             setAnchorOffsetS(view.anchor_offset_s || 0);
             setClipClock({ frameMap: view.frame_map || null,
                            clock: buildClipClock(view),
-                           padReading: view.pad_reading || null });
+                           padReading: view.pad_reading || null,
+                           degraded: !!view.frame_map_degraded });
           }
           setReplaySettled(true);
         }} />
@@ -73,6 +74,7 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
               anchorOffsetS=${anchorOffsetS}
               frameMap=${clipClock.frameMap} clock=${clipClock.clock}
               padReading=${clipClock.padReading}
+              degraded=${clipClock.degraded}
               tools=${html`<div class="attempt-drawer-tools">
                 <button onclick=${markTemplate} disabled=${marking === "busy"}
                     title="Compare every future run against THIS one">

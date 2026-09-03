@@ -5065,6 +5065,14 @@
   .input-screen-check.is-off:hover, .input-screen-check.is-open {
     background: rgba(160, 110, 30, .35);
   }
+  /* A degraded capture reads as a WARNING even when every checkable frame
+     agreed: the recorder's bookkeeping did not cover the clip, so the map was
+     repaired from the screen and can drift where the screen says nothing
+     (item 89). It must never look like a clean capture. */
+  .input-screen-check.is-degraded {
+    border-color: rgba(235, 140, 120, .6); color: #f0a58f;
+    background: rgba(170, 70, 50, .2);
+  }
   .input-screen-check-list {
     list-style: none; margin: .2rem 0 .5rem; padding: 0;
     display: flex; flex-wrap: wrap; gap: .3rem .5rem;

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from sm64_events.core.timefmt import GAME_FPS, format_igt
 from sm64_events.memory.addresses import course_name, star_name
-from sm64_events.replay import mapalign
+from sm64_events.replay import mapalign, padread
 from sm64_events.replay.feedmap import feed_map
 from sm64_events.replay.extract import video_start_of
 from sm64_events.replay.config import (ReplayConfig, save_settings,
@@ -62,6 +62,13 @@ def saved_attempt_ids(root: Path) -> set[int]:
 # way (his counter read 26, 27, 27, 29, 30, 31, 32, 33, 33) and does not
 # drift; that part is in the footage and cannot be corrected from the clip.
 DISPLAY_LAG_FRAMES = 1
+# How much of a clip the feed log must account for before its bookkeeping is
+# trusted over the pad reader's per-slot alignment (item 89). Measured on
+# three clips: 100% and 92% on the two the reader only had to confirm, 73% on
+# the one where it genuinely repaired capture damage. The gap between 73 and
+# 92 is empty, so anything in 0.80-0.90 separates them; provisional on three
+# clips from one session and worth re-measuring as they accumulate.
+FEED_COVERAGE_MIN = 0.85
 
 
 def _parse_utc(s: str) -> datetime:
@@ -428,6 +435,15 @@ class ReplayService:
                 "frame_times": m.get("frame_times"),
                 "encode": m.get("encode", "cfr"),
                 "feed_match": m.get("feed_match"),
+                # WHICH map shipped and whether the capture was healthy
+                # (item 89): "feed_log+offset" is the recorder's own
+                # bookkeeping moved by one whole-clip integer, which is what a
+                # well-covered clip gets; "reader_aligned" means the feed log
+                # did not cover the clip and the display had to repair it
+                # per slot, so the timeline says so rather than looking clean.
+                "frame_map_mode": m.get("frame_map_mode"),
+                "frame_map_degraded": m.get("frame_map_degraded", False),
+                "feed_coverage": m.get("feed_coverage"),
                 "saved_path": str(saved) if saved is not None else None}
 
     # A frame and a half of slack: the clip's own first-frame stamp and the
@@ -683,10 +699,39 @@ class ReplayService:
         if reading is None:
             meta["frame_map_read"] = False
             return False
-        meta["frame_map"] = list(reading.frame_map)
-        meta["frame_map_read"] = True
-        meta["pad_reading"] = reading.verdict.as_dict()
         verdict = reading.verdict
+        # THE READER IS AN AUDITOR ON A WELL-COVERED CLIP (item 89). A fresh
+        # review measured what its per-slot DP actually does: 50-77% of a
+        # clip's frames repeat their predecessor's pad, so the display cannot
+        # tell them apart, and 78-94% of the slots the DP MOVES sit between two
+        # such frames -- unfalsifiable moves, which is what one wrong button
+        # frame looks like (his Elevator Tour frame 13: R drawn where the
+        # screen showed Cdown, in a neutral stretch). On the two clips whose
+        # feed log covered them, the bookkeeping plus ONE flat integer matched
+        # the best per-window correction chosen with HINDSIGHT and came within
+        # 0.3 and 0.5 points of the DP. So the DP's freedom buys 2 slots of 676
+        # and costs run-to-run drift wherever the screen is silent.
+        #
+        # Coverage decides. Below the cutoff the DP genuinely earns its keep
+        # (on a 73%-covered clip: 85.6% -> 95.6%, where even a hindsight
+        # per-window corrector reached only 90.4%) -- but it is then patching
+        # capture damage, and the clip says so.
+        book = list(meta["frame_map"])          # what the feed log worked out
+        match = meta.get("feed_match") or {}
+        frames = match.get("frames") or 0
+        coverage = (match.get("matched", 0) / frames) if frames else 0.0
+        trusted = (coverage >= FEED_COVERAGE_MIN
+                   and verdict.offset_margin >= padread.OFFSET_MARGIN_MIN)
+        if trusted:
+            meta["frame_map"] = mapalign.frame_corrected(book, verdict.offset)
+            meta["frame_map_mode"] = "feed_log+offset"
+        else:
+            meta["frame_map"] = list(reading.frame_map)
+            meta["frame_map_mode"] = "reader_aligned"
+        meta["frame_map_degraded"] = not trusted
+        meta["feed_coverage"] = round(coverage, 4)
+        meta["frame_map_read"] = True
+        meta["pad_reading"] = verdict.as_dict()
         log.info("frame map READ off the display: %d of %d slots confirmed "
                  "(%.2f%%), %d contradicted, %d matched nothing nearby",
                  verdict.agree, verdict.sure, 100 * verdict.agreement,

@@ -627,7 +627,11 @@ def test_the_pixels_hold_the_boundaries_after_the_reader_picks_the_values(tmp_pa
         "R", (), {"frame_map": list(range(500, 500 + len(fm))),
                   "verdict": type("V", (), {
                       "as_dict": lambda self: {}, "sure": 40, "agree": 40,
-                      "nowhere": 0, "agreement": 1.0})()})()
+                      "nowhere": 0, "agreement": 1.0,
+                      # No feed_match in this fixture, so coverage is 0 and
+                      # the reader's own map ships -- which is what this test
+                      # is about (the picture runs re-hold it either way).
+                      "offset": 0, "offset_margin": 0.0})()})()
     res = svc.view(42)
     assert len(quantiser_calls) == 2, "the runs must hold the map AFTER the read"
     shipped = res["frame_map"]
@@ -703,3 +707,83 @@ def test_a_feed_log_that_cannot_cover_the_clip_falls_back_to_the_ledger(tmp_path
     assert asked["frame_times"] is not None
     assert all(abs(a - b) < 1e-5 for a, b in
                zip(asked["frame_times"], res["frame_times"], strict=True))
+
+
+# -- the reader is an AUDITOR when the bookkeeping covers the clip (item 89) --
+
+def _reader_stub(offset, margin, aligned):
+    """A pad_reader whose DP answers `aligned` and whose sweep answers
+    (offset, margin) -- the two contributions the service chooses between."""
+    def reader(clip, frame_map, attempt, repeats=None):
+        verdict = type("V", (), {
+            "as_dict": lambda self: {"offset": offset, "offset_margin": margin},
+            "sure": len(frame_map), "agree": len(frame_map), "nowhere": 0,
+            "agreement": 1.0, "offset": offset, "offset_margin": margin})()
+        return type("R", (), {"frame_map": list(aligned), "verdict": verdict})()
+    return reader
+
+
+def _service_with_feed(tmp_path, matched, frames=40):
+    from test_replay_service import T0, attempt, make_service
+    svc = make_service(tmp_path, [attempt()])
+    svc.extractor = _FeedExtractor(count=frames)
+    origin = (T0 - timedelta(seconds=3)).timestamp()
+    svc.recorder.ledger = _filled_ledger(origin, frames)
+    svc.map_quantiser = lambda clip, fm: list(fm)      # no picture runs here
+    # Force the coverage the test wants, whatever the fixture produced.
+    real = svc._map_from_feeds
+
+    def spy(meta, res):
+        real(meta, res)
+        if meta.get("feed_match"):
+            meta["feed_match"]["frames"] = frames
+            meta["feed_match"]["matched"] = matched
+    svc._map_from_feeds = spy
+    return svc
+
+
+def test_a_well_covered_clip_ships_the_bookkeeping_plus_one_offset(tmp_path):
+    """His Elevator Tour frame 13 drew R where the screen showed Cdown -- a
+    neutral stretch, where the display cannot tell two frames apart and the
+    reader's DP is free to drift. Measured across three clips: 50-77% of a
+    clip's frames repeat their predecessor's pad, and 78-94% of the DP's moves
+    sit between two such frames. On a covered clip the feed log plus ONE flat
+    integer matched a hindsight per-window corrector, so the DP's per-slot
+    freedom is what ships nothing but drift."""
+    svc = _service_with_feed(tmp_path, matched=40)          # 100% coverage
+    svc.pad_reader = _reader_stub(offset=2, margin=0.4,
+                                  aligned=[7777] * 40)      # the DP's answer
+    res = svc.view(42)
+    assert res["frame_map_mode"] == "feed_log+offset"
+    assert res["frame_map_degraded"] is False
+    assert 7777 not in res["frame_map"], "the DP's per-slot answer shipped"
+    # The bookkeeping, moved by exactly the one integer.
+    assert res["frame_map"][1] - res["frame_map"][0] == 1
+    assert res["feed_coverage"] == 1.0
+
+
+def test_a_starved_capture_still_lets_the_reader_align_and_says_so(tmp_path):
+    """Below the cutoff the DP genuinely earns its keep -- on a 73%-covered
+    clip it took agreement from 85.6% to 95.6%, where even a hindsight
+    per-window corrector reached only 90.4%. But it is patching capture
+    damage, and the clip says so rather than looking like a clean one."""
+    svc = _service_with_feed(tmp_path, matched=20)          # 50% coverage
+    svc.pad_reader = _reader_stub(offset=2, margin=0.4,
+                                  aligned=[7777] * 40)
+    res = svc.view(42)
+    assert res["frame_map_mode"] == "reader_aligned"
+    assert res["frame_map_degraded"] is True
+    assert res["frame_map"] == [7777] * 40
+    assert res["feed_coverage"] == 0.5
+
+
+def test_a_thin_offset_margin_keeps_the_reader_even_on_a_covered_clip(tmp_path):
+    """Coverage is the discriminator, but a sweep with no clear winner is its
+    own refusal: the measured peaks were 28 and 46 points clear on the clips
+    that take the bookkeeping path and 6.5 on the one that does not."""
+    svc = _service_with_feed(tmp_path, matched=40)
+    svc.pad_reader = _reader_stub(offset=2, margin=0.02,    # no clear winner
+                                  aligned=[7777] * 40)
+    res = svc.view(42)
+    assert res["frame_map_mode"] == "reader_aligned"
+    assert res["frame_map_degraded"] is True

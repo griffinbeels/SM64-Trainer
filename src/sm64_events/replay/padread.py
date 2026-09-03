@@ -86,6 +86,22 @@ TETHER = 0.0002          # per frame away from the prior: a tie-break only
 STEP_TETHER = 0.3        # per frame the step differs from the prior's step
 HOLE_COST = 0.5          # per known cell, on a frame the track never captured
 RESTART_COST = 5.0       # the prior jumped (a reset, a mis-stamped segment)
+# THE WHOLE-CLIP OFFSET SWEEP (item 89, 2026-09-02). A fresh review measured
+# what the reader's per-slot DP is actually doing on a well-covered clip: of
+# the slots it MOVES off the feed log's bookkeeping, 78-94% sit between two
+# frames the display cannot tell apart, because 50-77% of a clip's frames
+# repeat their predecessor's pad. Those moves are unfalsifiable, and they are
+# what a single wrong button frame looks like from the outside (his Elevator
+# Tour frame 13: R drawn where the screen showed Cdown, in a neutral stretch).
+# On the two well-covered clips, the feed-log map plus ONE flat integer scored
+# the same as the best per-window correction chosen with HINDSIGHT, and within
+# 0.3 and 0.5 points of the DP -- so the DP buys 2 slots of 676 and 14 of
+# 2702, at the cost of drifting freely wherever the screen is silent.
+OFFSET_SPAN = 6
+# The sweep must WIN clearly or the reader keeps aligning: measured peaks were
+# 28 and 46 points clear on the clips that take this path, and 6.5 on the one
+# that does not.
+OFFSET_MARGIN_MIN = 0.15
 MIN_SURE_SLOTS = 30      # a clip that reads fewer whole rows refuses
 REFERENCE = "pad_glyphs_us.npz"
 
@@ -467,6 +483,9 @@ class Verdict:
     frames_checked: int = 0  # ...on which the display could be checked
     frames_agree: int = 0    # ...and agreed on every checkable picture
     unpinned_longest: int = 0  # longest run of frames the display cannot tell apart
+    offset: int = 0          # the ONE integer that best explains the display
+    offset_agree: int = 0    # slots agreeing at it
+    offset_margin: float = 0.0   # winner minus runner-up, as a fraction
 
     @property
     def agreement(self) -> float:
@@ -474,6 +493,8 @@ class Verdict:
 
     def as_dict(self) -> dict:
         return {"sure": self.sure, "agree": self.agree, "nowhere": self.nowhere,
+                "offset": self.offset, "offset_agree": self.offset_agree,
+                "offset_margin": self.offset_margin,
                 "known_cells": self.known_cells, "slots": self.slots,
                 "icons_checked": self.icons_checked, "icons_agree": self.icons_agree,
                 "icons_learned": list(self.icons_learned),
@@ -795,6 +816,49 @@ def picture_flags(ffmpeg: str, clip: Path, cells: np.ndarray):
     return same, changed
 
 
+def offset_sweep(reads: dict, frame_map: list, pads,
+                 span: int = OFFSET_SPAN) -> tuple[int, int, float]:
+    """The ONE integer that best explains the whole clip's display, by direct
+    count -- no DP, no dwelling, nothing per-slot.
+
+    Returns (offset, slots agreeing at it, margin as a fraction of the slots
+    scored). The margin is the winner minus the runner-up: it is sharp on a
+    clip whose bookkeeping covers it (28 and 46 points measured) and thin on
+    one whose does not (6.5), so it is also the refusal criterion.
+    """
+    scores: dict[int, int] = {}
+    scored = 0
+    for offset in range(-span, span + 1):
+        agree = 0
+        seen = 0
+        for slot, raw in enumerate(frame_map):
+            if raw is None:
+                continue
+            truth = truth_glyphs(pads.get(raw + offset), "y"), \
+                truth_glyphs(pads.get(raw + offset), "x")
+            matched = True
+            checked = False
+            for row, want in zip(("y", "x"), truth, strict=True):
+                if want is None:
+                    continue
+                for index, col in enumerate(("letter", "d1", "d2")):
+                    cell = reads.get((row, col))
+                    if cell is None or not cell.known[slot]:
+                        continue
+                    checked = True
+                    if want[index] != cell.names[slot]:
+                        matched = False
+            if checked:
+                seen += 1
+                agree += matched
+        scores[offset] = agree
+        scored = max(scored, seen)
+    best = max(scores, key=lambda key: scores[key])
+    runner = max((v for k, v in scores.items() if k != best), default=0)
+    margin = (scores[best] - runner) / scored if scored else 0.0
+    return best, scores[best], margin
+
+
 def read_clip(clip: Path, frame_map: list, pads, ffmpeg: str,
               reference: Alphabet | None = None,
               held=None, resets=None, repeats=None) -> PadReading | None:
@@ -861,8 +925,15 @@ def read_clip(clip: Path, frame_map: list, pads, ffmpeg: str,
         except Exception:
             log.exception("icon read failed; aligning on the digits alone")
             icons = None
+    # The offset that best explains the display, measured against the map we
+    # were HANDED (the feed log's bookkeeping) rather than against the DP's
+    # own answer -- so it is not circular.
+    sweep_offset, sweep_agree, sweep_margin = offset_sweep(reads, frame_map, pads)
     path = align(reads, path, pads, same, changed, held, icons, anchors)
     verdict = score(reads, path, pads)
+    verdict.offset = sweep_offset
+    verdict.offset_agree = sweep_agree
+    verdict.offset_margin = round(sweep_margin, 4)
     verdict.anchors = {int(slot): [int(raw), int(path[slot])] for slot, raw in anchors.items()}
     if icons is not None and held is not None:
         checked = [(slot, raw) for slot, raw in enumerate(path) if icons[slot]]

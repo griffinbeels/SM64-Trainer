@@ -288,7 +288,7 @@ export function mappedTimeAtFrame(frame, frameMap, clock, stretches) {
 // test ("100% or it can't be relied on") as a number he can see, on the
 // surface he judges it from; the tool that lists each disagreement is named
 // in the hover.
-function screenCheck(reading, attemptId, open, toggle) {
+function screenCheck(reading, attemptId, open, toggle, degraded = false) {
   if (!reading || !reading.sure) return null;
   const off = reading.sure - reading.agree;
   // Three honest numbers in the timeline's own unit (his 2026-09-01
@@ -301,10 +301,16 @@ function screenCheck(reading, attemptId, open, toggle) {
   const checked = reading.frames_checked || 0;
   const gap = reading.unpinned_longest || 0;
   const gapText = gap ? ` · longest unpinned ${gap}f` : "";
+  // A DEGRADED capture is never allowed to look like a clean one (item 89):
+  // the recorder's own bookkeeping did not cover this clip, so the display
+  // had to repair the map frame by frame -- which is exactly where a drifting
+  // frame comes from. He should be able to see that without asking.
+  const health = degraded
+    ? `${" "}· capture was degraded, map repaired from the screen` : "";
   const label = total
     ? (off === 0
-        ? `screen-checked ${checked} of ${total} frames${gapText}`
-        : `screen-checked ${checked} of ${total} frames · ${off} disagree${gapText}`)
+        ? `screen-checked ${checked} of ${total} frames${gapText}${health}`
+        : `screen-checked ${checked} of ${total} frames · ${off} disagree${gapText}${health}`)
     : (off === 0
         ? `screen-checked ${reading.agree}/${reading.sure}`
         : `screen-checked ${reading.agree}/${reading.sure} · ${off} disagree`);
@@ -316,7 +322,8 @@ function screenCheck(reading, attemptId, open, toggle) {
   // A datum on a summary surface is a DOOR to its evidence (his standing
   // rule): the chip opens the list when there is one to open.
   return html`<button type="button"
-      class=${`input-screen-check ${off ? "is-off" : "is-clean"} ${open ? "is-open" : ""}`}
+      class=${`input-screen-check ${off ? "is-off" : "is-clean"} `
+        + `${degraded ? "is-degraded " : ""}${open ? "is-open" : ""}`}
       title=${title} disabled=${off === 0} aria-expanded=${open}
       onclick=${toggle}>${label}</button>`;
 }
@@ -352,7 +359,8 @@ function DisagreementList({ reading, frameMap, stretches, seek, lead }) {
 
 export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
                                 frameMap = null, clock = null,
-                                padReading = null, compact = false,
+                                padReading = null, degraded = false,
+                                compact = false,
                                 tools = null }) {
   const [state, setState] = useState({ phase: "loading" });
   const [frame, setFrame] = useState(0);
@@ -565,7 +573,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
               readable by the sweeps. */""}
         <h4 data-total=${total} data-lead=${lead}>${timeLabel(attemptFrames)}${" "}·${" "}${attemptFrames} frames${" "}·${" "}${data.fps} fps</h4>
         ${screenCheck(padReading, attemptId, checkOpen,
-                      () => setCheckOpen((open) => !open))}
+                      () => setCheckOpen((open) => !open), degraded)}
       </div>
     </header>
     ${checkOpen && html`<${DisagreementList} reading=${padReading}
