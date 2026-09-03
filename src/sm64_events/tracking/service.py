@@ -2154,15 +2154,21 @@ class TrackerService:
         for candidate in candidates:
             self._check_importable(candidate, own_segments)
 
-        def current_frames(entity_key, strat_tag, timer_mode):
+        def current_frames(entity_key, strat_tag, timer_mode, game_version=None):
             course_id, star_id, segment_id = _import_identity(entity_key)
             # An empty tag means NO strategy, and `current_pb` reads that as
             # "do not restrict" — which is the right comparison for such a
             # time: it can only be claimed by the strategy-blind best, so it
             # must beat everything to land.
+            #
+            # The ROM is part of the comparison too (2026-09-02): a (JP) row
+            # and a (US) row for one star and one strategy are two records,
+            # and comparing them against each other dropped the slower
+            # region's time on every merged approach the sheet holds.
             row = db.current_pb(course_id, star_id, timer_mode,
                                 segment_id=segment_id,
-                                strat_tag=strat_tag or None)
+                                strat_tag=strat_tag or None,
+                                game_version=game_version)
             return row["frames"] if row else None
 
         return importing.decide(candidates, current_frames)

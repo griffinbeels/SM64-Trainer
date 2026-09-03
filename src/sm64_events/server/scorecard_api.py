@@ -147,9 +147,11 @@ def _column_resolve(service):
         if kind == "star":
             course_id, star_id = rest.split(":")
             pb = service.db.current_pb(int(course_id), int(star_id), timer_mode,
-                                       strat_tag=strat_tag)
+                                       strat_tag=strat_tag,
+                                       game_version=version)
         elif kind == "segment":
             pb = service.db.current_pb(None, None, timer_mode,
+                                       game_version=version,
                                        segment_id=int(rest), strat_tag=strat_tag)
         else:
             return None

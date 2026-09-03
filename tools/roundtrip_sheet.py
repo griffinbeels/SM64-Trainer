@@ -82,11 +82,22 @@ def walk_rows(rows, payload):
 
 
 def expected_column(rows, payload, runner):
-    """That runner's own column, one entry per worksheet row."""
+    """That runner's own column, one entry per worksheet row.
+
+    The ROW's version selects the entry, not just the runner: build.py merges
+    a (JP) and a (US) worksheet row into ONE payload item, so two rows share
+    an entry list and the runner may hold a different time in each region.
+    Taking the first match made the US row expect the JP time -- which read as
+    the product disagreeing with the sheet when it was this function
+    disagreeing with itself."""
     lines = []
-    for _number, _row, _target, item in walk_rows(rows, payload):
-        entry = next((e for e in ((item or {}).get("entries") or [])
-                      if e.get("runner") == runner and e.get("time_cs")), None)
+    for _number, row, _target, item in walk_rows(rows, payload):
+        mine = [e for e in ((item or {}).get("entries") or [])
+                if e.get("runner") == runner and e.get("time_cs")]
+        version = getattr(row, "version", None)
+        if version and any(e.get("version") for e in mine):
+            mine = [e for e in mine if e.get("version") == version]
+        entry = mine[0] if mine else None
         lines.append(sheet_time(int(entry["time_cs"])) if entry else "")
     return lines
 
@@ -102,7 +113,8 @@ def row_labels(rows, payload):
             continue
         key = (target or {}).get("entity_key") or "NO-ENTITY"
         kind = "subsection" if row.kind == "subsection" else key.split(":")[0]
-        labels[number] = f"[{kind}] {row.label}"
+        tag = f"({row.version})" if row.version else ""
+        labels[number] = f"[{kind}]{tag} {row.label}"
     return labels
 
 
@@ -218,6 +230,27 @@ def fill_counts(payload):
     return filled, order
 
 
+def by_kind(expected, actual, labels):
+    """Per row KIND: how many of the runner's filled cells came back exactly,
+    and how each of the rest failed.
+
+    The kinds fail for different reasons and only one of them is about
+    strategies, so a single total hides the answer to "do all the stars get
+    added correctly with each strategy correctly used". The kind is the one
+    `row_labels` stamps -- a star approach, a subsection, a segment, or a
+    target the mapping never paired."""
+    buckets = {}
+    for index, (want, got) in enumerate(zip(expected, actual, strict=False)):
+        label = labels.get(index + 2)
+        if label is None or not (want or got):
+            continue
+        kind = label.split("]")[0].lstrip("[")
+        bucket = buckets.setdefault(kind, Counter())
+        bucket["cells"] += bool(want)
+        bucket["exact" if want == got else kind_of(want, got)] += 1
+    return buckets
+
+
 def report(runner, expected, actual, summary, labels, verbose):
     """One runner's line, plus its diff when there is one; how many rows
     disagreed."""
@@ -231,6 +264,12 @@ def report(runner, expected, actual, summary, labels, verbose):
     if not total:
         return 0
     print(f"    {dict(counts)}")
+    for kind, bucket in sorted(by_kind(expected, actual, labels).items(),
+                               key=lambda kv: -kv[1]["cells"]):
+        rest = {k: v for k, v in bucket.items() if k not in ("cells", "exact")}
+        share = bucket["exact"] / bucket["cells"] if bucket["cells"] else 0
+        print(f"      {kind:<12} {bucket['exact']:>4} of {bucket['cells']:>4} "
+              f"exact ({share:5.1%})   {rest or ''}")
     reasons = Counter(row.get("reason", "?")
                       for row in (summary.get("rejected") or []))
     if reasons:

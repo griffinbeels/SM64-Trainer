@@ -64,8 +64,16 @@ class ImportPlan:
 def decide(candidates, current_frames: Callable) -> ImportPlan:
     """Which candidates land, and the count of what did not.
 
-    `current_frames(entity_key, strat_tag, timer_mode) -> int | None` is the
-    player's current best for exactly that combination, in game frames."""
+    `current_frames(entity_key, strat_tag, timer_mode, game_version) -> int
+    | None` is the player's current best for exactly that combination, in game
+    frames.
+
+    The GAME VERSION is part of the combination, and that is not a detail: the
+    Ultimate Sheet keeps a (JP) row and a (US) row for the same star and the
+    same strategy, and they are different records timed on different ROMs.
+    Comparing them against each other made the slower region's time read as
+    "already faster" and dropped it -- measured 2026-09-02 across every merged
+    approach on the sheet."""
     landing, already_faster, unmappable, unstrategised = [], 0, 0, 0
     landed_best: dict[tuple, int] = {}
     for candidate in candidates:
@@ -87,7 +95,8 @@ def decide(candidates, current_frames: Callable) -> ImportPlan:
         # prints. Rounding UP is the conservative direction — it never credits
         # him with a time the timer could not display.
         frames = timefmt.frame_at_or_after(candidate.time_cs)
-        key = (candidate.entity_key, candidate.strat_tag, candidate.timer_mode)
+        key = (candidate.entity_key, candidate.strat_tag, candidate.timer_mode,
+               candidate.game_version)
         existing = landed_best.get(key)
         if existing is None:
             existing = current_frames(*key)

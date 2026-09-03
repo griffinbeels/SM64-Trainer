@@ -147,8 +147,17 @@ def candidates_for(payload: dict, runner: str, place=None):
                                              entry["time_cs"], reason)
                                     for entry in entries)
                     continue
+                # The ENTRY's own version, not the target's. A merged
+                # (JP)/(US) approach holds both regions' times in one item and
+                # the TARGET carries only one of the two labels -- Big Bob-omb
+                # on the Summit is stamped `jp`, so Raisn's US 45.70 landed as
+                # a JP time and its own (US) row exported blank. 57 of his 58
+                # missing star cells were this (measured 2026-09-02). The
+                # target's version stays the fallback for a row the sheet does
+                # not tag.
                 candidates.extend(ImportCandidate(
                     entity_key=entity_key, strat_tag=strategy,
-                    time_cs=int(entry["time_cs"]), game_version=version,
+                    time_cs=int(entry["time_cs"]),
+                    game_version=entry.get("version") or version,
                     timer_mode=timer_mode) for entry in entries)
     return candidates, rejected

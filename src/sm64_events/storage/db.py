@@ -1274,7 +1274,8 @@ class Database:
 
     def current_pb(self, course_id: int | None, star_id: int | None,
                    timer_mode: str, segment_id: int | None = None,
-                   strat_tag: str | None = None) -> dict | None:
+                   strat_tag: str | None = None,
+                   game_version: str | None = None) -> dict | None:
         """Latest saved row for one star/segment + mode — the same row
         views._current_pbs picks (later saves win). Kind-aware like
         insert_pb: segment rows match by segment_id, star rows by
@@ -1289,6 +1290,13 @@ class Database:
         by hand does."""
         strat_clause = " AND strat_tag=?" if strat_tag is not None else ""
         strat_param = (strat_tag,) if strat_tag is not None else ()
+        # When a ROM is named, a row set on the OTHER one is not an answer --
+        # but an unversioned row still is, since NULL means "grade on whatever
+        # is running" (migration v27). Only the sheet column export asks; every
+        # other caller omits it and sees exactly what it always did.
+        if game_version is not None:
+            strat_clause += " AND (game_version=? OR game_version IS NULL)"
+            strat_param += (game_version,)
         if segment_id is not None:
             q = ("SELECT * FROM pbs WHERE segment_id=? AND timer_mode=?"
                  + strat_clause + " AND" + self._VISIBLE_PB
