@@ -661,39 +661,73 @@ def test_the_endpoints_placer_lands_a_bowser_row_on_the_seeded_movement(tmp_path
         assert placed == (f"segment:{bitfs_id}", "rta", None)
 
 
-def test_an_imported_star_row_exports_the_time_it_was_imported_with(tmp_path):
-    """The round trip, end to end through the REAL shared placer: a sheet
-    row with no vetted `matched_strategy` is landed by `POST
-    /api/import/sheet` under the sheet's own approach name, so this door
-    asks for that same name and gets the same time back.
-
-    Round 19's whole finding lives here. Until then the export refused the
-    name half of the import's own rule, so 335 star rows -- and every line
-    of a column he had just imported -- exported blank."""
-    from sm64_events.library.export_column import column_lines
+def _bob_omb_rows(strategy_row=False):
+    """The Bob-omb target as one worksheet row plus its payload -- either the
+    star's OWN row (named after the target) or a named-STRATEGY row under it.
+    Round 25 treats the two differently, so both shapes are needed."""
     from sm64_events.library.sheet import SheetRow
+
+    name = "Fast rollout" if strategy_row else "Big Bob-omb on the Summit"
+    rows = [SheetRow(row=2, group="G", section="1. Bob-omb Battlefield",
+                     label=name, ids=frozenset({"1"}),
+                     kind="approach", opens_target=True, version=None,
+                     best_cs=None, best_runner="", ideal_cs=None,
+                     fill_rate=None)]
+    payload = {"targets": [
+        {"section": "1. Bob-omb Battlefield", "entity_key": "star:1:0",
+         "label": "Big Bob-omb on the Summit",
+         "approaches": [{"name": name, "ids": ["1"]}],
+         "subsections": []}]}
+    return rows, payload
+
+
+def test_a_stars_own_row_exports_his_best_on_it_however_he_set_it(tmp_path):
+    """ROUND 25. A row named after the STAR is about the star, so it prints
+    the best time on it whatever strategy set it -- the same number his
+    Scorecard already shows for that star.
+
+    This test used to assert the opposite, and its old "decoy" is now the
+    expected answer. That was round 19's shape: the export asked every row
+    for the sheet's own name, which closed the round trip for an IMPORTED
+    column and missed almost everything he PLAYED, because a played time is
+    filed under the name HE picked. Measured through the real endpoint on his
+    live database (268 PBs): 399 asks, 3 answers. Round 19's guarantee is not
+    lost -- it moved to the named-strategy row below, where a name still
+    means only times set that way."""
+    from sm64_events.library.export_column import column_lines
     from sm64_events.server.import_api import sheet_row_placer
     from sm64_events.server.scorecard_api import _column_resolve
 
     with make_client(tmp_path) as (_client, db, svc):
-        # Exactly what the import writes for this row: strat_tag = the
-        # sheet's own approach name, on the star the target maps to. The
-        # FASTER decoy under another name is what makes this test able to
-        # fail -- a lookup that forgot the name would answer with it.
         db.insert_pb(1, 0, "Big Bob-omb on the Summit", "igt", 1324, None,
                      "2026-08-24T00:00:00Z")
         db.insert_pb(1, 0, "Some other way round", "igt", 900, None,
                      "2026-08-24T00:00:00Z")
-        rows = [SheetRow(row=2, group="G", section="1. Bob-omb Battlefield",
-                         label="Big Bob-omb on the Summit", ids=frozenset({"1"}),
-                         kind="approach", opens_target=True, version=None,
-                         best_cs=None, best_runner="", ideal_cs=None,
-                         fill_rate=None)]
-        payload = {"targets": [
-            {"section": "1. Bob-omb Battlefield", "entity_key": "star:1:0",
-             "label": "Big Bob-omb on the Summit",
-             "approaches": [{"name": "Big Bob-omb on the Summit", "ids": ["1"]}],
-             "subsections": []}]}
+        rows, payload = _bob_omb_rows()
+        place = sheet_row_placer(svc, None)
+        lines = column_lines(rows, payload, _column_resolve(svc), place=place)
+        assert lines == [sheet_time(display_cs(900))], (
+            "the star's own row must carry his best time on that star")
+
+
+def test_an_imported_strategy_row_exports_the_time_it_was_imported_with(tmp_path):
+    """Round 19's finding, guarded where it now lives. A sheet row naming a
+    STRATEGY is landed by `POST /api/import/sheet` under the sheet's own
+    approach name, so this door asks for that same name and gets the same
+    time back -- and a FASTER time set another way must NOT appear under it,
+    which is what makes this test able to fail. Until round 19 the export
+    refused the name half of the import's own rule and every line of a
+    freshly imported column came back blank."""
+    from sm64_events.library.export_column import column_lines
+    from sm64_events.server.import_api import sheet_row_placer
+    from sm64_events.server.scorecard_api import _column_resolve
+
+    with make_client(tmp_path) as (_client, db, svc):
+        db.insert_pb(1, 0, "Fast rollout", "igt", 1324, None,
+                     "2026-08-24T00:00:00Z")
+        db.insert_pb(1, 0, "Some other way round", "igt", 900, None,
+                     "2026-08-24T00:00:00Z")
+        rows, payload = _bob_omb_rows(strategy_row=True)
         place = sheet_row_placer(svc, None)
         lines = column_lines(rows, payload, _column_resolve(svc), place=place)
         assert lines == [sheet_time(display_cs(1324))]

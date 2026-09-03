@@ -178,11 +178,14 @@ def test_a_carved_out_target_shares_its_parents_opening_row():
     against its neighbour's target -- 214 of 803 rows, the whole tail of the
     sheet, silently blank. One opening row opens one BLOCK."""
     rows, payload = _split_fixture()
+    # "Next Star" IS its target's own label, so round 25 asks that row with
+    # no strategy at all (`names_the_thing`); the other two name strategies
+    # under a differently-labelled target and still ask by name.
     lines = column_lines(rows, payload,
                          lambda entity_key, strat, mode, version: {
                              ("star:19:0", "Box Star"): 4370,
                              ("star:19:1", "Under 21"): 2060,
-                             ("star:1:0", "Next Star"): 8100,
+                             ("star:1:0", None): 8100,
                          }.get((entity_key, strat)))
     assert lines == ["43.70", "20.60", "1:21.00"]
 
@@ -254,3 +257,79 @@ def test_the_column_runs_to_the_sheets_last_data_row_blanks_and_all():
 
 def test_no_rows_is_no_lines():
     assert column_lines([], {"targets": []}, lambda *a: None) == []
+
+
+def _primary_fixture():
+    """One star target whose rows are its OWN name and two named strategies,
+    plus a subsection -- the shape 117 of the live sheet's 118 star targets
+    have (measured 2026-09-02)."""
+    rows = [
+        _row(2, "Chip off Whomp's Block", "approach", True, ids=("1",)),
+        _row(3, "Triple jump strat", "approach", False, ids=("2",)),
+        _row(4, "Warp fadeout", "subsection", False, ids=("3",)),
+    ]
+    payload = {"targets": [
+        {"entity_key": "star:2:0", "label": "Chip off Whomp's Block",
+         "approaches": [
+             {"name": "Chip off Whomp's Block", "ids": ["1"]},
+             {"name": "Triple jump strat", "ids": ["2"]},
+         ],
+         "subsections": [{"name": "Warp fadeout", "ids": ["3"]}]},
+    ]}
+    return rows, payload
+
+
+def test_a_star_own_row_asks_for_his_best_however_he_got_it():
+    """ROUND 25, and the whole reason the column came back nearly empty. The
+    export asked every row for the SHEET's strategy name, and his PBs are
+    filed under the names HE picked -- measured through the real endpoint on
+    his live database: 399 asks, 3 answers, the export wanting "Chip off
+    Whomp's Block" where he had "Standard". A row that names the STAR is
+    about the star, so it asks with no strategy at all; a row that names a
+    strategy still means only times set that way."""
+    rows, payload = _primary_fixture()
+    asked = []
+
+    def resolve(entity_key, strat_tag, timer_mode, version):
+        asked.append(strat_tag)
+        return 4370 if strat_tag is None else None
+
+    lines = column_lines(rows, payload, resolve)
+    assert lines[0] == "43.70", "the star's own row must print his best"
+    assert lines[1] == "", "a strategy row must not print a time set another way"
+    assert asked[:2] == [None, "Triple jump strat"], asked
+
+
+def test_a_strategy_row_still_only_prints_its_own_strategys_time():
+    """The other half, and what stops round 25 becoming "print your best
+    everywhere": a named strategy row asks for that name and nothing else,
+    so a time set a different way can never appear under it."""
+    rows, payload = _primary_fixture()
+
+    def resolve(entity_key, strat_tag, timer_mode, version):
+        return 2060 if strat_tag == "Triple jump strat" else None
+
+    lines = column_lines(rows, payload, resolve)
+    assert lines[0] == ""
+    assert lines[1] == "20.60"
+
+
+def test_a_subsection_row_names_the_piece_so_it_asks_blind_too():
+    """`adoptions.strategy_name` files a subsection under the default
+    strategy for the IMPORT -- "the row names the piece being practised, not
+    a way to perform that piece" -- and this door reads the same predicate
+    rather than keeping a second copy of it, so both directions agree about
+    which rows are about a thing and which are about a way of doing it."""
+    rows, payload = _primary_fixture()
+    asked = []
+
+    def place(target, item, kind):
+        return ("segment:9", "rta", "Standard") if kind == "subsection" else None
+
+    def resolve(entity_key, strat_tag, timer_mode, version):
+        asked.append((entity_key, strat_tag))
+        return 8100 if strat_tag is None else None
+
+    lines = column_lines(rows, payload, resolve, place=place)
+    assert lines[2] == "1:21.00"
+    assert ("segment:9", None) in asked

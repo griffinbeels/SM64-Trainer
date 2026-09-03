@@ -44,6 +44,7 @@ star row under `matched_strategy or the sheet's own name`, so refusing the
 name half meant a column he had just imported exported 0 of 803 lines. The
 fallback can never print a WRONG time either -- a name this database has not
 heard of resolves to `None` and the line stays blank."""
+from sm64_events.library.adoptions import DEFAULT_STRATEGY, strategy_name
 from sm64_events.library.sheet import base_name
 
 
@@ -104,6 +105,33 @@ def _find_item(row, block):
     return named[0]
 
 
+def names_the_thing(target, item, kind: str) -> bool:
+    """Does this row name the THING, rather than a way of doing it?
+
+    The sheet gives a star one row carrying its own name ("Chip off Whomp's
+    Block") and then a row per named strategy ("Triple jump strat"); a
+    subsection row names the piece being practised. Those first rows are
+    about the star or the piece, so what belongs in them is your best time on
+    it, however you got it -- while a strategy row means only times set THAT
+    way.
+
+    The predicate is `adoptions.strategy_name`'s, not a second copy of it:
+    that function already answers exactly this question for the IMPORT
+    direction (it files a target-named row and every subsection under the
+    default strategy, "a piece's community timing is its Standard"), and the
+    two doors are required to agree about which rows are which. Measured on
+    the live sheet 2026-09-02: 117 of 118 star targets carry exactly one
+    approach whose name IS the target's own label, and none carries two, so
+    the test is both available and unambiguous. The one exception is "Slide
+    Star (Under 21 Seconds)", whose rows are "Under 21" and "Late wall bounce
+    strat (U21)" -- it keeps the strategy match and exports blank unless a
+    name lines up."""
+    if not target:
+        return False
+    return strategy_name(target.get("label") or "", item.get("name") or "",
+                         kind=kind) == DEFAULT_STRATEGY
+
+
 def _line_for(row, block, resolve, place) -> str:
     target, item = _find_item(row, block)
     if item is None:
@@ -111,12 +139,26 @@ def _line_for(row, block, resolve, place) -> str:
     # The import's own order, and its own strategy name -- see the module
     # docstring. `place` outranks the star fallback because a row he has
     # explicitly linked to a piece he built is about that piece.
-    sheet_strategy = item.get("matched_strategy") or item.get("name")
+    #
+    # ROUND 25: a row that NAMES THE THING asks with no strategy at all.
+    # Until now every row asked for the SHEET's own name, which closes the
+    # round trip for a column he IMPORTED and misses almost everything he
+    # PLAYED -- his times are filed under the names HE picked. Measured
+    # through this door on his live database (268 PBs): 399 asks, 3 answers,
+    # because it was asking for "Chip off Whomp's Block" where he had
+    # "Standard" and "Wall Kicks Will Work" where he had "Backflip WK". A
+    # strategy-blind ask on a star's own row is the same number his Scorecard
+    # already shows for that star, so those two surfaces cannot disagree
+    # either. Same run after the change: 42 answers.
+    blind = names_the_thing(target, item, row.kind)
+    sheet_strategy = None if blind else (item.get("matched_strategy")
+                                         or item.get("name"))
     placed = place(target, item, row.kind) if place is not None else None
     if placed:
         placed_entity, timer_mode, strategy = placed
-        cs = resolve(placed_entity, strategy or sheet_strategy, timer_mode,
-                     row.version)
+        cs = resolve(placed_entity,
+                     None if blind else (strategy or sheet_strategy),
+                     timer_mode, row.version)
     elif (row.kind == "approach"
             and (target.get("entity_key") or "").startswith("star:")):
         cs = resolve(target["entity_key"], sheet_strategy, "igt", row.version)
