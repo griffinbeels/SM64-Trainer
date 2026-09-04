@@ -737,3 +737,77 @@ def test_the_grab_carries_the_coin_count_at_the_grab():
                 igt_overall=232, igt_result=231, coins=104)
     events = run_pairs(StarGrabDetector(), [prev, curr])
     assert events[0].payload["coins"] == 104
+
+
+# --- the whole star is OURS at the x-cam, in and OUT of a subarea -------------
+#
+# His report, 2026-09-04 (task 0117): Slip Slidin' Away is spawn -> chimney ->
+# slide -> cabin door -> the star OUTSIDE, and "it takes FOREVER for us to show
+# the actual final, aggregate time". Journal ids 34439-34450: the door back to
+# area 1 read as a retry, the bank was dropped, the row published 0'07"10 (the
+# leg since the door, `published_after` 1) and Usamune's 0'49"10 arrived as a
+# `star_time_corrected` 1.47 s later. The clock now reads the game's own warp
+# countdown, so the door banks the slide exactly as the chimney banked the
+# approach, and the sum leaves at the x-cam with nothing to correct.
+
+STALE_SSA = 3968   # an earlier Slip Slidin' Away, still in the result store
+
+
+def ssa_snaps():
+    """The reported run as the bytes move: 119 frames to the chimney (op 4
+    fires, area 1 -> 2, the counter zeroes), 1141 down the slide to the door
+    (op 3 fires, area 2 -> 1, zeroes again), 212 to a GROUND grab outside.
+    Usamune's burst at the x-cam is the real one: +1 echoes the leg (213),
+    +27 writes the whole star (1473)."""
+    snaps = []
+
+    def at(frame, **kw):
+        base = dict(global_timer=frame, curr_level=5, curr_area=1,
+                    igt_result=STALE_SSA, mario_action=ACT_IDLE,
+                    num_stars=31, last_completed_course=5,
+                    last_completed_star=1)
+        base.update(kw)
+        snaps.append(snap(**base))
+
+    def ride(frame, op, from_area, to_area, counter):
+        for tick in range(21):
+            at(frame + tick, curr_area=from_area, igt_overall=counter,
+               pending_warp_op=op, delayed_warp_timer=20 - tick)
+        at(frame + 23, curr_area=to_area, igt_overall=counter,
+           pending_warp_op=op)
+        at(frame + 24, curr_area=to_area, igt_overall=0)
+        return frame + 25
+
+    at(1000, igt_overall=100)
+    after = ride(1020, A.WARP_OP_WARP_OBJECT, 1, 2, counter=119)
+    after = ride(after + 1100, A.WARP_OP_WARP_DOOR, 2, 1, counter=1141)
+    grab = after + 212
+    at(grab - 1, igt_overall=211)
+    for offset in range(StarGrabDetector.RESULT_SETTLE_FRAMES + 2):
+        if offset >= 27:
+            result = 1473
+        elif offset >= 1:
+            result = 213
+        else:
+            result = STALE_SSA
+        at(grab + offset, igt_overall=212 + offset, igt_result=result,
+           num_stars=32, mario_action=A.ACT_STAR_DANCE_EXIT,
+           mario_action_timer=offset)
+    return snaps, grab
+
+
+def test_a_star_grabbed_after_leaving_its_subarea_publishes_the_whole_star_at_once():
+    snaps, xcam = ssa_snaps()
+    events = emitted_at(snaps)
+    kinds = [ev.type for _, ev in events]
+    assert kinds == ["star_collected"], kinds     # no correction to come
+    [(published_at, row)] = events
+    assert row.frame == xcam
+    assert row.payload["igt_frames"] == 1473      # 0'49"10, his screen
+    assert row.payload["igt"] == "0'49\"10"
+    assert row.payload["carried_igt"] == 1473
+    # The detector identifies the grab on one poll and settles on the next,
+    # so 1 is this shape's floor (his ground grabs journal `published_after`
+    # 1); what matters is that nothing is waited FOR.
+    assert row.payload["published_after"] <= 1
+    assert published_at - xcam <= 1

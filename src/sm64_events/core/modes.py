@@ -103,3 +103,38 @@ def effective_version(cfg: ModeConfig, detected: str | None = None) -> str:
     if detected in ("jp", "us"):
         return detected
     return "us"
+
+
+# --- the platform stamp -----------------------------------------------------
+# WHICH MACHINE set a time. `TrackerMode` above is what the tracker is reading
+# NOW; the platform is the same two values stamped onto an attempt at the
+# moment it closed, so a time set last month on the emulator stays "emu" the
+# day he switches the mode to a console (pb-import round 29, item 2). These
+# two literals live HERE and in ui/platform.js and nowhere else
+# (tests/test_single_source.py); the two copies are compared by
+# tests/test_cross_language_parity.py.
+PLATFORMS = tuple(mode.value for mode in TrackerMode)
+PLATFORM_LABELS = {TrackerMode.EMU.value: "Emulator",
+                   TrackerMode.N64.value: "N64"}
+DEFAULT_PLATFORM = TrackerMode.EMU.value
+
+
+def platform_from_payload(payload: dict) -> str | None:
+    """The platform a closing event names for itself, or None.
+
+    Only a front-end that is not the emulator ever writes the key (the vision
+    poller stamps "n64"); the emulator path writes nothing, and every journal
+    row written before 2026-09-04 predates the key. None is the honest STORED
+    value for both -- what it MEANS is `platform_of`'s one rule, not a guess
+    baked into every row. A value outside PLATFORMS is not a platform and is
+    stored as None rather than as a string nothing can draw."""
+    value = payload.get("platform")
+    return value if value in PLATFORMS else None
+
+
+def platform_of(stored: str | None) -> str:
+    """Resolve a stored platform to the one it means: an absent stamp is the
+    emulator, because until the console front-end existed nothing but
+    Project64's memory could close an attempt. ONE rule, here, so no reader
+    grows its own `or "emu"`."""
+    return stored if stored in PLATFORMS else DEFAULT_PLATFORM

@@ -844,3 +844,35 @@ def test_the_guards_can_still_fail():
                           for (ladder, time), py, node in
                           zip(fake_cases, fake_python, fake_js) if py != node]
     assert fake_disagreements == [({"Bronze": 100}, 50, "Silver", "Bronze")]
+
+
+# --- 12. the platform stamp -------------------------------------------------
+
+PLATFORM_JS = UI / "platform.js"
+
+
+def test_platforms_and_the_absent_rule_agree():
+    """`core/modes.py` stamps WHICH MACHINE set a time and owns the one rule
+    that an absent stamp means the emulator; `ui/platform.js` is the browser's
+    copy, so a card can label a time without a round trip. Compared: the value
+    set, its order, the labels, the default, and the resolver on every input
+    that matters -- each known value, null/None, and a string that is not a
+    platform (the JS must not draw a stamp Python would refuse to store)."""
+    from sm64_events.core.modes import (DEFAULT_PLATFORM, PLATFORM_LABELS,
+                                        PLATFORMS, platform_of)
+
+    probes = [*PLATFORMS, None, "gamecube", ""]
+    js = run_node(
+        f"import {{ PLATFORMS, PLATFORM_LABELS, DEFAULT_PLATFORM, platformOf }}"
+        f" from {PLATFORM_JS.as_uri()!r};\n"
+        f"const probes = {json.dumps(probes)};\n"
+        "console.log(JSON.stringify({ PLATFORMS, PLATFORM_LABELS,"
+        " DEFAULT_PLATFORM, resolved: probes.map(platformOf) }));")
+    assert js["PLATFORMS"] == list(PLATFORMS), (
+        f"the platform set disagrees: modes.py {list(PLATFORMS)} vs "
+        f"platform.js {js['PLATFORMS']}")
+    assert js["PLATFORM_LABELS"] == PLATFORM_LABELS
+    assert js["DEFAULT_PLATFORM"] == DEFAULT_PLATFORM
+    assert js["resolved"] == [platform_of(value) for value in probes], (
+        "platformOf and platform_of resolve a stored stamp differently; the "
+        "browser would label a time by a rule the server does not hold")

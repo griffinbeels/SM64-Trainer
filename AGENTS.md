@@ -54,4 +54,8 @@ is the executable spec.
 missed `no-app-server.py` — the guard that stops an agent seizing the recorder
 lock during a live practice session — for two days. `tests/test_agent_config_parity.py`
 fails if the two harnesses stop running the same set, or if this file grows
-rules of its own again.
+rules of its own again. **Since 2026-09-04 the Codex file is generated, never
+hand-written:** `python ~/.claude/harness/install.py --repo .` renders it from
+`.claude/settings.json` (the harness repo owns the renderer), and the parity
+test fails when the committed file differs from what the settings generate.
+Edit the settings; regenerate; commit both.

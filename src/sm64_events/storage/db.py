@@ -575,8 +575,27 @@ MIGRATIONS = [
      WHERE parent IS NOT NULL;
     ALTER TABLE segment_defs DROP COLUMN parent;
     """,
+    # v27 — the PLATFORM STAMP (pb-import round 29, item 2; built 2026-09-04):
+    # WHICH MACHINE set a time -- "emu" (Project64's memory) or "n64" (a real
+    # console's picture through the capture feed). `Attempt.platform` is read
+    # off the closing event's own payload by projection._build, so it
+    # re-derives on every reproject and needs no repair UPDATE (the v19/v20/
+    # timed_at shape). NULL default: every row written before this column
+    # existed came from the emulator, and core/modes.py::platform_of is the
+    # ONE place that says so -- storing 'emu' here would bake that rule into
+    # every row and into every branch's poller.
+    #
+    # A personal best carries no column of its own: it remembers its platform
+    # THROUGH its attempt (pbs()/current_pb LEFT JOIN attempts), one door.
+    # Two unmerged branches each carry their own v27+ (console-support:
+    # identity_source/confidence; pb-import: imported times); whichever
+    # merges main next re-tails its own block after this one, as v27's own
+    # comment on console-support already describes.
+    """
+    ALTER TABLE attempts ADD COLUMN platform TEXT;
+    """,
 
-    # v27 -- an IMPORTED TIME: a personal best the trainer recorded without an
+    # v28 -- an IMPORTED TIME: a personal best the trainer recorded without an
     # attempt behind it. `imported_from` is NULL for a played best and names
     # the source otherwise ("manual", "sheet:<runner>"), so one control can
     # remove a whole import and a later view can separate what he played from
@@ -594,9 +613,9 @@ MIGRATIONS = [
     ALTER TABLE pbs ADD COLUMN game_version TEXT;
     """,
 
-    # v28 -- an imported time is an ATTEMPT now (journaled `time_imported`,
+    # v29 -- an imported time is an ATTEMPT now (journaled `time_imported`,
     # projected like any other row), and its pb row links to it. For the few
-    # days v27 shipped on its own branch an import wrote a pb row with NO
+    # days v28 shipped on its own branch an import wrote a pb row with NO
     # attempt: a number in the card's head and no row in its log, which is
     # the shape he reported (2026-08-22). Those rows cannot be upgraded --
     # nothing journaled them -- so they go, and a re-import lands them
@@ -606,7 +625,7 @@ MIGRATIONS = [
     DELETE FROM pbs WHERE imported_from IS NOT NULL AND attempt_id IS NULL;
     """,
 
-    # v29 -- a HELD TIME: a sheet cell an import kept aside because the
+    # v30 -- a HELD TIME: a sheet cell an import kept aside because the
     # trainer has nowhere to put it yet -- a piece no segment is linked to,
     # a castle movement with no entity, a stage RTA, a star row timed on a
     # real-time clock. His ruling, 2026-09-04: "maximize compatibility with
@@ -636,7 +655,8 @@ _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
                  "cleared", "cleared_reason",
                  "rollouts_total", "rollouts_dustless",
                  "jumps_total", "jumps_dustless",
-                 "segment_id", "timed_by", "closed_by", "timed_at")
+                 "segment_id", "timed_by", "closed_by", "timed_at",
+                 "platform")
 
 
 class EventRow:
@@ -920,7 +940,8 @@ class Database:
                 int(a.cleared), a.cleared_reason,
                 a.rollouts_total, a.rollouts_dustless,
                 a.jumps_total, a.jumps_dustless,
-                a.segment_id, a.timed_by, a.closed_by, a.timed_at)
+                a.segment_id, a.timed_by, a.closed_by, a.timed_at,
+                a.platform)
 
     def replace_attempts(self, attempts: list[Attempt]) -> None:
         with self._lock:
@@ -1268,9 +1289,9 @@ class Database:
                   imported_from: str | None = None,
                   game_version: str | None = None) -> int:
         """`attempt_id=None` with an `imported_from` is an IMPORTED TIME — a
-        personal best he brought rather than set here (see migration v27).
+        personal best he brought rather than set here (see migration v28).
         `game_version` is the ROM that set it; None means "grade on the running
-        version", which is what every row written before v27 does."""
+        version", which is what every row written before v28 does."""
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO pbs (course_id, star_id, segment_id, strat_tag,"
@@ -1291,9 +1312,18 @@ class Database:
         directly and see every row."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM pbs WHERE" + self._VISIBLE_PB
-                + " ORDER BY id").fetchall()
+                self._PB_SELECT + self._VISIBLE_PB
+                + " ORDER BY pbs.id").fetchall()
             return [dict(r) for r in rows]
+
+    # A PB's `platform` is its attempt's (v27): exposed on the row here so no
+    # reader joins for it, and never stored twice. A row with no attempt (a
+    # legacy manual save) reads NULL, which core/modes.py::platform_of
+    # resolves. Every pbs column that attempts also has (course_id, star_id,
+    # segment_id, strat_tag) must be qualified `pbs.` in the WHERE.
+    _PB_SELECT = ("SELECT pbs.*, attempt_of_pb.platform AS platform FROM pbs"
+                  " LEFT JOIN attempts AS attempt_of_pb"
+                  " ON attempt_of_pb.id = pbs.attempt_id WHERE")
 
     def current_pb(self, course_id: int | None, star_id: int | None,
                    timer_mode: str, segment_id: int | None = None,
@@ -1313,23 +1343,24 @@ class Database:
         by hand does."""
         strat_clause = " AND strat_tag=?" if strat_tag is not None else ""
         strat_param = (strat_tag,) if strat_tag is not None else ()
+        strat_clause = strat_clause.replace("strat_tag", "pbs.strat_tag")
         # When a ROM is named, a row set on the OTHER one is not an answer --
         # but an unversioned row still is, since NULL means "grade on whatever
-        # is running" (migration v27). Only the sheet column export asks; every
+        # is running" (migration v28). Only the sheet column export asks; every
         # other caller omits it and sees exactly what it always did.
         if game_version is not None:
-            strat_clause += " AND (game_version=? OR game_version IS NULL)"
+            strat_clause += " AND (pbs.game_version=? OR pbs.game_version IS NULL)"
             strat_param += (game_version,)
         if segment_id is not None:
-            q = ("SELECT * FROM pbs WHERE segment_id=? AND timer_mode=?"
+            q = (self._PB_SELECT + " pbs.segment_id=? AND timer_mode=?"
                  + strat_clause + " AND" + self._VISIBLE_PB
-                 + " ORDER BY id DESC LIMIT 1")
+                 + " ORDER BY pbs.id DESC LIMIT 1")
             params = (segment_id, timer_mode) + strat_param
         else:
-            q = ("SELECT * FROM pbs WHERE course_id=? AND star_id=?"
-                 " AND segment_id IS NULL AND timer_mode=?"
+            q = (self._PB_SELECT + " pbs.course_id=? AND pbs.star_id=?"
+                 " AND pbs.segment_id IS NULL AND timer_mode=?"
                  + strat_clause + " AND" + self._VISIBLE_PB
-                 + " ORDER BY id DESC LIMIT 1")
+                 + " ORDER BY pbs.id DESC LIMIT 1")
             params = (course_id, star_id, timer_mode) + strat_param
         with self._lock:
             row = self._conn.execute(q, params).fetchone()

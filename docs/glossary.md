@@ -358,6 +358,18 @@ nothing to hold it.
   → the lander (`src/sm64_events/server/import_api.py`)
   → the link strip on the [[Library tab]]'s target page
 
+### Platform stamp
+
+Which machine set a time: `emu` (Project64's memory) or `n64` (a real
+console's picture). Every [[attempt]] carries one, read off the [[event]] that
+closed it, and a [[personal best]] remembers its platform through the
+[[attempt]] you saved it from. An absent stamp means `emu`: until the console
+front-end existed, nothing but the emulator could close an [[attempt]], and
+one rule in the mode registry says so.
+
+- **Lives** — the mode registry (`src/sm64_events/core/modes.py`)
+  → the [[practice log]] and the sheet export
+
 ### Strategy
 
 A named way of doing a [[target]] — which path through the level, which tricks.
@@ -580,7 +592,10 @@ a three-centisecond disagreement means exactly one frame.
 
 The stretch since Usamune's counter last restarted. Two readings from different
 epochs describe different things, so the trainer works out WHY the counter
-restarted before trusting any difference between them.
+restarted before trusting any difference between them: a restart the level
+caused — a door or warp the game itself carried out, in or out of a
+subarea, or a teleporter — adds the stretch before it to the [[star]]'s
+whole time, and a [[reset]] throws it away.
 
 - **Lives** — the epoch reader (`src/sm64_events/detectors/counter_epoch.py`)
 

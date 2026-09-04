@@ -70,14 +70,15 @@ def agent_skill_pointers() -> list[Path]:
 def test_both_harnesses_run_the_same_hook_scripts():
     claude = hook_scripts(json.loads(CLAUDE_SETTINGS.read_text(encoding="utf-8")))
     codex = hook_scripts(json.loads(CODEX_HOOKS.read_text(encoding="utf-8")))
-    # SessionStart cleanup is a Claude-Code-only lifecycle event; the GUARDS
-    # (PreToolUse/PostToolUse) are what must match, and dev_cleanup is the one
-    # entry that is not one.
-    guards_claude = {p for p in claude if "dev_cleanup" not in p}
-    assert guards_claude == codex, (
-        "the two harnesses run different guard hooks.\n"
-        f"  only Claude Code runs: {sorted(guards_claude - codex)}\n"
-        f"  only Codex runs:       {sorted(codex - guards_claude)}\n"
+    # Every row, including the SessionStart cleanup: Codex has the same
+    # lifecycle events (its hooks doc, fetched 2026-09-04), and the harness
+    # generator carries every Claude row across, translating matchers only.
+    # Until 2026-09-04 this test exempted dev_cleanup on the belief that
+    # SessionStart was Claude-only; it is not.
+    assert claude == codex, (
+        "the two harnesses run different hook scripts.\n"
+        f"  only Claude Code runs: {sorted(claude - codex)}\n"
+        f"  only Codex runs:       {sorted(codex - claude)}\n"
         "Every guard here exists because prose already failed to stop the "
         "thing once. A guard that binds one harness and not the other is a "
         "guard that binds nobody — no-app-server.py was in exactly that state "
@@ -88,11 +89,12 @@ def test_both_harnesses_run_the_same_hook_scripts():
 def test_codex_runs_the_shared_hook_scripts_not_its_own_copies():
     codex = hook_scripts(json.loads(CODEX_HOOKS.read_text(encoding="utf-8")))
     assert codex, "Codex runs no hooks at all"
-    own = [p for p in codex if not p.startswith(".claude/hooks/")]
+    own = [p for p in codex if p.startswith(".codex/")]
     assert not own, (
         f"Codex points at its own hook copies: {own}. Point at "
-        "`.claude/hooks/*.py` instead — two copies of a guard means one of "
-        "them is the stale one and nothing says which.")
+        "`.claude/hooks/*.py` (or a shared tool such as tools/dev_cleanup.py) "
+        "instead — two copies of a guard means one of them is the stale one "
+        "and nothing says which.")
     assert not (REPO / ".codex" / "hooks").exists(), (
         ".codex/hooks/ is back. It was deleted 2026-07-28 because its copies "
         "had already drifted from .claude/hooks/.")
@@ -171,3 +173,37 @@ def test_the_guards_can_still_fail(tmp_path):
     assert _ABSOLUTE_USER_PATH.search(r"python 'C:\Users\someone\repo\x.py'")
     assert _ABSOLUTE_USER_PATH.search("python /Users/someone/repo/x.py")
     assert not _ABSOLUTE_USER_PATH.search("python .claude/hooks/x.py")
+
+
+HARNESS_INSTALLER = Path.home() / ".claude" / "harness" / "install.py"
+
+
+def test_codex_hooks_file_is_generated():
+    """`.codex/hooks.json` is GENERATED from `.claude/settings.json` by the
+    harness repo's installer (2026-09-04), never hand-written -- the hand-written
+    file it replaced could not be parsed by Codex for 38 days (a `_comment` key
+    Codex rejects) while the name-diffing tests above stayed green, because a
+    diff of two files cannot see that one reader refuses to load one of them.
+
+    History the generated file's own description keeps, so it is not lost here
+    either: `.codex/hooks/*.py` were deleted 2026-07-28 after `no-app-server.py`
+    -- the guard that stops an agent seizing the recorder lock out from under a
+    live practice session -- shipped to `.claude/settings.json` on 2026-07-26 and
+    never reached the Codex mirror.
+
+    The installer lives at `~/.claude/harness/install.py` on a machine that has
+    the harness installed; without it this test skips, so its teeth were proved
+    by mutation (edit the committed file by hand -> FAIL naming the hunk ->
+    regenerate -> PASS) rather than by a red phase it cannot have.
+    Regenerate with `python ~/.claude/harness/install.py --repo .`"""
+    if not HARNESS_INSTALLER.exists():
+        pytest.skip(f"no harness installed at {HARNESS_INSTALLER}")
+    import subprocess
+    import sys
+    result = subprocess.run(
+        [sys.executable, str(HARNESS_INSTALLER), "--repo", str(REPO), "--check"],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    assert result.returncode == 0, (
+        ".codex/hooks.json differs from what .claude/settings.json generates -- "
+        "run `python ~/.claude/harness/install.py --repo .`:\n" + result.stdout + result.stderr)

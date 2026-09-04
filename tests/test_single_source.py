@@ -503,6 +503,22 @@ INVARIANTS = (
             "reviewer might check it on. That trap is written into "
             "regionflag.js's own header instead.",
     ),
+    SingleSource(
+        concept="which platform set a time",
+        owners=frozenset({"modes.py", "platform.js"}),
+        tokens=('"emu"', '"n64"'),
+        files=(*python_sources(), *ui_js()),
+        why="core/modes.py owns the two platform values (TrackerMode, and "
+            "the platform stamp's PLATFORMS/platform_of beside it); "
+            "ui/platform.js is the browser's one copy, pinned by "
+            "tests/test_cross_language_parity.py. The stamp's whole point "
+            "(pb-import round 29, item 2, built 2026-09-04) is that a time "
+            "remembers the machine that set it, and 'absent means emu' is "
+            "ONE rule -- a second file spelling either literal is a second "
+            "place that rule can drift, exactly how three surfaces once "
+            "derived one star icon three ways. A mode toggle that compares "
+            "against the literal imports the constant instead.",
+    ),
 )
 
 
