@@ -377,3 +377,30 @@ def test_the_grammar_leaves_a_clip_of_real_readings_alone():
         ("x", "d2"): cell(["", "", ""]),
     }
     assert enforce_grammar(reads) == 0
+
+
+def test_the_audit_skips_a_slot_no_picture_matched_instead_of_crashing():
+    """His first three clips on the timer wiring (2026-09-04): the audit is
+    scored against the map the caller HANDED IN, and a feed-log or timer map
+    holds None where no picture matched the slot. `score` added an offset to
+    that None and the whole pad reader died -- on every clip -- so the map
+    fell to the legacy aligner, which shifted the pyramid two frames off."""
+    from sm64_events.replay.padread import CellReads, score
+
+    def cell(names):
+        count = len(names)
+        return CellReads(list(names), np.zeros(count), np.full(count, 99.0),
+                         np.array([name != "" for name in names]))
+
+    reads = {
+        ("y", "letter"): cell(["U", "U", "U"]),
+        ("y", "d1"): cell(["8", "8", "8"]),
+        ("y", "d2"): cell(["4", "4", "4"]),
+        ("x", "letter"): cell(["", "", ""]),
+        ("x", "d1"): cell(["0", "0", "0"]),
+        ("x", "d2"): cell(["", "", ""]),
+    }
+    pads = {10: (0, 84), 11: (0, 84)}
+    verdict = score(reads, [10, None, 11], pads)
+    assert verdict.sure == 2 and verdict.agree == 2
+    assert verdict.disagreements == []

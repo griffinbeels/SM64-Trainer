@@ -723,6 +723,34 @@ map stands.
   infer which [[frame]] a picture shows from WHEN it appeared; the reader
   reads it off WHAT the picture shows.
 
+### Timer reader
+
+The part of extraction that names the [[frame]] a picture shows by joining
+two readings of one clock: the time Usamune printed into the picture, and
+the pair the [[picture ledger]] stamped on that same picture at capture --
+the game's own [[frame]] counter beside Usamune's running counter, read in
+one coherent poll. Usamune prints its counter times ten thirds, floored,
+in centiseconds, which inverts exactly, so the gap between the counter in
+RAM and the time on screen is how many [[frame]]s the picture trails
+capture, and the [[frame]] counter minus that gap is the picture's
+[[frame]]. The reader measures that gap per picture and assumes nothing
+about it: it read 1 on every picture of two clips and 0 on a third from
+the same sitting, and the [[pad reader]]'s audit confirmed each. Where
+the clock is frozen (a pause, the dance after a grab), unreadable, or
+unpaired, the
+[[frame map]] keeps the [[feed log]]'s bookkeeping shifted to the nearest
+picture the clock did name, and the clip says so (`bridged`). A clip whose
+screen and RAM stop sharing a counter refuses the timer path instead of
+bridging a disproved premise; the [[pad reader]] then audits whatever map
+ships but can no longer move it.
+
+- **Lives** -- `src/sm64_events/replay/timerread.py`; the recorder stamps
+  the pair (`src/sm64_events/replay/recorder.py`), extraction performs the join
+  (`src/sm64_events/replay/service.py`), and `tools/remap_clip.py` repeats
+  it on a clip already cut
+- **Not** -- the [[pad reader]]: that reads the STICK's digits, which repeat
+  on half the pictures of a clip; the clock never repeats while it ticks.
+
 ### Overlay layer
 
 One transparent video file drawing part of the pad — the stick, the

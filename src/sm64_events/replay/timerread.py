@@ -61,9 +61,15 @@ ORDER = ("m", "s1", "s2", "c1", "c2")
 BOX_H, BOX_W = 43, 34
 ROW0 = 11
 # Registration search: the HUD sits a pixel or two differently per capture
-# scale, so each box hunts its own best offset once per clip.
+# scale. It moves as ONE unit, so one coarse offset (every second pixel over
+# +-REGISTER_SPAN) is searched for all five boxes together, then each box
+# refines by a pixel. The exhaustive per-box search this replaced cost 77-82 s
+# per clip (441 offsets x 5 boxes x 200 frames x every template, measured
+# 2026-09-04 on 6592 / 6611) -- his "10x extraction time"; this reaches the
+# same offsets in about a second.
 REGISTER_SPAN = 10
-REGISTER_SAMPLE = 200
+REGISTER_SAMPLE = 40
+REGISTER_COARSE_STEP = 2
 
 # A run of identical readings longer than this is the clock FROZEN (a pause
 # menu, a star dance), not duplicate pictures. Measured on his clip: duplicate
@@ -116,31 +122,58 @@ class TimerReading:
                 "transitions": self.transitions}
 
 
+def _box_score(sample: np.ndarray, table: dict, top: int, left: int) -> float:
+    """How little the box at (top, left) looks like ANY digit, over the
+    sampled frames: the median per-frame distance to the nearest template."""
+    box = sample[:, top:top + BOX_H, left:left + BOX_W, :]
+    dists = np.stack([
+        (np.abs(box - t.median).mean(axis=-1) * t.weight).sum(axis=(1, 2))
+        / max(float(t.weight.sum()), 1.0) for t in table.values()])
+    return float(np.median(dists.min(axis=0)))
+
+
+def _box_fits(cells: np.ndarray, top: int, left: int) -> bool:
+    return (top >= 0 and left >= 0 and top + BOX_H <= cells.shape[1]
+            and left + BOX_W <= cells.shape[2])
+
+
 def register(cells: np.ndarray, table: dict) -> dict:
     """Each digit box's own (dy, dx) for this clip's capture scale, chosen by
-    the offset whose pixels look most like SOME digit across the clip."""
+    the offset whose pixels look most like SOME digit across the clip.
+
+    Coarse-to-fine: the five boxes share one shift (the HUD is one bitmap),
+    so the coarse pass scores every second offset for all five together and
+    the fine pass moves each box by at most a pixel from that answer."""
     if len(cells) == 0:
         return {name: (0, 0) for name in BANDS}
     picks = np.linspace(0, len(cells) - 1,
                         min(REGISTER_SAMPLE, len(cells))).astype(int)
     sample = cells[picks].astype(np.float32)
+    coarse = None
+    for dy in range(-REGISTER_SPAN, REGISTER_SPAN + 1, REGISTER_COARSE_STEP):
+        for dx in range(-REGISTER_SPAN, REGISTER_SPAN + 1, REGISTER_COARSE_STEP):
+            total = 0.0
+            for x0 in BANDS.values():
+                top, left = ROW0 + dy, x0 + dx
+                if not _box_fits(cells, top, left):
+                    total = None
+                    break
+                total += _box_score(sample, table, top, left)
+            if total is not None and (coarse is None or total < coarse[0]):
+                coarse = (total, dy, dx)
+    shared_dy, shared_dx = (coarse[1], coarse[2]) if coarse else (0, 0)
     chosen = {}
     for name, x0 in BANDS.items():
-        best = None
-        for dy in range(-REGISTER_SPAN, REGISTER_SPAN + 1):
-            for dx in range(-REGISTER_SPAN, REGISTER_SPAN + 1):
+        fine = None
+        for dy in range(shared_dy - 1, shared_dy + 2):
+            for dx in range(shared_dx - 1, shared_dx + 2):
                 top, left = ROW0 + dy, x0 + dx
-                if (top < 0 or left < 0 or top + BOX_H > cells.shape[1]
-                        or left + BOX_W > cells.shape[2]):
+                if not _box_fits(cells, top, left):
                     continue
-                box = sample[:, top:top + BOX_H, left:left + BOX_W, :]
-                dists = np.stack([
-                    (np.abs(box - t.median).mean(axis=-1) * t.weight).sum(axis=(1, 2))
-                    / max(float(t.weight.sum()), 1.0) for t in table.values()])
-                score = float(np.median(dists.min(axis=0)))
-                if best is None or score < best[0]:
-                    best = (score, dy, dx)
-        chosen[name] = (best[1], best[2]) if best else (0, 0)
+                score = _box_score(sample, table, top, left)
+                if fine is None or score < fine[0]:
+                    fine = (score, dy, dx)
+        chosen[name] = (fine[1], fine[2]) if fine else (shared_dy, shared_dx)
     return chosen
 
 
@@ -309,15 +342,25 @@ class TimerMapping:
 def _transition_holds(left, right) -> bool:
     """Can two mechanically joined pictures occur in this order?
 
-    A displayed frame cannot go backward, nor advance farther than live RAM
-    did between the two capture stamps.  A backward raw counter is a reset and
-    starts a new epoch rather than being compared across it.
+    A displayed frame never goes backward. It MAY advance farther than live
+    RAM did between the two capture stamps: the display lag is a per-picture
+    measurement, not a constant, and when the emulator catches up (lag 1 ->
+    lag 0) the screen skips a frame. Measured on his pyramid clip (6592,
+    2026-09-04): lag 0 on 587 pictures and 1 on 17, and the pad display,
+    scored with no alignment, agreed with the timer's own lag on 18 of those
+    19 odd pictures. The old upper bound (mapped delta <= raw delta) rejected
+    every lag drop, and the two-deep spike stack then refused 49 of the 50
+    pictures after two consecutive lag-1 ones -- and with them the whole
+    clip, which fell to the legacy aligner and shipped 2 frames off. A
+    backward raw counter is a reset and starts a new epoch rather than being
+    compared across it; how far a forward jump may go is bounded by the lag
+    range in map_from_clock.
     """
     _lslot, lraw, lmapped, _llag = left
     _rslot, rraw, rmapped, _rlag = right
     if rraw < lraw:
         return True
-    return 0 <= rmapped - lmapped <= rraw - lraw
+    return rmapped >= lmapped
 
 
 def _without_spikes(candidates: list[tuple]) -> tuple[list[tuple], set[int]]:

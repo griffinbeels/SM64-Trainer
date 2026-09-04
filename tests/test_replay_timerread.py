@@ -176,3 +176,44 @@ def test_a_clip_with_no_clock_on_screen_reads_nothing():
         {}, 40.0, 6.0)
     assert reading.values == []
     assert reading.as_dict()["read"] == 0
+
+
+def test_a_display_lag_drop_is_a_measurement_not_a_spike_and_never_cascades():
+    """His pyramid clip (6592, 2026-09-04): two consecutive pictures at lag 1
+    followed by pictures at lag 0 -- the display CAUGHT UP, so the displayed
+    frame advanced by two while RAM advanced by one. The old transition rule
+    forbade that, and the two-deep spike stack then rejected 49 of the next 50
+    pictures and refused the whole clip. The pad display, scored against the
+    timer's own per-picture answer with no alignment, agreed on 99% of it."""
+    frames = list(range(40))
+    lags = [1] * 20 + [0] * 20
+    pairs = [(500 + frame + lag, frame + lag)
+             for frame, lag in zip(frames, lags, strict=True)]
+    prior = [900 + frame for frame in frames]
+    mapped = timerread.map_from_clock(_reading(frames), pairs, prior)
+    assert mapped is not None
+    assert mapped.frame_map == [500 + frame for frame in frames]
+    assert mapped.mechanical == 40 and mapped.rejected == 0
+    assert mapped.as_dict()["display_lag_frames"] == {
+        "min": 0, "median": 1, "max": 1}
+
+
+def test_registration_finds_a_shared_hud_shift_coarse_then_fine():
+    """The HUD moves as one unit between capture scales; the search shares
+    one coarse offset across the five boxes and refines each by a pixel."""
+    from sm64_events.replay.padread import Template
+    rng = np.random.default_rng(3)
+    # A SMOOTH glyph, like a real one: a pixel off still looks mostly like
+    # it, which is what lets a coarse grid see the neighbourhood at all.
+    rows = np.arange(timerread.BOX_H, dtype=np.float32)[:, None]
+    cols = np.arange(timerread.BOX_W, dtype=np.float32)[None, :]
+    glyph = np.repeat(((np.sin(rows / 5.0) + np.cos(cols / 4.0) + 2.0) / 4.0)[:, :, None],
+                      3, axis=2).astype(np.float32)
+    table = {"7": Template(glyph, np.ones(glyph.shape[:2], np.float32), 1)}
+    shift_dy, shift_dx = 3, -4
+    cells = rng.random((30, timerread.HEIGHT, timerread.WIDTH, 3)).astype(np.float32)
+    for x0 in timerread.BANDS.values():
+        top, left = timerread.ROW0 + shift_dy, x0 + shift_dx
+        cells[:, top:top + timerread.BOX_H, left:left + timerread.BOX_W, :] = glyph
+    offsets = timerread.register(cells, table)
+    assert offsets == {name: (shift_dy, shift_dx) for name in timerread.BANDS}

@@ -577,6 +577,10 @@ def score(reads: dict, path: list, pads) -> Verdict:
     frames_checked: set = set()
     frames_agreed: set = set()
     for slot, raw in enumerate(path):
+        if raw is None:
+            # An unmapped slot (no picture matched it) cannot be checked
+            # against the track; it is neither agreement nor contradiction.
+            continue
         checked = False
         for row in ROWS:
             letter, d1, d2 = (reads[(row, col)] for col in COLS)
