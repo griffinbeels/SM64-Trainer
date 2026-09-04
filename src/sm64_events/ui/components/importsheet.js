@@ -19,18 +19,27 @@
 import { h } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import htm from "htm";
-import { getJSON, send } from "../api.js";
+import { getJSON, pollJob, send } from "../api.js";
 import { ImportOutcome, useImportFlow } from "./importflow.js";
 import { SearchSelect } from "./searchselect.js";
+import { ProgressLine } from "./states.js";
 
 const html = htm.bind(h);
 
 export function ImportSheet({ onDone }) {
   const [runners, setRunners] = useState(null);
   const [runner, setRunner] = useState("");
+  // The import is a JOB (round 29): the download + land takes 10-15 s, and
+  // a door that sat on its button for all of it read as hung -- "I want to
+  // see my progress as it's happening, otherwise it feels laggy and
+  // unresponsive." The server reports its real steps (download, build, fit,
+  // match, land) and the flow carries them to the line below the button.
   const flow = useImportFlow({
     source: `sheet:${runner}`, onDone,
-    post: () => send("POST", "/api/import/sheet", { runner }),
+    post: async (onStep) => {
+      const { job_id } = await send("POST", "/api/import/sheet/job", { runner });
+      return pollJob(`/api/import/sheet/job/${job_id}`, onStep);
+    },
   });
 
   useEffect(() => {
@@ -67,11 +76,15 @@ export function ImportSheet({ onDone }) {
             onChange=${(name) => { setRunner(name); flow.reset(); }} />
         <button type="button" class="primary-button"
             disabled=${!runner || working} onclick=${flow.run}>
-          ${working ? "Reading the sheet…" : "Import my times"}
+          ${working ? "Importing…" : "Import my times"}
         </button>
       </div>`}
-    ${working && html`<p class="settings-note">Downloading the current sheet
-      so your most recent times are the ones that land.</p>`}
+    ${working && flow.progress && html`<${ProgressLine}
+        className="importsheet-progress"
+        progress=${flow.progress.progress} message=${flow.progress.message}
+        running=${true} />`}
+    ${working && !flow.progress && html`<p class="settings-note">Downloading the
+      current sheet so your most recent times are the ones that land.</p>`}
     <${ImportOutcome} flow=${flow} rowNoun="row" />
     <p class="settings-note">Importing again later costs nothing: a time only
       lands when it beats the best you already hold for that star and strategy.</p>

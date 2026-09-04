@@ -306,3 +306,82 @@ def test_removing_a_source_erases_its_held_cells_too(tmp_path):
         assert db.held_times(source="sheet:GTM")
         client.delete("/api/import/sheet:GTM")
         assert db.held_times(source="sheet:GTM") == []
+
+
+def _poll_sheet_job(client, job_id, timeout_s=30):
+    """Every status the job door reports until it leaves `running`, in order
+    -- the STEPS are the claim, so a poll that read only the last one would
+    pass through a job that never narrated."""
+    import time
+
+    seen = []
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        status = client.get(f"/api/import/sheet/job/{job_id}").json()
+        if not seen or seen[-1]["message"] != status["message"]:
+            seen.append(status)
+        if status["state"] != "running":
+            return seen
+        time.sleep(0.02)
+    raise AssertionError(f"the sheet import job never finished: {seen}")
+
+
+def test_the_sheet_job_door_lands_the_same_column_and_narrates_the_steps(tmp_path):
+    """Round 29 item 4, the server half: the same import as `POST
+    /api/import/sheet`, reported as it goes. Against the bundled snapshot
+    (no download) the real boundaries left are matching the runner's rows
+    and landing the times, so the job must show at least those two distinct
+    sentences before `done`, its `result` must be the one-request door's
+    body, and the times must be IN the database -- a job that narrated and
+    landed nothing would satisfy a weaker test."""
+    with make_client(tmp_path) as (client, db, _svc):
+        started = client.post("/api/import/sheet/job", json={
+            "runner": "DentoriousRed", "refresh": False})
+        assert started.status_code == 200
+        seen = _poll_sheet_job(client, started.json()["job_id"])
+
+        assert seen[-1]["state"] == "done", seen
+        assert seen[-1]["progress"] == 1.0
+        # The snapshot path's two steps are fast, so one poll may miss one
+        # of them -- the claim is that the job NARRATED before it finished,
+        # in the door's own words, not that a 20 ms sampler saw every step.
+        messages = [status["message"] for status in seen]
+        assert len(messages) >= 2, messages
+        assert any("Matching DentoriousRed" in message or message.startswith("Landing ")
+                   for message in messages), messages
+        result = seen[-1]["result"]
+        assert result["imported"] == 16 and result["found"] == 16
+        assert result["source"] == "sheet:DentoriousRed"
+        assert [row["reason"] for row in result["held"]] == ["no_entity"]
+        assert result["sheet_revision"]
+        assert all(row["imported_from"] == "sheet:DentoriousRed" for row in db.pbs())
+        assert len(db.pbs()) == 16
+
+
+@pytest.mark.parametrize("failure", [
+    OSError("no route to host"),
+    LookupError("no sheet named 'Log'"),
+    zipfile.BadZipFile("File is not a zip file"),
+])
+def test_a_sheet_job_that_cannot_read_the_sheet_ends_in_error_naming_it(
+        tmp_path, monkeypatch, failure):
+    """The one-request door's 503 has a job-shaped twin: `state: error` and
+    a message that names the sheet, so the panel can put the reason where
+    the click landed rather than sit on its progress line forever."""
+    def boom(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr("sm64_events.server.import_api.fetch", boom)
+    with make_client(tmp_path) as (client, db, _svc):
+        started = client.post("/api/import/sheet/job", json={
+            "runner": "DentoriousRed", "refresh": True})
+        seen = _poll_sheet_job(client, started.json()["job_id"])
+        assert seen[-1]["state"] == "error", seen
+        assert "could not read the sheet" in seen[-1]["message"], seen
+        assert seen[-1]["result"] is None
+        assert db.pbs() == []
+
+
+def test_an_unknown_sheet_job_is_a_404(tmp_path):
+    with make_client(tmp_path) as (client, _db, _svc):
+        assert client.get("/api/import/sheet/job/nope").status_code == 404

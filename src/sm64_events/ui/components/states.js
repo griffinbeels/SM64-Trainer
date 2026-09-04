@@ -21,6 +21,25 @@ export function PageState({ kind = "loading", title, message }) {
   </section>`;
 }
 
+// A long job's own status line: a thin progress track and the sentence
+// naming the step it is on -- the column export's from round 26 ("how close
+// we are to being done", which a spinner cannot answer), shared with the
+// sheet import since round 29 ("a similar progress bar, like the one we made
+// for the copy sheet column button"). The track keeps its lane once the job
+// lands (the fill simply sits at 100%, green), so the line does not change
+// height at the moment he reads it.
+export function ProgressLine({ progress = 0, message = "", running = true,
+                               className = "" }) {
+  return html`<p class=${`meta job-status ${className}`}
+      role="status" aria-live="polite"
+      data-running=${running ? "true" : "false"}>
+    <span class="job-status-track" aria-hidden="true"
+        ><span class="job-status-fill"
+          style=${`width:${Math.round((progress || 0) * 100)}%`} /></span>
+    ${message}
+  </p>`;
+}
+
 export function InlineState({ kind = "loading", children }) {
   return html`<div class=${`inline-state ${kind}`}>
     <${Icon} name=${kind === "error" ? "close" : "updates"} size=${16} />

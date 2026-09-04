@@ -657,7 +657,7 @@ def test_a_held_time_shows_on_its_library_row_and_lands_when_the_row_is_linked(
     the import touches no other test's state."""
     from sm64_events.library.store import LibraryStore
     monkeypatch.setattr(LibraryStore, "refresh",
-                        lambda self, fetch_fn, overrides=None: {})
+                        lambda self, fetch_fn, overrides=None, step=None: {})
     with serve_ui(tmp_path / "held.db", arm_segment=FIXTURE_SEGMENT,
                   seed_editor_fixtures=True) as base:
         request = urllib.request.Request(

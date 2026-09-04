@@ -220,3 +220,24 @@ def test_reads_answer_the_questions_the_ui_asks():
     assert runner["entries"][0]["time_cs"] == 4380
     assert runner["entries"][0]["video"] == "https://youtu.be/z"
     assert store.runner("nobody")["entries"] == []
+
+
+def test_a_refresh_reports_its_three_real_boundaries_in_order(tmp_path, monkeypatch):
+    """Round 29: the sheet import narrates itself through `refresh(step=)`.
+    The steps are the function's own boundaries -- before the download,
+    before the build, before the ladder fit -- with rising fractions, and a
+    refresh with no `step` is exactly the refresh there was before."""
+    store = LibraryStore(tmp_path / "local.json.gz", None)
+    monkeypatch.setattr("sm64_events.library.build.build",
+                        lambda data, fetched_at, overrides=None:
+                        _snapshot("2026-08-05T09:15:18", "fresh"))
+    monkeypatch.setattr("sm64_events.library.ladders.fit_payload", lambda p: p)
+    seen = []
+    result = store.refresh(_fetch_returning(None),
+                           step=lambda fraction, message: seen.append((fraction, message)))
+    assert result["applied"] is True
+    assert [fraction for fraction, _message in seen] == sorted(
+        fraction for fraction, _message in seen), seen
+    assert len(seen) == 3 and len({message for _f, message in seen}) == 3, seen
+    assert "Downloading" in seen[0][1] and "Building" in seen[1][1], seen
+    assert "ladders" in seen[2][1], seen

@@ -1211,7 +1211,7 @@ def test_the_copy_narrates_its_real_steps_and_says_what_it_copied(monkeypatch):
             page.evaluate("clearInterval(window.__stepTimer)")
             steps = page.evaluate("window.__steps")
             fill = page.evaluate(
-                "document.querySelector('.scorecard-status-fill').style.width")
+                "document.querySelector('.scorecard-status .job-status-fill').style.width")
 
     assert len(steps) >= 2, (
         f"the status line showed one sentence for the whole copy: {steps}")

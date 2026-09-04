@@ -33,8 +33,6 @@ wants a time typed, ready to paste back in next to everyone else's.
 import csv
 import io
 import logging
-import threading
-import uuid
 
 from fastapi import APIRouter, Body, HTTPException, Response
 from fastapi.concurrency import run_in_threadpool
@@ -55,6 +53,7 @@ from sm64_events.ranks.scorecard import (
 from sm64_events.ranks.scoring import DIVISION_NUMERALS, best_ladder
 from sm64_events.tracking.views import segment_courses
 from sm64_events.server.import_api import sheet_row_placer
+from sm64_events.server.jobs import JobBoard
 
 _log = logging.getLogger("sm64.scorecard")
 _GOAL_KEY = "scorecard_goal"
@@ -78,10 +77,6 @@ _CUSTOM_KEY = "scorecard_custom_goals"
 _REGIONS_KEY = "scorecard_regions"
 _VALID_REGIONS = ("us", "jp")
 _VALID_TIERS = [tier for tier in RANK_NAMES if tier != "Iron"]
-# How many finished column-export jobs to keep addressable. One client polls
-# one job to completion and never looks again, so this only has to outlive a
-# burst of clicks -- it is a leak guard, not a cache.
-_MAX_COLUMN_JOBS = 8
 
 
 class GoalBody(BaseModel):
@@ -345,7 +340,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
     # Column-export jobs, per router (so a test's app cannot see another's).
     # `compare/service.py`'s shape verbatim: {state, progress, message} plus
     # the finished body under `result`.
-    _column_jobs: dict[str, dict] = {}
+    _column_jobs = JobBoard()
 
     def _require_db():
         """`service.db` is `None` on a genuinely BROADCAST-ONLY instance --
@@ -783,36 +778,24 @@ def create_scorecard_router(service, library=None, adoptions=None,
                 "mapped": sum(1 for line in lines if line),
                 "total_rows": len(lines)}
 
-    def _run_column_job(job_id: str):
-        """The same work `get_column` does, on a thread, reporting where it
-        is. Steps are the function's REAL boundaries (fetch, parse, build,
-        resolve) -- see `_fetch_column_source`. The final message is the one
-        that answers his other question in the same breath: how many rows,
-        which worksheet rows they cover, and how many carry a time."""
-        job = _column_jobs[job_id]
-
-        def step(fraction, message):
-            job["progress"] = fraction
-            job["message"] = message
-
+    def _column_work(step):
+        """The same work `get_column` does, on the job board's thread,
+        reporting where it is. Steps are the function's REAL boundaries
+        (fetch, parse, build, resolve) -- see `_fetch_column_source`. The
+        closing sentence answers his other question in the same breath: how
+        many rows, which worksheet rows they cover, and how many carry a
+        time -- the BUILD's sentence, not the copy's, since round 29 holds
+        the column on the page and the clipboard write is the button's own
+        gesture (it may not have happened yet, if he was tabbed away)."""
         try:
             rows, payload = _fetch_column_source(overrides, step=step)
-            step(0.85, "Matching your times to the sheet's rows…")
-            lines, payload = _resolve_column(rows, payload)
-            body = _column_body(lines, payload)
-            job["result"] = body
-            job["progress"] = 1.0
-            # The BUILD's sentence, not the copy's: since round 29 the column
-            # is held on the page and the clipboard write is the button's own
-            # gesture (it may not have happened yet, if he was tabbed away).
-            job["message"] = (
-                f"{body['total_rows']} rows ready (sheet rows 2–"
-                f"{body['total_rows'] + 1}) · {body['mapped']} carry a time")
-            job["state"] = "done"
-        except Exception as err:                        # noqa: BLE001
-            _log.warning("column export could not read the sheet: %r", err)
-            job["state"] = "error"
-            job["message"] = f"could not read the sheet: {err}"
+        except Exception as err:
+            raise RuntimeError(f"could not read the sheet: {err}") from err
+        step(0.85, "Matching your times to the sheet's rows…")
+        lines, payload = _resolve_column(rows, payload)
+        body = _column_body(lines, payload)
+        return body, (f"{body['total_rows']} rows ready (sheet rows 2–"
+                      f"{body['total_rows'] + 1}) · {body['mapped']} carry a time")
 
     @router.post("/column")
     async def start_column():
@@ -824,29 +807,20 @@ def create_scorecard_router(service, library=None, adoptions=None,
         A second door beside the synchronous GET rather than a replacement:
         that URL is documented, browser-reachable and separately tested, and
         the honest answer to a wait is to narrate it, not to move it. The job
-        shape is `compare/service.py`'s, verbatim in structure
-        (`{state, progress, message}` + a background thread + a status GET),
-        because a second progress vocabulary is a second thing to learn."""
+        shape (`{state, progress, message}` + a background thread + a status
+        GET) is `server/jobs.py`'s, shared with the sheet import since round
+        29, because a second progress vocabulary is a second thing to learn."""
         _require_db()
         if library is None:
             raise HTTPException(503, "sheet library unavailable")
-        job_id = uuid.uuid4().hex
-        # Bounded: a session that copies all day must not grow this map
-        # forever, and a finished job nobody polled is of no use to anyone.
-        for stale in list(_column_jobs)[:-_MAX_COLUMN_JOBS]:
-            _column_jobs.pop(stale, None)
-        _column_jobs[job_id] = {"state": "running", "progress": 0.0,
-                                "message": "Starting…", "result": None}
-        threading.Thread(target=_run_column_job, name="scorecard-column",
-                         daemon=True, args=(job_id,)).start()
-        return {"job_id": job_id}
+        return {"job_id": _column_jobs.start("scorecard-column", _column_work)}
 
     @router.get("/column/{job_id}")
     async def column_status(job_id: str):
-        job = _column_jobs.get(job_id)
+        job = _column_jobs.status(job_id)
         if job is None:
             raise HTTPException(404, "no such column export job")
-        return dict(job)          # a shallow copy: callers never mutate it
+        return job
 
     @router.get("/export.csv")
     async def export_csv(scope: str = "overall"):

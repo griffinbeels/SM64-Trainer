@@ -57,13 +57,21 @@ function plural(count, noun) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-// `post() -> Promise<summary>` is the door's own request; `source` is what
+// `post(onStep) -> Promise<summary>` is the door's own request; a door whose
+// request is a polled job calls `onStep({progress, message})` as it goes and
+// the flow carries it as `progress` for a `ProgressLine` (round 29: "I want
+// to see my progress as it's happening, otherwise it feels laggy and
+// unresponsive"); a one-request door simply never calls it. `source` is what
 // `DELETE /api/import/<source>` erases. Phases:
 //   idle | working | done | undone | error
 export function useImportFlow({ source, post, onDone }) {
   const [phase, setPhase] = useState("idle");
   const [shown, setShown] = useState(null);     // the latest summary
   const [error, setError] = useState("");
+  // `null` until the door's request reports a step; `{progress, message}`
+  // after, kept through `done` so the line can sit at 100% while the outcome
+  // draws under it.
+  const [progress, setProgress] = useState(null);
 
   async function attempt(busyPhase, work) {
     setPhase(busyPhase);
@@ -77,10 +85,12 @@ export function useImportFlow({ source, post, onDone }) {
   }
 
   return {
-    phase, shown, error,
-    reset() { setShown(null); setPhase("idle"); setError(""); },
+    phase, shown, error, progress,
+    reset() { setShown(null); setPhase("idle"); setError(""); setProgress(null); },
     run: () => attempt("working", async () => {
-      const body = await post();
+      setProgress(null);
+      const body = await post((step) => setProgress(
+        { progress: step.progress, message: step.message }));
       setShown(body);
       setPhase("done");
       if (body.imported && onDone) onDone(body);

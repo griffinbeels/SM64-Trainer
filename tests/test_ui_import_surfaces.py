@@ -269,7 +269,7 @@ def test_the_sheet_door_lists_every_held_row_by_name_under_its_reason(
     seeded movements), in two reasons."""
     from sm64_events.library.store import LibraryStore
     monkeypatch.setattr(LibraryStore, "refresh",
-                        lambda self, fetch_fn, overrides=None: {})
+                        lambda self, fetch_fn, overrides=None, step=None: {})
 
     with serve_ui(tmp_path / "sheetdoor.db") as base:
         with driver.get_driver().launch(headless=True) as page:
@@ -408,3 +408,100 @@ def test_the_import_section_sits_above_display_and_stays_one_section(tmp_path):
                 "a door is open before anything was picked — the resting "
                 "state has to be one heading and one row of chips, or the "
                 "drawer is long again")
+
+
+def test_the_sheet_import_narrates_its_steps_on_a_progress_line(tmp_path, monkeypatch):
+    """ROUND 29 item 4, his words: "we should have a similar progress bar,
+    like the one we made for the copy sheet column button. I want to see my
+    progress as it's happening, otherwise it feels laggy and unresponsive."
+
+    The download is replaced in the SERVER with a slow fake that reports the
+    refresh's own three steps (the real one takes 10-15 s on a ~5.6 MB
+    sheet; half a second here is that shape, compressed). The line under
+    the button must show MORE THAN ONE distinct sentence during the import
+    -- a single "Importing..." would tell him nothing about which step he
+    is on -- its fill must move, and the outcome must still land under it."""
+    import time
+
+    from sm64_events.library.store import LibraryStore
+
+    def slow_refresh(self, fetch_fn, overrides=None, step=None):
+        for fraction, message in ((0.05, "Downloading the current sheet…"),
+                                  (0.45, "Building the library from the sheet's rows…"),
+                                  (0.7, "Fitting the rank ladders…")):
+            if step:
+                step(fraction, message)
+            time.sleep(0.25)
+        return {}
+
+    monkeypatch.setattr(LibraryStore, "refresh", slow_refresh)
+
+    with serve_ui(tmp_path / "sheetprogress.db") as base:
+        with driver.get_driver().launch(headless=True) as page:
+            page.goto(base)
+            assert wait(page, ".practice-page")
+            settle(page, 1500)
+            assert page.evaluate(OPEN_SETTINGS)
+            assert wait(page, ".importsection")
+            open_door(page, "Ultimate Sheet")
+            assert wait(page, ".importsheet .search-select-trigger")
+            settle(page, 500)
+            page.evaluate("document.querySelector("
+                          "'.importsheet .search-select-trigger').click()")
+            assert wait(page, ".importsheet .search-menu")
+            settle(page)
+            assert page.evaluate("""
+              (() => {
+                const pick = [...document.querySelectorAll(
+                  '.importsheet .search-menu-option')]
+                  .find((o) => o.textContent.trim() === 'DentoriousRed');
+                if (pick) pick.click();
+                return !!pick;
+              })()
+            """), "DentoriousRed is not in the runner list"
+            settle(page, 300)
+
+            # Sample every distinct sentence and fill width the line shows
+            # while the import runs -- the steps are the point.
+            page.evaluate("""
+              (() => {
+                window.__steps = [];
+                window.__fills = [];
+                const read = () => {
+                  const el = document.querySelector('.importsheet .job-status');
+                  if (!el) return;
+                  const text = el.textContent.trim();
+                  if (text && window.__steps[window.__steps.length - 1] !== text) {
+                    window.__steps.push(text);
+                  }
+                  const fill = el.querySelector('.job-status-fill').style.width;
+                  if (window.__fills[window.__fills.length - 1] !== fill) {
+                    window.__fills.push(fill);
+                  }
+                };
+                window.__stepTimer = setInterval(read, 30);
+              })()
+            """)
+            page.evaluate(
+                "document.querySelector('.importsheet .primary-button').click()")
+            assert wait(page, ".importsheet .importdoor-summary")
+            settle(page, 300)
+            page.evaluate("clearInterval(window.__stepTimer)")
+            steps = page.evaluate("window.__steps")
+            fills = page.evaluate("window.__fills")
+            summary = page.evaluate(
+                "document.querySelector('.importsheet .importdoor-summary')"
+                ".textContent.trim()")
+            line_after = page.count(".importsheet .job-status")
+
+    assert len(steps) >= 2, f"the line showed one sentence for the whole import: {steps}"
+    # The server's own step sentences, in the server's order -- the fake
+    # refresh reports three, and the matching/landing steps after it run in
+    # a few ms on the snapshot, so a 30 ms sampler may or may not catch them.
+    assert "Downloading" in steps[0], steps
+    assert any("Building" in step or "Fitting" in step for step in steps), steps
+    widths = [int(fill.rstrip("%")) for fill in fills if fill]
+    assert len(widths) >= 2 and widths == sorted(widths), (
+        f"the fill did not move forward: {fills}")
+    assert "16 times added" in summary, summary
+    assert line_after == 0, "the line must give way to the outcome once the import lands"

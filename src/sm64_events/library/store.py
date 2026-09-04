@@ -231,16 +231,29 @@ class LibraryStore:
         return list(self.payload.get("runners") or [])
 
     # ---- refresh ----
-    def refresh(self, fetch_fn, overrides=None) -> dict:
+    def refresh(self, fetch_fn, overrides=None, step=None) -> dict:
         """Fetch the live sheet, rebuild, and keep it only if it is NEWER.
 
         A refresh that lands on an older revision than what we already have is
         not an error and is not applied: the sheet is the authority on its own
-        age, and re-fetching an unchanged sheet should not churn the file."""
+        age, and re-fetching an unchanged sheet should not churn the file.
+
+        `step(fraction, sentence)` is optional and is called BETWEEN the three
+        pieces of real work -- the ~5.6 MB download, the build over its rows,
+        the ladder fit -- never inside them (round 29: the sheet import
+        narrates itself the way the column export does, and these are the only
+        boundaries a refresh genuinely has)."""
         from sm64_events.library.ladders import fit_payload
 
+        if step:
+            step(0.05, "Downloading the current sheet…")
         data = fetch_fn()
-        fresh = fit_payload(build_and_stamp(data, overrides))
+        if step:
+            step(0.45, "Building the library from the sheet's rows…")
+        built = build_and_stamp(data, overrides)
+        if step:
+            step(0.7, "Fitting the rank ladders…")
+        fresh = fit_payload(built)
         current = self._payload
         if current is not None and newer(current, fresh) is current:
             return {"applied": False, "sheet_revision": self.revision,

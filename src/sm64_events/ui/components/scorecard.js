@@ -35,7 +35,7 @@
 import { h } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { getJSON, send } from "../api.js";
+import { getJSON, pollJob, send } from "../api.js";
 import { useIdentityFetch } from "../refetch.js";
 import { useMeasuredWidth } from "../viewport.js";
 import { attainableCs, fmtSeconds } from "../format.js";
@@ -46,7 +46,7 @@ import { entityIconSrc } from "./entityicons.js";
 import { Icon } from "./icons.js";
 import { RegionSwitch } from "./versionswitch.js";
 import { SearchSelect } from "./searchselect.js";
-import { InlineState } from "./states.js";
+import { InlineState, ProgressLine } from "./states.js";
 import { Modal } from "./modal.js";
 
 const html = htm.bind(h);
@@ -519,7 +519,7 @@ function ScorecardExports({ staleKey }) {
     setStatus({ progress: 0, message: "Starting…", running: true });
     try {
       const { job_id } = await send("POST", "/api/scorecard/column");
-      const body = await pollColumnJob(job_id, (step) =>
+      const body = await pollJob(`/api/scorecard/column/${job_id}`, (step) =>
         setStatus({ progress: step.progress, message: step.message,
                     running: step.state === "running" }));
       const held = { text: body.lines.join("\n") };
@@ -552,14 +552,9 @@ function ScorecardExports({ staleKey }) {
       <${Icon} name="restart" size=${13} />${" "}Rebuild
     </button>` : ""}
     ${error ? html`<${InlineState} kind="error">${error}<//>` : ""}
-    ${status ? html`<p class="meta scorecard-status"
-        role="status" aria-live="polite"
-        data-running=${status.running ? "true" : "false"}>
-      <span class="scorecard-status-track" aria-hidden="true"
-          ><span class="scorecard-status-fill"
-            style=${`width:${Math.round((status.progress || 0) * 100)}%`} /></span>
-      ${status.message}
-    </p>` : ""}
+    ${status ? html`<${ProgressLine} className="scorecard-status"
+        progress=${status.progress} message=${status.message}
+        running=${status.running} />` : ""}
     ${inspecting && held ? html`<${Modal} title="Your sheet column" icon="copy"
         description=${(status && status.message) || ""}
         onClose=${() => setInspecting(false)}
@@ -588,25 +583,11 @@ function ScorecardExports({ staleKey }) {
 // The steps are the server's REAL boundaries (fetch the sheet, read its rows,
 // build the library, match your times), reported as they happen through the
 // job door rather than guessed from a timer -- which is why this polls
-// `POST /api/scorecard/column` instead of just showing three timed sentences.
-// The closing line names the row count, the worksheet range it covers and how
-// many carry a time, which is also what lets him confirm item 2 at a glance
-// instead of counting cells.
-function pollColumnJob(jobId, onStep) {
-  return new Promise((resolve, reject) => {
-    const tick = () => {
-      getJSON(`/api/scorecard/column/${jobId}`)
-        .then((status) => {
-          onStep(status);
-          if (status.state === "running") { setTimeout(tick, 250); return; }
-          if (status.state === "error") { reject(new Error(status.message)); return; }
-          resolve(status.result);
-        })
-        .catch(reject);
-    };
-    tick();
-  });
-}
+// `POST /api/scorecard/column` (`api.js::pollJob`, shared with the sheet
+// import) instead of just showing three timed sentences. The closing line
+// names the row count, the worksheet range it covers and how many carry a
+// time, which is also what lets him confirm item 2 at a glance instead of
+// counting cells.
 
 // Appears only while there are unsaved goal edits -- his flow, verbatim:
 // "This should automatically adjust my goal time comparison... I should

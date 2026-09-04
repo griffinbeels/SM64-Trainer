@@ -7357,27 +7357,30 @@
   .scorecard-exports { display: flex; align-items: center; flex-wrap: wrap;
     gap: 8px; padding-top: 10px; border-top: 1px solid var(--border-soft); }
   .scorecard-exports .inline-state { flex-basis: 100%; }
-  /* Round 26: the copy's own status line, under the button it explains.
-     Full-width so a long sentence never squeezes the button, and it carries
-     a thin progress track rather than a spinner -- his ask was "how close we
-     are to being done", which a spinner cannot answer. The track keeps its
-     lane once the copy lands (the fill simply sits at 100%), so the line
-     does not change height at the moment he reads it. */
-  .scorecard-status {
+  /* Round 26: a long job's own status line, under the button it explains
+     (`states.js::ProgressLine` -- the column export's, shared with the sheet
+     import since round 29). Full-width so a long sentence never squeezes the
+     button, and it carries a thin progress track rather than a spinner --
+     his ask was "how close we are to being done", which a spinner cannot
+     answer. The track keeps its lane once the job lands (the fill simply
+     sits at 100%), so the line does not change height at the moment he
+     reads it. */
+  .job-status {
     flex-basis: 100%; margin: 0; display: flex; align-items: center;
     gap: .5rem; color: var(--muted);
   }
-  .scorecard-status-track {
+  .job-status-track {
     flex: none; width: 90px; height: 4px; border-radius: 3px;
     background: var(--border-soft); overflow: hidden;
   }
-  .scorecard-status-fill {
+  .job-status-fill {
     display: block; height: 100%; border-radius: 3px; background: var(--gold);
     transition: width .25s ease-out;
   }
-  .scorecard-status[data-running="false"] .scorecard-status-fill {
+  .job-status[data-running="false"] .job-status-fill {
     background: var(--green);
   }
+  .importsheet-progress { margin-top: 6px; }
   /* Round 29: once a column is HELD the primary button becomes the copy
      affordance (glyph + "Ready to copy") and two quiet controls join it --
      Open (inspect every line) and Rebuild (fetch the sheet again). The

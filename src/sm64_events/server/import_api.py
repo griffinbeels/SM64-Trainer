@@ -23,6 +23,7 @@ The runner LIST is not here: `GET /api/library/runners` already serves it from
 the bundled snapshot, which is what lets the picker fill with no network wait
 while the import itself reads a fresh fetch.
 """
+import asyncio
 import logging
 from contextlib import contextmanager
 
@@ -35,6 +36,7 @@ from sm64_events.library.audit import row_key
 from sm64_events.library.import_runner import TIMER_MODE, candidates_for
 from sm64_events.library.mapping import segment_seed_key
 from sm64_events.library.source import fetch
+from sm64_events.server.jobs import JobBoard
 from sm64_events.server.ranks_api import absorb_after_regrade
 from sm64_events.tracking.importing import ImportCandidate
 
@@ -53,6 +55,12 @@ def _service_refusals():
         raise HTTPException(422, str(err)) from err
     except RuntimeError as err:
         raise HTTPException(503, str(err)) from err
+
+
+class SheetUnreadable(RuntimeError):
+    """The live sheet could not be downloaded or read -- the one failure both
+    sheet doors phrase the same way, so "could not reach the sheet" and "this
+    runner has no times" never look alike to the person waiting."""
 
 
 class ManualImportBody(BaseModel):
@@ -241,15 +249,18 @@ def create_import_router(service, library=None, overrides=None,
             return {"removed": await service.remove_imported(source)}
 
     if library is not None:
-        @router.post("/sheet")
-        async def import_sheet(body: SheetImportBody):
-            """A whole runner's Ultimate Sheet column."""
+        _sheet_jobs = JobBoard()
+
+        def _read_sheet(body: SheetImportBody, step=None):
+            """Steps 1 of the sheet door, off the event loop: refresh the
+            library if asked (~5.6 MB and a full re-derive -- the poller
+            shares this process and a blocked loop is a dropped star grab,
+            `server/library_api.py` says the same), then read the runner's
+            column into candidates and held cells. `step` narrates the real
+            boundaries when a job is watching."""
             if body.refresh:
                 try:
-                    # ~5.6 MB and a full re-derive, so off the event loop: the
-                    # poller shares this process and a blocked loop is a
-                    # dropped star grab (`server/library_api.py` says the same).
-                    await run_in_threadpool(library.refresh, fetch, overrides)
+                    library.refresh(fetch, overrides, step=step)
                 except Exception as err:
                     # BROADER than OSError on purpose, and this was found by
                     # driving the real drawer: a download that SUCCEEDS and
@@ -263,12 +274,55 @@ def create_import_router(service, library=None, overrides=None,
                     # an answer, because "could not reach the sheet" and "this
                     # runner has no times" look identical from the outside.
                     _log.warning("sheet refresh failed: %r", err)
-                    raise HTTPException(
-                        503, f"could not read the sheet: {err}") from err
-            candidates, held = candidates_for(
-                library.payload, body.runner,
-                place=sheet_row_placer(service, adoptions))
+                    raise SheetUnreadable(f"could not read the sheet: {err}") from err
+            if step:
+                step(0.85, f"Matching {body.runner}'s rows to your trainer…")
+            return candidates_for(library.payload, body.runner,
+                                  place=sheet_row_placer(service, adoptions))
+
+        @router.post("/sheet")
+        async def import_sheet(body: SheetImportBody):
+            """A whole runner's Ultimate Sheet column, in one request."""
+            try:
+                candidates, held = await run_in_threadpool(_read_sheet, body)
+            except SheetUnreadable as err:
+                raise HTTPException(503, str(err)) from err
             return await finish(f"sheet:{body.runner}", candidates, [],
                                 held=held, sheet_revision=library.revision)
+
+        @router.post("/sheet/job")
+        async def start_sheet_import(body: SheetImportBody):
+            """The same import, run on a background thread and REPORTED as it
+            goes -- round 29, his words: "we should have a similar progress
+            bar, like the one we made for the copy sheet column button. I
+            want to see my progress as it's happening, otherwise it feels
+            laggy and unresponsive." The reading (download, build, fit,
+            match) runs on the job's thread with `_read_sheet`'s own steps;
+            the landing is `finish`, which must run ON the event loop (the
+            service is async and the journal is its), so the thread hands it
+            back and waits. The result is byte-identical to the one-request
+            door's body."""
+            loop = asyncio.get_running_loop()
+
+            def work(step):
+                candidates, held = _read_sheet(body, step=step)
+                step(0.92, f"Landing {len(candidates)} times…")
+                landing = asyncio.run_coroutine_threadsafe(
+                    finish(f"sheet:{body.runner}", candidates, [],
+                           held=held, sheet_revision=library.revision), loop)
+                try:
+                    summary = landing.result()
+                except HTTPException as err:
+                    raise RuntimeError(err.detail) from err
+                return summary, "Done"
+
+            return {"job_id": _sheet_jobs.start("sheet-import", work)}
+
+        @router.get("/sheet/job/{job_id}")
+        async def sheet_import_status(job_id: str):
+            job = _sheet_jobs.status(job_id)
+            if job is None:
+                raise HTTPException(404, "no such sheet import job")
+            return job
 
     return router
