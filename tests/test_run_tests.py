@@ -124,3 +124,64 @@ def test_only_a_completed_unfiltered_full_run_is_recorded():
     assert not run_tests.records_full_run("full", ["tests/test_api.py"], 0)
     assert not run_tests.records_full_run("full", [], 2)
     assert not run_tests.records_full_run("select", [], 0)
+
+
+def test_the_reserve_leaves_whole_physical_cores_free_off_the_end():
+    """Windows numbers a core's two threads adjacently, so handing back the
+    TOP indices frees whole physical cores rather than one thread of twice as
+    many -- 8 reserved of 32 is four whole cores the desktop can run on while
+    the suite keeps all 16 workers (2026-09-02: p95 stall 10.3 ms -> 1.3 ms
+    for 8% more wall time)."""
+    assert run_tests.reserved_affinity(8, total=32) == list(range(24))
+    assert run_tests.reserved_affinity(0, total=32) == [], "0 means leave affinity alone"
+    assert run_tests.reserved_affinity(-4, total=32) == []
+    assert run_tests.reserved_affinity(64, total=32) == [0], "never fence the run onto nothing"
+
+
+class _FakeProc:
+    def __init__(self, pid, children=(), raises=None):
+        self.pid = pid
+        self._children = list(children)
+        self._raises = raises
+        self.pinned_to = None
+
+    def children(self, recursive=False):
+        return self._children
+
+    def cpu_affinity(self, cpus):
+        if self._raises:
+            raise self._raises
+        self.pinned_to = list(cpus)
+
+
+def test_every_new_worker_and_browser_is_fenced_exactly_once(monkeypatch):
+    """Affinity is inherited at spawn, and xdist's workers and their browsers
+    appear over the run's first seconds -- so the sweep must reach a process
+    that did not exist on the previous pass, and must not re-pin one it has
+    already handled every two seconds for four minutes."""
+    worker = _FakeProc(2)
+    root = _FakeProc(1, children=[worker])
+    monkeypatch.setattr(run_tests.psutil, "Process", lambda pid: root)
+    pinned = set()
+    run_tests.apply_affinity(1, [0, 1], pinned)
+    assert worker.pinned_to == [0, 1] and pinned == {1, 2}
+
+    browser = _FakeProc(3)
+    root._children = [worker, browser]
+    worker.pinned_to = None
+    run_tests.apply_affinity(1, [0, 1], pinned)
+    assert browser.pinned_to == [0, 1], "a process spawned since the last sweep is fenced"
+    assert worker.pinned_to is None, "one already fenced is left alone"
+
+
+def test_a_process_that_exits_or_refuses_never_kills_the_run(monkeypatch):
+    """A finished worker is the normal case, so the sweep swallows it -- a run
+    must never die of its own courtesy to the desktop."""
+    gone = _FakeProc(2, raises=run_tests.psutil.NoSuchProcess(2))
+    monkeypatch.setattr(run_tests.psutil, "Process", lambda pid: _FakeProc(1, children=[gone]))
+    run_tests.apply_affinity(1, [0], set())
+
+    def vanished(pid):
+        raise run_tests.psutil.NoSuchProcess(pid)
+    monkeypatch.setattr(run_tests.psutil, "Process", vanished)
+    run_tests.apply_affinity(1, [0], set())

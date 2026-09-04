@@ -30,6 +30,8 @@ WF (level 24, course 2) hosts the fixtures; the pieces start on
 `area_enter`, the presence-typed shape a real recorded subsection carries.
 """
 
+import dataclasses
+
 from sm64_events.storage.db import EventRow
 from sm64_events.tracking.projection import Projector, target_entity_key
 from sm64_events.tracking.segments import SegmentDef
@@ -249,3 +251,70 @@ def test_a_SHARED_piece_on_an_EMPTY_hand_still_selects_nothing():
     enter_area(p, 3, 1000, 1, 2)
     enter_area(p, 4, 1500, 2, 3)
     assert p.target is None
+
+
+# -- the SAME ambiguity, spread across two definitions ----------------------
+# 2026-09-03. Round 27 counted one definition's own parents, which reads as
+# unambiguous for the shape he actually had: he authored the volcano's entry
+# TWICE, identical start/end/waypoints/guards, one filed under each volcano
+# star. Both close on the same pipe touch, each looks like a lone-parent
+# piece from inside itself, and the later one won. His ruling: *"if the rule
+# is ambiguous (i.e., two or more stars / segments share the subsegment),
+# then it shouldn't auto select. If it's objectively true that if I do this
+# subsegment that I'm only practicing that one thing, then I guess that's
+# fine."*
+
+
+def test_TWIN_definitions_under_different_stars_select_neither():
+    p = Projector(segments=[
+        piece(41, into_area=2, out_area=3, parents=("star:2:0",)),
+        piece(42, into_area=2, out_area=3, parents=("star:2:5",))])
+    p.feed(jev(1, "level_changed", 900, {"from": 16, "to": 24}))
+    p.feed(jev(2, "area_changed", 900, {"level": 24, "from": 1, "to": 1}))
+    enter_area(p, 3, 1000, 1, 2)
+    enter_area(p, 4, 1500, 2, 3)           # both twins complete together
+    assert p.target is None, (
+        "two definitions that fire identically under different stars are the "
+        "same ambiguity as one definition with two parents")
+
+
+def test_a_DISABLED_twin_leaves_the_other_unambiguous():
+    """A definition that never arms can never have been the thing he just
+    did, so it creates no ambiguity -- which is also how he turns one off."""
+    twin = dataclasses.replace(
+        piece(42, into_area=2, out_area=3, parents=("star:2:5",)),
+        enabled=False)
+    p = Projector(segments=[
+        piece(41, into_area=2, out_area=3, parents=("star:2:0",)), twin])
+    p.feed(jev(1, "level_changed", 900, {"from": 16, "to": 24}))
+    p.feed(jev(2, "area_changed", 900, {"level": 24, "from": 1, "to": 1}))
+    enter_area(p, 3, 1000, 1, 2)
+    enter_area(p, 4, 1500, 2, 3)
+    assert p.target == ("star", 2, 0)
+
+
+def test_two_pieces_that_fire_DIFFERENTLY_are_each_unambiguous():
+    """The rule is about definitions he cannot tell apart, not about two
+    pieces existing. Round 21 item 1's own case has to keep working."""
+    p = Projector(segments=[
+        piece(41, into_area=2, out_area=3, parents=("star:2:0",)),
+        piece(42, into_area=4, out_area=5, parents=("star:2:5",))])
+    p.feed(jev(1, "level_changed", 900, {"from": 16, "to": 24}))
+    p.feed(jev(2, "area_changed", 900, {"level": 24, "from": 1, "to": 1}))
+    enter_area(p, 3, 1000, 1, 2)
+    enter_area(p, 4, 1500, 2, 3)
+    assert p.target == ("star", 2, 0)
+
+
+def test_TWINS_UNDER_ONE_STAR_are_not_ambiguous():
+    """Two identical definitions filed under the SAME star name one entity
+    between them, so there is nothing to guess at -- the duplicate is an
+    authoring mess, not an attribution problem."""
+    p = Projector(segments=[
+        piece(41, into_area=2, out_area=3, parents=("star:2:0",)),
+        piece(42, into_area=2, out_area=3, parents=("star:2:0",))])
+    p.feed(jev(1, "level_changed", 900, {"from": 16, "to": 24}))
+    p.feed(jev(2, "area_changed", 900, {"level": 24, "from": 1, "to": 1}))
+    enter_area(p, 3, 1000, 1, 2)
+    enter_area(p, 4, 1500, 2, 3)
+    assert p.target == ("star", 2, 0)

@@ -204,7 +204,28 @@ patched):
    SUBSECTION... UNLESS that subsection is owned entirely and exclusively by
    exactly one star... Completing a subsection doesn't necessarily mean you're
    doing that star, unless it's exclusive to that star."* With several parents
-   and no matching hand the target is left exactly as found. Measured over his
+   and no matching hand the target is left exactly as found.
+   **EXCLUSIVITY IS COUNTED ACROSS DEFINITIONS, NOT WITHIN ONE** (2026-09-03,
+   task 0122's follow-on). Counting one definition's own parents reads as
+   unambiguous for the shape he actually had: he authored the volcano's entry
+   TWICE, identical start/end/waypoints/guards, one filed under each volcano
+   star. Both close on the same pipe touch, each is a lone-parent piece from
+   inside itself, and the later one won. `segments.attributable_parent(defn,
+   all_defs)` is now the one door for "which entity does this piece belong
+   to": every entity parent of the def PLUS every entity parent of any other
+   ENABLED def that `fires_identically` (the same four fields
+   `tracking/lint.py`'s duplicate warning compares, asked through the same
+   function). Exactly one key -> follow it; anything else -> leave the hand.
+   His words: *"if the rule is ambiguous (i.e., two or more stars / segments
+   share the subsegment), then it shouldn't auto select. If it's objectively
+   true that if I do this subsegment that I'm only practicing that one thing,
+   then I guess that's fine."* The same fact ships on each segment section as
+   `attributable_to` and gates the PRACTICE LOG: an ambiguous piece may not
+   conjure a card for a parent that earned none itself
+   (`ui/subsections.js::nestSubsections`), because that card would assert he
+   practiced a star he never chose — *"it doesn't show up in the practice log
+   until we've grabbed the star."* Nesting is untouched: once the parent has a
+   card, every piece still draws inside it. Measured over his
    journal: **0 attempt rows lost, gained or changed** (detection is
    untouched, which is the half he explicitly kept) and 9 target readings
    move — `star:7:4 -> none` x7 and `star:7:4 -> star:7:2` x2, his own 8-Coin
@@ -223,13 +244,11 @@ neutral or handing to their star, the inversion applied retroactively —
 with **0 attempt rows lost, gained or changed** on either journal. Pinned
 by `tests/test_family_dance.py` (rewritten to these rulings).
 
-**The selector's subarea narrowing lives beside this** (round 21 item 5):
-`addresses.COURSE_SUBAREA_STARS` — measured off his own grabs' settled
-areas before it was authored; a subarea with no row filters NOTHING —
-ships as vocab `subarea_stars`, filtered in `stagebanner.js`'s star row
-with the route filter's own never-empty fallback. Rendered live by
-`tests/test_ui_subarea_stars.py` (7 cells outside the volcano, 3 inside,
-7 again on the way out).
+**The selector's subarea narrowing USED to live beside this** (round 21
+item 5) and was retired on 2026-09-03 (task 0122): a course now shows every
+one of its stars whatever subarea you stand in, so `COURSE_SUBAREA_STARS`,
+the `subarea_stars` vocab key and their tests are gone. What that removal
+touched, and why, is in `.claude/rules/ui-selector.md`.
 
 ## When a segment's clock starts and stops
 

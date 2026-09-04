@@ -63,6 +63,7 @@ from sm64_events.tracking.caveats import (attempt_caveat, caveat_for,
                                           igt_seen_in)
 from sm64_events.tracking.pbaction import pb_action, pb_strat_gate
 from sm64_events.tracking.segments import (arm_level, arms_ambiently,
+                                            attributable_parent,
                                             card_step_labels,
                                             card_waiting_for_sentence,
                                             course_groups, hundred_coin_entity,
@@ -1714,6 +1715,17 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             # render, and a second derivation in JS is how two surfaces
             # start disagreeing.
             "parents": meta.get("parents") or [],
+            # The ONE entity this piece can be attributed to, or null when two
+            # or more could equally claim it (2026-09-03: his two identical
+            # "Volcano Entry" definitions, one under each volcano star). The
+            # practice log reads it to decide whether a piece may keep a
+            # parent card alive that earned nothing itself -- an ambiguous
+            # piece may not, because that card would assert he practiced a
+            # star he never chose. Stamped rather than derived client-side for
+            # the same reason `parents` is: the projector's own hand rule asks
+            # the identical question, and a second derivation in JS is how two
+            # surfaces start disagreeing.
+            "attributable_to": attributable_parent(meta, seg_rows),
             # Whether this definition is TRACKED at all -- the selector's
             # subsection badge writes it (round 22, 2026-08-08: "If you click
             # on the button, it should be dimmed out and then we no longer

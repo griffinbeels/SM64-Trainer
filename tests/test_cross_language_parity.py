@@ -590,6 +590,47 @@ def test_visible_entries_agrees_with_sections_version_filter():
         "for a version would count different entries.")
 
 
+# --- 13. which parents can HOLD a target -----------------------------------
+# `segments.entity_parents` (the projector's attribution rule) and
+# `subsections.js::isPiece` (the practice log's and the selector's nesting
+# rule) are one question asked in two languages: does this definition have a
+# parent that names an ENTITY -- something a card and a target can point at --
+# as opposed to a castle AREA, which is a place, or a reference to itself.
+#
+# They cannot share a door: the server decides where the practice target goes
+# without a round trip to the browser, and the browser decides which card
+# holds a piece without one to the server. They disagreeing is not
+# hypothetical -- round 30 is exactly that bug, two surfaces answering "is
+# this a piece" differently, and the fix extracted `isPiece` so the two UI
+# surfaces at least agreed with each other.
+
+SUBSECTIONS_JS = UI / "subsections.js"
+
+PARENT_CASES = [
+    [],
+    None,
+    ["star:7:4"],
+    ["segment:12"],
+    ["area:6:1"],
+    ["area:6:1", "area:6:2"],
+    ["area:6:1", "star:7:4"],
+    ["segment:90"],                 # the SELF reference, for def id 90
+    ["segment:90", "star:7:4"],
+]
+
+
+def test_which_parents_name_an_entity_agrees():
+    from sm64_events.tracking.segments import entity_parents
+    python_side = [bool(entity_parents(parents, 90)) for parents in PARENT_CASES]
+    js_side = run_node(
+        f"import {{ isPiece }} from {SUBSECTIONS_JS.as_uri()!r};\n"
+        f"const cases = {json.dumps(PARENT_CASES)};\n"
+        "console.log(JSON.stringify(cases.map("
+        "(parents) => isPiece({ kind: 'segment', segment_id: 90, parents }))));")
+    assert python_side == js_side, list(
+        zip(PARENT_CASES, python_side, js_side, strict=True))
+
+
 # --- 12. the competition-tie rule (1-2-2-4) ---------------------------------
 
 def test_the_boards_tie_numbering_agrees_with_leaderboard_modes():

@@ -198,6 +198,64 @@ def test_a_pair_that_earned_nothing_at_all_still_nests():
     assert rows == [("star:7:4", ("segment:90",))]
 
 
+# --- an AMBIGUOUS piece earns nobody a card --------------------------------
+# 2026-09-03, his report: he had authored the volcano's entry TWICE with
+# identical start/end/waypoints/guards, one under each volcano star, so
+# dropping into the volcano completed both and lit a star he never chose.
+# *"we just shouldn't select a star until I've actually selected a star (by
+# either manually selecting or by grabbing the star intentionally)... We
+# should still keep track of those subsegments, just that it doesn't show up
+# in the practice log until we've grabbed the star."*
+#
+# `attributable_to` is the server's answer to "which ONE entity does this
+# piece belong to" (tracking/segments.py::attributable_parent); null means
+# two or more could equally claim it. Absent means a hand-built section from
+# before the field existed (ui/tunelog.js's inspector), which keeps the old
+# behaviour -- every test above this line relies on that.
+
+
+def test_an_ambiguous_piece_does_not_conjure_its_parents_card():
+    # Both volcano stars, both twin pieces, and only the PIECES have history.
+    # Nothing may be drawn: a card here would assert he practiced a star he
+    # never chose, and round 28 already refuses to promote the piece itself.
+    rows = nest([star(7, 4), star(7, 5),
+                 seg(90, ["star:7:4"], attributable_to=None),
+                 seg(91, ["star:7:5"], attributable_to=None)],
+                earned_keys=["segment:90", "segment:91"])
+    assert rows == []
+
+
+def test_the_star_he_actually_grabs_brings_its_own_piece_back():
+    # "until we've grabbed the star" -- the grab earns star:7:4 a card of its
+    # own, and its piece then shows inside it with the rows it recorded all
+    # along. The star he did NOT grab stays away, with its twin.
+    rows = nest([star(7, 4), star(7, 5),
+                 seg(90, ["star:7:4"], attributable_to=None),
+                 seg(91, ["star:7:5"], attributable_to=None)],
+                earned_keys=["star:7:4", "segment:90", "segment:91"])
+    assert rows == [("star:7:4", ("segment:90",))]
+
+
+def test_an_UNAMBIGUOUS_piece_still_earns_its_parent_a_card():
+    # Round 22's rule, untouched where the attribution is objective: "if I do
+    # this subsegment ... I'm only practicing that one thing."
+    rows = nest([star(7, 4), seg(90, ["star:7:4"],
+                                 attributable_to="star:7:4")],
+                earned_keys=["segment:90"])
+    assert rows == [("star:7:4", ("segment:90",))]
+
+
+def test_an_ambiguous_piece_still_NESTS_once_its_parent_has_a_card():
+    # Nesting is untouched -- round 22's own ruling was that a card which
+    # silently omits one of its own pieces is wrong. Only the power to
+    # CONJURE a card is withdrawn.
+    rows = nest([star(7, 4), star(7, 5),
+                 seg(90, ["star:7:4", "star:7:5"], attributable_to=None)],
+                earned_keys=["star:7:4", "star:7:5"])
+    assert rows == [("star:7:4", ("segment:90",)),
+                    ("star:7:5", ("segment:90",))]
+
+
 # --- the rule the SELECTOR shares with this module --------------------------
 # Round 30, 2026-08-09. `isPiece` was extracted so the practice log and the
 # quick-select row stop answering "is this a piece" separately -- the star row
