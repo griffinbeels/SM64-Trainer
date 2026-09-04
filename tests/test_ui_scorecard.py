@@ -211,7 +211,7 @@ _MISSING = find_uilab()
 if _MISSING:
     pytest.skip(_MISSING, allow_module_level=True)
 
-from ui_fixture import serve_ui  # noqa: E402
+from ui_fixture import serve_ui, serve_ui_live  # noqa: E402
 from uilab.driver import get_driver  # noqa: E402
 import urllib.request  # noqa: E402
 
@@ -810,6 +810,13 @@ def _stub_workbook():
         (3, 2): {"text": "43.63"},
         (4, 1): {"text": "[1|2] Warp fadeout", "rgb": GREY},
         (4, 2): {"text": "15.90"},
+        # The fixture's own seeded star (ui_fixture.FIXTURE_COURSE/STAR: WF
+        # star 4), so ONE line of the column carries a real time -- without
+        # it every line is empty and "the column reached the page" is proved
+        # by comparing blank strings.
+        (5, 1): {"text": "2. Whomp's Fortress"},
+        (6, 1): {"text": "[5] Fall onto the Caged Island", "bold": True},
+        (6, 2): {"text": "13.50"},
     }
     return build_workbook({wb.SHEET_MAIN: cells,
                            wb.SHEET_LOG: {(1, 1): {"text": "46238.5"}}})
@@ -835,6 +842,18 @@ def _wait_until(page, expression, timeout_ms=15000, step_ms=100):
 _INSTALL_CLIPBOARD_SHIM = """(() => {
   window.__scorecardCopied = [];
   window.__scorecardHtml = [];
+  // Round 29: the auto-copy runs only when the document has focus, which a
+  // headless page cannot be relied on to report either way -- so every test
+  // says which case it is in. TRUE here; the away-from-the-page tests flip it.
+  document.hasFocus = () => true;
+  window.__columnPosts = 0;
+  const realFetch = window.fetch.bind(window);
+  window.fetch = (url, init) => {
+    if (String(url).endsWith("/api/scorecard/column") && init && init.method === "POST") {
+      window.__columnPosts += 1;
+    }
+    return realFetch(url, init);
+  };
   navigator.clipboard.writeText = (text) => {
     window.__scorecardCopied.push(text);
     return Promise.resolve();
@@ -912,8 +931,184 @@ def test_copy_sheet_column_writes_every_line_to_the_clipboard(monkeypatch):
             f"the column has {column['total_rows']}")
         assert label_now == "Copied ✓", label_now
         assert errors == 0, "a successful copy must leave the error slot empty"
-        assert label_later == "Copy sheet column", (
+        # Round 29: the column is HELD once built, so the label returns to the
+        # held state's own word rather than to the build's -- a second click
+        # copies what is on the page instead of downloading the sheet again.
+        assert label_later == "Ready to copy", (
             f"the confirmation must be transient, still reads {label_later!r}")
+
+
+def _read_copy_label(page) -> str:
+    return page.evaluate(
+        "document.querySelector('.scorecard-copy-column').textContent.trim()")
+
+
+def test_a_column_built_while_he_is_away_waits_on_the_page(monkeypatch):
+    """ROUND 29 item 3, his report: "I have to be tabbed in in order for it
+    to grab my clipboard. This throws an error if I'm not there... store the
+    result on the page so that if the player tabs out, they can come back
+    and grab it whenever they're ready... The button should say 'Ready to
+    Copy' when it's ready."
+
+    The document has NO focus while the job runs and lands. Nothing may
+    reach the clipboard, nothing may land in the error slot, and the column
+    must be on the page: the button reads "Ready to copy", Open shows every
+    line, and a click once he is back copies the HELD text without a second
+    download (the column POST count does not move)."""
+    monkeypatch.setattr("sm64_events.server.scorecard_api.fetch", _stub_workbook)
+    with serve_ui() as base:
+        column = json.loads(urllib.request.urlopen(
+            f"{base}/api/scorecard/column", timeout=10).read())
+        expected_text = "\n".join(column["lines"])
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-copy-column")
+            assert page.evaluate(_INSTALL_CLIPBOARD_SHIM) is True
+            page.evaluate("document.hasFocus = () => false")
+
+            page.evaluate("document.querySelector('.scorecard-copy-column').click()")
+            _wait_until(page, "document.querySelector('.scorecard-exports')"
+                              ".dataset.held === 'true'")
+            page.wait_ms(200)
+            copied_while_away = page.evaluate("window.__scorecardCopied.length")
+            errors_while_away = page.count(".rank-page .scorecard-exports .inline-state.error")
+            label_while_away = _read_copy_label(page)
+            open_controls = page.count(".rank-page .scorecard-column-open")
+            posts_after_build = page.evaluate("window.__columnPosts")
+
+            # He comes back and inspects it first.
+            page.evaluate("document.querySelector('.scorecard-column-open').click()")
+            page.wait_for(".modal .scorecard-column-view")
+            shown_text = page.evaluate(
+                "document.querySelector('.modal .scorecard-column-view').value")
+            page.evaluate("document.querySelector('.modal-close').click()")
+            page.wait_ms(100)
+            modal_left = page.count(".modal") == 0
+
+            # Then grabs it: the held text, no second download.
+            page.evaluate("document.hasFocus = () => true")
+            page.evaluate("document.querySelector('.scorecard-copy-column').click()")
+            _wait_until(page, "window.__scorecardCopied.length > 0")
+            label_after_copy = _read_copy_label(page)
+            copied = page.evaluate("window.__scorecardCopied")
+            posts_after_copy = page.evaluate("window.__columnPosts")
+            page.wait_ms(1600)
+            label_settled = _read_copy_label(page)
+
+    assert copied_while_away == 0, "the clipboard was written while the page had no focus"
+    assert errors_while_away == 0, "an unfocused finish must not read as a failure"
+    assert label_while_away == "Ready to copy", label_while_away
+    assert open_controls == 1, "no Open control beside the held column"
+    assert shown_text == expected_text, "Open does not show the column as built"
+    assert modal_left, "the inspect box did not close"
+    assert posts_after_build == 1
+    assert copied == [expected_text]
+    assert posts_after_copy == 1, "copying the held column downloaded the sheet again"
+    assert label_after_copy == "Copied ✓", label_after_copy
+    assert label_settled == "Ready to copy", (
+        f"the column must stay held after a copy, label reads {label_settled!r}")
+
+
+def test_a_clipboard_refusal_leaves_the_column_on_the_page(monkeypatch):
+    """The failure he saw, kept from costing the column: the browser refuses
+    the write (its own NotAllowedError when focus was lost between the check
+    and the write, a denied permission, a shell with no clipboard). The
+    error slot names the clipboard, and the column is still held -- the
+    button reads "Ready to copy" and Open shows every line."""
+    monkeypatch.setattr("sm64_events.server.scorecard_api.fetch", _stub_workbook)
+    with serve_ui() as base:
+        column = json.loads(urllib.request.urlopen(
+            f"{base}/api/scorecard/column", timeout=10).read())
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-copy-column")
+            assert page.evaluate(_INSTALL_CLIPBOARD_SHIM) is True
+            page.evaluate("""
+              navigator.clipboard.write = () => Promise.reject(
+                new DOMException("Document is not focused.", "NotAllowedError"));
+              navigator.clipboard.writeText = navigator.clipboard.write;
+            """)
+
+            page.evaluate("document.querySelector('.scorecard-copy-column').click()")
+            page.wait_for(".rank-page .scorecard-exports .inline-state.error")
+            page.wait_ms(200)
+            error = page.evaluate(
+                "document.querySelector('.rank-page .scorecard-exports "
+                ".inline-state.error').textContent")
+            label = _read_copy_label(page)
+            held = page.evaluate(
+                "document.querySelector('.scorecard-exports').dataset.held")
+            page.evaluate("document.querySelector('.scorecard-column-open').click()")
+            page.wait_for(".modal .scorecard-column-view")
+            shown_lines = page.evaluate(
+                "document.querySelector('.modal .scorecard-column-view')"
+                ".value.split('\\n').length")
+
+    assert "clipboard" in error and "not focused" in error, error
+    assert "still here" in error, f"the message must say the column survived: {error!r}"
+    assert held == "true" and label == "Ready to copy", (held, label)
+    assert shown_lines == column["total_rows"]
+
+
+def test_his_times_changing_drops_the_held_column(monkeypatch):
+    """The held column is a snapshot of his times. A time of his landing
+    bumps the Rank tab's staleness key, and a snapshot from before it would
+    paste stale into his sheet -- so the hold ends and the button offers the
+    build again. Driven through the store's own path: a `pb_saved` event on
+    the live WebSocket is what bumps `t.mareloRev`."""
+    monkeypatch.setattr("sm64_events.server.scorecard_api.fetch", _stub_workbook)
+    with serve_ui_live() as (base, service):
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-copy-column")
+            assert page.evaluate(_INSTALL_CLIPBOARD_SHIM) is True
+            # Built while away, so the label is the held state's own word and
+            # not the auto-copy's transient "Copied" flash.
+            page.evaluate("document.hasFocus = () => false")
+
+            page.evaluate("document.querySelector('.scorecard-copy-column').click()")
+            _wait_until(page, "document.querySelector('.scorecard-exports')"
+                              ".dataset.held === 'true'")
+            label_held = _read_copy_label(page)
+
+            _publish_pb_saved(service)
+            _wait_until(page, "document.querySelector('.scorecard-exports')"
+                              ".dataset.held === 'false'")
+            label_after = _read_copy_label(page)
+
+    assert label_held == "Ready to copy", label_held
+    assert label_after == "Copy sheet column", label_after
+
+
+def _publish_pb_saved(service) -> None:
+    """One `pb_saved` broadcast, the way the server's own PB save announces
+    itself -- through the live service's broadcaster, and NOT through
+    `service.publish`, which would also journal an empty PB event. In a
+    worker thread because the browser driver's sync API owns this thread's
+    loop (test_ui_recorder_latency.py's own pattern)."""
+    import asyncio
+    import datetime as dt
+    import threading
+
+    from sm64_events.core.events import Event
+
+    async def go():
+        await service.broadcaster.publish(Event(
+            type="pb_saved", frame=0,
+            timestamp_utc=dt.datetime.now(dt.timezone.utc), payload={}))
+
+    published = threading.Thread(target=lambda: asyncio.run(go()))
+    published.start()
+    published.join(timeout=10)
+    assert not published.is_alive(), "the pb_saved broadcast did not return"
 
 
 def test_copy_sheet_column_shows_the_doors_own_sentence_inline_on_a_503(monkeypatch):

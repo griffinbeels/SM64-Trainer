@@ -33,7 +33,7 @@
 // project treats as a bug. The CSV button was removed in round 19 (his
 // call); `GET /api/scorecard/export.csv` stays reachable by URL.
 import { h } from "preact";
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { useIdentityFetch } from "../refetch.js";
@@ -47,6 +47,7 @@ import { Icon } from "./icons.js";
 import { RegionSwitch } from "./versionswitch.js";
 import { SearchSelect } from "./searchselect.js";
 import { InlineState } from "./states.js";
+import { Modal } from "./modal.js";
 
 const html = htm.bind(h);
 
@@ -443,19 +444,50 @@ async function writeColumn(text) {
   })]);
 }
 
-function CopyButton({ className, label, onCopy, onError }) {
+// ROUND 29 item 3. The built column is HELD on the page, and the clipboard
+// is a courtesy on top of it. His report: "I noticed I have to be tabbed in
+// in order for it to grab my clipboard. This throws an error if I'm not
+// there... We should simply store the result on the page so that if the
+// player tabs out, they can come back and grab it whenever they're ready."
+//
+// A browser refuses a clipboard write from a document that does not have
+// focus, and the old flow wrote the moment the job landed -- so a ~10 s
+// download he alt-tabbed away from ended in an error and threw away the
+// column it had just built. Now the job's result becomes `column`, kept in
+// state until his times change or he rebuilds; the clipboard write happens
+// automatically only when `document.hasFocus()`, and otherwise waits for
+// his click on the same button, which reads "Ready to copy" (his words).
+// A clipboard failure of any kind leaves the column where it is -- the
+// message says so and points at Open, which shows every line in a box he
+// can select from by hand.
+//
+// `staleKey` is the Rank tab's own staleness key (`t.mareloRev`): a time of
+// his landing -- a grab, a PB save, an import -- bumps it, and the held
+// column is a snapshot of his times, so it is dropped rather than pasted
+// stale into his sheet. A fetch that changes nothing does not bump it.
+function ScorecardExports({ staleKey }) {
+  const [error, setError] = useState(null);
+  // `null` = idle and the line is absent entirely; a progress-bearing object
+  // while a build is in flight; the closing sentence once it lands.
+  const [status, setStatus] = useState(null);
+  // The held column: `{ text }` once a build has landed, `null` otherwise.
+  const [column, setColumn] = useState(null);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [inspecting, setInspecting] = useState(false);
+  const seenStaleKey = useRef(staleKey);
+  useEffect(() => {
+    if (seenStaleKey.current === staleKey) return;
+    seenStaleKey.current = staleKey;
+    setColumn(null);
+    setStatus(null);
+  }, [staleKey]);
 
-  async function handleClick() {
-    if (busy) return;
-    setBusy(true);
+  async function copyHeld(text) {
     // Round 25: the LAST failure's message goes the moment he tries again --
     // "If there's an error, and I click 'copy sheet column' again, the error
     // should disappear. If there's a new error, the new error should show."
-    // A message that outlives the gesture it explains reads as the retry
-    // having failed the same way, which is the one thing it cannot tell him.
-    onError(null);
+    setError(null);
     try {
       // `routes.js:269`'s own `navigator.clipboard &&` guard, but this
       // button owns an inline error slot (routes.js's plain Copy JSON does
@@ -464,21 +496,82 @@ function CopyButton({ className, label, onCopy, onError }) {
       if (!navigator.clipboard) {
         throw new Error("clipboard access is not available here");
       }
-      const text = await onCopy();
       await writeColumn(text);
       setCopied(true);
       setTimeout(() => setCopied(false), COPIED_FLASH_MS);
     } catch (err) {
-      onError(err.message || String(err));
+      setError(`could not reach the clipboard (${err.message || err}) — `
+        + "the column is still here: press Copy again, or Open it and copy by hand");
+    }
+  }
+
+  // The sheet column deliberately takes NO scope: its whole contract is one
+  // line per live worksheet row of the community sheet, whatever the card
+  // above it is scoped to. The CSV button was removed in round 19 (his
+  // call); `GET /api/scorecard/export.csv` stays reachable by URL for
+  // anyone who wants the card as a file, it simply has no button now.
+  async function build() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    setColumn(null);
+    setCopied(false);
+    setStatus({ progress: 0, message: "Starting…", running: true });
+    try {
+      const { job_id } = await send("POST", "/api/scorecard/column");
+      const body = await pollColumnJob(job_id, (step) =>
+        setStatus({ progress: step.progress, message: step.message,
+                    running: step.state === "running" }));
+      const held = { text: body.lines.join("\n") };
+      setColumn(held);
+      // Only a document with focus may write the clipboard, and only a
+      // person in front of it wants that: "If they ARE on the page, then
+      // it's nice for it to automatically be in their clipboard."
+      if (document.hasFocus()) await copyHeld(held.text);
+    } catch (err) {
+      setError(err.message || String(err));
+      setStatus(null);
     } finally {
       setBusy(false);
     }
   }
 
-  return html`<button class=${`scorecard-copy-btn ${className}`}
-      onclick=${handleClick} disabled=${busy}>
-    ${copied ? "Copied ✓" : label}
-  </button>`;
+  const held = column != null;
+  return html`<div class="scorecard-exports" data-held=${held ? "true" : "false"}>
+    <button class="scorecard-copy-btn scorecard-copy-column"
+        onclick=${held ? () => copyHeld(column.text) : build} disabled=${busy}>
+      ${held ? html`<${Icon} name="copy" size=${13} />` : ""}
+      ${copied ? "Copied ✓" : (held ? "Ready to copy" : "Copy sheet column")}
+    </button>
+    ${held ? html`<button type="button" class="quiet-button scorecard-column-open"
+        onclick=${() => setInspecting(true)}>
+      <${Icon} name="expand" size=${13} />${" "}Open
+    </button>
+    <button type="button" class="quiet-button scorecard-column-rebuild"
+        onclick=${build} disabled=${busy}>
+      <${Icon} name="restart" size=${13} />${" "}Rebuild
+    </button>` : ""}
+    ${error ? html`<${InlineState} kind="error">${error}<//>` : ""}
+    ${status ? html`<p class="meta scorecard-status"
+        role="status" aria-live="polite"
+        data-running=${status.running ? "true" : "false"}>
+      <span class="scorecard-status-track" aria-hidden="true"
+          ><span class="scorecard-status-fill"
+            style=${`width:${Math.round((status.progress || 0) * 100)}%`} /></span>
+      ${status.message}
+    </p>` : ""}
+    ${inspecting && held ? html`<${Modal} title="Your sheet column" icon="copy"
+        description=${(status && status.message) || ""}
+        onClose=${() => setInspecting(false)}
+        footer=${html`<button type="button" class="primary-button"
+            onclick=${() => copyHeld(column.text)}>
+          <${Icon} name="copy" size=${13} />${" "}${copied ? "Copied ✓" : "Copy"}
+        </button>`}>
+      <textarea class="scorecard-column-view" readonly spellcheck="false"
+          aria-label="The sheet column, one worksheet row per line"
+          value=${column.text} rows=${20}></textarea>
+    <//>` : ""}
+  </div>`;
 }
 
 // The column door's own 503 ("could not read the sheet: …") is shown
@@ -513,42 +606,6 @@ function pollColumnJob(jobId, onStep) {
     };
     tick();
   });
-}
-
-function ScorecardExports() {
-  const [error, setError] = useState(null);
-  // `null` = idle and the line is absent entirely; a progress-bearing object
-  // while a copy is in flight; the closing sentence once it lands.
-  const [status, setStatus] = useState(null);
-
-  // The sheet column deliberately takes NO scope: its whole contract is one
-  // line per live worksheet row of the community sheet, whatever the card
-  // above it is scoped to. The CSV button was removed in round 19 (his
-  // call); `GET /api/scorecard/export.csv` stays reachable by URL for
-  // anyone who wants the card as a file, it simply has no button now.
-  async function copyColumn() {
-    setStatus({ progress: 0, message: "Starting…", running: true });
-    const { job_id } = await send("POST", "/api/scorecard/column");
-    const body = await pollColumnJob(job_id, (step) =>
-      setStatus({ progress: step.progress, message: step.message,
-                  running: step.state === "running" }));
-    return body.lines.join("\n");
-  }
-
-  return html`<div class="scorecard-exports">
-    <${CopyButton} className="scorecard-copy-column" label="Copy sheet column"
-        onCopy=${copyColumn}
-        onError=${(message) => { setError(message); if (message) setStatus(null); }} />
-    ${error ? html`<${InlineState} kind="error">${error}<//>` : ""}
-    ${status ? html`<p class="meta scorecard-status"
-        role="status" aria-live="polite"
-        data-running=${status.running ? "true" : "false"}>
-      <span class="scorecard-status-track" aria-hidden="true"
-          ><span class="scorecard-status-fill"
-            style=${`width:${Math.round((status.progress || 0) * 100)}%`} /></span>
-      ${status.message}
-    </p>` : ""}
-  </div>`;
 }
 
 // Appears only while there are unsaved goal edits -- his flow, verbatim:
@@ -748,8 +805,14 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
         }
       }
       await send("PUT", "/api/scorecard/goal", { kind: "custom", name, times });
+      // Fetch FIRST, then clear the edits and swap the payload in the same
+      // render: clearing before the fetch returned dropped the save bar one
+      // round trip before the picker could name the new goal, so for that
+      // beat the card read "No goal" with nothing pending -- a wrong state
+      // on screen, and the race a render test lost (round 29).
+      const fresh = await getJSON("/api/scorecard");
       setPendingOverrides({});
-      setData(await getJSON("/api/scorecard"));
+      setData(fresh);
     } catch (err) {
       setSaveError(err.message || String(err));
     } finally {
@@ -796,6 +859,6 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
                  cards. I just think it would look better there." Its error
                  slot travels with it, so the reason a copy failed still
                  lands where the click did. */""}
-            <${ScorecardExports} />`}
+            <${ScorecardExports} staleKey=${t.mareloRev} />`}
   </div>`;
 }

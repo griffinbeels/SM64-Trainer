@@ -7378,6 +7378,23 @@
   .scorecard-status[data-running="false"] .scorecard-status-fill {
     background: var(--green);
   }
+  /* Round 29: once a column is HELD the primary button becomes the copy
+     affordance (glyph + "Ready to copy") and two quiet controls join it --
+     Open (inspect every line) and Rebuild (fetch the sheet again). The
+     glyph sits inline with the label, so the button's height never moves
+     between its three labels. */
+  .scorecard-copy-column { display: inline-flex; align-items: center; gap: 6px; }
+  .scorecard-column-open, .scorecard-column-rebuild {
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  /* The inspect box: the column exactly as it will paste, one worksheet row
+     per line, in a monospace textarea he can select from by hand -- the
+     fallback that works when no clipboard write is allowed at all. */
+  .scorecard-column-view {
+    display: block; width: 100%; min-height: 50vh; resize: vertical;
+    font-family: ui-monospace, Consolas, monospace; font-size: .82rem;
+    line-height: 1.35; white-space: pre; box-sizing: border-box;
+  }
   /* The "unsaved custom edits" bar (round 8): a name field + Save/Discard,
      shown only while `pendingOverrides` is non-empty. A gold-tinted border
      rather than a plain card, so an edit in progress reads as a distinct

@@ -802,8 +802,11 @@ def create_scorecard_router(service, library=None, adoptions=None,
             body = _column_body(lines, payload)
             job["result"] = body
             job["progress"] = 1.0
+            # The BUILD's sentence, not the copy's: since round 29 the column
+            # is held on the page and the clipboard write is the button's own
+            # gesture (it may not have happened yet, if he was tabbed away).
             job["message"] = (
-                f"Copied {body['total_rows']} rows (sheet rows 2–"
+                f"{body['total_rows']} rows ready (sheet rows 2–"
                 f"{body['total_rows'] + 1}) · {body['mapped']} carry a time")
             job["state"] = "done"
         except Exception as err:                        # noqa: BLE001

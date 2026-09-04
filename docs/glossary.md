@@ -789,11 +789,16 @@ A row that names the thing itself carries your best among the times no
 other row of its block claims. A name this database holds no
 [[personal best]] under prints the row's [[held time]] if an import left
 one, else stays blank, so the column can miss a time but never print a
-wrong one.
+wrong one. Once built, the column stays on the [[Scorecard]]'s page until
+one of your times changes or you rebuild it: the button reads "Ready to
+copy", a click copies it, Open shows every line, and the clipboard fills by
+itself only while you are looking at the page — so tabbing away during the
+build costs nothing.
 
 - **Lives** — the column builder
   (`src/sm64_events/library/export_column.py`)
   → the scorecard's column endpoint (`src/sm64_events/server/scorecard_api.py`)
+  → the held column and its controls (`src/sm64_events/ui/components/scorecard.js`)
 
 ### Runner rating
 
