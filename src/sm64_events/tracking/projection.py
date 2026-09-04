@@ -243,6 +243,7 @@ Caveats (hard-won — keep these current):
 """
 from dataclasses import dataclass, replace
 
+from sm64_events.core.modes import platform_from_payload
 from sm64_events.memory.addresses import (CASTLE_LEVELS, LEVEL_CASTLE_INSIDE,
                                           course_for_level)
 # one-way import: segments.py pulls Attempt lazily at call time, so this
@@ -366,6 +367,15 @@ class Attempt:
                                # "grab" there would assert something nobody
                                # has run the experiment for; the limitation is
                                # recorded in docs/api.md instead.
+    platform: str | None = None    # WHICH MACHINE set this time -- "emu" or
+                               # "n64" -- read off the closing event's own
+                               # `platform` key (core/modes.py::
+                               # platform_from_payload), so it re-derives on
+                               # every reproject like timed_at. Only the
+                               # console front-end ever writes the key; None
+                               # is stored for the emulator and for every row
+                               # older than the stamp, and what None MEANS
+                               # lives in ONE place (modes.platform_of).
 
 
 ANCHOR_EVENT_TYPES = ("practice_reset", "state_loaded")
@@ -1169,7 +1179,8 @@ class Projector:
                             igt_frames=ev.payload.get("igt_frames"),
                             timed_by="igt",
                             timed_at=(ev.payload.get("igt_timed_at")
-                                      if ev.type == "star_collected" else None))
+                                      if ev.type == "star_collected" else None),
+                            platform=platform_from_payload(ev.payload))
                 # WHICH EXIT STAR ended the run is a fact the closing event
                 # carries, and it decides which of the 100-coin star's ladders
                 # this time is graded against (spec 2026-08-03-hundred-coin-
@@ -2226,7 +2237,8 @@ class Projector:
             rollouts_dustless=self._rollouts_dustless,
             jumps_total=self._jumps_total,
             jumps_dustless=self._jumps_dustless,
-            timed_at=timed_at))
+            timed_at=timed_at,
+            platform=platform_from_payload(close.payload)))
 
     def _auto_ignored(self, a: Attempt) -> Attempt:
         """Range/validity check (spec 2026-07-23): an out-of-bounds SUCCESS

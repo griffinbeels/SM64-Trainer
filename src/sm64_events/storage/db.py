@@ -575,6 +575,25 @@ MIGRATIONS = [
      WHERE parent IS NOT NULL;
     ALTER TABLE segment_defs DROP COLUMN parent;
     """,
+    # v27 — the PLATFORM STAMP (pb-import round 29, item 2; built 2026-09-04):
+    # WHICH MACHINE set a time -- "emu" (Project64's memory) or "n64" (a real
+    # console's picture through the capture feed). `Attempt.platform` is read
+    # off the closing event's own payload by projection._build, so it
+    # re-derives on every reproject and needs no repair UPDATE (the v19/v20/
+    # timed_at shape). NULL default: every row written before this column
+    # existed came from the emulator, and core/modes.py::platform_of is the
+    # ONE place that says so -- storing 'emu' here would bake that rule into
+    # every row and into every branch's poller.
+    #
+    # A personal best carries no column of its own: it remembers its platform
+    # THROUGH its attempt (pbs()/current_pb LEFT JOIN attempts), one door.
+    # Two unmerged branches each carry their own v27+ (console-support:
+    # identity_source/confidence; pb-import: imported times); whichever
+    # merges main next re-tails its own block after this one, as v27's own
+    # comment on console-support already describes.
+    """
+    ALTER TABLE attempts ADD COLUMN platform TEXT;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -583,7 +602,8 @@ _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
                  "cleared", "cleared_reason",
                  "rollouts_total", "rollouts_dustless",
                  "jumps_total", "jumps_dustless",
-                 "segment_id", "timed_by", "closed_by", "timed_at")
+                 "segment_id", "timed_by", "closed_by", "timed_at",
+                 "platform")
 
 
 class EventRow:
@@ -867,7 +887,8 @@ class Database:
                 int(a.cleared), a.cleared_reason,
                 a.rollouts_total, a.rollouts_dustless,
                 a.jumps_total, a.jumps_dustless,
-                a.segment_id, a.timed_by, a.closed_by, a.timed_at)
+                a.segment_id, a.timed_by, a.closed_by, a.timed_at,
+                a.platform)
 
     def replace_attempts(self, attempts: list[Attempt]) -> None:
         with self._lock:
@@ -1231,9 +1252,18 @@ class Database:
         directly and see every row."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM pbs WHERE" + self._VISIBLE_PB
-                + " ORDER BY id").fetchall()
+                self._PB_SELECT + self._VISIBLE_PB
+                + " ORDER BY pbs.id").fetchall()
             return [dict(r) for r in rows]
+
+    # A PB's `platform` is its attempt's (v27): exposed on the row here so no
+    # reader joins for it, and never stored twice. A row with no attempt (a
+    # legacy manual save) reads NULL, which core/modes.py::platform_of
+    # resolves. Every pbs column that attempts also has (course_id, star_id,
+    # segment_id, strat_tag) must be qualified `pbs.` in the WHERE.
+    _PB_SELECT = ("SELECT pbs.*, attempt_of_pb.platform AS platform FROM pbs"
+                  " LEFT JOIN attempts AS attempt_of_pb"
+                  " ON attempt_of_pb.id = pbs.attempt_id WHERE")
 
     def current_pb(self, course_id: int | None, star_id: int | None,
                    timer_mode: str, segment_id: int | None = None,
@@ -1252,16 +1282,17 @@ class Database:
         by hand does."""
         strat_clause = " AND strat_tag=?" if strat_tag is not None else ""
         strat_param = (strat_tag,) if strat_tag is not None else ()
+        strat_clause = strat_clause.replace("strat_tag", "pbs.strat_tag")
         if segment_id is not None:
-            q = ("SELECT * FROM pbs WHERE segment_id=? AND timer_mode=?"
+            q = (self._PB_SELECT + " pbs.segment_id=? AND timer_mode=?"
                  + strat_clause + " AND" + self._VISIBLE_PB
-                 + " ORDER BY id DESC LIMIT 1")
+                 + " ORDER BY pbs.id DESC LIMIT 1")
             params = (segment_id, timer_mode) + strat_param
         else:
-            q = ("SELECT * FROM pbs WHERE course_id=? AND star_id=?"
-                 " AND segment_id IS NULL AND timer_mode=?"
+            q = (self._PB_SELECT + " pbs.course_id=? AND pbs.star_id=?"
+                 " AND pbs.segment_id IS NULL AND timer_mode=?"
                  + strat_clause + " AND" + self._VISIBLE_PB
-                 + " ORDER BY id DESC LIMIT 1")
+                 + " ORDER BY pbs.id DESC LIMIT 1")
             params = (course_id, star_id, timer_mode) + strat_param
         with self._lock:
             row = self._conn.execute(q, params).fetchone()
