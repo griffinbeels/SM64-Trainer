@@ -370,48 +370,19 @@ function StarRow({ t, v, stage }) {
   // an empty row: an empty selector reads as "broken", and standing somewhere
   // your route skips is a normal thing to do.
   const routeStars = course ? routeStarFilter(v, stage.course_id) : null;
-  // INSIDE A SUBAREA, only that subarea's stars (round 21 item 5: "I'm
-  // inside the volcano, so I can only do stars inside there"). The map is
-  // server-vocab (`subarea_stars`, measured off his own grabs — see
-  // addresses.COURSE_SUBAREA_STARS); a subarea with no row filters nothing,
-  // because hiding a valid star is the worse failure. Applied AFTER the
-  // route filter with the same never-empty fallback that filter has: a
-  // route narrowed to stars outside this subarea must not blank the row.
-  //
-  // AND NOT WHILE THE STAR SELECT IS UP (round 26, and the THIRD report of
-  // one symptom -- "I've mentioned this like 3 times"). The two earlier fixes
-  // aimed at a LEVEL-LOAD transient, and the UI log says the narrowing tracks
-  // the area byte exactly as designed at every other moment: 2 cells inside
-  // the volcano, 5 in the main area, flipping correctly all session. What
-  // nothing moves is the area byte while the course's own star-select screen
-  // is showing -- he grabbed a star in the volcano at 09:07:40 and the next
-  // spawn landed at 09:07:52, TWELVE SECONDS of that screen offering the
-  // volcano's two stars. `on_the_star_select` (tracking/service.py) is true
-  // from a grab until the next spawn, which is exactly that window.
-  //
-  // NOT WHILE THE AREA IS STILL THE LOAD'S (round 23, 2026-08-08). A course
-  // load walks the area byte through a transient -- entering LLL reads the
-  // volcano for 1.74 s, measured on his own journal -- and the STAR-SELECT
-  // SCREEN sits inside that window, so the row narrowed to the volcano's two
-  // stars on the screen where he picks which star to do: "On the star select,
-  // we should show the same options as when we spawn normally." `settling`
-  // (detectors/stage.py) marks exactly the emit that rode the level edge; the
-  // very next area change clears it, which is precisely the moment he walked
-  // somewhere himself. Showing everything is the safe side of this, and the
-  // same side `COURSE_SUBAREA_STARS` already takes for a subarea it has no
-  // row for.
-  const subareaStars = course && !stage.settling && !stage.on_the_star_select
-    ? ((t.vocab || {}).subarea_stars || {})[`${stage.level}:${stage.area}`]
-    : null;
-  const routeShown = course
+  // THE SUBAREA NEVER NARROWS THIS ROW (task 0122, 2026-09-03). It used to:
+  // standing inside the volcano offered only the volcano's stars. Three
+  // rounds of fixes went into the moments where the area byte is not his
+  // (a course load's transient, the star-select screen), and it still
+  // flashed the subarea's stars on a reset -- so he retired the feature
+  // instead of the flash: "I would expect to load into a course and see all
+  // the stars for that course at all times, regardless of which subarea im
+  // in." The route filter is the only thing left that can narrow this row.
+  const shown = course
     ? course.stars
         .map((name, i) => ({ name, i }))
         .filter(({ i }) => !routeStars || routeStars.has(`${stage.course_id}:${i}`))
     : [];
-  const hereShown = subareaStars
-    ? routeShown.filter(({ i }) => subareaStars.includes(i))
-    : routeShown;
-  const shown = hereShown.length ? hereShown : routeShown;
 
   // Task 0025 — DDD during 16 Star offers exactly one star, so pick it.
   // Computed BEFORE the `!course` early return because a hook may not run

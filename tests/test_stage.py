@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 
 from sm64_events.core.snapshot import GameSnapshot
-from sm64_events.detectors.counter_epoch import LEVEL_LOAD_TAIL_FRAMES
 from sm64_events.detectors.stage import StageChangeDetector
 
 
@@ -19,9 +18,8 @@ def payload(event, *keys):
     """The fields a test OWNS, never the whole dict.
 
     Whole-dict equality here claimed ownership of a shape other work extends:
-    adding `settling` (round 23) turned eleven green tests red without a single
-    behaviour changing. Each test now names what it is about; `settling` has
-    its own tests below.
+    adding one field once turned eleven green tests red without a single
+    behaviour changing. Each test names what it is about instead.
     """
     keys = keys or ("course_id", "level", "area", "mode")
     return {k: event.payload[k] for k in keys}
@@ -46,32 +44,32 @@ def test_first_pair_establishes():
                                  "mode": "stars"}
 
 
-def test_in_course_area_switch_re_emits_with_the_new_area():
-    # Inverted 2026-08-08. A subarea hosts a DIFFERENT set of stars
-    # (addresses.COURSE_SUBAREA_STARS), so walking into SSL's pyramid changes
-    # what the banner offers and has to re-emit.
+def test_in_course_area_switch_does_not_re_emit():
+    # Re-inverted 2026-09-03 (task 0122). A course's subareas offer the SAME
+    # cards now that the selector shows every star in the course, so walking
+    # into SSL's pyramid changes nothing the banner draws.
     d = StageChangeDetector()
     d.process(snap(curr_level=8, curr_area=1), snap(curr_level=8, curr_area=1))
-    events = d.process(snap(curr_level=8, curr_area=1),
-                       snap(curr_level=8, curr_area=2))
-    assert len(events) == 1
-    assert payload(events[0]) == {"course_id": 8, "level": 8, "area": 2,
-                                 "mode": "stars"}
+    assert d.process(snap(curr_level=8, curr_area=1),
+                     snap(curr_level=8, curr_area=2)) == []
 
 
-def test_the_area_a_course_load_settles_on_supersedes_the_transient():
-    # THE BUG (his journal, 2026-08-09 03:15): entering LLL stamped the load's
-    # transient area 2, the settle to area 1 emitted nothing, and the selector
-    # filtered the main area down to the volcano's stars. Both edges emit now.
+def test_a_course_loads_area_walk_publishes_once():
+    # The load walks the area byte (entering LLL from the basement reads
+    # 3 -> 2 -> 1 over ~1.8s, his journal 2026-08-09 03:15). One context per
+    # course, so the level edge emits and the walk that follows emits nothing
+    # -- which is what stopped the row flashing the volcano's stars on the way
+    # in, with no wait anywhere.
     d = StageChangeDetector()
-    d.process(snap(curr_level=6), snap(curr_level=6))                 # castle
-    entering = d.process(snap(curr_level=6), snap(curr_level=22, curr_area=2))
+    d.process(snap(curr_level=6, curr_area=3), snap(curr_level=6, curr_area=3))
+    entering = d.process(snap(curr_level=6, curr_area=3),
+                         snap(curr_level=22, curr_area=2))
     settled = d.process(snap(curr_level=22, curr_area=2),
                         snap(curr_level=22, curr_area=1))
-    assert entering[0].payload["area"] == 2
-    assert len(settled) == 1
-    assert payload(settled[0]) == {"course_id": 7, "level": 22, "area": 1,
-                                  "mode": "stars"}
+    assert len(entering) == 1
+    assert payload(entering[0]) == {"course_id": 7, "level": 22, "area": 2,
+                                    "mode": "stars"}
+    assert settled == []
 
 
 def test_no_event_while_course_stable():
@@ -197,69 +195,3 @@ def test_no_event_between_two_cap_levels():
     d.process(snap(curr_level=18), snap(curr_level=18))           # Vanish Cap (None)
     assert d.process(snap(curr_level=18), snap(curr_level=20)) == []  # -> Metal Cap
 
-
-# --- settling: is this area the LOAD's, or his? ----------------------------
-# Round 23. A course load walks the area byte through a transient (measured on
-# his own journal: entering LLL read the volcano for 1.74s), and the star-select
-# screen sits inside that window -- "On the star select, we should show the same
-# options as when we spawn normally." The flag lets the selector decline to
-# narrow on an area nobody has stood in yet, with nothing having to WAIT.
-
-def test_the_emit_that_rides_a_level_edge_is_marked_settling():
-    d = StageChangeDetector()
-    d.process(snap(curr_level=6), snap(curr_level=6))
-    entering = d.process(snap(curr_level=6), snap(curr_level=22, curr_area=2))
-    assert entering[0].payload["settling"] is True
-
-
-def test_walking_into_a_subarea_yourself_is_not_settling():
-    d = StageChangeDetector()
-    d.process(snap(curr_level=22, curr_area=1), snap(curr_level=22, curr_area=1))
-    walked = d.process(snap(curr_level=22, curr_area=1),
-                       snap(curr_level=22, curr_area=2))
-    assert walked[0].payload["settling"] is False
-
-
-def test_the_whole_LOAD_WALK_is_settling_not_just_its_first_frame():
-    """The fix's own correction. Entering LLL from the basement emits
-    (22, area 3) on the level edge and (22, area 2) a beat later -- and it was
-    that SECOND emit the star-select screen showed, which is why marking only
-    the first frame did nothing for him ("consistently, we show the SUBAREA
-    stars on the star select menu... This is a bug")."""
-    d = StageChangeDetector()
-    d.process(snap(curr_level=6, curr_area=3, global_timer=1000),
-              snap(curr_level=6, curr_area=3, global_timer=1000))
-    edge = d.process(snap(curr_level=6, curr_area=3, global_timer=1000),
-                     snap(curr_level=22, curr_area=3, global_timer=1001))
-    walk = d.process(snap(curr_level=22, curr_area=3, global_timer=1001),
-                     snap(curr_level=22, curr_area=2, global_timer=1030))
-    assert edge[0].payload["settling"] is True
-    assert walk[0].payload["settling"] is True, (
-        "the load's own area walk is still the LOAD's, not his")
-
-
-def test_the_window_EXPIRES_so_a_later_walk_narrows_normally():
-    """Past the measured load tail the area is his, and the row narrows again
-    -- otherwise entering the volcano on foot would never filter anything."""
-    d = StageChangeDetector()
-    d.process(snap(curr_level=6, global_timer=1000),
-              snap(curr_level=6, global_timer=1000))
-    d.process(snap(curr_level=6, global_timer=1000),
-              snap(curr_level=22, curr_area=1, global_timer=1001))
-    later = d.process(
-        snap(curr_level=22, curr_area=1, global_timer=1001 + LEVEL_LOAD_TAIL_FRAMES),
-        snap(curr_level=22, curr_area=2, global_timer=1001 + LEVEL_LOAD_TAIL_FRAMES))
-    assert later[0].payload["settling"] is False
-
-
-def test_a_console_reset_clears_the_window_rather_than_arming_it_forever():
-    """`global_timer` runs backward on a console reset, and an unguarded
-    subtraction there would read as "still loading" for two billion frames."""
-    d = StageChangeDetector()
-    d.process(snap(curr_level=6, global_timer=9000),
-              snap(curr_level=6, global_timer=9000))
-    d.process(snap(curr_level=6, global_timer=9000),
-              snap(curr_level=22, curr_area=1, global_timer=9001))
-    after = d.process(snap(curr_level=22, curr_area=1, global_timer=5),
-                      snap(curr_level=22, curr_area=2, global_timer=6))
-    assert after[0].payload["settling"] is False

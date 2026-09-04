@@ -131,7 +131,12 @@ its own rows in the [[practice log]], drawn INSIDE its parent's own card and
 indented under it. The [[star]] owns the hand: a piece arms
 and records underneath its parent without ever taking the [[target]] slot
 by detection — its completion points the slot at the parent [[star]], never
-at itself. It has no switch on the [[selector]] — a piece always tracks and
+at itself. It points at nothing at all when two or more [[star]]s or
+[[segment]]s share it — LLL's volcano entry serves both volcano [[star]]s,
+whether one definition names them both or two identical definitions each name
+one — because finishing it proves you did one of them and never which. Such a
+piece keeps recording, and shows nothing until the [[star]] it belongs to
+earns a card of its own. It has no switch on the [[selector]] — a piece always tracks and
 always draws its card as soon as its parent has one, even with nothing
 recorded yet (empty, closed, never stealing the parent's auto-open slot) —
 so its history, its [[ladder]] and the fact that it exists at all are
@@ -1070,13 +1075,9 @@ back in lockstep.
 ### Selector
 
 The row of [[practice cell]]s across the top of the [[Practice tab]], showing
-what you can practice where you currently stand — and no finer: standing
-inside a subarea narrows the row to that subarea's own [[star]]s (inside
-the volcano, the volcano's), while a subarea the trainer does not know
-keeps every [[star]] rather than hiding one wrongly. It narrows only once you
-have arrived: a course load moves the game through a subarea on its way in, so
-the row keeps every [[star]] until you walk somewhere yourself, which is what
-the course's own entry screen shows. Clicking a cell sets your
+what you can practice where you currently stand. A course shows every one of
+its [[star]]s the whole time you are inside it — walking into a subarea such
+as the volcano or the pyramid changes nothing here. Clicking a cell sets your
 [[target]]. The row draws [[star]]s and castle movements at all times, never
 a [[subsection]] beside its parent — a piece has nothing of its own here at
 all now; it shows up only in the [[practice log]], inside its parent's card.

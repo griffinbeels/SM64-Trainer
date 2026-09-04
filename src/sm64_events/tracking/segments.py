@@ -344,7 +344,6 @@ from sm64_events.memory.addresses import (AREA_LOBBY, BOWSER_STAGE_LEVELS,
                                           node_short_label,
                                           region_for_node, star_count,
                                           star_name, subarea_name,
-                                          COURSE_SUBAREA_STARS,
                                           world_connections, world_regions)
 from sm64_events.core.landmark import same_landmark
 from sm64_events.detectors.igt_clock import IgtClock
@@ -1875,7 +1874,81 @@ def speaks_through_a_parent(parents: list | None) -> bool:
     and the target queue stayed empty through every one, so the only thing
     that ever lit it was his own tap. *"If there's only one option, and we
     trigger its start condition, it should be highlighted."*"""
-    return any(not parent.startswith("area:") for parent in (parents or []))
+    return bool(entity_parents(parents))
+
+
+def entity_parents(parents: list | None, own_id: int | None = None) -> list:
+    """The parents that name an ENTITY — something a card and a target can
+    point at. A castle-area parent (`area:6:1`) is a place, and a self
+    reference exists only to stop infinite nesting; neither is one.
+
+    The same rule `ui/subsections.js::isPiece` applies on the browser side,
+    and the two are compared by `tests/test_cross_language_parity.py` rather
+    than kept in step by comment."""
+    own = f"segment:{own_id}" if own_id is not None else None
+    return [parent for parent in (parents or [])
+            if not str(parent).startswith("area:") and parent != own]
+
+
+def _matching_fields(defn) -> dict:
+    """The fields the rules below need, off EITHER shape this fact has to be
+    computable from: a `SegmentDef` (what the projector holds) or a
+    `db.segment_defs()` row (what the view builder holds). One reader rather
+    than one copy per caller — the whole point of the fact having one door."""
+    if isinstance(defn, dict):
+        return defn
+    return {"id": defn.id, "enabled": defn.enabled, "parents": defn.parents,
+            "start_triggers": defn.start_triggers,
+            "end_triggers": defn.end_triggers,
+            "waypoints": defn.waypoints, "guards": defn.guards}
+
+
+def fires_identically(one, other) -> bool:
+    """Do two definitions match the SAME play? Identical start, end,
+    waypoints and guards — nothing about a definition outside those four
+    changes which events arm it or close it, so two that agree on all four
+    are indistinguishable at run time however differently they are named or
+    filed. `tracking/lint.py`'s duplicate warning is this same question asked
+    at authoring time, and asks it through here."""
+    left, right = _matching_fields(one), _matching_fields(other)
+    return all(left.get(field) == right.get(field)
+               for field in ("start_triggers", "end_triggers",
+                             "waypoints", "guards"))
+
+
+def attributable_parent(defn, all_defs) -> str | None:
+    """The ONE entity a completion of `defn` can be attributed to, or None
+    when two or more could equally claim it.
+
+    HIS RULE, 2026-09-03: *"if the rule is ambiguous (i.e., two or more stars
+    / segments share the subsegment), then it shouldn't auto select. If it's
+    objectively true that if I do this subsegment that I'm only practicing
+    that one thing, then I guess that's fine."*
+
+    The set is every entity parent of `defn` PLUS every entity parent of any
+    other ENABLED definition that fires identically to it. Round 27 already
+    refused to guess between the parents of ONE definition; his LLL case is
+    the other half of the same ambiguity and looked unambiguous from inside
+    each definition alone — two separate "Volcano Entry" defs with identical
+    start/end/waypoints/guards, one filed under Hot-Foot-It and one under
+    Elevator Tour, both closing the instant he drops into the volcano. Each
+    had exactly one parent, so each followed onto its own star and the later
+    one won, selecting a star he never chose.
+
+    A DISABLED duplicate creates no ambiguity: it never arms, so it can never
+    have been the thing he just did."""
+    keys = set(entity_parents(_matching_fields(defn).get("parents"),
+                              _matching_fields(defn).get("id")))
+    if not keys:
+        return None
+    for other in all_defs or []:
+        fields = _matching_fields(other)
+        if (fields.get("id") == _matching_fields(defn).get("id")
+                or not fields.get("enabled", True)
+                or not fires_identically(defn, other)):
+            continue
+        keys |= set(entity_parents(fields.get("parents"), fields.get("id")))
+    return next(iter(keys)) if len(keys) == 1 else None
 
 
 def origin_view(node: str | None) -> dict:
@@ -2394,13 +2467,6 @@ def vocab() -> dict:
         # destinations) — the builder filters flow-annotated level/subarea
         # dropdowns to world-possible moves (addresses.WORLD_EDGES_*)
         "connections": world_connections(),
-        # Which stars a course SUBAREA hosts ("22:2" -> [4, 5, 6]) — the
-        # selector narrows its star row to these while the player stands
-        # inside one (round 21 item 5); a subarea with no row shows every
-        # star. addresses.COURSE_SUBAREA_STARS carries the measurement.
-        "subarea_stars": {f"{level}:{area}": list(stars)
-                          for (level, area), stars
-                          in COURSE_SUBAREA_STARS.items()},
         # Ordered region -> place tree for the segment library's grouping and
         # the editor's origin override (spec 2026-07-24-segment-origin-
         # categories). Domain-free shape: {key, label, children:[...]}.
@@ -2950,6 +3016,12 @@ class SegmentEngine:
         """The def for an id, or None (a deleted or never-loaded definition —
         callers must not assume every armed/pending id still has one)."""
         return self._def_by_id.get(sid)
+
+    def definitions(self) -> list[SegmentDef]:
+        """Every loaded definition. The cross-definition rules
+        (`attributable_parent`) need the whole set, not one id: whether a
+        piece is ambiguous is a fact about its NEIGHBOURS."""
+        return list(self._def_by_id.values())
 
     def hold_budget(self, sid: int) -> int:
         """How long a HOOKED practice target may outlive its arm, in frames

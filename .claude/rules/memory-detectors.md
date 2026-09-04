@@ -534,12 +534,11 @@ journal two values. The label reads "Spawned into Lethal Lava Land:
 Volcano" (`addresses.subarea_name`, confident rows only + "Area N"
 fallback), the trigger vocab's `spawned` clause pins `area`/`spawn_node`,
 and `synthesize._spawned_params` carries both off a picked recorder row —
-`tests/test_spawn_subarea.py` holds that half. Beside those names sits
-`addresses.COURSE_SUBAREA_STARS` (round 21 item 5) — which stars a course
-subarea hosts, measured off the settled area at every star grab across
-both journals before it was authored (the volcano = stars 4+5 across his
-41 grabs there; his six CCM 100-coin grabs landed INSIDE the slide, which
-is why star 6 rides every row); a subarea with no row filters nothing.
+`tests/test_spawn_subarea.py` holds that half. `addresses.COURSE_SUBAREA_STARS` used to sit beside those names —
+which stars a course subarea hosts, measured off the settled area at every
+star grab across both journals. It was DELETED on 2026-09-03 (task 0122)
+along with its one consumer, the selector's narrowing of the star row; the
+subarea NAMES here are untouched.
 
 ## A moment's time is per-kind
 

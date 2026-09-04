@@ -37,6 +37,24 @@ Two instruments, and why each is shaped as it is (all numbers 2026-09-01,
   the full run is what refreshes the map, and it is the one command that
   says "this merges".
 
+  **testmon reorders, and the suite puts the order back.** `--testmon-
+  noselect` is documented as "reorder and prioritize the tests most likely
+  to fail first", and it does, once a map exists -- a `trylast` collection
+  hook that sorts every module's tests by recorded failures and duration.
+  A module that shares one browser page across its tests (the fixture-
+  reach file, the collapse story, every `scope="module"` page) then runs
+  its practice-tab tests after its story tests, on a page left on the
+  Segments tab, and its two viewport params interleave so the page is
+  rebuilt dozens of times. Measured 2026-09-02, one worker, no other
+  load: 38 page builds and 3 failed + 7 reruns under the flag; 2 builds
+  and 81 green without it. The first full run in a fresh worktree has no
+  map and keeps file order, which is why the first gate in a worktree was
+  green and every later one red on a different set -- it read as load
+  flake for a day. `tests/conftest.py`'s collection hookwrapper restores
+  raw order plus pytest's own param grouping after every plugin, and
+  `tests/test_worker_groups.py` checks the live session against that
+  recipe on every run.
+
 The door closes the blind spot it can: after every full run it records a
 content hash of every non-Python file git knows about (tracked or untracked,
 not ignored), and `--changed` refuses to select when any of them differs --
@@ -55,9 +73,61 @@ The first answer was below-normal priority for the whole tree, and it was
 wrong: two full runs at that class went red (6 failed + 51 errors, then 11 +
 13) where the same tree at normal priority ran green, because this machine
 always carries normal-priority load beside a run (sibling Claude sessions
-and their servers) and a starved worker times out its browsers. So the lag
-lever is `--workers`: 16 is the measured sweet spot on an idle machine, and
-`--workers 8` while he is actively using it. And every run ends with a sweep that reports what it left behind, so "sludge" is a number
+and their servers) and a starved worker times out its browsers.
+
+The two levers that DO work are measured, by `tools/measure_run_load.py`,
+against what lag actually is: how long a normal-priority thread waits for a
+core after it is ready to run (its wake-latency probe; p95 of that wait, in
+ms, because a stutter is a tail event and the median never sees one).
+Thirteen full runs over the workers x reserve grid, 2026-09-02, each row
+carrying the ambient load it was measured against so a sibling session's own
+suite cannot skew one against another (the 24x8 row was measured at 98%
+ambient and is excluded for exactly that reason):
+
+    workers  reserved     wall    p95      p99     note
+    idle       --           --    0.6 ms   0.7 ms
+    16          0         214 s   3.9 ms  16.9 ms  what the gate was before
+    16          4         208 s   1.5 ms   4.3 ms
+    16          8         234 s   1.3 ms  17.7 ms
+    16         12         212 s   0.6 ms   0.9 ms
+    16         16         212 s   0.6 ms   0.8 ms
+    24          0         195 s   2.6 ms   6.0 ms  RED
+    24         12         204 s   0.6 ms   1.0 ms  <-- the default
+    32          0         228 s  17.7 ms  52.8 ms
+    32          8         194 s   5.0 ms  12.8 ms
+    32         12         206 s   0.8 ms   2.1 ms
+    32         16         218 s   0.6 ms   0.7 ms
+    8           8         298 s   0.6 ms   0.8 ms
+
+Three things that table settles, and one it does not:
+
+* **Reserving cores is close to FREE, and reserving 12 is where lag stops.**
+  At 16 workers the wall time is flat from 0 to 16 reserved (208-214 s, the
+  234 s row aside as noise) while p99 falls 16.9 -> 4.3 -> 0.9 ms. The knee
+  is at 12; 16 buys nothing more. This was the surprise: the first pass
+  reserved 8 because it looked like a trade, and it was not one.
+* **More workers than 16 still pays, once cores are reserved.** 24 and 32
+  both beat 16 by 6-8 s at reserve 12, and 24x12 matches the best lag on the
+  board. Without a reserve they do the opposite -- 32x0 is the WORST row for
+  both lag and, at 228 s, slower than 16 -- because the browsers and the
+  desktop are then fighting over the same 32 processors.
+* **Fewer workers is no longer the smoothness lever.** 8x8 is idle-grade and
+  94 s slower than 24x12, which is idle-grade too. `--workers 8` now only
+  makes sense to hand cores back to something heavy that is not the desktop.
+* What it does NOT settle: differences under ~8 s are inside this machine's
+  run-to-run spread, so 16x12, 24x12 and 32x12 are a three-way tie on speed
+  and the choice among them is not load-bearing. The reserve is.
+
+**So the default is 24 workers with 12 logical processors reserved.** The
+reserve is CPU affinity, not priority: the pytest tree is fenced off the TOP
+12 of this machine's 32 logical indices, so Windows' adjacent sibling
+threads mean six WHOLE physical cores come free and the desktop always has
+somewhere to run rather than waiting behind a worker. Affinity is inherited
+at spawn and xdist's workers and their browsers appear over the run's first
+seconds, so it is re-applied to every new descendant on a 2 s sweep rather
+than set once. `--reserve 0` turns it off.
+
+And every run ends with a sweep that reports what it left behind, so "sludge" is a number
 on screen rather than a feeling: orphaned headless browsers (parent gone),
 orphaned workers and ffmpeg from THIS checkout, and Playwright profile dirs
 in TEMP that no live browser references. Measured before this existed: ten
@@ -82,14 +152,24 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import psutil
 
+from find_uilab import find_uilab
+
 ROOT = Path(__file__).resolve().parent.parent
 STATE_PATH = ROOT / ".run_tests.json"
-DEFAULT_WORKERS = 16
+DEFAULT_WORKERS = 24
+# Logical processors kept OFF the test tree so the desktop always has one.
+# 12 of the 32 here: the knee of the curve, where p99 stall reaches idle
+# (0.9 ms) and reserving more buys nothing. It costs no wall time at all --
+# 24 workers with 12 reserved is FASTER than 16 with none. The docstring
+# carries the whole grid.
+DEFAULT_RESERVED_CORES = 12
+AFFINITY_SWEEP_SECONDS = 2.0
 # pytest exit codes that mean the run COMPLETED and the coverage map is whole:
 # 0 all passed, 1 some failed. 2 is an interruption, 3/4 are pytest's own
 # errors, 5 collected nothing -- none of those leave a map worth stamping.
@@ -123,6 +203,37 @@ def pytest_args(mode: str, workers: int, extra: list[str]) -> list[str]:
     if mode == "select":
         return [*base_args(workers), "--testmon", *extra]
     raise ValueError(mode)
+
+
+def reserved_affinity(reserve: int, total: int | None = None) -> list[int]:
+    """The logical processors the test tree may use when `reserve` are kept for
+    the desktop -- empty when nothing is reserved, which is how the caller knows
+    to leave affinity alone. The TOP indices are the ones handed back: Windows
+    numbers a core's two threads adjacently, so taking them off the end frees
+    whole physical cores rather than one thread of twice as many."""
+    if reserve <= 0:
+        return []
+    total = total or psutil.cpu_count()
+    return list(range(max(1, total - reserve)))
+
+
+def apply_affinity(root_pid: int, cpus: list[int], pinned: set[int]) -> None:
+    """Fence the run's whole process tree onto `cpus`, skipping what is already
+    fenced. Silent on a process that exited mid-walk or refuses -- a finished
+    worker is the normal case, and a run must never die of its own courtesy."""
+    try:
+        root = psutil.Process(root_pid)
+        family = [root, *root.children(recursive=True)]
+    except psutil.NoSuchProcess:
+        return
+    for proc in family:
+        if proc.pid in pinned:
+            continue
+        pinned.add(proc.pid)
+        try:
+            proc.cpu_affinity(cpus)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            pass
 
 
 def is_python(path: str) -> bool:
@@ -289,6 +400,26 @@ def save_state(prints: dict[str, str], workers: int, exit_code: int) -> None:
     }, indent=0), encoding="utf-8")
 
 
+def say_if_the_rendered_gates_cannot_run() -> None:
+    """Announce a missing uilab, because a run without it looks GREEN.
+
+    Every layout, contact-sheet and rendered-behaviour gate skips when uilab
+    is unreachable, and a skip is not a failure: the run reports `8413 passed,
+    75 skipped` in 68 seconds and exits 0. Measured 2026-09-03, building a
+    baseline to compare a branch against -- a `git worktree` outside
+    `.claude/worktrees/` resolves the sibling checkout relative to ITSELF, so
+    the 62 browser tests silently left the run and the comparison was about to
+    be believed. `find_uilab`'s own docstring covers the other way this
+    vanishes (a `uv sync` pruning an editable install).
+
+    Prints and returns; it never blocks. The point is that a run missing its
+    rendered half cannot look identical to one that has it."""
+    if find_uilab() is not None:
+        print("run_tests: !! uilab NOT FOUND -- every rendered gate will SKIP, "
+              "and the run will still exit 0. Set UILAB_PATH to your uilab "
+              "checkout before trusting this result.", flush=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -297,6 +428,9 @@ def main(argv: list[str] | None = None) -> int:
                              "change touched; runs everything if a non-Python file changed")
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS,
                         help=f"pytest-xdist workers (default {DEFAULT_WORKERS})")
+    parser.add_argument("--reserve", type=int, default=DEFAULT_RESERVED_CORES,
+                        help=f"logical processors kept free of the test tree so the desktop "
+                             f"stays responsive (default {DEFAULT_RESERVED_CORES}; 0 disables)")
     args, extra = parser.parse_known_args(argv)
 
     current = fingerprint(git_known_files())
@@ -306,6 +440,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         mode, why = "full", "the merge gate: every test, and the coverage map refreshed"
     print(f"run_tests: {mode} -- {why}", flush=True)
+    say_if_the_rendered_gates_cannot_run()
 
     sweep_leftovers("before")
     command = [sys.executable, "-m", "pytest", *pytest_args(mode, args.workers, extra)]
@@ -315,7 +450,14 @@ def main(argv: list[str] | None = None) -> int:
     # always has normal-priority load beside a run (sibling Claude sessions,
     # their servers) and a starved worker times out its browsers. Lag is
     # answered with `--workers` instead; see the docstring.
-    exit_code = subprocess.run(command, cwd=ROOT).returncode
+    child = subprocess.Popen(command, cwd=ROOT)
+    cpus = reserved_affinity(args.reserve)
+    if cpus:
+        pinned: set[int] = set()
+        while child.poll() is None:
+            apply_affinity(child.pid, cpus, pinned)
+            time.sleep(AFFINITY_SWEEP_SECONDS)
+    exit_code = child.wait()
     sweep_leftovers("after")
     if records_full_run(mode, extra, exit_code):
         save_state(current, args.workers, exit_code)

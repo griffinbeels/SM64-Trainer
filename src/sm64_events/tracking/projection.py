@@ -252,7 +252,8 @@ from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
     SEGMENT_ATTEMPT_OFFSET, MatchContext, SegmentEngine, arms_ambiently,
     hooks_on_arm, hundred_coin_entity, origin_course, reachable_places,
-    segment_origin, speaks_through_a_parent, stage_origin, time_bounds)
+    attributable_parent, entity_parents, segment_origin,
+    speaks_through_a_parent, stage_origin, time_bounds)
 
 
 @dataclass(frozen=True)
@@ -1890,15 +1891,18 @@ class Projector:
         """What a segment's SUCCESS moves an unheld hand onto (round 21): a
         top-level segment follows onto itself, exactly as it always has; a
         SUBSECTION follows onto its parent — the current target when it is
-        already one of the piece's parents, else the primary (parents[0]) ONLY
-        when there is exactly one; a piece belonging to several stars leaves
-        the hand alone rather than guessing between them (round 27).
+        already one of the piece's parents, else the one entity that piece can
+        be attributed to. A piece two or more entities could equally claim
+        leaves the hand alone rather than guessing between them.
         A castle-area parent ("area:...") is a place, not a target, so an
         area-parented piece keeps the old behavior and follows onto
         itself."""
         d = self._segments.definition(segment_id)
         parents = (d.parents or []) if d is not None else []
-        if not parents:
+        # No parent that can HOLD a target -- a top-level segment, or one
+        # filed only under a castle AREA, which is a place. Both follow onto
+        # themselves, exactly as they always have (round 22 item 5).
+        if not entity_parents(parents, segment_id):
             return ("segment", segment_id)
         current = target_entity_key(self.target)
         # AMBIGUITY DOES NOT GET RESOLVED BY GUESSING (round 27, 2026-08-09).
@@ -1916,13 +1920,19 @@ class Projector:
         # stars/subsections WHEN THEY FINISH, and then select the correct star
         # once detected (or manually selected)."
         #
-        # So a piece with SEVERAL parents and no matching hand leaves the hand
-        # exactly as it found it. A piece with ONE parent is unambiguous and
-        # still follows, which is round 21 item 1's own case ("swap to the
-        # correct list") and the reason this is not a blanket refusal.
-        if current not in parents and len(parents) > 1:
+        # THE SAME AMBIGUITY ALSO ARRIVES ACROSS DEFINITIONS (2026-09-03, task
+        # 0122's follow-on). Counting one definition's own parents was not
+        # enough: he had authored the volcano's entry TWICE, identical
+        # start/end/waypoints/guards, one filed under each volcano star. Each
+        # def had exactly one parent, so each looked unambiguous from inside
+        # itself, both closed on the same pipe touch, and the later one won.
+        # `attributable_parent` (segments.py) asks the question the way he
+        # phrased it -- "two or more stars / segments share the subsegment" --
+        # over the whole enabled definition set rather than over one row.
+        chosen = (current if current in parents
+                  else attributable_parent(d, self._segments.definitions()))
+        if chosen is None:
             return self.target
-        chosen = current if current in parents else parents[0]
         kind, _, rest = chosen.partition(":")
         if kind == "star":
             course_str, _, star_str = rest.partition(":")

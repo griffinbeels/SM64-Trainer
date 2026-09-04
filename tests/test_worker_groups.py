@@ -32,3 +32,35 @@ def test_under_loadgroup_the_group_reached_the_scheduler(request):
     if not getattr(request.config.option, "loadgroup", False):
         pytest.skip("only meaningful under `-n <k> --dist loadgroup`")
     assert request.node.nodeid.endswith("@tests/test_worker_groups.py"), request.node.nodeid
+
+
+def test_the_session_runs_every_file_in_its_own_order(request):
+    """The merge gate refreshes testmon's map with `--testmon-noselect`, and
+    that mode REORDERS the collection ("prioritize the tests most likely to
+    fail first") once a map exists -- which scrambled a module's tests
+    across its two viewport params, rebuilt the fixture-reach file's
+    module-scoped page 38 times instead of twice, and ran practice-tab
+    assertions on a page a story test had left on Segments (2026-09-02,
+    measured on one worker with no other load: 3 failed + 7 reruns; file
+    order: 81 green). conftest's hookwrapper puts the order back after every
+    plugin has had its say. This compares the LIVE session's order with the
+    order that recipe produces -- raw collection order, then pytest's own
+    parametrised-fixture grouping -- so a plugin that reorders, or a hook
+    change that stops restoring, goes red here on the next gate. With no map
+    the two are trivially equal; the gate always has one after its first run."""
+    from _pytest.fixtures import reorder_items
+    from conftest import RAW_INDEX
+
+    live = [item.nodeid for item in request.session.items]
+    expected = [item.nodeid for item in reorder_items(
+        sorted(request.session.items, key=lambda item: item.stash[RAW_INDEX]))]
+    # strict=False on purpose: a length difference IS a divergence, and the
+    # message should name where it starts rather than raise on its way there.
+    first_divergence = next(
+        (index for index, (seen, wanted) in enumerate(zip(live, expected, strict=False))
+         if seen != wanted),
+        min(len(live), len(expected)))
+    assert live == expected, (
+        "the session's items are not in file order (plus pytest's own "
+        "param grouping); a plugin reordered them and conftest did not put "
+        f"them back. First divergence at index {first_divergence}")

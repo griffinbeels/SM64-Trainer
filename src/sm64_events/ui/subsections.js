@@ -118,8 +118,29 @@ export const piecesFor = (rows, parentKey) => (rows || []).filter(
  *    this branch asked for. Deliberately NOT generalised to a segment piece.
  *  - **A parent with a nesting child EARNS a card**, whether or not it earned
  *    one itself. Practicing only the piece would otherwise orphan it back to
- *    the top level on the very run that proves the association.
+ *    the top level on the very run that proves the association. **Only a child
+ *    that can be ATTRIBUTED to it counts** (2026-09-03): a piece two or more
+ *    entities could equally claim proves no association at all, and a card
+ *    conjured by one would assert he practiced a star he never chose. His
+ *    case: two "Volcano Entry" definitions with identical start/end/waypoints/
+ *    guards, one under each volcano star, both closing the instant he drops
+ *    into the volcano -- *"we just shouldn't select a star until I've actually
+ *    selected a star... We should still keep track of those subsegments, just
+ *    that it doesn't show up in the practice log until we've grabbed the
+ *    star."* The server answers which entity owns a piece (`attributable_to`,
+ *    tracking/segments.py::attributable_parent), because the projector's hand
+ *    rule asks the identical question and two derivations would drift.
+ *    Nesting itself is untouched: once a parent has a card of its own, every
+ *    one of its pieces still shows inside it (round 22's own ruling).
  */
+// Can this child, on its own, earn `parentKey` a card it did not earn
+// itself? Only when the server says this piece belongs to that entity and no
+// other. `undefined` means a hand-built section from before the field existed
+// (ui/tunelog.js's inspector fixture) and keeps the old behaviour; `null` is
+// the server saying the piece is ambiguous.
+const speaksFor = (child, parentKey) =>
+  child.attributable_to === undefined || child.attributable_to === parentKey;
+
 export function nestSubsections(sections, earned = () => true) {
   // A DISABLED section is dropped from the log entirely (the `enabled`
   // check a few lines down), so it must never count as a home either -- a
@@ -178,7 +199,8 @@ export function nestSubsections(sections, earned = () => true) {
     // Deliberately NOT generalised to a segment piece: that one has never
     // been a standalone card, and round 28's rule for it is untouched.
     if (wantsAParent(sec) && !homesOf(sec).length && isSegment(sec)) continue;
-    if (!children.length && !earned(sec)) continue;
+    if (!children.some((child) => speaksFor(child, key)) && !earned(sec))
+      continue;
     groups.push({ sec, children });
   }
   return groups;

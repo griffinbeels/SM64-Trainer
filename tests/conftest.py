@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _pytest.fixtures import reorder_items
 
 # tests/ has no __init__.py, so pytest puts THIS directory on sys.path and the
 # shared helper imports bare: `from source_scan import strip_comments`. The
@@ -23,7 +24,12 @@ from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
 
 
-@pytest.hookimpl(tryfirst=True)
+# Where each item sat in the raw collection, stamped before any plugin
+# touches the list, so the order can be put back afterwards (below).
+RAW_INDEX = pytest.StashKey[int]()
+
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
 def pytest_collection_modifyitems(items):
     """Every test carries a WORKER GROUP for pytest-xdist's `loadgroup`
     scheduler: its own file by default, so a module's one-server-one-browser
@@ -36,13 +42,37 @@ def pytest_collection_modifyitems(items):
     `@<group>` to the nodeid and splits it back on those two characters.
     `tryfirst` because xdist's worker reads the marks in ITS hook of the same
     name, and this conftest registers before that worker plugin does -- so
-    without it the marks arrive one hook too late and every file spreads."""
-    for item in items:
+    without it the marks arrive one hook too late and every file spreads.
+
+    A HOOKWRAPPER since 2026-09-02, because the group alone did not keep a
+    file's order: pytest-testmon's `--testmon-noselect` -- the flag the
+    merge gate runs under to refresh its map -- is documented as "reorder
+    and prioritize the tests most likely to fail first", and does it in a
+    `trylast` impl of this same hook once a map exists. Measured on the
+    fixture-reach file: one worker without the flag ran it in file order,
+    built its module-scoped page twice and passed 81/81 in 41 s; one worker
+    WITH the flag ran a scrambled order, built the page 38 times, and went
+    3 failed + 7 reruns in 161 s with no other load on the machine -- tests
+    that assume the Practice tab ran on a page a story test had just left
+    on Segments. The map only exists after a first full run, which is why
+    the first gate in a fresh worktree was green and every one after it
+    red on a different set (2026-09-01/02). The post-yield half runs after
+    EVERY non-wrapper impl, testmon's included: it puts the items back in
+    raw collection order and re-applies pytest's own parametrised-fixture
+    grouping (`reorder_items`, the thing that keeps both viewports of a
+    module-scoped page together), so what a plugin does to the order can
+    never reach the workers. `tests/test_worker_groups.py` compares the
+    live session's order against that recipe."""
+    for index, item in enumerate(items):
+        item.stash[RAW_INDEX] = index
         if item.get_closest_marker("spread"):
             group = re.sub(r"[^A-Za-z0-9_./:-]", "_", item.nodeid)
         else:
             group = item.nodeid.split("::")[0]
         item.add_marker(pytest.mark.xdist_group(group))
+    yield
+    items.sort(key=lambda item: item.stash.get(RAW_INDEX, len(items)))
+    items[:] = reorder_items(items)
 
 
 @pytest.fixture(autouse=True, scope="session")
