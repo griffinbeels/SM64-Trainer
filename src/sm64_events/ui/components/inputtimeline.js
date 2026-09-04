@@ -22,6 +22,7 @@ import htm from "htm";
 import { Icon } from "./icons.js";
 import { fmtIgtShort } from "../format.js";
 import { ControllerPanel, FacingDial, stickPhrase } from "./controllerpanel.js";
+import { SetupModal } from "./setupmodal.js";
 
 const html = htm.bind(h);
 
@@ -328,6 +329,18 @@ function screenCheck(reading, attemptId, open, toggle, degraded = false) {
       onclick=${toggle}>${label}</button>`;
 }
 
+// Whether this clip's frame map came off the frame-exact capture layer (the
+// wrapper plugin, core/capturelayer.py) rather than a reconstruction after
+// the fact -- a nudge, not a verdict: every other source is a real, working
+// map, just one built from less direct evidence than the plugin's own.
+function frameMapNote(frameMapSource, openSetup) {
+  if (frameMapSource === "plugin") return null;
+  return html`<div class="input-frame-map-note">
+    <span>Frame-exact capture is off.</span>
+    <button type="button" onclick=${openSetup}>Set up</button>
+  </div>`;
+}
+
 // The frames the screen contradicts, each as the PANEL frame it sits on --
 // "which 2 frames disagree?" answered on the surface, and a click goes
 // there. `disagreements` rows are [slot, row, screen reads, map says].
@@ -360,11 +373,13 @@ function DisagreementList({ reading, frameMap, stretches, seek, lead }) {
 export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
                                 frameMap = null, clock = null,
                                 padReading = null, degraded = false,
+                                frameMapSource = null,
                                 compact = false,
                                 tools = null }) {
   const [state, setState] = useState({ phase: "loading" });
   const [frame, setFrame] = useState(0);
   const [checkOpen, setCheckOpen] = useState(false);   // the screen-check list
+  const [setupOpen, setSetupOpen] = useState(false);
   // The pointer and the playhead both work in the TRACK column's own box,
   // never the lane row's: the row starts with the label column, and a
   // playhead measured against it could be dragged over the words "Stick"
@@ -574,6 +589,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         <h4 data-total=${total} data-lead=${lead}>${timeLabel(attemptFrames)}${" "}·${" "}${attemptFrames} frames${" "}·${" "}${data.fps} fps</h4>
         ${screenCheck(padReading, attemptId, checkOpen,
                       () => setCheckOpen((open) => !open), degraded)}
+        ${frameMapNote(frameMapSource, () => setSetupOpen(true))}
       </div>
     </header>
     ${checkOpen && html`<${DisagreementList} reading=${padReading}
@@ -678,5 +694,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       </div>
     </footer>
     ${tools}
+    ${setupOpen && html`<${SetupModal} onClose=${() => setSetupOpen(false)}
+        initialPane="emu" />`}
   </div>`;
 }

@@ -301,6 +301,7 @@ def build():
     # (reader): the sidecar's frame_map is built from it at extraction.
     frame_clock = FrameClock()
     replay = None
+    frame_stream = None
     if replay_cfg.enabled:
         from sm64_events.replay.encoder import pick_video_codec
         codec = pick_video_codec()
@@ -346,7 +347,6 @@ def build():
         # the header before the first frame is wanted; a machine with no
         # layer just holds an idle mapping. Decided per attach: the layer is
         # live when its heartbeat moves within a fifth of a second.
-        frame_stream = None
         try:
             from sm64_events.memory.addresses import RDRAM_FULL_SIZE
             from sm64_events.replay.framestream import FrameStream
@@ -607,10 +607,21 @@ def build():
                                version=layout.version,
                                events=db.events_between,
                                landmark_names=db.landmark_names)
+    # THE CAPTURE LAYER's installer (item 95): the setup screen's door to
+    # installing the wrapper plugin under consent. Built on the real
+    # registry and process list; its heartbeat comes from the frame stream
+    # when replay opened one, so "active" means the plugin is presenting.
+    from sm64_events.core.capturelayer import CaptureLayer, WinProcesses, WinRegistry
+    from sm64_events.core.paths import bundled_plugin_dll, capture_layer_settings_path
+    capture_layer = CaptureLayer(
+        registry=WinRegistry(), processes=WinProcesses(),
+        settings_path=capture_layer_settings_path(),
+        dll_source=bundled_plugin_dll(),
+        stream_header=(frame_stream.header if frame_stream is not None else None))
     return create_app(poller, broadcaster, service=service, replay=replay,
                       inputs=inputs,
                       updater=updater, compare=compare, compilation=compilation,
-                      db_retry=db_retry)
+                      db_retry=db_retry, capture_layer=capture_layer)
 
 
 _app = None

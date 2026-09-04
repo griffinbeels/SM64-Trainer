@@ -4713,6 +4713,68 @@
     background: rgba(99,45,55,.22); color: #f0a4aa;
   }
 
+  /* The setup screen (setupmodal.js) -- a platform picker + a per-platform
+     checklist, over `.modal-large`. Every state change here is a mount, not
+     a display toggle, so newly-appearing content (a row's body, the
+     disabled reason, the active line) plays a short entrance animation
+     rather than snapping in -- `animation`, not `transition`, since there is
+     no prior DOM state for a transition to interpolate from. */
+  .setup-platform-picks {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .6rem; margin-bottom: 1rem;
+  }
+  .setup-platform-choice {
+    display: flex; flex-direction: column; align-items: flex-start; gap: .2rem;
+    padding: .85rem 1rem; border: 1px solid var(--border-soft);
+    border-radius: 10px; background: #101f31; color: var(--text);
+    cursor: pointer; text-align: left;
+    transition: border-color .15s ease, background-color .15s ease;
+  }
+  .setup-platform-choice:hover { border-color: #5b90c4; }
+  .setup-platform-choice.is-selected {
+    border-color: var(--gold-soft); background: #16283f;
+  }
+  .setup-platform-name { font-weight: 650; }
+  .setup-platform-detail { font-size: .78rem; color: var(--muted); }
+  .setup-error { color: #e08585; font-size: .85em; margin: 0 0 .6rem; }
+  .setup-checklist { display: flex; flex-direction: column; gap: .65rem; }
+  .setup-row {
+    border: 1px solid var(--border-soft); border-radius: 8px;
+    padding: .7rem .8rem; background: #0e1c2c;
+  }
+  .setup-row-head { display: flex; align-items: center; gap: .5rem; }
+  .setup-status-dot {
+    width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto;
+    background: #5b6b7d;
+  }
+  .setup-row-ok .setup-status-dot { background: #59d98e; }
+  .setup-row-warn .setup-status-dot { background: #e0b34a; }
+  .setup-row-title { font-weight: 600; }
+  .setup-row-detail { margin: .35rem 0 0; color: var(--muted); font-size: .8rem; }
+  .setup-row-body { margin-top: .55rem; }
+  .setup-path {
+    word-break: break-all; background: #081422; padding: .05rem .3rem;
+    border-radius: 4px; font-family: monospace; font-size: .78rem;
+  }
+  .setup-consent-card p { margin: .3rem 0; font-size: .82rem; color: var(--text); }
+  .setup-consent-card .primary-button { margin-top: .5rem; }
+  .setup-disabled-reason { margin: .4rem 0 0; color: #e0a4a4; font-size: .78rem; }
+  .setup-active-line {
+    display: flex; align-items: center; gap: .4rem; color: #59d98e;
+  }
+  .setup-active-line button { margin-left: auto; }
+  .setup-n64-note { color: var(--muted); margin: 0; }
+  @media (prefers-reduced-motion: no-preference) {
+    .setup-row-body, .setup-disabled-reason, .setup-active-line,
+    .setup-consent-card {
+      animation: setup-row-in .2s ease-out;
+    }
+    @keyframes setup-row-in {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  }
+
   .strategy-name-field { margin-bottom: 1rem; }
   .stratname { margin: 0; }
   /* "Include in ranking" — a checkbox ROW, and deliberately NOT a
@@ -5086,6 +5148,20 @@
   .input-screen-check-row:hover { background: rgba(160, 110, 30, .3); }
   .input-screen-check-row .frame { font-weight: 600; color: #f0c877; }
   .input-screen-check-row .axis { color: #8fa3b8; }
+
+  /* A nudge, not a warning -- every source here is a real, working map, this
+     one just built from less direct evidence than the wrapper plugin's own
+     frame stream. Sits beneath the header's title/screen-check line rather
+     than beside it: at 850px the chip already wraps its own line. */
+  .input-frame-map-note {
+    display: flex; align-items: center; gap: .4rem; margin: .25rem 0 0;
+    font-size: .72rem; color: #8fa3b8;
+  }
+  .input-frame-map-note button {
+    font: inherit; font-size: .72rem; color: #f0c877; background: none;
+    border: none; min-height: 0; padding: 0; text-decoration: underline;
+    cursor: pointer;
+  }
 
   .input-inspector {
     display: flex; align-items: center; gap: .8rem; flex-wrap: wrap;

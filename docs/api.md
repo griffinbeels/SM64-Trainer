@@ -396,6 +396,23 @@ is informational: the emulator path with an explicit JP has no verified JP
 addresses, so detection stays US while grading uses JP standards. `mode`
 (`"emu"`/`"n64"`) is stored and echoed; nothing on main reads it yet.
 
+### Setup
+
+The first-run setup screen (`setupmodal.js`) — one small API over two things
+already persisted separately: which platform you practice on
+(`core/modes.py`, the same record `/api/mode` reads) and the capture layer's
+own state (`core/capturelayer.py` — whether the frame-exact wrapper plugin is
+installed into Project64). Mounted only when the server is given a capture
+layer object (`create_app(..., capture_layer=...)`); a broadcast-only second
+instance carries none of these routes.
+
+| Method | Path | Body | Description |
+|---|---|---|---|
+| `GET` | `/api/setup` | — | `{platform: "emu"\|"n64", emu: <LayerStatus>, n64: {available: false}}`. `emu` is the capture layer's full status (`pj64_dir`, `pj64_running`, `registry_graphics_dll`, `wrapper_present`, `wrapper_current`, `wrapper_selected`, `wrapped_name`, `layer_alive`, `gl_context`, `consented_at`, `problems`, `state` — one of `not_installed\|needs_restart\|active\|regressed\|unavailable`). `n64` has nothing to report yet (console-support's own front-end). |
+| `PUT` | `/api/setup/platform` | `{"platform": "emu"\|"n64"}` | Persists the platform choice through `core/modes.py` (touches `mode` only — the stored game version is unchanged) and returns the `GET` payload. 422 on any other value. |
+| `POST` | `/api/setup/capture-layer` | `{"consent": true}` | `capture_layer.install(consent)`, then the `GET` payload. A refused install (`LayerRefused` — Project64 running, no folder known, `consent` false) is a 409 whose `detail` is the sentence the checklist shows where the click landed. |
+| `DELETE` | `/api/setup/capture-layer` | — | `capture_layer.uninstall()`, then the `GET` payload. Refusal is a 409 the same way. |
+
 ## MARELO — the overall rating
 
 **MARELO** rolls every rankable entity's score into one 0-100 rating per

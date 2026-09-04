@@ -33,6 +33,7 @@ import uvicorn
 
 from sm64_events.compare.importer import VideoImporter
 from sm64_events.compare.service import CompareService
+from sm64_events.core.capturelayer import LayerRefused, LayerStatus
 from sm64_events.core.events import Event
 from sm64_events.memory.behaviours import pointer_of
 from sm64_events.core.timefmt import format_igt
@@ -97,6 +98,48 @@ class _OfflineMemory:
 
     def detach(self) -> None:
         pass
+
+
+class _FixtureCaptureLayer:
+    """A capture layer whose STATUS is fixed for the fixture's whole
+    lifetime -- a real install/uninstall needs a real Project64 and a real
+    registry, neither of which this offline fixture has. `install`/
+    `uninstall` are recorded (so a driven test can assert they were called)
+    and either succeed by returning the fixed status or refuse with a fixed
+    reason; nothing here simulates a state MACHINE. A test that wants a
+    different state asks `serve_ui(capture_layer_status={...})` for a fresh
+    fixture at that state, the same way every other fixture knob works."""
+
+    def __init__(self, status: LayerStatus, refuse: str | None = None):
+        self._status = status
+        self._refuse = refuse
+        self.installs: list[bool] = []
+        self.uninstalls = 0
+
+    def status(self) -> LayerStatus:
+        return self._status
+
+    def install(self, consent: bool) -> LayerStatus:
+        self.installs.append(consent)
+        if self._refuse or not consent:
+            raise LayerRefused(self._refuse or "consent is required")
+        return self._status
+
+    def uninstall(self) -> LayerStatus:
+        self.uninstalls += 1
+        if self._refuse:
+            raise LayerRefused(self._refuse)
+        return self._status
+
+
+def _fixture_capture_layer_status(**overrides) -> LayerStatus:
+    fields = dict(pj64_dir=None, pj64_running=False,
+                 registry_graphics_dll=None, wrapper_present=False,
+                 wrapper_current=False, wrapper_selected=False,
+                 wrapped_name=None, layer_alive=False, gl_context=False,
+                 consented_at=None, problems=[], state="not_installed")
+    fields.update(overrides)
+    return LayerStatus(**fields)
 
 
 # Task 6 fix round 2 (the root cause is cited three times in
@@ -1318,7 +1361,9 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               enter_level: int | None = None,
               arm_hundred_coin: tuple[int, int] | None = None,
               seed_reds_run: bool = False,
-              pad_journal: int = 0):
+              pad_journal: int = 0,
+              capture_layer_status: dict | None = None,
+              capture_layer_refuse: str | None = None):
     """Yield the base URL of an offline instance; stop it on the way out.
 
     DETERMINISTIC BY DEFAULT: an empty database plus `seed_practice`, so two
@@ -1424,6 +1469,15 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     `pad_journal` bulk-inserts that many inert journal rows before the server
     starts, so per-poll endpoint costs match a LIVE-sized journal instead of a
     fresh one (see `_pad_journal` -- the burst latency gate is why).
+
+    `capture_layer_status` overrides fields of the setup screen's capture-
+    layer status (`_fixture_capture_layer_status`, `LayerStatus.as_dict()`'s
+    own keys) -- default is a bare `not_installed` with no Project64 folder
+    known, which is deliberately NOT the state that makes the header's setup
+    modal auto-open (that needs `pj64_dir` or `pj64_running` truthy too), so
+    the general sweep is not interrupted by a modal nobody asked this fixture
+    for. `capture_layer_refuse` makes every install/uninstall attempt fail
+    with that sentence, for driving the 409 path.
     """
     scratch = None
     if db_path is None:
@@ -1514,8 +1568,14 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     inputs = InputsService(database.inputs, database.input_templates,
                            database.attempts, events=database.events_between,
                            landmark_names=database.landmark_names)
+    # The setup screen's own capture layer -- see _FixtureCaptureLayer's
+    # docstring for why this is a fixed status rather than a simulated
+    # install/uninstall state machine.
+    capture_layer = _FixtureCaptureLayer(
+        _fixture_capture_layer_status(**(capture_layer_status or {})),
+        refuse=capture_layer_refuse)
     app = create_app(poller, broadcaster, service=service, compare=compare,
-                     inputs=inputs,
+                     inputs=inputs, capture_layer=capture_layer,
                      adoptions_path=Path(compare_cache_scratch.name)
                      / "library_adoptions.json",
                      mode_path=Path(compare_cache_scratch.name) / "tracker_mode.json")

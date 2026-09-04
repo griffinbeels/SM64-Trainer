@@ -494,8 +494,31 @@ await waitFor(() => !!document.querySelector('.runner-page'));
 await sleep(60);
 """)
 
+# The setup screen (setupmodal.js) -- a modal, so no plain page load reaches
+# it. It opens off the settings drawer's own "Setup" button (header.js), so
+# this walks the same door a person does: open Settings, then Setup.
+_SETUP_SETUP = _script("""
+if (!document.querySelector('.settings-drawer')) {
+  const settingsBtn = document.querySelector('.nav-item.settings-link')
+    || document.querySelector('button[aria-label="Open settings"]');
+  if (settingsBtn) {
+    settingsBtn.click();
+    await waitFor(() => !!document.querySelector('.settings-drawer'));
+  }
+}
+if (!document.querySelector('.setup-platform-picks')) {
+  const setupBtn = Array.from(document.querySelectorAll('.settings-actions button'))
+    .find((b) => b.textContent.trim() === 'Setup');
+  if (setupBtn) {
+    setupBtn.click();
+    await waitFor(() => !!document.querySelector('.setup-platform-picks'));
+  }
+}
+""")
+
 STORIES = [
     Story(name="page", at="", setup=_EXPAND_ALL),
+    Story(name="setup-modal", at=".modal", setup=_SETUP_SETUP),
     # The attempt drawer: the clip and the input timeline on one clock. It is
     # opened by a button, so no page load reaches it -- same reason the
     # recorder stories exist.

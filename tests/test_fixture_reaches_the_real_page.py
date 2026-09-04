@@ -257,6 +257,23 @@ def test_the_fixture_reaches_a_real_compare_backend():
             "a fresh fixture should have no saved comparisons yet")
 
 
+def test_the_fixture_reaches_a_real_capture_layer():
+    """`/api/setup` must answer 200 with a real payload, not 404 -- confirms
+    `serve_ui()` wires `capture_layer=` into `create_app` (setup_api.py is
+    mounted only when one is given, same as the inputs router above), and
+    that `capture_layer_status` overrides actually reach the response, or the
+    setup modal's own uilab test would be reading a fixture state it never
+    asked for."""
+    with serve_ui(capture_layer_status={"state": "active", "pj64_dir": "C:/PJ64"}) as base:
+        with urllib.request.urlopen(f"{base}/api/setup", timeout=10) as r:
+            assert r.status == 200, r.status
+            body = json.loads(r.read())
+        assert body["platform"] == "emu"
+        assert body["emu"]["state"] == "active"
+        assert body["emu"]["pj64_dir"] == "C:/PJ64"
+        assert body["n64"] == {"available": False}
+
+
 # Two viewports, not one: 1500x1000 (comfortably wide, side-by-side rank
 # banners) and 850x1180 (the supported floor, min_viewport_width -- stacked
 # banners, the narrow objective-card band). Reach had only ever been proven

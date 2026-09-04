@@ -71,7 +71,8 @@ def main(argv: list[str]) -> int:
     # the person named rather than one the walk derived).
     for flag, name in (("--recorder", "recorder-open"),
                        ("--recording", "recorder-review"),
-                       ("--waypoints", "recorder-waypoints")):
+                       ("--waypoints", "recorder-waypoints"),
+                       ("--setup", "setup-modal")):
         if flag in argv:
             story = next(s for s in STORIES if s.name == name)
             selector = selector or ".modal"

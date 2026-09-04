@@ -250,7 +250,8 @@ def _quiet_connection_resets(loop, context) -> None:
 def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, updater=None, compare=None,
                compilation=None, db_retry=None, debug_hooks: bool = False,
-               adoptions_path=None, mode_path=None, inputs=None) -> FastAPI:
+               adoptions_path=None, mode_path=None, inputs=None,
+               capture_layer=None) -> FastAPI:
     # `mode_path` overrides where the game version setting persists
     # (server/mode_api.py) -- tests pass a scratch file; None (production)
     # resolves to core.paths.mode_settings_path().
@@ -445,6 +446,11 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     if inputs is not None:
         from sm64_events.server.inputs_api import create_inputs_router
         app.include_router(create_inputs_router(inputs))
+
+    if capture_layer is not None:
+        from sm64_events.server.setup_api import create_setup_router
+        app.include_router(create_setup_router(capture_layer,
+                                               mode_path=mode_path))
 
     if compare is not None:
         from sm64_events.server.compare_api import create_compare_router
