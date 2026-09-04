@@ -519,7 +519,10 @@ a three-centisecond disagreement means exactly one frame.
 
 The stretch since Usamune's counter last restarted. Two readings from different
 epochs describe different things, so the trainer works out WHY the counter
-restarted before trusting any difference between them.
+restarted before trusting any difference between them: a restart the level
+caused — a door or warp the game itself carried out, in or out of a
+subarea, or a teleporter — adds the stretch before it to the [[star]]'s
+whole time, and a [[reset]] throws it away.
 
 - **Lives** — the epoch reader (`src/sm64_events/detectors/counter_epoch.py`)
 

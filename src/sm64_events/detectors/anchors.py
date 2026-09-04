@@ -146,6 +146,19 @@ area_load (2026-08-01, live report: "if we enter a subarea within a stage, we
   polls of the SAME game frame, so the edge and the zero need a window
   (AREA_LOAD_WINDOW) rather than an exact match.
 
+  **And the destination cannot see a walk back OUT (task 0117, 2026-09-04)**:
+  the CCM slide's cabin door lands in area 1, the retry's-reload shape, so
+  Slip Slidin' Away recorded a reset he never made at the door (journal id
+  34447) and the star's clock dropped the slide with it. The game's own warp
+  is the second reading, and `counter_epoch.EpochTracker` holds both: a
+  walked warp (door op 0x03, warp object 0x04) FIRES when `sDelayedWarpTimer`
+  reaches zero with the op still pending, wherever it leads -- a reset never
+  fires one, it zeroes op and countdown together (probe_warp_block,
+  2026-08-11). Every journal on this machine: the op was still pending at
+  175 of 176 subarea entries and all 25 door exits, and had vanished with
+  the countdown still running at every cancelled ride. The destination
+  reading stays for the one entry whose op had gone stale.
+
 teleport (2026-08-03, live demo in CCM and WDW; task 0082): an IN-LEVEL
   teleporter — the CCM broken bridge, the WDW corner warps, the HMC toxic-maze
   pads — relocates Mario inside the SAME area, and Usamune zeroes the overall
@@ -180,11 +193,14 @@ teleport (2026-08-03, live demo in CCM and WDW; task 0082): an IN-LEVEL
   attempt for it; `segments.py`'s echo shape (6) keeps it invisible to the
   matcher while still moving that basis frame.
 
-warp_op / frames_since_warp_op (2026-08-01, INERT — read by nothing): the
-  game's own pending warp op (`sDelayedWarpOp`) most recently seen non-zero,
-  and how long ago. Kept as evidence for the case `area_load` above does NOT
-  cover: walking back OUT of a subarea zeroes the counter the same way, and
-  is indistinguishable from a reset by destination alone.
+warp_op / frames_since_warp_op (2026-08-01): the game's own pending warp op
+  (`sDelayedWarpOp`) most recently seen non-zero, and how long ago. Journaled
+  INERT for a month as evidence for the case the destination could not
+  cover -- walking back OUT of a subarea -- and that evidence is what sized
+  the fix: `counter_epoch.EpochTracker` now reads the op's COUNTDOWN (task
+  0117, 2026-09-04), see `area_load` above. These two payload fields are
+  unchanged and still read by nothing; they are how the next case gets
+  measured.
 
 Pause streak: consecutive game frames where global_timer advanced but the
   overall IGT did not — game logic stopped, i.e. the Usamune pause menu (or a
@@ -314,9 +330,10 @@ class AnchorDetector:
         if curr.mario_action in SAVE_DIALOG_ACTIONS:
             self._save_menu_seen = True
         # The game's own reason for a pending transition, kept the way door and
-        # dialogue recency are kept. INERT: journaled for the open question in
-        # the docstring (an area load is indistinguishable from an L-reset),
-        # read by nothing.
+        # dialogue recency are kept -- for the PAYLOAD. The classification
+        # reads the op's countdown inside `counter_epoch.EpochTracker.observe`
+        # (a walked warp fired), never this recency: an op that was merely
+        # seen is also what a cancelled ride leaves behind.
         if curr.pending_warp_op:
             self._last_warp_op = (curr.global_timer, curr.pending_warp_op)
         # Where the area last moved TO within this level, and when the
