@@ -326,14 +326,31 @@ def _poll_sheet_job(client, job_id, timeout_s=30):
     raise AssertionError(f"the sheet import job never finished: {seen}")
 
 
-def test_the_sheet_job_door_lands_the_same_column_and_narrates_the_steps(tmp_path):
+def test_the_sheet_job_door_lands_the_same_column_and_narrates_the_steps(
+        tmp_path, monkeypatch):
     """Round 29 item 4, the server half: the same import as `POST
     /api/import/sheet`, reported as it goes. Against the bundled snapshot
-    (no download) the real boundaries left are matching the runner's rows
-    and landing the times, so the job must show at least those two distinct
-    sentences before `done`, its `result` must be the one-request door's
-    body, and the times must be IN the database -- a job that narrated and
-    landed nothing would satisfy a weaker test."""
+    (no download) the whole job can finish inside one poll interval, so the
+    steps are read off the job board's own `step` calls -- every sentence
+    the work reported, in order -- rather than sampled: the claim is that
+    the job NARRATES its real boundaries (matching the runner's rows,
+    landing the times) with rising fractions, that its `result` is the
+    one-request door's body, and that the times are IN the database -- a
+    job that narrated and landed nothing would satisfy a weaker test."""
+    from sm64_events.server import jobs
+
+    steps = []
+    real_start = jobs.JobBoard.start
+
+    def recording_start(self, name, work):
+        def recorded(step):
+            def spy(fraction, message):
+                steps.append((fraction, message))
+                step(fraction, message)
+            return work(spy)
+        return real_start(self, name, recorded)
+
+    monkeypatch.setattr(jobs.JobBoard, "start", recording_start)
     with make_client(tmp_path) as (client, db, _svc):
         started = client.post("/api/import/sheet/job", json={
             "runner": "DentoriousRed", "refresh": False})
@@ -342,13 +359,11 @@ def test_the_sheet_job_door_lands_the_same_column_and_narrates_the_steps(tmp_pat
 
         assert seen[-1]["state"] == "done", seen
         assert seen[-1]["progress"] == 1.0
-        # The snapshot path's two steps are fast, so one poll may miss one
-        # of them -- the claim is that the job NARRATED before it finished,
-        # in the door's own words, not that a 20 ms sampler saw every step.
-        messages = [status["message"] for status in seen]
-        assert len(messages) >= 2, messages
-        assert any("Matching DentoriousRed" in message or message.startswith("Landing ")
-                   for message in messages), messages
+        assert [message for _fraction, message in steps] == [
+            "Matching DentoriousRed's rows to your trainer…",
+            "Landing 16 times…"], steps
+        assert [fraction for fraction, _message in steps] == sorted(
+            fraction for fraction, _message in steps)
         result = seen[-1]["result"]
         assert result["imported"] == 16 and result["found"] == 16
         assert result["source"] == "sheet:DentoriousRed"
