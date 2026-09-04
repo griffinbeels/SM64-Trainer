@@ -55,6 +55,24 @@ only the first manual download does.)
 - **Windowed**, not exclusive fullscreen, or replay capture can't see the game.
 - Your data lives in `%LOCALAPPDATA%\SM64Trainer\` and survives every update.
 
+**The setup screen and the capture layer.** The first time the trainer sees
+an emulator it opens a setup screen: pick **Emulator** (N64 setup arrives
+with console support) and walk a three-row checklist -- Project64 found, the
+Usamune ROM, and **frame-exact capture**. That last row asks your consent to
+install the **capture layer**: a small wrapper graphics plugin the trainer
+copies into Project64's `Plugin` folder, selects as the `Graphics Dll`, and
+points at the graphics plugin you already use through a one-line ini. It
+forwards everything to your plugin and, from inside the emulator, hands the
+trainer every presented picture together with the game's own frame counter
+and pad for that picture -- so a replay's input timeline is exact on every
+frame instead of inferred from a desktop recording. Install with Project64
+CLOSED (1.6 rewrites its settings on exit), then restart it; the row turns
+"active" when the layer is presenting. The trainer works without it (the
+desktop grab stays the fallback and the timeline says "frame-exact capture is
+off"), and **Remove** on the same row puts your original plugin name back.
+The screen reappears on its own only while an emulator is detected and the
+layer is not consented; open it any time from the header's **Setup**.
+
 > **No sound on a saved replay?** Windows has routed the app's audio — and the
 > embedded browser's (`msedgewebview2.exe`) — to a different output device.
 > Open **Settings → System → Sound → Volume mixer** and point both at your

@@ -592,7 +592,10 @@ wherever the reader can check the display, and a clip whose display it
 cannot read keeps the answer the clocks gave, and says so. A clip cut from
 the [[picture feed]] carries a map the trainer reads off the [[feed log]]
 instead: picture k IS a row, so no matching of picture stretches and no
-quantising happens, and the [[pad reader]] audits it. The [[input timeline]]
+quantising happens, and the [[pad reader]] audits it. A clip recorded
+through the [[capture layer]] carries the plugin's own stamps as its map:
+nothing aligns, joins or infers, and the [[oracle reader]] can certify it
+picture by picture. The [[input timeline]]
 and every [[overlay layer]] read the clip through its map; a clip cut
 before maps existed falls back to a fixed offset.
 
@@ -750,6 +753,71 @@ ships but can no longer move it.
   it on a clip already cut
 - **Not** -- the [[pad reader]]: that reads the STICK's digits, which repeat
   on half the pictures of a clip; the clock never repeats while it ticks.
+
+### Capture layer
+
+The wrapper graphics plugin the trainer installs into Project64 (2026-09-04,
+his ask: "redo our recording system so that the recording [[frame]]s ARE game
+[[frame]]s"). It forwards every call to the graphics plugin you already use;
+when the game submits a picture it copies the game's own memory -- the
+[[frame]] counter, the pad, Mario, the running IGT -- and when the plugin
+presents that picture it reads the picture off the GPU and hands both to
+the [[recorder]] through the [[frame stream]]. A clip made of these pictures
+carries no inference: each [[picture ledger]] row says `exact`, the
+[[frame map]] is the rows, and the [[timer reader]] and the [[pad reader]]
+only audit. The trainer installs it under your explicit consent on the
+[[setup screen]] (the file into Project64's Plugin folder, its `Graphics Dll`
+setting, a small ini naming your plugin) and undoes it from the same screen;
+without it the [[recorder]] photographs the desktop as before.
+
+- **Lives** -- `plugin/gfxwrap/gfxwrap.c` (the plugin), built by
+  `tools/build_plugin.py` into `src/sm64_events/data/plugin/`;
+  `src/sm64_events/core/capturelayer.py` installs and undoes it;
+  `src/sm64_events/replay/pluginsource.py` is the [[recorder]]'s camera over
+  it
+- **Not** -- the desktop grab (`src/sm64_events/replay/video.py`): that
+  photographs the window ~120 times a second and the trainer must then work
+  out which [[frame]] each photograph shows.
+
+### Frame stream
+
+The shared-memory ring the [[capture layer]] writes and the [[recorder]]
+reads: one slot per presented picture, the copied memory beside its pixels,
+and -- in the other direction -- the table of addresses the trainer asks the
+plugin to copy, so the plugin itself knows no game address. Both sides
+compute its size from the same constants and a test pins the C offsets
+against the Python ones.
+
+- **Lives** -- `src/sm64_events/replay/framestream.py` (the trainer's side),
+  `plugin/gfxwrap/stream.h` (the plugin's)
+
+### Oracle reader
+
+The developer's check that reads the [[frame]] number the game prints into its own
+picture when Usamune's HUD memory display shows `0x8032D5D4`, and scores any
+[[frame map]] against it. It trusts a reading only when a neighbouring
+picture vouches for it (the counter steps by exactly one), so a misread
+contradicts its neighbours instead of passing. His ruling: the display is
+the oracle, never the shipped mechanism -- users will not enter a memory
+address to play.
+
+- **Lives** -- `src/sm64_events/replay/oracleread.py`; `tools/score_oracle.py`
+  prints the verdict for a clip
+- **Not** -- the [[timer reader]] or the [[pad reader]]: those read what
+  the game always draws; this reads a display only a developer switches on.
+
+### Setup screen
+
+The modal that asks which platform you practice on -- Emulator or N64 -- and
+then shows that platform's checklist, each row a door to its own fix. The
+Emulator rows are Project64 (found, or how to let the trainer find it), the
+Usamune ROM, and the [[capture layer]]'s consent card: what the install
+writes, why, and the undo. It opens on its own once each time you open the app while the trainer
+detects an emulator and you have not consented to the layer, and again from
+the header any time. N64's rows arrive with console support.
+
+- **Lives** -- `src/sm64_events/ui/components/setupmodal.js`; its API is
+  `src/sm64_events/server/setup_api.py`
 
 ### Overlay layer
 
@@ -1461,7 +1529,9 @@ doubt.
 ### Recorder
 
 The capture holding the last stretch of play, so a [[star]] you just took can
-become a clip without you having recorded anything deliberately.
+become a clip without you having recorded anything deliberately. Its camera
+is the [[capture layer]] once you have installed it and Project64 presents
+through it, and the desktop grab otherwise.
 
 - **Lives** — the recorder (`src/sm64_events/replay/recorder.py`)
 

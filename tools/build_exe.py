@@ -70,6 +70,12 @@ def app_args(ffmpeg: "str | None") -> list[str]:
         f"{REPO / 'src' / 'sm64_events' / 'data' / 'symbols_us.tsv'}{SEP}.",
         "--add-data",
         f"{REPO / 'src' / 'sm64_events' / 'data' / 'symbols_jp.tsv'}{SEP}.",
+        # THE CAPTURE LAYER (core/paths.py::bundled_plugin_dll): the wrapper
+        # graphics plugin the setup screen installs into Project64. Kept
+        # under its package path so the frozen lookup mirrors the source one.
+        "--add-data",
+        f"{REPO / 'src' / 'sm64_events' / 'data' / 'plugin' / 'sm64_trainer_gfx.dll'}"
+        f"{SEP}sm64_events/data/plugin",
         # The desktop tray + pywebview window load assets/ukiki.ico at RUNTIME
         # via _asset_path (-> sys._MEIPASS/ukiki.ico when frozen). --icon only
         # embeds it in the PE header (Explorer/taskbar); without bundling it as
