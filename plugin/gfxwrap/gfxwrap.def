@@ -1,0 +1,24 @@
+LIBRARY sm64_trainer_gfx
+EXPORTS
+    CaptureScreen
+    ChangeWindow
+    CloseDLL
+    DllAbout
+    DllConfig
+    DllTest
+    DrawScreen
+    FBGetFrameBufferInfo
+    FBRead
+    FBWrite
+    GetDllInfo
+    InitiateGFX
+    MoveScreen
+    ProcessDList
+    ProcessRDPList
+    ReadScreen
+    RomClosed
+    RomOpen
+    ShowCFB
+    UpdateScreen
+    ViStatusChanged
+    ViWidthChanged
