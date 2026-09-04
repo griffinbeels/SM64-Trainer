@@ -317,6 +317,18 @@ shows whichever [[strategy]] you have selected.
 - **Lives** — the store (`src/sm64_events/storage/db.py`)
   → the PB tag on the [[practice log]]
 
+### Platform stamp
+
+Which machine set a time: `emu` (Project64's memory) or `n64` (a real
+console's picture). Every [[attempt]] carries one, read off the [[event]] that
+closed it, and a [[personal best]] remembers its platform through the
+[[attempt]] you saved it from. An absent stamp means `emu`: until the console
+front-end existed, nothing but the emulator could close an [[attempt]], and
+one rule in the mode registry says so.
+
+- **Lives** — the mode registry (`src/sm64_events/core/modes.py`)
+  → the [[practice log]] and the sheet export
+
 ### Strategy
 
 A named way of doing a [[target]] — which path through the level, which tricks.
