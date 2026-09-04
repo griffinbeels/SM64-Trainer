@@ -31,7 +31,7 @@ against the offsets the C side prints):
       40  table_count  44  lists_since
       48  lengths[16]  116 seq_end
       128 table bytes: 16 x TABLE_ENTRY_BYTES
-      1280 pixels: stride x height, FORMAT_BGR8_BOTTOM_UP (glReadPixels order)
+      4096 pixels: stride x height, FORMAT_BGR8_BOTTOM_UP (glReadPixels order)
 
 The writer fills a slot, then `seq_end`, then the header's `write_seq`,
 each behind a memory barrier; a reader copies the slot and re-checks that
@@ -58,8 +58,8 @@ MAX_WIDTH = 3840
 MAX_HEIGHT = 2160
 BYTES_PER_PIXEL = 3
 TABLE_ENTRIES = 16
-TABLE_ENTRY_BYTES = 64
-SLOT_META_BYTES = 1280
+TABLE_ENTRY_BYTES = 128                  # Mario's block is 76 bytes; a stick/button struct 32
+SLOT_META_BYTES = 4096
 SLOT_BYTES = SLOT_META_BYTES + MAX_WIDTH * MAX_HEIGHT * BYTES_PER_PIXEL
 TOTAL_BYTES = HEADER_BYTES + SLOT_COUNT * SLOT_BYTES
 
@@ -81,7 +81,7 @@ KIND_PICTURE = 1
 
 S_SEQ, S_KIND, S_LIST_QPC, S_PRESENT_QPC, S_VI_ORIGIN = 0, 4, 8, 16, 24
 S_WIDTH, S_HEIGHT, S_STRIDE, S_TABLE_COUNT, S_LISTS_SINCE = 28, 32, 36, 40, 44
-S_LENGTHS, S_SEQ_END, S_TABLE, S_PIXELS = 48, 116, 128, 1280
+S_LENGTHS, S_SEQ_END, S_TABLE, S_PIXELS = 48, 116, 128, 4096
 
 #: every named constant above, for the C side's parity test
 LAYOUT = {name: value for name, value in globals().items()

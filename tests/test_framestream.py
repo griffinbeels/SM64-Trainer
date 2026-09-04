@@ -84,7 +84,7 @@ def test_set_table_lands_in_the_header_count_last(stream):
     with pytest.raises(ValueError):
         stream.set_table([(0x32D5D6, 4)], rdram_bytes=8 << 20)     # not word-aligned
     with pytest.raises(ValueError):
-        stream.set_table([(0, 68)], rdram_bytes=8 << 20)           # over an entry's size
+        stream.set_table([(0, 132)], rdram_bytes=8 << 20)          # over an entry's size
 
 
 def test_want_frames_and_the_tracker_heartbeat(stream):

@@ -173,6 +173,13 @@ def main() -> int:
     if not meta.get("frame_times") or not meta.get("picture_ledger"):
         print("not a picture-feed clip with a picture ledger; nothing to re-join")
         return 2
+    if all(row.get("exact") for row in meta["picture_ledger"]):
+        # A capture-layer clip (item 95): the map IS the plugin's stamps;
+        # there is no join to re-run. Score it against the oracle instead.
+        print("a capture-layer clip: every row is the plugin's own stamp, the map is "
+              "the rows -- nothing to re-join. Certify it with "
+              f"`tools/score_oracle.py --attempt {args.attempt}`")
+        return 0
     ffmpeg = str(bundled_ffmpeg() or "ffmpeg")
     pairs, prior = clock_pairs_from_ledger(meta)
     stamped = sum(1 for pair in pairs if pair is not None)

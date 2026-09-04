@@ -338,10 +338,45 @@ def build():
             except Exception:
                 logging.getLogger("sm64.replay").exception(
                     "ffmpeg probe failed - using in-process encoder")
+        # THE CAPTURE LAYER (round 32 item 95): when the wrapper plugin inside
+        # Project64 is presenting, every picture comes from it already stamped
+        # with the game's own frame counter and pad (replay/pluginsource.py),
+        # and the desktop grab is not used. The stream is opened here so the
+        # address table -- from THIS layout, never from the plugin -- is in
+        # the header before the first frame is wanted; a machine with no
+        # layer just holds an idle mapping. Decided per attach: the layer is
+        # live when its heartbeat moves within a fifth of a second.
+        frame_stream = None
+        try:
+            from sm64_events.memory.addresses import RDRAM_FULL_SIZE
+            from sm64_events.replay.framestream import FrameStream
+            from sm64_events.replay.pluginsource import PluginVideoSource, table_for
+            frame_stream = FrameStream()
+            stamp_table = table_for(layout)
+            frame_stream.set_table([(offset, length) for _name, offset, length in stamp_table],
+                                   rdram_bytes=RDRAM_FULL_SIZE)
+        except Exception:
+            logging.getLogger("sm64.replay").exception(
+                "frame stream unavailable; desktop capture only")
+
+        def video_factory(win):
+            if frame_stream is not None:
+                import time as _time
+                before = frame_stream.header()
+                _time.sleep(0.2)
+                after = frame_stream.header()
+                if after.initiated and after.alive != before.alive:
+                    logging.getLogger("sm64.replay").info(
+                        "capture layer live (wrapping %s): frames come stamped "
+                        "from inside Project64", after.wrapped_name or "?")
+                    return PluginVideoSource(frame_stream, stamp_table, layout,
+                                             fps=replay_cfg.fps)
+            return DwmSurfaceVideoSource(win, fps=replay_cfg.fps)
+
         recorder = ReplayRecorder(
             cfg=replay_cfg,
             window_finder=find_window,
-            video_factory=lambda win: DwmSurfaceVideoSource(win, fps=replay_cfg.fps),
+            video_factory=video_factory,
             audio_factory=lambda pid: ProcessAudioSource(
                 pid=pid, rate=replay_cfg.audio_rate),
             fallback_audio_factory=lambda pid: SystemAudioSource(
@@ -450,6 +485,16 @@ def build():
                                       str(bundled_ffmpeg() or "ffmpeg"))
 
         replay.map_aligner = _align_map_to_footage
+
+        # THE CAPTURE LAYER's own audit (item 95): the pad the plugin copied
+        # beside each picture against the track's pad at that frame -- no
+        # pixels involved. Wired here for the same reason as the aligner.
+        def _track_pads(attempt):
+            track = track_for_attempt(db.inputs, attempt)
+            return {number: (frame.stick_x, frame.stick_y, frame.buttons)
+                    for number, frame in track} if track else {}
+
+        replay.track_pads = _track_pads
 
         # THE PAD READER (round 32, 2026-09-01) runs BEFORE the ink anchor
         # and supersedes it when it answers: it reads the display's six

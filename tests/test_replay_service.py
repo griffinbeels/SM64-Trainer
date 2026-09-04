@@ -1036,3 +1036,55 @@ def test_a_refusing_or_broken_reader_leaves_the_ink_anchor_in_charge(tmp_path):
         assert sidecar.get("frame_map_read") is not True
         (svc.clips_dir / "clip_attempt_42.mp4").unlink()
         (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").unlink()
+
+
+class ExactLedger:
+    """Rows a capture-layer clip carries: the plugin's own frame and pad."""
+    def __init__(self, count=3, pads=None):
+        self.count = count
+        self.pads = pads or {}
+    def rows_between(self, t0, t1):
+        return [{"ts": t0 + 0.5 + i / 30, "frame": 100 + i, "exact": True,
+                 "pad": self.pads.get(100 + i, [0, 0, 0]), "igt_overall": 40 + i,
+                 "vi_origin": 0x100000 + i, "lists_since": 1}
+                for i in range(self.count)]
+
+
+def test_a_capture_layer_clip_takes_its_stamps_as_the_map_and_audits_the_pads(tmp_path):
+    """Item 95: every row says `exact`, so the map is the rows -- the
+    footage aligner and the timer join are never called, the pad reader only
+    audits, and the stamp's pad is checked against the input track."""
+    import json as _json
+
+    svc = make_service(tmp_path, [attempt()])
+    svc.recorder.ledger = ExactLedger(pads={100: [5, -9, 0x8000], 101: [5, -9, 0x8000],
+                                            102: [0, 0, 0]})
+    svc.ledger_mapper = lambda clip, rows, *a, **k: [row["frame"] for row in rows] + [102]
+    svc.map_aligner = lambda *a, **k: (_ for _ in ()).throw(AssertionError("aligner ran"))
+    svc.timer_reader = lambda *a, **k: (_ for _ in ()).throw(AssertionError("timer ran"))
+    audits = []
+    svc.pad_reader = lambda clip, frame_map, attempt, **k: audits.append(k) or None
+    svc.track_pads = lambda attempt: {100: (5, -9, 0x8000), 101: (5, -9, 0x8000),
+                                      102: (3, 0, 0)}
+    res = svc.view(42)
+    assert res["frame_map"] == [100, 101, 102, 102]
+    assert res["frame_map_source"] == "plugin"
+    assert res["frame_map_inferred"] is False
+    assert res["pad_stamp_agreement"]["pictures"] == 3
+    assert res["pad_stamp_agreement"]["agree"] == 2
+    assert res["pad_stamp_agreement"]["disagreements"] == [[2, 102, [3, 0, 0], [0, 0, 0]]]
+    assert len(audits) == 1                  # the reader ran once, as an auditor
+    sidecar = _json.loads(
+        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
+    assert sidecar["frame_map_source"] == "plugin"
+    assert sidecar["picture_ledger"][0]["exact"] is True
+
+
+def test_a_clip_with_one_inexact_row_takes_the_old_path(tmp_path):
+    svc = make_service(tmp_path, [attempt()])
+    svc.recorder.ledger = FakeLedger()          # no `exact` on any row
+    svc.ledger_mapper = lambda clip, rows, *a, **k: [100, 101, 102, 102]
+    aligned = []
+    svc.map_aligner = lambda *a, **k: aligned.append(a) or None
+    res = svc.view(42)
+    assert res["frame_map_source"] == "ledger" and aligned

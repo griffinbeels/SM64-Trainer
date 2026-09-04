@@ -166,10 +166,14 @@ def detail(attempt_id, side, track, seams, panel_frames) -> None:
             drift = (row["frame"] - mapped_there
                      if mapped_there is not None and row["frame"] is not None
                      else None)
+            # `exact` = the capture layer's own stamp (item 95): the frame
+            # the plugin read inside Project64, never an inference.
+            mark = "  [exact]" if row.get("exact") else ""
+            pad = f"  pad {row['pad']}" if row.get("pad") is not None else ""
             print(f"   ledger ts {row['ts']:+8.4f}s (slot {slot_of_row}): "
                   f"stamped f{row['frame']}  map there f{mapped_there}"
-                  f"  stamp-map {drift:+d}" if drift is not None else
-                  f"   ledger ts {row['ts']:+8.4f}s: stamped f{row['frame']}")
+                  f"  stamp-map {drift:+d}{mark}{pad}" if drift is not None else
+                  f"   ledger ts {row['ts']:+8.4f}s: stamped f{row['frame']}{mark}{pad}")
 
 
 def audit(attempt_id, side, track, seams) -> None:

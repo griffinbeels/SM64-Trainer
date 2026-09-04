@@ -19,8 +19,8 @@
 #define MAX_HEIGHT 2160
 #define BYTES_PER_PIXEL 3
 #define TABLE_ENTRIES 16
-#define TABLE_ENTRY_BYTES 64
-#define SLOT_META_BYTES 1280
+#define TABLE_ENTRY_BYTES 128
+#define SLOT_META_BYTES 4096
 #define SLOT_BYTES (SLOT_META_BYTES + MAX_WIDTH * MAX_HEIGHT * BYTES_PER_PIXEL)
 #define TOTAL_BYTES (HEADER_BYTES + SLOT_COUNT * SLOT_BYTES)
 
@@ -70,7 +70,7 @@
 #define S_LENGTHS 48
 #define S_SEQ_END 116
 #define S_TABLE 128
-#define S_PIXELS 1280
+#define S_PIXELS 4096
 
 #pragma pack(push, 1)
 typedef struct {

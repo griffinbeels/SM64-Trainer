@@ -510,3 +510,35 @@ def test_the_picture_ledger_rides_the_capture_path(tmp_path):
     assert rec.ledger.feeds_between(0.0, 1e12) == [
         {"at": rows[0]["ts"] + 0.004, "ts": rows[0]["ts"]}]
     rec.stop()
+
+
+def test_a_stamped_picture_files_the_stamps_frame_and_never_asks_the_frame_clock(tmp_path):
+    """Item 95: a picture from the capture layer arrives with the game's own
+    frame counter; the recorder tags it with that frame, the ledger row says
+    `exact` and carries the pad, and the frame clock is not consulted."""
+    from sm64_events.inputs.frame import InputFrame
+    from sm64_events.replay.pluginsource import FrameStamp
+
+    class RefusingClock:
+        def capture_tag(self, capture_ts):
+            raise AssertionError("the frame clock must not be asked for a stamped picture")
+
+    video, audio = FakeVideoSource(), SystemFakeAudioSource()
+    sink = FakeAvSink()
+    rec = make_recorder(tmp_path, video, audio, frame_clock=RefusingClock(),
+                        video_sink_factory=lambda cfg, on_seg, codec: sink)
+    rec.start()
+    assert wait_for(lambda: video.on_frame is not None)
+    stamp = FrameStamp(frame=5150, igt_overall=91,
+                       pad=InputFrame(buttons=0x8000, pressed=0x8000, stick_x=3, stick_y=-70),
+                       vi_origin=0x100000, list_qpc=1, present_qpc=2, lists_since=1)
+    video.on_frame(np.full((480, 640, 4), 7, dtype=np.uint8), int(1 / 30 * 1e7), stamp)
+    assert wait_for(lambda: len(getattr(sink, "tags", [])) >= 1)
+    frame_tag, capture_ts = sink.tags[0]
+    assert frame_tag == 5150 and abs(capture_ts - (T0.timestamp() + 1 / 30)) < 1e-5
+    rows = rec.ledger.rows_between(T0.timestamp() - 1, T0.timestamp() + 1)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["frame"] == 5150 and row["exact"] is True and row["igt_overall"] == 91
+    assert row["pad"] == [3, -70, 0x8000] and row["vi_origin"] == 0x100000
+    rec.stop()

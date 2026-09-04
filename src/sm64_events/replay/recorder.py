@@ -60,7 +60,12 @@ _IDLE_FLOOR_S = 3.0
 
 
 class VideoSource(Protocol):
-    def start(self, on_frame: Callable[[np.ndarray, int], None],
+    """A camera. `on_frame(bgra, ts_100ns)` for a desktop grab the recorder
+    must place in game time itself; the capture layer's source
+    (replay/pluginsource.py) calls `on_frame(bgra, ts_100ns, stamp)` with the
+    game's own frame counter and pad for that picture, and carries
+    `frame_source = "plugin"` so status can say which camera is live."""
+    def start(self, on_frame: Callable[..., None],
               on_stopped: Callable[[], None]) -> None: ...
     def stop(self) -> None: ...
 
@@ -142,6 +147,7 @@ class ReplayRecorder:
         # protected by _lock
         self._writer: SegmentWriter | None = None
         self._video_source: VideoSource | None = None
+        self._frame_source = "desktop"
         self._audio_source: AudioSource | None = None
         self._clock: CaptureClock | None = None
         self._last_frame: np.ndarray | None = None
@@ -288,6 +294,7 @@ class ReplayRecorder:
         # C1: assign _video_source the instant start() succeeds so teardown
         # can always reclaim it, even if something below raises.
         video = self._video_factory(win)
+        self._frame_source = getattr(video, "frame_source", "desktop")
         # Idle throttle: while the recorder is idle (AFK / manual pause) the
         # capture source drops to a trickle grab rate — every segment is
         # discarded anyway, so the dominant cost (the per-grab ~8 MB surface
@@ -515,7 +522,26 @@ class ReplayRecorder:
 
     # -- frame callback (library thread) -------------------------------------
 
-    def _on_frame(self, bgra: np.ndarray, ts_100ns: int) -> None:
+    def _observe_picture(self, bgra, tag, capture_ts, stamp) -> bool:
+        """One grab into the picture ledger: a stamped picture carries the
+        capture layer's own fields; a desktop grab carries what the frame
+        clock knows about that instant (its edge phase and the IGT pair)."""
+        if stamp is not None and tag is not None:
+            return self.ledger.observe(bgra, tag[1], tag[0], stamp.extras())
+        if tag is not None:
+            phase = self._frame_clock.edge_phase(tag[1])
+            igt = self._frame_clock.igt_for(tag[0])
+            extras = {}
+            if phase is not None:
+                extras["phase"] = phase
+            if igt is not None:
+                extras["igt_overall"] = igt
+            return self.ledger.observe(bgra, tag[1], tag[0], extras or None)
+        if capture_ts is not None:
+            return self.ledger.observe(bgra, capture_ts, None)
+        return False
+
+    def _on_frame(self, bgra: np.ndarray, ts_100ns: int, stamp=None) -> None:
         # NO idle gate here: frames keep flowing so the sink's timeline and
         # `_latest` stay fresh; idle discard happens per completed segment
         # in _on_segment.
@@ -529,11 +555,17 @@ class ReplayRecorder:
             # composition time -- WGC's SystemRelativeTime through the run's
             # CaptureClock, not the moment this callback happened to run --
             # which is what the frame map's present series keys on (v4).
+            # A picture from the CAPTURE LAYER (item 95) arrives with its
+            # own stamp -- the frame the game submitted it as, read inside
+            # the emulator -- so the frame clock is not consulted for it:
+            # the tag's frame IS the stamp's, and the row says `exact`.
             tag = None
             clock = self._clock
             capture_ts = (clock.utc_of(ts_100ns).timestamp()
                           if clock is not None else None)
-            if self._frame_clock is not None:
+            if stamp is not None and capture_ts is not None:
+                tag = (stamp.frame, capture_ts)
+            elif self._frame_clock is not None:
                 tag = self._frame_clock.capture_tag(capture_ts)
             if self._picture_feed and not _sink_has_room(sink):
                 # LOCKSTEP (item 88): no budget to encode this picture, so it
@@ -548,19 +580,7 @@ class ReplayRecorder:
             # The picture ledger notices each NEW picture among the grabs
             # (item 40) -- before submit so the sample reads the buffer this
             # callback was handed. observe() never raises.
-            new_picture = False
-            if tag is not None:
-                phase = self._frame_clock.edge_phase(tag[1])
-                igt = self._frame_clock.igt_for(tag[0])
-                extras = {}
-                if phase is not None:
-                    extras["phase"] = phase
-                if igt is not None:
-                    extras["igt_overall"] = igt
-                new_picture = self.ledger.observe(
-                    bgra, tag[1], tag[0], extras or None)
-            elif capture_ts is not None:
-                new_picture = self.ledger.observe(bgra, capture_ts, None)
+            new_picture = self._observe_picture(bgra, tag, capture_ts, stamp)
             if self._picture_feed:
                 # ONE frame per DISTINCT picture (item 38): a grab that
                 # changed nothing feeds nothing. The tag's second field is
@@ -668,4 +688,11 @@ class ReplayRecorder:
             "encode_backlog": (self._video_sink.queue_depth()[0]
                                if hasattr(self._video_sink, "queue_depth")
                                else 0),
+            # Which camera is live: "plugin" = the capture layer inside
+            # Project64 (every picture stamped by the game), "desktop" = the
+            # window grab the frame clock places in game time afterwards.
+            "frame_source": self._frame_source,
+            "frame_source_health": (self._video_source.status()
+                                    if hasattr(self._video_source, "status")
+                                    else None),
         }

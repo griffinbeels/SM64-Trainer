@@ -157,6 +157,12 @@ class ReplayService:
     #: keep the existing path.
     timer_reader = None
 
+    #: The input track's pads for an attempt, `{frame: (stick_x, stick_y,
+    #: buttons)}`, for the capture-layer audit (`_audit_pad_stamps`): the
+    #: pad the plugin copied for a picture must equal the track's pad at
+    #: that frame. Injected from main.py, which owns the track.
+    track_pads = None
+
     #: Holds the map to ONE answer per distinct picture in the footage
     #: (`replay/mapalign.py::quantised`). Injected like the aligner, and
     #: independent of it: a clip whose display cannot be read still gets
@@ -414,7 +420,10 @@ class ReplayService:
                             # "presents" = v4, "feeds" = v2, "edges" = v1).
                             m["frame_map"], m["frame_map_source"] = mapped
                     if m.get("frame_map") is not None:
-                        self._align_to_the_footage(m, clip, a)
+                        if self._rows_are_exact(m):
+                            self._take_the_stamps(m, clip, a)
+                        else:
+                            self._align_to_the_footage(m, clip, a)
             meta.write_text(json.dumps(m))
             url, source = f"/api/replay/clips/{name}", "buffer"
         # fps = encoded rate (CFR); game_fps = SM64 logic rate — the
@@ -439,6 +448,9 @@ class ReplayService:
                 # `bridged` slots had no usable clock pair and retain shifted
                 # bookkeeping. None for clips captured before the IGT stamp.
                 "timer_reading": m.get("timer_reading"),
+                # A capture-layer clip's own check: the pad the plugin copied
+                # for each picture against the input track at that frame.
+                "pad_stamp_agreement": m.get("pad_stamp_agreement"),
                 "video_start_s": m.get("video_start_s", 0.0),
                 # Per-frame timestamps of a picture-feed clip (VFR); None
                 # for a CFR clip, whose slots are k / fps from
@@ -620,6 +632,60 @@ class ReplayService:
         meta["frame_map_quantised"] = True
         log.info("frame map held to one answer per picture: %d slots moved",
                  moved)
+
+    @staticmethod
+    def _rows_are_exact(meta: dict) -> bool:
+        """A clip recorded through the capture layer (item 95): every ledger
+        row carries `exact`, the frame the plugin read inside Project64 at
+        the display list that drew that picture."""
+        rows = meta.get("picture_ledger") or []
+        return bool(rows) and all(row.get("exact") for row in rows)
+
+    def _take_the_stamps(self, meta: dict, clip: Path, attempt) -> None:
+        """The map IS the rows: nothing is aligned, joined or read into
+        identity. The footage aligner, the timer join and the pad reader's
+        alignment stand down; the pad reader still AUDITS (his 100% test,
+        3 s a clip) and the stamp's own pad is checked against the input
+        track -- a per-picture agreement with no pixels in it."""
+        meta["frame_map_base_source"] = meta.get("frame_map_source")
+        meta["frame_map_source"] = "plugin"
+        meta["frame_map_mode"] = "plugin"
+        meta["frame_map_inferred"] = False
+        meta.pop("_clock_pairs", None)
+        self._read_the_display(meta, clip, attempt, audit_only=True)
+        self._audit_pad_stamps(meta, attempt)
+
+    def _audit_pad_stamps(self, meta: dict, attempt) -> None:
+        """Every exact row's copied pad against the input track's pad at
+        that frame: `pad_stamp_agreement` = {pictures, agree, disagreements}.
+        Absent when no track lookup is wired or the track is empty."""
+        if self.track_pads is None:
+            return
+        try:
+            pads = self.track_pads(attempt)
+        except Exception:
+            log.exception("track lookup failed; no pad-stamp audit")
+            return
+        if not pads:
+            return
+        pictures = agree = 0
+        disagreements = []
+        for slot, row in enumerate(meta.get("picture_ledger") or []):
+            stamped = row.get("pad")
+            frame = row.get("frame")
+            if stamped is None or frame is None or frame not in pads:
+                continue
+            pictures += 1
+            tracked = list(pads[frame])
+            if tracked == list(stamped):
+                agree += 1
+            elif len(disagreements) < 50:
+                disagreements.append([slot, frame, tracked, list(stamped)])
+        meta["pad_stamp_agreement"] = {"pictures": pictures, "agree": agree,
+                                       "disagreements": disagreements}
+        if pictures and agree != pictures:
+            log.warning("pad stamps disagree with the track on %d of %d pictures",
+                        pictures - agree, pictures)
 
     def _align_to_the_footage(self, meta: dict, clip: Path, attempt) -> None:
         """Shift the fresh map onto what the clip's own pixels show.
