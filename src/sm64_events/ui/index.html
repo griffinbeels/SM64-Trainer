@@ -7386,9 +7386,11 @@
      Open (inspect every line) and Rebuild (fetch the sheet again). The
      glyph sits inline with the label, so the button's height never moves
      between its three labels. */
-  .scorecard-copy-column { display: inline-flex; align-items: center; gap: 6px; }
+  .scorecard-copy-column {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
   .scorecard-column-open, .scorecard-column-rebuild {
-    display: inline-flex; align-items: center; gap: 5px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
   }
   /* The inspect box: the column exactly as it will paste, one worksheet row
      per line, in a monospace textarea he can select from by hand -- the
