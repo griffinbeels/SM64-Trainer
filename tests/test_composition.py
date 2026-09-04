@@ -151,6 +151,28 @@ def test_build_gives_the_poller_the_trackers_frame_heartbeat(monkeypatch):
     assert heartbeat.__func__ is TrackerService.settle_frame
 
 
+def test_build_wires_the_clock_reader_into_replay(monkeypatch):
+    """Unit tests below the composition root pass even if the callback that
+    makes the CLOCK primary is never assigned. Exercise the real replay branch
+    and pin that seam explicitly."""
+    main_mod = _stubbed_main(monkeypatch)
+    captured = {}
+    real_replay_service = main_mod.ReplayService
+
+    def spy(*args, **kwargs):
+        built = real_replay_service(*args, **kwargs)
+        captured["replay"] = built
+        return built
+
+    monkeypatch.setattr(main_mod, "ReplayService", spy)
+    main_mod.build()
+
+    replay = captured.get("replay")
+    assert replay is not None, "the enabled replay branch was not composed"
+    assert replay.timer_reader is not None, (
+        "the CLOCK reader was built but never wired into ReplayService")
+
+
 def _stubbed_main(monkeypatch):
     """A freshly reloaded `main` with everything build() would really touch
     stubbed out. Every stub here is load-bearing; the reason is on its line."""

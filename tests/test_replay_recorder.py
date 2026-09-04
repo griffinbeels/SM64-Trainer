@@ -489,6 +489,7 @@ def test_the_picture_ledger_rides_the_capture_path(tmp_path):
     sink = FakeAvSink()
     frame_clock = FrameClock()
     frame_clock.mark(4242)
+    frame_clock.mark_igt(4242, 73)
     rec = make_recorder(tmp_path, video, audio, frame_clock=frame_clock,
                         video_sink_factory=lambda cfg, on_seg, codec: sink)
     rec.start()
@@ -499,6 +500,7 @@ def test_the_picture_ledger_rides_the_capture_path(tmp_path):
     assert wait_for(lambda: len(getattr(sink, "tags", [])) >= 2)
     rows = rec.ledger.rows_between(0.0, 1e12)
     assert [row["frame"] for row in rows] == [4242, 4242]
+    assert [row["igt_overall"] for row in rows] == [73, 73]
     assert rows[1]["ts"] - rows[0]["ts"] > 0
     time.sleep(0.05)
     assert len(sink.frames) == 2, "one fed frame per distinct picture"

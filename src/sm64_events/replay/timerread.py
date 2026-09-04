@@ -1,5 +1,4 @@
-"""THE TIMER READER: which game frame a picture shows, read off Usamune's
-own IGT clock.
+"""THE TIMER READER: join Usamune's displayed IGT to a captured game frame.
 
 Round 32, 2026-09-03. His question ended the previous approach: "have we even
 FOR SURE confirmed that we can even accurately extract the numbers... out from
@@ -9,31 +8,32 @@ signal we had chosen is ambiguous BY NATURE. The stick readout repeats on
 neighbour, and everything built on it (a banded search, a dynamic-programming
 aligner, a learned-anchor store) existed to guess across those gaps.
 
-The timer does not repeat. Usamune prints `floor(frames * 100 / 30)` since the
-run began, so it advances 3 or 4 centiseconds on EVERY game frame and names
-each one outright. His instruction: "We should leverage the actual, mechanical,
-concrete data that we have access to."
+The conversion from a correctly read CLOCK value to a relative IGT frame is
+exact: Usamune prints ``floor(frame * 10 / 3)``, which is strictly increasing.
+But that fact does NOT prove that five OCR glyphs were read correctly, and a
+relative IGT frame is not an absolute ``gGlobalTimer`` frame.  The first draft
+mistook both statements for one proof, then filled the missing constant from
+controller OCR or the old frame map -- the authorities this reader was meant
+to replace.
 
-TWO CHECKS THAT NEED NO CONTROLLER DATA AT ALL, which is what makes this
-different from everything before it -- the reader can be proved right from the
-screen alone:
+The real join is recorded at capture.  InputSampler reads
+``(gGlobalTimer, usamune_overall)`` inside one counter sandwich and the picture
+ledger stamps that pair on the distinct picture.  If the picture shows IGT
+frame ``shown`` while RAM has reached ``current``, the render delay is
+``current - shown`` and the displayed absolute frame is therefore
+``gGlobalTimer - (current - shown)``.  No fitted epoch, controller pixels, or
+timing constant participates.  This is deliberately local to one picture:
+older comments claimed the RAM counter survived subarea loads, but the newer
+live-journal epoch analysis proved it restarts there, so no run-wide epoch is
+assumed.  If screen and RAM stop sharing a counter domain, their lag becomes
+impossible and a sustained mismatch refuses the timer path.
 
-  1. `floor(k * 100 / 30)` can only end in 0, 3 or 6. Measured over his clip
-     and a window of raw ring footage: 3,503 reads, 3,503 legal.
-  2. Every step between two readings must be a whole number of game frames,
-     i.e. a sum of 3s and 4s. Measured: 3,077 of 3,079 and 420 of 422; the
-     handful of exceptions were a seconds digit misread.
-
-And the conversion back is EXACT, not fitted: `cs = floor(k * 10 / 3)` is
-strictly increasing, so `k = ceil(cs * 3 / 10)` recovers the frame with no
-rounding ambiguity. Measured on 3,080 reads carrying 2,533 distinct values:
-every repeat was a duplicate picture, never two different frames.
-
-WHERE IT DOES NOT ANSWER, and the caller must bridge (the picture ledger's
-bookkeeping does): the pause menu and a star dance FREEZE the clock while the
-game keeps running, fades and the reset flash hide it, and it resets to zero
-each attempt. Measured on his clip: 92.5% of frames pinned outright, against
-the 23-50% the stick display manages.
+The screen-only arithmetic remains a diagnostic, not a certificate.  A value
+can end only in 0, 3, or 6 and consecutive readable values cannot go backward,
+but a wrong higher digit can satisfy both.  A slot is called mechanical only
+when it also has the coherent RAM pair and a physically possible display lag.
+Frozen/unreadable/unpaired stretches are bridged from the prior map and are
+reported as bridges, never described as exact.
 
 The digits are the SAME glyphs the stick readout uses, so this needs no
 alphabet of its own -- `padread.load_alphabet()[("y", "d1")]` reads them.
@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 
@@ -68,10 +69,20 @@ REGISTER_SAMPLE = 200
 # menu, a star dance), not duplicate pictures. Measured on his clip: duplicate
 # runs reach 3 pictures; the pause froze 1'16"03 across hundreds.
 FREEZE_RUN = 4
-# The epoch fit must win clearly or the clip keeps the bookkeeping's map.
-EPOCH_MARGIN_MIN = 0.15
-# Fewer pinned frames than this and the timer has not covered the clip.
-MIN_PINNED = 30
+# The old end-to-end measurement put the screen one frame behind RAM and the
+# prototype's healthy joins stayed in single digits.  Twelve is deliberately
+# looser than either result, but narrower than one CLOCK seconds digit (30
+# frames): a one-second OCR error must never pass merely because it is a legal
+# timer value.  This is a refusal guard, not a calibrated correction.
+MAX_DISPLAY_LAG_FRAMES = 12
+# An isolated reset edge or glyph error can be bridged. A sustained rejection
+# means the premise itself is wrong (wrong counter domain/address, or a whole
+# glyph run misread), so replacing the rest of that stretch from the old map
+# would call an inference mechanical. Refuse the timer path instead.
+MAX_REJECTED_RUN = 3
+# Fewer independently joined slots than this is not enough coverage to replace
+# the existing map.  This is a refusal threshold, not a truth threshold.
+MIN_MECHANICAL = 30
 
 
 def frames_of(centiseconds: int) -> int:
@@ -93,23 +104,16 @@ class TimerReading:
     frozen: list = field(default_factory=list)
     read: int = 0            # frames all five digits read on
     legal: int = 0           # ...whose last digit is a possible one (0, 3, 6)
-    achievable: int = 0      # steps that are a whole number of game frames
-    steps: int = 0           # steps scored
+    monotonic: int = 0       # readable transitions that do not go backward
+    backwards: int = 0       # reset boundary or OCR error; screen alone cannot tell
+    transitions: int = 0     # readable transitions scored
     pinned: int = 0          # frames the clock names outright
-
-    @property
-    def sound(self) -> bool:
-        """Did the clock prove itself on the screen alone? Both checks need
-        no controller data, so a failure here is the READER's, never the
-        map's."""
-        return (self.read >= MIN_PINNED
-                and self.legal == self.read
-                and self.achievable == self.steps)
 
     def as_dict(self) -> dict:
         return {"read": self.read, "legal": self.legal, "pinned": self.pinned,
-                "achievable": self.achievable, "steps": self.steps,
-                "sound": self.sound}
+                "monotonic": self.monotonic,
+                "backwards": self.backwards,
+                "transitions": self.transitions}
 
 
 def register(cells: np.ndarray, table: dict) -> dict:
@@ -187,12 +191,7 @@ def learn(cells: np.ndarray, offsets: dict, digits: dict, template_of) -> dict:
 
 def read(cells: np.ndarray, table: dict, dist_max: float,
          margin_min: float, template_of=None) -> TimerReading:
-    """Usamune's clock, per video frame, with its own two proofs.
-
-    Everything here is checkable from the screen alone: a reading whose last
-    digit is impossible, or a step that is not a whole number of game frames,
-    is a MISREAD -- no controller data, no frame map, no alignment.
-    """
+    """Usamune's clock per video frame, plus necessary OCR diagnostics."""
     count = len(cells)
     if count == 0:
         return TimerReading(values=[], frozen=[])
@@ -221,16 +220,23 @@ def read(cells: np.ndarray, table: dict, dist_max: float,
     out.read = sum(1 for one in values if one is not None)
     # CHECK 1: floor(k * 100 / 30) can only end in 0, 3 or 6.
     out.legal = sum(1 for one in values if one is not None and one % 10 in (0, 3, 6))
-    # CHECK 2: every step is a whole number of game frames (a sum of 3s and 4s).
+    # CHECK 2: a running/reset-free clock never goes backward.  This catches
+    # the observed seconds-digit spike, but it is not sufficient to prove all
+    # five glyphs (a wrong larger value can still be monotone).
     previous = None
     for one in values:
         if one is None:
             continue
         if previous is not None:
-            step = one - previous
-            out.steps += 1
-            if step >= 0 and any(3 * k <= step <= 4 * k for k in range(0, 60)):
-                out.achievable += 1
+            out.transitions += 1
+            if one >= previous:
+                out.monotonic += 1
+            else:
+                # Could be a legitimate retry/subarea epoch. The screen alone
+                # cannot distinguish that from a misread, so report the fact
+                # and leave the RAM join to decide; do not turn it into a
+                # boolean certificate.
+                out.backwards += 1
         previous = one
     _mark_frozen(out)
     out.pinned = sum(1 for slot, one in enumerate(values)
@@ -258,51 +264,6 @@ def _mark_frozen(reading: TimerReading) -> None:
         start = end + 1
 
 
-def fit_epoch(reading: TimerReading, stick_agrees, prior: list,
-              span: int = 240):
-    """The ONE frame the clock counted from, fitted against the CONTROLLER
-    DATA rather than against any map.
-
-    `stick_agrees(slot, frame) -> bool | None` says whether the stick digits
-    read from THAT picture match the pad the track holds on `frame` (None when
-    the picture's readout says nothing). So the clock is checked against the
-    other half of the same display plus what the player actually pressed --
-    mechanical and concrete, and independent of every map. `prior` is used
-    only to centre the search.
-
-    Returns (epoch, agreeing frames, scored frames, margin). The margin is the
-    winner minus the best epoch more than two frames away, as a fraction of
-    the frames scored -- an epoch that only just wins has not been
-    established, and the caller keeps the bookkeeping's map.
-    """
-    pinned = [(slot, frames_of(one))
-              for slot, one in enumerate(reading.values)
-              if one is not None and not reading.frozen[slot]]
-    if len(pinned) < MIN_PINNED:
-        return None, 0, 0, 0.0
-    guesses: dict[int, int] = {}
-    for slot, offset in pinned:
-        if slot < len(prior) and prior[slot] is not None:
-            guesses[prior[slot] - offset] = guesses.get(prior[slot] - offset, 0) + 1
-    centre = max(guesses, key=lambda key: guesses[key]) if guesses else 0
-    scores: dict[int, tuple[int, int]] = {}
-    for epoch in range(centre - span, centre + span + 1):
-        agree = checked = 0
-        for slot, offset in pinned:
-            verdict = stick_agrees(slot, epoch + offset)
-            if verdict is None:
-                continue
-            checked += 1
-            agree += bool(verdict)
-        scores[epoch] = (agree, checked)
-    best = max(scores, key=lambda key: scores[key][0])
-    runner = max((hits for epoch, (hits, _seen) in scores.items()
-                  if abs(epoch - best) > 2), default=0)
-    agree, checked = scores[best]
-    margin = (agree - runner) / checked if checked else 0.0
-    return best, agree, checked, margin
-
-
 def segments(reading: TimerReading) -> list[tuple[int, int]]:
     """Maximal runs of slots the clock names outright, as (first, last).
 
@@ -325,96 +286,168 @@ def segments(reading: TimerReading) -> list[tuple[int, int]]:
     return runs
 
 
-def fit_runs(reading: TimerReading, prior: list, agrees, span: int = 8,
-             margin_min: float = 0.10) -> list:
-    """Each clock run's own constant: fitted against the CONTROLLER DATA where
-    the display can determine it, and taken from the recorder's bookkeeping
-    where it cannot.
+@dataclass(frozen=True)
+class TimerMapping:
+    frame_map: list
+    reading: TimerReading
+    mechanical: int
+    bridged: int
+    rejected: int
+    display_lags: tuple[int, ...]
 
-    Returns one entry per run: (first, last, constant, agreeing, scored,
-    margin, fitted). The clock supplies every frame's position within a run;
-    this supplies only the run's one number, which is all a pause can cost.
+    def as_dict(self) -> dict:
+        lags = sorted(self.display_lags)
+        lag = (None if not lags else {
+            "min": lags[0], "median": lags[len(lags) // 2], "max": lags[-1]})
+        return {**self.reading.as_dict(),
+                "mechanical": self.mechanical,
+                "bridged": self.bridged,
+                "rejected": self.rejected,
+                "display_lag_frames": lag}
 
-    Measured on his clip 6510 (2026-09-03), eight runs: the four the display
-    could determine agreed with the controller data on 2269 of 2283 frames,
-    and the four it could not tied across every candidate -- there the
-    bookkeeping is the better answer than an arbitrary winner, so it is used
-    and the run says it was not fitted.
+
+def _transition_holds(left, right) -> bool:
+    """Can two mechanically joined pictures occur in this order?
+
+    A displayed frame cannot go backward, nor advance farther than live RAM
+    did between the two capture stamps.  A backward raw counter is a reset and
+    starts a new epoch rather than being compared across it.
     """
-    out = []
-    for first, last in segments(reading):
-        modes: dict[int, int] = {}
-        for slot in range(first, last + 1):
-            if slot < len(prior) and prior[slot] is not None:
-                guess = prior[slot] - frames_of(reading.values[slot])
-                modes[guess] = modes.get(guess, 0) + 1
-        centre = max(modes, key=lambda key: modes[key]) if modes else 0
-        scores: dict[int, tuple[int, int]] = {}
-        for candidate in range(centre - span, centre + span + 1):
-            agree = checked = 0
-            for slot in range(first, last + 1):
-                verdict = agrees(slot, candidate + frames_of(reading.values[slot]))
-                if verdict is None:
-                    continue
-                checked += 1
-                agree += bool(verdict)
-            scores[candidate] = (agree, checked)
-        best = max(scores, key=lambda key: scores[key][0])
-        agree, checked = scores[best]
-        runner = max((hits for cand, (hits, _n) in scores.items() if cand != best),
-                     default=0)
-        margin = (agree - runner) / checked if checked else 0.0
-        fitted = margin >= margin_min
-        out.append((first, last, best if fitted else centre,
-                    agree, checked, margin, fitted))
-    return out
+    _lslot, lraw, lmapped, _llag = left
+    _rslot, rraw, rmapped, _rlag = right
+    if rraw < lraw:
+        return True
+    return 0 <= rmapped - lmapped <= rraw - lraw
 
 
-def frame_map(reading: TimerReading, runs: list, prior: list) -> list:
-    """The map: every frame the clock names outright, and the recorder's own
-    bookkeeping across the stretches it cannot (a pause, a dance, a fade).
+def _without_spikes(candidates: list[tuple]) -> tuple[list[tuple], set[int]]:
+    """Drop an isolated OCR value that violates both mechanical neighbours.
 
-    `runs` comes from `fit_runs`. The bridge is SHIFTED to meet the clock, so
-    a gap cannot introduce a step change -- the bookkeeping is trusted for how
-    many frames passed, never for which frame it was.
+    This is a refusal, not a repair: the prior map bridges the rejected slot.
+    The small stack rule is the linear-time form of the counterfactual -- if
+    removing the last value makes the surrounding two agree, the last value
+    was the first divergence; otherwise the new value is the one we cannot
+    establish.
     """
-    out: list = [None] * len(reading.values)
-    for first, last, here, _agree, _checked, _margin, _fitted in runs:
-        # THE CLOCK GIVES THE SHAPE, ONE CONSTANT GIVES THE RUN ITS PLACE.
-        # Within a run the clock names every frame exactly and corrects all
-        # the per-frame wander; only the run's single number comes from
-        # elsewhere, which is why a pause -- where the clock stops but the
-        # game does not -- costs one number rather than the clip.
-        #
-        # Carrying the constant across a gap from its two edge frames instead
-        # was tried and is far worse (measured 2026-09-03: 0.58% against
-        # 96.57%), because a gap's edges are exactly where a degraded
-        # bookkeeping is least reliable, and eight runs compound it.
-        for slot in range(first, last + 1):
-            out[slot] = here + frames_of(reading.values[slot])
-    # The stretches the clock cannot name -- a pause, a dance, a fade -- take
-    # the bookkeeping, shifted to meet the NEAREST run so a gap can never
-    # introduce a step change of its own. Carrying one clip-wide shift instead
-    # put every gap on the wrong side of a run that had refused its fit
-    # (measured 2026-09-03).
-    shifts: list = [None] * len(out)
-    for first, last, *_rest in runs:
-        for slot in (first, last):
-            if slot < len(prior) and prior[slot] is not None:
-                shifts[slot] = out[slot] - prior[slot]
+    accepted: list[tuple] = []
+    rejected: set[int] = set()
+    for candidate in candidates:
+        if not accepted or _transition_holds(accepted[-1], candidate):
+            accepted.append(candidate)
+            continue
+        if len(accepted) >= 2 and _transition_holds(accepted[-2], candidate):
+            rejected.add(accepted[-1][0])
+            accepted[-1] = candidate
+        else:
+            rejected.add(candidate[0])
+    return accepted, rejected
+
+
+def _longest_consecutive(slots: set[int]) -> int:
+    longest = run = 0
+    previous = None
+    for slot in sorted(slots):
+        run = run + 1 if previous is not None and slot == previous + 1 else 1
+        longest = max(longest, run)
+        previous = slot
+    return longest
+
+
+def _bridge_from_nearest(exact: list, prior: list) -> list:
+    """Shift prior bookkeeping by the nearest mechanical slot across holes."""
+    out = list(exact)
+    anchors = [slot for slot, value in enumerate(exact)
+               if value is not None and slot < len(prior)
+               and prior[slot] is not None]
+    if not anchors:
+        return out
+    left: list[int | None] = [None] * len(out)
+    right: list[int | None] = [None] * len(out)
+    anchor_set = set(anchors)
     nearest = None
-    for slot in range(len(out)):                    # carry forward
-        if shifts[slot] is not None:
-            nearest = shifts[slot]
-        elif out[slot] is None:
-            shifts[slot] = nearest
-    nearest = None
-    for slot in range(len(out) - 1, -1, -1):        # and back, for a leading gap
-        if out[slot] is not None and slot < len(prior) and prior[slot] is not None:
-            nearest = out[slot] - prior[slot]
-        elif out[slot] is None and shifts[slot] is None:
-            shifts[slot] = nearest
     for slot in range(len(out)):
-        if out[slot] is None and slot < len(prior) and prior[slot] is not None:
-            out[slot] = prior[slot] + (shifts[slot] or 0)
+        if slot in anchor_set:
+            nearest = slot
+        left[slot] = nearest
+    nearest = None
+    for slot in range(len(out) - 1, -1, -1):
+        if slot in anchor_set:
+            nearest = slot
+        right[slot] = nearest
+    for slot in range(len(out)):
+        if out[slot] is not None or slot >= len(prior) or prior[slot] is None:
+            continue
+        before, after = left[slot], right[slot]
+        anchor = after if before is None else before
+        if after is not None and before is not None \
+                and after - slot < slot - before:
+            anchor = after
+        if anchor is not None:
+            out[slot] = prior[slot] + exact[anchor] - prior[anchor]
     return out
+
+
+def map_from_clock(reading: TimerReading, clock_pairs: list,
+                   prior: list) -> TimerMapping | None:
+    """Mechanically join each displayed CLOCK value to ``gGlobalTimer``.
+
+    ``clock_pairs[slot]`` is the ledger row's coherently sampled
+    ``(gGlobalTimer, usamune_overall)``.  For an advancing clock the delta
+    between the RAM and screen IGT values is exactly how far the rendered
+    picture trails capture, so subtracting it from the RAM frame names the
+    displayed frame directly.
+    """
+    count = min(len(reading.values), len(clock_pairs), len(prior))
+    candidates = []
+    impossible: set[int] = set()
+    for slot in range(count):
+        value = reading.values[slot]
+        pair = clock_pairs[slot]
+        if value is None or reading.frozen[slot] or pair is None:
+            continue
+        if value % 10 not in (0, 3, 6):
+            impossible.add(slot)
+            continue
+        raw, current_igt = pair
+        shown_igt = frames_of(value)
+        lag = current_igt - shown_igt
+        if not 0 <= lag <= MAX_DISPLAY_LAG_FRAMES:
+            impossible.add(slot)
+            continue
+        candidates.append((slot, int(raw), int(raw) - lag, lag))
+    accepted, spikes = _without_spikes(candidates)
+    rejected = impossible | spikes
+    if (len(accepted) < MIN_MECHANICAL
+            or _longest_consecutive(rejected) > MAX_REJECTED_RUN):
+        return None
+    exact: list = [None] * len(prior)
+    lags = []
+    for slot, _raw, mapped, lag in accepted:
+        exact[slot] = mapped
+        lags.append(lag)
+    built = _bridge_from_nearest(exact, prior)
+    bridged = sum(1 for slot, value in enumerate(built)
+                  if value is not None and exact[slot] is None)
+    return TimerMapping(frame_map=built, reading=reading,
+                        mechanical=len(accepted), bridged=bridged,
+                        rejected=len(rejected),
+                        display_lags=tuple(lags))
+
+
+def read_clip(clip: Path, prior: list, clock_pairs: list,
+              ffmpeg: str, reference: dict | None = None
+              ) -> TimerMapping | None:
+    """Decode one clip and return a map only when the mechanical join covers it."""
+    from sm64_events.replay import padread
+
+    if not prior or not clock_pairs:
+        return None
+    cells = padread.decode_region(ffmpeg, clip, REGION, WIDTH, HEIGHT)
+    if len(cells) == 0:
+        return None
+    count = min(len(cells), len(prior), len(clock_pairs))
+    table = (reference if reference is not None
+             else padread.load_alphabet()[("y", "d1")])
+    reading = read(cells[:count], table, padread.DIST_MAX,
+                   padread.MARGIN_MIN, template_of=padread.template_from)
+    return map_from_clock(reading, list(clock_pairs), list(prior))

@@ -551,9 +551,14 @@ class ReplayRecorder:
             new_picture = False
             if tag is not None:
                 phase = self._frame_clock.edge_phase(tag[1])
+                igt = self._frame_clock.igt_for(tag[0])
+                extras = {}
+                if phase is not None:
+                    extras["phase"] = phase
+                if igt is not None:
+                    extras["igt_overall"] = igt
                 new_picture = self.ledger.observe(
-                    bgra, tag[1], tag[0],
-                    {"phase": phase} if phase is not None else None)
+                    bgra, tag[1], tag[0], extras or None)
             elif capture_ts is not None:
                 new_picture = self.ledger.observe(bgra, capture_ts, None)
             if self._picture_feed:

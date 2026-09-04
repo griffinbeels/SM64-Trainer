@@ -1,148 +1,178 @@
-"""The TIMER READER: which game frame a picture shows, off Usamune's clock.
-
-His question ended the previous approach -- "have we even FOR SURE confirmed
-that we can even accurately extract the numbers... out from the bottom left
-corner of the screen?" -- and the answer exposed that the signal we had chosen
-is ambiguous BY NATURE: the stick readout repeats on 50-77% of a clip's
-frames. The clock does not repeat. His instruction: "We should leverage the
-actual, mechanical, concrete data that we have access to."
-
-What makes this different from everything before it is that the reader can be
-proved right FROM THE SCREEN ALONE, with no controller data and no map.
-"""
+"""The CLOCK/RAM join that identifies a replay picture's input frame."""
 import numpy as np
 
 from sm64_events.replay import timerread
 
 
-def test_a_reading_names_its_frame_exactly_with_no_rounding_ambiguity():
-    """Usamune prints floor(frames * 100 / 30). That is strictly increasing,
-    so it inverts exactly and no two frames can share a value -- which is the
-    whole reason the clock can do what the stick display cannot."""
-    seen = {}
-    for frame in range(0, 20000):
-        centiseconds = frame * 100 // 30
-        assert timerread.frames_of(centiseconds) == frame
-        assert centiseconds not in seen, "two frames shared a reading"
-        seen[centiseconds] = frame
-
-
-def _reading(values, frozen=None):
-    out = timerread.TimerReading(values=list(values),
-                                 frozen=list(frozen or [False] * len(values)))
+def _reading(frames):
+    values = [frame * 100 // 30 for frame in frames]
+    out = timerread.TimerReading(values=values, frozen=[False] * len(values))
+    out.read = len(values)
+    out.legal = sum(value % 10 in (0, 3, 6) for value in values)
+    out.transitions = max(0, len(values) - 1)
+    out.monotonic = sum(b >= a for a, b in zip(values, values[1:], strict=False))
+    out.backwards = sum(b < a for a, b in zip(values, values[1:], strict=False))
+    out.pinned = len(values)
     return out
 
 
-def test_the_two_checks_need_no_controller_data_at_all():
-    """A reading whose last digit is impossible, or a step that is not a whole
-    number of game frames, is a MISREAD -- provable from the screen. Measured
-    on his clip and on raw ring footage: 3,503 reads, 3,503 legal; steps
-    achievable on 3,077 of 3,079 and 420 of 422."""
-    table = {"0": None}                      # unused by the checks
-    # A clean run of real readings: frames 0..9 of a run.
-    values = [frame * 100 // 30 for frame in range(40)]
-    reading = _reading(values)
-    reading.read = len(values)
-    reading.legal = sum(1 for one in values if one % 10 in (0, 3, 6))
-    assert reading.legal == reading.read, "every real reading ends in 0, 3 or 6"
-    assert all(one % 10 in (0, 3, 6) for one in values)
-    # An impossible reading: a last digit the arithmetic cannot produce.
-    assert 5 % 10 not in (0, 3, 6)
-    assert table is not None
+def _pairs(frames, epoch=500, lag=7):
+    pairs = []
+    for frame in frames:
+        current_igt = frame + lag
+        pairs.append((epoch + current_igt, current_igt))
+    return pairs
 
 
-def test_a_run_of_identical_readings_is_the_clock_frozen_not_a_duplicate():
-    """A pause menu and a star dance stop the clock while the game keeps
-    running, so those frames are readable but name no new frame. Duplicate
-    pictures reach three in a row; his pause froze one value across
-    hundreds."""
-    values = ([0, 3, 6, 6]                      # a duplicate picture: kept
-              + [10] * 12                        # the pause: frozen
-              + [13, 16, 20])
-    reading = _reading(values)
+def test_a_correctly_read_clock_value_inverts_without_rounding_ambiguity():
+    seen = {}
+    for frame in range(20_000):
+        centiseconds = frame * 100 // 30
+        assert timerread.frames_of(centiseconds) == frame
+        assert centiseconds not in seen
+        seen[centiseconds] = frame
+
+
+def test_screen_arithmetic_is_reported_but_does_not_claim_ocr_is_proved():
+    # A seconds digit jumping forward can still produce only legal values and
+    # a monotone sequence. The first implementation called that `sound`;
+    # this is exactly the false implication the hop analysis found.
+    values = [0, 3, 6] + [frame * 100 // 30 for frame in range(33, 60)]
+    assert all(value % 10 in (0, 3, 6) for value in values)
+    reading = timerread.TimerReading(values=values,
+                                     frozen=[False] * len(values),
+                                     read=len(values), legal=len(values),
+                                     monotonic=len(values) - 1,
+                                     transitions=len(values) - 1,
+                                     pinned=len(values))
+    assert "sound" not in reading.as_dict()
+    assert "screen_consistent" not in reading.as_dict()
+
+
+def test_a_long_identical_reading_is_frozen_not_a_new_frame_source():
+    values = [0, 3, 6, 6] + [10] * 12 + [13, 16, 20]
+    reading = timerread.TimerReading(values=values,
+                                     frozen=[False] * len(values))
     timerread._mark_frozen(reading)
-    assert not any(reading.frozen[:4]), "a duplicate picture is not a freeze"
-    assert all(reading.frozen[4:16]), "the pause was not detected"
-    assert not any(reading.frozen[16:])
-    runs = timerread.segments(reading)
-    assert runs == [(0, 3), (16, 18)], runs
+    assert not any(reading.frozen[:4])
+    assert all(reading.frozen[4:16])
+    assert timerread.segments(reading) == [(0, 3), (16, 18)]
 
 
-def test_the_clock_gives_the_shape_and_one_constant_gives_the_run_its_place():
-    """Within a run every frame is named exactly; only the run's single number
-    comes from elsewhere, which is all a pause can cost."""
-    values = [frame * 100 // 30 for frame in range(6)]
-    reading = _reading(values)
-    prior = [500 + frame for frame in range(6)]
-    runs = timerread.fit_runs(reading, prior, lambda slot, frame: None)
-    assert len(runs) == 1
-    first, last, constant, _agree, _checked, _margin, fitted = runs[0]
-    assert (first, last) == (0, 5)
-    assert constant == 500, "the run's constant is what the bookkeeping implies"
-    assert not fitted, "with nothing to score against, it cannot claim a fit"
-    built = timerread.frame_map(reading, runs, prior)
-    assert built == prior
+def test_the_ram_pair_turns_relative_igt_into_the_absolute_displayed_frame():
+    frames = list(range(40))
+    reading = _reading(frames)
+    truth = [500 + frame for frame in frames]
+    prior = [value + 4 for value in truth]          # deliberately wrong map
+    mapped = timerread.map_from_clock(reading, _pairs(frames), prior)
+    assert mapped is not None
+    assert mapped.frame_map == truth
+    assert mapped.mechanical == 40 and mapped.bridged == 0
+    assert mapped.as_dict()["display_lag_frames"] == {
+        "min": 7, "median": 7, "max": 7}
 
 
-def test_the_controller_data_can_move_a_run_off_the_bookkeeping():
-    """Where the display CAN determine a run's constant, it wins -- that is
-    the point. Measured on his clip: the four runs the display could settle
-    agreed with the controller data on 2,269 of 2,283 frames."""
-    values = [frame * 100 // 30 for frame in range(40)]
-    reading = _reading(values)
-    prior = [500 + frame for frame in range(40)]
-
-    # The controller data says every picture is two frames LATER than the
-    # bookkeeping claims, and says so unambiguously.
-    def agrees(slot, frame):
-        return frame == 502 + slot
-
-    runs = timerread.fit_runs(reading, prior, agrees)
-    _first, _last, constant, agree, checked, margin, fitted = runs[0]
-    assert fitted, "an unambiguous fit was refused"
-    assert constant == 502
-    assert agree == checked == 40
-    assert margin > 0.10
-    built = timerread.frame_map(reading, runs, prior)
-    assert built == [502 + slot for slot in range(40)]
+def test_per_picture_delay_is_measured_not_replaced_by_one_fitted_epoch():
+    frames = list(range(40))
+    lags = [5] * 20 + [6] * 20
+    pairs = [(800 + frame + lag, frame + lag)
+             for frame, lag in zip(frames, lags, strict=True)]
+    mapped = timerread.map_from_clock(
+        _reading(frames), pairs, [900 + frame for frame in frames])
+    assert mapped is not None
+    assert mapped.frame_map == [800 + frame for frame in frames]
+    assert mapped.as_dict()["display_lag_frames"] == {
+        "min": 5, "median": 6, "max": 6}
 
 
-def test_a_run_the_display_cannot_settle_keeps_the_bookkeeping():
-    """When every candidate scores alike the display has not determined the
-    run, and an arbitrary winner would be a guess wearing a measurement. His
-    clip had four such runs of eight."""
-    values = [frame * 100 // 30 for frame in range(40)]
-    reading = _reading(values)
-    prior = [500 + frame for frame in range(40)]
-    runs = timerread.fit_runs(reading, prior, lambda slot, frame: True)
-    _first, _last, constant, _agree, _checked, margin, fitted = runs[0]
-    assert margin == 0.0 and not fitted
-    assert constant == 500, "it fell back to the bookkeeping, not to a tie"
+def test_an_isolated_legal_ocr_spike_is_refused_and_bridged():
+    frames = list(range(40))
+    reading = _reading(frames)
+    reading.values[20] += 10       # still ends in 6, but names frame 23
+    truth = [500 + frame for frame in frames]
+    mapped = timerread.map_from_clock(reading, _pairs(frames), truth)
+    assert mapped is not None
+    assert mapped.frame_map == truth
+    assert mapped.mechanical == 39
+    assert mapped.rejected == 1
+    assert mapped.bridged == 1
 
 
-def test_the_stretches_the_clock_cannot_name_take_the_bookkeeping(monkeypatch):
-    """A pause, a dance or a fade is bridged by the recorder's own record,
-    shifted to meet the nearest run so a gap cannot introduce a step change."""
-    values = ([frame * 100 // 30 for frame in range(5)]
-              + [None] * 6                                  # a fade
-              + [(frame + 11) * 100 // 30 for frame in range(5)])
-    reading = _reading(values)
-    prior = [500 + frame for frame in range(16)]
-
-    def agrees(slot, frame):
-        return frame == 502 + slot          # the truth is +2 on the bookkeeping
-
-    runs = timerread.fit_runs(reading, prior, agrees)
-    built = timerread.frame_map(reading, runs, prior)
-    assert None not in built, "a bridged stretch was left unmapped"
-    assert built[:5] == [502 + slot for slot in range(5)]
-    # The bridge carries the same shift, so the seam does not step.
-    assert built[5] - built[4] == 1
-    assert all(b - a == 1 for a, b in zip(built, built[1:], strict=False))
+def test_an_illegal_last_digit_is_never_joined_even_when_its_lag_is_plausible():
+    frames = list(range(40))
+    reading = _reading(frames)
+    reading.values[20] = 65       # inverts nearby, but CLOCK cannot print it
+    truth = [500 + frame for frame in frames]
+    mapped = timerread.map_from_clock(reading, _pairs(frames), truth)
+    assert mapped is not None
+    assert mapped.frame_map == truth
+    assert mapped.mechanical == 39
+    assert mapped.rejected == mapped.bridged == 1
 
 
-def test_a_clip_with_no_clock_on_screen_reads_nothing_rather_than_guessing():
-    reading = timerread.read(np.zeros((0, timerread.HEIGHT, timerread.WIDTH, 3),
-                                      np.uint8), {}, 40.0, 6.0)
+def test_a_one_second_glyph_error_cannot_pass_as_render_delay():
+    frames = list(range(60))
+    reading = _reading(frames)
+    reading.values[40] -= 100     # legal, but 30 frames behind live RAM
+    truth = [500 + frame for frame in frames]
+    mapped = timerread.map_from_clock(reading, _pairs(frames), truth)
+    assert mapped is not None
+    assert mapped.frame_map == truth
+    assert mapped.rejected == mapped.bridged == 1
+
+
+def test_a_sustained_counter_domain_mismatch_refuses_the_timer_path():
+    frames = list(range(45))
+    reading = _reading(frames)
+    pairs = _pairs(frames)
+    # Model a subarea edge where RAM restarts but the displayed counter does
+    # not. This is not an OCR hole the old map may silently bridge; it refutes
+    # the join's counter-domain premise for the rest of the stretch.
+    for slot in range(20, len(pairs)):
+        raw, _current = pairs[slot]
+        pairs[slot] = (raw, slot - 20)
+    assert timerread.map_from_clock(reading, pairs,
+                                    [500 + f for f in frames]) is None
+
+
+def test_a_reset_epoch_crossing_is_not_mistaken_for_render_delay():
+    frames = list(range(40))
+    pairs = _pairs(frames)
+    # The captured RAM clock has reset while this picture still shows the old
+    # epoch. Negative delay proves the two cannot be joined.
+    pairs[20] = (12, 2)
+    truth = [500 + frame for frame in frames]
+    mapped = timerread.map_from_clock(_reading(frames), pairs, truth)
+    assert mapped is not None
+    assert mapped.frame_map == truth
+    assert mapped.rejected == 1 and mapped.bridged == 1
+
+
+def test_unreadable_or_unpaired_slots_are_explicit_nearest_map_bridges():
+    frames = list(range(45))
+    pairs = _pairs(frames, epoch=700, lag=8)
+    for slot in range(12, 20):
+        pairs[slot] = None
+    truth = [700 + frame for frame in frames]
+    prior = [value + 3 for value in truth]
+    mapped = timerread.map_from_clock(_reading(frames), pairs, prior)
+    assert mapped is not None
+    assert mapped.frame_map == truth
+    assert mapped.mechanical == 37 and mapped.bridged == 8
+
+
+def test_too_few_mechanical_joins_refuses_instead_of_guessing():
+    frames = list(range(40))
+    pairs = _pairs(frames)
+    pairs[timerread.MIN_MECHANICAL - 1:] = [None] * (
+        len(pairs) - timerread.MIN_MECHANICAL + 1)
+    assert timerread.map_from_clock(_reading(frames), pairs,
+                                    [500 + f for f in frames]) is None
+
+
+def test_a_clip_with_no_clock_on_screen_reads_nothing():
+    reading = timerread.read(
+        np.zeros((0, timerread.HEIGHT, timerread.WIDTH, 3), np.uint8),
+        {}, 40.0, 6.0)
     assert reading.values == []
-    assert not reading.sound, "an empty read must never call itself sound"
+    assert reading.as_dict()["read"] == 0

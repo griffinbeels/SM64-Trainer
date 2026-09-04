@@ -68,7 +68,7 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
     LayoutRow("mario_object", "gMarioObject", None,
               "pointer to Mario's own object; its behaviour is bhvMario"),
     LayoutRow("usamune_overall", None, "usamune_time",
-              "u16 running OVERALL star time; keeps counting across subareas"),
+              "u16 running leg counter; counter_epoch banks subarea resets"),
     LayoutRow("usamune_star_result", None, "usamune_time",
               "u16 written at the grab with the EXACT displayed time"),
     LayoutRow("usamune_timer", None, "usamune_time",

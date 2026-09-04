@@ -120,6 +120,14 @@ def test_capture_tag_carries_the_frame_and_the_composition_time():
     assert FrameClock().capture_tag(100.01) == (None, 100.01)
     assert FrameClock().capture_tag(None) is None
 
+
+def test_igt_is_returned_only_for_the_exact_frame_it_was_paired_with():
+    clock = FrameClock()
+    clock.mark_igt(700, 31)
+    assert clock.igt_for(700) == 31
+    assert clock.igt_for(699) is None
+    assert clock.igt_for(None) is None
+
 # --- v4: the present series (item 30; probe_host_present.py's counter) -------
 #
 # The physical model: present tick n happens at true time

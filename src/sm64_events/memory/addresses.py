@@ -86,15 +86,16 @@ PARTICLE_DUST = 1 << 0
 # Usamune practice-timer globals — STATIC addresses in expansion RAM
 # (slot-independent, unlike the object-pool counters below), in no symbol
 # map, so a new version HUNTS them (`sync/address_gates.py`, the exact-value
-# scan of the displayed time): `layout.usamune_overall` (u16, running OVERALL
-# star time: keeps counting across area warps, resets with Usamune level
-# resets), `layout.usamune_star_result` (u16, written at the grab with the
-# EXACT final time Usamune displays; persists after the grab, 0 until then).
+# scan of the displayed time): `layout.usamune_overall` (u16, Usamune's
+# RUNNING leg counter; despite the historical name, it restarts at retries,
+# deeper-area loads and in-level teleports -- `detectors/counter_epoch.py`
+# carries the live-journal proof and banks involuntary restarts),
+# `layout.usamune_star_result` (u16, written at the grab with the EXACT final
+# whole-star time Usamune displays; persists after the grab, 0 until then).
 # US neighbours observed 2026-06-10: +0x-2 constant 256; +0x2 written at grab.
-# `layout.usamune_timer` is the SECTION (per-area) counter — slot-dependent
-# AND resets on area warps inside a level, so it must NOT be the event IGT
-# source (it under-reported multi-area stars like "Inside the Ancient
-# Pyramid"). Kept for diagnostics only.
+# `layout.usamune_timer` is a second SECTION/per-area counter in the object
+# pool -- slot-dependent, and likewise not a whole-star event source. Kept for
+# diagnostics only.
 
 # Trap, do not reuse for IGT: the vanilla HUD race timer (gHudDisplay.timer,
 # `layout.hud_display` + HUD_TIMER_OFF, u16) and sTimerRunning (`layout.hud_timer_running`,

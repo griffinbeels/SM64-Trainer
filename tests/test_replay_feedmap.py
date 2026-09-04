@@ -73,6 +73,28 @@ def test_a_heartbeat_repeat_is_the_same_game_frame_and_is_flagged():
     assert stats["repeats"] == 1
 
 
+def test_the_same_feed_join_can_return_a_rows_coherent_clock_pair():
+    rows, feeds = rows_and_feeds(6)
+    for index, row in enumerate(rows):
+        row["igt_overall"] = 40 + index
+    pairs, repeats, stats = feed_map(
+        clip_times(6), START, rows, feeds,
+        row_value=lambda row: ((row["frame"], row["igt_overall"])
+                               if row.get("igt_overall") is not None else None))
+    assert pairs == [(500 + k, 40 + k) for k in range(6)]
+    assert repeats == [False] * 6
+    assert stats["matched"] == 6
+
+
+def test_a_clip_from_before_the_igt_stamp_has_no_clock_pair_map():
+    rows, feeds = rows_and_feeds(6)
+    pairs, _repeats, stats = feed_map(
+        clip_times(6), START, rows, feeds,
+        row_value=lambda row: None)
+    assert pairs is None
+    assert stats["matched"] == 0
+
+
 def test_a_frame_with_no_feed_entry_is_unknown_not_guessed():
     rows, feeds = rows_and_feeds(10)
     times = clip_times(10)

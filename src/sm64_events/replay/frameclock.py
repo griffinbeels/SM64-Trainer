@@ -283,10 +283,26 @@ class FrameClock:
         # tick or None on a straddle) per host present tick -- the v4 series.
         self._presents: deque[tuple[float, int, int | None]] = deque(
             maxlen=int(retention_s * _PRESENT_CEILING))
+        # Latest coherent (gGlobalTimer, Usamune running IGT) pair.  The
+        # input sampler publishes it with one tuple assignment; capture asks
+        # for the IGT only if its independently read frame tag still matches,
+        # so a thread race degrades to no stamp rather than a mixed pair.
+        self._igt_pair: tuple[int, int] | None = None
 
     def mark(self, frame: int) -> None:
         """The game's frame counter just advanced to `frame`."""
         self._pairs.append((self._now(), frame))
+
+    def mark_igt(self, frame: int, igt_overall: int) -> None:
+        """Publish one coherently sampled absolute/Usamune clock pair."""
+        self._igt_pair = (int(frame), int(igt_overall))
+
+    def igt_for(self, frame: int | None) -> int | None:
+        """Usamune IGT paired with exactly ``frame``, else unknown."""
+        pair = self._igt_pair
+        if frame is None or pair is None or pair[0] != frame:
+            return None
+        return pair[1]
 
     def edge_phase(self, capture_ts: float | None) -> float | None:
         """Seconds from the last marked frame edge to capture_ts -- WHERE

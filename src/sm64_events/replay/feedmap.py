@@ -45,14 +45,17 @@ def _nearest(times: list[float], wall: float) -> int | None:
 
 
 def feed_map(frame_times: list[float], start_ts: float, rows: list[dict],
-             feeds: list[dict], lag_frames: int = 0):
+             feeds: list[dict], lag_frames: int = 0, *, row_value=None):
     """(frame_map, repeats, stats) for a picture-feed clip.
 
     `frame_times` are the clip's own per-frame timestamps, `start_ts` the
     wall time of its media origin, `rows` the ledger rows around the span
     (composition time `ts`, RAM `frame`, `phase`), `feeds` the feed-log
-    entries around it (`at`, `ts` or None). frame_map[k] is the displayed
-    game frame of video frame k (None where nothing matched), repeats[k]
+    entries around it (`at`, `ts` or None). By default frame_map[k] is the
+    displayed game frame of video frame k (None where nothing matched).
+    ``row_value`` optionally projects the EXACT matched ledger row; the CLOCK
+    path uses it to recover the coherent ``(gGlobalTimer, usamune_overall)``
+    stamp on the same slot without duplicating this wall-time join. repeats[k]
     is True where the sink re-fed the previous picture, and stats report
     the match so a verdict is answerable from the sidecar. frame_map is
     None when too few frames matched.
@@ -97,10 +100,13 @@ def feed_map(frame_times: list[float], start_ts: float, rows: list[dict],
             out.append(None)
             repeats.append(False)
             continue
-        value = displays.get(index)
-        if value is None:
-            stamp = rows[index].get("frame")
-            value = None if stamp is None else stamp - lag_frames
+        if row_value is not None:
+            value = row_value(rows[index])
+        else:
+            value = displays.get(index)
+            if value is None:
+                stamp = rows[index].get("frame")
+                value = None if stamp is None else stamp - lag_frames
         out.append(value)
         repeats.append(False)
     matched = sum(1 for value in out if value is not None)

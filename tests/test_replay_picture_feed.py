@@ -325,7 +325,8 @@ def _filled_ledger(origin: float, count: int, first_frame: int = 100,
         picture[0, 0, 0] = index % 256
         picture[0, 1, 0] = (index // 256) % 256
         ts = origin + index / 30
-        assert ledger.observe(picture, ts, first_frame + index)
+        assert ledger.observe(picture, ts, first_frame + index,
+                              {"igt_overall": 20 + index})
         ledger.mark_fed(ts, ts + latency)
     return ledger
 
@@ -379,6 +380,63 @@ def test_the_service_reads_the_map_off_the_log_and_hands_the_reader_the_repeats(
     assert sidecar["encode"] == "picture_feed"
     assert len(sidecar["picture_ledger"]) == 90
     assert sidecar["feed_match"]["matched"] == 90
+
+
+def test_the_timer_join_is_primary_and_the_pad_can_only_audit_it(tmp_path):
+    from test_replay_service import T0, attempt, make_service
+
+    svc = make_service(tmp_path, [attempt()])
+    svc.extractor = _FeedExtractor(count=40)
+    origin = (T0 - timedelta(seconds=3)).timestamp()
+    svc.recorder.ledger = _filled_ledger(origin, 40, first_frame=600)
+    timer_map = [590 + index for index in range(40)]
+    seen = {}
+
+    class Mapping:
+        frame_map = timer_map
+        mechanical = 35
+        bridged = 5
+        rejected = 1
+
+        @staticmethod
+        def as_dict():
+            return {"mechanical": 35, "bridged": 5, "rejected": 1}
+
+    def timer_reader(clip, prior, clock_pairs):
+        seen["pairs"] = list(clock_pairs)
+        return Mapping()
+
+    class Verdict:
+        agree = 31
+        sure = 35
+
+        @staticmethod
+        def as_dict():
+            return {"agree": 31, "sure": 35}
+
+    class PadResult:
+        frame_map = [999] * 40              # must never replace timer identity
+        verdict = Verdict()
+        audit = Verdict()
+
+    def pad_reader(clip, frame_map, a, repeats=None):
+        seen["audited"] = list(frame_map)
+        return PadResult()
+
+    svc.timer_reader = timer_reader
+    svc.pad_reader = pad_reader
+    result = svc.view(42)
+
+    assert seen["pairs"] == [(600 + i, 20 + i) for i in range(40)]
+    assert seen["audited"] == timer_map
+    assert result["frame_map"] == timer_map
+    assert result["frame_map_source"] == "timer"
+    assert result["frame_map_mode"] == "timer+bridge"
+    assert result["frame_map_degraded"] is False
+    assert result["frame_map_inferred"] is True
+    assert result["timer_reading"] == {
+        "mechanical": 35, "bridged": 5, "rejected": 1}
+    assert result["pad_reading"] == {"agree": 31, "sure": 35}
 
 
 def test_a_cfr_clip_keeps_its_three_argument_reader_and_no_frame_times(tmp_path):

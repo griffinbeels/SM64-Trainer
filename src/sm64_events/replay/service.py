@@ -150,6 +150,13 @@ class ReplayService:
     #: many slots the display confirmed and every one it contradicts.
     pad_reader = None
 
+    #: Reads the on-screen CLOCK and joins it to the coherent
+    #: (gGlobalTimer, usamune_overall) stamp carried by the matched picture
+    #: ledger row.  Unlike pad_reader this is a frame-identity source, not an
+    #: alignment search.  Clips captured before the stamp simply refuse and
+    #: keep the existing path.
+    timer_reader = None
+
     #: Holds the map to ONE answer per distinct picture in the footage
     #: (`replay/mapalign.py::quantised`). Injected like the aligner, and
     #: independent of it: a clip whose display cannot be read still gets
@@ -428,6 +435,10 @@ class ReplayService:
                 # disagreements): how many pictures the game's own display
                 # confirmed the map on. None for a clip it could not read.
                 "pad_reading": m.get("pad_reading"),
+                # The CLOCK/RAM join: `mechanical` slots were named directly;
+                # `bridged` slots had no usable clock pair and retain shifted
+                # bookkeeping. None for clips captured before the IGT stamp.
+                "timer_reading": m.get("timer_reading"),
                 "video_start_s": m.get("video_start_s", 0.0),
                 # Per-frame timestamps of a picture-feed clip (VFR); None
                 # for a CFR clip, whose slots are k / fps from
@@ -443,6 +454,10 @@ class ReplayService:
                 # per slot, so the timeline says so rather than looking clean.
                 "frame_map_mode": m.get("frame_map_mode"),
                 "frame_map_degraded": m.get("frame_map_degraded", False),
+                # Distinct from capture degradation: True means the CLOCK
+                # named part of the map mechanically and recorder bookkeeping
+                # bridged slots where the clock was frozen/unreadable.
+                "frame_map_inferred": m.get("frame_map_inferred", False),
                 "feed_coverage": m.get("feed_coverage"),
                 "saved_path": str(saved) if saved is not None else None}
 
@@ -542,6 +557,14 @@ class ReplayService:
                 return
             built, repeats, stats = feed_map(
                 res.frame_times, start, rows, feeds, DISPLAY_LAG_FRAMES)
+            # The SAME feed-to-row join, projected onto the pair sampled
+            # inside InputSampler's counter sandwich.
+            clock_pairs, _clock_repeats, _clock_stats = feed_map(
+                res.frame_times, start, rows, feeds,
+                row_value=lambda row: (
+                    (row["frame"], row["igt_overall"])
+                    if row.get("frame") is not None
+                    and row.get("igt_overall") is not None else None))
         except Exception:
             log.exception("feed-log mapping failed; the clip carries no map")
             return
@@ -554,6 +577,10 @@ class ReplayService:
         meta["frame_map"] = built
         meta["repeats"] = repeats
         meta["frame_map_source"] = "feed_log"
+        # Kept only until the timer reader runs; the durable evidence is
+        # already in picture_ledger.
+        if clock_pairs is not None:
+            meta["_clock_pairs"] = clock_pairs
         # NOT marked quantised: one frame is one CAPTURED picture, but the
         # emulator re-presents a render when the game lags, and those two
         # grabs land as two frames with advancing RAM stamps -- the same
@@ -607,6 +634,14 @@ class ReplayService:
         or no clear winner: the map stands as built and says so.
         """
         self._hold_one_answer_per_picture(meta, clip)
+        if self._read_the_timer(meta, clip, attempt):
+            # The timer owns identity; the pad reader is now only an auditor
+            # and can never move the map it is being asked to check.
+            self._read_the_display(meta, clip, attempt, audit_only=True)
+            meta.pop("frame_map_quantised", None)
+            self._hold_one_answer_per_picture(meta, clip)
+            meta.pop("_clock_pairs", None)
+            return
         if self._read_the_display(meta, clip, attempt):
             # THE PIXELS OWN THE BOUNDARIES, the reader owns the VALUES. The
             # reader may still advance the map across a picture the emulator
@@ -619,7 +654,9 @@ class ReplayService:
             # on a held picture at all.
             meta.pop("frame_map_quantised", None)
             self._hold_one_answer_per_picture(meta, clip)
+            meta.pop("_clock_pairs", None)
             return
+        meta.pop("_clock_pairs", None)
         if self.map_aligner is None:
             return
         try:
@@ -669,7 +706,37 @@ class ReplayService:
                  "(fit %.3f, margin %.3f, %d slots paired)",
                  found.offset, found.fit, found.margin, found.paired)
 
-    def _read_the_display(self, meta: dict, clip: Path, attempt) -> bool:
+    def _read_the_timer(self, meta: dict, clip: Path, attempt) -> bool:
+        """Replace the map with the direct CLOCK/RAM join when it covers.
+
+        No controller data reaches this callback.  The old map participates
+        only after the join, as an explicitly counted bridge for unreadable,
+        frozen, or unpaired slots.
+        """
+        pairs = meta.get("_clock_pairs")
+        if self.timer_reader is None or pairs is None:
+            return False
+        try:
+            mapping = self.timer_reader(clip, meta["frame_map"], pairs)
+        except Exception:
+            log.exception("timer reader failed; keeping the prior map")
+            return False
+        if mapping is None:
+            return False
+        meta["frame_map_base_source"] = meta.get("frame_map_source")
+        meta["frame_map"] = list(mapping.frame_map)
+        meta["frame_map_source"] = "timer"
+        meta["frame_map_mode"] = ("timer+bridge" if mapping.bridged
+                                  else "timer")
+        meta["frame_map_inferred"] = mapping.bridged > 0
+        meta["timer_reading"] = mapping.as_dict()
+        log.info("frame map joined through the CLOCK: %d mechanical, %d "
+                 "bridged, %d rejected", mapping.mechanical,
+                 mapping.bridged, mapping.rejected)
+        return True
+
+    def _read_the_display(self, meta: dict, clip: Path, attempt,
+                          audit_only: bool = False) -> bool:
         """Pin the map to the pad Usamune drew into every picture.
 
         The pad reader (round 32, 2026-09-01) reads the display's six
@@ -700,6 +767,18 @@ class ReplayService:
             meta["frame_map_read"] = False
             return False
         verdict = reading.verdict
+        if audit_only:
+            # PadReading.audit is scored against the map the caller handed
+            # in, before the reader aligns anything.  Older injected readers
+            # have no such field; their aligned verdict is still useful as a
+            # diagnostic but is never allowed to mutate timer identity.
+            verdict = getattr(reading, "audit", None) or verdict
+            meta["frame_map_read"] = True
+            meta["pad_reading"] = verdict.as_dict()
+            log.info("timer map audited by the pad display: %d of %d slots "
+                     "agree, %d contradicted", verdict.agree, verdict.sure,
+                     verdict.sure - verdict.agree)
+            return True
         # THE READER IS AN AUDITOR ON A WELL-COVERED CLIP (item 89). A fresh
         # review measured what its per-slot DP actually does: 50-77% of a
         # clip's frames repeat their predecessor's pad, so the display cannot

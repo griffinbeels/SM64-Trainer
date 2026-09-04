@@ -683,7 +683,7 @@ def _hunt_frozen_u16(ctx, prompt_text: str) -> tuple[list[int], int | None]:
 
 
 def _hunt_ticking_u16(ctx, prompt_text: str) -> tuple[list[int], int | None]:
-    """The hunt for a RUNNING counter (Usamune's overall timer). Two images
+    """The hunt for Usamune's RUNNING leg counter. Two images
     TICK_SCAN_SECONDS apart name every u16 that advances at game rate -- a
     handful in 8 MB -- and the value he typed only has to be NEAR one of
     them: within 30 frames per second that passed since he answered, plus
@@ -724,7 +724,7 @@ def _hunt_ticking_u16(ctx, prompt_text: str) -> tuple[list[int], int | None]:
 
 def _check_usamune_overall(ctx) -> Verdict:
     found, _ = _hunt_ticking_u16(
-        ctx, "Stand in any course with the Usamune overall timer RUNNING and "
+        ctx, "Stand in any course with the Usamune timer RUNNING and "
              "visible; type what it reads right now (e.g. 0'20\"20) and press "
              "Enter -- it keeps running, that is fine.")
     if not found:
@@ -829,8 +829,9 @@ register(Gate(
     needs=("version.rom",), timeout_s=180.0,
     instruction="Stand in any course with the Usamune overall timer RUNNING "
                "and visible; when asked, type what it reads right now.",
-    proves="the RAM address holding Usamune's running overall star time "
-           "(a u16 that ticks at game rate and reads near what he typed).",
+    proves="the RAM address holding Usamune's running leg counter (a u16 "
+           "that ticks at game rate and reads near what he typed); subarea "
+           "banking is counter_epoch's separate contract.",
     check=_check_usamune_overall,
 ))
 register(Gate(

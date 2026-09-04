@@ -140,8 +140,9 @@ def _clip_dims(ffmpeg: str, clip: Path) -> tuple[int, int]:
     return width, height
 
 
-def _decode_region(ffmpeg: str, clip: Path, region, out_w: int, out_h: int,
-                   width: int | None, height: int | None) -> np.ndarray:
+def decode_region(ffmpeg: str, clip: Path, region, out_w: int, out_h: int,
+                  width: int | None = None,
+                  height: int | None = None) -> np.ndarray:
     """One scaled cell per STORED video frame -- `-fps_mode passthrough` so a
     VFR picture-feed clip (item 38) is NOT re-timed onto its r_frame_rate
     grid. Without it ffmpeg duplicated 8 frames of a 718-frame clip (726 out),
@@ -169,7 +170,7 @@ def _decode_region(ffmpeg: str, clip: Path, region, out_w: int, out_h: int,
 def decode_cells(ffmpeg: str, clip: Path, width: int | None = None,
                  height: int | None = None) -> np.ndarray:
     """Every stored video frame's readout region, scaled to CELL_W x CELL_H."""
-    return _decode_region(ffmpeg, clip, REGION, CELL_W, CELL_H, width, height)
+    return decode_region(ffmpeg, clip, REGION, CELL_W, CELL_H, width, height)
 
 
 def cut(cells: np.ndarray, row: str, col: str) -> np.ndarray:
@@ -204,6 +205,28 @@ class Template:
 Alphabet = dict  # (row, col) -> {glyph: Template}
 
 
+def template_from(images: np.ndarray, members: list[int]) -> Template | None:
+    """One HUD glyph template from labelled image indices.
+
+    Shared by the pad and CLOCK readers: both are the same Usamune font, and
+    two copies of the exemplar/spread/paint gate would be two subtly
+    different definitions of a readable digit.
+    """
+    if len(members) < MIN_EXEMPLARS:
+        return None
+    chosen = np.array(members)
+    if len(chosen) > MAX_EXEMPLARS:
+        chosen = chosen[np.linspace(0, len(chosen) - 1,
+                                    MAX_EXEMPLARS).astype(int)]
+    stack = images[chosen].astype(np.float32)
+    median = np.median(stack, axis=0)
+    spread = np.median(np.abs(stack - median), axis=0).mean(axis=-1) * 1.4826
+    weight = ((spread < SPREAD_MAX) & ink_mask(median)).astype(np.float32)
+    if weight.sum() < MIN_WEIGHT:
+        return None
+    return Template(median, weight, len(chosen))
+
+
 def learn(cells: np.ndarray, labels: dict) -> Alphabet:
     """One template per painted glyph per cell, from labelled frames.
 
@@ -226,19 +249,9 @@ def learn(cells: np.ndarray, labels: dict) -> Alphabet:
                 groups.setdefault(glyph, []).append(index)
         table = {}
         for glyph, members in groups.items():
-            if len(members) < MIN_EXEMPLARS:
-                continue
-            chosen = np.array(members)
-            if len(chosen) > MAX_EXEMPLARS:
-                chosen = chosen[np.linspace(0, len(chosen) - 1,
-                                            MAX_EXEMPLARS).astype(int)]
-            stack = imgs[chosen].astype(np.float32)
-            median = np.median(stack, axis=0)
-            spread = np.median(np.abs(stack - median), axis=0).mean(axis=-1) * 1.4826
-            weight = ((spread < SPREAD_MAX) & ink_mask(median)).astype(np.float32)
-            if weight.sum() < MIN_WEIGHT:
-                continue
-            table[glyph] = Template(median, weight, len(chosen))
+            template = template_from(imgs, members)
+            if template is not None:
+                table[glyph] = template
         alphabet[key] = table
     return alphabet
 
@@ -694,7 +707,8 @@ ICON_REFERENCE = "pad_icons_us.npz"
 def decode_icons(ffmpeg: str, clip: Path, width: int | None = None,
                  height: int | None = None) -> np.ndarray:
     """Every stored video frame's icon strip, scaled to ICON_W x ICON_H."""
-    return _decode_region(ffmpeg, clip, ICON_STRIP, ICON_W, ICON_H, width, height)
+    return decode_region(ffmpeg, clip, ICON_STRIP, ICON_W, ICON_H,
+                         width, height)
 
 
 def icon_cell(strip: np.ndarray, position: int) -> np.ndarray:
@@ -832,6 +846,10 @@ class PadReading:
     frame_map: list
     verdict: Verdict
     learned: dict            # (row, col) -> glyphs the clip taught itself
+    # Reference-alphabet score against the map the caller supplied BEFORE
+    # any alignment or map-labelled self-learning.  This is the independent
+    # auditor the timer path may report without letting the pad move identity.
+    audit: Verdict | None = None
 
 
 def picture_flags(ffmpeg: str, clip: Path, cells: np.ndarray):
@@ -947,9 +965,12 @@ def read_clip(clip: Path, frame_map: list, pads, ffmpeg: str,
     icons = None                      # the digits align first; icons join the final pass
     path = frame_map
     learned: dict = {}
+    audit = None
     for _ in range(2):
         reads = read(cells, alphabet)
         enforce_grammar(reads)
+        if audit is None:
+            audit = score(reads, frame_map, pads)
         path = align(reads, path, pads, same, changed, held, icons, anchors)
         if path is None:
             return None
@@ -993,4 +1014,4 @@ def read_clip(clip: Path, frame_map: list, pads, ffmpeg: str,
     if verdict.sure < MIN_SURE_SLOTS:
         log.info("pad reader refused: %d sure slots of %d", verdict.sure, count)
         return None
-    return PadReading(path, verdict, learned)
+    return PadReading(path, verdict, learned, audit)

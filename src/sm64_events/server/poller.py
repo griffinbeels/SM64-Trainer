@@ -155,6 +155,13 @@ class Poller:
         frame_now = self.input_sampler.sample()
         if frame_now is None:
             return False                       # straddled or unreadable
+        # Capture needs the RELATION between the two clocks, not another
+        # estimate of display lag.  InputSampler read this pair inside its
+        # gGlobalTimer sandwich; FrameClock exposes it to the capture thread
+        # only when the frame number still agrees.
+        clock_pair = getattr(self.input_sampler, "clock_pair", lambda: None)()
+        if self.frame_clock is not None and clock_pair is not None:
+            self.frame_clock.mark_igt(*clock_pair)
         if frame_now != self._frame_now:
             ended = self._frame_now
             if self.frame_clock is not None and ended is not None:

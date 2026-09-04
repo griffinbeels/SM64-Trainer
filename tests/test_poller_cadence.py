@@ -138,6 +138,32 @@ def test_the_frame_clock_is_marked_on_the_edge_tick_once_per_frame():
     assert ticks_at_mark == [8, 16]         # the edge ticks, not the settle ones
 
 
+def test_the_coherent_igt_pair_reaches_the_frame_clock_on_every_good_sample():
+    class PairSampler(ScriptedSampler):
+        def clock_pair(self):
+            return self.last, self.last - 90
+
+    class PairClock:
+        def __init__(self):
+            self.pairs = []
+            self.marks = []
+
+        def mark_igt(self, frame, igt):
+            self.pairs.append((frame, igt))
+
+        def mark(self, frame):
+            self.marks.append(frame)
+
+    sampler = PairSampler([100, 100, 101])
+    clock = PairClock()
+    poller = Poller(memory=None, detectors=[], broadcaster=NullBroadcaster(),
+                    reader=CountingReader(sampler), input_sampler=sampler,
+                    frame_clock=clock)
+    for _ in range(3):
+        asyncio.run(poller.tick())
+    assert clock.pairs == [(100, 10), (100, 10), (101, 11)]
+
+
 def test_no_sampler_leaves_the_loop_exactly_as_it_was():
     """Every existing poller test drives tick() with no sampler, so the gate
     must be invisible without one or those tests stop meaning anything."""

@@ -491,6 +491,22 @@ def build():
 
         replay.pad_reader = _read_pad_off_the_footage
 
+        # THE CLOCK READER (round 32 item 91) is the primary identity source
+        # only for clips whose ledger carries the coherent RAM clock pair.
+        # It receives no controller track: displayed IGT plus the captured
+        # (gGlobalTimer, usamune_overall) pair names the displayed absolute
+        # frame directly where the two counters agree. A sustained mismatch
+        # (including a different subarea-reset domain) refuses instead of
+        # bridging a disproved premise. Older clips retain the pad/map
+        # compatibility path above.
+        from sm64_events.replay.timerread import read_clip as read_timer
+
+        def _read_timer_off_the_footage(clip, frame_map, clock_pairs):
+            return read_timer(clip, frame_map, clock_pairs,
+                              str(bundled_ffmpeg() or "ffmpeg"))
+
+        replay.timer_reader = _read_timer_off_the_footage
+
         # THE DIGIT REFIT IS BUILT AND NOT WIRED (round 32 item 57).
         # `mapalign.digit_fitted` assigns every picture its own frame by
         # ink, which fixed one of his clips (5146) and BROKE another
