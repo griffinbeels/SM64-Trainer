@@ -341,6 +341,23 @@ rather than importing what it understood and staying quiet about the rest.
   → the projector (`src/sm64_events/tracking/projection.py`)
   → the store (`src/sm64_events/storage/db.py`)
 
+### Held time
+
+A time from an [[Ultimate Sheet]] column that an import kept aside because
+the trainer had nowhere to put it: a [[sheet piece]] you have not linked to
+a [[segment]], a castle-movement [[approach]] with no entity, a whole-stage
+RTA row, or a [[star]] row the sheet times on a real-time clock. It is not
+an [[attempt]] and grades nothing. It shows on its row in the
+[[Library tab]], the [[column export]] prints it back exactly as the sheet
+had it, undoing the import erases it, and an [[adoption]] of its row lands
+it on that [[segment]] through the ordinary import rule as soon as you make
+the link — so the trainer loses nothing a [[runner]] wrote down, and invents
+nothing to hold it.
+
+- **Lives** — the hold (`src/sm64_events/storage/db.py`)
+  → the lander (`src/sm64_events/server/import_api.py`)
+  → the link strip on the [[Library tab]]'s target page
+
 ### Strategy
 
 A named way of doing a [[target]] — which path through the level, which tricks.
@@ -765,9 +782,14 @@ time]] would land one, under the same [[strategy]] name: a [[sheet piece]] or
 a castle-movement [[approach]] needs an [[adoption]] (or the unasked
 name/seed-key match that grants one) to say which [[segment]] it lands on,
 and an [[approach]] on a [[star]] otherwise files under its [[matched
-strategy]], or under the sheet's own row name where no match names one. A
-name this database holds no [[personal best]] under stays blank, so the
-column can miss a time but never print a wrong one.
+strategy]], or under the sheet's own row name where no match names one —
+qualified by its 100-coin heading or by the row it sits under wherever the
+sheet repeats a name, so every worksheet row of one entity is a slot of its own.
+A row that names the thing itself carries your best among the times no
+other row of its block claims. A name this database holds no
+[[personal best]] under prints the row's [[held time]] if an import left
+one, else stays blank, so the column can miss a time but never print a
+wrong one.
 
 - **Lives** — the column builder
   (`src/sm64_events/library/export_column.py`)

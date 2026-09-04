@@ -44,7 +44,8 @@ star row under `matched_strategy or the sheet's own name`, so refusing the
 name half meant a column he had just imported exported 0 of 803 lines. The
 fallback can never print a WRONG time either -- a name this database has not
 heard of resolves to `None` and the line stays blank."""
-from sm64_events.library.adoptions import DEFAULT_STRATEGY, strategy_name
+from sm64_events.library.adoptions import DEFAULT_STRATEGY, sheet_strategy
+from sm64_events.library.audit import row_key
 from sm64_events.library.sheet import base_name
 
 
@@ -115,7 +116,7 @@ def names_the_thing(target, item, kind: str) -> bool:
     it, however you got it -- while a strategy row means only times set THAT
     way.
 
-    The predicate is `adoptions.strategy_name`'s, not a second copy of it:
+    The predicate is `adoptions.sheet_strategy`'s, not a second copy of it:
     that function already answers exactly this question for the IMPORT
     direction (it files a target-named row and every subsection under the
     default strategy, "a piece's community timing is its Standard"), and the
@@ -125,14 +126,25 @@ def names_the_thing(target, item, kind: str) -> bool:
     the test is both available and unambiguous. The one exception is "Slide
     Star (Under 21 Seconds)", whose rows are "Under 21" and "Late wall bounce
     strat (U21)" -- it keeps the strategy match and exports blank unless a
-    name lines up."""
+    name lines up. A 100-coin route's own row is NOT the thing either --
+    four routes share one entity, so its slot is the route's label (round
+    28: the export used to read the older two-argument rule, fell back
+    blind on such a row, and printed a sibling route's time on it)."""
     if not target:
         return False
-    return strategy_name(target.get("label") or "", item.get("name") or "",
-                         kind=kind) == DEFAULT_STRATEGY
+    return sheet_strategy(target, item, kind) == DEFAULT_STRATEGY
 
 
-def _line_for(row, block, resolve, place) -> str:
+def _claimed_names(block) -> dict:
+    """{id(item): strategy name} for every approach in the block -- what
+    each row CLAIMS, so a row that names the thing can ask for whatever is
+    left over (`_ask`)."""
+    return {id(item): sheet_strategy(target, item, "approach")
+            for target in (block or [])
+            for item in (target.get("approaches") or [])}
+
+
+def _line_for(row, block, resolve, place, claimed=None, held=None) -> str:
     target, item = _find_item(row, block)
     if item is None:
         return ""
@@ -151,24 +163,38 @@ def _line_for(row, block, resolve, place) -> str:
     # already shows for that star, so those two surfaces cannot disagree
     # either. Same run after the change: 42 answers.
     blind = names_the_thing(target, item, row.kind)
-    sheet_strategy = item.get("matched_strategy") or item.get("name")
+    own_strategy = sheet_strategy(target, item, row.kind)
+    # What the block's OTHER rows claim. A row that names the thing may
+    # carry only what none of them does -- its own name is not "another
+    # row", and neither is its (JP)/(US) twin, which is the same item.
+    claimed = claimed or _claimed_names(block)
+    others = frozenset(name for key, name in claimed.items()
+                       if key != id(item))
     placed = place(target, item, row.kind) if place is not None else None
+    cs = None
     if placed:
         placed_entity, timer_mode, strategy = placed
-        cs = _ask(resolve, placed_entity, strategy or sheet_strategy,
-                  timer_mode, row.version, blind)
+        cs = _ask(resolve, placed_entity, strategy or own_strategy,
+                  timer_mode, row.version, blind, others)
     elif (row.kind == "approach"
             and (target.get("entity_key") or "").startswith("star:")):
-        cs = _ask(resolve, target["entity_key"], sheet_strategy, "igt",
-                  row.version, blind)
-    else:
-        return ""
+        cs = _ask(resolve, target["entity_key"], own_strategy, "igt",
+                  row.version, blind, others)
+    if cs is None and held is not None:
+        # Nothing here answers -- the row has no home, or a home with no
+        # time in it -- so the cell an import HELD for it prints back as
+        # written (round 28). A held cell is released the moment its row
+        # lands, so this can never print over a real personal best.
+        cs = held(row_key(target, item.get("name") or "",
+                          item.get("ids") or ()), row.version)
     return sheet_time(cs) if cs is not None else ""
 
 
-def _ask(resolve, entity_key, strategy, timer_mode, version, blind):
+def _ask(resolve, entity_key, strategy, timer_mode, version, blind,
+         others=frozenset()):
     """The row's own strategy FIRST, then -- only on a row that names the
-    thing -- your best on it however you set it.
+    thing -- your best on it however you set it, among the times NO OTHER
+    ROW of the block claims.
 
     The order is what lets one door serve two things he asked for a round
     apart, and it took a measurement to see they were not in conflict. Round
@@ -183,21 +209,28 @@ def _ask(resolve, entity_key, strategy, timer_mode, version, blind):
     Asking by name first settles both. An imported column has a PB under the
     exact name, so it round-trips; a played one has none there, the name
     misses, and the blind fallback still carries it. A row that names a
-    STRATEGY never falls back at all -- it means only times set that way."""
+    STRATEGY never falls back at all -- it means only times set that way.
+
+    Round 28: the blind ask carries `others` -- the strategy names every
+    OTHER row of the block files under -- and the caller answers with the
+    fastest time filed under none of them. Without it the star's own row
+    printed a SIBLING row's time (THI's Tip Top: a runner with no time on
+    the plain route exported "No mountain clip" 20.90 there, and the
+    ten-runner sweep's whole `extra` column was this). A time he filed
+    under a name the sheet has no row for -- his own picks -- is exactly
+    what is left over, so round 25's case still lands."""
+    # A row that names the THING is that thing's Standard strategy (his
+    # ruling, 2026-09-02: "Standard maps to any row that's just the star
+    # name / segment name"), which is what `sheet_strategy` answers for it,
+    # what the import files it under, and what he practises under himself
+    # -- so the name-first ask on a blind row IS the Standard ask.
     cs = resolve(entity_key, strategy, timer_mode, version)
     if cs is None and blind:
-        # A row that names the THING is that thing's Standard strategy (his
-        # ruling, 2026-09-02: "Standard maps to any row that's just the star
-        # name / segment name"), which is also what the import files it under
-        # and what he practises under himself. Asked before the strategy-blind
-        # sweep, so a row can still print an exact answer rather than a best.
-        cs = resolve(entity_key, DEFAULT_STRATEGY, timer_mode, version)
-    if cs is None and blind:
-        cs = resolve(entity_key, None, timer_mode, version)
+        cs = resolve(entity_key, None, timer_mode, version, excluding=others)
     return cs
 
 
-def column_lines(rows, payload, resolve, place=None) -> list:
+def column_lines(rows, payload, resolve, place=None, held=None) -> list:
     """One string per worksheet row, row 2 through the last data row --
     `""` wherever nothing maps: a header or spacer (no `SheetRow` at that
     row number at all), or a row whose text names nothing in its own block,
@@ -211,7 +244,16 @@ def column_lines(rows, payload, resolve, place=None) -> list:
     `place(target, item, kind) -> (entity_key, timer_mode, strat_tag) | None`
     is optional -- omit it (or let it answer `None`) and every row that is
     not a star approach goes blank, exactly like an import with no placer
-    would drop it."""
+    would drop it.
+
+    `resolve(entity_key, strat_tag, timer_mode, version, *, excluding=())`
+    answers a strategy by name, or -- `strat_tag=None` -- the fastest time
+    on the entity filed under NO name in `excluding` (a time with no
+    strategy at all counts as unclaimed).
+
+    `held(row_key, version) -> cs | None` is the cell an import kept aside
+    for a row with no home (round 28), printed only where nothing else
+    answers; omit it and such rows stay blank."""
     if not rows:
         return []
     blocks = _blocks(payload.get("targets") or [])
@@ -219,6 +261,7 @@ def column_lines(rows, payload, resolve, place=None) -> list:
     last_row = max(by_row)
     lines = []
     block_index = -1
+    claimed = None
     for row_number in range(2, last_row + 1):
         row = by_row.get(row_number)
         if row is None:
@@ -228,5 +271,7 @@ def column_lines(rows, payload, resolve, place=None) -> list:
             block_index += 1
         block = (blocks[block_index]
                  if 0 <= block_index < len(blocks) else None)
-        lines.append(_line_for(row, block, resolve, place))
+        if row.opens_target:
+            claimed = _claimed_names(block)
+        lines.append(_line_for(row, block, resolve, place, claimed, held))
     return lines

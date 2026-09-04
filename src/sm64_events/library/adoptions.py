@@ -60,6 +60,98 @@ def strategy_name(target_label: str, row_name: str, *, kind: str = "approach") -
             else row_name)
 
 
+# What joins a qualifier to the row it qualifies: "the row it sits under › the
+# row". Deliberately NOT the standards store's " · " -- that glyph means
+# "exit-star variant · leaf" and `tests/test_single_source.py` keeps it to the
+# modules that own that rule. This is a different fact about a different kind
+# of row, so it wears a different mark and can never be misread as a variant.
+ROUTE_SEP = " › "
+
+
+def shares_its_entity(target: dict) -> bool:
+    """Is this target one of SEVERAL the sheet maps onto one entity?
+
+    True for every 100-coin star: `library/mapping.py` files every "+ 100c"
+    row under `star:<course>:6`, and a course opens one target per route
+    ending on a different star. Four targets cannot all be that entity's
+    Standard, and their same-named sub-rows cannot all share one slot."""
+    from sm64_events.library.mapping import HUNDRED_COIN_STAR
+    key = target.get("entity_key") or ""
+    return key.startswith("star:") and key.endswith(f":{HUNDRED_COIN_STAR}")
+
+
+def _same_item(one: dict, other: dict) -> bool:
+    return one is other or (one.get("name") == other.get("name")
+                            and sorted(one.get("ids") or ())
+                            == sorted(other.get("ids") or ()))
+
+
+def _owning_approach(target: dict, item: dict):
+    """For an approach whose NAME repeats inside its target, the approach it
+    sits under; None for a name that appears once.
+
+    The sheet writes a split row -- "Red coin star Xcam", "100 coin star
+    Xcam" -- directly beneath the approach it splits, and stamps it with that
+    approach's bracket ids. So the owner is the nearest PRECEDING approach of
+    another name whose ids overlap this row's, and failing an overlap (one
+    live row carries a bracket typo, `[4|6]` under Xiah's `[5|6]`) simply the
+    nearest preceding one -- which is the sheet's own layout rule."""
+    approaches = target.get("approaches") or []
+    name = item.get("name")
+    if sum(1 for other in approaches if other.get("name") == name) < 2:
+        return None
+    position = next((index for index, other in enumerate(approaches)
+                     if _same_item(other, item)), len(approaches))
+    preceding = [other for other in approaches[:position]
+                 if other.get("name") != name]
+    ids = set(item.get("ids") or ())
+    for candidate in reversed(preceding):
+        if ids & set(candidate.get("ids") or ()):
+            return candidate
+    return preceding[-1] if preceding else None
+
+
+def sheet_strategy(target: dict, item: dict, kind: str = "approach") -> str:
+    """The strategy an Ultimate Sheet row files under HERE -- ONE rule, read
+    by the import (`library/import_runner.py`) and the column export
+    (`library/export_column.py`) alike, so the two doors cannot disagree
+    about which slot a row is.
+
+    The rule is that every worksheet row of one entity gets a slot of its
+    OWN. His ruling on the round-27 measurement, 2026-09-04 ("fix all bugs
+    and maximize compatibility with the sheet"): the sheet is the finer
+    record, and two rows the sheet keeps apart must not share one personal
+    best. Three shapes collide without this, all measured on Raisn's column:
+
+      * a row named after its target is that thing's STANDARD strategy
+        (`strategy_name`) -- EXCEPT on a target that shares its entity (a
+        100-coin star's four routes), where the target's own label is the
+        slot, since four routes cannot all be "Standard";
+      * a sub-row of such a shared target is qualified by its target --
+        "Slip Slidin' Away + 100c › 100 coin star Xcam" -- because the
+        course's other 100-coin routes each carry a row of the same name;
+      * a row whose name REPEATS inside its own target is qualified by the
+        approach it sits under -- "Xiah cycle pipe entry › Red coin star
+        Xcam" -- because BitDW reds carries five "Red coin star Xcam" rows,
+        one per pipe route, each timing a different run.
+
+    A subsection is always its linked segment's Standard (the row names the
+    piece being practised, not a way to perform it). A vetted match still
+    outranks the sheet's own name on an ordinary strategy row."""
+    label = (target.get("label") or "").strip()
+    name = (item.get("name") or "").strip()
+    if kind == "subsection":
+        return DEFAULT_STRATEGY
+    shared = shares_its_entity(target)
+    if strategy_name(label, name) == DEFAULT_STRATEGY:
+        return label if shared else DEFAULT_STRATEGY
+    own = item.get("matched_strategy") or name
+    owner = _owning_approach(target, item)
+    if owner is not None:
+        return f"{sheet_strategy(target, owner)}{ROUTE_SEP}{own}"
+    return f"{label}{ROUTE_SEP}{own}" if shared else own
+
+
 def _normalized(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (name or "").lower()).strip()
 

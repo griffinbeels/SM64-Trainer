@@ -75,11 +75,16 @@ def test_the_sheet_door_lands_a_runners_column_from_the_snapshot(tmp_path):
             "runner": "DentoriousRed", "refresh": False}).json()
         assert payload["found"] == 16
         assert payload["imported"] == 16
-        # One row per dropped ENTRY, named, in the same `{text, reason}`
-        # shape every door answers with -- he reviews these by name (round 3).
-        assert payload["rejected"] == [
+        # One row per HELD entry, named, in the same `{text, reason}`
+        # shape every door answers with -- he reviews these by name (round
+        # 3). Nothing is REJECTED by this door any more: a row it cannot
+        # place is kept (round 28), and `held` names it.
+        assert payload["rejected"] == []
+        assert [{"reason": row["reason"], "text": row["text"]}
+                for row in payload["held"]] == [
             {"reason": "no_entity",
              "text": "CCM wooden door - Enter BitDW (LBLJ) — 0'09\"23"}]
+        assert [cell["time_cs"] for cell in db.held_times()] == [923]
         assert payload["sheet_revision"]
         assert all(row["imported_from"] == "sheet:DentoriousRed"
                    for row in db.pbs())
@@ -141,7 +146,7 @@ def test_a_subsection_linked_in_the_library_imports_onto_that_segment(tmp_path):
         landed = db.current_pb(None, None, "rta", segment_id=piece,
                                strat_tag="Standard")
         assert landed and landed["frames"] == 242          # 8.06s, rounded up
-        texts = [row["text"] for row in payload["rejected"]]
+        texts = [row["text"] for row in payload["held"]]
         assert not any("Volcano entry" in text for text in texts), texts
         assert "Hot-Foot-It into the Volcano — Inside the volcano — 0'08\"53" in texts
 
@@ -260,3 +265,44 @@ def test_an_import_absorbs_the_rank_it_produced(tmp_path):
             "or this test proves nothing"
         assert service.marelo_watermarks()["overall"] == climbed
         assert client.get("/api/marelo").json().get("celebration") is None
+
+
+def test_linking_a_held_row_lands_its_time_the_moment_the_link_is_made(tmp_path):
+    """Round 28, the other half of holding a cell. GTM's "Volcano entry" piece
+    is held by the import (no segment is linked); building the segment and
+    linking the row through the Library's own adopt door lands the held time
+    there at once -- through the ordinary improvement rule -- and releases
+    the hold, so the column prints the real PB from then on."""
+    with make_client(tmp_path) as (client, db, _svc):
+        payload = client.post("/api/import/sheet", json={
+            "runner": "GTM", "refresh": False}).json()
+        held_texts = [row["text"] for row in payload["held"]]
+        assert any("Volcano entry" in text for text in held_texts), held_texts
+        assert any(cell["row_key"] == VOLCANO_ENTRY_ROW for cell in db.held_times())
+
+        piece = db.insert_segment_def(
+            "Volcano entry", [{"type": "level_enter", "to": 22}],
+            [{"type": "area_enter", "level": 22, "area": 2}], [],
+            "2026-09-04T00:00:00Z")
+        linked = client.post("/api/library/adopt", json={
+            "row_key": VOLCANO_ENTRY_ROW, "entity_key": f"segment:{piece}"})
+        assert linked.status_code == 200, linked.text
+        assert linked.json()["held"] == {"landed": 1, "released": 1}
+        landed = db.current_pb(None, None, "rta", segment_id=piece,
+                               strat_tag="Standard")
+        assert landed and landed["frames"] == 242          # 8.06s, rounded up
+        assert landed["imported_from"] == "sheet:GTM"
+        assert not any(cell["row_key"] == VOLCANO_ENTRY_ROW
+                       for cell in db.held_times())
+        # Linking the same row again lands nothing and releases nothing.
+        assert client.post("/api/library/adopt", json={
+            "row_key": VOLCANO_ENTRY_ROW, "entity_key": f"segment:{piece}"}
+            ).json()["held"] == {"landed": 0, "released": 0}
+
+
+def test_removing_a_source_erases_its_held_cells_too(tmp_path):
+    with make_client(tmp_path) as (client, db, _svc):
+        client.post("/api/import/sheet", json={"runner": "GTM", "refresh": False})
+        assert db.held_times(source="sheet:GTM")
+        client.delete("/api/import/sheet:GTM")
+        assert db.held_times(source="sheet:GTM") == []

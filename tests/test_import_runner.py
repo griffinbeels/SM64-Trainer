@@ -20,14 +20,15 @@ def payload():
 
 
 def test_dentoriousred_maps_to_fourteen_times_over_ten_stars():
-    candidates, rejected = candidates_for(payload(), "DentoriousRed")
+    candidates, held = candidates_for(payload(), "DentoriousRed")
     assert len(candidates) == 14
     assert len({c.entity_key for c in candidates}) == 10
-    # ONE ROW PER DROPPED ENTRY, named so he can review it -- a tally by kind
+    # ONE ROW PER HELD ENTRY, named so he can review it -- a tally by kind
     # hid exactly the rows he wants to see (round 3, 2026-08-23). The text
     # names the target, the approach where it differs from the target, and
-    # the sheet's own time.
-    assert rejected == [
+    # the sheet's own time. The fields pinned are the ones this test owns;
+    # the row also carries what it takes to HOLD the cell (below).
+    assert [{"reason": row["reason"], "text": row["text"]} for row in held] == [
         {"reason": "segments",
          "text": "Bowser in the Fire Sea Course — No pole glitch — 0'39\"43"},
         {"reason": "segments",
@@ -35,6 +36,43 @@ def test_dentoriousred_maps_to_fourteen_times_over_ten_stars():
         {"reason": "no_entity",
          "text": "CCM wooden door - Enter BitDW (LBLJ) — 0'09\"23"},
     ]
+
+
+def test_a_held_row_carries_what_it_takes_to_keep_the_cell():
+    """Round 28: a row the door cannot place is HELD, not dropped -- so
+    every such row names its stable key, the sheet's own centiseconds and
+    the ROM it was set on, which is what `db.hold_times` stores and what
+    the column export prints back. The ROM is the ENTRY's, falling back
+    to the target's (a JP-stamped target's rows carry none of their own)."""
+    from sm64_events.library.audit import row_key
+    _candidates, held = candidates_for(payload(), "DentoriousRed")
+    lblj = next(row for row in held if row["text"].startswith("CCM wooden door"))
+    assert lblj["time_cs"] == 923
+    assert lblj["game_version"] is None
+    target = next(t for t in payload()["targets"]
+                  if t["label"] == "CCM wooden door - Enter BitDW (LBLJ)")
+    item = target["approaches"][0]
+    assert lblj["row_key"] == row_key(target, item["name"], item["ids"])
+
+
+def test_a_star_row_timed_in_real_time_is_held_rather_than_snapped():
+    """One approach on the whole sheet times a star on a REAL-TIME clock
+    ("[N64 REAL TIME] w/ sub"). A star here is a frame count, so its 42.52
+    could only land as 42.53 -- and then export as a number the runner
+    never typed. Held as written instead, under its own reason."""
+    from sm64_events.library.import_runner import REAL_TIME, timed_in_real_time
+    target = {"entity_key": "star:9:5", "label": "Collect the Caps...",
+              "section": "9. Dire, Dire Docks", "version": None,
+              "subsections": [],
+              "approaches": [
+                  {"name": "Collect the Caps...", "ids": ["1"],
+                   "entries": [{"runner": "R", "time_cs": 4166}]},
+                  {"name": "[N64 REAL TIME] w/ sub", "ids": ["3"],
+                   "entries": [{"runner": "R", "time_cs": 4252}]}]}
+    assert timed_in_real_time(target["approaches"][1])
+    candidates, held = candidates_for({"targets": [target]}, "R")
+    assert [c.time_cs for c in candidates] == [4166]
+    assert [(row["reason"], row["time_cs"]) for row in held] == [(REAL_TIME, 4252)]
 
 
 def test_a_segment_row_drops_unless_the_caller_can_vouch_for_the_id():

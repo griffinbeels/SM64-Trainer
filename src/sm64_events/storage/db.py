@@ -605,6 +605,29 @@ MIGRATIONS = [
     """
     DELETE FROM pbs WHERE imported_from IS NOT NULL AND attempt_id IS NULL;
     """,
+
+    # v29 -- a HELD TIME: a sheet cell an import kept aside because the
+    # trainer has nowhere to put it yet -- a piece no segment is linked to,
+    # a castle movement with no entity, a stage RTA, a star row timed on a
+    # real-time clock. His ruling, 2026-09-04: "maximize compatibility with
+    # the sheet" -- a row the import cannot land is KEPT rather than
+    # dropped, so the column export prints it back, its Library row shows
+    # it, and linking the row lands it. Keyed by the row's stable key and
+    # the ROM the cell was set on (NULL = the sheet did not say); `source`
+    # is the import that brought it, so undoing that import erases it.
+    # Later rows win, exactly as pbs do.
+    """
+    CREATE TABLE IF NOT EXISTS held_times (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source TEXT NOT NULL,
+      row_key TEXT NOT NULL,
+      game_version TEXT,
+      time_cs INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      saved_utc TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS held_times_row ON held_times(row_key);
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -1317,6 +1340,61 @@ class Database:
             self._conn.execute("DELETE FROM pbs WHERE id=?", (pb_id,))
             self._conn.commit()
 
+    # -- held times (sheet cells an import kept aside) ---------------------
+    def hold_times(self, source: str, cells, saved_utc: str) -> int:
+        """Keep `cells` -- `[{row_key, game_version, time_cs, reason}]` --
+        for `source`, replacing that source's earlier hold of the same row
+        and ROM. Another source's hold of the row survives underneath, so
+        undoing the later import uncovers it (latest-row-wins, as pbs)."""
+        with self._lock:
+            for cell in cells:
+                self._conn.execute(
+                    "DELETE FROM held_times WHERE source=? AND row_key=?"
+                    " AND game_version IS ?",
+                    (source, cell["row_key"], cell.get("game_version")))
+                self._conn.execute(
+                    "INSERT INTO held_times (source, row_key, game_version,"
+                    " time_cs, reason, saved_utc) VALUES (?,?,?,?,?,?)",
+                    (source, cell["row_key"], cell.get("game_version"),
+                     int(cell["time_cs"]), cell.get("reason") or "",
+                     saved_utc))
+            self._conn.commit()
+            return len(cells)
+
+    def held_times(self, source: str | None = None,
+                   row_key: str | None = None) -> list[dict]:
+        """Every held cell, id-ordered (later holds win), optionally one
+        source's or one row's."""
+        clauses, params = [], []
+        if source is not None:
+            clauses.append("source=?")
+            params.append(source)
+        if row_key is not None:
+            clauses.append("row_key=?")
+            params.append(row_key)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM held_times" + where + " ORDER BY id",
+                params).fetchall()
+            return [dict(row) for row in rows]
+
+    def delete_held_times(self, source: str | None = None,
+                          row_keys=None) -> int:
+        """Erase held cells -- one source's (an undo), or every source's
+        hold of the given rows (a link that just landed them). Returns
+        how many went."""
+        with self._lock:
+            gone = 0
+            if source is not None:
+                gone += self._conn.execute(
+                    "DELETE FROM held_times WHERE source=?", (source,)).rowcount
+            for key in (row_keys or ()):
+                gone += self._conn.execute(
+                    "DELETE FROM held_times WHERE row_key=?", (key,)).rowcount
+            self._conn.commit()
+            return gone
+
     def purge_event_types(self, types) -> int:
         """Delete every journal row of the given types and RECLAIM the file
         space, returning how many went.
@@ -1454,6 +1532,9 @@ class Database:
         with self._lock:
             self._conn.execute("DELETE FROM events")
             self._conn.execute("DELETE FROM pbs")
+            # A held time is imported history too: it came in with a
+            # column and goes out with everything else.
+            self._conn.execute("DELETE FROM held_times")
             self._conn.execute("DELETE FROM sessions WHERE id<>?",
                                (keep_session_id,))
             self._conn.commit()

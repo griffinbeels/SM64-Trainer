@@ -644,3 +644,92 @@ def test_the_practice_cards_library_door_follows_the_link(library_server):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_a_held_time_shows_on_its_library_row_and_lands_when_the_row_is_linked(
+        tmp_path, monkeypatch):
+    """Round 28. A sheet time the import could not place -- here GTM's
+    "Volcano entry" piece, 8.06 s, with no segment linked -- is HELD, and a
+    time that lives only in the export is a time he cannot see. So the
+    piece's own link strip shows it ("Your sheet time 8"06 is kept aside"),
+    and linking the row lands it on the segment at once: the strip flips to
+    "Linked to your segment" and the held note is gone. Its own server, so
+    the import touches no other test's state."""
+    from sm64_events.library.store import LibraryStore
+    monkeypatch.setattr(LibraryStore, "refresh",
+                        lambda self, fetch_fn, overrides=None: {})
+    with serve_ui(tmp_path / "held.db", arm_segment=FIXTURE_SEGMENT,
+                  seed_editor_fixtures=True) as base:
+        request = urllib.request.Request(
+            f"{base}/api/import/sheet", method="POST",
+            data=json.dumps({"runner": "GTM", "refresh": False}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(request) as reply:
+            imported = json.loads(reply.read())
+        assert any("Volcano entry" in row["text"] for row in imported["held"])
+        with driver.get_driver().launch(headless=True) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card", timeout_ms=20000)
+            page.evaluate(CLICK_LIBRARY_TAB)
+            page.wait_for(".library-target .library-section", timeout_ms=15000)
+            _navigate_to_target(page, "7. Lethal Lava Land",
+                                "Hot-Foot-It into the Volcano")
+            page.wait_for(".library-pieces", timeout_ms=15000)
+            find_strip = """
+              (() => {
+                const section = [...document.querySelectorAll(
+                  '.library-pieces .library-piece-section')]
+                  .find((s) => s.querySelector('.library-section-name')
+                                ?.textContent === 'Volcano entry');
+                if (!section) return null;
+                const strip = section.querySelector('.library-link-state');
+                return strip ? { text: strip.textContent.replace(/\\s+/g, ' ').trim(),
+                                 held: !!strip.querySelector('.library-held-time'),
+                                 linked: strip.classList.contains('is-linked') }
+                             : null;
+              })()
+            """
+            strip = page.evaluate(find_strip)
+            assert strip, "the Volcano entry piece must render its link strip"
+            assert strip["held"], strip
+            assert "Your sheet time" in strip["text"] and "8\"06" in strip["text"], strip
+            assert "kept aside" in strip["text"], strip
+            # Link it to the fixture segment through the strip's own door.
+            clicked = page.evaluate("""
+              (() => {
+                const section = [...document.querySelectorAll(
+                  '.library-pieces .library-piece-section')]
+                  .find((s) => s.querySelector('.library-section-name')
+                                ?.textContent === 'Volcano entry');
+                const button = section.querySelector('.library-link-button');
+                if (!button) return 'no link button';
+                button.click();
+                return 'clicked';
+              })()
+            """)
+            assert clicked == "clicked", clicked
+            page.wait_for(".library-pieces .search-menu", timeout_ms=10000)
+            picked = page.evaluate("""
+              (() => {
+                const option = [...document.querySelectorAll(
+                  '.library-pieces .search-menu-option')][0];
+                if (!option) return 'no segment option';
+                option.click();
+                return 'picked';
+              })()
+            """)
+            assert picked == "picked", picked
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                strip = page.evaluate(find_strip)
+                if strip and strip["linked"]:
+                    break
+                time.sleep(0.2)
+            assert strip and strip["linked"], strip
+            assert not strip["held"], "a landed hold must leave the strip"
+        # The held time is the segment's PB now, and the hold is released.
+        with urllib.request.urlopen(f"{base}/api/session?scope=lifetime") as reply:
+            view = json.loads(reply.read())
+        landed = [s for s in view["segments"] if (s.get("pb") or {}).get("rta")]
+        assert any(((s.get("pb") or {}).get("rta") or {}).get("frames") == 242
+                   for s in landed), [(s["name"], s.get("pb")) for s in landed]

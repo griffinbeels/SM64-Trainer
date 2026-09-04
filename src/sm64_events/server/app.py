@@ -427,9 +427,22 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         return [(definition["id"], definition["name"])
                 for definition in db.segment_defs()]
 
+    # A HELD TIME (round 28) is a sheet cell an import kept aside for a
+    # row with no home; the Library row shows it, and the link door lands
+    # it -- both need the tracker service, so a broadcast-only instance
+    # simply shows none and lands none.
+    held_times, on_adopt = None, None
+    if service is not None and getattr(service, "db", None) is not None:
+        from sm64_events.server.import_api import held_row_lander
+        # Resolved per call, never bound here: `start()` may replace the db,
+        # and a test's stand-in db need not know the table at all -- the
+        # router treats a failing read as "nothing held" rather than a 500.
+        held_times = lambda: service.db.held_times()  # noqa: E731
+        on_adopt = held_row_lander(service, library, adoptions)
     app.include_router(create_library_router(
         library, overrides=library_overrides, adoptions=adoptions,
-        segment_names=live_segment_names if service is not None else None))
+        segment_names=live_segment_names if service is not None else None,
+        held_times=held_times, on_adopt=on_adopt))
     if service is not None:
         app.include_router(create_api_router(service))
         from sm64_events.server.ranks_api import create_ranks_router

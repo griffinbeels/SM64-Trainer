@@ -57,7 +57,7 @@ def test_line_count_covers_every_worksheet_row_and_blanks_the_gaps():
     rows, payload = _fixture()
     calls = []
 
-    def resolve(entity_key, strat_tag, timer_mode, version):
+    def resolve(entity_key, strat_tag, timer_mode, version, **_):
         calls.append((entity_key, strat_tag, timer_mode, version))
         if entity_key == "star:1:0" and strat_tag == "Vetted Strat":
             return 4370
@@ -102,7 +102,7 @@ def test_a_version_mismatch_is_the_caller_resolves_responsibility():
          "subsections": []}]}
     seen = []
 
-    def resolve(entity_key, strat_tag, timer_mode, version):
+    def resolve(entity_key, strat_tag, timer_mode, version, **_):
         seen.append(version)
         return None                                    # the caller says "no match"
 
@@ -120,7 +120,7 @@ def test_a_star_approach_with_no_vetted_strategy_exports_under_the_sheets_name()
     rows, payload = _fixture()
     asked = []
 
-    def resolve(entity_key, strat_tag, timer_mode, version):
+    def resolve(entity_key, strat_tag, timer_mode, version, **_):
         asked.append((entity_key, strat_tag))
         return 4370 if strat_tag == "Approach B" else None
 
@@ -142,7 +142,7 @@ def test_the_placer_outranks_the_star_fallback():
 
     seen = []
 
-    def resolve(entity_key, strat_tag, timer_mode, version):
+    def resolve(entity_key, strat_tag, timer_mode, version, **_):
         seen.append((entity_key, strat_tag, timer_mode))
         return 8100
 
@@ -182,7 +182,7 @@ def test_a_carved_out_target_shares_its_parents_opening_row():
     # no strategy at all (`names_the_thing`); the other two name strategies
     # under a differently-labelled target and still ask by name.
     lines = column_lines(rows, payload,
-                         lambda entity_key, strat, mode, version: {
+                         lambda entity_key, strat, mode, version, **_: {
                              ("star:19:0", "Box Star"): 4370,
                              ("star:19:1", "Under 21"): 2060,
                              ("star:1:0", None): 8100,
@@ -211,7 +211,7 @@ def test_same_name_rows_in_one_block_are_told_apart_by_their_ids():
         placed.append(sorted(item["ids"]))
         return None
 
-    column_lines(rows, payload, lambda *a: None, place=place)
+    column_lines(rows, payload, lambda *a, **_: None, place=place)
     assert placed == [["1"], ["1", "2"], ["3", "4"]]
 
 
@@ -224,7 +224,7 @@ def test_a_lone_candidate_wins_on_its_name_alone():
         {"entity_key": "star:1:0", "label": "Some Star",
          "approaches": [{"name": "Approach A", "ids": ["1", "2"]}],
          "subsections": []}]}
-    assert column_lines(rows, payload, lambda *a: 4370) == ["43.70"]
+    assert column_lines(rows, payload, lambda *a, **_: 4370) == ["43.70"]
 
 
 def test_the_column_runs_to_the_sheets_last_data_row_blanks_and_all():
@@ -249,14 +249,14 @@ def test_the_column_runs_to_the_sheets_last_data_row_blanks_and_all():
          "approaches": [{"name": "Real Name", "ids": ["1"]}],
          "subsections": []},
     ]}
-    lines = column_lines(rows, payload, lambda *a: 4370)
+    lines = column_lines(rows, payload, lambda *a, **_: 4370)
     assert len(lines) == 8                      # rows 2..9, the last data row
     assert lines[0] == "43.70"
     assert lines[1:] == [""] * 7                # the tail survives being empty
 
 
 def test_no_rows_is_no_lines():
-    assert column_lines([], {"targets": []}, lambda *a: None) == []
+    assert column_lines([], {"targets": []}, lambda *a, **_: None) == []
 
 
 def _primary_fixture():
@@ -270,6 +270,7 @@ def _primary_fixture():
     ]
     payload = {"targets": [
         {"entity_key": "star:2:0", "label": "Chip off Whomp's Block",
+         "section": "2. Whomp's Fortress",
          "approaches": [
              {"name": "Chip off Whomp's Block", "ids": ["1"]},
              {"name": "Triple jump strat", "ids": ["2"]},
@@ -290,21 +291,20 @@ def test_a_star_own_row_asks_for_his_best_however_he_got_it():
     rows, payload = _primary_fixture()
     asked = []
 
-    def resolve(entity_key, strat_tag, timer_mode, version):
+    def resolve(entity_key, strat_tag, timer_mode, version, **_):
         asked.append(strat_tag)
         return 4370 if strat_tag is None else None
 
     lines = column_lines(rows, payload, resolve)
     assert lines[0] == "43.70", "the star's own row must print his best"
     assert lines[1] == "", "a strategy row must not print a time set another way"
-    # Round 27 put the row's OWN name first and the blind ask second, so the
+    # Round 27 put the row's OWN slot first and the blind ask second, so the
     # star's row asks TWICE when nothing is filed under its name -- which is
     # what lets an imported column round-trip without costing a played one.
-    # Round 28 put STANDARD between the row's own name and the blind sweep:
-    # a row named after the star IS that star's Standard strategy (his rule),
-    # which is what the import files it under and what he practises under.
-    assert asked[:4] == ["Chip off Whomp's Block", "Standard", None,
-                         "Triple jump strat"], asked
+    # A row named after the star IS that star's Standard strategy (his
+    # rule, 2026-09-02), so its own slot is "Standard", never the star's
+    # name; `adoptions.sheet_strategy` answers that for both doors.
+    assert asked[:3] == ["Standard", None, "Triple jump strat"], asked
 
 
 def test_a_strategy_row_still_only_prints_its_own_strategys_time():
@@ -313,7 +313,7 @@ def test_a_strategy_row_still_only_prints_its_own_strategys_time():
     so a time set a different way can never appear under it."""
     rows, payload = _primary_fixture()
 
-    def resolve(entity_key, strat_tag, timer_mode, version):
+    def resolve(entity_key, strat_tag, timer_mode, version, **_):
         return 2060 if strat_tag == "Triple jump strat" else None
 
     lines = column_lines(rows, payload, resolve)
@@ -333,7 +333,7 @@ def test_a_subsection_row_names_the_piece_so_it_asks_blind_too():
     def place(target, item, kind):
         return ("segment:9", "rta", "Standard") if kind == "subsection" else None
 
-    def resolve(entity_key, strat_tag, timer_mode, version):
+    def resolve(entity_key, strat_tag, timer_mode, version, **_):
         asked.append((entity_key, strat_tag))
         return 8100 if strat_tag is None else None
 
@@ -356,12 +356,13 @@ def test_an_imported_row_wins_over_your_faster_time_on_the_star():
     number.
 
     Asking by NAME first settles both, and this is the case that tells them
-    apart: a PB exists under the row's own name AND a faster one exists under
-    another. The row must print its own."""
+    apart: a PB exists under the row's own slot -- "Standard", which is
+    where the import files a star's own row -- AND a faster one exists
+    under another. The row must print its own."""
     rows, payload = _primary_fixture()
 
-    def resolve(entity_key, strat_tag, timer_mode, version):
-        if strat_tag == "Chip off Whomp's Block":
+    def resolve(entity_key, strat_tag, timer_mode, version, **_):
+        if strat_tag == "Standard":
             return 4370                      # what the import landed here
         if strat_tag is None:
             return 2060                      # faster, set some other way
@@ -380,7 +381,52 @@ def test_the_blind_fallback_still_carries_a_time_he_played():
     prints his best on that star."""
     rows, payload = _primary_fixture()
 
-    def resolve(entity_key, strat_tag, timer_mode, version):
+    def resolve(entity_key, strat_tag, timer_mode, version, **_):
         return 2060 if strat_tag is None else None
 
     assert column_lines(rows, payload, resolve)[0] == "20.60"
+
+
+def test_the_blind_ask_carries_only_what_no_other_row_claims():
+    """Round 28. The star's own row used to ask strategy-blind and got the
+    LATEST save on the star -- for an imported column, some sibling row's
+    time, printed twice (THI's Tip Top: "No mountain clip" 20.90 on a row
+    the runner left blank; the ten-runner sweep's whole `extra` column was
+    this). Now the blind ask names what every OTHER row of the block claims,
+    and the caller answers with the fastest of the rest -- which is exactly
+    where a time filed under a name the sheet has no row for (his own picks)
+    still lands."""
+    rows, payload = _primary_fixture()
+    asked = []
+
+    def resolve(entity_key, strat_tag, timer_mode, version, excluding=()):
+        asked.append((strat_tag, frozenset(excluding)))
+        return None
+
+    column_lines(rows, payload, resolve)
+    assert (None, frozenset({"Triple jump strat"})) in asked, asked
+    # A strategy row never asks blind, so it never carries the exclusion.
+    assert all(excl == frozenset() for tag, excl in asked if tag is not None), asked
+
+
+def test_a_held_cell_prints_where_nothing_else_answers_and_never_over_a_pb():
+    """Round 28: a row the import could not place is HELD, and the export
+    prints the hold back as written -- so a subsection nobody has linked, a
+    castle movement with no entity, a stage RTA all round-trip. Only where
+    nothing else answers: a row with a real personal best prints that."""
+    rows, payload = _primary_fixture()
+    from sm64_events.library.audit import row_key
+    target = payload["targets"][0]
+    piece_key = row_key(target, "Warp fadeout", ["3"])
+    strat_key = row_key(target, "Triple jump strat", ["2"])
+    cells = {(piece_key, None): 1613, (strat_key, None): 9999}
+
+    def resolve(entity_key, strat_tag, timer_mode, version, **_):
+        return 2060 if strat_tag == "Triple jump strat" else None
+
+    lines = column_lines(rows, payload, resolve,
+                         held=lambda key, version: cells.get((key, version)))
+    assert lines[2] == "16.13", "an unplaced piece prints its held cell"
+    assert lines[1] == "20.60", "a row with a PB never prints its stale hold"
+    assert column_lines(rows, payload, resolve)[2] == "", (
+        "without a held lookup the row stays blank, as before")

@@ -4,6 +4,8 @@ Reads are cheap and served straight from the loaded snapshot. The one
 expensive route is the refresh, which downloads ~5.6 MB and re-derives 631
 ladders, so it runs in a worker thread rather than blocking the event loop --
 the poller shares this process and a blocked loop is a dropped star grab."""
+import sqlite3
+
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
@@ -14,7 +16,8 @@ from sm64_events.links import ukikipedia_url
 
 
 def create_library_router(store, overrides=None, adoptions=None,
-                          segment_names=None) -> APIRouter:
+                          segment_names=None, held_times=None,
+                          on_adopt=None) -> APIRouter:
     """`adoptions` is an `Adoptions` binding the user's assignments to the
     standards store; omit it and the adopt routes are simply not mounted, which
     is what a second broadcast-only instance wants.
@@ -22,7 +25,13 @@ def create_library_router(store, overrides=None, adoptions=None,
     `segment_names` is a zero-arg callable yielding (id, name) pairs for the
     user's LIVE segment definitions -- what `auto_match` pairs an entity-less
     target against per request (round 6: "we should autoassign any segments
-    that exist already"). Omit it and no target claims a match."""
+    that exist already"). Omit it and no target claims a match.
+
+    `held_times` is a zero-arg callable yielding the db's held cells (round
+    28: a sheet time an import kept aside for a row with no home yet), so
+    every decorated row can show its own under `held`; `on_adopt(row_keys)`
+    is awaited after every successful link with the rows just linked, and
+    is how those cells LAND (`server/import_api.py::held_row_lander`)."""
     router = APIRouter(prefix="/api/library", tags=["library"])
 
     @router.get("")
@@ -44,12 +53,25 @@ def create_library_router(store, overrides=None, adoptions=None,
         # Decorate COPIES: the store's payload is shared across requests and
         # a baked-in `adopted` goes stale on the next assignment.
         assigned = adoptions.rows() if adoptions is not None else {}
+        held = {}
+        if held_times is not None:
+            try:
+                for cell in held_times():
+                    held.setdefault(cell["row_key"], []).append(
+                        {"game_version": cell.get("game_version"),
+                         "time_cs": cell["time_cs"]})
+            except (sqlite3.Error, AttributeError):
+                # A degraded db, or a stand-in db that never grew the table
+                # (the composition tests' stub): the page shows no held
+                # times rather than failing to render at all.
+                held = {}
 
         def rows(items):
             return [{**item,
                      "row_key": (key := row_key(target, item["name"],
                                                 item["ids"])),
-                     "adopted": assigned.get(key)}
+                     "adopted": assigned.get(key),
+                     "held": held.get(key, [])}
                     for item in items]
 
         matched = None
@@ -179,8 +201,16 @@ def create_library_router(store, overrides=None, adoptions=None,
                     "by_entity": adoptions.linked_targets(),
                     "matched_by_name": matched}
 
+        async def landed(result: dict, keys) -> dict:
+            """A link gives a held cell its home, so the cells on the rows
+            just linked land NOW rather than on some later import; what
+            happened rides the answer as `held`."""
+            if on_adopt is not None:
+                result["held"] = await on_adopt(list(keys))
+            return result
+
         @router.post("/adopt")
-        def library_adopt(body: dict = Body(...)):
+        async def library_adopt(body: dict = Body(...)):
             """Assign one library row to a segment the user built.
 
             The sheet's movements are finer than our segments and its
@@ -190,11 +220,12 @@ def create_library_router(store, overrides=None, adoptions=None,
             if not key or not entity:
                 raise HTTPException(400, "row_key and entity_key are required")
             try:
-                return adoptions.adopt(key, entity)
+                result = adoptions.adopt(key, entity)
             except adoptions_store.AdoptionError as err:
                 # 409, not 400: the request is well formed and the refusal is
                 # about the state of the world, which the caller must be told.
                 raise HTTPException(409, str(err)) from err
+            return await landed(result, [key])
 
         @router.post("/unadopt")
         def library_unadopt(body: dict = Body(...)):
@@ -204,7 +235,7 @@ def create_library_router(store, overrides=None, adoptions=None,
             return adoptions.unadopt(key)
 
         @router.post("/adopt_target")
-        def library_adopt_target(body: dict = Body(...)):
+        async def library_adopt_target(body: dict = Body(...)):
             """Round 7: link a WHOLE target -- every laddered approach
             becomes a strategy on the segment in one request, so a
             half-linked target is unreachable by a failed batch."""
@@ -213,9 +244,11 @@ def create_library_router(store, overrides=None, adoptions=None,
                 raise HTTPException(400,
                                     "target_index and entity_key are required")
             try:
-                return adoptions.adopt_target(index, entity)
+                result = adoptions.adopt_target(index, entity)
             except adoptions_store.AdoptionError as err:
                 raise HTTPException(409, str(err)) from err
+            return await landed(result, [row["row_key"]
+                                         for row in result["adopted"]])
 
         @router.post("/unadopt_target")
         def library_unadopt_target(body: dict = Body(...)):

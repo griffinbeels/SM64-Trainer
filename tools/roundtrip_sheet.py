@@ -20,6 +20,12 @@ different things and only one of them is ever the export's fault:
   missing   the sheet has a time here, we exported nothing
   extra     we exported a time here, the sheet's cell is empty
   differs   both have a time and they are not the same
+  snapped   both have a time; the sheet's is one the timer cannot show
+            and ours is the next frame up (50.92 -> 50.93). Reported,
+            never a failure: a star here is a frame count, and rounding
+            UP is the documented rule (`.claude/rules/import.md`). Six
+            rows across eleven runners on 2026-09-04, every one of them
+            a hand-typed centisecond off the 30-per-second set.
 
 It also prints the import's OWN refusal reasons, because the `missing` class
 is mostly them: a subsection nobody has linked to a segment, and a target the
@@ -48,8 +54,10 @@ from sm64_events.library import source                             # noqa: E402
 from sm64_events.library.audit import row_key                   # noqa: E402
 from sm64_events.library.export_column import (                    # noqa: E402
     _blocks, _find_item, sheet_time)
-from sm64_events.library.sheet import read_rows                    # noqa: E402
+from sm64_events.library.sheet import parse_time, read_rows        # noqa: E402
 from sm64_events.library.store import build_and_stamp              # noqa: E402
+from sm64_events.core.timefmt import frame_at_or_after             # noqa: E402
+from sm64_events.ranks.classify import display_cs                  # noqa: E402
 from sm64_events.ranks.standards import RankStandards              # noqa: E402
 from sm64_events.server.app import create_app                      # noqa: E402
 from sm64_events.server.broadcaster import Broadcaster             # noqa: E402
@@ -198,7 +206,13 @@ def roundtrip(runner, rows, payload, scratch, link=0):
 def kind_of(want, got):
     if want and not got:
         return "missing"
-    return "extra" if got and not want else "differs"
+    if got and not want:
+        return "extra"
+    sheet_cs, our_cs = parse_time(want), parse_time(got)
+    if (sheet_cs is not None and our_cs is not None
+            and display_cs(frame_at_or_after(sheet_cs)) == our_cs):
+        return "snapped"
+    return "differs"
 
 
 def classify(expected, actual):
@@ -255,13 +269,20 @@ def report(runner, expected, actual, summary, labels, verbose):
     """One runner's line, plus its diff when there is one; how many rows
     disagreed."""
     counts, rows = classify(expected, actual)
-    total = sum(counts.values())
-    verdict = "MATCH" if total == 0 else f"{total} rows differ"
+    # A snapped cell is the sheet holding a number the timer cannot show;
+    # it is reported beside the verdict and never counts against it.
+    total = sum(count for kind, count in counts.items() if kind != "snapped")
+    snapped = counts.get("snapped", 0)
+    verdict = ("MATCH" if total == 0 else f"{total} rows differ") + (
+        f" ({snapped} snapped)" if snapped else "")
     print(f"{runner:<22} sheet {sum(1 for line in expected if line):>4}  "
           f"exported {sum(1 for line in actual if line):>4}  "
           f"landed {summary.get('imported', '?'):>4}  "
           f"linked {summary.get('linked', 0):>3}  -> {verdict}")
+    held = Counter(row.get("reason", "?") for row in (summary.get("held") or []))
     if not total:
+        if held:
+            print(f"    import held: {dict(held)}")
         return 0
     print(f"    {dict(counts)}")
     for kind, bucket in sorted(by_kind(expected, actual, labels).items(),
@@ -274,6 +295,12 @@ def report(runner, expected, actual, summary, labels, verbose):
                       for row in (summary.get("rejected") or []))
     if reasons:
         print(f"    import refused: {dict(reasons)}")
+    held = Counter(row.get("reason", "?") for row in (summary.get("held") or []))
+    if held:
+        # Round 28: a row the import cannot place is HELD rather than dropped,
+        # and prints back from the hold -- so it round-trips, and the count
+        # here says how much of a MATCH is held rather than landed.
+        print(f"    import held: {dict(held)}")
     for number, kind, want, got in (rows if verbose else rows[:6]):
         print(f"    row {number:<5} {kind:<8} sheet={want!r:<10} "
               f"ours={got!r:<10} {labels.get(number, '')[:52]}")

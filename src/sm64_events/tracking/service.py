@@ -2011,8 +2011,20 @@ class TrackerService:
                                  timestamp_utc=_now(), payload=payload))
         return payload
 
-    async def import_times(self, source: str, candidates) -> dict:
-        """Land a batch of brought-in times, each as an attempt with a PB.
+    async def import_times(self, source: str, candidates, held=()) -> dict:
+        """Land a batch of brought-in times, each as an attempt with a PB --
+        and HOLD the cells the source could not place.
+
+        `held` is `[{row_key, game_version, time_cs, reason}]`: sheet cells
+        the reader had no entity for (a piece nobody has linked, a castle
+        movement, a stage RTA, a real-time-clocked star row). They are kept
+        beside the journal under this source (`db.hold_times`) rather than
+        dropped -- his ruling, 2026-09-04, "maximize compatibility with the
+        sheet" -- so the column export prints them back, the Library row
+        shows them, `remove_imported` erases them with the rest, and a
+        LINK lands them (`server/import_api.py::held_row_lander`). Not
+        journaled: a held cell is not an attempt, and the projector never
+        reads it.
 
         Every import door arrives here — typed by hand, a runner's Ultimate
         Sheet column. The improvement rule lives in `tracking/importing.py`
@@ -2067,6 +2079,8 @@ class TrackerService:
         if plan.landing:
             await self._select_freshly_earned_strats(
                 {landed.entity_key for landed, _ in plan.landing})
+        if held:
+            db.hold_times(source, list(held), _iso(_now()))
         return {"source": source, **plan.summary}
 
     async def _select_freshly_earned_strats(self, entity_keys) -> None:
@@ -2198,6 +2212,10 @@ class TrackerService:
         if doomed:
             db.delete_events(doomed)
             await self._reproject()
+        # The cells this source held go with it: they were brought by the
+        # same button press, and a held time surviving its import would be
+        # a column he cannot see and cannot undo.
+        db.delete_held_times(source=source)
         return len(doomed)
 
     async def wipe_data(self, kind: str, course_id: int | None = None,

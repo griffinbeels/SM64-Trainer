@@ -276,3 +276,22 @@ def test_clear_all_practice_data_wipes_the_filled_selection(tmp_path):
     asyncio.run(svc.wipe_data("all", scope="lifetime"))
     assert _active(db, svc).for_segment(seg) is None
     assert _active(db, svc).for_star(1, 0) is None
+
+
+def test_an_import_holds_what_it_could_not_place_and_the_undo_erases_it(tmp_path):
+    """Round 28: the cells a door cannot land ride the same command as the
+    ones it can, under the same source -- so one button press brings both,
+    and one undo takes both. A held cell is not journaled: it is not an
+    attempt, and the projector never reads it."""
+    db, svc = make(tmp_path)
+    held = [{"row_key": "sheet||row||1", "game_version": "jp",
+             "time_cs": 1613, "reason": "subsections"}]
+    summary = asyncio.run(svc.import_times("sheet:Raisn", [candidate()], held=held))
+    assert summary["imported"] == 1
+    assert [(c["source"], c["row_key"], c["time_cs"]) for c in db.held_times()] == [
+        ("sheet:Raisn", "sheet||row||1", 1613)]
+    assert all(e.type != "held" for e in db.events())
+    asyncio.run(svc.import_times("manual", [candidate(700, key="star:2:0")]))
+    assert asyncio.run(svc.remove_imported("sheet:Raisn")) == 1
+    assert db.held_times() == [], "the undo must take the held cells with it"
+    assert db.current_pb(2, 0, "igt", strat_tag="Standard") is not None

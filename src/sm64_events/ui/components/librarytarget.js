@@ -641,6 +641,21 @@ function LinkDoor({ linkedName, linkedNote, offerNote, doAdopt, doUnlink,
   </div>`;
 }
 
+// Round 28: a HELD TIME -- the sheet time an import kept aside for a row the
+// trainer had nowhere to put. One cell per ROM the sheet timed it on, each
+// wearing its flag (never the letters: his 2026-09-02 ruling). Drawn on the
+// row it belongs to -- the piece's link strip, a movement's section head --
+// because a time that lives only in the export is a time he cannot see.
+function HeldTime({ held }) {
+  if (!held || !held.length) return null;
+  return html`<span class="library-held-time"
+      title="Kept aside by an import — it lands the moment this row is linked to one of your segments.">
+    ${held.map((cell, index) => html`<span key=${index}>${index ? " · " : ""}${
+      fmtSeconds(cell.time_cs / 100)}${cell.game_version
+        ? html` <${RegionFlag} version=${cell.game_version} size=${12} />` : ""}</span>`)}
+  </span>`;
+}
+
 // A PIECE's own row-level door (round 5, narrowed round 7: approaches no
 // longer carry one -- the whole-target door in the page header covers them).
 function LinkControl({ row, kind, entityKey, adoptable, segments, segmentsError,
@@ -649,10 +664,13 @@ function LinkControl({ row, kind, entityKey, adoptable, segments, segmentsError,
   if (!linked && !(adoptable && linkable({ entity_key: entityKey }, row, kind))) {
     return null;
   }
+  const heldHere = row.held && row.held.length;
   return html`<${LinkDoor}
       linkedName=${linked ? resolveLabel(row.adopted) : null}
       linkedNote=${" — it grades there now."}
-      offerNote="Not graded yet — link one of your segments to grade it."
+      offerNote=${heldHere
+        ? html`Your sheet time <${HeldTime} held=${row.held} /> is kept aside — link one of your segments to land it there.`
+        : "Not graded yet — link one of your segments to grade it."}
       doAdopt=${async (segmentId) => {
         await send("POST", "/api/library/adopt",
           { row_key: row.row_key, entity_key: `segment:${segmentId}` });
@@ -999,6 +1017,9 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
             ? html`<span class="meta">Best ${fmtSeconds(approach.best_cs / 100)} · ${approach.best_runner}</span>` : ""}
           ${approach.fill_rate != null
             ? html`<span class="meta">Fill ${Math.round(approach.fill_rate * 100)}%</span>` : ""}
+          ${approach.held && approach.held.length
+            ? html`<span class="meta library-section-held">Your sheet time${" "}
+                <${HeldTime} held=${approach.held} /> · kept aside</span>` : ""}
           ${standing
             ? html`<span class="meta library-your-standing"
                 title=${standing.noTimes ? "Capless — no recorded time on this segment yet." : undefined}>

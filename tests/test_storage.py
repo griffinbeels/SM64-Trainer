@@ -1258,3 +1258,39 @@ def test_played_pb_leaves_provenance_null(tmp_path):
     row = next(r for r in db.pbs() if r["id"] == pb_id)
     assert row["imported_from"] is None
     assert row["game_version"] is None
+
+
+def test_held_times_are_kept_per_source_and_released_by_undo_or_by_row(tmp_path):
+    """Round 28: a HELD TIME is a sheet cell an import kept aside for a row
+    with no home. Later holds win (as pbs do), one source's hold of a row
+    replaces its own earlier one and never another source's, an undo erases
+    one source's cells, and a link releases every source's hold of a row."""
+    db = make_db(tmp_path)
+    db.hold_times("sheet:Raisn", [
+        {"row_key": "k1", "game_version": None, "time_cs": 1613, "reason": "subsections"},
+        {"row_key": "k2", "game_version": "jp", "time_cs": 2683, "reason": "subsections"},
+        {"row_key": "k2", "game_version": "us", "time_cs": 2850, "reason": "subsections"},
+    ], "2026-09-04T00:00:00Z")
+    db.hold_times("sheet:Falcon", [
+        {"row_key": "k1", "game_version": None, "time_cs": 1700, "reason": "subsections"},
+    ], "2026-09-04T00:00:01Z")
+    # Re-holding the same row and ROM for the same source replaces, never doubles.
+    db.hold_times("sheet:Raisn", [
+        {"row_key": "k1", "game_version": None, "time_cs": 1600, "reason": "subsections"},
+    ], "2026-09-04T00:00:02Z")
+    assert [(c["source"], c["row_key"], c["game_version"], c["time_cs"])
+            for c in db.held_times()] == [
+        ("sheet:Raisn", "k2", "jp", 2683), ("sheet:Raisn", "k2", "us", 2850),
+        ("sheet:Falcon", "k1", None, 1700), ("sheet:Raisn", "k1", None, 1600)]
+    assert [c["time_cs"] for c in db.held_times(source="sheet:Falcon")] == [1700]
+    assert [c["time_cs"] for c in db.held_times(row_key="k2")] == [2683, 2850]
+    # The undo of one import takes only that import's cells.
+    assert db.delete_held_times(source="sheet:Falcon") == 1
+    assert {c["source"] for c in db.held_times()} == {"sheet:Raisn"}
+    # A link releases the ROW, whoever held it.
+    assert db.delete_held_times(row_keys=["k2"]) == 2
+    assert [c["row_key"] for c in db.held_times()] == ["k1"]
+    # A lifetime wipe takes them all: they are imported history.
+    session = db.insert_session("2026-09-04T00:00:03Z")
+    db.wipe_all_history(session)
+    assert db.held_times() == []

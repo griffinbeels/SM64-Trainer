@@ -758,13 +758,15 @@ def test_a_stars_own_row_prefers_the_time_filed_under_its_own_name(tmp_path):
     blind ask alone, 104 of one runner's 601 filled rows exported the wrong
     number; asking by name first, 28.
 
-    Here both exist, and the row's own name must win."""
+    Here both exist, and the row's own slot must win. That slot is
+    "Standard" -- a row named after the star IS its Standard strategy (his
+    rule, 2026-09-02), and the import files it there."""
     from sm64_events.library.export_column import column_lines
     from sm64_events.server.import_api import sheet_row_placer
     from sm64_events.server.scorecard_api import _column_resolve
 
     with make_client(tmp_path) as (_client, db, svc):
-        db.insert_pb(1, 0, "Big Bob-omb on the Summit", "igt", 1324, None,
+        db.insert_pb(1, 0, "Standard", "igt", 1324, None,
                      "2026-08-24T00:00:00Z")
         db.insert_pb(1, 0, "Some other way round", "igt", 900, None,
                      "2026-08-24T00:00:00Z")
@@ -1200,3 +1202,49 @@ def test_a_runner_goal_walks_the_sheet_once_and_reuses_it_until_something_moves(
         assert len(walks) == 3, "a new adoption is a new key"
         client.get("/api/scorecard")
         assert len(walks) == 3
+
+
+def test_column_resolve_answers_the_leftovers_ask_with_the_fastest_unclaimed_pb(tmp_path):
+    """Round 28: `strat_tag=None` with `excluding` is the star's own row
+    asking for whatever the block's other rows do NOT claim -- the fastest
+    of those, on the row's ROM. A PB with no strategy is unclaimed by every
+    row; a PB set on the other ROM is never an answer for a versioned row."""
+    from sm64_events.server.scorecard_api import _column_resolve
+    with make_client(tmp_path) as (_client, db, svc):
+        db.insert_pb(1, 0, "Left side clip", "igt", 560, None, "2026-09-04T00:00:00Z")
+        db.insert_pb(1, 0, "Backflip WK", "igt", 640, None, "2026-09-04T00:00:01Z")
+        db.insert_pb(1, 0, None, "igt", 700, None, "2026-09-04T00:00:02Z")
+        db.insert_pb(1, 0, "Log firsty", "igt", 500, None, "2026-09-04T00:00:03Z",
+                     game_version="jp")
+        resolve = _column_resolve(svc)
+        # Every named sibling claimed: the strategy-less time is what is left.
+        assert resolve("star:1:0", None, "igt", None,
+                       excluding={"Left side clip", "Backflip WK", "Log firsty"}
+                       ) == display_cs(700)
+        # One sibling unclaimed: his own pick wins over the strategy-less one.
+        assert resolve("star:1:0", None, "igt", None,
+                       excluding={"Left side clip", "Log firsty"}) == display_cs(640)
+        # On the US row the JP time is not an answer, however fast.
+        assert resolve("star:1:0", None, "igt", "us", excluding=set()) == display_cs(560)
+        assert resolve("star:1:0", None, "igt", "jp", excluding=set()) == display_cs(500)
+        # Nothing left over: blank, never a sibling's time.
+        assert resolve("star:1:0", None, "igt", "jp",
+                       excluding={"Log firsty"}) is None
+
+
+def test_the_held_lookup_matches_a_versioned_row_to_its_own_rom(tmp_path):
+    from sm64_events.server.scorecard_api import _held_lookup
+    with make_client(tmp_path) as (_client, db, svc):
+        db.hold_times("sheet:Raisn", [
+            {"row_key": "piece", "game_version": "jp", "time_cs": 2683, "reason": "subsections"},
+            {"row_key": "piece", "game_version": "us", "time_cs": 2850, "reason": "subsections"},
+            {"row_key": "door", "game_version": "jp", "time_cs": 390, "reason": "no_entity"},
+        ], "2026-09-04T00:00:00Z")
+        held = _held_lookup(svc)
+        assert held("piece", "jp") == 2683
+        assert held("piece", "us") == 2850
+        # A JP-stamped target's rows carry no version of their own but their
+        # cells do: an unversioned row takes what the row holds.
+        assert held("door", None) == 390
+        assert held("piece", None) in (2683, 2850)
+        assert held("nowhere", None) is None

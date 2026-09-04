@@ -136,35 +136,103 @@ def _fetch_column_source(overrides, step=None):
     return rows, payload
 
 
+def _column_identity(entity_key):
+    """`(course_id, star_id, segment_id)` for a star or segment key; None
+    for anything else."""
+    kind, _, rest = entity_key.partition(":")
+    if kind == "star":
+        course_id, star_id = rest.split(":")
+        return int(course_id), int(star_id), None
+    if kind == "segment":
+        return None, None, int(rest)
+    return None
+
+
 def _column_resolve(service):
     """Your current PB on ONE named strategy -- `centiseconds | None`,
     `None` when there is no PB on that strategy, or when there is one
     but it was set on the other ROM (`row.version` is only ever non-None on
     a row the sheet itself declares a version for; an unversioned row never
-    checks)."""
-    def resolve(entity_key, strat_tag, timer_mode, version):
-        kind, _, rest = entity_key.partition(":")
-        if kind == "star":
-            course_id, star_id = rest.split(":")
-            pb = service.db.current_pb(int(course_id), int(star_id), timer_mode,
-                                       strat_tag=strat_tag,
-                                       game_version=version)
-        elif kind == "segment":
-            pb = service.db.current_pb(None, None, timer_mode,
-                                       game_version=version,
-                                       segment_id=int(rest), strat_tag=strat_tag)
-        else:
+    checks).
+
+    With `strat_tag=None` it is the LEFTOVERS ask (round 28): the fastest
+    current PB on the entity filed under no name in `excluding` -- the
+    names the block's other rows claim -- on the row's ROM. Fastest,
+    not latest, because a row that names the thing prints "your best on
+    it however you set it" (round 25), and the latest save on a star is
+    whichever strategy he happened to run last. A PB with no strategy is
+    unclaimed by every row and so always eligible."""
+    ranks = getattr(service, "ranks", None)
+    latest_rows = []
+
+    def set_on(pb, version):
+        """Was this PB set on `version`? An unversioned row grades on the
+        running ROM, so it counts as that one and no other."""
+        if version is None:
+            return True
+        pb_version = pb.get("game_version") or (
+            ranks.grading_version if ranks is not None else None)
+        return pb_version == version
+
+    def leftovers(identity, timer_mode, version, excluding):
+        if not latest_rows:
+            # Latest row per (entity, clock, strategy) wins, exactly as
+            # `views.current_pbs_by_strat` reads the table; read once per
+            # column rather than once per worksheet row.
+            latest = {}
+            for pb in service.db.pbs():
+                latest[(pb["course_id"], pb["star_id"], pb["segment_id"],
+                        pb["timer_mode"], pb["strat_tag"])] = pb
+            latest_rows.append(latest)
+        course_id, star_id, segment_id = identity
+        best = None
+        for (course, star, segment, mode, strat), pb in latest_rows[0].items():
+            if (course, star, segment, mode) != (course_id, star_id,
+                                                segment_id, timer_mode):
+                continue
+            if strat in excluding or not set_on(pb, version):
+                continue
+            if best is None or pb["frames"] < best["frames"]:
+                best = pb
+        return best
+
+    def resolve(entity_key, strat_tag, timer_mode, version, *, excluding=()):
+        identity = _column_identity(entity_key)
+        if identity is None:
             return None
-        if pb is None:
+        if strat_tag is None:
+            pb = leftovers(identity, timer_mode, version, frozenset(excluding))
+            return display_cs(pb["frames"]) if pb else None
+        course_id, star_id, segment_id = identity
+        pb = service.db.current_pb(course_id, star_id, timer_mode,
+                                   segment_id=segment_id, strat_tag=strat_tag,
+                                   game_version=version)
+        if pb is None or not set_on(pb, version):
             return None
-        if version is not None:
-            ranks = getattr(service, "ranks", None)
-            pb_version = pb.get("game_version") or (
-                ranks.grading_version if ranks is not None else None)
-            if pb_version != version:
-                return None
         return display_cs(pb["frames"])
     return resolve
+
+
+def _held_lookup(service):
+    """`held(row_key, version) -> cs | None` over the db's HELD TIMES --
+    the cells an import kept aside for rows with no home (round 28). A
+    versioned worksheet row wants the cell set on that ROM; an
+    unversioned one takes whatever the row holds (a JP-stamped target's
+    rows carry no version of their own but their cells do). Later holds
+    win, as pbs do."""
+    by_row = {}
+    for cell in service.db.held_times():
+        by_row.setdefault(cell["row_key"], {})[cell.get("game_version")] = (
+            int(cell["time_cs"]))
+
+    def held(key, version):
+        cells = by_row.get(key)
+        if not cells:
+            return None
+        if version is not None:
+            return cells.get(version)
+        return next(iter(cells.values()))
+    return held
 
 
 _CSV_HEADER = ["Course", "Star", "Record", "Goal", "You", "Delta"]
@@ -703,7 +771,8 @@ def create_scorecard_router(service, library=None, adoptions=None,
 
     def _resolve_column(rows, payload):
         place = sheet_row_placer(service, adoptions)
-        lines = column_lines(rows, payload, _column_resolve(service), place=place)
+        lines = column_lines(rows, payload, _column_resolve(service),
+                             place=place, held=_held_lookup(service))
         return lines, payload
 
     def _column_body(lines, payload):

@@ -32,7 +32,7 @@ from pydantic import BaseModel
 
 from sm64_events.library import adoptions as adoptions_store
 from sm64_events.library.audit import row_key
-from sm64_events.library.import_runner import candidates_for
+from sm64_events.library.import_runner import TIMER_MODE, candidates_for
 from sm64_events.library.mapping import segment_seed_key
 from sm64_events.library.source import fetch
 from sm64_events.server.ranks_api import absorb_after_regrade
@@ -138,6 +138,59 @@ def sheet_row_placer(service, adoptions):
     return place
 
 
+def held_row_lander(service, library, adoptions):
+    """`land(row_keys) -> {landed, released}`: land every HELD TIME on the
+    rows just linked, through the ordinary import rule.
+
+    The other half of holding a cell (`import_runner.py`): a row the
+    import could not place is kept, and the moment a link gives it a home
+    -- the Library's link door, the recorder saving a piece, a whole-target
+    link -- the cell goes through `sheet_row_placer` exactly as a fresh
+    import would, and lands under the same improvement rule (a cell slower
+    than what he already holds there lands nothing). Either way the hold
+    is RELEASED: its question has been answered, and a hold that outlived
+    its answer would print a stale number in the column. Wired into the
+    library router's adopt doors as `on_adopt` (`server/app.py`)."""
+    async def land(row_keys) -> dict:
+        database = getattr(service, "db", None)
+        if database is None or library is None:
+            return {"landed": 0, "released": 0}
+        wanted = set(row_keys)
+        held = [cell for cell in database.held_times()
+                if cell["row_key"] in wanted]
+        if not held:
+            return {"landed": 0, "released": 0}
+        place = sheet_row_placer(service, adoptions)
+        by_source, placed_keys = {}, set()
+        for cell in held:
+            target, item, kind = adoptions_store.find_row(
+                library.payload, cell["row_key"])
+            if target is None:
+                continue                 # the sheet no longer has the row
+            placed = place(target, item, kind)
+            if not placed:
+                continue                 # linked elsewhere, or not at all
+            entity_key, timer_mode, strategy = placed
+            by_source.setdefault(cell["source"], []).append(ImportCandidate(
+                entity_key=entity_key,
+                strat_tag=strategy or adoptions_store.sheet_strategy(
+                    target, item, kind),
+                time_cs=int(cell["time_cs"]),
+                game_version=cell.get("game_version"),
+                timer_mode=timer_mode or TIMER_MODE))
+            placed_keys.add(cell["row_key"])
+        landed = 0
+        for source, candidates in by_source.items():
+            with _service_refusals():
+                summary = await service.import_times(source, candidates)
+            landed += summary.get("imported", 0)
+        if landed:
+            absorb_after_regrade(service)
+        released = database.delete_held_times(row_keys=sorted(placed_keys))
+        return {"landed": landed, "released": released}
+    return land
+
+
 def create_import_router(service, library=None, overrides=None,
                          adoptions=None) -> APIRouter:
     """`library` is the `LibraryStore`; omit it and the sheet door is simply
@@ -148,10 +201,13 @@ def create_import_router(service, library=None, overrides=None,
     router = APIRouter(prefix="/api/import", tags=["import"])
 
     async def finish(source: str, candidates: list, rejected: list,
-                     **extra) -> dict:
-        """Land, and answer in the one shape every door shares."""
+                     held=(), **extra) -> dict:
+        """Land, hold what could not land, and answer in the one shape
+        every door shares -- `rejected` for rows nothing can keep, `held`
+        for rows kept aside until a link gives them a home."""
         with _service_refusals():
-            summary = await service.import_times(source, candidates)
+            summary = await service.import_times(source, candidates,
+                                                 held=held)
         if summary.get("imported"):
             # Every rank on every scope just moved for a reason that is not a
             # run -- the same shape as the game-version flip, and handled the
@@ -160,7 +216,10 @@ def create_import_router(service, library=None, overrides=None,
             # something he did not just do, which he reads as a bug outright
             # (his ruling, 2026-08-01).
             absorb_after_regrade(service)
-        return {"source": source, **summary, "rejected": rejected, **extra}
+        return {"source": source, **summary, "rejected": rejected,
+                "held": [{"text": cell["text"], "reason": cell["reason"],
+                          "row_key": cell["row_key"]} for cell in held],
+                **extra}
 
     @router.post("/manual")
     async def import_manual(body: ManualImportBody):
@@ -206,10 +265,10 @@ def create_import_router(service, library=None, overrides=None,
                     _log.warning("sheet refresh failed: %r", err)
                     raise HTTPException(
                         503, f"could not read the sheet: {err}") from err
-            candidates, dropped = candidates_for(
+            candidates, held = candidates_for(
                 library.payload, body.runner,
                 place=sheet_row_placer(service, adoptions))
-            return await finish(f"sheet:{body.runner}", candidates, dropped,
-                                sheet_revision=library.revision)
+            return await finish(f"sheet:{body.runner}", candidates, [],
+                                held=held, sheet_revision=library.revision)
 
     return router

@@ -20,25 +20,37 @@ when we import, it should import correctly... once we've defined what the
 subsection actually links to, we should be able to import it very easily."*
 Until then every subsection row was dropped regardless of any link.
 
-A row nobody can place is dropped, NAMED — one row per dropped entry in the
-`{text, reason}` shape every door answers with. They were COUNTED by kind until round 3
-(2026-08-23), which hid exactly what he asked to see: *"it makes more sense to
-just show all the things that failed as a list"*. The reasons:
+A row nobody can place is HELD, NAMED — one row per held entry in the
+`{text, reason}` shape every door answers with, carrying the row's stable
+`row_key`, its `time_cs` and the ROM it was set on, so the caller can keep
+the cell (`TrackerService.import_times(held=)`) rather than drop it. Round
+28 (2026-09-04), his ruling: *"maximize compatibility with the sheet"* --
+a row the trainer has no home for yet still round-trips, shows on its
+Library row, and lands the moment the row is linked. They were COUNTED by
+kind until round 3 (2026-08-23), which hid exactly what he asked to see:
+*"it makes more sense to just show all the things that failed as a list"*.
+The reasons:
 
   * `subsections` — a piece with no link. Landing it on the target's star
     would publish a 15.90 s way of doing a 43 s star.
-  * `no_entity` — a castle movement neither linked nor name-matched.
+  * `no_entity` — a castle movement neither linked nor name-matched, a
+    stage RTA (a route, not a target), a row the mapper names as no target.
   * `segments` — a Bowser row whose seeded movement this database no longer
     holds. A bare segment id is LOCAL to each database (the mapper resolved
     `segment:6` against the seeding order of the machine that scraped it),
     so the reader never lands the number itself.
+  * `real_time` — a star row the sheet times on a REAL-TIME clock ("[N64
+    REAL TIME] w/ sub", one approach on the whole sheet). A star here is
+    a frame count, so 42.52 could only land as 42.53; held as written.
 
 Pure — takes a payload, returns candidates. The caller decides where the
 payload came from, which is what lets the picker fill from the bundled
 snapshot while the import itself reads a fresh fetch.
 """
-from sm64_events.library.adoptions import DEFAULT_STRATEGY, strategy_name
-from sm64_events.library.mapping import HUNDRED_COIN_STAR
+import re
+
+from sm64_events.library.adoptions import sheet_strategy
+from sm64_events.library.audit import row_key
 from sm64_events.tracking.importing import ImportCandidate
 
 # Sheet approach times are STAR times measured the way Usamune measures them.
@@ -49,11 +61,21 @@ TIMER_MODE = "igt"
 # `place` — see the module docstring.
 IMPORTABLE_KIND = "star:"
 
-# The three reasons a sheet row is dropped. `ui/components/importflow.js`
+# The four reasons a sheet row is held. `ui/components/importflow.js`
 # `REASONS` puts each into words; a new key here owes a sentence there.
 SUBSECTION = "subsections"
 NO_ENTITY = "no_entity"
 SEGMENT = "segments"
+REAL_TIME = "real_time"
+
+# The sheet's own marker for a row timed on a real-time clock rather than
+# the frame counter -- "[N64 REAL TIME] w/ sub". Matched on the words, not
+# the brackets, so a re-styled marker still reads.
+_REAL_TIME = re.compile(r"\bREAL[ -]?TIME\b", re.IGNORECASE)
+
+
+def timed_in_real_time(item: dict) -> bool:
+    return bool(_REAL_TIME.search(item.get("name") or ""))
 
 
 def _sheet_time(centiseconds: int) -> str:
@@ -66,54 +88,53 @@ def _sheet_time(centiseconds: int) -> str:
     return f"{minutes}'{seconds:02d}\"{cents:02d}"
 
 
-def _dropped(target: dict, detail: str | None, time_cs: int, reason: str) -> dict:
-    """One reviewable row for an entry this door could not land.
+def _held(target: dict, item: dict, entry: dict, reason: str,
+          version: str | None) -> dict:
+    """One reviewable row for an entry this door could not land -- and
+    everything the caller needs to KEEP it: the row's stable key, the
+    sheet's own centiseconds, the ROM the entry was set on.
 
     The target label carries its ROM version where the sheet opened a
     separate target for it (BBH's Ghost Hunt, the JP movements), or two
-    dropped rows read as one. The approach or piece name is added only where
+    held rows read as one. The approach or piece name is added only where
     it says more than the target does — a castle movement's single approach
     is named after the movement itself."""
     label = target.get("label") or "?"
     if target.get("version"):
         label = f"{label} ({target['version'].upper()})"
     parts = [label]
+    detail = item.get("name")
     if detail and detail != target.get("label"):
         parts.append(detail)
-    parts.append(_sheet_time(time_cs))
-    return {"text": " — ".join(parts), "reason": reason}
+    parts.append(_sheet_time(entry["time_cs"]))
+    return {"text": " — ".join(parts), "reason": reason,
+            "row_key": row_key(target, item.get("name") or "",
+                               item.get("ids") or ()),
+            "time_cs": int(entry["time_cs"]), "game_version": version}
 
 
-def _drop_reason(target: dict, kind: str) -> str:
+def _hold_reason(target: dict, item: dict, kind: str) -> str:
     if kind == "subsection":
         return SUBSECTION
+    if timed_in_real_time(item):
+        return REAL_TIME
     entity_key = target.get("entity_key") or ""
     return SEGMENT if entity_key.startswith("segment:") else NO_ENTITY
 
 
-def _shares_its_entity(target: dict) -> bool:
-    """Is this target one of SEVERAL the sheet maps onto one entity?
-
-    True for every 100-coin star: `library/mapping.py` files every "+ 100c"
-    row under `star:<course>:6`, and a course opens one target per route
-    ending on a different star. A target-named row cannot be that entity's
-    Standard when three siblings claim the same title."""
-    key = target.get("entity_key") or ""
-    return key.startswith("star:") and key.endswith(f":{HUNDRED_COIN_STAR}")
-
-
 def candidates_for(payload: dict, runner: str, place=None):
-    """`([ImportCandidate, ...], [{text, reason}, ...])` — what lands,
-    and one named row per entry that could not.
+    """`([ImportCandidate, ...], [{text, reason, row_key, time_cs,
+    game_version}, ...])` — what lands, and one named row per entry that
+    could not, carrying what it takes to HOLD it.
 
     `place(target, item, kind) -> (entity_key, timer_mode, strategy | None)`
     is how the caller vouches for anything that is not a star row: the local
     entity it lands on, the clock that entity is timed on, and the strategy
     to file it under (None = the sheet's own: the vetted pairing where there
     is one, else the approach's name). Without it, or when it answers None,
-    such rows are dropped, named."""
+    such rows are held, named."""
     candidates = []
-    rejected = []
+    held = []
     for target in payload.get("targets") or []:
         target_key = target.get("entity_key") or ""
         version = target.get("version")
@@ -124,55 +145,28 @@ def candidates_for(payload: dict, runner: str, place=None):
                            if entry.get("runner") == runner]
                 if not entries:
                     continue
-                # A row whose name IS the target's own is that thing's
-                # STANDARD strategy, not a strategy called after the star --
-                # his ruling (2026-09-02): "if the name of the row is just the
-                # name of the star, then it should be given a Standard
-                # strategy... For the other sub rows, those are either
-                # subsections of the star, or they're genuine alternative
-                # strategies, which are always named."
-                #
-                # `adoptions.strategy_name` is that rule and already answered
-                # it this way for every row that goes through `place`; the
-                # star branch below kept its own answer and filed those times
-                # under "Big Bob-omb on the Summit". That is why a column he
-                # imported did not line up with the times he PLAYS, which are
-                # under Standard like everything else in this app.
-                #
-                # The vetted name still wins on a row that names a strategy;
-                # a target-named row has no strategy to be vetted against.
-                named = strategy_name(target.get("label") or "",
-                                      item.get("name") or "", kind=kind)
-                if named == DEFAULT_STRATEGY and _shares_its_entity(target):
-                    # ...EXCEPT on a 100-coin star, where several sheet
-                    # targets map to ONE entity: CCM alone opens four ("Big
-                    # Penguin Race + 100c", "Slide + 100c No teleporter
-                    # route", ...), each of them a different run ending on a
-                    # different star. Calling all four Standard puts four
-                    # distinct times in one slot and keeps whichever is
-                    # fastest -- 21 of Raisn's 28 remaining star mismatches
-                    # were exactly this (measured 2026-09-02). The store
-                    # already knows: `ranks/standards.py` VARIANT-QUALIFIES a
-                    # 100-coin star's strategies for this reason. Until a
-                    # qualified name can be derived here that the standards
-                    # store also recognises, these keep the row's own name,
-                    # which is distinct and round-trips.
-                    named = None
-                sheet_strategy = (named if named == DEFAULT_STRATEGY
-                                  else (item.get("matched_strategy")
-                                        or item.get("name")))
+                # WHICH slot this row is -- a row named after the target is
+                # its Standard, a repeated name is qualified by the approach
+                # it sits under, a 100-coin route's sub-row by its route.
+                # `adoptions.sheet_strategy` is that rule, and the column
+                # export reads the SAME function, which is what lets a
+                # column round-trip: every worksheet row of one entity has
+                # a slot of its own (round 28, 2026-09-04; round 27 measured
+                # 20 of Raisn's star rows sharing a slot with a sibling).
+                own_strategy = sheet_strategy(target, item, kind)
                 placed = place(target, item, kind) if place else None
                 if placed:
                     entity_key, timer_mode, strategy = placed
-                    strategy = strategy or sheet_strategy
-                elif kind == "approach" and target_key.startswith(IMPORTABLE_KIND):
+                    strategy = strategy or own_strategy
+                elif (kind == "approach" and target_key.startswith(IMPORTABLE_KIND)
+                        and not timed_in_real_time(item)):
                     entity_key, timer_mode, strategy = (
-                        target_key, TIMER_MODE, sheet_strategy)
+                        target_key, TIMER_MODE, own_strategy)
                 else:
-                    reason = _drop_reason(target, kind)
-                    rejected.extend(_dropped(target, item.get("name"),
-                                             entry["time_cs"], reason)
-                                    for entry in entries)
+                    reason = _hold_reason(target, item, kind)
+                    held.extend(_held(target, item, entry, reason,
+                                      entry.get("version") or version)
+                                for entry in entries)
                     continue
                 # The ENTRY's own version, not the target's. A merged
                 # (JP)/(US) approach holds both regions' times in one item and
@@ -187,4 +181,4 @@ def candidates_for(payload: dict, runner: str, place=None):
                     time_cs=int(entry["time_cs"]),
                     game_version=entry.get("version") or version,
                     timer_mode=timer_mode) for entry in entries)
-    return candidates, rejected
+    return candidates, held

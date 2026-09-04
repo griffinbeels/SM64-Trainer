@@ -267,3 +267,74 @@ def test_linked_targets_is_the_reverse_view_the_segment_editor_reads():
     adoptions._rows = {key: "segment:42"}
     assert adoptions.linked_targets() == {
         "segment:42": [{"index": 0, "label": "Lobby door (L) - BoB door"}]}
+
+
+def _hundred_coin_target(label, rows):
+    return {"entity_key": "star:4:6", "label": label, "section": "4. Cool, Cool Mountain",
+            "version": "jp", "subsections": [],
+            "approaches": [{"name": name, "ids": list(ids)} for name, ids in rows]}
+
+
+def test_every_worksheet_row_of_one_entity_files_under_a_slot_of_its_own():
+    """Round 28, his ruling on the round-27 measurement: "fix all bugs and
+    maximize compatibility with the sheet". Three shapes shared one slot:
+    a 100-coin course's four routes each carry a "100 coin star Xcam" row;
+    a target-named row on such a route cannot be Standard when four routes
+    claim it; and BitDW reds carries FIVE "Red coin star Xcam" rows, one per
+    pipe route. `sheet_strategy` is the one rule both doors read."""
+    slide = _hundred_coin_target("Slip Slidin' Away + 100c", [
+        ("Slip Slidin' Away + 100c", ["1", "2"]),
+        ("100 coin star Xcam", ["1", "2"])])
+    no_tp = _hundred_coin_target("Slide + 100c No teleporter route", [
+        ("Slide + 100c No teleporter route", ["1", "2"]),
+        ("100 coin star Xcam", ["1", "2"])])
+    # The route's own row is the route, not "Standard" (four routes, one entity).
+    assert ad.sheet_strategy(slide, slide["approaches"][0]) == "Slip Slidin' Away + 100c"
+    # A sub-row is qualified by its route, so two courses' xcam rows differ.
+    assert ad.sheet_strategy(slide, slide["approaches"][1]) == (
+        "Slip Slidin' Away + 100c › 100 coin star Xcam")
+    assert ad.sheet_strategy(no_tp, no_tp["approaches"][1]) == (
+        "Slide + 100c No teleporter route › 100 coin star Xcam")
+
+    bitdw = {"entity_key": "star:16:0", "label": "Bowser in the Dark World Red Coins",
+             "section": "Bowser Courses", "version": "jp", "subsections": [],
+             "approaches": [
+                 {"name": "Bowser in the Dark World Red Coins", "ids": ["1", "2"]},
+                 {"name": "Red coin star Xcam", "ids": ["1", "2"]},
+                 {"name": "Shigeru w/ island red first pipe entry", "ids": ["3", "4"]},
+                 {"name": "Red coin star Xcam", "ids": ["3", "4"]},
+                 {"name": "Xiah cycle pipe entry", "ids": ["5", "6"]},
+                 # The sheet's own bracket typo: [4|6] under Xiah's [5|6].
+                 {"name": "Red coin star Xcam", "ids": ["4", "6"]}]}
+    names = [ad.sheet_strategy(bitdw, item) for item in bitdw["approaches"]]
+    assert names == [
+        "Standard", "Standard › Red coin star Xcam",
+        "Shigeru w/ island red first pipe entry",
+        "Shigeru w/ island red first pipe entry › Red coin star Xcam",
+        "Xiah cycle pipe entry",
+        "Xiah cycle pipe entry › Red coin star Xcam"]
+    assert len(set(names)) == len(names), "every row must be its own slot"
+    # A vetted match still names an ordinary strategy row, and a piece is
+    # always its segment's Standard.
+    matched = {"name": "Log firsty", "ids": ["3"], "matched_strategy": "Log Firsty"}
+    plain = {"entity_key": "star:12:1", "label": "Mystery of the Monkey Cage",
+             "approaches": [{"name": "Mystery of the Monkey Cage", "ids": ["1"]}, matched]}
+    assert ad.sheet_strategy(plain, matched) == "Log Firsty"
+    assert ad.sheet_strategy(plain, plain["approaches"][0]) == "Standard"
+    assert ad.sheet_strategy(plain, {"name": "Post pipe", "ids": ["1"]},
+                             kind="subsection") == "Standard"
+
+
+def test_the_two_doors_read_the_same_naming_rule():
+    """A second copy of the slot rule in either door is the divergence this
+    round fixed (the export had an older two-argument rule and fell back
+    blind on a 100-coin route's own row). Both modules must call the shared
+    function and neither may re-derive it."""
+    import inspect
+
+    from sm64_events.library import export_column, import_runner
+    for module in (export_column, import_runner):
+        source = inspect.getsource(module)
+        assert "sheet_strategy(" in source, module.__name__
+        assert "strategy_name(" not in source.replace("sheet_strategy(", ""), (
+            f"{module.__name__} must not derive a row's slot on its own")

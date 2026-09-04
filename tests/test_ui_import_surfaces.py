@@ -253,11 +253,14 @@ def test_the_sheet_picker_fills_from_the_bundled_snapshot(tmp_path):
                 "the runner this feature was built for is not in the list")
 
 
-def test_the_sheet_door_lists_every_dropped_row_by_name_under_its_reason(
+def test_the_sheet_door_lists_every_held_row_by_name_under_its_reason(
         tmp_path, monkeypatch):
     """Round 3 (2026-08-23): "it makes more sense to just show all the things
     that failed as a list". The tally it replaced said "3 rows can't be used"
     and then "23 no_entity" -- counting KINDS where the sentence promised ROWS.
+    Round 28: those rows are HELD rather than dropped -- kept aside until a
+    link gives them a home -- so the box is not red, its sentence says so,
+    and the same reason groups tell him which link to make.
 
     The live download is replaced in the SERVER (the fixture runs in-process),
     so the door reads the bundled snapshot and what is driven is the panel.
@@ -295,13 +298,16 @@ def test_the_sheet_door_lists_every_dropped_row_by_name_under_its_reason(
             segment_pbs_before = _segment_pb_count(base)
             page.evaluate(
                 "document.querySelector('.importsheet .primary-button').click()")
-            assert wait(page, ".importsheet .importdoor-rejects")
+            assert wait(page, ".importsheet .importdoor-held")
             settle(page, 500)
             drawn = page.evaluate("""
               (() => {
-                const box = document.querySelector('.importsheet .importdoor-rejects');
+                const box = document.querySelector('.importsheet .importdoor-held');
                 return {
                   heading: box.querySelector('.settings-note').textContent.trim(),
+                  red: !!box.querySelector('.settings-note.is-bad'),
+                  summary: document.querySelector(
+                    '.importsheet .importdoor-summary').textContent.trim(),
                   groups: [...box.querySelectorAll('.importdoor-reject-group')].map(
                     (g) => ({reason: g.querySelector('.importdoor-reject-reason')
                                         .textContent.trim(),
@@ -310,7 +316,9 @@ def test_the_sheet_door_lists_every_dropped_row_by_name_under_its_reason(
                 };
               })()
             """)
-            assert drawn["heading"].startswith("24 rows"), drawn
+            assert drawn["heading"].startswith("24 rows kept aside"), drawn
+            assert not drawn["red"], "a held row is not a failure"
+            assert "24 kept aside" in drawn["summary"], drawn
             assert [g["reason"] for g in drawn["groups"]] == [
                 "rows timing part of a star rather than the star (2)",
                 "rows the trainer has no target for (22)"], drawn
