@@ -117,15 +117,42 @@ def test_the_secret_card_holds_the_seven_secrets_then_the_castle_stars():
     assert "star:16:0" not in labels
 
 
-def test_missing_side_leaves_both_sums():
+def test_each_side_sums_its_own_lines_and_the_delta_only_the_shared_ones():
+    """Round 29: a column's sum is a fact about that column. His two lines
+    add to 9000 even though the goal names only one of them; the goal's one
+    line is its sum; the DELTA compares only the line both have (1 of 6),
+    so it is -500 and not the 4500 a naive 9000 - 4500 would print."""
     you = {"star:1:0": 4000, "star:1:1": 5000}
     goal = {"star:1:0": 4500}            # star:1:1 has no goal
     card = scorecard.build_card(scorecard.template_rows(), you=you, goal=goal)
     row = card["rows"][0]
-    assert row["sum"] == {"you_cs": 4000, "goal_cs": 4500, "delta_cs": -500,
+    assert row["sum"] == {"you_cs": 9000, "goal_cs": 4500, "delta_cs": -500,
                            "counted": 1, "total": 6}
     tile1 = next(t for t in row["tiles"] if t["key"] == "star:1:1")
     assert tile1["you_cs"] == 5000 and tile1["goal_cs"] is None and tile1["delta_cs"] is None
+
+
+def test_nothing_of_his_still_sums_the_goal():
+    """The reported case (round 29, after Settings -> wipe all practice
+    data): every card's foot read "--" in all three columns. The goal's
+    Stage Sum does not depend on him -- "It should be summed still. Not a
+    ---" -- while his side and the delta are absent, and absent is None
+    rather than a 0 that would print as 0'00"00."""
+    goal = {"star:1:0": 4500, "star:1:1": 4600, "star:1:2": 4700}
+    card = scorecard.build_card(scorecard.template_rows(), you={}, goal=goal)
+    row = card["rows"][0]
+    assert row["sum"] == {"you_cs": None, "goal_cs": 13800, "delta_cs": None,
+                           "counted": 0, "total": 6}
+    assert card["total"]["goal_cs"] == 13800
+    assert card["total"]["you_cs"] is None and card["total"]["delta_cs"] is None
+
+
+def test_no_goal_line_leaves_the_goal_sum_absent_not_zero():
+    you = {"star:1:0": 4000}
+    card = scorecard.build_card(scorecard.template_rows(), you=you, goal={})
+    row = card["rows"][0]
+    assert row["sum"] == {"you_cs": 4000, "goal_cs": None, "delta_cs": None,
+                           "counted": 0, "total": 6}
 
 
 def test_card_total_runs_the_same_sum_over_every_row():

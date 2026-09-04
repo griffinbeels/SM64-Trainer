@@ -277,12 +277,11 @@ def _record_lookup(library, adoptions, service):
 
 def _record_sum(tiles: list[dict], record_of) -> int | None:
     """The Stage-RTA/Upstairs-RTA Record cell: the sum of every tile's own
-    Record, over exactly the tiles that carry one. Record is
-    sheet-derived and, like a tile's own Record cell, does not wait on
-    whether You/Goal are also present -- so this is an independent sum, not
-    a second read of `row["sum"]`'s you/goal-gated `counted` set. `None`
-    when the row's tiles carry no Record at all, never a sum that silently
-    drops one."""
+    Record, over exactly the tiles that carry one -- the same each-side-
+    sums-its-own-lines rule `row["sum"]`'s You and Goal follow since round
+    29, computed here because Record is sheet-derived and never enters the
+    card's tiles. `None` when the row's tiles carry no Record at all, never
+    a sum that silently drops one."""
     values = [record_of(tile["key"]) for tile in tiles]
     values = [value for value in values if value is not None]
     return sum(values) if values else None
@@ -296,10 +295,11 @@ def _csv_tile_row(course_label: str, tile: dict, record_cs: int | None) -> list[
 
 def _csv_sum_row(course_label: str, star_label: str, tiles: list[dict],
                  sum_obj: dict, record_of) -> list[str]:
-    counted = sum_obj["counted"] > 0
+    """Record, Goal and You each sum their own lines (`None` -> an empty
+    cell); Delta is `_sum_tiles`' shared-set gap, so it is blank whenever
+    the two columns share no line."""
     return [course_label, star_label, _csv_time(_record_sum(tiles, record_of)),
-            _csv_time(sum_obj["goal_cs"] if counted else None),
-            _csv_time(sum_obj["you_cs"] if counted else None),
+            _csv_time(sum_obj["goal_cs"]), _csv_time(sum_obj["you_cs"]),
             _csv_signed_time(sum_obj["delta_cs"])]
 
 

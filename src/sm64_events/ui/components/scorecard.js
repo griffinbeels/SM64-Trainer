@@ -297,19 +297,22 @@ function ScoreLine({ t, tile, onGoalOverride, onOpenLibrary,
 // corpus, the run where you play a whole course start to finish -- and
 // this number is not that, it is the addition of separately practised
 // times. The CSV export keeps the sheet template's own wording, since it
-// exists to be pasted back into that sheet. `counted === 0` still carries
-// sums of 0 (Python `sum([])`), which is not a real 0'00"00 -- em-dashes,
-// never two invented zeroes (`.claude/rules/acceptance.md`'s "cannot
-// logically be compared" rule).
+// exists to be pasted back into that sheet. Each column is gated on its
+// OWN sum (round 29): the goal's Stage Sum is a fact about the goal, so it
+// prints with nothing of his on the card ("It should be summed still. Not
+// a ---"); the delta prints only over the lines both sides have, with the
+// "n/6" chip saying how many that is. A side the server sent as null has
+// no line at all -- an em-dash, never an invented 0'00"00
+// (`.claude/rules/acceptance.md`'s "cannot logically be compared" rule).
 function CardFoot({ row }) {
   const sum = row.sum;
   const hasDelta = sum.delta_cs != null;
   const behind = hasDelta && sum.delta_cs > 0;
   return html`<div class="score-card-foot">
     <span class="score-card-foot-label">${row.course_id != null ? "Stage Sum" : "Total"}</span>
-    <span class="score-line-you"><span class="score-line-time">${hasDelta
+    <span class="score-line-you"><span class="score-line-time">${sum.you_cs != null
       ? fmtSeconds(sum.you_cs / 100) : "—"}</span></span>
-    <span class="score-line-goal">${hasDelta
+    <span class="score-line-goal">${sum.goal_cs != null
       ? fmtSeconds(sum.goal_cs / 100) : "—"}</span>
     <span class="score-gap ${hasDelta ? (behind ? "bad" : "good") : ""}">
       ${hasDelta ? fmtGapCs(sum.delta_cs) : "—"}</span>

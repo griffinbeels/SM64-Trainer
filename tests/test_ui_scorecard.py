@@ -130,10 +130,10 @@ def test_apply_goal_overrides_recomputes_the_touched_tile_and_its_row_sum():
                 {"key": "star:1:1", "label": "B", "you_cs": 1200, "goal_cs": None,
                  "delta_cs": None, "folded": False},
             ],
-            "sum": {"you_cs": 900, "goal_cs": 1000, "delta_cs": -100,
+            "sum": {"you_cs": 2100, "goal_cs": 1000, "delta_cs": -100,
                     "counted": 1, "total": 2},
         }],
-        "total": {"you_cs": 900, "goal_cs": 1000, "delta_cs": -100,
+        "total": {"you_cs": 2100, "goal_cs": 1000, "delta_cs": -100,
                   "counted": 1, "total": 2},
         "goal_coverage": {"covered": 1, "tiles": 2},
     }
@@ -148,7 +148,7 @@ def test_apply_goal_overrides_recomputes_the_touched_tile_and_its_row_sum():
 
 
 def test_apply_goal_overrides_is_a_no_op_with_nothing_pending():
-    payload = {"rows": [], "total": {"you_cs": 0, "goal_cs": 0, "delta_cs": None,
+    payload = {"rows": [], "total": {"you_cs": None, "goal_cs": None, "delta_cs": None,
                                      "counted": 0, "total": 0},
                "goal_coverage": {"covered": 0, "tiles": 0}}
     assert call("applyGoalOverrides", payload, {}) == payload
@@ -164,9 +164,9 @@ def test_apply_goal_overrides_reaches_a_previously_uncovered_tile():
             "course_id": 1, "label": "X",
             "tiles": [{"key": "star:1:6", "label": "100c", "you_cs": 5000,
                        "goal_cs": None, "delta_cs": None}],
-            "sum": {"you_cs": 0, "goal_cs": 0, "delta_cs": None, "counted": 0, "total": 1},
+            "sum": {"you_cs": 5000, "goal_cs": None, "delta_cs": None, "counted": 0, "total": 1},
         }],
-        "total": {"you_cs": 0, "goal_cs": 0, "delta_cs": None, "counted": 0, "total": 1},
+        "total": {"you_cs": 5000, "goal_cs": None, "delta_cs": None, "counted": 0, "total": 1},
         "goal_coverage": {"covered": 0, "tiles": 1},
     }
     result = call("applyGoalOverrides", payload, {"star:1:6": 4800})
@@ -176,6 +176,29 @@ def test_apply_goal_overrides_reaches_a_previously_uncovered_tile():
     assert result["rows"][0]["sum"]["delta_cs"] == 200
     assert result["total"]["counted"] == 1
     assert result["goal_coverage"]["covered"] == 1
+
+
+def test_apply_goal_overrides_sums_the_goal_with_nothing_of_his():
+    """Round 29's rule on the LIVE side: typing goals onto a card he has no
+    times on must sum the goal column and leave his side and the delta
+    null -- the exact state his wiped-data screenshot showed as three
+    em-dashes."""
+    payload = {
+        "rows": [{
+            "course_id": 1, "label": "X",
+            "tiles": [{"key": "star:1:0", "label": "A", "you_cs": None,
+                       "goal_cs": 1000, "delta_cs": None},
+                      {"key": "star:1:1", "label": "B", "you_cs": None,
+                       "goal_cs": None, "delta_cs": None}],
+            "sum": {"you_cs": None, "goal_cs": 1000, "delta_cs": None, "counted": 0, "total": 2},
+        }],
+        "total": {"you_cs": None, "goal_cs": 1000, "delta_cs": None, "counted": 0, "total": 2},
+        "goal_coverage": {"covered": 1, "tiles": 2},
+    }
+    result = call("applyGoalOverrides", payload, {"star:1:1": 1200})
+    assert result["rows"][0]["sum"] == {
+        "you_cs": None, "goal_cs": 2200, "delta_cs": None, "counted": 0, "total": 2}
+    assert result["total"] == result["rows"][0]["sum"]
 
 
 # --- the rendered card -------------------------------------------------
@@ -286,11 +309,112 @@ def test_the_cards_render_colored_lines_against_a_real_goal():
         assert card_count == len(payload["rows"])
         assert line_count == len(first_row["tiles"])
         row_sum = first_row["sum"]
-        if row_sum["counted"] > 0:
-            assert you_text == _fmt_seconds_like_js(row_sum["you_cs"] / 100)
-            assert goal_text == _fmt_seconds_like_js(row_sum["goal_cs"] / 100)
-        else:
-            assert you_text == "—" and goal_text == "—"
+        assert (you_text, goal_text) == _expected_foot_sums(row_sum)
+
+
+def _expected_foot_sums(row_sum: dict) -> tuple[str, str]:
+    """What a card's foot prints for You and Goal, from the payload's own
+    sum: each side on its own presence (round 29), an em-dash for a null."""
+    return (_fmt_seconds_like_js(row_sum["you_cs"] / 100)
+            if row_sum["you_cs"] is not None else "—",
+            _fmt_seconds_like_js(row_sum["goal_cs"] / 100)
+            if row_sum["goal_cs"] is not None else "—")
+
+
+def _read_feet(page) -> list[dict]:
+    """Every rendered card's foot: label, the three printed cells, and the
+    coverage chip's text ("" when the chip is not drawn)."""
+    return page.evaluate(
+        "Array.from(document.querySelectorAll('.rank-page .scorecard-card "
+        ".score-card')).map((card) => {"
+        "  const foot = card.querySelector('.score-card-foot');"
+        "  const chip = foot.querySelector('.score-sum-coverage');"
+        "  return {name: card.querySelector('.score-card-name').textContent.trim(),"
+        "          you: foot.querySelector('.score-line-you').textContent.trim(),"
+        "          goal: foot.querySelector('.score-line-goal').textContent.trim(),"
+        "          gap: foot.querySelector('.score-gap').textContent.trim(),"
+        "          chip: chip ? chip.textContent.trim() : ''};"
+        "})")
+
+
+def _wipe_all(base: str) -> None:
+    body = json.dumps({"kind": "all", "scope": "lifetime"}).encode()
+    request = urllib.request.Request(
+        f"{base}/api/wipe", data=body, method="POST",
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        assert response.status == 200
+
+
+def test_the_goal_stage_sum_prints_with_nothing_of_his_on_the_card():
+    """Round 29 item 1, his exact case: Settings -> wipe all practice data,
+    then the Rank tab's scorecard. Every foot used to read "--" in all
+    three columns under "0/6"; now the GOAL column still sums, his column
+    and the gap are em-dashes, and the chip says 0/n."""
+    with serve_ui() as base:
+        _put_division_goal(base, "Bronze", "V")
+        _wipe_all(base)
+        payload = _get_scorecard(base)
+        assert all(tile["you_cs"] is None
+                   for row in payload["rows"] for tile in row["tiles"]), (
+            "the wipe left a time of his on the card -- this test would then "
+            "prove nothing about the empty-YOU case")
+        summed_rows = [row for row in payload["rows"] if row["sum"]["goal_cs"] is not None]
+        assert summed_rows, "the division goal covers no card at all"
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-card-foot")
+            page.wait_ms(200)
+            feet = {foot["name"]: foot for foot in _read_feet(page)}
+
+        for row in payload["rows"]:
+            foot = feet[row["label"]]
+            expected_you, expected_goal = _expected_foot_sums(row["sum"])
+            assert foot["you"] == "—" == expected_you, (row["label"], foot)
+            assert foot["goal"] == expected_goal, (row["label"], foot)
+            assert foot["gap"] == "—", (row["label"], foot)
+            assert foot["chip"] == f"0/{row['sum']['total']}", (row["label"], foot)
+        assert any(feet[row["label"]]["goal"] != "—" for row in summed_rows)
+
+
+def test_a_partly_shared_card_prints_each_sides_own_sum_and_the_shared_gap():
+    """The 3/6-shaped case: a runner goal is partial by nature, and the
+    seeded fixture's PBs cover other lines, so at least one card has times
+    on BOTH sides over DIFFERENT lines. Its foot must print his sum over his
+    lines, the goal's over its lines, and a gap over only the shared ones
+    -- which is why the printed gap is NOT you-minus-goal there -- with the
+    chip saying how many lines the gap compares."""
+    with serve_ui() as base:
+        _put_runner_goal(base, _any_sheet_runner())
+        payload = _get_scorecard(base)
+        split_rows = [row for row in payload["rows"]
+                      if row["sum"]["you_cs"] is not None
+                      and row["sum"]["goal_cs"] is not None
+                      and 0 < row["sum"]["counted"] < row["sum"]["total"]
+                      and row["sum"]["delta_cs"]
+                      != row["sum"]["you_cs"] - row["sum"]["goal_cs"]]
+        assert split_rows, (
+            "no card has both sides over different lines -- pick another "
+            "runner, or this test proves nothing about the split-sets case")
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .score-card-foot")
+            page.wait_ms(200)
+            feet = {foot["name"]: foot for foot in _read_feet(page)}
+
+        for row in split_rows:
+            foot = feet[row["label"]]
+            row_sum = row["sum"]
+            assert (foot["you"], foot["goal"]) == _expected_foot_sums(row_sum), (row["label"], foot)
+            sign = "-" if row_sum["delta_cs"] < 0 else "+"
+            assert foot["gap"] == f"{sign}{abs(row_sum['delta_cs']) / 100:.2f}", (row["label"], foot)
+            assert foot["chip"] == f"{row_sum['counted']}/{row_sum['total']}", (row["label"], foot)
 
 
 def test_the_card_reaches_a_real_goal_covers_line_when_partial():

@@ -872,10 +872,12 @@ that [[route]]'s entities into the same cards; a course-shaped one draws
 that course's card alone. A course's [[100-coin star]] is not its own
 line — its line combines it with a companion [[star]] (usually the course's
 red-coin [[star]]; five courses pair differently), because the 100-coin
-[[run]] collects that companion's objective on the way. A card's foot sums
-its lines into one Stage RTA gap, counting only lines both sides have a
-time for, and a toggle under the grid adds each line's [[rank]] caps —
-off by default, remembered once you turn it on.
+[[run]] collects that companion's objective on the way. A card's foot is
+its Stage Sum: your lines added up, the [[Goal]]'s lines added up, and the
+gap between the two counted only over the lines both sides have a time
+for, with a chip saying how many of the card's lines that gap compares —
+so wiping your data leaves the [[Goal]]'s sum standing while your column
+and the gap go blank.
 
 The [[Ultimate Sheet]] and the community's [[Standard]]s both file the
 Under-21 slide [[star]] under the box [[star]]'s heading; the trainer splits

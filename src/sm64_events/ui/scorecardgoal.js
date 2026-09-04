@@ -107,15 +107,22 @@ function _recomputeTile(tile, overrides) {
 }
 
 // A row's (or the card's) Sigma over a tile LIST -- mirrors
-// `ranks/scorecard.py::_sum_tiles` exactly: only tiles with both
-// sides present count, `total` is the tile count regardless.
+// `ranks/scorecard.py::_sum_tiles` exactly: each side sums its OWN lines
+// (round 29: "the Goal Stage Sum ... should be summed still. Not a ---"),
+// the delta only the lines both sides have, `counted` is that shared
+// set's size and `total` the tile count regardless. A side with no line
+// is null, never a 0 that would print as a real 0'00"00.
 function _recomputeSum(tiles) {
-  const counted = tiles.filter((tile) =>
+  const sumOf = (values) => (values.length
+    ? values.reduce((total, value) => total + value, 0) : null);
+  const you_cs = sumOf(tiles.filter((tile) => tile.you_cs != null)
+    .map((tile) => tile.you_cs));
+  const goal_cs = sumOf(tiles.filter((tile) => tile.goal_cs != null)
+    .map((tile) => tile.goal_cs));
+  const shared = tiles.filter((tile) =>
     tile.you_cs != null && tile.goal_cs != null);
-  const you_cs = counted.reduce((total, tile) => total + tile.you_cs, 0);
-  const goal_cs = counted.reduce((total, tile) => total + tile.goal_cs, 0);
-  return { you_cs, goal_cs, delta_cs: counted.length ? you_cs - goal_cs : null,
-           counted: counted.length, total: tiles.length };
+  const delta_cs = sumOf(shared.map((tile) => tile.you_cs - tile.goal_cs));
+  return { you_cs, goal_cs, delta_cs, counted: shared.length, total: tiles.length };
 }
 
 // Live client-side recompute for an UNSAVED goal edit -- his own words,

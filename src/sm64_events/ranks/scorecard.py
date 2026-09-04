@@ -426,17 +426,31 @@ def _tile(you: dict, goal: dict, key: str, label: str, clock: str) -> dict:
 
 
 def _sum_tiles(tiles: list[dict]) -> dict:
-    """A row's (or the card's) Sigma: only tiles with both sides count, so
-    the sum is always over one comparable set. `total` is the row's physical
-    tile count -- the "5/6" coverage chip's denominator."""
-    counted_tiles = [t for t in tiles
-                      if t["you_cs"] is not None and t["goal_cs"] is not None]
-    you_cs = sum(t["you_cs"] for t in counted_tiles)
-    goal_cs = sum(t["goal_cs"] for t in counted_tiles)
-    counted = len(counted_tiles)
-    return {"you_cs": you_cs, "goal_cs": goal_cs,
-            "delta_cs": (you_cs - goal_cs) if counted else None,
-            "counted": counted, "total": len(tiles)}
+    """A row's (or the card's) Sigma, three facts with three owners:
+    `you_cs` sums every line HE has a time on, `goal_cs` every line the
+    goal has one on, and `delta_cs` only the lines both do -- `counted` is
+    that shared set's size, `total` the row's physical tile count, the two
+    halves of the "3/6" coverage chip.
+
+    Round 29 (2026-09-04) split the sides. Round 14's rule summed BOTH
+    columns over the shared set, so wiping his data blanked the goal's sum
+    too: "the Goal Stage Sum doesn't get summed. It should be summed still.
+    Not a ---." A column's sum is a fact about that column -- the sheet's
+    own Stage RTA cell adds whatever the column holds -- so each side sums
+    its own lines. The DELTA keeps the shared set, because a gap between
+    two sums over different lines is not a gap, and the chip says how many
+    lines it compares. A side with no line at all is None, never a 0 that
+    would print as a real 0'00"00 (the same absent-never-zero rule
+    `runner_times` follows)."""
+    you_cs = [t["you_cs"] for t in tiles if t["you_cs"] is not None]
+    goal_cs = [t["goal_cs"] for t in tiles if t["goal_cs"] is not None]
+    shared = [t for t in tiles
+              if t["you_cs"] is not None and t["goal_cs"] is not None]
+    return {"you_cs": sum(you_cs) if you_cs else None,
+            "goal_cs": sum(goal_cs) if goal_cs else None,
+            "delta_cs": (sum(t["you_cs"] - t["goal_cs"] for t in shared)
+                         if shared else None),
+            "counted": len(shared), "total": len(tiles)}
 
 
 def division_goal_cs(ladder_cs: dict[str, int], tier: str, division: str) -> int | None:
