@@ -1,6 +1,6 @@
 """THE CAPTURE LAYER's installer: the wrapper graphics plugin, into and out
-of Project64, under consent (round 32 item 95; spec
-docs/superpowers/specs is local -- the facts live in this docstring).
+of Project64, under consent (round 32 item 95; the facts live in this
+docstring and in .claude/rules/replay-compare.md).
 
 Project64 1.6 keeps its plugin choice in the registry, under
 ``HKCU\\Software\\N64 Emulation\\Project64 Version 1.6\\Dll``: the value
@@ -29,8 +29,12 @@ injected (small Protocols below) so every path is testable with fakes.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import shutil
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -50,6 +54,13 @@ NEEDS_RESTART = "needs_restart"   # installed and selected; PJ64 has not loaded 
 ACTIVE = "active"                 # the frame stream's heartbeat is advancing
 REGRESSED = "regressed"           # we installed it, but the registry names another plugin now
 UNAVAILABLE = "unavailable"       # no PJ64 folder known / no DLL shipped with this build
+
+_OVERLAY_DEFAULTS = {
+    "consented_at": None,
+    "pj64_dir": None,
+    "wrapped": None,
+    "uninstalled_at": None,
+}
 
 
 class LayerRefused(Exception):
@@ -87,6 +98,26 @@ class LayerStatus:
         return asdict(self)
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _files_match(path_a: Path, path_b: Path) -> bool:
+    """Byte-identical, compared by hash rather than size-and-mtime -- the
+    only question that matters here is "would re-copying change anything",
+    and a stale-but-same-size DLL must not read as current."""
+    try:
+        return _sha256(path_a) == _sha256(path_b)
+    except OSError:
+        return False
+
+
 class CaptureLayer:
     """Locate Project64, report the layer's state, install and undo it."""
 
@@ -98,16 +129,227 @@ class CaptureLayer:
         self._settings_path = settings_path
         self._dll_source = dll_source
         self._stream_header = stream_header or (lambda: None)
+        self._last_alive: int | None = None   # the previous status() call's heartbeat
+
+    # -- overlay -----------------------------------------------------
+
+    def _load_overlay(self) -> dict:
+        """The persisted `{consented_at, pj64_dir, wrapped, uninstalled_at}`,
+        or all-None defaults on any read failure -- an absent or corrupt
+        file must never stop the setup screen from rendering (same
+        resilience contract as `core/modes.py::load_mode_config`)."""
+        try:
+            raw = json.loads(self._settings_path.read_text())
+        except FileNotFoundError:
+            return dict(_OVERLAY_DEFAULTS)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            log.warning("ignoring unreadable %s; capture layer treated as "
+                        "never consented", self._settings_path)
+            return dict(_OVERLAY_DEFAULTS)
+        if not isinstance(raw, dict):
+            log.warning("ignoring non-object %s; capture layer treated as "
+                        "never consented", self._settings_path)
+            return dict(_OVERLAY_DEFAULTS)
+        return {key: raw.get(key, default) for key, default in _OVERLAY_DEFAULTS.items()}
+
+    def _save_overlay(self, overlay: dict) -> None:
+        self._settings_path.parent.mkdir(parents=True, exist_ok=True)
+        self._settings_path.write_text(json.dumps(overlay, indent=2))
+
+    def _remember_pj64_dir(self, pj64_dir: Path) -> None:
+        overlay = self._load_overlay()
+        if overlay.get("pj64_dir") == str(pj64_dir):
+            return
+        overlay["pj64_dir"] = str(pj64_dir)
+        self._save_overlay(overlay)
+
+    # -- the plugin folder + its files --------------------------------
+
+    def _plugin_dir(self, pj64_dir: Path) -> Path:
+        """PJ64's Plugin folder: the exe folder's own `Plugin` subfolder
+        unless `Use Default Plugin Dir` is explicitly 0, in which case
+        `Plugin Directory` names it instead."""
+        use_default = self._registry.get(REGISTRY_KEY, USE_DEFAULT_PLUGIN_DIR_VALUE)
+        if use_default in (0, "0"):
+            custom = self._registry.get(REGISTRY_KEY, PLUGIN_DIR_VALUE)
+            if custom:
+                return Path(custom)
+        return pj64_dir / "Plugin"
+
+    def _registry_graphics_dll(self) -> str | None:
+        value = self._registry.get(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE)
+        return str(value) if value is not None else None
+
+    def _set_registry_graphics_dll(self, name: str) -> None:
+        self._registry.set(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE, name)
+
+    def _read_wrapped_name(self, ini_path: Path) -> str | None:
+        try:
+            text = ini_path.read_text()
+        except OSError:
+            return None
+        for line in text.splitlines():
+            if line.startswith("wrapped="):
+                return line[len("wrapped="):].strip()
+        return None
+
+    def _write_wrapped_name(self, ini_path: Path, name: str | None) -> None:
+        ini_path.write_text(f"wrapped={name or ''}\n")
+
+    # -- public surface ------------------------------------------------
 
     def locate(self) -> Path | None:
         """Project64's folder: from the running process, else remembered."""
-        raise NotImplementedError
+        image_path = self._processes.pj64_image_path()
+        if image_path:
+            pj64_dir = Path(image_path).parent
+            self._remember_pj64_dir(pj64_dir)
+            return pj64_dir
+        remembered = self._load_overlay().get("pj64_dir")
+        if remembered and Path(remembered).is_dir():
+            return Path(remembered)
+        return None
 
     def status(self) -> LayerStatus:
-        raise NotImplementedError
+        pj64_dir = self.locate()
+        running = self._processes.pj64_image_path() is not None
+        overlay = self._load_overlay()
+        consented_at = overlay.get("consented_at")
+
+        registry_graphics_dll = self._registry_graphics_dll()
+        wrapper_selected = (registry_graphics_dll is not None
+                             and registry_graphics_dll.lower() == WRAPPER_DLL.lower())
+        wrapper_present = False
+        wrapper_current = False
+        wrapped_name = overlay.get("wrapped")
+
+        if pj64_dir is not None:
+            plugin_dir = self._plugin_dir(pj64_dir)
+            dll_path = plugin_dir / WRAPPER_DLL
+            ini_path = plugin_dir / WRAPPER_INI
+            wrapper_present = dll_path.exists()
+            if wrapper_present and self._dll_source is not None:
+                wrapper_current = _files_match(dll_path, self._dll_source)
+            if ini_path.exists():
+                ini_wrapped = self._read_wrapped_name(ini_path)
+                if ini_wrapped is not None:
+                    wrapped_name = ini_wrapped
+
+        header = self._stream_header()
+        layer_alive = False
+        gl_context = False
+        if header is not None:
+            alive = getattr(header, "alive", None)
+            if isinstance(alive, int):
+                layer_alive = self._last_alive is not None and alive != self._last_alive
+                self._last_alive = alive
+            status_bits = getattr(header, "status", None)
+            if isinstance(status_bits, int):
+                gl_context = bool(status_bits & 2)
+
+        if pj64_dir is None or self._dll_source is None:
+            state = UNAVAILABLE
+        elif consented_at is None:
+            state = NOT_INSTALLED
+        elif not wrapper_selected or not wrapper_present:
+            state = REGRESSED
+        elif layer_alive:
+            state = ACTIVE
+        else:
+            state = NEEDS_RESTART
+
+        problems: list[str] = []
+        if state == NOT_INSTALLED and running:
+            problems.append("Project64 is running -- close it before installing")
+        elif state == REGRESSED and not wrapper_selected:
+            problems.append(
+                f"another graphics plugin is selected ({registry_graphics_dll}); "
+                "re-install to restore the capture layer")
+        elif state == REGRESSED:
+            problems.append("the capture layer's file is missing from Project64's "
+                            "Plugin folder; re-install to restore it")
+        elif state == NEEDS_RESTART:
+            problems.append("restart Project64 to load the capture layer")
+
+        return LayerStatus(
+            pj64_dir=str(pj64_dir) if pj64_dir is not None else None,
+            pj64_running=running,
+            registry_graphics_dll=registry_graphics_dll,
+            wrapper_present=wrapper_present,
+            wrapper_current=wrapper_current,
+            wrapper_selected=wrapper_selected,
+            wrapped_name=wrapped_name,
+            layer_alive=layer_alive,
+            gl_context=gl_context,
+            consented_at=consented_at,
+            problems=problems,
+            state=state,
+        )
 
     def install(self, consent: bool) -> LayerStatus:
-        raise NotImplementedError
+        if not consent:
+            raise LayerRefused("consent is required before installing the capture layer")
+        pj64_dir = self.locate()
+        if pj64_dir is None:
+            raise LayerRefused("start Project64 once so the trainer can find it")
+        if self._processes.pj64_image_path() is not None:
+            raise LayerRefused("close Project64, then install")
+        if self._dll_source is None or not self._dll_source.exists():
+            raise LayerRefused("this build carries no capture layer")
+
+        plugin_dir = self._plugin_dir(pj64_dir)
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        dll_path = plugin_dir / WRAPPER_DLL
+        ini_path = plugin_dir / WRAPPER_INI
+
+        current_graphics_dll = self._registry_graphics_dll()
+        if current_graphics_dll is not None and current_graphics_dll.lower() == WRAPPER_DLL.lower():
+            # a re-install: the registry already names OUR wrapper, so the
+            # real "what were you wrapping" answer is whatever the ini
+            # already says -- never overwrite it with our own name.
+            wrapped_name = (self._read_wrapped_name(ini_path) if ini_path.exists()
+                             else self._load_overlay().get("wrapped"))
+        else:
+            wrapped_name = current_graphics_dll
+
+        shutil.copyfile(self._dll_source, dll_path)
+        self._write_wrapped_name(ini_path, wrapped_name)
+        self._set_registry_graphics_dll(WRAPPER_DLL)
+
+        overlay = self._load_overlay()
+        overlay["consented_at"] = _now_iso()
+        overlay["pj64_dir"] = str(pj64_dir)
+        overlay["wrapped"] = wrapped_name
+        overlay["uninstalled_at"] = None
+        self._save_overlay(overlay)
+
+        return self.status()
 
     def uninstall(self) -> LayerStatus:
-        raise NotImplementedError
+        if self._processes.pj64_image_path() is not None:
+            raise LayerRefused("close Project64, then uninstall")
+
+        pj64_dir = self.locate()
+        overlay = self._load_overlay()
+        wrapped_name = None
+        if pj64_dir is not None:
+            ini_path = self._plugin_dir(pj64_dir) / WRAPPER_INI
+            if ini_path.exists():
+                wrapped_name = self._read_wrapped_name(ini_path)
+        if wrapped_name is None:
+            wrapped_name = overlay.get("wrapped")
+        if wrapped_name is not None:
+            self._set_registry_graphics_dll(wrapped_name)
+
+        overlay["uninstalled_at"] = _now_iso()
+        overlay["consented_at"] = None
+        self._save_overlay(overlay)
+
+        return self.status()
+
+
+# The real Registry/Processes adapters (WinRegistry, WinProcesses) moved to
+# capturelayer_win.py once this module passed its size budget -- re-exported
+# here so `from sm64_events.core.capturelayer import WinRegistry` still
+# works for a future wiring call site.
+from sm64_events.core.capturelayer_win import WinProcesses, WinRegistry  # noqa: E402,F401
