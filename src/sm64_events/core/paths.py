@@ -170,6 +170,26 @@ def mode_settings_path() -> Path:
     return data_root() / "data" / "tracker_mode.json"
 
 
+def capture_layer_settings_path() -> Path:
+    # The capture layer's consent + what it installed (core/capturelayer.py):
+    # a JSON overlay like tracker_mode.json, so an undo needs no migration.
+    return data_root() / "data" / "capture_layer.json"
+
+
+def bundled_plugin_dll() -> Path | None:
+    """The capture layer DLL (`sm64_trainer_gfx.dll`) shipped with this
+    build: beside a frozen exe under ``sys._MEIPASS/sm64_events/data/plugin``,
+    else the package's own data folder; None when this build carries none
+    (a clone that never built it), which the setup screen reports rather
+    than installing nothing."""
+    name = "sm64_trainer_gfx.dll"
+    if is_frozen():
+        cand = Path(getattr(sys, "_MEIPASS", "")) / "sm64_events" / "data" / "plugin" / name
+        return cand if cand.exists() else None
+    cand = Path(__file__).resolve().parents[1] / "data" / "plugin" / name
+    return cand if cand.exists() else None
+
+
 def update_state_path() -> Path:
     # Skipped-update version lives here (a JSON overlay like replay_settings.json,
     # keeps the updater DB-free).
