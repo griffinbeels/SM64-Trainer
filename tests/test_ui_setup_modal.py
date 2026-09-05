@@ -94,3 +94,28 @@ def test_an_active_layer_renders_active_and_a_remove_button():
         assert page.evaluate(
             "document.querySelector('.setup-active-line button').textContent"
             ).strip() == "Remove"
+
+
+def test_the_screen_opens_by_itself_for_a_user_who_never_set_up_even_before_project64_is_seen():
+    """His first launch after the layer shipped showed no screen because
+    Project64 was not running yet. The rule now: not consented (or regressed)
+    -> the screen opens on load, with the Project64 row as the door to
+    finding the folder; a build with nothing to install stays quiet."""
+    with serve_ui(capture_layer_status={"state": "not_installed", "pj64_dir": None,
+                                        "pj64_running": False,
+                                        "problems": ["start Project64 once so the trainer can find it"]}) as url, \
+            get_driver().launch() as page:
+        page.goto(url + "/ui/index.html")
+        page.wait_for(".setup-platform-picks", timeout_ms=8000)
+        rows = page.evaluate("document.querySelector('.setup-checklist').textContent")
+        assert "Start Project64 once" in rows
+        reason = page.evaluate("document.querySelector('.setup-disabled-reason').textContent")
+        assert "start Project64 once" in reason
+
+
+def test_the_screen_stays_quiet_when_the_layer_is_active():
+    with serve_ui(capture_layer_status={"state": "active", "pj64_dir": LONG_PJ64_DIR}) as url, \
+            get_driver().launch() as page:
+        page.goto(url + "/ui/index.html")
+        page.wait_ms(2500)
+        assert page.count(".setup-platform-picks") == 0

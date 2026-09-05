@@ -133,11 +133,15 @@ class _FixtureCaptureLayer:
 
 
 def _fixture_capture_layer_status(**overrides) -> LayerStatus:
-    fields = dict(pj64_dir=None, pj64_running=False,
-                 registry_graphics_dll=None, wrapper_present=False,
-                 wrapper_current=False, wrapper_selected=False,
-                 wrapped_name=None, layer_alive=False, gl_context=False,
-                 consented_at=None, problems=[], state="not_installed")
+    # The default is an ACTIVE layer: the setup screen opens by itself for
+    # any state short of that (his rule 2026-09-05), and the general sweep
+    # must not be interrupted by a modal nobody asked this fixture for. A
+    # test that wants the first-run state asks for `state="not_installed"`.
+    fields = dict(pj64_dir="C:/Project64", pj64_running=True,
+                 registry_graphics_dll="sm64_trainer_gfx.dll", wrapper_present=True,
+                 wrapper_current=True, wrapper_selected=True,
+                 wrapped_name="GLideN64_LINK_4.2.dll", layer_alive=True, gl_context=True,
+                 consented_at="2026-09-05T00:00:00+00:00", problems=[], state="active")
     fields.update(overrides)
     return LayerStatus(**fields)
 
@@ -1472,12 +1476,13 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
 
     `capture_layer_status` overrides fields of the setup screen's capture-
     layer status (`_fixture_capture_layer_status`, `LayerStatus.as_dict()`'s
-    own keys) -- default is a bare `not_installed` with no Project64 folder
-    known, which is deliberately NOT the state that makes the header's setup
-    modal auto-open (that needs `pj64_dir` or `pj64_running` truthy too), so
-    the general sweep is not interrupted by a modal nobody asked this fixture
-    for. `capture_layer_refuse` makes every install/uninstall attempt fail
-    with that sentence, for driving the 409 path.
+    own keys) -- default is an ACTIVE layer, deliberately NOT a state that
+    makes the header's setup modal auto-open (anything short of active or
+    needs_restart does, since 2026-09-05), so the general sweep is not
+    interrupted by a modal nobody asked this fixture for. A first-run test
+    asks for `state="not_installed"`. `capture_layer_refuse` makes every
+    install/uninstall attempt fail with that sentence, for driving the 409
+    path.
     """
     scratch = None
     if db_path is None:

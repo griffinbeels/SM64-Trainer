@@ -228,4 +228,15 @@ def test_corrupt_overlay_loads_as_never_consented(dll_source, settings_path):
     status = layer.status()   # must not raise despite the corrupt file
 
     assert status.consented_at is None
-    assert status.state == UNAVAILABLE   # no pj64 dir survives to be found
+    # No pj64 dir survives to be found -- still NOT_INSTALLED, never
+    # unavailable: the setup screen must open for a user who has never set
+    # up, and its Project64 row is the door to finding the folder.
+    assert status.state == NOT_INSTALLED
+    assert status.problems == ["start Project64 once so the trainer can find it"]
+
+
+def test_a_build_with_no_dll_is_unavailable_but_a_missing_folder_is_not(settings_path):
+    registry = registry_with_original_plugin()
+    processes = FakeProcesses(image_path=None)
+    no_dll = CaptureLayer(registry, processes, settings_path, dll_source=None)
+    assert no_dll.status().state == UNAVAILABLE

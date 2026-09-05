@@ -34,11 +34,16 @@ function rememberSetupPrompt() {
 // and Project64 is at least findable (a folder we know, or it is running
 // right now) -- otherwise the modal would open onto a checklist with nothing
 // for him to act on yet. Never while the layer is already active.
+// His rule (2026-09-05, the first launch after the layer shipped): "If the
+// user hasn't installed / set up, it should trigger the screen. This should
+// trigger for existing users." So the screen opens whenever the layer is
+// not consented (or was and regressed) -- whether or not Project64 has been
+// seen yet: the Project64 row is itself the door for that. Only a build with
+// no layer to install, or the N64 platform, stays quiet.
 function shouldOfferSetup(setup) {
   if (!setup || setup.platform === "n64") return false;
   const emu = setup.emu;
-  if (!emu || emu.state !== "not_installed") return false;
-  return !!(emu.pj64_dir || emu.pj64_running);
+  return !!emu && (emu.state === "not_installed" || emu.state === "regressed");
 }
 
 const CLOCK_OPTIONS = [["igt", "Usamune IGT"], ["rta", "Anchor → grab"]];

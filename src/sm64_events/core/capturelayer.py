@@ -247,11 +247,15 @@ class CaptureLayer:
             if isinstance(status_bits, int):
                 gl_context = bool(status_bits & 2)
 
-        if pj64_dir is None or self._dll_source is None:
+        # UNAVAILABLE means this BUILD has nothing to install. Not knowing
+        # where Project64 lives is a step the setup screen walks the user
+        # through, not a reason to hide it (his first launch after the
+        # layer shipped: no screen, because PJ64 was not running yet).
+        if self._dll_source is None:
             state = UNAVAILABLE
         elif consented_at is None:
             state = NOT_INSTALLED
-        elif not wrapper_selected or not wrapper_present:
+        elif pj64_dir is None or not wrapper_selected or not wrapper_present:
             state = REGRESSED
         elif layer_alive:
             state = ACTIVE
@@ -259,8 +263,12 @@ class CaptureLayer:
             state = NEEDS_RESTART
 
         problems: list[str] = []
-        if state == NOT_INSTALLED and running:
+        if state == NOT_INSTALLED and pj64_dir is None:
+            problems.append("start Project64 once so the trainer can find it")
+        elif state == NOT_INSTALLED and running:
             problems.append("Project64 is running -- close it before installing")
+        elif state == REGRESSED and pj64_dir is None:
+            problems.append("start Project64 once so the trainer can find it again")
         elif state == REGRESSED and not wrapper_selected:
             problems.append(
                 f"another graphics plugin is selected ({registry_graphics_dll}); "
