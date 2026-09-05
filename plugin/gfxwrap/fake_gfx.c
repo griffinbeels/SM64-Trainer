@@ -4,6 +4,7 @@
  * wrapper's GL_FRONT read has a known picture to capture. Nothing else. */
 #include <windows.h>
 #include <GL/gl.h>
+#include <stddef.h>
 #include <string.h>
 #include "zilmar.h"
 
@@ -29,6 +30,40 @@ EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
     return TRUE;
 }
 
+#define FAKE_DIRTY_GL_OFFSET 131
+#define GL_READ_FRAMEBUFFER 0x8CA8
+#define GL_PIXEL_PACK_BUFFER 0x88EB
+#define GL_STATIC_READ 0x88E9
+typedef void (WINAPI *fn_gen)(GLsizei, GLuint *);
+typedef void (WINAPI *fn_bind)(GLenum, GLuint);
+typedef void (WINAPI *fn_buffer_data)(GLenum, ptrdiff_t, const void *, GLenum);
+
+/* Review finding 5's regression guard: a real plugin may leave a
+ * framebuffer object, a pixel-pack buffer and its own pack parameters
+ * bound after presenting. When the host sets RDRAM[131], this leaves
+ * all three dirty so the wrapper's read has to cope. */
+static void leave_gl_dirty(void) {
+    static GLuint framebuffer, pack_buffer;
+    fn_gen gen_framebuffers = (fn_gen)wglGetProcAddress("glGenFramebuffers");
+    fn_bind bind_framebuffer = (fn_bind)wglGetProcAddress("glBindFramebuffer");
+    fn_gen gen_buffers = (fn_gen)wglGetProcAddress("glGenBuffers");
+    fn_bind bind_buffer = (fn_bind)wglGetProcAddress("glBindBuffer");
+    fn_buffer_data buffer_data = (fn_buffer_data)wglGetProcAddress("glBufferData");
+    if (gen_framebuffers && bind_framebuffer) {
+        if (!framebuffer) gen_framebuffers(1, &framebuffer);
+        bind_framebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+    }
+    if (gen_buffers && bind_buffer && buffer_data) {
+        if (!pack_buffer) { gen_buffers(1, &pack_buffer); }
+        bind_buffer(GL_PIXEL_PACK_BUFFER, pack_buffer);
+        buffer_data(GL_PIXEL_PACK_BUFFER, 4 << 20, NULL, GL_STATIC_READ);
+    }
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glPixelStorei(GL_PACK_ROW_LENGTH, 999);
+    glPixelStorei(GL_PACK_SKIP_ROWS, 3);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 5);
+}
+
 EXPORT void CALL UpdateScreen(void) {
     if (!g_have_gfx || !wglGetCurrentContext()) return;
     const unsigned char *colour = g_gfx.RDRAM + FAKE_COLOUR_OFFSET;
@@ -37,6 +72,7 @@ EXPORT void CALL UpdateScreen(void) {
     HDC device = GetDC(g_gfx.hWnd);
     SwapBuffers(device);
     ReleaseDC(g_gfx.hWnd, device);
+    if (g_gfx.RDRAM[FAKE_DIRTY_GL_OFFSET]) leave_gl_dirty();
     g_updates++;
 }
 

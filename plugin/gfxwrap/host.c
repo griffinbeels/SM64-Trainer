@@ -68,6 +68,7 @@ static HWND make_gl_window(HDC *device_out, HGLRC *context_out) {
 
 static const char *g_wrapped_name = "fake_gfx.dll";   /* --wrapped overrides */
 static unsigned g_rdram_committed_mb = 8;             /* --rdram-mb overrides */
+static int g_dirty_gl;                                /* --dirty-gl: the fake leaves GL state bound */
 
 static void write_ini(const char *wrapper_path, const char *stream_name) {
     char path[MAX_PATH];
@@ -160,6 +161,7 @@ static int drive(const char *wrapper_path, int frames, const char *stream_name) 
         rdram[128] = (unsigned char)frame;
         rdram[129] = (unsigned char)(2 * frame);
         rdram[130] = (unsigned char)(3 * frame);
+        rdram[131] = (unsigned char)g_dirty_gl;
         api.ProcessDList();
         g_vi_origin = 0x100000u + (unsigned)frame;
         api.UpdateScreen();
@@ -184,11 +186,13 @@ int main(int argc, char **argv) {
         if (strcmp(argv[index], "--wrapped") == 0) g_wrapped_name = argv[index + 1];
         if (strcmp(argv[index], "--rdram-mb") == 0) g_rdram_committed_mb = (unsigned)atoi(argv[index + 1]);
     }
+    for (int index = 1; index < argc; index++)
+        if (strcmp(argv[index], "--dirty-gl") == 0) g_dirty_gl = 1;
     if (argc >= 2 && strcmp(argv[1], "--layout") == 0) return print_layout();
     if (argc >= 3 && strcmp(argv[1], "--info") == 0) return info(argv[2]);
     if (argc >= 4 && strcmp(argv[1], "--drive") == 0)
         return drive(argv[2], atoi(argv[3]), stream_name);
     fprintf(stderr, "usage: gfxwrap_host --layout | --info <dll> | --drive <dll> <frames> "
-                    "[--stream <name>] [--wrapped <dll>] [--rdram-mb <n>]\n");
+                    "[--stream <name>] [--wrapped <dll>] [--rdram-mb <n>] [--dirty-gl]\n");
     return 1;
 }

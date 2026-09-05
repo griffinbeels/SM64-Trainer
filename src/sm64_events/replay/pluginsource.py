@@ -202,7 +202,13 @@ class PluginVideoSource:
             self._skipped += skipped
             for slot in slots:
                 self._last_seq = slot.seq
-                stamp = decode_stamp(slot, self._table, self._layout)
+                try:
+                    stamp = decode_stamp(slot, self._table, self._layout)
+                except Exception:
+                    # A slot whose bytes do not decode (a table the layout
+                    # disagrees with) is counted, never fatal to the source.
+                    log.exception("plugin stamp did not decode; slot dropped")
+                    stamp = None
                 if stamp is None:
                     self._undecodable += 1
                     continue

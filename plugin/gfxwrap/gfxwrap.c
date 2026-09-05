@@ -72,18 +72,38 @@ static int64_t qpc_now(void) {
 }
 
 /* -- the ini beside this DLL: wrapped=<file>, stream=<name> -------------- */
-static void self_dir(char *out, size_t size) {
-    out[0] = '\0';
-    if (GetModuleFileNameA(g_self, out, (DWORD)size) == 0) return;
-    char *slash = strrchr(out, '\\');
-    if (slash) *(slash + 1) = '\0';
+static void self_dir(wchar_t *out, size_t count) {
+    out[0] = L'\0';
+    if (GetModuleFileNameW(g_self, out, (DWORD)count) == 0) return;
+    wchar_t *slash = wcsrchr(out, L'\\');
+    if (slash) *(slash + 1) = L'\0';
 }
 
+/* One line per event, appended beside the DLL -- the setup screen cannot
+ * see inside Project64, so a mapping that failed to open or a wrapped
+ * plugin that failed to load leaves its reason here. */
+static void plugin_log(const char *message) {
+    wchar_t path[MAX_PATH];
+    self_dir(path, MAX_PATH);
+    wcsncat_s(path, MAX_PATH, L"sm64_trainer_gfx.log", _TRUNCATE);
+    FILE *log = _wfopen(path, L"a");
+    if (!log) return;
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    fprintf(log, "%04u-%02u-%02u %02u:%02u:%02u %s\n", now.wYear, now.wMonth, now.wDay,
+            now.wHour, now.wMinute, now.wSecond, message);
+    fclose(log);
+}
+
+static BOOL g_ini_read;
+
 static void read_ini(void) {
-    char path[MAX_PATH];
-    self_dir(path, sizeof path);
-    strncat_s(path, sizeof path, "sm64_trainer_gfx.ini", _TRUNCATE);
-    FILE *ini = fopen(path, "r");
+    if (g_ini_read) return;
+    g_ini_read = TRUE;
+    wchar_t path[MAX_PATH];
+    self_dir(path, MAX_PATH);
+    wcsncat_s(path, MAX_PATH, L"sm64_trainer_gfx.ini", _TRUNCATE);
+    FILE *ini = _wfopen(path, L"r");
     if (!ini) return;
     char line[512];
     while (fgets(line, sizeof line, ini)) {
@@ -100,29 +120,49 @@ static void read_ini(void) {
     fclose(ini);
 }
 
+/* Load the wrapped plugin. NOT from GetDllInfo: Project64 enumerates every
+ * DLL in its Plugin folder by loading it, asking GetDllInfo and freeing it
+ * again, and a plugin loaded from inside that enumeration would leak one
+ * reference per pass (review finding 16). So the dialog is answered from
+ * the ini alone, and the real plugin loads at InitiateGFX. */
 static void ensure_wrapped(void) {
     if (g_loaded_once) return;
     g_loaded_once = TRUE;
     read_ini();
-    if (!g_wrapped_name[0]) return;
-    char path[MAX_PATH];
-    if (strchr(g_wrapped_name, '\\') || strchr(g_wrapped_name, ':')) {
-        strncpy_s(path, sizeof path, g_wrapped_name, _TRUNCATE);
+    if (!g_wrapped_name[0]) { plugin_log("no wrapped= line in sm64_trainer_gfx.ini"); return; }
+    wchar_t name[MAX_PATH];
+    if (MultiByteToWideChar(CP_UTF8, 0, g_wrapped_name, -1, name, MAX_PATH) == 0) return;
+    wchar_t path[MAX_PATH];
+    if (wcschr(name, L'\\') || wcschr(name, L':')) {
+        wcsncpy_s(path, MAX_PATH, name, _TRUNCATE);
     } else {
-        self_dir(path, sizeof path);
-        strncat_s(path, sizeof path, g_wrapped_name, _TRUNCATE);
+        self_dir(path, MAX_PATH);
+        wcsncat_s(path, MAX_PATH, name, _TRUNCATE);
     }
-    g_wrapped_module = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-    if (!g_wrapped_module) return;
+    g_wrapped_module = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (!g_wrapped_module) {
+        char message[MAX_PATH + 64];
+        snprintf(message, sizeof message, "LoadLibrary(%s) failed: %lu", g_wrapped_name, GetLastError());
+        plugin_log(message);
+        return;
+    }
     if (g_wrapped_module == g_self) {
         /* The ini names THIS DLL (a copy, or an install that wrote the
          * wrapper's own name): forwarding would recurse until the stack
          * died. Stay unwrapped and say so through GetDllInfo. */
         FreeLibrary(g_wrapped_module);
         g_wrapped_module = NULL;
+        plugin_log("wrapped= names the capture layer itself; staying unwrapped");
         return;
     }
     RESOLVE_GFX_API(g_wrapped, g_wrapped_module);
+}
+
+static void release_wrapped(void) {
+    if (g_wrapped_module) FreeLibrary(g_wrapped_module);
+    g_wrapped_module = NULL;
+    memset(&g_wrapped, 0, sizeof g_wrapped);
+    g_loaded_once = FALSE;
 }
 
 /* How much of RDRAM is really there. GFX_INFO carries no size, and the
@@ -156,10 +196,24 @@ static void open_stream(void) {
     if (g_hdr) return;
     g_map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
                                0, (DWORD)TOTAL_BYTES, g_stream_name);
-    if (!g_map) return;
+    if (!g_map) {
+        /* ERROR_ACCESS_DENIED here is usually an elevation mismatch: an
+         * elevated Project64 cannot open a mapping a normal tracker made. */
+        char message[160];
+        snprintf(message, sizeof message, "CreateFileMapping(%s) failed: %lu", g_stream_name, GetLastError());
+        plugin_log(message);
+        return;
+    }
     BOOL existed = GetLastError() == ERROR_ALREADY_EXISTS;
     void *view = MapViewOfFile(g_map, FILE_MAP_ALL_ACCESS, 0, 0, 0);
-    if (!view) { CloseHandle(g_map); g_map = NULL; return; }
+    if (!view) {
+        /* 75 MB must be contiguous in a 32-bit process; a fragmented
+         * address space is the usual cause of this one. */
+        char message[160];
+        snprintf(message, sizeof message, "MapViewOfFile(%u bytes) failed: %lu", (unsigned)TOTAL_BYTES, GetLastError());
+        plugin_log(message);
+        CloseHandle(g_map); g_map = NULL; return;
+    }
     g_hdr = (stream_header_t *)view;
     g_slots = (uint8_t *)view + HEADER_BYTES;
     if (!existed || memcmp(g_hdr->magic, STREAM_MAGIC, 8) != 0) {
@@ -346,29 +400,38 @@ static void capture_if_presented(void) {
 
 /* -- the exported surface ----------------------------------------------- */
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
-    (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
         g_self = instance;
         DisableThreadLibraryCalls(instance);
-    } else if (reason == DLL_PROCESS_DETACH) {
+    } else if (reason == DLL_PROCESS_DETACH && reserved == NULL) {
+        /* A FreeLibrary (the plugin dialog enumerating, or a plugin change):
+         * leave the header honest. On process exit (`reserved` set) the
+         * handles are already being reclaimed and nothing here is safe. */
         close_stream();
     }
     return TRUE;
 }
 
 EXPORT void CALL GetDllInfo(PLUGIN_INFO *info) {
-    ensure_wrapped();
-    if (g_wrapped.GetDllInfo) {
+    read_ini();
+    info->Version = 0x0103;
+    info->Type = PLUGIN_TYPE_GFX;
+    info->NormalMemory = FALSE;
+    info->MemoryBswaped = TRUE;
+    if (g_wrapped_module && g_wrapped.GetDllInfo) {
+        /* Already running: the wrapped plugin's own name, suffixed. */
         g_wrapped.GetDllInfo(info);
         char name[100];
         snprintf(name, sizeof name, "%.80s +SM64 Trainer", info->Name);
         strncpy_s(info->Name, sizeof info->Name, name, _TRUNCATE);
         return;
     }
-    info->Version = 0x0103;
-    info->Type = PLUGIN_TYPE_GFX;
-    info->NormalMemory = FALSE;
-    info->MemoryBswaped = TRUE;
+    if (g_wrapped_name[0]) {
+        char name[100];
+        snprintf(name, sizeof name, "%.80s +SM64 Trainer", g_wrapped_name);
+        strncpy_s(info->Name, sizeof info->Name, name, _TRUNCATE);
+        return;
+    }
     strncpy_s(info->Name, sizeof info->Name,
               "SM64 Trainer capture (wrapped plugin missing)", _TRUNCATE);
 }
@@ -395,7 +458,18 @@ EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
             strncpy_s(g_hdr->wrapped_name, sizeof g_hdr->wrapped_name, g_wrapped_name, _TRUNCATE);
         }
     }
-    if (!g_wrapped.InitiateGFX) return FALSE;
+    if (!g_wrapped.InitiateGFX) {
+        char message[MAX_PATH + 200];
+        snprintf(message, sizeof message,
+                 "SM64 Trainer's capture layer could not load the graphics plugin it wraps"
+                 " (%s).\nCheck the wrapped= line in sm64_trainer_gfx.ini beside it, or"
+                 " pick your graphics plugin again in Options > Settings > Plugins.",
+                 g_wrapped_name[0] ? g_wrapped_name : "no wrapped= line in sm64_trainer_gfx.ini");
+        plugin_log("InitiateGFX refused: no wrapped plugin");
+        if (!GetEnvironmentVariableA("SM64_TRAINER_GFX_NO_DIALOGS", NULL, 0))   /* the test host sets it */
+            MessageBoxA(g_gfx.hWnd, message, "SM64 Trainer capture layer", MB_OK | MB_ICONWARNING);
+        return FALSE;
+    }
     return g_wrapped.InitiateGFX(info);
 }
 
@@ -425,6 +499,7 @@ EXPORT void CALL CloseDLL(void) {
     if (g_wrapped.CloseDLL) g_wrapped.CloseDLL();
     if (g_hdr) g_hdr->status &= ~(uint32_t)(STATUS_INITIATED | STATUS_ROM_OPEN);
     g_have_gfx = FALSE;
+    release_wrapped();
 }
 
 EXPORT void CALL ProcessRDPList(void) { if (g_wrapped.ProcessRDPList) g_wrapped.ProcessRDPList(); }

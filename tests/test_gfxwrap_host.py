@@ -39,10 +39,13 @@ def built(tmp_path_factory):
     return {"host": host, "fake": fake, "wrapper": wrapper, "dir": out}
 
 
-def drive(host: Path, wrapper: Path, frames: int, stream_name: str) -> str:
+QUIET = {**os.environ, "SM64_TRAINER_GFX_NO_DIALOGS": "1"}   # no message box under test
+
+
+def drive(host: Path, wrapper: Path, frames: int, stream_name: str, *extra) -> str:
     result = subprocess.run([str(host), "--drive", str(wrapper), str(frames),
-                             "--stream", stream_name],
-                            capture_output=True, text=True, timeout=60,
+                             "--stream", stream_name, *extra],
+                            capture_output=True, text=True, timeout=60, env=QUIET,
                             creationflags=_NO_WINDOW, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
     return result.stdout
@@ -70,7 +73,9 @@ def test_the_wrapper_exports_everything_pj64_16_requires_and_names_the_wrapped_p
     info = subprocess.run([str(built["host"]), "--info", str(built["wrapper"])],
                           capture_output=True, text=True, creationflags=_NO_WINDOW,
                           check=True).stdout
-    assert "Fake GFX" in info and "+SM64 Trainer" in info
+    # The dialog is answered from the ini alone (loading the wrapped plugin
+    # inside PJ64's enumerate-every-DLL pass would leak a reference per pass)
+    assert "fake_gfx.dll +SM64 Trainer" in info
     assert "version 0x0103" in info and "bswaped 1" in info
 
 
@@ -146,11 +151,17 @@ def test_an_ini_naming_the_wrapper_itself_leaves_it_unwrapped_instead_of_recursi
     """Fresh-context review finding: forwarding to ourselves would recurse
     until the stack died. The wrapper notices its own module and reports
     the wrapped plugin as missing."""
-    info = subprocess.run([str(built["host"]), "--info", str(built["wrapper"]),
-                           "--wrapped", "sm64_trainer_gfx.dll"],
-                          capture_output=True, text=True, creationflags=_NO_WINDOW,
-                          check=True, timeout=60).stdout
-    assert "wrapped plugin missing" in info
+    name = unique_name()
+    result = subprocess.run([str(built["host"]), "--drive", str(built["wrapper"]), "2",
+                             "--stream", name, "--wrapped", "sm64_trainer_gfx.dll"],
+                            capture_output=True, text=True, timeout=60, env=QUIET,
+                            creationflags=_NO_WINDOW, check=False)
+    # InitiateGFX refuses (the host reports it and exits 5) -- no recursion,
+    # no crash, and the reason is in the log beside the wrapper
+    assert result.returncode == 5, result.stdout + result.stderr
+    assert "InitiateGFX failed" in result.stderr
+    log = built["wrapper"].parent / "sm64_trainer_gfx.log"
+    assert log.exists() and "names the capture layer itself" in log.read_text()
 
 
 def test_a_stamp_entry_past_the_committed_rdram_is_dropped_not_a_crash(built):
@@ -163,15 +174,68 @@ def test_a_stamp_entry_past_the_committed_rdram_is_dropped_not_a_crash(built):
     try:
         stream.set_table([(0, 4), (6 << 20, 4)], rdram_bytes=8 << 20)
         stream.set_want_frames(True)
-        result = subprocess.run([str(built["host"]), "--drive", str(built["wrapper"]), "3",
-                                 "--stream", name, "--rdram-mb", "4"],
-                                capture_output=True, text=True, timeout=60,
-                                creationflags=_NO_WINDOW, check=False)
-        assert result.returncode == 0, result.stdout + result.stderr
+        drive(built["host"], built["wrapper"], 3, name, "--rdram-mb", "4")
         slots, _ = stream.read_new(0)
         assert [slot.seq for slot in slots] == [1, 2, 3]
         for slot in slots:
             assert slot.table[0] == (1000 + slot.seq - 1).to_bytes(4, "little")
             assert slot.table[1] == b""
     finally:
+        stream.close()
+
+
+def test_gl_state_the_wrapped_plugin_leaves_bound_does_not_redirect_the_capture(built):
+    """Review finding 5's guard: the fake leaves a framebuffer object, a
+    pixel-pack buffer and odd pack parameters bound after every present;
+    every slot must still hold the window's own clear colour."""
+    name = unique_name()
+    stream = F.FrameStream(name)
+    try:
+        stream.set_table([(0, 4)], rdram_bytes=8 << 20)
+        stream.set_want_frames(True)
+        drive(built["host"], built["wrapper"], 5, name, "--dirty-gl")
+        slots, _ = stream.read_new(0)
+        assert [slot.seq for slot in slots] == [1, 2, 3, 4, 5]
+        for slot in slots:
+            frame = slot.seq - 1
+            centre = slot.pixels[24, 32]
+            assert tuple(int(channel) for channel in centre) == (frame, 2 * frame, 3 * frame)
+    finally:
+        stream.close()
+
+
+def test_the_source_stops_within_seconds_when_the_emulator_dies(built):
+    """Review finding 10: a plugin that dies with its header bits set must
+    not park the recorder. The host is killed mid-drive; the source's
+    on_stopped fires within a few seconds."""
+    import threading
+    import time
+
+    from sm64_events.memory.layout import layout_for
+    from sm64_events.replay.pluginsource import PluginVideoSource, table_for
+
+    name = unique_name()
+    stream = F.FrameStream(name)
+    layout = layout_for("us")
+    table = table_for(layout)                       # the host's fake RDRAM is 8 MB of zeros
+    stream.set_table([(offset, length) for _n, offset, length in table], rdram_bytes=8 << 20)
+    stopped = threading.Event()
+    delivered = []
+    source = PluginVideoSource(stream, table, layout)
+    source.start(lambda bgra, ts, stamp: delivered.append(stamp.frame), stopped.set)
+    host = subprocess.Popen([str(built["host"]), "--drive", str(built["wrapper"]), "100000",
+                             "--stream", name], env=QUIET, creationflags=_NO_WINDOW,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 15
+        while not delivered and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert delivered, "no frame arrived from the host"
+        host.kill()
+        host.wait(timeout=10)
+        assert stopped.wait(timeout=4.0), "the source kept waiting on a dead plugin"
+    finally:
+        if host.poll() is None:
+            host.kill()
+        source.stop()
         stream.close()
