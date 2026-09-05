@@ -301,11 +301,11 @@ def test_every_slot_after_a_pictures_first_is_flagged_as_the_same_picture(monkey
     same picture, wherever the run sits."""
     import pathlib
 
-    from sm64_events.replay import mapalign, padread
+    from sm64_events.replay import padread
 
     runs = [(0, 1), (1, 3), (4, 1), (5, 2), (7, 1)]   # 8 slots, 5 pictures
-    monkeypatch.setattr(mapalign, "decode_grey", lambda ffmpeg, clip: np.zeros((8, 4), np.uint8))
-    monkeypatch.setattr(mapalign, "picture_runs", lambda grey: runs)
+    monkeypatch.setattr(padread, "decode_grey", lambda ffmpeg, clip: np.zeros((8, 4), np.uint8))
+    monkeypatch.setattr(padread, "picture_runs", lambda grey: runs)
     cells = np.zeros((8, padread.CELL_H, padread.CELL_W, 3), np.uint8)
     same, _changed = padread.picture_flags("ffmpeg", pathlib.Path("nope.mp4"), cells)
     assert list(same) == [False, False, True, True, False, False, True, False]

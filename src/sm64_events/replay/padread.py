@@ -856,11 +856,56 @@ class PadReading:
     audit: Verdict | None = None
 
 
+# --- distinct pictures in the footage -------------------------------------
+# A 30 fps game captured at 60 gives two video frames per picture, and the
+# capture's own jitter makes it one or three often enough to see: measured on
+# clip 4374, 397 runs of 2 against 11 of one and 13 longer. A picture IS one
+# game frame however many video frames it occupies, so a reading must answer
+# the same thing across all of them.
+#
+# Scaled small on purpose: the question is "did the picture change at all",
+# and a 160x120 grey copy answers it for a fraction of the decode. These two
+# lived in `replay/mapalign.py` until that module was deleted (2026-09-05);
+# they are the only part of it anything still needs.
+RUN_WIDTH, RUN_HEIGHT = 160, 120
+# Mean per-pixel difference above which two video frames are DIFFERENT
+# pictures. A re-encoded duplicate is not bit-identical, so this cannot be
+# zero; measured on his clips, true duplicates sit under 0.1 and consecutive
+# gameplay frames run 11 and up.
+RUN_CHANGE_THRESHOLD = 0.35
+
+
+def picture_runs(grey: np.ndarray) -> list[tuple[int, int]]:
+    """(first slot, length) per distinct picture, in order."""
+    if len(grey) == 0:
+        return []
+    changed = (np.abs(np.diff(grey.astype(np.int16), axis=0)).mean(axis=1)
+               >= RUN_CHANGE_THRESHOLD)
+    starts = [0] + [index + 1 for index, flag in enumerate(changed) if flag]
+    return [(start, end - start)
+            for start, end in zip(starts, starts[1:] + [len(grey)], strict=True)]
+
+
+def decode_grey(ffmpeg: str, clip: Path) -> np.ndarray:
+    """Every STORED video frame as a small grey image, for run detection --
+    `-fps_mode passthrough`, or a VFR picture-feed clip is re-timed onto its
+    r_frame_rate grid and the runs no longer index the clip's frames (the
+    reader's own decode had the same fault, 2026-09-02)."""
+    out = subprocess.run(
+        [ffmpeg, "-v", "error", "-i", str(clip),
+         "-vf", f"scale={RUN_WIDTH}:{RUN_HEIGHT}", "-fps_mode", "passthrough",
+         "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"],
+        capture_output=True, check=False)
+    stride = RUN_WIDTH * RUN_HEIGHT
+    count = len(out.stdout) // stride
+    return np.frombuffer(out.stdout[:count * stride],
+                         dtype=np.uint8).reshape(count, stride)
+
+
 def picture_flags(ffmpeg: str, clip: Path, cells: np.ndarray):
     """(same_picture, changed) per slot. Same = the whole frame repeats the
     previous one (the quantiser's own picture runs); changed = the readout
     region itself differs, which is a new frame however still the world."""
-    from sm64_events.replay.mapalign import decode_grey, picture_runs
     count = len(cells)
     same = np.zeros(count, bool)
     try:

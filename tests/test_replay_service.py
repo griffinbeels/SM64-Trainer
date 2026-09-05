@@ -94,55 +94,27 @@ def test_view_pads_span_and_returns_clip_url(tmp_path):
     assert res["anchor_offset_s"] == 3.0 + DISPLAY_LAG_FRAMES / 30
 
 
-def test_the_sidecar_carries_the_frame_map_and_a_save_keeps_it(tmp_path):
-    """Round 32 item 17: with a frame clock wired, a cut clip's sidecar says
-    which game frame each video frame shows, the view payload returns it,
-    and the saved copy keeps it after the clock (and the ring) are gone. A
-    service with no clock, or a clip the clock cannot cover, carries none
-    -- the offset fallback stays what it was."""
-    import json as _json
-
-    from sm64_events.replay.frameclock import FrameClock
-
-    clock = FrameClock(now=lambda: 0.0)
-    base = (T0 - timedelta(seconds=3)).timestamp()
-    for n in range(17 * 30):                     # the whole padded span, 30fps
-        clock._now = lambda t=base + n / 30: t
-        clock.mark(7000 + n)
+def test_a_clip_with_no_stamped_rows_carries_no_map_at_all(tmp_path):
+    """ONE map path since 2026-09-05, and it is a read: the capture layer
+    stamps each picture with the frame that drew it. A clip recorded
+    without the layer -- no ledger, no feed log, or rows that name no
+    frame -- gets `frame_map: None`, and the panel says "Frame-exact
+    capture is off" rather than showing a derived guess. Four generations
+    of derived map used to answer here."""
     svc = make_service(tmp_path, [attempt()])
-    svc._frame_clock = clock
-    res = svc.view(42)
-    fm = res["frame_map"]
-    assert fm is not None and len(fm) == 17 * 60
-    # The display lag rides INSIDE the map: the first slots predate the
-    # first marked frame's picture (None, honestly), and the last slot shows
-    # the frame the game finished DISPLAY_LAG_FRAMES earlier.
-    from sm64_events.replay.service import DISPLAY_LAG_FRAMES
-    # The wall bias (frameclock.MAP_WALL_BIAS_S, the measured half-slot the
-    # whole encode chain answers late by) shifts every slot's answer one
-    # slot earlier than the raw edge arithmetic would say.
-    assert fm[0] is None and fm[2] == 7000
-    assert fm[-1] == 7000 + 17 * 30 - 1 - DISPLAY_LAG_FRAMES + 1
-    ordered = [frame for frame in fm if frame is not None]
-    assert ordered == sorted(ordered)
-    # ...and names the series that answered (edge marks only here), so the
-    # pixel scorer's verdict says which map version it scored.
-    assert res["frame_map_source"] == "edges"
-    sidecar = _json.loads(
-        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
-    assert sidecar["frame_map"] == fm
-    assert sidecar["frame_map_source"] == "edges"
-    saved = svc.save(42)
-    assert _json.loads(Path(saved["path"]).with_suffix(".json").read_text())[
-        "frame_map"] == fm
+    assert svc.view(42)["frame_map"] is None          # no ledger at all
 
+    class TimeOnlyLedger:
+        """A desktop grab's rows: a composition time and nothing else."""
+        def rows_between(self, t0, t1):
+            return [{"ts": t0 + 0.5 + i / 30, "frame": None} for i in range(9)]
 
-def test_no_clock_or_no_coverage_means_no_map_not_a_crash(tmp_path):
-    svc = make_service(tmp_path, [attempt()])
-    assert svc.view(42)["frame_map"] is None     # no clock wired
-    from sm64_events.replay.frameclock import FrameClock
+        def feeds_between(self, t0, t1):
+            return [{"at": t0 + 0.5 + i / 30 + 0.004, "ts": t0 + 0.5 + i / 30}
+                    for i in range(9)]
+
     svc2 = make_service(tmp_path / "b", [attempt()])
-    svc2._frame_clock = FrameClock()             # wired, never marked
+    svc2.recorder.ledger = TimeOnlyLedger()
     assert svc2.view(42)["frame_map"] is None
 
 
@@ -533,88 +505,6 @@ def test_save_segment_attempt_filename_contains_segment_name_and_rta(tmp_path):
     assert "-rta" in name
 
 
-def test_a_fresh_clip_is_aligned_to_its_own_footage(tmp_path):
-    """Round 32, 2026-08-28. The timing constants estimate a journey nobody
-    can measure from RAM, and four rounds of setting them by hand each
-    landed somewhere else ("Totally desynced now, it's even worse than when
-    we started"). So extraction now asks the CLIP: the alignment it
-    measures is applied to the map and recorded beside it."""
-    import json as _json
-
-    from sm64_events.replay.frameclock import FrameClock
-    from sm64_events.replay.mapalign import Alignment
-
-    clock = FrameClock(now=lambda: 0.0)
-    base = (T0 - timedelta(seconds=3)).timestamp()
-    for n in range(17 * 30):
-        clock._now = lambda t=base + n / 30: t
-        clock.mark(7000 + n)
-    svc = make_service(tmp_path, [attempt()])
-    svc._frame_clock = clock
-    seen = {}
-
-    def aligner(clip, frame_map, a):
-        seen["clip"] = clip
-        seen["slots"] = len(frame_map)
-        return Alignment(offset=-3, fit=0.71, margin=0.04, paired=900)
-
-    svc.map_aligner = aligner
-    res = svc.view(42)
-    assert seen["slots"] == 17 * 60          # the built map, before the shift
-    # The correction lands in the FRAME domain -- an odd slot shift would
-    # split pictures that quantising unified -- so -3 slots rounds to a
-    # constant of round(-3/2) = -2 game frames on every value.
-    assert res["frame_map"][2] == 7000 - 2
-    assert res["frame_map"][-1] == svc.view(42)["frame_map"][-1]
-    sidecar = _json.loads(
-        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
-    assert sidecar["frame_map_aligned"] is True
-    assert sidecar["frame_map_offset"] == -3
-    assert sidecar["frame_map_fit"] == 0.71
-
-
-def test_an_unreadable_display_leaves_the_map_alone_and_says_so(tmp_path):
-    import json as _json
-
-    from sm64_events.replay.frameclock import FrameClock
-
-    clock = FrameClock(now=lambda: 0.0)
-    base = (T0 - timedelta(seconds=3)).timestamp()
-    for n in range(17 * 30):
-        clock._now = lambda t=base + n / 30: t
-        clock.mark(7000 + n)
-    svc = make_service(tmp_path, [attempt()])
-    svc._frame_clock = clock
-    svc.map_aligner = lambda clip, frame_map, a: None
-    res = svc.view(42)
-    assert res["frame_map"][2] == 7000        # untouched
-    sidecar = _json.loads(
-        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
-    assert sidecar["frame_map_aligned"] is False
-    assert "frame_map_offset" not in sidecar
-
-
-def test_a_broken_aligner_never_costs_the_clip(tmp_path):
-    """Alignment is a correction, not a dependency: whatever it does, the
-    clip and its map still reach him."""
-    from sm64_events.replay.frameclock import FrameClock
-
-    clock = FrameClock(now=lambda: 0.0)
-    base = (T0 - timedelta(seconds=3)).timestamp()
-    for n in range(17 * 30):
-        clock._now = lambda t=base + n / 30: t
-        clock.mark(7000 + n)
-    svc = make_service(tmp_path, [attempt()])
-    svc._frame_clock = clock
-
-    def explode(clip, frame_map, a):
-        raise RuntimeError("ffmpeg went missing")
-
-    svc.map_aligner = explode
-    res = svc.view(42)
-    assert res["frame_map"] is not None and res["frame_map"][2] == 7000
-
-
 def test_a_short_lead_in_is_not_a_warning_but_a_late_start_is(tmp_path):
     """2026-08-28: "there's also this warning for 'starts mid attempt' --
     but... I just reset as normal? What does this even mean?" `truncated`
@@ -664,378 +554,12 @@ def test_a_clip_cut_off_before_the_finish_says_that_instead(tmp_path):
     assert res["starts_mid_attempt"] is False and res["ends_early"] is True
 
 
-def test_a_fresh_clip_holds_one_answer_per_picture(tmp_path):
-    """His ruling, 2026-08-28: "if there's duplicated frames, input
-    timeline should be identical for the sequential duplicated frames."
-    The quantiser runs even when the ALIGNER refuses -- it needs nothing
-    but the pictures, and his clip 4374 is exactly that case (the level's
-    yellow floor swamped the digit region, so alignment had no verdict
-    while 257 pictures still carried two different frames)."""
-    import json as _json
-
-    from sm64_events.replay.frameclock import FrameClock
-
-    clock = FrameClock(now=lambda: 0.0)
-    base = (T0 - timedelta(seconds=3)).timestamp()
-    for n in range(17 * 30):
-        clock._now = lambda t=base + n / 30: t
-        clock.mark(7000 + n)
-    svc = make_service(tmp_path, [attempt()])
-    svc._frame_clock = clock
-    svc.map_aligner = lambda clip, frame_map, a: None      # refuses
-    seen = {}
-
-    def quantiser(clip, frame_map):
-        seen["slots"] = len(frame_map)
-        return [7000] * len(frame_map)                     # one flat answer
-
-    svc.map_quantiser = quantiser
-    res = svc.view(42)
-    assert seen["slots"] == 17 * 60
-    assert set(res["frame_map"]) == {7000}
-    sidecar = _json.loads(
-        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
-    assert sidecar["frame_map_quantised"] is True
-    assert sidecar["frame_map_aligned"] is False
-
-
-def test_a_broken_quantiser_never_costs_the_clip(tmp_path):
-    from sm64_events.replay.frameclock import FrameClock
-
-    clock = FrameClock(now=lambda: 0.0)
-    base = (T0 - timedelta(seconds=3)).timestamp()
-    for n in range(17 * 30):
-        clock._now = lambda t=base + n / 30: t
-        clock.mark(7000 + n)
-    svc = make_service(tmp_path / "broken", [attempt()])
-    svc._frame_clock = clock
-
-    def explode(clip, frame_map):
-        raise RuntimeError("ffmpeg went missing")
-
-    svc.map_quantiser = explode
-    res = svc.view(42)
-    assert res["frame_map"] is not None and res["frame_map"][2] == 7000
-
-
-def test_unreadable_digits_inherit_the_learned_anchor(tmp_path):
-    """A clip whose digits cannot be read is corrected by the median the
-    OTHER clips measured, instead of going uncorrected -- the "calibrate
-    once" idea made continuous: he calibrates by playing."""
-    import json as _json
-
-    from sm64_events.replay.frameclock import FrameClock
-    from sm64_events.replay.mapalign import AnchorStats
-
-    clock = FrameClock(now=lambda: 0.0)
-    base = (T0 - timedelta(seconds=3)).timestamp()
-    for n in range(17 * 30):
-        clock._now = lambda t=base + n / 30: t
-        clock.mark(7000 + n)
-    svc = make_service(tmp_path, [attempt()])
-    svc._frame_clock = clock
-    svc.map_aligner = lambda clip, frame_map, a: None      # digits unreadable
-    stats = AnchorStats(tmp_path / "anchor.json")
-    for clip_id, measured in ((1, -2), (2, -2), (3, -2)):
-        stats.record(clip_id, measured, 0.5)
-    svc.anchor_stats = stats
-    res = svc.view(42)
-    assert res["frame_map"][2] == 7000 - 1     # -2 slots -> -1 frame, learned
-    sidecar = _json.loads(
-        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
-    assert sidecar["frame_map_aligned"] is False
-    assert sidecar["frame_map_learned"] is True
-    assert sidecar["frame_map_offset"] == -2
-
-
-def test_a_measured_clip_teaches_the_store(tmp_path):
-    from sm64_events.replay.frameclock import FrameClock
-    from sm64_events.replay.mapalign import Alignment, AnchorStats
-
-    clock = FrameClock(now=lambda: 0.0)
-    base = (T0 - timedelta(seconds=3)).timestamp()
-    for n in range(17 * 30):
-        clock._now = lambda t=base + n / 30: t
-        clock.mark(7000 + n)
-    svc = make_service(tmp_path / "m", [attempt()])
-    svc._frame_clock = clock
-    svc.map_aligner = lambda clip, frame_map, a: Alignment(
-        offset=-2, fit=0.5, margin=0.02, paired=900)
-    stats = AnchorStats(tmp_path / "m" / "anchor.json")
-    svc.anchor_stats = stats
-    svc.view(42)
-    import json as _json
-    rows = _json.loads((tmp_path / "m" / "anchor.json").read_text())
-    assert rows and rows[-1]["offset"] == -2
-
-
-# -- the picture ledger path (round 32 item 40) -----------------------------
-
-class FakeLedger:
-    """Echoes rows inside whatever window the service asks about."""
-    def __init__(self, count=3):
-        self.count = count
-        self.asked = []
-    def rows_between(self, t0, t1):
-        self.asked.append((t0, t1))
-        return [{"ts": t0 + 0.5 + i / 30, "frame": 100 + i,
-                 "mario_action": 0x0880}
-                for i in range(self.count)]
-
-
-def test_a_clip_with_a_ledger_maps_from_it_and_the_sidecar_keeps_the_rows(
-        tmp_path):
-    """Item 40: capture's own per-picture record answers FIRST; the map it
-    builds is already one answer per picture, so the quantiser has nothing
-    to do; the aligner still closes identity on top; and the rows -- extra
-    stamps included -- persist in the sidecar for any future analysis."""
-    import json as _json
-
-    svc = make_service(tmp_path, [attempt()])
-    svc.recorder.ledger = FakeLedger()
-    quantiser_calls = []
-    svc.map_quantiser = lambda clip, fm: quantiser_calls.append(clip) or fm
-    aligned = {}
-
-    def mapper(clip, rows, start_ts, duration_s, fps, frame_times=None):
-        aligned["rows"] = rows
-        aligned["fps"] = fps
-        return [200, 200, 201, 201]
-
-    svc.ledger_mapper = mapper
-    res = svc.view(42)
-    assert res["frame_map"] == [200, 200, 201, 201]
-    assert res["frame_map_source"] == "ledger"
-    assert quantiser_calls == []             # already one answer per picture
-    assert aligned["rows"][0]["frame"] == 100
-    sidecar = _json.loads(
-        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
-    # The durable per-frame record: composition times as offsets from the
-    # clip's own start, stamps riding along.
-    assert sidecar["frame_map_quantised"] is True
-    # The ask window starts 0.5 s before the clip, so the echoed rows land
-    # at the clip start exactly: offsets from the clip's own first frame.
-    assert [row["ts"] for row in sidecar["picture_ledger"]] == [
-        0.0, round(1 / 30, 4), round(2 / 30, 4)]
-    assert sidecar["picture_ledger"][0]["mario_action"] == 0x0880
-
-
-def test_a_ledger_refusal_falls_back_to_the_series_map(tmp_path):
-    """Too little coverage: ledger_map returns None, the frame-clock series
-    answer as before -- and the rows still persist, because they are the
-    record he asked for whether or not they carried the map."""
-    import json as _json
-
-    from sm64_events.replay.frameclock import FrameClock
-
-    clock = FrameClock(now=lambda: 0.0)
-    base = (T0 - timedelta(seconds=3)).timestamp()
-    for n in range(17 * 30):
-        clock._now = lambda t=base + n / 30: t
-        clock.mark(7000 + n)
-    svc = make_service(tmp_path, [attempt()])
-    svc._frame_clock = clock
-    svc.recorder.ledger = FakeLedger()
-    svc.ledger_mapper = lambda *a, **k: None
-    res = svc.view(42)
-    assert res["frame_map_source"] == "edges"
-    sidecar = _json.loads(
-        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
-    assert len(sidecar["picture_ledger"]) == 3
-
-
-def test_a_broken_ledger_mapper_never_costs_the_clip(tmp_path):
-    from sm64_events.replay.frameclock import FrameClock
-
-    clock = FrameClock(now=lambda: 0.0)
-    base = (T0 - timedelta(seconds=3)).timestamp()
-    for n in range(17 * 30):
-        clock._now = lambda t=base + n / 30: t
-        clock.mark(7000 + n)
-    svc = make_service(tmp_path, [attempt()])
-    svc._frame_clock = clock
-    svc.recorder.ledger = FakeLedger()
-
-    def broken(*a):
-        raise RuntimeError("decode died")
-
-    svc.ledger_mapper = broken
-    res = svc.view(42)
-    assert res["clip_url"].endswith("clip_attempt_42.mp4")
-    assert res["frame_map_source"] == "edges"
-
-
-def test_no_ledger_on_the_recorder_changes_nothing(tmp_path):
-    svc = make_service(tmp_path, [attempt()])
-    svc.ledger_mapper = lambda *a, **k: [1, 2]
-    res = svc.view(42)
-    assert res["frame_map"] is None
-
-
-def test_windowed_alignment_corrects_each_shelf_and_says_so(tmp_path):
-    """Items 41-43: the aligner may answer (global, windows); each picture
-    then takes its shelf's own offset and the sidecar records the shelves,
-    so a 'panel is off HERE' report is answerable from the file."""
-    import json as _json
-
-    from sm64_events.replay.frameclock import FrameClock
-    from sm64_events.replay.mapalign import Alignment
-
-    clock = FrameClock(now=lambda: 0.0)
-    base = (T0 - timedelta(seconds=3)).timestamp()
-    for n in range(17 * 30):
-        clock._now = lambda t=base + n / 30: t
-        # One skipped frame at n=310 (its picture never captured): the
-        # place a downward shelf step becomes expressible.
-        clock.mark(7000 + n + (1 if n >= 310 else 0))
-    svc = make_service(tmp_path, [attempt()])
-    svc._frame_clock = clock
-    windows = [(0, 500, 2, 0.9, 0.5), (500, 17 * 60, 0, 0.9, 0.5)]
-    svc.map_aligner = lambda clip, fm, a: (
-        Alignment(offset=0, fit=0.8, margin=0.3, paired=900), windows)
-    res = svc.view(42)
-    fm = res["frame_map"]
-    # +2 slots = +1 frame on the early shelf, untouched on the late one --
-    # proven against a twin service whose aligner applies no correction.
-    twin = make_service(tmp_path / "twin", [attempt()])
-    twin._frame_clock = clock
-    twin.map_aligner = lambda clip, fm, a: (
-        Alignment(offset=0, fit=0.8, margin=0.3, paired=900), [])
-    plain = twin.view(42)["frame_map"]
-    assert fm[10] == plain[10] + 1                 # early: up a frame
-    # The downward step waits for the skipped frame (n=310, ~slot 800),
-    # then the late shelf runs exactly as the uncorrected map does.
-    assert fm[900:1000] == plain[900:1000]
-    sidecar = _json.loads(
-        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
-    assert sidecar["frame_map_windows"] == [list(w) for w in windows]
-    assert sidecar["frame_map_aligned"] is True
-    assert sidecar["frame_map_offset"] == 0
-
-
-def test_an_aligner_answering_no_windows_applies_the_global_offset(tmp_path):
-    from sm64_events.replay.frameclock import FrameClock
-    from sm64_events.replay.mapalign import Alignment
-
-    clock = FrameClock(now=lambda: 0.0)
-    base = (T0 - timedelta(seconds=3)).timestamp()
-    for n in range(17 * 30):
-        clock._now = lambda t=base + n / 30: t
-        clock.mark(7000 + n)
-    svc = make_service(tmp_path, [attempt()])
-    svc._frame_clock = clock
-    svc.map_aligner = lambda clip, fm, a: (
-        Alignment(offset=-3, fit=0.7, margin=0.04, paired=900), [])
-    res = svc.view(42)
-    assert res["frame_map"][2] == 7000 - 2         # round(-3/2) frames
-
-
-def test_the_digit_refit_replaces_the_map_and_says_so(tmp_path):
-    """Round 32 item 55: the anchors move a map by one number, and his BBH
-    clip drifts instead -- exact at frames 87-89, one to two early at
-    129-141. The refit gives every picture its own frame; a refusal or a
-    failure leaves the anchored map exactly as it was."""
-    import json as _json
-
-    from sm64_events.replay.frameclock import FrameClock
-    from sm64_events.replay.mapalign import Alignment
-
-    def wired(tmp):
-        clock = FrameClock(now=lambda: 0.0)
-        base = (T0 - timedelta(seconds=3)).timestamp()
-        for n in range(17 * 30):
-            clock._now = lambda t=base + n / 30: t
-            clock.mark(7000 + n)
-        svc = make_service(tmp, [attempt()])
-        svc._frame_clock = clock
-        svc.map_aligner = lambda clip, fm, a: (
-            Alignment(offset=0, fit=0.8, margin=0.3, paired=900), [])
-        return svc
-
-    svc = wired(tmp_path)
-    svc.map_digit_fit = lambda clip, fm, a: [4242] * len(fm)
-    assert svc.view(42)["frame_map"] == [4242] * (17 * 60)
-    sidecar = _json.loads(
-        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
-    assert sidecar["frame_map_digitfit"] is True
-
-    refused = wired(tmp_path / "b")
-    refused.map_digit_fit = lambda clip, fm, a: None
-    assert refused.view(42)["frame_map"][2] == 7000
-
-    def broken(clip, fm, a):
-        raise RuntimeError("decode died")
-
-    crashed = wired(tmp_path / "c")
-    crashed.map_digit_fit = broken
-    assert crashed.view(42)["frame_map"][2] == 7000
-
-
-def test_a_read_display_replaces_the_map_and_the_ink_anchor_stands_down(tmp_path):
-    """Round 32, 2026-09-01. The pad reader READS Usamune's display cell by
-    cell and pins the map to it; when it answers, the ink anchor (one
-    number per slot, too weak to pin a picture) is not consulted, and the
-    sidecar carries the reader's own verdict -- how many slots the display
-    confirmed and which it contradicts -- so 100% is a number per clip."""
-    import json as _json
-
-    from sm64_events.replay.frameclock import FrameClock
-    from sm64_events.replay.padread import PadReading, Verdict
-
-    clock = FrameClock(now=lambda: 0.0)
-    base = (T0 - timedelta(seconds=3)).timestamp()
-    for n in range(17 * 30):
-        clock._now = lambda t=base + n / 30: t
-        clock.mark(7000 + n)
-    svc = make_service(tmp_path, [attempt()])
-    svc._frame_clock = clock
-    consulted = []
-    svc.map_aligner = lambda clip, frame_map, a: consulted.append("ink") or None
-
-    def reader(clip, frame_map, a):
-        read = [None if raw is None else raw + 5 for raw in frame_map]
-        verdict = Verdict(sure=400, agree=399, nowhere=0, known_cells=2000,
-                          slots=len(frame_map), disagreements=[(12, "y", "U71", "U70")])
-        return PadReading(read, verdict, {("y", "d1"): ["7", "8"]})
-
-    svc.pad_reader = reader
-    res = svc.view(42)
-    assert res["frame_map"][2] == 7000 + 5, "the map is what the display read"
-    assert consulted == [], "the ink anchor is not consulted once the display is read"
-    sidecar = _json.loads(
-        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
-    assert sidecar["frame_map_read"] is True
-    assert sidecar["pad_reading"]["agree"] == 399 and sidecar["pad_reading"]["sure"] == 400
-    assert sidecar["pad_reading"]["disagreements"] == [[12, "y", "U71", "U70"]]
-    assert "frame_map_aligned" not in sidecar
-
-
-def test_a_refusing_or_broken_reader_leaves_the_ink_anchor_in_charge(tmp_path):
-    import json as _json
-
-    from sm64_events.replay.frameclock import FrameClock
-    from sm64_events.replay.mapalign import Alignment
-
-    for reader in (lambda clip, frame_map, a: None,
-                   lambda clip, frame_map, a: (_ for _ in ()).throw(RuntimeError("boom"))):
-        clock = FrameClock(now=lambda: 0.0)
-        base = (T0 - timedelta(seconds=3)).timestamp()
-        for n in range(17 * 30):
-            clock._now = lambda t=base + n / 30: t
-            clock.mark(7000 + n)
-        svc = make_service(tmp_path, [attempt()])
-        svc._frame_clock = clock
-        svc.pad_reader = reader
-        svc.map_aligner = lambda clip, frame_map, a: Alignment(
-            offset=-2, fit=0.6, margin=0.05, paired=700)
-        res = svc.view(42)
-        assert res["frame_map"][2] == 7000 - 1        # the ink anchor's -2 slots = -1 frame
-        sidecar = _json.loads(
-            (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
-        assert sidecar["frame_map_aligned"] is True
-        assert sidecar.get("frame_map_read") is not True
-        (svc.clips_dir / "clip_attempt_42.mp4").unlink()
-        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").unlink()
+# The footage aligner, the picture-run quantiser, the learned ink anchor,
+# the ledger mapper, the digit refit and the pad reader were pinned here --
+# six generations of DERIVING which game frame a picture shows, each with a
+# refusal path and a never-costs-the-clip guard. The capture layer is told
+# the frame, so all of it was deleted 2026-09-05 along with
+# `replay/{mapalign,timerread,frameclock}.py` and `memory/present.py`.
 
 
 class ExactLedger:
@@ -1051,29 +575,37 @@ class ExactLedger:
 
 
 def test_a_capture_layer_clip_takes_its_stamps_as_the_map_and_audits_the_pads(tmp_path):
-    """Item 95: every row says `exact`, so the map is the rows -- the
-    footage aligner and the timer join are never called, the pad reader only
-    audits, and the stamp's pad is checked against the input track."""
+    """Item 95: every row says `exact`, so the map IS the rows, and the
+    stamp's own pad is checked against the input track -- the clip's only
+    shipped check, and the number the timeline's chip draws. It reads the
+    pad the PLUGIN copied out of RDRAM beside the picture, so it involves
+    no pixels and cannot misread; the display reader it replaced scored
+    82-94% on clips the oracle certified perfect (2026-09-05)."""
     import json as _json
 
+    class PaddedFeedLedger(FeedExactLedger):
+        def __init__(self, count, pads):
+            super().__init__(count)
+            self.pads = pads
+
+        def rows_between(self, t0, t1):
+            rows = super().rows_between(t0, t1)
+            for row in rows:
+                row["pad"] = self.pads.get(row["frame"], [0, 0, 0])
+            return rows
+
     svc = make_service(tmp_path, [attempt()])
-    svc.recorder.ledger = ExactLedger(pads={100: [5, -9, 0x8000], 101: [5, -9, 0x8000],
-                                            102: [0, 0, 0]})
-    svc.ledger_mapper = lambda clip, rows, *a, **k: [row["frame"] for row in rows] + [102]
-    svc.map_aligner = lambda *a, **k: (_ for _ in ()).throw(AssertionError("aligner ran"))
-    svc.timer_reader = lambda *a, **k: (_ for _ in ()).throw(AssertionError("timer ran"))
-    audits = []
-    svc.pad_reader = lambda clip, frame_map, attempt, **k: audits.append(k) or None
-    svc.track_pads = lambda attempt: {100: (5, -9, 0x8000), 101: (5, -9, 0x8000),
-                                      102: (3, 0, 0)}
+    svc.extractor = FeedExtractor(count=3)
+    svc.recorder.ledger = PaddedFeedLedger(
+        count=3, pads={100: [5, -9, 0x8000], 101: [5, -9, 0x8000], 102: [0, 0, 0]})
+    # The track disagrees with the stamp on frame 102 and nowhere else.
+    svc.track_pads = lambda attempt: {99: (5, -9, 0x8000), 100: (5, -9, 0x8000),
+                                      101: (5, -9, 0x8000), 102: (3, 0, 0)}
     res = svc.view(42)
-    assert res["frame_map"] == [100, 101, 102, 102]
     assert res["frame_map_source"] == "plugin"
-    assert res["frame_map_inferred"] is False
     assert res["pad_stamp_agreement"]["pictures"] == 3
     assert res["pad_stamp_agreement"]["agree"] == 2
     assert res["pad_stamp_agreement"]["disagreements"] == [[2, 102, [3, 0, 0], [0, 0, 0]]]
-    assert len(audits) == 1                  # the reader ran once, as an auditor
     sidecar = _json.loads(
         (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
     assert sidecar["frame_map_source"] == "plugin"
@@ -1118,9 +650,6 @@ def test_a_plugin_clips_map_is_its_stamps_less_the_layers_own_lag_and_carries_th
     svc = make_service(tmp_path, [attempt()])
     svc.extractor = FeedExtractor(count=120)
     svc.recorder.ledger = FeedExactLedger(count=120, inexact_at=7)
-    svc.map_aligner = lambda *a, **k: (_ for _ in ()).throw(AssertionError("aligner ran"))
-    svc.timer_reader = lambda *a, **k: (_ for _ in ()).throw(AssertionError("timer ran"))
-    svc.pad_reader = lambda clip, frame_map, attempt, **k: None
     svc.track_pads = lambda attempt: {}
     res = svc.view(42)
     assert res["frame_map_source"] == "plugin"
@@ -1135,24 +664,29 @@ def test_a_plugin_clips_map_is_its_stamps_less_the_layers_own_lag_and_carries_th
     assert sidecar["plugin_inexact_rows"] == 1 and sidecar["picture_igt"][8] == 47
 
 
-def test_a_clip_with_one_inexact_row_takes_the_old_path(tmp_path):
+def test_a_clip_whose_rows_are_not_all_stamped_gets_no_map(tmp_path):
+    """There is no second path to fall back to: rows the plugin did not
+    stamp cannot name a frame, so the map is dropped rather than derived."""
     svc = make_service(tmp_path, [attempt()])
-    svc.recorder.ledger = FakeLedger()          # no `exact` on any row
-    svc.ledger_mapper = lambda clip, rows, *a, **k: [100, 101, 102, 102]
-    aligned = []
-    svc.map_aligner = lambda *a, **k: aligned.append(a) or None
+    svc.recorder.ledger = FeedExactLedger(count=40)
+    svc.recorder.ledger.__class__ = type(
+        "Unstamped", (FeedExactLedger,),
+        {"rows_between": lambda self, t0, t1: [
+            {"ts": t0 + 1.5 + i / 30, "frame": 100 + i} for i in range(40)]})
+    svc.extractor = FeedExtractor(count=40)
     res = svc.view(42)
-    assert res["frame_map_source"] == "ledger" and aligned
+    assert res["frame_map"] is None and res["frame_map_source"] is None
 
 
 def test_a_few_inexact_rows_keep_the_plugin_map_but_say_so(tmp_path):
     """Review finding 9: a present that saw two display lists is marked
     inexact; one such row in a hundred keeps the rows as the map and the
     sidecar says the map is inferred there. Many such rows do not."""
-    class MostlyExact(ExactLedger):
+    class MostlyExactFeed(FeedExactLedger):
         def __init__(self, count, inexact_every):
             super().__init__(count)
             self.inexact_every = inexact_every
+
         def rows_between(self, t0, t1):
             rows = super().rows_between(t0, t1)
             for index, row in enumerate(rows):
@@ -1161,15 +695,17 @@ def test_a_few_inexact_rows_keep_the_plugin_map_but_say_so(tmp_path):
             return rows
 
     svc = make_service(tmp_path, [attempt()])
-    svc.recorder.ledger = MostlyExact(count=200, inexact_every=200)   # 1 of 200
-    svc.ledger_mapper = lambda clip, rows, *a, **k: [row["frame"] for row in rows]
-    svc.map_aligner = lambda *a, **k: (_ for _ in ()).throw(AssertionError("aligner ran"))
+    svc.extractor = FeedExtractor(count=200)
+    svc.recorder.ledger = MostlyExactFeed(count=200, inexact_every=200)
+    svc.track_pads = lambda attempt: {}
     res = svc.view(42)
-    assert res["frame_map_source"] == "plugin" and res["frame_map_inferred"] is True
+    assert res["frame_map_source"] == "plugin"
+    assert res["plugin_inexact_rows"] == 1
+    # 20 of 200 inexact is past PLUGIN_EXACT_SHARE: there is nothing else to
+    # fall back to, so the clip carries no map and says so.
     svc = make_service(tmp_path / "many", [attempt()])
-    svc.recorder.ledger = MostlyExact(count=200, inexact_every=10)    # 20 of 200
-    svc.ledger_mapper = lambda clip, rows, *a, **k: [row["frame"] for row in rows]
-    aligned = []
-    svc.map_aligner = lambda *a, **k: aligned.append(1) or None
+    svc.extractor = FeedExtractor(count=200)
+    svc.recorder.ledger = MostlyExactFeed(count=200, inexact_every=10)
+    svc.track_pads = lambda attempt: {}
     res = svc.view(42)
-    assert res["frame_map_source"] != "plugin" and aligned
+    assert res["frame_map"] is None and res["frame_map_source"] is None

@@ -580,31 +580,20 @@ you can watch; with no clip there is no lead-in.
 ### Frame map
 
 The list a clip carries naming which [[frame]] of the game each picture of
-that clip shows. The trainer stamps the wall time of every [[frame]] as you
-play, watches the [[present counter]] whenever it holds one, and writes the
-map when it cuts a clip, so a [[frame]] the emulator held on screen twice
-maps twice and one it skipped never maps -- the duplicates and skips a
-single offset cannot describe. Each map names what built it: the
-[[picture ledger]] first (capture's own record of each picture), then the
-timing series -- presents (the screen's own updates), the tagged capture
-feed, the [[frame]]-edge stamps. **Then the [[pad reader]] pins that answer to the clip
-itself**: with the game's own input display on, every picture shows the
-pad the game drew into it, the reader reads it glyph by glyph, and the
-map moves onto what it read, picture by picture -- so the map is right
-wherever the reader can check the display, and a clip whose display it
-cannot read keeps the answer the clocks gave, and says so. A clip cut from
-the [[picture feed]] carries a map the trainer reads off the [[feed log]]
-instead: picture k IS a row, so no matching of picture stretches and no
-quantising happens, and the [[pad reader]] audits it. A clip recorded
-through the [[capture layer]] carries the plugin's own stamps as its map:
-nothing aligns, joins or infers, and the [[oracle reader]] can certify it
-picture by picture. The [[input timeline]]
-and every [[overlay layer]] read the clip through its map; a clip cut
-before maps existed falls back to a fixed offset.
+that clip shows. The [[capture layer]] stamps every picture with the
+[[frame]] the game was drawing when it made that picture, the [[feed log]]
+says which stamped picture each encoded picture is, and the map is those
+stamps -- so a [[frame]] the emulator held on screen twice maps twice and
+one it skipped never maps, which no single offset can describe. Nothing
+aligns, joins or infers: the [[oracle reader]] certifies the result picture
+by picture, and a clip whose pictures carry no stamp gets NO map and says
+so on the [[input timeline]] rather than showing a guess. The
+[[input timeline]] and every [[overlay layer]] read the clip through its
+map.
 
-- **Lives** -- the frame clock (`src/sm64_events/replay/frameclock.py`)
-  records the stamps; the map rides the clip's own metadata
-  (`src/sm64_events/replay/service.py`)
+- **Lives** -- the clip's own metadata, written at extraction
+  (`src/sm64_events/replay/service.py`) from the [[feed log]] join
+  (`src/sm64_events/replay/feedmap.py`)
 - **Not** -- the [[input track]]'s own axis. The track says what you DID on
   each [[frame]]; the map says which [[frame]] the footage SHOWS.
 
@@ -667,24 +656,6 @@ the footage. Registering one more per-picture fact takes one line.
   reads a second; the ledger records what the screen SHOWED, one row per
   picture.
 
-### Present counter
-
-The count the emulator's video plugin keeps of pictures it has handed to
-the screen. It lives in the emulator program's own working memory rather
-than in the game's, lands at a different address every time the emulator
-starts, and the trainer hunts it down each time by how it behaves: one tick
-per [[frame]], drifting against the game's clock in streaks, exactly the
-way the footage drifts. Watching it tells the [[frame map]] when the screen ACTUALLY
-changed instead of guessing a fixed delay -- the drift lands between the
-ticks, where it belongs, rather than inside the map's answers.
-
-- **Lives** -- the hunter (`src/sm64_events/memory/present.py`); the
-  [[poller]] watches the found counter and the frame clock
-  (`src/sm64_events/replay/frameclock.py`) records its ticks
-- **Not** -- a [[memory layout]] row: those name fixed addresses inside the
-  game's memory, and this counter has no fixed address and sits outside it.
-  Reading it stays read-only, like every other read.
-
 ### Clip start
 
 The time of a clip's first picture, in the clip's own clock. A cut
@@ -707,55 +678,45 @@ is the first of them.
 
 ### Pad reader
 
-The part of extraction that reads Usamune's input display out of every
-picture of a clip and pins the [[frame map]] to what it read. The game
-paints the pad into each picture as six glyph cells -- a direction
-letter and up to two digits on the up-down line, the same on the
-left-right line -- and paints each glyph identically every time, so a
-cell either matches one known glyph by a clear margin or the reader
-calls it unknown, never a guess. The [[input track]] knows the pad on
-every [[frame]]; the reader lines the track up with what the pictures
-show, one [[frame]] per picture, and the [[input timeline]] then shows
-on each picture exactly the pad the screen shows. Its verdict rides the
-clip's own metadata: how many pictures the display confirmed and every
-one it contradicts, so "in sync" is a number per clip rather than a
-feeling. A clip recorded with the display off refuses, and the clocks'
-map stands.
+The reader that reads Usamune's input display out of every picture of a
+clip. The game paints the pad into each picture as six glyph cells -- a
+direction letter and up to two digits on the up-down line, the same on the
+left-right line -- and paints each glyph identically every time, so a cell
+either matches one known glyph by a clear margin or the reader calls it
+unknown, never a guess.
 
-- **Lives** -- `src/sm64_events/replay/padread.py`; extraction runs it
-  (`src/sm64_events/replay/service.py`) and `tools/score_pad_read.py`
-  prints its verdict for one clip
-- **Not** -- the [[picture ledger]] or the [[present counter]]: those
-  infer which [[frame]] a picture shows from WHEN it appeared; the reader
-  reads it off WHAT the picture shows.
+It was part of extraction until 2026-09-05, pinning the [[frame map]] to
+what it read. The [[capture layer]] made that unnecessary and the reader's
+own accuracy made it unwanted: it read 82% to 94% of the pictures of three
+clips the [[oracle reader]] certified exact, every sampled disagreement a
+digit confusion off compressed video. What checks a clip now is the
+[[pad stamp audit]], which reads no pixels at all. The reader stays as an
+offline instrument, and the [[oracle reader]] borrows its glyph machinery.
 
-### Timer reader
+- **Lives** -- `src/sm64_events/replay/padread.py`;
+  `tools/score_pad_read.py` prints its verdict for one clip and
+  `tools/score_picture_offset.py` sweeps which picture shows which pad
+- **Not** -- the [[pad stamp audit]]: that compares two numbers the trainer
+  already holds, where this one recognises glyphs in a picture.
 
-The part of extraction that names the [[frame]] a picture shows by joining
-two readings of one clock: the time Usamune printed into the picture, and
-the pair the [[picture ledger]] stamped on that same picture at capture --
-the game's own [[frame]] counter beside Usamune's running counter, read in
-one coherent poll. Usamune prints its counter times ten thirds, floored,
-in centiseconds, which inverts exactly, so the gap between the counter in
-RAM and the time on screen is how many [[frame]]s the picture trails
-capture, and the [[frame]] counter minus that gap is the picture's
-[[frame]]. The reader measures that gap per picture and assumes nothing
-about it: it read 1 on every picture of two clips and 0 on a third from
-the same sitting, and the [[pad reader]]'s audit confirmed each. Where
-the clock is frozen (a pause, the dance after a grab), unreadable, or
-unpaired, the
-[[frame map]] keeps the [[feed log]]'s bookkeeping shifted to the nearest
-picture the clock did name, and the clip says so (`bridged`). A clip whose
-screen and RAM stop sharing a counter refuses the timer path instead of
-bridging a disproved premise; the [[pad reader]] then audits whatever map
-ships but can no longer move it.
+### Pad stamp audit
 
-- **Lives** -- `src/sm64_events/replay/timerread.py`; the recorder stamps
-  the pair (`src/sm64_events/replay/recorder.py`), extraction performs the join
-  (`src/sm64_events/replay/service.py`), and `tools/remap_clip.py` repeats
-  it on a clip already cut
-- **Not** -- the [[pad reader]]: that reads the STICK's digits, which repeat
-  on half the pictures of a clip; the clock never repeats while it ticks.
+The check a clip carries saying whether the [[input timeline]] holds the
+same pad the game held. The [[capture layer]] copies the pad out of the
+game's memory beside every picture it stamps, so the trainer ends up with
+two independent records of one [[frame]]'s pad -- the plugin's copy and the
+[[input track]]'s -- and the audit compares them picture by picture. It
+reads no pixels, cannot misread, and costs nothing, which is why it
+replaced the [[pad reader]]'s verdict on the [[input timeline]]'s own
+header (2026-09-05: 1,482 of 1,482 pictures across his three certified
+clips).
+
+- **Lives** -- `src/sm64_events/replay/service.py`; the
+  [[input timeline]] draws it as a chip that opens the list of
+  disagreeing pictures
+- **Not** -- the [[oracle reader]]: that certifies WHICH [[frame]] a
+  picture shows, where this one certifies the PAD on the [[frame]] the map
+  already names.
 
 ### Capture layer
 
@@ -772,7 +733,7 @@ picture arrives, in whichever order you opened the game and the trainer;
 a layer Project64 loaded that cannot read leaves the [[recorder]] on the
 desktop grab and says why on the [[setup screen]]. A clip made of these pictures
 carries no inference: each [[picture ledger]] row says `exact`, the
-[[frame map]] is the rows, and the [[timer reader]] and the [[pad reader]]
+[[frame map]] is the rows, and the [[pad reader]]
 only audit. The trainer installs it under your explicit consent on the
 [[setup screen]] (the file into Project64's Plugin folder, its `Graphics Dll`
 setting, a small ini naming your plugin) and undoes it from the same screen;
@@ -811,7 +772,7 @@ address to play.
 
 - **Lives** -- `src/sm64_events/replay/oracleread.py`; `tools/score_oracle.py`
   prints the verdict for a clip
-- **Not** -- the [[timer reader]] or the [[pad reader]]: those read what
+- **Not** -- the [[pad reader]]: that reads what
   the game always draws; this reads a display only a developer switches on.
 
 ### Setup screen

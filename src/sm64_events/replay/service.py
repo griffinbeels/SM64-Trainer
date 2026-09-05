@@ -18,7 +18,6 @@ from pathlib import Path
 
 from sm64_events.core.timefmt import GAME_FPS, format_igt
 from sm64_events.memory.addresses import course_name, star_name
-from sm64_events.replay import mapalign, padread
 from sm64_events.replay.feedmap import feed_map
 from sm64_events.replay.extract import video_start_of
 from sm64_events.replay.config import (ReplayConfig, save_settings,
@@ -82,13 +81,6 @@ DISPLAY_LAG_FRAMES = 1
 #: both channels under this constant (7116: 177 of 177 icons; 7049: 227 of
 #: 227). A picture's pad, IGT and Mario are therefore the PREVIOUS row's.
 PLUGIN_PICTURE_LAG = 1
-# How much of a clip the feed log must account for before its bookkeeping is
-# trusted over the pad reader's per-slot alignment (item 89). Measured on
-# three clips: 100% and 92% on the two the reader only had to confirm, 73% on
-# the one where it genuinely repaired capture damage. The gap between 73 and
-# 92 is empty, so anything in 0.80-0.90 separates them; provisional on three
-# clips from one session and worth re-measuring as they accumulate.
-FEED_COVERAGE_MIN = 0.85
 
 
 def _parse_utc(s: str) -> datetime:
@@ -153,71 +145,20 @@ class ReplayService:
     lookup just sees the filesystem truth.
     """
 
-    #: Measures a freshly cut clip's map against the game's OWN display and
-    #: returns a `replay/mapalign.py::Alignment` (or None for no verdict).
-    #: Injected by the composition root because it needs the input track,
-    #: which this zone must not reach into. None = clips keep the map the
-    #: timing constants produced, which is what every clip did until
-    #: 2026-08-28 and what four rounds of live checks found wrong.
-    map_aligner = None
-
-    #: READS Usamune's input display out of the clip, glyph cell by glyph
-    #: cell, and pins the map to what it read (`replay/padread.py::
-    #: read_clip`), signature (clip, frame_map, attempt) -> PadReading |
-    #: None. Injected like the aligner. When it answers, the ink anchor
-    #: and the digit refit below are skipped -- the display has been read
-    #: rather than weighed -- and the sidecar carries its verdict: how
-    #: many slots the display confirmed and every one it contradicts.
-    pad_reader = None
-
-    #: Reads the on-screen CLOCK and joins it to the coherent
-    #: (gGlobalTimer, usamune_overall) stamp carried by the matched picture
-    #: ledger row.  Unlike pad_reader this is a frame-identity source, not an
-    #: alignment search.  Clips captured before the stamp simply refuse and
-    #: keep the existing path.
-    timer_reader = None
-
     #: The input track's pads for an attempt, `{frame: (stick_x, stick_y,
     #: buttons)}`, for the capture-layer audit (`_audit_pad_stamps`): the
     #: pad the plugin copied for a picture must equal the track's pad at
-    #: that frame. Injected from main.py, which owns the track.
+    #: that frame. Injected from main.py, which owns the track. This is the
+    #: ONE injected hook left; there were seven, one per generation of the
+    #: derived frame map, and the capture layer retired all of them.
     track_pads = None
 
-    #: Holds the map to ONE answer per distinct picture in the footage
-    #: (`replay/mapalign.py::quantised`). Injected like the aligner, and
-    #: independent of it: a clip whose display cannot be read still gets
-    #: this, because it needs nothing but the pictures.
-    map_quantiser = None
-
-    #: `mapalign.AnchorStats` (or None): the per-clip measured anchors,
-    #: remembered so a clip whose digits cannot be read inherits the median
-    #: of the clips whose digits could. Injected by the composition root
-    #: with a real path under data/.
-    anchor_stats = None
-
-    #: Refits a clip's map picture-by-picture against its own digits
-    #: (`replay/mapalign.py::digit_fitted`), signature
-    #: (clip, frame_map, attempt) -> list | None. Injected like the aligner;
-    #: None or a refusal leaves the anchored map exactly as it was.
-    map_digit_fit = None
-
-    #: Builds a frame map from the picture ledger's rows and the clip's own
-    #: picture runs (`replay/mapalign.py::ledger_map`), signature
-    #: (clip, rows, start_ts, duration_s, fps) -> list | None. Injected like
-    #: the quantiser (it needs ffmpeg to decode the runs). None, or a ledger
-    #: with no rows: the frame-clock series answer as before.
-    ledger_mapper = None
-
     def __init__(self, cfg: ReplayConfig, recorder, extractor, tracker,
-                 revealer=None, frame_clock=None):
+                 revealer=None):
         self.cfg = cfg
         self.recorder = recorder
         self.extractor = extractor
         self.tracker = tracker
-        # WHEN each game frame happened (replay/frameclock.py), fed by the
-        # poller. At extraction it becomes the sidecar's frame_map; None
-        # (older wiring, tests) just means clips carry no map.
-        self._frame_clock = frame_clock
         self._revealer = revealer or _open_explorer_select
         # One cut per attempt at a time. Two `view()` calls for the same
         # attempt used to run two ffmpeg processes over one output path --
@@ -397,53 +338,33 @@ class ReplayService:
             if res.start_utc is not None:
                 m["start_utc"] = res.start_utc.isoformat()
                 if res.duration_s:
-                    # WHICH game frame each video frame shows (round 32 item
-                    # 17): built here, at the one moment the clip's span and
-                    # capture's memory overlap, and stored in the sidecar so
-                    # a saved copy keeps it after capture forgets. The
-                    # picture ledger answers first (item 40: capture's own
-                    # per-picture record); the frame-clock series are the
-                    # fallback for clips from before it, and the display lag
-                    # rides INSIDE the map either way; anchor_offset_s stays
-                    # the fallback for a clip that has none.
+                    # WHICH game frame each video frame shows: ONE path,
+                    # and it is a read rather than a derivation. The
+                    # capture layer stamps every picture with the frame
+                    # the game submitted it as, read inside Project64;
+                    # the feed log says which stamped row each encoded
+                    # frame is; the map is those rows. A clip whose rows
+                    # are not stamped (the capture layer was not running)
+                    # gets NO map, and the panel says "Frame-exact capture
+                    # is off" rather than showing a guess -- his standard
+                    # for this surface: "We need 100% accuracy for this.
+                    # If it's wrong even once, then it can't be relied on
+                    # as a tool" (2026-08-23). Four generations of derived
+                    # map lived here (frame-clock edges, the feed series,
+                    # a pixel read, PJ64's present counter) plus a footage
+                    # aligner, a clock join and a digit refit; all of them
+                    # existed to recover an identity capture used to throw
+                    # away, and the layer keeps it. Deleted 2026-09-05.
                     if res.frame_times is not None:
-                        # One frame per picture: the feed log SAYS which
-                        # row each frame is; nothing is inferred from
-                        # runs, and the CFR series cannot describe it.
                         self._map_from_feeds(m, res)
-                        if m.get("frame_map") is None:
-                            # A loaded machine drops pictures at the sink's
-                            # queue and writes the rest late, so the log can
-                            # stop covering the clip: his Haunted Books run
-                            # captured 680 pictures, encoded 387, and matched
-                            # 178 -- and shipped with NO map, which the panel
-                            # answers by falling back to plain arithmetic
-                            # ("lots of incorrect frames", 2026-09-02). The
-                            # ledger path matches rows to the clip's own
-                            # picture runs and does not care how many frames
-                            # went missing, so it is the fallback, not none.
-                            log.warning("feed log did not cover the clip; "
-                                        "falling back to the picture ledger")
-                            self._map_from_ledger(m, clip, res)
-                    else:
-                        self._map_from_ledger(m, clip, res)
-                    if (m.get("frame_map") is None
-                            and res.frame_times is None
-                            and self._frame_clock is not None):
-                        mapped = self._frame_clock.frame_map(
-                            res.start_utc, res.duration_s, self.cfg.fps,
-                            DISPLAY_LAG_FRAMES / GAME_FPS)
-                        if mapped is not None:
-                            # Which series answered rides beside the map so
-                            # the pixel scorer's verdict names what it
-                            # scored ("ledger" = the picture ledger,
-                            # "presents" = v4, "feeds" = v2, "edges" = v1).
-                            m["frame_map"], m["frame_map_source"] = mapped
                     if m.get("frame_map") is not None:
                         if self._rows_are_exact(m):
-                            self._take_the_stamps(m, clip, a)
+                            self._take_the_stamps(m, a)
                         else:
-                            self._align_to_the_footage(m, clip, a)
+                            log.warning("clip %s has a map but unstamped "
+                                        "rows; dropping it", name)
+                            m["frame_map"] = None
+                            m["frame_map_source"] = None
             meta.write_text(json.dumps(m))
             url, source = f"/api/replay/clips/{name}", "buffer"
         # fps = encoded rate (CFR); game_fps = SM64 logic rate — the
@@ -463,16 +384,9 @@ class ReplayService:
                 # A capture-layer clip: the game's own timer per video
                 # slot, from the stamps (None where a slot has none).
                 "picture_igt": m.get("picture_igt"),
-                # The pad reader's verdict (sure / agree / nowhere /
-                # disagreements): how many pictures the game's own display
-                # confirmed the map on. None for a clip it could not read.
-                "pad_reading": m.get("pad_reading"),
-                # The CLOCK/RAM join: `mechanical` slots were named directly;
-                # `bridged` slots had no usable clock pair and retain shifted
-                # bookkeeping. None for clips captured before the IGT stamp.
-                "timer_reading": m.get("timer_reading"),
-                # A capture-layer clip's own check: the pad the plugin copied
-                # for each picture against the input track at that frame.
+                # THE CLIP'S CHECK: the pad the plugin copied for each
+                # picture against the input track at that frame -- what
+                # the timeline's screen-check chip reads.
                 "pad_stamp_agreement": m.get("pad_stamp_agreement"),
                 "video_start_s": m.get("video_start_s", 0.0),
                 # Per-frame timestamps of a picture-feed clip (VFR); None
@@ -480,20 +394,12 @@ class ReplayService:
                 # video_start_s.
                 "frame_times": m.get("frame_times"),
                 "encode": m.get("encode", "cfr"),
+                # How much of the clip the feed log accounted for, and how
+                # many rows the plugin could not call exact -- the capture's
+                # own health, so a degraded run reads as degraded rather
+                # than as a clean map.
                 "feed_match": m.get("feed_match"),
-                # WHICH map shipped and whether the capture was healthy
-                # (item 89): "feed_log+offset" is the recorder's own
-                # bookkeeping moved by one whole-clip integer, which is what a
-                # well-covered clip gets; "reader_aligned" means the feed log
-                # did not cover the clip and the display had to repair it
-                # per slot, so the timeline says so rather than looking clean.
-                "frame_map_mode": m.get("frame_map_mode"),
-                "frame_map_degraded": m.get("frame_map_degraded", False),
-                # Distinct from capture degradation: True means the CLOCK
-                # named part of the map mechanically and recorder bookkeeping
-                # bridged slots where the clock was frozen/unreadable.
-                "frame_map_inferred": m.get("frame_map_inferred", False),
-                "feed_coverage": m.get("feed_coverage"),
+                "plugin_inexact_rows": m.get("plugin_inexact_rows"),
                 "saved_path": str(saved) if saved is not None else None}
 
     # A frame and a half of slack: the clip's own first-frame stamp and the
@@ -532,44 +438,6 @@ class ReplayService:
                            .total_seconds() > self._COVERAGE_SLACK_S),
         }
 
-    def _map_from_ledger(self, meta: dict, clip: Path, res) -> None:
-        """The frame map from capture's own per-picture record (item 40).
-
-        His spec: "when we build the video, at every single frame of
-        gameplay, we have access to all the memory addresses and data
-        in-game that would allow us to embed each frame with extra
-        information that we can use to do any type of future analysis
-        with." The recorder's picture ledger stamped every distinct
-        picture at capture; here the clip's slice of those rows becomes
-        the sidecar's `picture_ledger` (the durable per-frame record,
-        extra stamps included) and, matched to the clip's picture runs,
-        the frame map itself -- already one answer per picture, so the
-        quantiser has nothing left to move. Any failure leaves the meta
-        untouched and the series path answers as before."""
-        ledger = getattr(self.recorder, "ledger", None)
-        if ledger is None or self.ledger_mapper is None:
-            return
-        start = res.start_utc.timestamp()
-        try:
-            rows = ledger.rows_between(start - 0.5,
-                                       start + res.duration_s + 0.5)
-            if not rows:
-                return
-            built = self.ledger_mapper(clip, rows, start, res.duration_s,
-                                       self.cfg.fps,
-                                       frame_times=res.frame_times)
-        except Exception:
-            log.exception("picture-ledger mapping failed; the frame-clock "
-                          "series answer instead")
-            return
-        meta["picture_ledger"] = [
-            {**row, "ts": round(row["ts"] - start, 4)} for row in rows]
-        if built is None:
-            return
-        meta["frame_map"] = built
-        meta["frame_map_source"] = "ledger"
-        meta["frame_map_quantised"] = True
-
     def _map_from_feeds(self, meta: dict, res) -> None:
         """The frame map READ off the picture feed's log (item 38).
 
@@ -590,26 +458,13 @@ class ReplayService:
             feeds = ledger.feeds_between(start - 1.0, end + 1.0)
             if not rows or not feeds:
                 return
-            # A capture-layer clip's rows: the picture shows the pad of the
-            # stamp before its own (PLUGIN_PICTURE_LAG, measured), and an
-            # inexact row (two lists between presents) claims nothing. The
-            # desktop grab's lag is a different fact about a different
-            # camera and never applies here.
-            plugin_rows = bool(rows) and all("exact" in row for row in rows)
+            # The picture shows the pad of the stamp BEFORE its own
+            # (PLUGIN_PICTURE_LAG, measured); an inexact row (two display
+            # lists between presents) claims nothing.
             built, repeats, stats = feed_map(
                 res.frame_times, start, rows, feeds,
-                0 if plugin_rows else DISPLAY_LAG_FRAMES,
-                row_value=((lambda row: (row["frame"] - PLUGIN_PICTURE_LAG
-                                         if row.get("exact") else None))
-                           if plugin_rows else None))
-            # The SAME feed-to-row join, projected onto the pair sampled
-            # inside InputSampler's counter sandwich.
-            clock_pairs, _clock_repeats, _clock_stats = feed_map(
-                res.frame_times, start, rows, feeds,
-                row_value=lambda row: (
-                    (row["frame"], row["igt_overall"])
-                    if row.get("frame") is not None
-                    and row.get("igt_overall") is not None else None))
+                lambda row: (row["frame"] - PLUGIN_PICTURE_LAG
+                             if row.get("exact") else None))
         except Exception:
             log.exception("feed-log mapping failed; the clip carries no map")
             return
@@ -622,49 +477,7 @@ class ReplayService:
         meta["frame_map"] = built
         meta["repeats"] = repeats
         meta["frame_map_source"] = "feed_log"
-        # Kept only until the timer reader runs; the durable evidence is
-        # already in picture_ledger.
-        if clock_pairs is not None:
-            meta["_clock_pairs"] = clock_pairs
-        # NOT marked quantised: one frame is one CAPTURED picture, but the
-        # emulator re-presents a render when the game lags, and those two
-        # grabs land as two frames with advancing RAM stamps -- the same
-        # picture twice (115 of 775 on his pyramid clip, 2026-09-02). The
-        # quantiser's pixel runs hold both to one answer, so a display-off
-        # clip is honest too, and the reader's own pixel flag does the rest.
         log.info("frame map read off the feed log: %s", stats)
-
-    def _hold_one_answer_per_picture(self, meta: dict, clip: Path) -> None:
-        """One timeline frame per PICTURE, however many video frames it
-        occupies.
-
-        A 30 fps game captured at 60 gives two video frames per picture,
-        and the capture's jitter makes it one or three often enough to
-        see -- measured on his clip 4374: 397 runs of two against 11 of
-        one and 13 longer. A map built from CLOCKS crosses those runs
-        wherever its boundaries fall half a frame off the pictures', so
-        stepping forward showed the same picture with a different pad
-        beside it. His ruling: "if there's duplicated frames, input
-        timeline should be identical for the sequential duplicated
-        frames." The runs supply the boundaries; the map still supplies
-        the advance, because a count-based map would drift by however
-        many game frames the capture missed.
-        """
-        if self.map_quantiser is None or meta.get("frame_map_quantised"):
-            return                     # a ledger-built map already holds it
-        try:
-            held = self.map_quantiser(clip, meta["frame_map"])
-        except Exception:
-            log.exception("picture-run quantising failed; map left as built")
-            return
-        if held is None:
-            return
-        moved = sum(1 for was, now in zip(meta["frame_map"], held)
-                    if was != now)
-        meta["frame_map"] = held
-        meta["frame_map_quantised"] = True
-        log.info("frame map held to one answer per picture: %d slots moved",
-                 moved)
 
     #: the share of a capture-layer clip's rows that must be exact for the
     #: rows to be the map; a row whose present saw zero or two display lists
@@ -684,24 +497,18 @@ class ReplayService:
         exact = sum(1 for row in stamped if row["exact"])
         return exact >= cls.PLUGIN_EXACT_SHARE * len(rows)
 
-    def _take_the_stamps(self, meta: dict, clip: Path, attempt) -> None:
+    def _take_the_stamps(self, meta: dict, attempt) -> None:
         """The map IS the rows: nothing is aligned, joined or read into
-        identity. The footage aligner, the timer join and the pad reader's
-        alignment stand down; the pad reader still AUDITS (his 100% test,
-        3 s a clip) and the stamp's own pad is checked against the input
+        identity. The stamp's own pad is then checked against the input
         track -- a per-picture agreement with no pixels in it."""
         rows = meta.get("picture_ledger") or []
         inexact = sum(1 for row in rows if not row.get("exact"))
-        meta["frame_map_base_source"] = meta.get("frame_map_source")
         meta["frame_map_source"] = "plugin"
-        meta["frame_map_mode"] = "plugin"
-        meta["frame_map_inferred"] = inexact > 0
         meta["plugin_inexact_rows"] = inexact
         # The game's own timer in each picture: the IGT the plugin copied at
         # the list that drew it. The panel shows THIS as the frame's time,
         # so it reads what the screen printed rather than counting from the
         # track's first frame (the two clocks start a frame or two apart).
-        meta.pop("_clock_pairs", None)
         # ...read off the row whose frame the map names for the slot, so
         # the clock and the pad the panel shows are the same picture's.
         igt_by_frame = {row["frame"]: row["igt_overall"] for row in rows
@@ -709,13 +516,23 @@ class ReplayService:
         frame_map = meta.get("frame_map") or []
         igts = [igt_by_frame.get(frame) if frame is not None else None for frame in frame_map]
         meta["picture_igt"] = igts if any(igt is not None for igt in igts) else None
-        self._read_the_display(meta, clip, attempt, audit_only=True)
         self._audit_pad_stamps(meta, attempt)
 
     def _audit_pad_stamps(self, meta: dict, attempt) -> None:
-        """Every exact row's copied pad against the input track's pad at
-        that frame: `pad_stamp_agreement` = {pictures, agree, disagreements}.
-        Absent when no track lookup is wired or the track is empty."""
+        """THE CLIP'S OWN CHECK, and the only one that ships: every exact
+        row's copied pad against the input track's pad at that frame, as
+        `pad_stamp_agreement` = {pictures, agree, disagreements}.
+
+        It replaced reading Usamune's input display out of the pixels
+        (`replay/padread.py`, unwired 2026-09-05). Two facts decided it:
+        the reader answers a question the stamps already answer exactly --
+        does the timeline hold the pad the game held on this frame -- and
+        it answered it badly, 82-94% on his three certified clips with
+        every sampled disagreement a digit confusion off compressed video
+        (L13 for L12, U83 for U82, a dropped direction letter). The stamp
+        audit read 1,482 of 1,482 pictures on those same clips, costs no
+        decode, and cannot misread. Absent when no track lookup is wired
+        or the track is empty."""
         if self.track_pads is None:
             return
         try:
@@ -743,226 +560,6 @@ class ReplayService:
         if pictures and agree != pictures:
             log.warning("pad stamps disagree with the track on %d of %d pictures",
                         pictures - agree, pictures)
-
-    def _align_to_the_footage(self, meta: dict, clip: Path, attempt) -> None:
-        """Shift the fresh map onto what the clip's own pixels show.
-
-        The timing constants upstream estimate a journey (game logic ->
-        plugin present -> capture -> encoded slot) whose length is not
-        ours to know; the clip knows it, because Usamune draws the pad
-        into every frame. So this measures rather than assumes, and
-        records BOTH numbers in the sidecar -- the offset applied and the
-        strength of the evidence -- so a later verdict is answerable from
-        the file instead of by eye. No aligner, no display in the footage,
-        or no clear winner: the map stands as built and says so.
-        """
-        self._hold_one_answer_per_picture(meta, clip)
-        if self._read_the_timer(meta, clip, attempt):
-            # The timer owns identity; the pad reader is now only an auditor
-            # and can never move the map it is being asked to check.
-            self._read_the_display(meta, clip, attempt, audit_only=True)
-            meta.pop("frame_map_quantised", None)
-            self._hold_one_answer_per_picture(meta, clip)
-            meta.pop("_clock_pairs", None)
-            return
-        if self._read_the_display(meta, clip, attempt):
-            # THE PIXELS OWN THE BOUNDARIES, the reader owns the VALUES. The
-            # reader may still advance the map across a picture the emulator
-            # merely re-presented, and then stepping forward lands on the same
-            # image twice with a different pad beside it -- his standing rule:
-            # "when the user plays back their video, they NEVER see a duplicate
-            # frame" (2026-09-02). Re-holding the read map to the picture runs
-            # makes one answer per picture an invariant of what SHIPS, so the
-            # stepper (which walks to the next distinct map value) cannot land
-            # on a held picture at all.
-            meta.pop("frame_map_quantised", None)
-            self._hold_one_answer_per_picture(meta, clip)
-            meta.pop("_clock_pairs", None)
-            return
-        meta.pop("_clock_pairs", None)
-        if self.map_aligner is None:
-            return
-        try:
-            found = self.map_aligner(clip, meta["frame_map"], attempt)
-        except Exception:
-            log.exception("frame-map alignment failed; keeping the built map")
-            return
-        # The aligner may answer (global, windows): the pipeline lag drifts
-        # by whole frames WITHIN a clip (attempt 4518's three shelves), so
-        # each window of footage names its own offset where its digits can.
-        found, windows = (found if isinstance(found, tuple)
-                          else (found, []))
-        if found is None:
-            # Digits unreadable in THIS clip: inherit the anchor other clips
-            # measured (the stats store's median) rather than go uncorrected.
-            learned = (self.anchor_stats.fallback_offset()
-                       if self.anchor_stats is not None else None)
-            if learned:
-                meta["frame_map"] = mapalign.frame_corrected(
-                    meta["frame_map"], learned)
-                meta["frame_map_offset"] = learned
-                meta["frame_map_learned"] = True
-                log.info("frame map corrected by the LEARNED anchor: "
-                         "%+d slots (digits unreadable here)", learned)
-            meta["frame_map_aligned"] = False
-            return
-        # The correction is applied in the FRAME domain: an odd slot shift
-        # would split pictures that quantising just unified. With windows,
-        # each picture takes its nearest confident window's offset --
-        # piecewise, which is what a stepped lag needs; without, the global
-        # offset applies to everything as before.
-        if windows:
-            meta["frame_map"] = mapalign.window_corrected(meta["frame_map"],
-                                                          windows)
-            meta["frame_map_windows"] = [list(row) for row in windows]
-        else:
-            meta["frame_map"] = mapalign.frame_corrected(meta["frame_map"],
-                                                         found.offset)
-        meta["frame_map_aligned"] = True
-        meta["frame_map_offset"] = found.offset
-        meta["frame_map_fit"] = round(found.fit, 4)
-        self._refit_to_the_digits(meta, clip, attempt)
-        if self.anchor_stats is not None:
-            self.anchor_stats.record(getattr(attempt, "id", 0),
-                                     found.offset, found.fit)
-        log.info("frame map aligned to the footage: %+d slots "
-                 "(fit %.3f, margin %.3f, %d slots paired)",
-                 found.offset, found.fit, found.margin, found.paired)
-
-    def _read_the_timer(self, meta: dict, clip: Path, attempt) -> bool:
-        """Replace the map with the direct CLOCK/RAM join when it covers.
-
-        No controller data reaches this callback.  The old map participates
-        only after the join, as an explicitly counted bridge for unreadable,
-        frozen, or unpaired slots.
-        """
-        pairs = meta.get("_clock_pairs")
-        if self.timer_reader is None or pairs is None:
-            return False
-        try:
-            mapping = self.timer_reader(clip, meta["frame_map"], pairs)
-        except Exception:
-            log.exception("timer reader failed; keeping the prior map")
-            return False
-        if mapping is None:
-            return False
-        meta["frame_map_base_source"] = meta.get("frame_map_source")
-        meta["frame_map"] = list(mapping.frame_map)
-        meta["frame_map_source"] = "timer"
-        meta["frame_map_mode"] = ("timer+bridge" if mapping.bridged
-                                  else "timer")
-        meta["frame_map_inferred"] = mapping.bridged > 0
-        meta["timer_reading"] = mapping.as_dict()
-        log.info("frame map joined through the CLOCK: %d mechanical, %d "
-                 "bridged, %d rejected", mapping.mechanical,
-                 mapping.bridged, mapping.rejected)
-        return True
-
-    def _read_the_display(self, meta: dict, clip: Path, attempt,
-                          audit_only: bool = False) -> bool:
-        """Pin the map to the pad Usamune drew into every picture.
-
-        The pad reader (round 32, 2026-09-01) reads the display's six
-        glyph cells per video frame and aligns the track to them, so the
-        map is RIGHT wherever the display can be checked and no worse
-        than the clocks' answer where it cannot. True when it answered:
-        the map is replaced, and `pad_reading` in the sidecar says how
-        many slots the display confirmed, how many it contradicts, and
-        which. A refusal (display off, too little read) or any failure
-        leaves the built map for the ink anchor, as before.
-        """
-        if self.pad_reader is None:
-            return False
-        try:
-            # A picture-feed clip knows which frames are heartbeat repeats
-            # (the feed log said so); the reader takes them as its picture
-            # flags instead of guessing them from pixels. A CFR clip has
-            # none, and the hook keeps its three-argument shape for it.
-            repeats = meta.get("repeats")
-            reading = (self.pad_reader(clip, meta["frame_map"], attempt,
-                                       repeats=repeats)
-                       if repeats is not None
-                       else self.pad_reader(clip, meta["frame_map"], attempt))
-        except Exception:
-            log.exception("pad reader failed; keeping the built map")
-            return False
-        if reading is None:
-            meta["frame_map_read"] = False
-            return False
-        verdict = reading.verdict
-        if audit_only:
-            # PadReading.audit is scored against the map the caller handed
-            # in, before the reader aligns anything.  Older injected readers
-            # have no such field; their aligned verdict is still useful as a
-            # diagnostic but is never allowed to mutate timer identity.
-            verdict = getattr(reading, "audit", None) or verdict
-            meta["frame_map_read"] = True
-            meta["pad_reading"] = verdict.as_dict()
-            log.info("timer map audited by the pad display: %d of %d slots "
-                     "agree, %d contradicted", verdict.agree, verdict.sure,
-                     verdict.sure - verdict.agree)
-            return True
-        # THE READER IS AN AUDITOR ON A WELL-COVERED CLIP (item 89). A fresh
-        # review measured what its per-slot DP actually does: 50-77% of a
-        # clip's frames repeat their predecessor's pad, so the display cannot
-        # tell them apart, and 78-94% of the slots the DP MOVES sit between two
-        # such frames -- unfalsifiable moves, which is what one wrong button
-        # frame looks like (his Elevator Tour frame 13: R drawn where the
-        # screen showed Cdown, in a neutral stretch). On the two clips whose
-        # feed log covered them, the bookkeeping plus ONE flat integer matched
-        # the best per-window correction chosen with HINDSIGHT and came within
-        # 0.3 and 0.5 points of the DP. So the DP's freedom buys 2 slots of 676
-        # and costs run-to-run drift wherever the screen is silent.
-        #
-        # Coverage decides. Below the cutoff the DP genuinely earns its keep
-        # (on a 73%-covered clip: 85.6% -> 95.6%, where even a hindsight
-        # per-window corrector reached only 90.4%) -- but it is then patching
-        # capture damage, and the clip says so.
-        book = list(meta["frame_map"])          # what the feed log worked out
-        match = meta.get("feed_match") or {}
-        frames = match.get("frames") or 0
-        coverage = (match.get("matched", 0) / frames) if frames else 0.0
-        trusted = (coverage >= FEED_COVERAGE_MIN
-                   and verdict.offset_margin >= padread.OFFSET_MARGIN_MIN)
-        if trusted:
-            meta["frame_map"] = mapalign.frame_corrected(book, verdict.offset)
-            meta["frame_map_mode"] = "feed_log+offset"
-        else:
-            meta["frame_map"] = list(reading.frame_map)
-            meta["frame_map_mode"] = "reader_aligned"
-        meta["frame_map_degraded"] = not trusted
-        meta["feed_coverage"] = round(coverage, 4)
-        meta["frame_map_read"] = True
-        meta["pad_reading"] = verdict.as_dict()
-        log.info("frame map READ off the display: %d of %d slots confirmed "
-                 "(%.2f%%), %d contradicted, %d matched nothing nearby",
-                 verdict.agree, verdict.sure, 100 * verdict.agreement,
-                 verdict.sure - verdict.agree, verdict.nowhere)
-        return True
-
-    def _refit_to_the_digits(self, meta: dict, clip: Path, attempt) -> None:
-        """Give every picture its OWN frame (round 32 item 55).
-
-        The anchors above move the whole map, or a stretch of it, by one
-        number. What his BBH clip actually does is drift where the capture
-        dropped frames -- exact at 87-89, one to two early at 129-141 -- so
-        the last step assigns each picture the frame whose digits explain
-        its ink, monotonically. Any failure leaves the anchored map.
-        """
-        if self.map_digit_fit is None:
-            return
-        try:
-            fitted = self.map_digit_fit(clip, meta["frame_map"], attempt)
-        except Exception:
-            log.exception("digit refit failed; keeping the anchored map")
-            return
-        if fitted is None:
-            return
-        moved = sum(1 for was, now in zip(meta["frame_map"], fitted)
-                    if was != now)
-        meta["frame_map"] = fitted
-        meta["frame_map_digitfit"] = True
-        log.info("frame map refitted to the digits: %d slots moved", moved)
 
     def _anchor_offset(self, a, meta: dict) -> float:
         """Where in the clip the anchor frame's PICTURE is on screen, in

@@ -38,12 +38,10 @@ from sm64_events.inputs.service import InputsService
 from sm64_events.inputs.store import ChunkWriter
 from sm64_events.memory.layout import LAYOUT_ROWS, layout_for
 from sm64_events.memory.pj64 import Pj64Memory
-from sm64_events.memory.present import PresentHunter
 from sm64_events.replay.audio import ProcessAudioSource, SystemAudioSource
 from sm64_events.replay.compilation import CompilationBuilder, CompilationService
 from sm64_events.replay.config import ReplayConfig, apply_settings_file
 from sm64_events.replay.extract import ClipExtractor
-from sm64_events.replay.frameclock import FrameClock
 from sm64_events.replay.recorder import ReplayRecorder
 from sm64_events.replay.service import ReplayService, saved_attempt_ids
 from sm64_events.replay.video import DwmSurfaceVideoSource
@@ -297,9 +295,6 @@ def build():
     # when replay is disabled this run -- the clips he saved are on disk either
     # way, and their filenames are the only index to them.
     service.saved_clip_ids = lambda: saved_attempt_ids(replay_cfg.save_root)
-    # ONE frame clock, shared by the poller (writer) and the replay service
-    # (reader): the sidecar's frame_map is built from it at extraction.
-    frame_clock = FrameClock()
     replay = None
     frame_stream = None
     if replay_cfg.enabled:
@@ -332,8 +327,7 @@ def build():
                 # nvenc flashed a non-NVIDIA user's cursor, 2026-08-07).
                 video_sink_factory = (
                     lambda cfg, on_seg, codec, _f=_ffmpeg: FfmpegAvSink(
-                        cfg, on_seg, ffmpeg=_f, codec=codec,
-                        frame_clock=frame_clock))
+                        cfg, on_seg, ffmpeg=_f, codec=codec))
                 logging.getLogger("sm64.replay").info(
                     "replay backend: single ffmpeg A+V mux (%s)", _ffmpeg)
             except Exception:
@@ -400,12 +394,11 @@ def build():
             fallback_audio_factory=lambda pid: SystemAudioSource(
                 rate=replay_cfg.audio_rate, pid=pid),
             codec=codec,
-            video_sink_factory=video_sink_factory,
-            frame_clock=frame_clock)
+            video_sink_factory=video_sink_factory)
         replay = ReplayService(
             cfg=replay_cfg, recorder=recorder,
             extractor=ClipExtractor(cfg=replay_cfg, codec=codec),
-            tracker=service, frame_clock=frame_clock)
+            tracker=service)
     # Compare tab: import comparison videos (yt-dlp/copy -> ffmpeg normalize)
     # into the content cache, then serve them as plain clips. Only built when
     # ffmpeg is available (same binary the replay sink uses). Deliberately NOT
@@ -467,14 +460,8 @@ def build():
     if db is not None and layout.player1_controller is not None:
         input_writer = ChunkWriter(db.inputs, lambda: service.session_id)
         input_sampler = InputSampler(memory, layout, input_writer.add)
-    # PJ64's host-side present counter moves every session (heap), so it is
-    # hunted by signature in the background and watched on the poll tick --
-    # the frame clock's present series, map v4 (memory/present.py).
-    present_hunter = (PresentHunter(memory, layout.global_timer)
-                      if layout.global_timer is not None else None)
     poller = Poller(memory, detectors, service, on_frame=service.settle_frame,
-                    reader=reader, input_sampler=input_sampler,
-                    frame_clock=frame_clock, present_hunter=present_hunter)
+                    reader=reader, input_sampler=input_sampler)
     updater = UpdateService(current_version=__version__)
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     if input_writer is not None:
@@ -483,140 +470,22 @@ def build():
         # finishes, not up to ten seconds later when the buffer fills.
         service.on_attempt_settled = input_writer.close
     if replay is not None and db is not None:
-        # THE clip's map is checked against the game's own display before it
-        # is written (replay/mapalign.py): the constants upstream estimate a
-        # journey nobody can measure from RAM, and the footage carries the
-        # answer. Wired here because it needs the input track, which the
-        # replay zone must not reach into.
-        from sm64_events.inputs.track import track_for_attempt
-        from sm64_events.replay.mapalign import windowed_alignment
-
-        def _align_map_to_footage(clip, frame_map, attempt):
-            track = track_for_attempt(db.inputs, attempt)
-            if not track:
-                return None
-            pads = {number: (frame.stick_x, frame.stick_y)
-                    for number, frame in track}
-            # (global verdict, per-window verdicts) -- the windows are what
-            # correct a lag that steps mid-clip (attempt 4518's shelves).
-            return windowed_alignment(clip, frame_map, pads.get,
-                                      str(bundled_ffmpeg() or "ffmpeg"))
-
-        replay.map_aligner = _align_map_to_footage
-
         # THE CAPTURE LAYER's own audit (item 95): the pad the plugin copied
         # beside each picture against the track's pad at that frame -- no
-        # pixels involved. Wired here for the same reason as the aligner.
+        # pixels involved. Wired here because it needs the input track,
+        # which the replay zone must not reach into. It is the ONLY hook
+        # this service takes now: the footage aligner, the pad reader, the
+        # clock join, the map quantiser, the digit refit, the anchor store
+        # and the ledger mapper were seven generations of GUESSING which
+        # game frame a picture shows, and the capture layer is told.
+        from sm64_events.inputs.track import track_for_attempt
+
         def _track_pads(attempt):
             track = track_for_attempt(db.inputs, attempt)
             return {number: (frame.stick_x, frame.stick_y, frame.buttons)
                     for number, frame in track} if track else {}
 
         replay.track_pads = _track_pads
-
-        # THE PAD READER (round 32, 2026-09-01) runs BEFORE the ink anchor
-        # and supersedes it when it answers: it reads the display's six
-        # glyph cells per video frame (`replay/padread.py`) and pins the
-        # map to the pad the game drew, with a per-slot verdict in the
-        # sidecar. The track is taken over the clip's WHOLE span (the
-        # lead-in included), since every picture with the display on is
-        # evidence, not only the attempt's own.
-        from sm64_events.inputs.track import track_with_lead
-        from sm64_events.memory import addresses as A
-        from sm64_events.replay.padread import BAND, read_clip
-
-        def _read_pad_off_the_footage(clip, frame_map, attempt, repeats=None):
-            seen = [raw for raw in frame_map if raw is not None]
-            if not seen:
-                return None
-            frames, _lead = track_with_lead(
-                db.inputs, attempt, span=(min(seen) - BAND, max(seen) + BAND))
-            if not frames:
-                return None
-            pads = {number: (frame.stick_x, frame.stick_y)
-                    for number, frame in frames}
-            # The reset's white flash shows the reset frame the journal
-            # recorded -- the one anchor a reset's washed-out, resting
-            # neighbourhood offers (his C-down on the frame after a reset,
-            # read one frame late). Button icons would pin more; their
-            # instrument is not yet at the wire-in gate (padread.py).
-            resets = ([attempt.anchor_frame]
-                      if getattr(attempt, "anchor_type", None) == "practice_reset"
-                      and attempt.anchor_frame is not None else [])
-            # Every frame's held buttons: a lit icon on a picture must be a
-            # button held on its frame, which pins a press while the stick
-            # holds still (his A and B inside the pyramid, frames 746/771).
-            held = {number: frame.buttons & A.BUTTON_VALID_MASK
-                    for number, frame in frames}
-            return read_clip(clip, frame_map, pads,
-                             str(bundled_ffmpeg() or "ffmpeg"), held=held,
-                             resets=resets, repeats=repeats)
-
-        replay.pad_reader = _read_pad_off_the_footage
-
-        # THE CLOCK READER (round 32 item 91) is the primary identity source
-        # only for clips whose ledger carries the coherent RAM clock pair.
-        # It receives no controller track: displayed IGT plus the captured
-        # (gGlobalTimer, usamune_overall) pair names the displayed absolute
-        # frame directly where the two counters agree. A sustained mismatch
-        # (including a different subarea-reset domain) refuses instead of
-        # bridging a disproved premise. Older clips retain the pad/map
-        # compatibility path above.
-        from sm64_events.replay.timerread import read_clip as read_timer
-
-        def _read_timer_off_the_footage(clip, frame_map, clock_pairs):
-            return read_timer(clip, frame_map, clock_pairs,
-                              str(bundled_ffmpeg() or "ffmpeg"))
-
-        replay.timer_reader = _read_timer_off_the_footage
-
-        # THE DIGIT REFIT IS BUILT AND NOT WIRED (round 32 item 57).
-        # `mapalign.digit_fitted` assigns every picture its own frame by
-        # ink, which fixed one of his clips (5146) and BROKE another
-        # (5165): where the picture is washed out the ink says nothing, so
-        # the path buys a marginal fit with six-frame skips and drops
-        # inputs he had just pressed. A step penalty and an "explain the
-        # digits better than the prior" gate were both added and the wrong
-        # path STILL won, which is the finding: total ink is too weak a
-        # signal to overrule the ledger. Wire it only when the digits are
-        # READ rather than summed (`replay/pixelmap.py`), and gate it on
-        # the same 99% the pixel reader owes.
-
-        def _hold_one_answer_per_picture(clip, frame_map):
-            from sm64_events.replay.mapalign import decode_grey, picture_runs, quantised
-            grey = decode_grey(str(bundled_ffmpeg() or "ffmpeg"), clip)
-            runs = picture_runs(grey)
-            return quantised(frame_map, runs) if runs else None
-
-        replay.map_quantiser = _hold_one_answer_per_picture
-
-        def _map_from_picture_ledger(clip, rows, start_ts, duration_s, fps,
-                                     frame_times=None):
-            # Item 40: capture's own per-picture record becomes the map.
-            # Same decode as the quantiser; the display-lag constant is the
-            # one the feed series subtracts, so both map kinds land in one
-            # domain and the anchor store's medians stay comparable.
-            from sm64_events.replay.mapalign import (
-                decode_grey,
-                ledger_map,
-                picture_runs,
-            )
-            from sm64_events.replay.service import DISPLAY_LAG_FRAMES
-            grey = decode_grey(str(bundled_ffmpeg() or "ffmpeg"), clip)
-            runs = picture_runs(grey)
-            if not runs:
-                return None
-            slot_count = (len(frame_times) if frame_times
-                          else max(1, round(duration_s * fps)))
-            return ledger_map(slot_count, runs, rows, start_ts, fps,
-                              lag_frames=DISPLAY_LAG_FRAMES,
-                              frame_times=frame_times)
-
-        replay.ledger_mapper = _map_from_picture_ledger
-        from sm64_events.core.paths import data_root
-        from sm64_events.replay.mapalign import AnchorStats
-        replay.anchor_stats = AnchorStats(
-            data_root() / "data" / "mapalign_anchor.json")
     # Reading back what was captured needs no controller address, so the
     # timeline and the templates are wired on every layout that has a db.
     inputs = None

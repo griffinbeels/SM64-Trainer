@@ -186,20 +186,11 @@ def test_a_script_row_with_no_mario_state_reads_as_not_captured():
     assert got[0][1].speed == 0.0
 
 
-def test_the_two_clocks_are_exposed_only_as_one_coherent_pair():
-    """The CLOCK reader's absolute join must come from the same sandwich as
-    the input frame, never from two independently timed snapshot fields."""
-    sampler = InputSampler(
-        ScriptedMemory([(100, 0, 0, 0, 0, 0, 0, 0.0, 37)]), US,
-        lambda *_args: None)
-    assert sampler.sample() == 100
-    assert sampler.clock_pair() == (100, 37)
-
-    straddled = InputSampler(
-        ScriptedMemory([(100, 0, 0, 0, 0, 0, 0, 0.0, 37)], {0}), US,
-        lambda *_args: None)
-    assert straddled.sample() is None
-    assert straddled.clock_pair() is None
+# The sampler also read Usamune's own timer inside its counter sandwich and
+# exposed the coherent pair, so the CLOCK reader could name the frame a
+# picture showed. The capture layer reads that timer itself, beside the
+# picture it stamps, so the extra RDRAM read came off the 250 Hz loop with
+# `replay/timerread.py` (2026-09-05).
 
 
 def test_a_skipped_frame_is_COUNTED_since_its_input_is_gone():

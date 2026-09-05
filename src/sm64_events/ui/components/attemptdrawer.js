@@ -29,7 +29,7 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
   // its encode rate -- the timeline's exact clock; the offset is its fallback.
   const [clipClock, setClipClock] = useState({ frameMap: null,
                                               clock: null,
-                                              padReading: null,
+                                              padAgreement: null,
                                               frameMapSource: null });
   // The timeline appears only once the replay has ANSWERED (his ruling
   // 2026-09-01: "it should be hidden until we extract the replay, after
@@ -65,8 +65,7 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
             setClipClock({ frameMap: view.frame_map || null,
                            pictureIgt: view.picture_igt || null,
                            clock: buildClipClock(view),
-                           padReading: view.pad_reading || null,
-                           degraded: !!view.frame_map_degraded,
+                           padAgreement: view.pad_stamp_agreement || null,
                            frameMapSource: view.frame_map_source || null });
           }
           setReplaySettled(true);
@@ -77,8 +76,7 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
               anchorOffsetS=${anchorOffsetS}
               frameMap=${clipClock.frameMap} clock=${clipClock.clock}
               pictureIgt=${clipClock.pictureIgt}
-              padReading=${clipClock.padReading}
-              degraded=${clipClock.degraded}
+              padAgreement=${clipClock.padAgreement}
               frameMapSource=${clipClock.frameMapSource}
               tools=${html`<div class="attempt-drawer-tools">
                 <button onclick=${markTemplate} disabled=${marking === "busy"}

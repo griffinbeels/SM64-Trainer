@@ -92,7 +92,6 @@ class ReplayRecorder:
                  clock_factory: Callable[[], CaptureClock] = CaptureClock.now,
                  codec: str | None = None,
                  video_sink_factory=None,
-                 frame_clock=None,
                  recorder_lock_factory=acquire_recorder_lock):
         self._cfg = cfg
         # machine-wide single-recorder guard (injectable for tests): only the
@@ -105,9 +104,6 @@ class ReplayRecorder:
         self._audio_factory = audio_factory
         self._fallback_audio_factory = fallback_audio_factory
         self._clock_factory = clock_factory
-        # The frame clock (replay/frameclock.py): _on_frame tags each
-        # captured picture with the RAM frame current at capture time.
-        self._frame_clock = frame_clock
         # The picture ledger (replay/ledger.py, item 40): one row per
         # DISTINCT captured picture -- its composition time, the RAM frame,
         # and every registered stamp. Extraction reads it back through
@@ -525,20 +521,15 @@ class ReplayRecorder:
     # -- frame callback (library thread) -------------------------------------
 
     def _observe_picture(self, bgra, tag, capture_ts, stamp) -> bool:
-        """One grab into the picture ledger: a stamped picture carries the
-        capture layer's own fields; a desktop grab carries what the frame
-        clock knows about that instant (its edge phase and the IGT pair)."""
+        """One grab into the picture ledger. A picture from THE CAPTURE
+        LAYER carries its own stamp -- the game frame the plugin read
+        inside Project64 at the display list that drew it -- and that row
+        is what the frame map is made of. A grab with no stamp (the
+        desktop camera, before the layer publishes) is recorded by TIME
+        only: it names no frame, so the clip gets no map and the timeline
+        says frame-exact capture is off rather than showing a guess."""
         if stamp is not None and tag is not None:
             return self.ledger.observe(bgra, tag[1], tag[0], stamp.extras())
-        if tag is not None:
-            phase = self._frame_clock.edge_phase(tag[1])
-            igt = self._frame_clock.igt_for(tag[0])
-            extras = {}
-            if phase is not None:
-                extras["phase"] = phase
-            if igt is not None:
-                extras["igt_overall"] = igt
-            return self.ledger.observe(bgra, tag[1], tag[0], extras or None)
         if capture_ts is not None:
             return self.ledger.observe(bgra, capture_ts, None)
         return False
@@ -567,8 +558,6 @@ class ReplayRecorder:
                           if clock is not None else None)
             if stamp is not None and capture_ts is not None:
                 tag = (stamp.frame, capture_ts)
-            elif self._frame_clock is not None:
-                tag = self._frame_clock.capture_tag(capture_ts)
             if self._picture_feed and not _sink_has_room(sink):
                 # LOCKSTEP (item 88): no budget to encode this picture, so it
                 # is not recorded as captured either. The ledger keeps its

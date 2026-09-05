@@ -151,10 +151,15 @@ def test_build_gives_the_poller_the_trackers_frame_heartbeat(monkeypatch):
     assert heartbeat.__func__ is TrackerService.settle_frame
 
 
-def test_build_wires_the_clock_reader_into_replay(monkeypatch):
-    """Unit tests below the composition root pass even if the callback that
-    makes the CLOCK primary is never assigned. Exercise the real replay branch
-    and pin that seam explicitly."""
+def test_build_wires_the_pad_stamp_audit_into_replay(monkeypatch):
+    """The ONE hook ReplayService still takes, and the only thing that makes
+    the timeline's pad-check chip appear. Unit tests below the composition
+    root pass even if it is never assigned, so pin the seam explicitly.
+
+    Six sibling hooks used to be pinned here (the footage aligner, the pad
+    reader, the clock join, the map quantiser, the digit refit, the ledger
+    mapper) -- one per generation of DERIVED frame map. The capture layer
+    stamps the frame instead, and they were deleted 2026-09-05."""
     main_mod = _stubbed_main(monkeypatch)
     captured = {}
     real_replay_service = main_mod.ReplayService
@@ -169,8 +174,8 @@ def test_build_wires_the_clock_reader_into_replay(monkeypatch):
 
     replay = captured.get("replay")
     assert replay is not None, "the enabled replay branch was not composed"
-    assert replay.timer_reader is not None, (
-        "the CLOCK reader was built but never wired into ReplayService")
+    assert replay.track_pads is not None, (
+        "the pad-stamp audit was built but never wired into ReplayService")
 
 
 def _stubbed_main(monkeypatch):

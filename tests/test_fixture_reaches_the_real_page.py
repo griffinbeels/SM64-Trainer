@@ -1371,32 +1371,37 @@ def test_the_frame_readout_can_reach_its_own_last_frame(page):
 
 
 def test_the_screen_check_chip_reaches_the_timeline_header(page):
-    """2026-09-01: the pad reader's verdict -- how many video frames the
-    game's own input display confirmed the timeline on -- is a chip in the
-    timeline header, so his 100% test is a number on the surface he judges
-    it from. The fixture's synthetic view carries one contradicted frame,
-    so the wording that renders is the one that names a disagreement and
-    the tool that lists it."""
+    """THE CLIP'S CHECK -- how many of the capture layer's stamped pads the
+    timeline holds -- is a chip in the timeline header, so his 100% test is
+    a number on the surface he judges it from. The fixture's synthetic view
+    carries one contradicted picture, so the wording that renders is the one
+    that names a disagreement.
+
+    It read the PAD READER's verdict until 2026-09-05. The stamps answer the
+    same question exactly and for free, where the reader scored 82-94% on
+    three clips the oracle certified perfect -- a check that cries wolf on
+    one frame in eight is worse than none, which is what he reported on
+    2026-09-02 ("a lot of the screen checked frames aren't actually even
+    wrong")."""
     reach(page, "input-timeline")
     page.wait_for(".input-screen-check", timeout_ms=8000)
     text, is_off = page.evaluate(
         "(() => { const chip = document.querySelector('.input-screen-check');"
         " return [chip.textContent, chip.classList.contains('is-off')]; })()")
-    assert text.startswith("screen-checked ") and "1 disagree" in text, text
-    # Honest units (2026-09-01): "N of M frames" plus the longest unpinned
-    # run -- never "N/N", which read as "every frame checked".
-    assert " of " in text and "frames" in text and "unpinned 41f" in text, text
-    assert is_off, "one contradicted frame must read as off, not clean"
+    assert text.startswith("pad-checked ") and "1 disagree" in text, text
+    # Honest units: "N of M pictures", never "N/N".
+    assert " of " in text and "pictures" in text, text
+    assert is_off, "one contradicted picture must read as off, not clean"
     # The chip is a DOOR (his rule: a datum on a summary surface leads to
-    # its evidence): click it and every disagreeing frame is listed as the
-    # panel frame it sits on, with what the screen read and what the
-    # timeline holds; click a row and the panel goes there.
+    # its evidence): click it and every disagreeing picture is listed as the
+    # panel frame it sits on, with what the game held and what the timeline
+    # holds; click a row and the panel goes there.
     page.click(".input-screen-check")
     page.wait_for(".input-screen-check-row", timeout_ms=4000)
     row_text, frame_text = page.evaluate(
         "(() => { const row = document.querySelector('.input-screen-check-row');"
         " return [row.textContent, row.querySelector('.frame').textContent]; })()")
-    assert frame_text.startswith("frame ") and "U71" in row_text and "U70" in row_text, row_text
+    assert frame_text.startswith("frame ") and "71,0" in row_text and "70,0" in row_text, row_text
     page.click(".input-screen-check-row")
     page.wait_ms(200)
     readout = page.evaluate(

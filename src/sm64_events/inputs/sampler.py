@@ -40,7 +40,6 @@ class InputSampler:
         # capture can
         # later turn a displayed relative frame into an absolute frame
         # without asking either the pad OCR or an inferred frame map.
-        self._igt_at = layout.usamune_overall
         self._controller_at = layout.player1_controller
         # Mario's own state rides along inside the SAME coherent window as the
         # pad (round 32): what he was doing, which way he faced, how fast he
@@ -51,7 +50,6 @@ class InputSampler:
         self._sink = sink
         self._frame: int | None = None
         self._latest: InputFrame | None = None
-        self._clock_pair: tuple[int, int] | None = None
         self._previous_buttons = 0
         self._counts = {"samples": 0, "straddles": 0, "frames": 0,
                         "edge_checks": 0, "edge_mismatches": 0,
@@ -87,8 +85,6 @@ class InputSampler:
                                             A.CONTROLLER_SIZE)
             mario = (self._memory.read_block(self._mario_at, MARIO_BLOCK_SIZE)
                      if self._mario_at is not None else None)
-            igt = (self._memory.read_u16(self._igt_at)
-                   if self._igt_at is not None else None)
             after = self._memory.read_u32(self._timer_at)
         except MemoryReadError:
             return None
@@ -101,11 +97,6 @@ class InputSampler:
             # on it -- but nothing is held from a straddled read.
             self._counts["straddles"] += 1
             return None
-        # One immutable assignment is what the capture thread reads.  A
-        # straddled sample never reaches here, so the pair cannot combine two
-        # game frames.  Layouts without the Usamune row simply offer no pair
-        # and keep the pre-CLOCK replay path.
-        self._clock_pair = ((before, igt) if igt is not None else None)
         if self._frame is None:
             self._frame = before
         elif before != self._frame:
@@ -126,20 +117,10 @@ class InputSampler:
         self._latest = decode(block, mario)
         return before
 
-    def clock_pair(self) -> tuple[int, int] | None:
-        """The latest coherent ``(gGlobalTimer, usamune_overall)`` sample.
-
-        This is deliberately not part of :class:`InputFrame`: it is capture
-        metadata used to identify the picture, not controller state exported
-        in a template.
-        """
-        return self._clock_pair
-
     def flush(self) -> None:
         """Emit the frame in hand — for shutdown, and for a lost emulator."""
         self._emit()
         self._frame = None
-        self._clock_pair = None
         self._previous_buttons = 0
 
     def _emit(self) -> None:

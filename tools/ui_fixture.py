@@ -1609,11 +1609,11 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
         frame_map = []
         for raw in range(first - pre, close + post):
             frame_map.extend([raw, raw])          # 30 fps game, 60 fps video
-        # The pad reader's verdict rides the view too (2026-09-01): the
-        # timeline header shows how many pictures the game's own display
-        # confirmed, so the chip is reachable by the sweeps. One contradicted
-        # slot, so the "disagree" wording is the one that renders.
-        sure = len(frame_map) - 200
+        # THE CLIP'S CHECK rides the view too: the timeline header shows how
+        # many of the capture layer's stamped pads the timeline holds, so the
+        # chip is reachable by the sweeps. One contradicted picture, so the
+        # "disagree" wording is the one that renders.
+        pictures = len(frame_map) // 2
         # A capture-layer clip's stamps: the game's timer per slot, one
         # frame ahead of the track's own count inside the attempt, None in
         # the run-up and the tail -- so the inspector's stamped clock is
@@ -1626,13 +1626,10 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                 "picture_igt": picture_igt,
                 "source": "buffer", "anchor_offset_s": pre / 30,
                 "truncated": False, "saved_path": None,
-                "pad_reading": {"sure": sure, "agree": sure - 1, "nowhere": 0,
-                                "known_cells": sure * 5, "slots": len(frame_map),
-                                "frames_total": len(frame_map) // 2,
-                                "frames_checked": len(frame_map) // 2 - 100,
-                                "frames_agree": len(frame_map) // 2 - 101,
-                                "unpinned_longest": 41,
-                                "disagreements": [[pre * 2 + 40, "y", "U71", "U70"]]}}
+                "pad_stamp_agreement": {
+                    "pictures": pictures, "agree": pictures - 1,
+                    "disagreements": [[pre * 2 + 40, first + 20,
+                                       [71, 0, 0], [70, 0, 0]]]}}
 
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(

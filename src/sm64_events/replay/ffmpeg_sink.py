@@ -330,7 +330,6 @@ class FfmpegAvSink:
     _HEALTHY_CHILD_S = 5.0
 
     def __init__(self, cfg, on_segment, ffmpeg: str = "ffmpeg",
-                 frame_clock=None,
                  codec: str = "h264_nvenc", on_fed=None):
         self._cfg = cfg
         # The picture feed (item 38): submit() queues each new picture and
@@ -380,7 +379,6 @@ class FfmpegAvSink:
         # audio named-pipe transport
         self._audio_q: queue.Queue = queue.Queue(maxsize=256)
         self._audio_dropped = 0
-        self._frame_clock = frame_clock
         self._pipe_name: str | None = None
         self._pipe_handle = None
         self._audio_thread: threading.Thread | None = None
@@ -804,10 +802,6 @@ class FfmpegAvSink:
             # behind every segment time (measured 2026-09-02).
             self._anchor_utc = datetime.fromtimestamp(wrote_at, timezone.utc)
         wms = (_time.perf_counter() - t0) * 1000
-        if self._frame_clock is not None and tag is not None:
-            # AFTER the write: ffmpeg stamps at its read, which this
-            # write just satisfied, so the two clocks agree here.
-            self._frame_clock.mark_feed(tag)
         if self.on_fed is not None:
             try:
                 self.on_fed(tag, wrote_at)

@@ -77,11 +77,10 @@ class FakeAvSink:
 
 def make_recorder(tmp_path, video, audio, found=WIN, fallback=None,
                   recorder_lock_factory=None, video_sink_factory=None,
-                  fallback_factory=None, frame_clock=None):
+                  fallback_factory=None):
     cfg = ReplayConfig(scratch_dir=tmp_path / "buf", attach_poll_s=0.01, fps=30)
     return ReplayRecorder(
         cfg=cfg,
-        frame_clock=frame_clock,
         window_finder=lambda title: found,
         video_factory=lambda win: video,
         audio_factory=lambda pid: audio,
@@ -452,54 +451,40 @@ def test_session_pause_forces_idle_and_outranks_input(tmp_path):
     assert rec.status()["idle"] is False
     rec._maybe_idle_pause()                 # clock refreshed on unpause
     assert rec.status()["idle"] is False
-def test_capture_tags_carry_the_frame_and_the_composition_time(tmp_path):
-    """The frame map's present series keys on WHEN the picture was composed
-    (WGC's SystemRelativeTime through the run's CaptureClock), never on when
-    our callback happened to run -- and the RAM frame rides beside it for
-    the v2 fallback (round 32 items 17 + 30)."""
-    from sm64_events.replay.frameclock import FrameClock
-    video, audio = FakeVideoSource(), SystemFakeAudioSource()
-    sink = FakeAvSink()
-    frame_clock = FrameClock()
-    frame_clock.mark(4242)
-    rec = make_recorder(tmp_path, video, audio, frame_clock=frame_clock,
-                        video_sink_factory=lambda cfg, on_seg, codec: sink)
-    rec.start()
-    assert wait_for(lambda: video.on_frame is not None)
-    push_frames(video, 1)                    # qpc tick 0
-    # A SECOND picture: the picture feed (item 38) hands the sink only what
-    # the ledger calls new, so an identical grab would feed nothing.
-    video.on_frame(np.full((480, 640, 4), 90, dtype=np.uint8), int(1 / 30 * 1e7))
-    assert wait_for(lambda: len(getattr(sink, "tags", [])) >= 2)
-    assert sink.tags[0] == (4242, T0.timestamp())
-    frame_tag, capture_ts = sink.tags[1]
-    assert frame_tag == 4242
-    # utc_of quantises to whole microseconds
-    assert abs(capture_ts - (T0.timestamp() + 1 / 30)) < 1e-5
-    rec.stop()
-
-
 def test_the_picture_ledger_rides_the_capture_path(tmp_path):
     """Item 40: every grab passes the picture ledger; identical grabs of one
     presented picture land ONE row, a changed picture lands the next. And
     item 38: the sink is fed ONE frame per row -- the three identical grabs
-    reach it once, and every write lands in the ledger's feed log."""
-    from sm64_events.replay.frameclock import FrameClock
+    reach it once, and every write lands in the ledger's feed log.
+
+    Driven with STAMPED pictures because that is the only path that ships:
+    a grab with no stamp names no game frame at all now (the frame clock
+    that used to guess one was deleted 2026-09-05), so it is recorded by
+    time and the clip carries no map."""
+    from sm64_events.inputs.frame import InputFrame
+    from sm64_events.replay.pluginsource import FrameStamp
+
+    def stamp_at(frame):
+        return FrameStamp(frame=frame, igt_overall=73,
+                          pad=InputFrame(buttons=0, pressed=0,
+                                         stick_x=0, stick_y=0),
+                          vi_origin=0x100000, list_qpc=1, present_qpc=2,
+                          lists_since=1)
+
     video, audio = FakeVideoSource(), SystemFakeAudioSource()
     sink = FakeAvSink()
-    frame_clock = FrameClock()
-    frame_clock.mark(4242)
-    frame_clock.mark_igt(4242, 73)
-    rec = make_recorder(tmp_path, video, audio, frame_clock=frame_clock,
+    rec = make_recorder(tmp_path, video, audio,
                         video_sink_factory=lambda cfg, on_seg, codec: sink)
     rec.start()
     assert wait_for(lambda: video.on_frame is not None)
-    push_frames(video, 3)                    # the same zeros picture, thrice
+    same = np.zeros((480, 640, 4), dtype=np.uint8)
+    for tick in range(3):                    # the same zeros picture, thrice
+        video.on_frame(same, int(tick / 30 * 1e7), stamp_at(4242))
     changed = np.full((480, 640, 4), 200, dtype=np.uint8)
-    video.on_frame(changed, int(3 / 30 * 1e7))
+    video.on_frame(changed, int(3 / 30 * 1e7), stamp_at(4245))
     assert wait_for(lambda: len(getattr(sink, "tags", [])) >= 2)
     rows = rec.ledger.rows_between(0.0, 1e12)
-    assert [row["frame"] for row in rows] == [4242, 4242]
+    assert [row["frame"] for row in rows] == [4242, 4245]
     assert [row["igt_overall"] for row in rows] == [73, 73]
     assert rows[1]["ts"] - rows[0]["ts"] > 0
     time.sleep(0.05)
@@ -512,20 +497,18 @@ def test_the_picture_ledger_rides_the_capture_path(tmp_path):
     rec.stop()
 
 
-def test_a_stamped_picture_files_the_stamps_frame_and_never_asks_the_frame_clock(tmp_path):
+def test_a_stamped_picture_files_the_stamps_own_frame(tmp_path):
     """Item 95: a picture from the capture layer arrives with the game's own
-    frame counter; the recorder tags it with that frame, the ledger row says
-    `exact` and carries the pad, and the frame clock is not consulted."""
+    frame counter; the recorder tags it with that frame, and the ledger row
+    says `exact` and carries the pad and the IGT. This is the ONLY way a
+    row gets a frame now -- the frame clock that used to derive one for a
+    desktop grab was deleted 2026-09-05."""
     from sm64_events.inputs.frame import InputFrame
     from sm64_events.replay.pluginsource import FrameStamp
 
-    class RefusingClock:
-        def capture_tag(self, capture_ts):
-            raise AssertionError("the frame clock must not be asked for a stamped picture")
-
     video, audio = FakeVideoSource(), SystemFakeAudioSource()
     sink = FakeAvSink()
-    rec = make_recorder(tmp_path, video, audio, frame_clock=RefusingClock(),
+    rec = make_recorder(tmp_path, video, audio,
                         video_sink_factory=lambda cfg, on_seg, codec: sink)
     rec.start()
     assert wait_for(lambda: video.on_frame is not None)

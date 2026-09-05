@@ -55,7 +55,7 @@ class Poller:
 
     def __init__(self, memory, detectors, broadcaster, hz: int | None = None,
                  reader=None, on_frame=None, input_sampler=None,
-                 frame_clock=None, present_hunter=None):
+):
         self.memory = memory
         self.detectors = list(detectors)
         self.broadcaster = broadcaster
@@ -98,20 +98,6 @@ class Poller:
         # `broadcaster`, which is sometimes a plain Broadcaster: this poller's
         # sink contract is publish(), and a clock consumer is a second concern.
         self.on_frame = on_frame
-        # WHEN each game frame happened, on the wall clock -- the replay
-        # sidecar's frame_map source (replay/frameclock.py). Marked on the
-        # counter EDGE, so with a sampler the stamp is 250 Hz-precise; the
-        # 60 Hz path marks at snapshot time, one poll coarser.
-        self.frame_clock = frame_clock
-        # PJ64's host-side present counter (memory/present.py): hunted in
-        # the background while frames advance, then read every tick so the
-        # frame clock's PRESENT series (map v4) records each screen update
-        # with the game frame it shows. None on layouts with no timer, in
-        # tests, and on the offline harness -- the map falls back to v2.
-        self.present_hunter = present_hunter
-        self._present_count: int | None = None    # last counter value seen
-        self._present_timer_at: int | None = None  # game frame at that value
-        self._watch_timer_prev: int | None = None
         self.interval = 1.0 / hz
         self.reader = reader or SnapshotReader(memory)
         # Set when the reader can never read (core/snapshot.py::UnreadyReader
@@ -166,20 +152,8 @@ class Poller:
             self._unreadable_ticks += 1
             return False                       # straddled or unreadable
         self._unreadable_ticks = 0
-        # Capture needs the RELATION between the two clocks, not another
-        # estimate of display lag.  InputSampler read this pair inside its
-        # gGlobalTimer sandwich; FrameClock exposes it to the capture thread
-        # only when the frame number still agrees.
-        clock_pair = getattr(self.input_sampler, "clock_pair", lambda: None)()
-        if self.frame_clock is not None and clock_pair is not None:
-            self.frame_clock.mark_igt(*clock_pair)
         if frame_now != self._frame_now:
             ended = self._frame_now
-            if self.frame_clock is not None and ended is not None:
-                # A real observed edge -- the first sample after an attach is
-                # mid-frame, and stamping "now" onto a frame that started
-                # earlier would file its picture under the wrong wall time.
-                self.frame_clock.mark(frame_now)
             self._frame_now = frame_now
             self._ticks_in_frame = 0
             return ended is not None and self._snapshot_frame != ended
@@ -187,64 +161,13 @@ class Poller:
         return (self._snapshot_frame != frame_now
                 and self._ticks_in_frame >= self._settle_ticks)
 
-    # The watchdog's threshold: the game running this many frames past the
-    # last observed tick proves the address dead (heap reused, plugin or
-    # process restarted) -- a live counter ticks every frame. Big enough
-    # that a lag spike or a console reset's black screen never trips it.
-    PRESENT_FROZEN_FRAMES = 120
     #: consecutive unreadable sampler ticks (half a second at 250 Hz) before
     #: the tick reads the snapshot regardless, so a dead emulator detaches
     UNREADABLE_TICKS_BEFORE_READ = 125
 
-    def _watch_presents(self) -> None:
-        """One 250 Hz look at the host present counter (map v4).
-
-        Starts the background hunt whenever frames advance with no counter
-        in hand, records each observed tick into the frame clock's present
-        series -- except the FIRST value after (re)acquisition, whose edge
-        was not observed (the same rule the logic-edge stamp follows) --
-        and invalidates an address the game has outrun (no tick, or no
-        successful read, across PRESENT_FROZEN_FRAMES of play). A BACKWARD
-        timer jump is an F1 console reset: the emulator process -- and the
-        counter's heap -- survive it, so the watchdog re-baselines rather
-        than throwing a valid address away (a fresh hunt costs half a
-        minute of degraded maps, and resets are his commonest gesture).
-        """
-        hunter = self.present_hunter
-        timer = (self._frame_now if self.input_sampler is not None
-                 else self._last_timer)
-        if timer is not None and timer != self._watch_timer_prev:
-            self._watch_timer_prev = timer
-            if hunter.address is None:
-                hunter.ensure_hunting()
-        if hunter.address is None:
-            self._present_count = None
-            self._present_timer_at = None
-            return
-        if self._present_timer_at is None:
-            self._present_timer_at = timer     # watchdog baseline from now
-        count = hunter.read()
-        if count is not None and count != self._present_count:
-            unobserved_edge = self._present_count is None
-            self._present_count = count
-            self._present_timer_at = timer
-            if not unobserved_edge and self.frame_clock is not None:
-                self.frame_clock.mark_present(count, timer)
-            return
-        if timer is None or self._present_timer_at is None:
-            return
-        if timer < self._present_timer_at:
-            self._present_timer_at = timer     # console reset: re-baseline
-        elif timer - self._present_timer_at > self.PRESENT_FROZEN_FRAMES:
-            hunter.invalidate("no present tick while the game ran")
-            self._present_count = None
-            self._present_timer_at = None
-
     async def tick(self) -> None:
         if self.input_sampler is not None:
             due_for_a_snapshot = self._due_for_a_snapshot()
-            if self.present_hunter is not None:
-                self._watch_presents()
             if (not due_for_a_snapshot
                     and self._unreadable_ticks < self.UNREADABLE_TICKS_BEFORE_READ):
                 return
@@ -252,8 +175,6 @@ class Poller:
                 # Half a second of unreadable samples: read the snapshot
                 # anyway so a dead emulator raises and detaches below.
                 self._unreadable_ticks = 0
-        elif self.present_hunter is not None:
-            self._watch_presents()
         try:
             curr = self.reader.read()
             # Which frame this reading DESCRIBES comes from the snapshot's own
@@ -262,23 +183,10 @@ class Poller:
         except MemoryReadError:
             log.warning("lost emulator; detaching")
             self.memory.detach()
-            if self.present_hunter is not None:
-                # Keep the hunted address: a detach is usually an F1 console
-                # reset, which the emulator process -- and the counter's
-                # heap -- survive. If the process really died, the watchdog
-                # above invalidates within PRESENT_FROZEN_FRAMES of play.
-                # Only the first-value-skip state resets, so the reattach's
-                # first tick (edge unobserved across the gap) never marks.
-                self._present_count = None
-                self._present_timer_at = None
             self._prev = None
             self.latest = None
             await self.broadcaster.publish(_lifecycle_event("emulator_disconnected"))
             return
-        if (self.frame_clock is not None and self.input_sampler is None
-                and self._last_timer is not None
-                and curr.global_timer != self._last_timer):
-            self.frame_clock.mark(curr.global_timer)
         if not _plausible(curr):
             log.error("memory layout mismatch (impossible values read) — "
                       "refusing to emit events; check the address registry")
@@ -353,10 +261,6 @@ class Poller:
         except MemoryReadError:
             self.memory.detach()
             return False
-        if (self.frame_clock is not None and self.input_sampler is None
-                and self._last_timer is not None
-                and curr.global_timer != self._last_timer):
-            self.frame_clock.mark(curr.global_timer)
         if not _plausible(curr):
             log.error("memory layout mismatch (impossible values read) — "
                       "refusing to serve; check ROM / address registry")

@@ -18,6 +18,7 @@ from sm64_events.core.paths import bundled_ffmpeg
 from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.extract import ClipExtractor, ClipResult
 from sm64_events.replay.feedmap import feed_map
+from sm64_events.replay.service import PLUGIN_PICTURE_LAG
 from sm64_events.replay.ffmpeg_sink import PICTURE_HEARTBEAT_S, FfmpegAvSink
 from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.ring import SegmentRing
@@ -184,7 +185,8 @@ def _feed_pictures(sink, ledger, seconds: float, first_frame: int = 1000,
         frame[:, :, 0] = index % 256
         frame[:, :, 1] = (index // 256) % 256
         ts = time.time()
-        assert ledger.observe(frame, ts, first_frame + index)
+        assert ledger.observe(frame, ts, first_frame + index,
+                              {"exact": True})
         sink.submit(frame, (first_frame + index, ts))
         index += 1
         now = time.perf_counter()
@@ -265,7 +267,10 @@ def test_a_cut_keeps_every_picture_at_its_own_time_and_the_map_reads_off_the_log
     origin = result.start_utc.timestamp()
     rows = ledger.rows_between(origin - 1.5, origin + result.duration_s + 1.0)
     feeds = ledger.feeds_between(origin - 1.0, origin + result.duration_s + 1.0)
-    built, repeats, stats = feed_map(result.frame_times, origin, rows, feeds, 0)
+    built, repeats, stats = feed_map(
+        result.frame_times, origin, rows, feeds,
+        lambda row: (row["frame"] - PLUGIN_PICTURE_LAG
+                     if row.get("exact") else None))
     assert built is not None, stats
     # Nearly every frame matches its feed entry. A CPU-starved worker under the
     # 16-way door delivers a few frames late (real-time capture), which the
@@ -280,7 +285,7 @@ def test_a_cut_keeps_every_picture_at_its_own_time_and_the_map_reads_off_the_log
     # a +2 step around it, which is honest bookkeeping, not a shear.
     assert set(advances) <= {1, 2}, advances
     assert advances.count(1) >= len(advances) * 0.9, advances
-    assert built[0] >= 7000
+    assert built[0] >= 7000 - PLUGIN_PICTURE_LAG
 
 
 def test_a_cfr_ring_cut_with_the_switch_on_still_reports_its_frame_times(tmp_path):
@@ -326,156 +331,18 @@ def _filled_ledger(origin: float, count: int, first_frame: int = 100,
         picture[0, 1, 0] = (index // 256) % 256
         ts = origin + index / 30
         assert ledger.observe(picture, ts, first_frame + index,
-                              {"igt_overall": 20 + index})
+                              {"exact": True, "igt_overall": 20 + index})
         ledger.mark_fed(ts, ts + latency)
     return ledger
 
 
-def test_the_service_reads_the_map_off_the_log_and_hands_the_reader_the_repeats(tmp_path):
-    import json as _json
+# The pad reader's hand-off, the CLOCK join and the heartbeat-repeat flag
+# were pinned here. All three belonged to DERIVING a frame map; the capture
+# layer stamps it, so `_take_the_stamps` is the whole of extraction now and
+# `replay/timerread.py` is deleted (2026-09-05). What survives of the pad
+# reader is an offline instrument (`tools/score_pad_read.py`) and the glyph
+# machinery the oracle borrows.
 
-    from test_replay_service import attempt, make_service
-    from sm64_events.replay.service import DISPLAY_LAG_FRAMES
-
-    svc = make_service(tmp_path, [attempt()])
-    svc.extractor = _FeedExtractor(count=90)
-    # The clip's media origin is the padded start (pre_pad before the anchor).
-    origin = (svc.extractor.calls[0][0].timestamp() if svc.extractor.calls
-              else None)
-    # make_service's attempt starts at T0; the view pads 3 s before it.
-    from test_replay_service import T0
-    origin = (T0 - timedelta(seconds=3)).timestamp()
-    svc.recorder.ledger = _filled_ledger(origin, 90)
-    seen = {}
-
-    def reader(clip, frame_map, a, repeats=None):
-        seen["repeats"] = repeats
-        seen["map"] = list(frame_map)
-        return None                                   # refuses: the map stands
-
-    svc.pad_reader = reader
-    quantised = []
-    svc.map_quantiser = lambda clip, fm: quantised.append(clip) or fm
-    res = svc.view(42)
-    assert res["encode"] == "picture_feed"
-    assert res["frame_times"] == [round(k / 30 + 0.004, 6) for k in range(90)]
-    assert res["frame_map_source"] == "feed_log"
-    assert res["frame_map"] == [100 - DISPLAY_LAG_FRAMES + k for k in range(90)]
-    assert res["feed_match"]["unmatched"] == 0
-    assert res["video_start_s"] == 0.004
-    # The quantiser DOES run on a picture-feed clip. One encoded frame is one
-    # CAPTURED picture, but when the game lags the emulator re-presents the
-    # same render: two grabs, two ledger rows with advancing RAM stamps, ONE
-    # picture on screen. Measured on his pyramid clip (5946, 2026-09-02): 115
-    # of 775 stored frames pixel-identical to their predecessor, and the map
-    # stepped +1 across 110 of them -- the panel advanced while the screen
-    # held. Only the PIXELS can see that, so the picture-run quantiser holds
-    # both frames to one answer.
-    assert quantised == [svc.clips_dir / "clip_attempt_42.mp4"], (
-        "a picture-feed clip still needs the pixel runs: the emulator "
-        "re-presents a render when the game lags")
-    assert seen["repeats"] == [False] * 90
-    sidecar = _json.loads(
-        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
-    assert sidecar["encode"] == "picture_feed"
-    assert len(sidecar["picture_ledger"]) == 90
-    assert sidecar["feed_match"]["matched"] == 90
-
-
-def test_the_timer_join_is_primary_and_the_pad_can_only_audit_it(tmp_path):
-    from test_replay_service import T0, attempt, make_service
-
-    svc = make_service(tmp_path, [attempt()])
-    svc.extractor = _FeedExtractor(count=40)
-    origin = (T0 - timedelta(seconds=3)).timestamp()
-    svc.recorder.ledger = _filled_ledger(origin, 40, first_frame=600)
-    timer_map = [590 + index for index in range(40)]
-    seen = {}
-
-    class Mapping:
-        frame_map = timer_map
-        mechanical = 35
-        bridged = 5
-        rejected = 1
-
-        @staticmethod
-        def as_dict():
-            return {"mechanical": 35, "bridged": 5, "rejected": 1}
-
-    def timer_reader(clip, prior, clock_pairs):
-        seen["pairs"] = list(clock_pairs)
-        return Mapping()
-
-    class Verdict:
-        agree = 31
-        sure = 35
-
-        @staticmethod
-        def as_dict():
-            return {"agree": 31, "sure": 35}
-
-    class PadResult:
-        frame_map = [999] * 40              # must never replace timer identity
-        verdict = Verdict()
-        audit = Verdict()
-
-    def pad_reader(clip, frame_map, a, repeats=None):
-        seen["audited"] = list(frame_map)
-        return PadResult()
-
-    svc.timer_reader = timer_reader
-    svc.pad_reader = pad_reader
-    result = svc.view(42)
-
-    assert seen["pairs"] == [(600 + i, 20 + i) for i in range(40)]
-    assert seen["audited"] == timer_map
-    assert result["frame_map"] == timer_map
-    assert result["frame_map_source"] == "timer"
-    assert result["frame_map_mode"] == "timer+bridge"
-    assert result["frame_map_degraded"] is False
-    assert result["frame_map_inferred"] is True
-    assert result["timer_reading"] == {
-        "mechanical": 35, "bridged": 5, "rejected": 1}
-    assert result["pad_reading"] == {"agree": 31, "sure": 35}
-
-
-def test_a_cfr_clip_keeps_its_three_argument_reader_and_no_frame_times(tmp_path):
-    from test_replay_service import attempt, make_service
-    svc = make_service(tmp_path, [attempt()])
-    calls = []
-    svc.pad_reader = lambda clip, fm, a: calls.append((clip, fm)) or None
-    res = svc.view(42)
-    assert res["frame_times"] is None
-    assert res["encode"] == "cfr"
-    assert calls == []                      # no map at all without a clock
-
-
-def test_a_heartbeat_frame_in_the_clip_is_a_repeat_for_the_reader(tmp_path):
-    from test_replay_service import T0, attempt, make_service
-
-    class _HoldExtractor(_FeedExtractor):
-        def extract(self, ring, start, end, out_path):
-            result = super().extract(ring, start, end, out_path)
-            times = list(result.frame_times) + [result.frame_times[-1] + PICTURE_HEARTBEAT_S]
-            return ClipResult(path=result.path, duration_s=result.duration_s,
-                              truncated=False, start_utc=start,
-                              video_start_s=times[0], frame_times=times)
-
-    svc = make_service(tmp_path, [attempt()])
-    svc.extractor = _HoldExtractor(count=30)
-    origin = (T0 - timedelta(seconds=3)).timestamp()
-    ledger = _filled_ledger(origin, 30)
-    ledger.mark_fed(None, origin + 29 / 30 + 0.004 + PICTURE_HEARTBEAT_S)
-    svc.recorder.ledger = ledger
-    seen = {}
-    svc.pad_reader = lambda clip, fm, a, repeats=None: (seen.setdefault("repeats", repeats), None)[1]
-    res = svc.view(42)
-    assert res["frame_map"][-1] == res["frame_map"][-2]
-    assert seen["repeats"] == [False] * 30 + [True]
-    assert res["feed_match"]["repeats"] == 1
-
-
-# -- audio and video on ONE clock: a flash and a click at the same instant -----
 
 def test_a_flash_and_a_click_at_one_instant_land_together_in_the_cut(tmp_path):
     """The A/V sync instrument this pipeline never had: at one wall-clock
@@ -653,52 +520,6 @@ def test_passthrough_is_load_bearing_on_a_vfr_clip(tmp_path):
         f"got {buggy_count} for {stored} stored frames")
 
 
-def test_the_pixels_hold_the_boundaries_after_the_reader_picks_the_values(tmp_path):
-    """His standing rule: "when the user plays back their video, they NEVER
-    see a duplicate frame. They should step forward and never see duplicate
-    frames" (2026-09-02). The reader can still advance the map across a
-    picture the emulator merely re-presented, so the picture runs are applied
-    AGAIN after it answers -- one answer per picture is an invariant of what
-    ships, which is what makes the stepper (it walks to the next distinct map
-    value) unable to land on a held picture."""
-    from test_replay_service import attempt, make_service
-
-    svc = make_service(tmp_path, [attempt()])
-    svc.extractor = _FeedExtractor(count=40)
-    from test_replay_service import T0
-    origin = (T0 - timedelta(seconds=3)).timestamp()
-    svc.recorder.ledger = _filled_ledger(origin, 40)
-    quantiser_calls = []
-
-    def quantiser(clip, frame_map):
-        quantiser_calls.append(list(frame_map))
-        # Two pictures held: slots 10 and 11 show one picture, 20 and 21 another.
-        held = list(frame_map)
-        for slot in (11, 21):
-            if slot < len(held):
-                held[slot] = held[slot - 1]
-        return held
-
-    svc.map_quantiser = quantiser
-    # A reader that answers, and advances straight across both held pictures.
-    svc.pad_reader = lambda clip, fm, a, repeats=None: type(
-        "R", (), {"frame_map": list(range(500, 500 + len(fm))),
-                  "verdict": type("V", (), {
-                      "as_dict": lambda self: {}, "sure": 40, "agree": 40,
-                      "nowhere": 0, "agreement": 1.0,
-                      # No feed_match in this fixture, so coverage is 0 and
-                      # the reader's own map ships -- which is what this test
-                      # is about (the picture runs re-hold it either way).
-                      "offset": 0, "offset_margin": 0.0})()})()
-    res = svc.view(42)
-    assert len(quantiser_calls) == 2, "the runs must hold the map AFTER the read"
-    shipped = res["frame_map"]
-    assert shipped[11] == shipped[10], "a held picture kept two answers"
-    assert shipped[21] == shipped[20], "a held picture kept two answers"
-
-
-# -- one cut per attempt, and a map even when the log cannot cover the clip ---
-
 def test_two_callers_for_one_attempt_cut_it_once(tmp_path):
     """His 100-coin replay came back a black, undecodable video whose sidecar
     counted 1921 frames of a 1380-frame file: he clicked extract, the LBLJ
@@ -729,119 +550,10 @@ def test_two_callers_for_one_attempt_cut_it_once(tmp_path):
     assert len(results) == 2 and results[0]["clip_url"] == results[1]["clip_url"]
 
 
-def test_a_feed_log_that_cannot_cover_the_clip_falls_back_to_the_ledger(tmp_path):
-    """A loaded machine drops pictures at the sink's queue and writes the rest
-    late, so the log stops covering the clip: his Haunted Books run captured
-    680 pictures, encoded 387, matched 178 -- and shipped with NO frame map,
-    which the panel answers with plain arithmetic ("lots of incorrect
-    frames"). The picture ledger matches rows to the clip's own picture runs
-    and does not care how many frames went missing, so it answers instead."""
-    from test_replay_service import T0, attempt, make_service
-
-    svc = make_service(tmp_path, [attempt()])
-    svc.extractor = _FeedExtractor(count=40)
-    origin = (T0 - timedelta(seconds=3)).timestamp()
-    # A ledger with rows but a feed log far from the clip's frames: nothing
-    # matches, so feed_map refuses.
-    ledger = _filled_ledger(origin, 40)
-    ledger._feeds.clear()
-    for index in range(40):
-        ledger.mark_fed(origin + index / 30, origin + 500 + index / 30)
-    svc.recorder.ledger = ledger
-    asked = {}
-
-    def ledger_mapper(clip, rows, start_ts, duration_s, fps, frame_times=None):
-        asked["frame_times"] = frame_times
-        return [900 + k for k in range(len(frame_times or []))]
-
-    svc.ledger_mapper = ledger_mapper
-    svc.pad_reader = None
-    res = svc.view(42)
-    assert res["frame_map"] is not None, "a loaded capture shipped no map"
-    assert res["frame_map"][0] == 900
-    assert res["frame_map_source"] == "ledger"
-    # The fallback is handed the clip's OWN times: a picture-feed clip is VFR
-    # and its runs do not sit on the 60 Hz grid.
-    assert asked["frame_times"] is not None
-    assert all(abs(a - b) < 1e-5 for a, b in
-               zip(asked["frame_times"], res["frame_times"], strict=True))
-
-
-# -- the reader is an AUDITOR when the bookkeeping covers the clip (item 89) --
-
-def _reader_stub(offset, margin, aligned):
-    """A pad_reader whose DP answers `aligned` and whose sweep answers
-    (offset, margin) -- the two contributions the service chooses between."""
-    def reader(clip, frame_map, attempt, repeats=None):
-        verdict = type("V", (), {
-            "as_dict": lambda self: {"offset": offset, "offset_margin": margin},
-            "sure": len(frame_map), "agree": len(frame_map), "nowhere": 0,
-            "agreement": 1.0, "offset": offset, "offset_margin": margin})()
-        return type("R", (), {"frame_map": list(aligned), "verdict": verdict})()
-    return reader
-
-
-def _service_with_feed(tmp_path, matched, frames=40):
-    from test_replay_service import T0, attempt, make_service
-    svc = make_service(tmp_path, [attempt()])
-    svc.extractor = _FeedExtractor(count=frames)
-    origin = (T0 - timedelta(seconds=3)).timestamp()
-    svc.recorder.ledger = _filled_ledger(origin, frames)
-    svc.map_quantiser = lambda clip, fm: list(fm)      # no picture runs here
-    # Force the coverage the test wants, whatever the fixture produced.
-    real = svc._map_from_feeds
-
-    def spy(meta, res):
-        real(meta, res)
-        if meta.get("feed_match"):
-            meta["feed_match"]["frames"] = frames
-            meta["feed_match"]["matched"] = matched
-    svc._map_from_feeds = spy
-    return svc
-
-
-def test_a_well_covered_clip_ships_the_bookkeeping_plus_one_offset(tmp_path):
-    """His Elevator Tour frame 13 drew R where the screen showed Cdown -- a
-    neutral stretch, where the display cannot tell two frames apart and the
-    reader's DP is free to drift. Measured across three clips: 50-77% of a
-    clip's frames repeat their predecessor's pad, and 78-94% of the DP's moves
-    sit between two such frames. On a covered clip the feed log plus ONE flat
-    integer matched a hindsight per-window corrector, so the DP's per-slot
-    freedom is what ships nothing but drift."""
-    svc = _service_with_feed(tmp_path, matched=40)          # 100% coverage
-    svc.pad_reader = _reader_stub(offset=2, margin=0.4,
-                                  aligned=[7777] * 40)      # the DP's answer
-    res = svc.view(42)
-    assert res["frame_map_mode"] == "feed_log+offset"
-    assert res["frame_map_degraded"] is False
-    assert 7777 not in res["frame_map"], "the DP's per-slot answer shipped"
-    # The bookkeeping, moved by exactly the one integer.
-    assert res["frame_map"][1] - res["frame_map"][0] == 1
-    assert res["feed_coverage"] == 1.0
-
-
-def test_a_starved_capture_still_lets_the_reader_align_and_says_so(tmp_path):
-    """Below the cutoff the DP genuinely earns its keep -- on a 73%-covered
-    clip it took agreement from 85.6% to 95.6%, where even a hindsight
-    per-window corrector reached only 90.4%. But it is patching capture
-    damage, and the clip says so rather than looking like a clean one."""
-    svc = _service_with_feed(tmp_path, matched=20)          # 50% coverage
-    svc.pad_reader = _reader_stub(offset=2, margin=0.4,
-                                  aligned=[7777] * 40)
-    res = svc.view(42)
-    assert res["frame_map_mode"] == "reader_aligned"
-    assert res["frame_map_degraded"] is True
-    assert res["frame_map"] == [7777] * 40
-    assert res["feed_coverage"] == 0.5
-
-
-def test_a_thin_offset_margin_keeps_the_reader_even_on_a_covered_clip(tmp_path):
-    """Coverage is the discriminator, but a sweep with no clear winner is its
-    own refusal: the measured peaks were 28 and 46 points clear on the clips
-    that take the bookkeeping path and 6.5 on the one that does not."""
-    svc = _service_with_feed(tmp_path, matched=40)
-    svc.pad_reader = _reader_stub(offset=2, margin=0.02,    # no clear winner
-                                  aligned=[7777] * 40)
-    res = svc.view(42)
-    assert res["frame_map_mode"] == "reader_aligned"
-    assert res["frame_map_degraded"] is True
+# A feed log that cannot cover the clip used to fall back to matching rows
+# against the clip's own picture RUNS, and a coverage/offset policy then
+# chose between the log's bookkeeping and the pad reader's per-slot
+# alignment. Both are gone: the lockstep rule (item 88) made the log cover
+# every clip it describes -- 476/477, 542/548 and 835/841 on his three
+# certified clips -- and a clip the log cannot cover now carries no map
+# rather than an inferred one.

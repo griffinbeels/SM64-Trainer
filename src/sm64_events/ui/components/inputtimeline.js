@@ -283,48 +283,37 @@ export function mappedTimeAtFrame(frame, frameMap, clock, stretches) {
   return null;
 }
 
-// The pad reader's verdict on the clip (replay/padread.py): how many video
-// frames the game's OWN input display could be read on, and on how many of
-// those the timeline's pad is exactly what the screen shows. His acceptance
-// test ("100% or it can't be relied on") as a number he can see, on the
-// surface he judges it from; the tool that lists each disagreement is named
-// in the hover.
-function screenCheck(reading, attemptId, open, toggle, degraded = false) {
-  if (!reading || !reading.sure) return null;
-  const off = reading.sure - reading.agree;
-  // Three honest numbers in the timeline's own unit (his 2026-09-01
-  // ruling that "checked 1207/1207" was "literally and objectively
-  // wrong"): how many of the clip's FRAMES the display could be checked
-  // on, how many of those disagree, and the longest run the display
-  // cannot tell apart (inside a hold every neighbour reads the same, so
-  // nothing on screen pins which one a picture is). Never "N/N".
-  const total = reading.frames_total || 0;
-  const checked = reading.frames_checked || 0;
-  const gap = reading.unpinned_longest || 0;
-  const gapText = gap ? ` · longest unpinned ${gap}f` : "";
-  // A DEGRADED capture is never allowed to look like a clean one (item 89):
-  // the recorder's own bookkeeping did not cover this clip, so the display
-  // had to repair the map frame by frame -- which is exactly where a drifting
-  // frame comes from. He should be able to see that without asking.
-  const health = degraded
-    ? `${" "}· capture was degraded, map repaired from the screen` : "";
-  const label = total
-    ? (off === 0
-        ? `screen-checked ${checked} of ${total} frames${gapText}${health}`
-        : `screen-checked ${checked} of ${total} frames · ${off} disagree${gapText}${health}`)
-    : (off === 0
-        ? `screen-checked ${reading.agree}/${reading.sure}`
-        : `screen-checked ${reading.agree}/${reading.sure} · ${off} disagree`);
-  const title = `Of the clip's ${total || "?"} game frames the game's own input display `
-    + `could be checked on ${checked}; the timeline's pad matches on all but ${off}. `
-    + (gap ? `The longest stretch nothing on screen can pin is ${gap} frames. ` : "")
-    + (off ? "Click to list each disagreeing frame."
-           : "Every checkable frame agrees.");
+// THE CLIP'S OWN CHECK (`pad_stamp_agreement`): the capture layer copied the
+// pad out of RDRAM beside every picture it stamped, and this is how many of
+// those pads equal what the timeline holds for that frame. His acceptance
+// test ("100% or it can't be relied on") as a number on the surface he
+// judges it from.
+//
+// It used to be the PAD READER's verdict -- Usamune's input display read out
+// of the pixels. Two facts retired that: the stamps answer the same question
+// exactly and for free, and the reader answered it badly (82-94% on three
+// clips the oracle certified perfect, every sampled disagreement a digit
+// confusion off compressed video). A check that cries wolf on one frame in
+// eight is worse than no check, because he cannot tell its misreads from
+// real ones -- which is what he reported on 2026-09-02: "a lot of the screen
+// checked frames aren't actually even wrong".
+function screenCheck(agreement, open, toggle) {
+  if (!agreement || !agreement.pictures) return null;
+  const off = agreement.pictures - agreement.agree;
+  const label = off === 0
+    ? `pad-checked ${agreement.pictures} of ${agreement.pictures} pictures`
+    : `pad-checked ${agreement.agree} of ${agreement.pictures} pictures`
+      + ` \u00b7 ${off} disagree`;
+  const title = "The capture layer copied the pad beside every picture it "
+    + `stamped; the timeline holds the same pad on ${agreement.agree} of `
+    + `${agreement.pictures}. `
+    + (off ? "Click to list each disagreeing picture."
+           : "Every stamped picture agrees.");
   // A datum on a summary surface is a DOOR to its evidence (his standing
   // rule): the chip opens the list when there is one to open.
   return html`<button type="button"
       class=${`input-screen-check ${off ? "is-off" : "is-clean"} `
-        + `${degraded ? "is-degraded " : ""}${open ? "is-open" : ""}`}
+        + `${open ? "is-open" : ""}`}
       title=${title} disabled=${off === 0} aria-expanded=${open}
       onclick=${toggle}>${label}</button>`;
 }
@@ -341,32 +330,29 @@ function frameMapNote(frameMapSource, openSetup) {
   </div>`;
 }
 
-// The frames the screen contradicts, each as the PANEL frame it sits on --
-// "which 2 frames disagree?" answered on the surface, and a click goes
-// there. `disagreements` rows are [slot, row, screen reads, map says].
-function DisagreementList({ reading, frameMap, stretches, seek, lead }) {
-  const rows = (reading && reading.disagreements) || [];
+// The pictures whose stamped pad the timeline does not hold, each as the
+// PANEL frame it sits on -- "which 2 disagree?" answered on the surface, and
+// a click goes there. `disagreements` rows are
+// [slot, frame, track pad, stamped pad], each pad [stick_x, stick_y, buttons].
+function padOf(pad) {
+  return Array.isArray(pad) ? `${pad[0]},${pad[1]}` : "--";
+}
+
+function DisagreementList({ agreement, stretches, seek, lead }) {
+  const rows = (agreement && agreement.disagreements) || [];
   if (!rows.length) return null;
-  const seen = new Set();
-  const items = [];
-  for (const [slot, row, screen, says] of rows) {
-    const raw = frameMap ? frameMap[slot] : null;
-    const axis = raw == null ? null : trackFrameOf(raw, stretches);
-    const key = `${axis}:${row}`;
-    if (seen.has(key)) continue;                  // both slots of one picture
-    seen.add(key);
-    items.push({ axis, row, screen, says, slot });
-  }
   return html`<ul class="input-screen-check-list">
-    ${items.map((item) => html`<li key=${item.slot}>
-      <button type="button" class="input-screen-check-row"
-          disabled=${item.axis == null}
-          onclick=${() => item.axis != null && seek(item.axis + lead)}>
-        <span class="frame">${item.axis == null ? "outside the track" : `frame ${item.axis}`}</span>
-        <span class="axis">${item.row === "y" ? "up/down" : "left/right"}</span>
-        <span>screen <strong>${item.screen}</strong> · timeline <strong>${item.says}</strong></span>
-      </button>
-    </li>`)}
+    ${rows.map(([slot, raw, tracked, stamped]) => {
+      const axis = raw == null ? null : trackFrameOf(raw, stretches);
+      return html`<li key=${slot}>
+        <button type="button" class="input-screen-check-row"
+            disabled=${axis == null}
+            onclick=${() => axis != null && seek(axis + lead)}>
+          <span class="frame">${axis == null ? "outside the track" : `frame ${axis}`}</span>
+          <span>game <strong>${padOf(stamped)}</strong>${" "}\u00b7${" "}timeline${" "}<strong>${padOf(tracked)}</strong></span>
+        </button>
+      </li>`;
+    })}
   </ul>`;
 }
 
@@ -390,7 +376,7 @@ export function inspectorClock(frame, lead, pictureIgt, slot) {
 export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
                                 frameMap = null, clock = null,
                                 pictureIgt = null,
-                                padReading = null, degraded = false,
+                                padAgreement = null,
                                 frameMapSource = null,
                                 compact = false,
                                 tools = null }) {
@@ -605,14 +591,13 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
               a 0'19"20 row). data-total/data-lead keep the drawn span
               readable by the sweeps. */""}
         <h4 data-total=${total} data-lead=${lead}>${timeLabel(attemptFrames)}${" "}·${" "}${attemptFrames} frames${" "}·${" "}${data.fps} fps</h4>
-        ${screenCheck(padReading, attemptId, checkOpen,
-                      () => setCheckOpen((open) => !open), degraded)}
+        ${screenCheck(padAgreement, checkOpen,
+                      () => setCheckOpen((open) => !open))}
         ${frameMapNote(frameMapSource, () => setSetupOpen(true))}
       </div>
     </header>
-    ${checkOpen && html`<${DisagreementList} reading=${padReading}
-        frameMap=${frameMap} stretches=${data.stretches} seek=${seek}
-        lead=${lead} />`}
+    ${checkOpen && html`<${DisagreementList} agreement=${padAgreement}
+        stretches=${data.stretches} seek=${seek} lead=${lead} />`}
 
     ${data.template && html`<div class="input-template-note">
       <${Icon} name="bookmark" size=${13} />
