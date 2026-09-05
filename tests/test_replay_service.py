@@ -1109,11 +1109,12 @@ class FeedExtractor(FakeExtractor):
                                    frame_times=frame_times, video_start_s=frame_times[0])
 
 
-def test_a_plugin_clips_map_is_its_stamps_with_no_display_lag_and_carries_the_igt(tmp_path):
-    """The first plugin clips went through the desktop grab's display lag
-    and sat one frame behind their own stamps on every picture. Through the
-    feed log, a capture-layer clip's map IS the stamps: no lag, None where a
-    present saw two lists, and the game's own timer per slot rides the view."""
+def test_a_plugin_clips_map_is_its_stamps_less_the_layers_own_lag_and_carries_the_igt(tmp_path):
+    """A capture-layer picture shows the pad of the stamp before its own
+    (PLUGIN_PICTURE_LAG, measured on 7015: 352 of 352 A icons at -1). The
+    desktop grab's lag never applies; a present that saw two lists claims
+    nothing; the game's own timer rides the view for the frame the map
+    names, so the clock and the pad are one picture's."""
     svc = make_service(tmp_path, [attempt()])
     svc.extractor = FeedExtractor(count=120)
     svc.recorder.ledger = FeedExactLedger(count=120, inexact_at=7)
@@ -1123,14 +1124,15 @@ def test_a_plugin_clips_map_is_its_stamps_with_no_display_lag_and_carries_the_ig
     svc.track_pads = lambda attempt: {}
     res = svc.view(42)
     assert res["frame_map_source"] == "plugin"
-    assert res["frame_map"][:7] == [100, 101, 102, 103, 104, 105, 106]
+    assert res["frame_map"][:7] == [99, 100, 101, 102, 103, 104, 105]
     assert res["frame_map"][7] is None                    # two lists: nothing claimed
-    assert res["frame_map"][8:12] == [108, 109, 110, 111]
-    assert res["picture_igt"][:3] == [40, 41, 42] and res["picture_igt"][7] is None
+    assert res["frame_map"][8:12] == [107, 108, 109, 110]
+    # slot 0 names frame 99, which no row stamped: no clock there
+    assert res["picture_igt"][:3] == [None, 40, 41] and res["picture_igt"][7] is None
     import json as _json
     sidecar = _json.loads(
         (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
-    assert sidecar["plugin_inexact_rows"] == 1 and sidecar["picture_igt"][8] == 48
+    assert sidecar["plugin_inexact_rows"] == 1 and sidecar["picture_igt"][8] == 47
 
 
 def test_a_clip_with_one_inexact_row_takes_the_old_path(tmp_path):

@@ -62,6 +62,20 @@ def saved_attempt_ids(root: Path) -> set[int]:
 # way (his counter read 26, 27, 27, 29, 30, 31, 32, 33, 33) and does not
 # drift; that part is in the footage and cannot be corrected from the clip.
 DISPLAY_LAG_FRAMES = 1
+#: THE CAPTURE LAYER'S OWN LAG: the picture the layer grabs at the VI whose
+#: VI_ORIGIN changed shows the pad of the stamp BEFORE its own. MEASURED
+#: 2026-09-05 on clip 7015 by a fresh-context review, two channels, the map
+#: as handed and never the aligner's own answer: an offset sweep of the
+#: stick digits (screen = pad of map[k] + o) scored -2: 66.4%, -1: 85.8%,
+#: 0: 66.8%, +1: 60.1% of 1076 slots; the A-button icon, templates learned
+#: under offset-0 labels so the test leaned AGAINST the answer, scored
+#: -1: 352 of 352 lit slots, 0: 311, +1: 272. Clip 6918 agreed (41 vs 129
+#: reader disagreements at -1 vs 0). Whether the picture IS the previous
+#: list (SM64 swaps the buffer it rendered the iteration before) or the
+#: ROM's input display draws the previous pad, the panel must show
+#: pad(stamp - 1); which of the two it is -- and so whether the frame
+#: label is also one off -- is the oracle clip's to say (round 33 item 3).
+PLUGIN_PICTURE_LAG = 1
 # How much of a clip the feed log must account for before its bookkeeping is
 # trusted over the pad reader's per-slot alignment (item 89). Measured on
 # three clips: 100% and 92% on the two the reader only had to confirm, 73% on
@@ -570,17 +584,17 @@ class ReplayService:
             feeds = ledger.feeds_between(start - 1.0, end + 1.0)
             if not rows or not feeds:
                 return
-            # A capture-layer clip's rows carry the frame the plugin read at
-            # the list that DREW the picture: no display lag applies, and an
+            # A capture-layer clip's rows: the picture shows the pad of the
+            # stamp before its own (PLUGIN_PICTURE_LAG, measured), and an
             # inexact row (two lists between presents) claims nothing. The
-            # first plugin clips (2026-09-05, 6918/6942/6986) went through
-            # the desktop lag and sat one frame behind their own stamps on
-            # every picture -- his "the time is always one frame later".
+            # desktop grab's lag is a different fact about a different
+            # camera and never applies here.
             plugin_rows = bool(rows) and all("exact" in row for row in rows)
             built, repeats, stats = feed_map(
                 res.frame_times, start, rows, feeds,
                 0 if plugin_rows else DISPLAY_LAG_FRAMES,
-                row_value=((lambda row: row["frame"] if row.get("exact") else None)
+                row_value=((lambda row: (row["frame"] - PLUGIN_PICTURE_LAG
+                                         if row.get("exact") else None))
                            if plugin_rows else None))
             # The SAME feed-to-row join, projected onto the pair sampled
             # inside InputSampler's counter sandwich.
@@ -681,13 +695,14 @@ class ReplayService:
         # the list that drew it. The panel shows THIS as the frame's time,
         # so it reads what the screen printed rather than counting from the
         # track's first frame (the two clocks start a frame or two apart).
-        pairs = meta.pop("_clock_pairs", None)
-        if pairs is not None:
-            frame_map = meta.get("frame_map") or []
-            igts = [pair[1] if pair and index < len(frame_map) and frame_map[index] is not None
-                    else None
-                    for index, pair in enumerate(pairs)]
-            meta["picture_igt"] = igts if any(igt is not None for igt in igts) else None
+        meta.pop("_clock_pairs", None)
+        # ...read off the row whose frame the map names for the slot, so
+        # the clock and the pad the panel shows are the same picture's.
+        igt_by_frame = {row["frame"]: row["igt_overall"] for row in rows
+                        if row.get("frame") is not None and row.get("igt_overall") is not None}
+        frame_map = meta.get("frame_map") or []
+        igts = [igt_by_frame.get(frame) if frame is not None else None for frame in frame_map]
+        meta["picture_igt"] = igts if any(igt is not None for igt in igts) else None
         self._read_the_display(meta, clip, attempt, audit_only=True)
         self._audit_pad_stamps(meta, attempt)
 

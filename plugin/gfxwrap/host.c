@@ -23,7 +23,8 @@
  *
  * The window is a tool window shown without activation at the top-left of
  * the screen for the run's duration (a hidden window has no front buffer to
- * read), so it never takes focus. Exit code 0 on success. */
+ * read), layered at alpha 1 and click-through so it is never seen and never
+ * takes focus. Exit code 0 on success. */
 #include <windows.h>
 #include <GL/gl.h>
 #include <stdio.h>
@@ -58,10 +59,16 @@ static HWND make_gl_window(HDC *device_out, HGLRC *context_out) {
     klass.lpszClassName = "sm64_gfxwrap_host";
     klass.style = CS_OWNDC;
     RegisterClassA(&klass);
-    HWND window = CreateWindowExA(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, klass.lpszClassName,
+    /* Layered at alpha 1 and click-through: the window must exist and be
+     * composed for GL_FRONT to hold a picture, but it must not be SEEN --
+     * the suite drives this host dozens of times and he found "a rainbow
+     * square in the corner of my screen" (2026-09-05). */
+    HWND window = CreateWindowExA(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED
+                                  | WS_EX_TRANSPARENT, klass.lpszClassName,
                                   "gfxwrap host", WS_POPUP, 0, 0, 64, 48,
                                   NULL, NULL, klass.hInstance, NULL);
     if (!window) return NULL;
+    SetLayeredWindowAttributes(window, 0, 1, LWA_ALPHA);
     HDC device = GetDC(window);
     if (g_no_context) {
         ShowWindow(window, SW_SHOWNOACTIVATE);
