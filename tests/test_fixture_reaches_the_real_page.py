@@ -1370,37 +1370,28 @@ def test_the_frame_readout_can_reach_its_own_last_frame(page):
         "cannot reach its own last frame")
 
 
-def test_the_screen_check_chip_reaches_the_timeline_header(page):
-    """THE CLIP'S CHECK -- how many of the capture layer's stamped pads the
-    timeline holds -- is a chip in the timeline header, so his 100% test is
-    a number on the surface he judges it from. The fixture's synthetic view
-    carries one contradicted picture, so the wording that renders is the one
-    that names a disagreement.
+def test_a_disagreeing_picture_reaches_the_timeline_header(page):
+    """The clip's pad check is SILENT when it passes and speaks only when the
+    timeline contradicts what the game held. The fixture's synthetic view
+    carries one contradicted picture, so the chip renders here; the test
+    below proves it vanishes when nothing disagrees.
 
-    It read the PAD READER's verdict until 2026-09-05. The stamps answer the
-    same question exactly and for free, where the reader scored 82-94% on
-    three clips the oracle certified perfect -- a check that cries wolf on
-    one frame in eight is worse than none, which is what he reported on
-    2026-09-02 ("a lot of the screen checked frames aren't actually even
-    wrong")."""
+    His ruling on the passing state, 2026-09-05: "displaying this to the user
+    is really weird lol, worthless information for them". A check that has
+    never failed is a fact about our plumbing, not about his run -- the same
+    call he made retiring the segment step indicator once the segment logic
+    worked."""
     reach(page, "input-timeline")
     page.wait_for(".input-screen-check", timeout_ms=8000)
-    text, is_off = page.evaluate(
-        "(() => { const chip = document.querySelector('.input-screen-check');"
-        " return [chip.textContent, chip.classList.contains('is-off')]; })()")
-    assert text.startswith("pad-checked ") and "1 disagree" in text, text
-    # Honest units, and NEVER a ratio of a number against itself: a clip
-    # reaches past the attempt at both ends, so the count checked is smaller
-    # than the clip's pictures and the tooltip carries the rest.
-    assert "pictures" in text and "/" not in text, text
-    hover = page.evaluate(
-        "document.querySelector('.input-screen-check').getAttribute('title')")
-    assert "fall outside the attempt" in hover, hover
-    assert is_off, "one contradicted picture must read as off, not clean"
-    # The chip is a DOOR (his rule: a datum on a summary surface leads to
-    # its evidence): click it and every disagreeing picture is listed as the
-    # panel frame it sits on, with what the game held and what the timeline
-    # holds; click a row and the panel goes there.
+    chip = page.evaluate(
+        "document.querySelector('.input-screen-check').textContent")
+    assert "1 picture" in chip and "disagree with the game" in chip, chip
+    # No ratio and no count of what passed: the chip is news, not a statistic.
+    assert "/" not in chip and "all agree" not in chip, chip
+    # The chip is a DOOR (his rule: a datum on a summary surface leads to its
+    # evidence): click it and every disagreeing picture is listed as the panel
+    # frame it sits on, with what the game held and what the timeline holds;
+    # click a row and the panel goes there.
     page.click(".input-screen-check")
     page.wait_for(".input-screen-check-row", timeout_ms=4000)
     row_text, frame_text = page.evaluate(
@@ -1413,6 +1404,51 @@ def test_the_screen_check_chip_reaches_the_timeline_header(page):
         "document.querySelector('.input-inspector-frame strong').textContent")
     listed = int(frame_text.split()[1])
     assert int(readout.split("/")[0].strip()) == listed, (readout, frame_text)
+
+
+def test_a_clip_whose_pads_all_agree_draws_no_chip_at_all(page):
+    """The half his ruling is actually about, and a state live data always
+    holds but the fixture cannot seed twice: every picture agreeing. Reached
+    the way `.claude/rules/ui-core.md` prescribes -- rewrite the captured
+    response on its way in -- so the REAL component renders a clean view.
+
+    The header must then carry the time, the frame count and nothing else.
+    Mutation proof: restore the "all agree" branch in `screenCheck` and this
+    goes red while its sibling above stays green."""
+    # A fresh page first: the drawer fetches its view once, on open, so a
+    # patch installed while it is already open changes nothing (measured --
+    # the previous test's payload rendered straight through).
+    page.evaluate("(() => { location.reload(); return true; })()")
+    page.wait_for(PROJECT.ready_selector, timeout_ms=15000)
+    page.wait_ms(400)
+    page.evaluate(
+        "(() => {"
+        "  const real = window.fetch;"
+        "  window.fetch = async (input, init) => {"
+        "    const response = await real(input, init);"
+        "    const url = typeof input === 'string' ? input : input.url;"
+        "    if (!/\/replay$/.test(url || '')) return response;"
+        "    const body = await response.clone().json();"
+        "    if (body && body.pad_stamp_agreement) {"
+        "      body.pad_stamp_agreement.agree = body.pad_stamp_agreement.pictures;"
+        "      body.pad_stamp_agreement.disagreements = [];"
+        "    }"
+        "    return new Response(JSON.stringify(body), {status: 200,"
+        "      headers: {'content-type': 'application/json'}});"
+        "  };"
+        "  return true; })()")
+    reach(page, "input-timeline")
+    page.wait_for(".input-timeline", timeout_ms=8000)
+    page.wait_ms(400)
+    head = page.evaluate(
+        "(() => { const h = document.querySelector('.input-timeline-head');"
+        "  return [h.textContent, document.querySelectorAll('.input-screen-check').length];"
+        " })()")
+    assert head[1] == 0, f"a clip whose pads all agree still drew a chip: {head[0]!r}"
+    assert "frames" in head[0] and "fps" in head[0], head[0]
+    # Put the real fetch back for whatever runs next on this shared page.
+    page.evaluate("(() => { location.reload(); return true; })()")
+    page.wait_for(PROJECT.ready_selector, timeout_ms=15000)
 
 
 # --- and it must not leave the state it reached behind ---------------------

@@ -706,14 +706,14 @@ same pad the game held. The [[capture layer]] copies the pad out of the
 game's memory beside every picture it stamps, so the trainer ends up with
 two independent records of one [[frame]]'s pad -- the plugin's copy and the
 [[input track]]'s -- and the audit compares them picture by picture. It
-reads no pixels, cannot misread, and costs nothing, which is why it
-replaced the [[pad reader]]'s verdict on the [[input timeline]]'s own
-header (2026-09-05: 1,482 of 1,482 pictures across his three certified
-clips).
+reads no pixels, cannot misread, and costs nothing. It is SILENT when it
+passes: it has never failed, so saying so on screen states a fact about
+our own plumbing rather than about the [[attempt]] on screen, and only a
+DISAGREEMENT draws -- a chip on the [[input timeline]]'s header opening the
+list of contradicted pictures.
 
-- **Lives** -- `src/sm64_events/replay/service.py`; the
-  [[input timeline]] draws it as a chip that opens the list of
-  disagreeing pictures
+- **Lives** -- `src/sm64_events/replay/service.py`; the clip's own metadata
+  keeps the verdict whether or not anything draws it
 - **Not** -- the [[oracle reader]]: that certifies WHICH [[frame]] a
   picture shows, where this one certifies the PAD on the [[frame]] the map
   already names.

@@ -283,48 +283,34 @@ export function mappedTimeAtFrame(frame, frameMap, clock, stretches) {
   return null;
 }
 
-// THE CLIP'S OWN CHECK (`pad_stamp_agreement`): the capture layer copied the
-// pad out of RDRAM beside every picture it stamped, and this is how many of
-// those pads equal what the timeline holds for that frame. His acceptance
-// test ("100% or it can't be relied on") as a number on the surface he
-// judges it from.
+// THE CLIP'S OWN CHECK (`pad_stamp_agreement`), and it is SILENT WHEN IT
+// PASSES. The capture layer copies the pad out of RDRAM beside every picture
+// it stamps, so extraction can compare that against what the timeline holds
+// for the same frame -- exactly, with no pixels involved. It is right on
+// every picture of every clip, and a chip saying so is a fact about our
+// plumbing rather than about his run: "displaying this to the user is really
+// weird lol, worthless information for them" (2026-09-05). Same shape as the
+// segment step indicator he retired: the display existed to prove the
+// mechanism worked, and it has.
 //
-// It used to be the PAD READER's verdict -- Usamune's input display read out
-// of the pixels. Two facts retired that: the stamps answer the same question
-// exactly and for free, and the reader answered it badly (82-94% on three
-// clips the oracle certified perfect, every sampled disagreement a digit
-// confusion off compressed video). A check that cries wolf on one frame in
-// eight is worse than no check, because he cannot tell its misreads from
-// real ones -- which is what he reported on 2026-09-02: "a lot of the screen
-// checked frames aren't actually even wrong".
+// A DISAGREEMENT still draws, because that is the opposite kind of news --
+// the panel beside this video is showing a pad the game did not hold, and
+// nothing else on the page would say so. Clicking it lists every contradicted
+// picture and seeks there.
 function screenCheck(agreement, open, toggle) {
   if (!agreement || !agreement.pictures) return null;
   const off = agreement.pictures - agreement.agree;
-  // NEVER "N of N". A clip reaches past the attempt at both ends and the
-  // track has no pad for those frames, so the number checked is honestly
-  // smaller than the number of pictures -- and printing a ratio of a number
-  // against itself is what he rejected on the reader's chip (2026-09-01:
-  // "checked 1207/1207" was "literally and objectively wrong"). So the clean
-  // state states the count it checked, and the tooltip carries the rest.
-  const label = off === 0
-    ? `pad-checked ${agreement.pictures} pictures \u00b7 all agree`
-    : `pad-checked ${agreement.pictures} pictures \u00b7 ${off} disagree`;
-  const rows = agreement.rows || 0;
-  const outside = rows > agreement.pictures ? rows - agreement.pictures : 0;
-  const title = "The capture layer copied the pad beside every picture it "
-    + `stamped; the timeline holds the same pad on ${agreement.agree} of `
-    + `${agreement.pictures}. `
-    + (outside ? `${outside} of the clip's ${rows} pictures fall outside the `
-                 + "attempt, where the track has no pad to check against. " : "")
-    + (off ? "Click to list each disagreeing picture."
-           : "Every checkable picture agrees.");
+  if (off === 0) return null;
+  const title = "The capture layer copied the pad the game held beside every "
+    + `picture it stamped, and the timeline disagrees with it on ${off} of `
+    + `${agreement.pictures}. Click to list them.`;
   // A datum on a summary surface is a DOOR to its evidence (his standing
-  // rule): the chip opens the list when there is one to open.
+  // rule): the chip opens the list.
   return html`<button type="button"
-      class=${`input-screen-check ${off ? "is-off" : "is-clean"} `
-        + `${open ? "is-open" : ""}`}
-      title=${title} disabled=${off === 0} aria-expanded=${open}
-      onclick=${toggle}>${label}</button>`;
+      class=${`input-screen-check ${open ? "is-open" : ""}`}
+      title=${title} aria-expanded=${open}
+      onclick=${toggle}>${off} ${off === 1 ? "picture" : "pictures"}${" "}
+      disagree with the game</button>`;
 }
 
 // Whether this clip's frame map came off the frame-exact capture layer (the
