@@ -39,7 +39,7 @@ import { getJSON, pollJob, send } from "../api.js";
 import { useIdentityFetch } from "../refetch.js";
 import { useMeasuredWidth } from "../viewport.js";
 import { attainableCs, fmtSeconds } from "../format.js";
-import { applyGoalOverrides, cardColumns, columnCountFor, divisionOptions,
+import { applyGoalOverrides, cardLayout, columnCountFor, divisionOptions,
          fmtGapCs, goalGroups, parseGapTime } from "../scorecardgoal.js";
 import { capName, divisionDigit } from "./caps.js";
 import { entityIconSrc } from "./entityicons.js";
@@ -56,7 +56,7 @@ const html = htm.bind(h);
 // Re-exported at this path too -- ui/scorecardgoal.js's own header comment
 // says why the pure logic lives in a separate, genuinely import-free file
 // rather than here.
-export { applyGoalOverrides, cardColumns, columnCountFor, divisionOptions,
+export { applyGoalOverrides, cardLayout, columnCountFor, divisionOptions,
          fmtGapCs, goalGroups, parseGapTime };
 
 function goalToValue(goal) {
@@ -863,11 +863,11 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
               : ""}
             <div class="score-cards" ref=${setCardsElement}
                 data-cols=${String(columnCountFor(cardsWidth))}
-                style=${`--score-rows:${Math.max(1, ...cardColumns(
+                style=${`--score-rows:${Math.max(1, ...cardLayout(
                   displayData.rows, columnCountFor(cardsWidth))
-                  .map((column) => column.rows.length))}`}>
-              ${cardColumns(displayData.rows, columnCountFor(cardsWidth))
-                .map((column, columnIndex) => html`<div
+                  .columns.map((column) => column.rows.length))}`}>
+              ${cardLayout(displayData.rows, columnCountFor(cardsWidth))
+                .columns.map((column, columnIndex) => html`<div
                   key=${columnIndex} class="score-col">
                 ${column.rows.map((row) => html`<${ScoreCard} key=${row.label}
                     t=${t} row=${row} removing=${removing}
@@ -875,6 +875,19 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
                     onOpenLibrary=${openLibrary} sourceNames=${sourceNames} />`)}
               </div>`)}
             </div>
+            ${/* Round 32: the odd card (Bowser) sits centred beneath the
+                 stacks, one card wide -- "centered between the two columns
+                 here when the page is narrower"; "centered between all 4
+                 columns (centered under SSL + TTM)". */""}
+            ${cardLayout(displayData.rows, columnCountFor(cardsWidth)).centred.length
+              ? html`<div class="score-centred"
+                    style=${`--score-cols:${columnCountFor(cardsWidth)}`}>
+                ${cardLayout(displayData.rows, columnCountFor(cardsWidth)).centred
+                  .map((row) => html`<${ScoreCard} key=${row.label}
+                    t=${t} row=${row} removing=${removing}
+                    onRemove=${removeRow} onGoalOverride=${handleGoalOverride}
+                    onOpenLibrary=${openLibrary} sourceNames=${sourceNames} />`)}
+              </div>` : ""}
             ${/* Round 25: the export sits UNDER the cards, not in the head --
                  "The button should go at the bottom, underneath all the
                  cards. I just think it would look better there." Its error

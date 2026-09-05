@@ -168,33 +168,37 @@ export function fmtGapCs(cs) {
 // order, which is how the sheet he grades himself against is laid out.
 //
 // Round 21 split the specials into two cards again (Secret, Bowser), so
-// there are 17 cards for a 16-slot grid, and his ask was an arrangement
-// "so that (1) we can easily screenshot all of them at once, (2) and it
-// feels reasonably uniform". Measured at his window (a ~2214px pane at
-// his zoom): four rows of cards fit one screenshot, five do not. So the
-// COURSE cards keep his grid exactly -- chunked column-major on their own
-// count -- and the two specials go in a track of their OWN when the pane
-// has room for five (`SPECIALS_TRACK_FROM`), else they are appended to
-// the last course column, so "Secret -> Bowser" closes the reading
-// order either way. Chunking all 17 together would have put five in the
-// first column and moved BBH to the bottom of it.
-export const SPECIALS_TRACK_FROM = 5;
-
-export function cardColumns(rows, columnCount = 4) {
-  if (!rows || !rows.length) return [];
+// there are 17 cards for a 16-slot grid. Round 32 (2026-09-05) settled
+// where the odd one goes, at every width, in his words against three
+// screenshots: "What if the Bowser card is centered between the two
+// columns here when the page is narrower?"; "when medium width, what if
+// it's centered between all 4 columns? (centered under SSL + TTM)"; and of
+// the old five-track full-monitor shape, "we actually should just keep the
+// same layout as the medium width... that looks much nicer." So: the
+// COURSE cards keep his grid exactly, chunked column-major on the column
+// count; Secret closes the last course column; and the LAST special
+// (Bowser) leaves the stacks for a centred row of its own beneath them,
+// one card wide, whenever there is more than one column. A single column
+// is a single stack and keeps everything in it. The five-track shape is
+// retired with `columnCountFor`'s floors below.
+export function cardLayout(rows, columnCount = 4) {
+  if (!rows || !rows.length) return { columns: [], centred: [] };
   const courses = rows.filter((row) => row.course_id != null);
   const specials = rows.filter((row) => row.course_id == null);
-  const ownTrack = columnCount >= SPECIALS_TRACK_FROM && specials.length > 0;
-  const courseColumns = ownTrack ? columnCount - 1 : columnCount;
-  const perColumn = Math.ceil(courses.length / Math.max(1, courseColumns)) || 1;
+  const perColumn = Math.ceil(courses.length / Math.max(1, columnCount)) || 1;
   const columns = [];
   for (let start = 0; start < courses.length; start += perColumn)
     columns.push({ rows: courses.slice(start, start + perColumn) });
-  if (specials.length) {
-    if (ownTrack || !columns.length) columns.push({ rows: [...specials] });
-    else columns[columns.length - 1].rows.push(...specials);
+  // Only a card that would otherwise hang alone off the last column is
+  // centred: a scope with one special (a route holding only Secret) keeps
+  // it in the stack, since there is no odd card to balance.
+  const centred = columnCount > 1 && specials.length > 1 ? [specials[specials.length - 1]] : [];
+  const stacked = specials.slice(0, specials.length - centred.length);
+  if (stacked.length) {
+    if (!columns.length) columns.push({ rows: [...stacked] });
+    else columns[columns.length - 1].rows.push(...stacked);
   }
-  return columns;
+  return { columns, centred };
 }
 
 // How many columns that measured pane gets. The COMPONENT picks, not a
@@ -203,13 +207,19 @@ export function cardColumns(rows, columnCount = 4) {
 // the chunker anything. Reading down a column is only course order if the
 // stack it drew is the stack it chunked.
 //
-// Round 11's two floors, unchanged: 4-up only where each card gets ~320px+,
-// one column below 560. Round 21 adds the five-track step for the
-// specials' own column, MEASURED (2026-09-02, the real card at his zoom):
-// five tracks wrap no star name from a 2117px pane (415px cards) upward,
-// and five names wrap at 2067px, so the floor sits just above the last
-// wrap. His own window measures ~2214px.
-export const CARD_COLUMN_FLOORS = [[2120, 5], [1320, 4], [560, 2]];
+// Round 32's one rule for the floors: "Every single name should be on a
+// SINGLE row, rather than occupying two rows." MEASURED on the real
+// template (2026-09-05, viewport walked down in 20px steps): a card wraps
+// no star-row name at 417px and wider, and "Red Coins on the Floating Isle
+// + 100c" (the widest) wraps at 412px. Four cards plus three 10px gaps need
+// a 1698px pane; two cards plus one gap need 844px. So four columns above
+// 1700, two above 850 (the supported minimum window, whose pane is
+// narrower), else one -- the count steps DOWN before a name would wrap,
+// never the name's font or its words. Round 21's five-track step is
+// retired (his call: keep the four-column layout at every wider pane).
+// `tests/test_ui_scorecard.py::test_every_name_sits_on_one_line_at_every_column_count`
+// re-measures this on the real template just above each floor.
+export const CARD_COLUMN_FLOORS = [[1700, 4], [850, 2]];
 
 export function columnCountFor(paneWidth) {
   for (const [floor, count] of CARD_COLUMN_FLOORS)

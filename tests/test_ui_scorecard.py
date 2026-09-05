@@ -32,6 +32,27 @@ pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node not on PATH")
 
 
+def _viewport_for_pane(pane: int) -> int:
+    """The window width that gives the scorecard a pane of `pane` px: the
+    shell spends 283px beside the pane with the wide sidebar (1180px windows
+    and up) and 153px with the rail below that -- both measured; the test
+    asserts the pane it actually got, so a shell change shows up here."""
+    wide = pane + 283
+    return wide if wide >= 1180 else pane + 153
+
+
+def _column_floors() -> list:
+    """`CARD_COLUMN_FLOORS` as the module ships it, so a render test can
+    probe each floor rather than a copy of it."""
+    script = (f"import * as mod from {SCORECARDGOAL_JS!r};\n"
+              "console.log(JSON.stringify(mod.CARD_COLUMN_FLOORS));")
+    result = subprocess.run(["node", "--input-type=module", "-"],
+                            input=script, capture_output=True, text=True,
+                            timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
 def call(fn: str, *args: object) -> object:
     """One exported function, one call, JSON in and JSON out -- the exact
     pattern test_ui_entity_section.py drives entitysection.js with."""
@@ -1476,11 +1497,13 @@ def test_the_cards_sit_in_four_aligned_columns_reading_down_in_course_order():
     RENDERED, not chunked: the node tests above already prove `cardColumns`
     chunks column-major, and this is the other half — that the browser draws
     the stacks it chunked, in that order, with their rows in register.
-    Driven at 1920px, where the 4-up track count applies."""
+    Driven at 2100px, where the 4-up track count applies (round 32 raised
+    the 4-up floor to a 1700px pane so no name wraps; 1920 sits just under
+    it)."""
     with serve_ui() as base:
         _put_division_goal(base, "Bronze", "V")
 
-        with get_driver().launch(headless=True, viewport=(1920, 1000)) as page:
+        with get_driver().launch(headless=True, viewport=(2100, 1000)) as page:
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
@@ -1506,17 +1529,17 @@ def test_the_cards_sit_in_four_aligned_columns_reading_down_in_course_order():
         assert drawn == sorted(drawn, key=CARD_ORDER.index), (
             "reading down each column in turn must walk the course list in "
             f"order; drew {drawn}")
-        assert drawn[-2:] == [SECRET_LABEL, BOWSER_LABEL], (
-            "Secret then Bowser close the last column (round 21)")
+        assert drawn[-1] == SECRET_LABEL, (
+            "Secret closes the last column; Bowser is centred beneath (round 32)")
 
-        # Round 21: 15 course cards chunk [4, 4, 4, 3] and the two specials
-        # cards append to the last column, so it holds five. Rows register
-        # across columns (the column stacks are subgrids on the outer grid's
-        # row tracks), but no COLUMN stretches to the tallest one any more --
-        # round 20's merged card made every card its column's average, 272px
-        # for six lines of content.
+        # Round 21: 15 course cards chunk [4, 4, 4, 3]; Secret appends to
+        # the last column, so every column holds four (round 32 moved
+        # Bowser to its own centred row). Rows register across columns (the
+        # column stacks are subgrids on the outer grid's row tracks), but no
+        # COLUMN stretches to the tallest one any more -- round 20's merged
+        # card made every card its column's average, 272px for six lines.
         counts = [len(column) for column in columns]
-        assert counts == [4, 4, 4, 5], counts
+        assert counts == [4, 4, 4, 4], counts
         for card_index in range(4):
             tops = [column[card_index]["top"] for column in columns]
             bottoms = [column[card_index]["bottom"] for column in columns]
@@ -1580,14 +1603,13 @@ def test_every_card_labels_its_columns_and_keeps_them_in_register():
                     f"the {column} column drifts within one card: {edges}")
 
 
-def test_a_full_monitor_gives_the_specials_their_own_column():
-    """Round 21's wide shape, rendered: at a 2860px viewport the grid draws
-    FIVE tracks -- his four course columns untouched and the two specials
-    cards in a fifth -- so the page is four rows tall and fits one
-    screenshot. (Round 20 had retired round 12's six-track shape for one
-    merged specials card; round 21 split it again, and a sixth track was
-    measured to wrap most star names, so five it is.) The chunked stacks
-    and the drawn tracks must be the same number."""
+def test_a_full_monitor_keeps_four_columns_and_centres_bowser():
+    """Round 32, rendered at a 2860px viewport: the five-track shape is
+    retired ("we actually should just keep the same layout as the medium
+    width... that looks much nicer") -- four tracks, four cards each, and
+    the Bowser card on a centred row beneath, its centre on the grid's
+    midline and its width a column's. The chunked stacks and the drawn
+    tracks must be the same number."""
     with serve_ui() as base:
         _put_division_goal(base, "Bronze", "V")
 
@@ -1613,19 +1635,34 @@ def test_a_full_monitor_gives_the_specials_their_own_column():
                 " col.querySelectorAll('.score-card').length),"
                 "    last: cols[cols.length - 1].querySelector("
                 "'.score-card:last-child .score-card-name').textContent.trim(),"
+                "    centred: (() => {"
+                "      const row = document.querySelector('.rank-page .score-centred');"
+                "      if (!row) return null;"
+                "      const card = row.querySelector('.score-card');"
+                "      const grid = cards.getBoundingClientRect();"
+                "      const box = card.getBoundingClientRect();"
+                "      const column = cols[0].querySelector('.score-card').getBoundingClientRect();"
+                "      return {label: card.querySelector('.score-card-name').textContent.trim(),"
+                "              offCentre: Math.abs((box.left + box.right) / 2 - (grid.left + grid.right) / 2),"
+                "              widthGap: Math.abs(box.width - column.width),"
+                "              below: box.top >= grid.bottom};"
+                "    })(),"
                 "  };"
                 "})()")
 
         assert state["width"] >= 1900, (
             f"the pane itself is only {state['width']}px wide — the "
             "workspace cap is back")
-        assert state["dataCols"] == "5", state
-        assert state["tracks"] == 5, (
-            f"the grid drew {state['tracks']} tracks for 5 chunked stacks "
+        assert state["dataCols"] == "4", state
+        assert state["tracks"] == 4, (
+            f"the grid drew {state['tracks']} tracks for 4 chunked stacks "
             "— the CSS and the component disagree")
-        assert state["counts"] == [4, 4, 4, 3, 2], state
-        assert state["last"] == BOWSER_LABEL, (
-            "the Bowser card closes the specials column")
+        assert state["counts"] == [4, 4, 4, 4], state
+        assert state["last"] == SECRET_LABEL, "Secret closes the last column"
+        assert state["centred"] and state["centred"]["label"] == BOWSER_LABEL, state
+        assert state["centred"]["offCentre"] <= 1.5, state["centred"]
+        assert state["centred"]["widthGap"] <= 1.5, state["centred"]
+        assert state["centred"]["below"], state["centred"]
 
 
 def test_every_line_is_a_door_to_that_stars_library_page():
@@ -1905,66 +1942,66 @@ def test_unpicking_the_last_goal_clears_it_and_one_pick_stays_single():
         assert _get_scorecard(base)["goal"] is None
 
 
-def test_no_star_name_leaves_a_blank_line_under_itself():
-    """Round 13. The hover glyph reserves inline space, and on a name that
-    fills its column that space landed the glyph ALONE on a second line:
-    one line of visible text inside a two-line box, so the icon -- centred
-    on the box, correctly -- drew below the text. His report: "the text
-    ends up not being center aligned, and it appears to have incorrectly
-    loaded above the course icon", naming six real stars.
+def test_every_name_sits_on_one_line_at_every_column_count():
+    """Round 32, his rule: "Every single name should be on a SINGLE row,
+    rather than occupying two rows." The column count steps down before a
+    name would wrap (`CARD_COLUMN_FLOORS`, measured on this template), so
+    the real card grid -- every one of the 120 stars and the Bowser rows --
+    is driven at a pane just above each floor and at the widest window, and
+    every name must occupy one line. This replaces round 13's blank-line
+    guard, whose premise (a wrapped name) no longer exists at any width the
+    grid offers.
 
-    The property, measured rather than inspected: every name's last line of
-    VISIBLE TEXT reaches the bottom of its own box. Driven at 2860px, where
-    the six-column layout makes those exact names wrap (at 1500px nothing
-    wraps and the defect cannot appear at all)."""
+    The widths are DERIVED from `CARD_COLUMN_FLOORS` at test time -- each
+    floor plus one pane pixel, plus the ~283px of sidebar and padding a
+    viewport adds -- so lowering a floor moves the probe with it and the
+    guard goes red where a name would wrap (a hard-coded list would keep
+    passing at the old widths). Plus a single-column width and the widest
+    window."""
+    floors = _column_floors()                       # [[1700, 4], [850, 2]]
+    probes = [(2860, "4")] + [(_viewport_for_pane(floor + 1), str(count))
+                              for floor, count in floors]
+    probes.append((_viewport_for_pane(min(floor for floor, _count in floors) - 50), "1"))
     with serve_ui() as base:
         _put_division_goal(base, "Bronze", "V")
-
         with get_driver().launch(headless=True, viewport=(2860, 1200)) as page:
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
-            page.wait_ms(400)
+            page.wait_for(".rank-page .scorecard-card .score-card .score-line")
+            page.wait_ms(300)
+            findings = {}
+            for width, expected_cols in probes:
+                page.set_viewport(width, 1200)
+                page.wait_ms(250)
+                findings[width] = page.evaluate("""
+                  (() => {
+                    const cards = document.querySelector('.rank-page .score-cards');
+                    const names = [...document.querySelectorAll('.rank-page .score-line-name')];
+                    const lineHeight = parseFloat(getComputedStyle(names[0]).lineHeight);
+                    const wrapped = names.filter((el) =>
+                      el.getBoundingClientRect().height > lineHeight * 1.5)
+                      .map((el) => el.textContent.trim());
+                    return {cols: cards.dataset.cols, pane: cards.getBoundingClientRect().width,
+                            names: names.length, wrapped};
+                  })()
+                """)
+                assert findings[width]["cols"] == expected_cols, (width, findings[width])
+                if width != 2860:
+                    wanted = next(pane for pane in (floor + 1 for floor, _c in floors)
+                                  if _viewport_for_pane(pane) == width) if expected_cols != "1" else None
+                    if wanted is not None:
+                        assert abs(findings[width]["pane"] - wanted) <= 4, (
+                            f"a {width}px window gave a {findings[width]['pane']}px pane, "
+                            f"expected {wanted} -- the shell's offset moved")
+    for width, found in findings.items():
+        # 15 courses x 6 lines (a 100-coin star shares its companion's line)
+        # + Secret's 7 + Bowser's 3.
+        assert found["names"] >= 100, (width, found)
+        assert found["wrapped"] == [], (
+            f"at a {width}px window ({found['pane']:.0f}px pane, {found['cols']} columns) "
+            f"these names wrap: {found['wrapped']}")
 
-            names = page.evaluate(
-                "(() => {"
-                "  const out = [];"
-                "  for (const name of document.querySelectorAll('.rank-page "
-                ".scorecard-card .score-line-name')) {"
-                "    const walker = document.createTreeWalker(name, NodeFilter.SHOW_TEXT);"
-                "    let last = null;"
-                "    while (walker.nextNode())"
-                "      if (walker.currentNode.data.trim()) last = walker.currentNode;"
-                "    if (!last) continue;"
-                "    const range = document.createRange();"
-                "    range.setStart(name, 0);"
-                "    range.setEnd(last, last.data.length);"
-                "    const rects = Array.from(range.getClientRects());"
-                "    if (!rects.length) continue;"
-                "    const box = name.getBoundingClientRect();"
-                "    out.push({ text: name.textContent.trim(),"
-                "               lines: rects.length,"
-                "               slack: box.bottom - Math.max(...rects.map((r) => r.bottom)) });"
-                "  }"
-                "  return out;"
-                "})()")
-
-        assert names, "no names measured"
-        wrapped = [row for row in names if row["lines"] > 1]
-        assert wrapped, (
-            "no name wrapped at this width — the fixture can no longer "
-            "exhibit the defect, so this guard proves nothing; widen the "
-            "names or narrow the viewport")
-        blank_tailed = [row for row in names if row["slack"] > 4]
-        assert not blank_tailed, (
-            "these names end in a blank line, so their icon centres below "
-            "the text: "
-            + ", ".join(f"{row['text']!r} (+{row['slack']:.1f}px)"
-                        for row in blank_tailed[:6]))
-
-
-# -- round 20: where a card sits in the grid ---------------------------------
 
 COURSE_ORDER = ["BOB", "WF", "JRB", "CCM", "BBH", "HMC", "LLL", "SSL",
                 "DDD", "SL", "WDW", "TTM", "THI", "TTC", "RR", "Specials"]
@@ -1979,38 +2016,37 @@ def test_the_grid_reads_down_each_column_in_course_order():
             for index, name in enumerate(COURSE_ORDER[:15])]
     rows += [{"label": "Secret", "course_id": None},
              {"label": "Bowser", "course_id": None}]
-    columns = call("cardColumns", rows, 4)
-    drawn = [[card["label"] for card in column["rows"]] for column in columns]
-    # Round 21: two specials cards again, appended to the last column so
-    # the 15 courses keep his grid exactly and "Secret -> Bowser" still
-    # closes the reading order.
+    layout = call("cardLayout", rows, 4)
+    drawn = [[card["label"] for card in column["rows"]] for column in layout["columns"]]
+    # Round 21: two specials cards again. Round 32: Secret closes the last
+    # column and Bowser -- the odd card -- takes a centred row of its own
+    # ("centered between all 4 columns (centered under SSL + TTM)").
     assert drawn == [["BOB", "WF", "JRB", "CCM"],
                      ["BBH", "HMC", "LLL", "SSL"],
                      ["DDD", "SL", "WDW", "TTM"],
-                     ["THI", "TTC", "RR", "Secret", "Bowser"]]
+                     ["THI", "TTC", "RR", "Secret"]]
+    assert [card["label"] for card in layout["centred"]] == ["Bowser"]
 
 
-def test_a_wide_pane_gives_the_specials_their_own_column():
-    """Round 21's wide shape, his ask: an arrangement "so that (1) we can
-    easily screenshot all of them at once, (2) and it feels reasonably
-    uniform". Five tracks: his 4x4 course grid untouched, and the two
-    specials in a fifth column -- four rows tall, which fits his window
-    where five rows (the specials appended) did not."""
+def test_bowser_rides_a_centred_row_at_two_columns_and_the_stack_at_one():
+    """Round 32, his narrow case: "What if the Bowser card is centered
+    between the two columns here when the page is narrower?" At two columns
+    the courses chunk 8 / 7, Secret closes the second, Bowser is centred. A
+    single column is one stack and keeps everything in it; a scope with one
+    special has no odd card and keeps it in the stack."""
     rows = [{"label": name, "course_id": index + 1}
             for index, name in enumerate(COURSE_ORDER[:15])]
     rows += [{"label": "Secret", "course_id": None},
              {"label": "Bowser", "course_id": None}]
-    columns = call("cardColumns", rows, 5)
-    drawn = [[card["label"] for card in column["rows"]] for column in columns]
-    assert drawn == [["BOB", "WF", "JRB", "CCM"],
-                     ["BBH", "HMC", "LLL", "SSL"],
-                     ["DDD", "SL", "WDW", "TTM"],
-                     ["THI", "TTC", "RR"],
-                     ["Secret", "Bowser"]]
-    # A scope with no specials card (a single course) does not draw an
-    # empty fifth track.
-    only_courses = call("cardColumns", rows[:15], 5)
-    assert [len(column["rows"]) for column in only_courses] == [3, 3, 3, 3, 3]
+    two = call("cardLayout", rows, 2)
+    assert [len(column["rows"]) for column in two["columns"]] == [8, 8]
+    assert two["columns"][1]["rows"][-1]["label"] == "Secret"
+    assert [card["label"] for card in two["centred"]] == ["Bowser"]
+    one = call("cardLayout", rows, 1)
+    assert [len(column["rows"]) for column in one["columns"]] == [17]
+    assert one["columns"][0]["rows"][-1]["label"] == "Bowser" and one["centred"] == []
+    lone = call("cardLayout", rows[:16], 4)
+    assert lone["columns"][-1]["rows"][-1]["label"] == "Secret" and lone["centred"] == []
 
 
 def test_a_scope_with_fewer_cards_still_reads_down_in_order():
@@ -2018,27 +2054,28 @@ def test_a_scope_with_fewer_cards_still_reads_down_in_order():
     and reading down still walks the list in order."""
     rows = [{"label": name, "course_id": index + 1}
             for index, name in enumerate(["BOB", "WF", "JRB", "CCM", "BBH"])]
-    columns = call("cardColumns", rows, 4)
+    columns = call("cardLayout", rows, 4)["columns"]
     assert [card["label"] for column in columns for card in column["rows"]] == [
         "BOB", "WF", "JRB", "CCM", "BBH"]
     assert [len(column["rows"]) for column in columns] == [2, 2, 1]
 
 
 def test_no_cards_draws_no_columns():
-    assert call("cardColumns", [], 4) == []
+    assert call("cardLayout", [], 4) == {"columns": [], "centred": []}
 
 
 def test_the_track_count_follows_the_measured_pane():
     """The COMPONENT picks the track count, not a container query: the
     chunker and the drawn grid have to be the same number or reading down a
     column stops being course order. Floors are round 11's."""
-    assert call("columnCountFor", 2600) == 5
-    assert call("columnCountFor", 2121) == 5   # round 21: the specials' own column
-    assert call("columnCountFor", 2120) == 4
-    assert call("columnCountFor", 1321) == 4
-    assert call("columnCountFor", 1320) == 2
-    assert call("columnCountFor", 561) == 2
-    assert call("columnCountFor", 560) == 1
+    # Round 32's floors: the count steps down before a name would wrap
+    # (a card needs 417px; measured on the real template), and four is the
+    # ceiling -- the five-track shape is retired.
+    assert call("columnCountFor", 2860) == 4
+    assert call("columnCountFor", 1701) == 4
+    assert call("columnCountFor", 1700) == 2
+    assert call("columnCountFor", 851) == 2
+    assert call("columnCountFor", 850) == 1
     assert call("columnCountFor", 0) == 1
 
 
@@ -2048,7 +2085,7 @@ def test_the_css_declares_a_track_rule_for_every_count_the_component_picks():
     that one width."""
     css = (UI / "index.html").read_text(encoding="utf-8")
     counts = {call("columnCountFor", width)
-              for width in (0, 560, 561, 1320, 1321, 2120, 2121, 2600)}
+              for width in (0, 850, 851, 1700, 1701, 2860)}
     for count in counts:
         if count == 4:
             continue                      # the bare `.score-cards` default

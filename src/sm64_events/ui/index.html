@@ -7498,9 +7498,6 @@
     grid-template-rows: repeat(var(--score-rows, 1), auto);
     gap: 10px; align-items: stretch;
   }
-  .score-cards[data-cols="5"] {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-  }
   .score-cards[data-cols="2"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -7508,6 +7505,15 @@
   .score-col {
     display: grid; min-width: 0; grid-row: 1 / -1;
     grid-template-rows: subgrid;
+  }
+  /* Round 32: the odd card (Bowser) beneath the stacks, centred on the
+     grid's midline and exactly one column wide -- `--score-cols` is the
+     count the component chunked, so the card matches the cards above it
+     at every width. */
+  .score-centred { display: flex; justify-content: center; margin-top: 10px; }
+  .score-centred > .score-card {
+    flex: none;
+    width: calc((100% - (var(--score-cols, 4) - 1) * 10px) / var(--score-cols, 4));
   }
   /* Each card wears its course's own tint (round 10: "a unique background
      color... so each pops better") via --card-tint from the component; the
