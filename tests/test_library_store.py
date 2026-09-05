@@ -284,3 +284,25 @@ def test_absorb_is_refreshs_own_tail(tmp_path):
     assert store.absorb(_snapshot("2026-09-05T00:00:00", "newer"))["applied"] is True
     assert store.payload["targets"][0]["label"] == "newer"
     assert (tmp_path / "local.json.gz").exists()
+
+
+def test_the_store_refuses_to_be_pointed_at_its_own_bundled_snapshot(tmp_path):
+    """The store OWNS the path it is given -- a refresh or an absorb rewrites
+    it whole -- so that path may never be the bundled snapshot every fresh
+    install falls back to.
+
+    2026-09-05: a harness handed the bundled seed in as the store's own path.
+    One import rewrote it without its vetted `matched_strategy` stamps, and
+    fourteen unrelated library and import tests went red in the NEXT full run.
+    Nothing failed at the time; a tracked file simply sat modified. The
+    constructor is the only place that can catch it before the write."""
+    seed = tmp_path / "bundled.json.gz"
+    write_snapshot(seed, {"schema_version": SCHEMA_VERSION, "sheet_revision": "1",
+                          "targets": [], "runners": [], "ladder_model": {}})
+    with pytest.raises(ValueError, match="bundled snapshot"):
+        LibraryStore(seed, seed)
+    # The two legitimate shapes still work: a copy beside it, and read-only.
+    own = tmp_path / "mine.json.gz"
+    own.write_bytes(seed.read_bytes())
+    assert LibraryStore(own, seed).bundled_path == seed
+    assert LibraryStore(None, seed).path is None

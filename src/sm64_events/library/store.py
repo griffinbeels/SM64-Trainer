@@ -113,6 +113,19 @@ class LibraryStore:
     def __init__(self, path=None, bundled_path=None):
         self.path = Path(path) if path else None
         self.bundled_path = Path(bundled_path) if bundled_path else None
+        # The store OWNS `path`: `refresh`/`absorb` rewrite it whole. So it may
+        # never BE the bundled snapshot, which is the read-only fallback every
+        # fresh install starts from. Measured 2026-09-05: a harness handed the
+        # bundled seed as the store's own path, one import rewrote it without
+        # its vetted `matched_strategy` stamps, and fourteen unrelated tests
+        # went red in the NEXT full run -- nothing failed at the time, and a
+        # tracked file sat quietly modified in the worktree. Hand it a copy.
+        if (self.path is not None and self.bundled_path is not None
+                and self.path.resolve() == self.bundled_path.resolve()):
+            raise ValueError(
+                f"the library store would overwrite its own bundled snapshot "
+                f"({self.path}); pass a copy as `path`, or omit `path` to read "
+                f"the bundled one without ever writing it")
         self._payload = None
         self._source = None   # "local" | "bundled" | None (nothing loaded)
 
