@@ -110,6 +110,21 @@ def expected_column(rows, payload, runner):
     return lines
 
 
+def expected_platforms(rows, payload, runner):
+    """That runner's own PLATFORM per worksheet row, from the legend their
+    column carries (round 29 item 2: `sheet.py::runner_legends`) -- None
+    wherever the cell is empty or the column has no legend."""
+    platforms = []
+    for _number, row, _target, item in walk_rows(rows, payload):
+        mine = [e for e in ((item or {}).get("entries") or [])
+                if e.get("runner") == runner and e.get("time_cs")]
+        version = getattr(row, "version", None)
+        if version and any(e.get("version") for e in mine):
+            mine = [e for e in mine if e.get("version") == version]
+        platforms.append(mine[0].get("platform") if mine else None)
+    return platforms
+
+
 def row_labels(rows, payload):
     """What each row is CALLED and which KIND of thing it belongs to -- which
     is what decides whether the import could ever have landed it. A subsection
@@ -199,7 +214,25 @@ def roundtrip(runner, rows, payload, scratch, link=0):
         if landed.status_code != 200:
             raise SystemExit(f"import of {runner!r} failed: {landed.text[:300]}")
         summary = dict(landed.json(), linked=linked)
-        actual = client.get("/api/scorecard/column").json()["lines"]
+        exported = client.get("/api/scorecard/column")
+        if exported.status_code != 200:
+            raise SystemExit(f"export for {runner!r} failed: {exported.text[:300]}")
+        body = exported.json()
+        actual = body["lines"]
+        # The COLOUR round trip (round 29 item 2): a cell the runner's legend
+        # stamped must come back with the same platform. Counted only over
+        # rows whose value matched -- a value that did not round-trip has no
+        # platform to compare -- and only for a runner with a legend.
+        expected_platforms_ = expected_platforms(rows, payload, runner)
+        actual_platforms = [cell["platform"] for cell in body["cells"]]
+        stamped = [(number + 2, want, got) for number, (want, got, want_text, got_text)
+                   in enumerate(zip(expected_platforms_, actual_platforms,
+                                    expected_column(rows, payload, runner), actual,
+                                    strict=False))
+                   if want is not None and want_text == got_text]
+        summary["platform_cells"] = len(stamped)
+        summary["platform_mismatches"] = [(row, want, got) for row, want, got in stamped
+                                          if want != got]
     return expected_column(rows, payload, runner), actual, summary
 
 
@@ -280,10 +313,17 @@ def report(runner, expected, actual, summary, labels, verbose):
           f"landed {summary.get('imported', '?'):>4}  "
           f"linked {summary.get('linked', 0):>3}  -> {verdict}")
     held = Counter(row.get("reason", "?") for row in (summary.get("held") or []))
+    stamped = summary.get("platform_cells", 0)
+    if stamped:
+        # The colour round trip, for a runner whose column carries a legend.
+        wrong = summary.get("platform_mismatches") or []
+        print(f"    platform: {stamped - len(wrong)} of {stamped} stamped cells "
+              f"came back on the same machine"
+              + (f"; wrong: {wrong[:6]}" if wrong else ""))
     if not total:
         if held:
             print(f"    import held: {dict(held)}")
-        return 0
+        return len(summary.get("platform_mismatches") or [])
     print(f"    {dict(counts)}")
     for kind, bucket in sorted(by_kind(expected, actual, labels).items(),
                                key=lambda kv: -kv[1]["cells"]):

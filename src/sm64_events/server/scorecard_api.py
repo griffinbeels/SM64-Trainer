@@ -33,6 +33,7 @@ wants a time typed, ready to paste back in next to everyone else's.
 import csv
 import io
 import logging
+import re
 
 from fastapi import APIRouter, Body, HTTPException, Response
 from fastapi.concurrency import run_in_threadpool
@@ -40,11 +41,12 @@ from pydantic import BaseModel
 
 from sm64_events.library.examples import sheet_best
 from sm64_events.tracking.activestrat import ActiveStrats
-from sm64_events.library.export_column import column_lines, sheet_time
+from sm64_events.library.export_column import column_cells, sheet_time
 from sm64_events.library.ratings import runner_times
 from sm64_events.library.sheet import read_rows
 from sm64_events.library.source import fetch
 from sm64_events.library.store import build_and_stamp
+from sm64_events.core.modes import platform_of
 from sm64_events.core.timefmt import attainable_cs
 from sm64_events.ranks.classify import RANK_NAMES, display_cs
 from sm64_events.ranks.scorecard import (
@@ -75,6 +77,19 @@ _CUSTOM_KEY = "scorecard_custom_goals"
 # scorecard keeps tracking `ranks.grading_version` as a mode flip or a
 # detection moves it, and only a deliberate pick freezes it.
 _REGIONS_KEY = "scorecard_regions"
+# Round 29 item 2: how the pasted column is COLOURED. A time set on the
+# emulator and one set on a console wear different fills in the sheet
+# (Raisn's convention, and his ask: "The user should be able to select a color
+# for N64 times, and select a color for EMU times... I guess you should also be
+# able to choose the font color"), plus the font the cells are typed in. One
+# stored preference, edited in Settings with a live preview -- an inspector,
+# never a guessed constant -- and these defaults are only its starting point:
+# a blue / orange pair "darker than Raisn's setup" (his A5A9F1 / FF6D01), white
+# text on both, and Arial because it is what Sheets itself defaults to.
+_SHEET_STYLE_KEY = "sheet_style"
+DEFAULT_SHEET_STYLE = {"emu_fill": "#4F7BE0", "n64_fill": "#E07A2F",
+                       "font_color": "#FFFFFF", "font_family": "Arial"}
+_HEX_COLOUR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _VALID_REGIONS = ("us", "jp")
 _VALID_TIERS = [tier for tier in RANK_NAMES if tier != "Iron"]
 
@@ -102,6 +117,26 @@ class GoalBody(BaseModel):
 
 class RegionsBody(BaseModel):
     regions: list[str]
+
+
+class SheetStyleBody(BaseModel):
+    emu_fill: str
+    n64_fill: str
+    font_color: str
+    font_family: str
+
+
+def sheet_style(db) -> dict:
+    """The stored sheet style over the defaults -- a missing or corrupt KV,
+    or one field of it, reads as the default for that field alone."""
+    stored = db.get_state(_SHEET_STYLE_KEY, None) if db is not None else None
+    style = dict(DEFAULT_SHEET_STYLE)
+    if isinstance(stored, dict):
+        for key in style:
+            value = stored.get(key)
+            if isinstance(value, str) and value:
+                style[key] = value
+    return style
 
 
 def _fetch_column_source(overrides, step=None):
@@ -195,30 +230,35 @@ def _column_resolve(service):
         identity = _column_identity(entity_key)
         if identity is None:
             return None
+        # `(cs, platform)`: the PB's own stamp, through its attempt (v27),
+        # so the column can colour a cell by the machine that set the time
+        # (round 29 item 2). Left unresolved here -- `platform_of` runs once,
+        # in `_column_body`, so no second reader grows its own emulator default.
         if strat_tag is None:
             pb = leftovers(identity, timer_mode, version, frozenset(excluding))
-            return display_cs(pb["frames"]) if pb else None
+            return (display_cs(pb["frames"]), pb.get("platform")) if pb else None
         course_id, star_id, segment_id = identity
         pb = service.db.current_pb(course_id, star_id, timer_mode,
                                    segment_id=segment_id, strat_tag=strat_tag,
                                    game_version=version)
         if pb is None or not set_on(pb, version):
             return None
-        return display_cs(pb["frames"])
+        return (display_cs(pb["frames"]), pb.get("platform"))
     return resolve
 
 
 def _held_lookup(service):
-    """`held(row_key, version) -> cs | None` over the db's HELD TIMES --
-    the cells an import kept aside for rows with no home (round 28). A
-    versioned worksheet row wants the cell set on that ROM; an
-    unversioned one takes whatever the row holds (a JP-stamped target's
-    rows carry no version of their own but their cells do). Later holds
-    win, as pbs do."""
+    """`held(row_key, version) -> (cs, platform) | None` over the db's HELD
+    TIMES -- the cells an import kept aside for rows with no home (round
+    28), each with the platform its column's legend named (round 29 item 2,
+    None when it did not). A versioned worksheet row wants the cell set on
+    that ROM; an unversioned one takes whatever the row holds (a JP-stamped
+    target's rows carry no version of their own but their cells do). Later
+    holds win, as pbs do."""
     by_row = {}
     for cell in service.db.held_times():
         by_row.setdefault(cell["row_key"], {})[cell.get("game_version")] = (
-            int(cell["time_cs"]))
+            int(cell["time_cs"]), cell.get("platform"))
 
     def held(key, version):
         cells = by_row.get(key)
@@ -745,6 +785,30 @@ def create_scorecard_router(service, library=None, adoptions=None,
         service.db.set_state(_REGIONS_KEY, picked)
         return {"regions": picked}
 
+    @router.get("/sheet_style")
+    async def get_sheet_style():
+        """How a pasted column is coloured -- `style` is what applies now,
+        `defaults` what Reset returns to."""
+        return {"style": sheet_style(service.db), "defaults": dict(DEFAULT_SHEET_STYLE)}
+
+    @router.put("/sheet_style")
+    async def put_sheet_style(body: SheetStyleBody):
+        """Three colours as `#RRGGBB` and a font family name (1-64 characters,
+        no CSS punctuation: it is written straight into an inline style)."""
+        _require_db()
+        colours = {"emu_fill": body.emu_fill, "n64_fill": body.n64_fill,
+                   "font_color": body.font_color}
+        bad = [name for name, value in colours.items() if not _HEX_COLOUR.match(value)]
+        if bad:
+            raise HTTPException(422, f"{', '.join(bad)}: a colour is #RRGGBB")
+        family = body.font_family.strip()
+        if not family or len(family) > 64 or any(ch in family for ch in ';:"\'{}<>'):
+            raise HTTPException(422, "font_family: a font name, 1-64 characters")
+        style = {**{name: value.upper() for name, value in colours.items()},
+                 "font_family": family}
+        service.db.set_state(_SHEET_STYLE_KEY, style)
+        return {"style": style, "defaults": dict(DEFAULT_SHEET_STYLE)}
+
     @router.get("/column")
     async def get_column():
         """Your PBs as the Ultimate Sheet's own column
@@ -766,15 +830,23 @@ def create_scorecard_router(service, library=None, adoptions=None,
 
     def _resolve_column(rows, payload):
         place = sheet_row_placer(service, adoptions)
-        lines = column_lines(rows, payload, _column_resolve(service),
+        cells = column_cells(rows, payload, _column_resolve(service),
                              place=place, held=_held_lookup(service))
-        return lines, payload
+        return cells, payload
 
-    def _column_body(lines, payload):
+    def _column_body(cells, payload):
         """The one shape both column doors answer with -- the synchronous GET
         and the job's `result` -- so a client can be moved from one to the
-        other without learning a second payload."""
+        other without learning a second payload. `lines` is the column as
+        text; `cells` (round 29 item 2) pairs each line with the machine that
+        set its time -- `platform_of` resolves an unstamped PB to the
+        emulator HERE, once, so every timed cell names "emu" or "n64" and an
+        empty cell names nothing."""
+        lines = [cell["text"] for cell in cells]
         return {"lines": lines, "sheet_revision": payload.get("sheet_revision"),
+                "cells": [{"text": cell["text"],
+                           "platform": platform_of(cell["platform"]) if cell["text"] else None}
+                          for cell in cells],
                 "mapped": sum(1 for line in lines if line),
                 "total_rows": len(lines)}
 
@@ -792,8 +864,8 @@ def create_scorecard_router(service, library=None, adoptions=None,
         except Exception as err:
             raise RuntimeError(f"could not read the sheet: {err}") from err
         step(0.85, "Matching your times to the sheet's rows…")
-        lines, payload = _resolve_column(rows, payload)
-        body = _column_body(lines, payload)
+        cells, payload = _resolve_column(rows, payload)
+        body = _column_body(cells, payload)
         return body, (f"{body['total_rows']} rows ready (sheet rows 2–"
                       f"{body['total_rows'] + 1}) · {body['mapped']} carry a time")
 

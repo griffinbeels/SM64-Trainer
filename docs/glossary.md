@@ -365,10 +365,41 @@ console's picture). Every [[attempt]] carries one, read off the [[event]] that
 closed it, and a [[personal best]] remembers its platform through the
 [[attempt]] you saved it from. An absent stamp means `emu`: until the console
 front-end existed, nothing but the emulator could close an [[attempt]], and
-one rule in the mode registry says so.
+one rule in the mode registry says so. An [[imported time]] takes its stamp
+from the [[sheet legend]] of the column it came from, and the [[column
+export]] paints each cell in its [[sheet colours]] by the stamp of the
+[[personal best]] it prints.
 
 - **Lives** — the mode registry (`src/sm64_events/core/modes.py`)
   → the [[practice log]] and the sheet export
+
+### Sheet legend
+
+The two cells a [[runner]] may write into rows 2 and 3 of their own
+[[Ultimate Sheet]] column — "Emu" in one fill and "N64" in another — so that
+every time below, wearing one of the two fills, says which machine set it.
+Raisn's convention, not the sheet's: on 2026-09-04 his was the only column
+with one. The sheet import reads a [[platform stamp]] off a timed cell only
+where the column's own legend names both platforms in two different fills,
+matching the cell to the nearest legend fill within a small distance; a
+column with no legend stamps nothing.
+
+- **Lives** — the sheet reader (`src/sm64_events/library/sheet.py`)
+  → the library payload's entries → the sheet import
+
+### Sheet colours
+
+The colours your pasted [[column export]] wears: the fill an emulator time
+wears, the fill a console time wears, the text colour, and the font family
+— one stored preference, edited in Settings under "Sheet column colours"
+with a live preview of the two cells a paste produces. Each timed cell of the
+pasted column wears the fill of its [[platform stamp]]; an empty cell wears
+nothing. The defaults are a blue and an orange darker than Raisn's, white
+text, and Arial, and they are only a starting point.
+
+- **Lives** — the stored preference and its door (`src/sm64_events/server/scorecard_api.py`)
+  → the Settings inspector (`src/sm64_events/ui/components/sheetstyle.js`)
+  → the clipboard's HTML half (`src/sm64_events/ui/components/scorecard.js`)
 
 ### Strategy
 

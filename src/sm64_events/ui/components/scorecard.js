@@ -48,6 +48,7 @@ import { RegionSwitch } from "./versionswitch.js";
 import { SearchSelect } from "./searchselect.js";
 import { InlineState, ProgressLine } from "./states.js";
 import { Modal } from "./modal.js";
+import { N64 } from "../platform.js";
 
 const html = htm.bind(h);
 
@@ -424,23 +425,44 @@ const COPIED_FLASH_MS = 1500;
 // way a trailing newline can. Plain text rides along as the fallback for
 // anything that does not take HTML, so nothing is lost if the reading is
 // wrong -- which matters, because no test here can drive Google Sheets.
-function columnHtml(text) {
-  const cell = (line) => `<td>${line.replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;").replace(/>/g, "&gt;")}</td>`;
-  return "<table>" + text.split("\n")
-    .map((line) => `<tr>${cell(line)}</tr>`).join("") + "</table>";
+//
+// ROUND 29 item 2: each TIMED cell is painted -- background by the machine
+// that set the time (`cell.platform`, "emu" / "n64"), text colour and font
+// family from the stored sheet style (`GET /api/scorecard/sheet_style`,
+// edited in Settings) -- the way Raisn colours his own column; an empty cell
+// carries no style at all, as his empty cells do. Google Sheets keeps inline
+// `background-color` / `color` / `font-family` from a pasted HTML table,
+// which is what makes the HTML half the mechanism and the plain-text half
+// the fallback. Exported for the tests, which read the markup rather than
+// drive Google Sheets.
+export function columnHtml(cells, style) {
+  const escape = (line) => line.replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const paint = (cell) => {
+    if (!cell.text || !cell.platform || !style) return "";
+    const fill = cell.platform === N64 ? style.n64_fill : style.emu_fill;
+    return ` style="background-color:${fill};color:${style.font_color};`
+      + `font-family:${escape(style.font_family)}"`;
+  };
+  return "<table>" + cells
+    .map((cell) => `<tr><td${paint(cell)}>${escape(cell.text)}</td></tr>`)
+    .join("") + "</table>";
 }
 
-async function writeColumn(text) {
+async function writeColumn(column) {
+  const text = column.cells.map((cell) => cell.text).join("\n");
   // `ClipboardItem` is Chromium 76+, so both shells have it; the guard is for
   // anything else, and it degrades to exactly what shipped before.
   if (typeof ClipboardItem === "undefined" || !navigator.clipboard.write) {
     await navigator.clipboard.writeText(text);
     return;
   }
+  // The style is read at COPY time, not at build time, so a colour changed in
+  // Settings after the column was built paints the very next copy.
+  const style = (await getJSON("/api/scorecard/sheet_style")).style;
   await navigator.clipboard.write([new ClipboardItem({
     "text/plain": new Blob([text], { type: "text/plain" }),
-    "text/html": new Blob([columnHtml(text)], { type: "text/html" }),
+    "text/html": new Blob([columnHtml(column.cells, style)], { type: "text/html" }),
   })]);
 }
 
@@ -483,7 +505,7 @@ function ScorecardExports({ staleKey }) {
     setStatus(null);
   }, [staleKey]);
 
-  async function copyHeld(text) {
+  async function copyHeld(column) {
     // Round 25: the LAST failure's message goes the moment he tries again --
     // "If there's an error, and I click 'copy sheet column' again, the error
     // should disappear. If there's a new error, the new error should show."
@@ -496,7 +518,7 @@ function ScorecardExports({ staleKey }) {
       if (!navigator.clipboard) {
         throw new Error("clipboard access is not available here");
       }
-      await writeColumn(text);
+      await writeColumn(column);
       setCopied(true);
       setTimeout(() => setCopied(false), COPIED_FLASH_MS);
     } catch (err) {
@@ -522,12 +544,12 @@ function ScorecardExports({ staleKey }) {
       const body = await pollJob(`/api/scorecard/column/${job_id}`, (step) =>
         setStatus({ progress: step.progress, message: step.message,
                     running: step.state === "running" }));
-      const held = { text: body.lines.join("\n") };
+      const held = { text: body.lines.join("\n"), cells: body.cells };
       setColumn(held);
       // Only a document with focus may write the clipboard, and only a
       // person in front of it wants that: "If they ARE on the page, then
       // it's nice for it to automatically be in their clipboard."
-      if (document.hasFocus()) await copyHeld(held.text);
+      if (document.hasFocus()) await copyHeld(held);
     } catch (err) {
       setError(err.message || String(err));
       setStatus(null);
@@ -539,7 +561,7 @@ function ScorecardExports({ staleKey }) {
   const held = column != null;
   return html`<div class="scorecard-exports" data-held=${held ? "true" : "false"}>
     <button class="scorecard-copy-btn scorecard-copy-column"
-        onclick=${held ? () => copyHeld(column.text) : build} disabled=${busy}>
+        onclick=${held ? () => copyHeld(column) : build} disabled=${busy}>
       ${held ? html`<${Icon} name="copy" size=${13} />` : ""}
       ${copied ? "Copied ✓" : (held ? "Ready to copy" : "Copy sheet column")}
     </button>
@@ -559,7 +581,7 @@ function ScorecardExports({ staleKey }) {
         description=${(status && status.message) || ""}
         onClose=${() => setInspecting(false)}
         footer=${html`<button type="button" class="primary-button"
-            onclick=${() => copyHeld(column.text)}>
+            onclick=${() => copyHeld(column)}>
           <${Icon} name="copy" size=${13} />${" "}${copied ? "Copied ✓" : "Copy"}
         </button>`}>
       <textarea class="scorecard-column-view" readonly spellcheck="false"

@@ -12,6 +12,7 @@ import { RUN_ACTIVE } from "../store.js";
 import { ICON_STYLES } from "./rankicon.js";
 import { useMareloTurn } from "../mareloturn.js";
 import { ImportSection } from "./importsection.js";
+import { SheetStyleSection } from "./sheetstyle.js";
 import { celebrationsEnabled, setCelebrationsEnabled,
          CLIMB_SKIP_STYLES, climbSkipStyle, setClimbSkipStyle } from "./celebrate.js";
 
@@ -296,6 +297,8 @@ export function Header({ t, settingsOpen, closeSettings }) {
              this once on their first day and should not have to scroll past
              every tuning link to find it. */""}
         <${ImportSection} onDone=${t.refresh} />
+
+        <${SheetStyleSection} />
 
         <section class="settings-section">
           <h3>Display</h3>

@@ -144,10 +144,27 @@ def _claimed_names(block) -> dict:
             for item in (target.get("approaches") or [])}
 
 
-def _line_for(row, block, resolve, place, claimed=None, held=None) -> str:
+def _as_time(answer):
+    """`resolve`'s answer as `(cs, platform)`: a bare centisecond count (every
+    test double, and any caller that has no platform to offer) is a time with
+    no stamp; a `(cs, platform)` pair is taken as is. None stays None."""
+    if answer is None:
+        return None
+    if isinstance(answer, tuple):
+        cs, platform = answer
+        return None if cs is None else (cs, platform)
+    return (answer, None)
+
+
+def _cell_for(row, block, resolve, place, claimed=None, held=None) -> dict:
+    """One worksheet cell: `{"text", "platform"}` -- the sheet's own time
+    notation (or `""`), and the machine the answering PB says set it
+    (`"emu"` / `"n64"` / None for unstamped or empty). Round 29 item 2: the
+    clipboard's HTML half colours a cell by this, the way Raisn's column
+    colours his."""
     target, item = _find_item(row, block)
     if item is None:
-        return ""
+        return {"text": "", "platform": None}
     # The import's own order, and its own strategy name -- see the module
     # docstring. `place` outranks the star fallback because a row he has
     # explicitly linked to a piece he built is about that piece.
@@ -171,23 +188,33 @@ def _line_for(row, block, resolve, place, claimed=None, held=None) -> str:
     others = frozenset(name for key, name in claimed.items()
                        if key != id(item))
     placed = place(target, item, row.kind) if place is not None else None
-    cs = None
+    time = None
     if placed:
         placed_entity, timer_mode, strategy = placed
-        cs = _ask(resolve, placed_entity, strategy or own_strategy,
-                  timer_mode, row.version, blind, others)
+        time = _ask(resolve, placed_entity, strategy or own_strategy,
+                    timer_mode, row.version, blind, others)
     elif (row.kind == "approach"
             and (target.get("entity_key") or "").startswith("star:")):
-        cs = _ask(resolve, target["entity_key"], own_strategy, "igt",
-                  row.version, blind, others)
-    if cs is None and held is not None:
+        time = _ask(resolve, target["entity_key"], own_strategy, "igt",
+                    row.version, blind, others)
+    if time is None and held is not None:
         # Nothing here answers -- the row has no home, or a home with no
         # time in it -- so the cell an import HELD for it prints back as
         # written (round 28). A held cell is released the moment its row
-        # lands, so this can never print over a real personal best.
-        cs = held(row_key(target, item.get("name") or "",
-                          item.get("ids") or ()), row.version)
-    return sheet_time(cs) if cs is not None else ""
+        # lands, so this can never print over a real personal best. A held
+        # cell is not an attempt, so its platform rides the hold itself
+        # (round 29 item 2) -- `held` may answer `(cs, platform)` or a bare
+        # cs, like `resolve`.
+        time = _as_time(held(row_key(target, item.get("name") or "",
+                                     item.get("ids") or ()), row.version))
+    if time is None:
+        return {"text": "", "platform": None}
+    cs, platform = time
+    return {"text": sheet_time(cs), "platform": platform}
+
+
+def _line_for(row, block, resolve, place, claimed=None, held=None) -> str:
+    return _cell_for(row, block, resolve, place, claimed, held)["text"]
 
 
 def _ask(resolve, entity_key, strategy, timer_mode, version, blind,
@@ -224,14 +251,32 @@ def _ask(resolve, entity_key, strategy, timer_mode, version, blind,
     # name / segment name"), which is what `sheet_strategy` answers for it,
     # what the import files it under, and what he practises under himself
     # -- so the name-first ask on a blind row IS the Standard ask.
-    cs = resolve(entity_key, strategy, timer_mode, version)
-    if cs is None and blind:
-        cs = resolve(entity_key, None, timer_mode, version, excluding=others)
-    return cs
+    time = _as_time(resolve(entity_key, strategy, timer_mode, version))
+    if time is None and blind:
+        time = _as_time(resolve(entity_key, None, timer_mode, version,
+                                excluding=others))
+    return time
 
 
 def column_lines(rows, payload, resolve, place=None, held=None) -> list:
-    """One string per worksheet row, row 2 through the last data row --
+    """`column_cells`' texts alone -- one string per worksheet row."""
+    return [cell["text"] for cell in column_cells(rows, payload, resolve,
+                                                  place=place, held=held)]
+
+
+def column_cells(rows, payload, resolve, place=None, held=None) -> list:
+    """One `{"text", "platform"}` per worksheet row, row 2 through the last
+    data row -- `text` is the sheet's own time notation, `platform` the
+    machine the answering PB says set it (`"emu"` / `"n64"`, None when the
+    PB carries no stamp or the cell is empty). `text` is `""` wherever
+    nothing maps: a header or spacer (no `SheetRow` at that row number at
+    all), a row whose text names nothing in its own block, or one
+    `resolve`/`place` refuses.
+
+    `resolve` may answer a bare centisecond count OR a `(cs, platform)`
+    pair (`_as_time`); the bare form is a time with no stamp.
+
+    One string per worksheet row, row 2 through the last data row --
     `""` wherever nothing maps: a header or spacer (no `SheetRow` at that
     row number at all), or a row whose text names nothing in its own block,
     or one `resolve`/`place` refuses.
@@ -251,9 +296,9 @@ def column_lines(rows, payload, resolve, place=None, held=None) -> list:
     on the entity filed under NO name in `excluding` (a time with no
     strategy at all counts as unclaimed).
 
-    `held(row_key, version) -> cs | None` is the cell an import kept aside
-    for a row with no home (round 28), printed only where nothing else
-    answers; omit it and such rows stay blank."""
+    `held(row_key, version) -> (cs, platform) | cs | None` is the cell an
+    import kept aside for a row with no home (round 28), printed only where
+    nothing else answers; omit it and such rows stay blank."""
     if not rows:
         return []
     blocks = _blocks(payload.get("targets") or [])
@@ -265,7 +310,7 @@ def column_lines(rows, payload, resolve, place=None, held=None) -> list:
     for row_number in range(2, last_row + 1):
         row = by_row.get(row_number)
         if row is None:
-            lines.append("")
+            lines.append({"text": "", "platform": None})
             continue
         if row.opens_target:
             block_index += 1
@@ -273,5 +318,5 @@ def column_lines(rows, payload, resolve, place=None, held=None) -> list:
                  if 0 <= block_index < len(blocks) else None)
         if row.opens_target:
             claimed = _claimed_names(block)
-        lines.append(_line_for(row, block, resolve, place, claimed, held))
+        lines.append(_cell_for(row, block, resolve, place, claimed, held))
     return lines

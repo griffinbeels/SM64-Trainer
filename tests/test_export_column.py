@@ -430,3 +430,25 @@ def test_a_held_cell_prints_where_nothing_else_answers_and_never_over_a_pb():
     assert lines[1] == "20.60", "a row with a PB never prints its stale hold"
     assert column_lines(rows, payload, resolve)[2] == "", (
         "without a held lookup the row stays blank, as before")
+
+
+def test_a_cell_carries_the_platform_the_resolver_names():
+    """Round 29 item 2: `resolve` may answer `(cs, platform)`, and the cell
+    keeps the platform beside the text so the clipboard can colour it. A
+    bare centisecond answer -- every stub in this file -- is a time with no
+    stamp, an empty row names nothing, and `column_lines` is the texts."""
+    from sm64_events.library.export_column import column_cells
+
+    rows = [_row(2, "Approach A", "approach", True, ids=("1",))]
+    payload = {"targets": [
+        {"entity_key": "star:1:0", "label": "Some Star",
+         "approaches": [{"name": "Approach A", "ids": ["1"]}],
+         "subsections": []}]}
+    stamped = column_cells(rows, payload, lambda *a, **_: (4370, "n64"))
+    assert stamped[0] == {"text": "43.70", "platform": "n64"}
+    bare = column_cells(rows, payload, lambda *a, **_: 4370)
+    assert bare[0] == {"text": "43.70", "platform": None}
+    silent = column_cells(rows, payload, lambda *a, **_: None)
+    assert silent[0] == {"text": "", "platform": None}
+    assert column_lines(rows, payload, lambda *a, **_: (4370, "emu")) == [
+        cell["text"] for cell in stamped]

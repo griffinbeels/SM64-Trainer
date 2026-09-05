@@ -817,6 +817,14 @@ def _stub_workbook():
         (5, 1): {"text": "2. Whomp's Fortress"},
         (6, 1): {"text": "[5] Fall onto the Caged Island", "bold": True},
         (6, 2): {"text": "13.50"},
+        # A runner column with Raisn's legend (round 29 item 2): rows 2/3
+        # name the platforms in two fills, and an N64 time on the fixture's
+        # own star, faster than the seeded PB so an import of this column
+        # lands it -- the end-to-end paint test imports Griff and copies.
+        (1, 7): {"text": "Griff"},
+        (2, 7): {"text": "Emu", "fill": "FFA5A9F1"},
+        (3, 7): {"text": "N64", "fill": "theme:8"},
+        (6, 7): {"text": "11.00", "fill": "theme:8"},
     }
     return build_workbook({wb.SHEET_MAIN: cells,
                            wb.SHEET_LOG: {(1, 1): {"text": "46238.5"}}})
@@ -2151,3 +2159,66 @@ def test_the_scorecard_sits_between_the_scope_rank_card_and_progress():
         f"the scorecard must sit directly below the scope rank card: {order}")
     assert order.index("progress") > order.index("scorecard"), (
         f"Progress must come after the scorecard: {order}")
+
+
+def test_the_pasted_html_paints_each_timed_cell_by_the_machine_that_set_it(monkeypatch):
+    """ROUND 29 item 2, his loop with colour: "people like to color the cells
+    either an EMU color or an N64 color... exporting exports the fastest
+    time across both your emu / console times, and colors the cell
+    accordingly." Griff's column in the stub workbook carries Raisn's legend
+    and an N64 11.00 on the fixture's star; importing it through the real
+    sheet door stamps that time n64, and the copied HTML's cell for that
+    row wears the N64 fill, the chosen text colour and font, while every
+    empty cell carries no style at all -- as Raisn's empty cells do. The
+    style is the one he picked in Settings, read at copy time."""
+    from sm64_events.library.ladders import fit_payload
+    from sm64_events.library.store import LibraryStore, build_and_stamp
+
+    monkeypatch.setattr("sm64_events.server.scorecard_api.fetch", _stub_workbook)
+
+    # The sheet door's refresh, replaced in the SERVER (the fixture runs
+    # in-process): the store takes the stub workbook's payload without the
+    # newer-than-what-we-have check (the stub's Log is older than the bundled
+    # snapshot) and without writing a snapshot anywhere.
+    def stub_refresh(self, fetch_fn, overrides=None, step=None):
+        self._payload = fit_payload(build_and_stamp(_stub_workbook(), overrides))
+        return {"applied": True}
+
+    monkeypatch.setattr(LibraryStore, "refresh", stub_refresh)
+    with serve_ui() as base:
+        style = {"emu_fill": "#4F7BE0", "n64_fill": "#AB3F14",
+                 "font_color": "#FFFFFF", "font_family": "Roboto Mono"}
+        request = urllib.request.Request(
+            f"{base}/api/scorecard/sheet_style", data=json.dumps(style).encode(),
+            method="PUT", headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            assert response.status == 200
+        request = urllib.request.Request(
+            f"{base}/api/import/sheet", method="POST",
+            data=json.dumps({"runner": "Griff", "refresh": True}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            landed = json.loads(response.read())
+        assert landed["imported"] == 1, landed
+        column = json.loads(urllib.request.urlopen(
+            f"{base}/api/scorecard/column", timeout=10).read())
+        assert [cell["platform"] for cell in column["cells"] if cell["text"]] == ["n64"], column
+
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-copy-column")
+            assert page.evaluate(_INSTALL_CLIPBOARD_SHIM) is True
+            page.evaluate("document.querySelector('.scorecard-copy-column').click()")
+            _wait_until(page, "window.__scorecardHtml.length > 0")
+            html_copied = page.evaluate("window.__scorecardHtml")[0]
+
+    import re
+    cells = re.findall(r"<td([^>]*)>([^<]*)</td>", html_copied)
+    assert len(cells) == column["total_rows"]
+    timed = [(attrs, text) for attrs, text in cells if text]
+    assert timed == [(
+        ' style="background-color:#AB3F14;color:#FFFFFF;font-family:Roboto Mono"',
+        "11.00")], timed
+    assert all(attrs == "" for attrs, text in cells if not text), cells

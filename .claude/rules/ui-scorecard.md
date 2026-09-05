@@ -1,6 +1,7 @@
 ---
 paths:
   - "src/sm64_events/ui/components/scorecard.js"
+  - "src/sm64_events/ui/components/sheetstyle.js"
   - "src/sm64_events/ui/scorecardgoal.js"
   - "src/sm64_events/server/scorecard_api.py"
 ---
@@ -17,6 +18,7 @@ the API are `.claude/rules/ranks.md`'s scorecard row; the column export is
 
 | To change... | Edit |
 |---|---|
+| The [[Sheet colours]] (round 29 item 2) -- how the pasted column is painted | `server/scorecard_api.py` -- `DEFAULT_SHEET_STYLE`, `sheet_style(db)`, `GET`/`PUT /api/scorecard/sheet_style` (one KV like the regions pick; `#RRGGBB` + a plain font name, validated because it is written into an inline style) -- and `ui/components/sheetstyle.js`, the Settings inspector: a colour input per value, a free-text font field with the Sheets menu as `<datalist>` suggestions (no primary source for that menu was reachable; any name his menu shows works), a live two-cell preview, Reset. `scorecard.js::columnHtml(cells, style)` paints each TIMED `<td>` (`background-color` by `cell.platform`, `color`, `font-family`) and leaves empty cells bare, as Raisn's are; `writeColumn` reads the style at COPY time so a Settings change paints the very next paste. The platform per cell is `_column_body`'s `cells` -- `_column_resolve` answers `(cs, pb.platform)` and `platform_of` resolves an unstamped PB to the emulator ONCE there. Gates: `test_scorecard_api.py` (style API, body cells), `test_ui_scorecard.py::test_the_pasted_html_paints_each_timed_cell_by_the_machine_that_set_it` (import a legend column, copy, read the HTML), `test_ui_sheet_style.py` (the inspector rendered). The two platform literals are never spelled here: `platform.js`'s `EMU`/`N64` |
 | The [[Scorecard]] card + its [[Goal]] picker | `ui/components/scorecard.js` + `ui/scorecardgoal.js` — **full detail below: [The Scorecard card](#the-scorecard-card)** |
 
 ## The Scorecard card

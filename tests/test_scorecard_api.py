@@ -672,11 +672,11 @@ def test_column_resolve_reads_your_pb_and_checks_an_explicit_version(tmp_path):
     with make_client(tmp_path) as (_client, db, svc):
         db.insert_pb(1, 0, "Standard", "igt", 886, None, "2026-08-23T00:00:00Z")
         resolve = _column_resolve(svc)
-        assert resolve("star:1:0", "Standard", "igt", None) == display_cs(886)
+        assert resolve("star:1:0", "Standard", "igt", None) == (display_cs(886), None)
         # No PB was ever set as JP, and the default grading version is US --
         # an explicitly-versioned JP row must not print this US time.
         assert resolve("star:1:0", "Standard", "igt", "jp") is None
-        assert resolve("star:1:0", "Standard", "igt", "us") == display_cs(886)
+        assert resolve("star:1:0", "Standard", "igt", "us") == (display_cs(886), None)
         assert resolve("star:1:0", "Other Strat", "igt", None) is None
 
 
@@ -688,7 +688,7 @@ def test_column_resolve_reads_a_segment_pb_on_its_own_clock(tmp_path):
         db.insert_pb(None, None, "Standard", "rta", 476, None,
                      "2026-08-23T00:00:00Z", segment_id=piece)
         resolve = _column_resolve(svc)
-        assert resolve(f"segment:{piece}", "Standard", "rta", None) == display_cs(476)
+        assert resolve(f"segment:{piece}", "Standard", "rta", None) == (display_cs(476), None)
 
 
 def test_the_endpoints_placer_is_the_same_one_the_import_door_uses(tmp_path):
@@ -1220,13 +1220,13 @@ def test_column_resolve_answers_the_leftovers_ask_with_the_fastest_unclaimed_pb(
         # Every named sibling claimed: the strategy-less time is what is left.
         assert resolve("star:1:0", None, "igt", None,
                        excluding={"Left side clip", "Backflip WK", "Log firsty"}
-                       ) == display_cs(700)
+                       ) == (display_cs(700), None)
         # One sibling unclaimed: his own pick wins over the strategy-less one.
         assert resolve("star:1:0", None, "igt", None,
-                       excluding={"Left side clip", "Log firsty"}) == display_cs(640)
+                       excluding={"Left side clip", "Log firsty"}) == (display_cs(640), None)
         # On the US row the JP time is not an answer, however fast.
-        assert resolve("star:1:0", None, "igt", "us", excluding=set()) == display_cs(560)
-        assert resolve("star:1:0", None, "igt", "jp", excluding=set()) == display_cs(500)
+        assert resolve("star:1:0", None, "igt", "us", excluding=set()) == (display_cs(560), None)
+        assert resolve("star:1:0", None, "igt", "jp", excluding=set()) == (display_cs(500), None)
         # Nothing left over: blank, never a sibling's time.
         assert resolve("star:1:0", None, "igt", "jp",
                        excluding={"Log firsty"}) is None
@@ -1241,10 +1241,91 @@ def test_the_held_lookup_matches_a_versioned_row_to_its_own_rom(tmp_path):
             {"row_key": "door", "game_version": "jp", "time_cs": 390, "reason": "no_entity"},
         ], "2026-09-04T00:00:00Z")
         held = _held_lookup(svc)
-        assert held("piece", "jp") == 2683
-        assert held("piece", "us") == 2850
+        assert held("piece", "jp") == (2683, None)
+        assert held("piece", "us") == (2850, None)
         # A JP-stamped target's rows carry no version of their own but their
         # cells do: an unversioned row takes what the row holds.
-        assert held("door", None) == 390
-        assert held("piece", None) in (2683, 2850)
+        assert held("door", None) == (390, None)
+        assert held("piece", None) in ((2683, None), (2850, None))
         assert held("nowhere", None) is None
+
+
+def test_column_resolve_answers_the_pbs_own_platform(tmp_path):
+    """The stamp reaches the column through the PB's attempt (main's v27):
+    an imported time whose source named the console resolves as
+    `(cs, "n64")`; a PB with no attempt behind it resolves with None, which
+    `_column_body` turns into the emulator once."""
+    import asyncio
+
+    from sm64_events.server.scorecard_api import _column_resolve
+    from sm64_events.tracking.importing import ImportCandidate
+    with make_client(tmp_path) as (_client, db, svc):
+        asyncio.run(svc.import_times("sheet:Raisn", [ImportCandidate(
+            entity_key="star:1:0", strat_tag="Standard", time_cs=886,
+            platform="n64")]))
+        db.insert_pb(1, 1, "Standard", "igt", 900, None, "2026-08-23T00:00:00Z")
+        resolve = _column_resolve(svc)
+        # 886 cs lands as frames and reads back as the displayable 886.
+        assert resolve("star:1:0", "Standard", "igt", None) == (886, "n64")
+        assert resolve("star:1:1", "Standard", "igt", None) == (display_cs(900), None)
+
+
+def test_the_column_body_pairs_every_line_with_its_platform(tmp_path, monkeypatch):
+    """`cells` is `lines` with the machine beside each time: a timed cell
+    always names emu or n64 (an unstamped PB resolves to the emulator HERE,
+    once), an empty cell names nothing."""
+    monkeypatch.setattr("sm64_events.server.scorecard_api.fetch", _bob_workbook)
+    with make_client(tmp_path) as (client, db, _svc):
+        db.insert_pb(1, 0, "Big Bob-omb on the Summit", "igt", 886, None,
+                     "2026-08-23T00:00:00Z")
+        body = client.get("/api/scorecard/column").json()
+        assert [cell["text"] for cell in body["cells"]] == body["lines"]
+        timed = [cell for cell in body["cells"] if cell["text"]]
+        assert timed and all(cell["platform"] == "emu" for cell in timed), body["cells"]
+        assert all(cell["platform"] is None for cell in body["cells"] if not cell["text"])
+
+
+def test_the_sheet_style_is_one_stored_preference_over_its_defaults(tmp_path):
+    """Round 29 item 2: three colours and a font, read as defaults until he
+    sets them, validated as #RRGGBB and a plain font name (it is written
+    straight into an inline style), stored upper-cased, and handed back
+    beside the defaults so Reset knows where to go."""
+    from sm64_events.server.scorecard_api import DEFAULT_SHEET_STYLE
+    with make_client(tmp_path) as (client, _db, _svc):
+        fresh = client.get("/api/scorecard/sheet_style").json()
+        assert fresh == {"style": DEFAULT_SHEET_STYLE, "defaults": DEFAULT_SHEET_STYLE}
+
+        picked = {"emu_fill": "#a5a9f1", "n64_fill": "#FF6D01",
+                  "font_color": "#000000", "font_family": "Roboto Mono"}
+        saved = client.put("/api/scorecard/sheet_style", json=picked)
+        assert saved.status_code == 200
+        assert saved.json()["style"] == {**picked, "emu_fill": "#A5A9F1"}
+        assert client.get("/api/scorecard/sheet_style").json()["style"] == {
+            **picked, "emu_fill": "#A5A9F1"}
+
+        bad_colour = client.put("/api/scorecard/sheet_style",
+                                json={**picked, "n64_fill": "orange"})
+        assert bad_colour.status_code == 422 and "n64_fill" in bad_colour.json()["detail"]
+        bad_font = client.put("/api/scorecard/sheet_style",
+                              json={**picked, "font_family": 'x"; color: red'})
+        assert bad_font.status_code == 422
+        # a refused write changes nothing
+        assert client.get("/api/scorecard/sheet_style").json()["style"]["n64_fill"] == "#FF6D01"
+
+
+def test_a_held_cell_prints_back_with_the_platform_its_legend_named(tmp_path):
+    """The hold carries the platform (round 29 item 2), the lookup answers
+    the pair, and the column body resolves it like any PB's -- so a held N64
+    cell paints orange rather than falling to the emulator default."""
+    from sm64_events.server.scorecard_api import _held_lookup
+    with make_client(tmp_path) as (_client, db, svc):
+        db.hold_times("sheet:Raisn", [
+            {"row_key": "row:a", "game_version": None, "time_cs": 923,
+             "reason": "no_entity", "platform": "n64"},
+            {"row_key": "row:b", "game_version": "jp", "time_cs": 1200,
+             "reason": "no_entity"}], "2026-09-04T00:00:00Z")
+        held = _held_lookup(svc)
+        assert held("row:a", None) == (923, "n64")
+        assert held("row:b", "jp") == (1200, None)
+        assert held("row:b", "us") is None
+        assert held("row:c", None) is None

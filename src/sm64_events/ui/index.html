@@ -7381,6 +7381,16 @@
     background: var(--green);
   }
   .importsheet-progress { margin-top: 6px; }
+  /* Round 29 item 2: the sheet-colour inspector's two preview cells -- drawn
+     the size and shape of a Sheets cell, so what he tunes is what he will
+     paste. */
+  .sheetstyle-preview { display: flex; gap: 8px; margin: 6px 0 10px; }
+  .sheetstyle-cell {
+    display: inline-flex; align-items: center; justify-content: flex-end;
+    min-width: 84px; height: 24px; padding: 0 6px; box-sizing: border-box;
+    border: 1px solid rgba(255,255,255,.18); font-size: 13px;
+  }
+  .sheetstyle input[type="color"] { width: 44px; height: 28px; padding: 0; border-radius: 4px; }
   /* Round 29: once a column is HELD the primary button becomes the copy
      affordance (glyph + "Ready to copy") and two quiet controls join it --
      Open (inspect every line) and Rebuild (fetch the sheet again). The
