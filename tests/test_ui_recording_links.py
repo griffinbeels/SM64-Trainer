@@ -1,0 +1,289 @@
+"""Recording interactions in the shipped Preact components.
+
+Only HTTP boundaries are replaced: these tests drive the real editor, replay
+selection, and Library player without downloading public videos in the suite.
+"""
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "tools"))
+from find_uilab import find_uilab  # noqa: E402
+
+_MISSING = find_uilab()
+if _MISSING:
+    pytest.skip(_MISSING, allow_module_level=True)
+
+from ui_fixture import serve_ui  # noqa: E402
+from uilab import driver  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def server():
+    with serve_ui() as base:
+        yield base
+
+
+@pytest.fixture
+def page(server):
+    with driver.get_driver().launch(headless=True, viewport=(850, 900)) as browser:
+        browser.goto(f"{server}/ui/index.html")
+        browser.wait_for(".log-list-card", timeout_ms=20000)
+        browser.evaluate("""(() => {
+          window.recording = {url: null, revision: 0};
+          window.calls = []; window.failSave = false; window.conflict = false;
+          const original = window.fetch;
+          window.fetch = async (url, options = {}) => {
+            const path = new URL(url, location.href).pathname;
+            const method = options.method || 'GET';
+            const reply = (body, status = 200) => new Response(JSON.stringify(body),
+              {status, headers: {'Content-Type': 'application/json'}});
+            if (path === '/api/attempts/4242/recording') {
+              calls.push({path, method, body: options.body && JSON.parse(options.body)});
+              if (method === 'PUT') {
+                if (window.failSave) return reply({detail: 'Please retry saving'}, 503);
+                if (window.conflict) {
+                  window.conflict = false;
+                  window.recording = {url: 'https://recording.example/other', revision: 9};
+                  return reply({detail: 'changed'}, 409);
+                }
+                const body = JSON.parse(options.body);
+                if (body.expected_revision !== recording.revision)
+                  return reply({detail: 'changed'}, 409);
+                window.recording = {url: body.url, revision: recording.revision + 1};
+              }
+              return reply(recording);
+            }
+            if (path.startsWith('/api/media')) {
+              calls.push({path, method, body: options.body && JSON.parse(options.body)});
+              if (path === '/api/media/preview')
+                return reply({title: 'My recording', site: 'Recording', thumbnail: null});
+              if (window.mediaReply) return reply(window.mediaReply);
+              return reply(method === 'POST'
+                ? {state: 'error', error: 'Offline', start_s: 0}
+                : {state: 'missing', start_s: 0});
+            }
+            if (path === '/api/attempts/4242/replay') {
+              calls.push({path, method});
+              return reply({clip_url: '/ui/assets/empty/ukiki_1.png', game_fps: 30});
+            }
+            return original(url, options);
+          };
+          const root = document.createElement('div'); root.id = 'recording-test';
+          root.style.cssText = 'max-width:620px;margin:20px;padding:16px;background:#101f31';
+          document.body.prepend(root);
+        })()""")
+        yield browser
+
+
+def mount(page, *, url=None, imported=True, library=False):
+    page.evaluate(f"window.recording = {{url: {json.dumps(url)}, revision: 0}}")
+    page.evaluate(f"""(async () => {{
+      const {{h, render}} = await import('preact');
+      const mod = await import('/ui/components/{'librarytarget' if library else 'replay'}.js');
+      render(h(mod.{'ExampleMedia' if library else 'ReplayPlayer'},
+        {json.dumps({'entry': {'video': url, 'runner': 'Runner', 'time_cs': 1133}} if library else {'attemptId': 4242, 'imported': imported})}),
+        document.querySelector('#recording-test'));
+    }})()""")
+    page.wait_for("#recording-test .external-video" if library else "#recording-test .recording-link")
+    wait(page, "document.querySelector('#recording-test input') || "
+         "document.querySelector('#recording-test .recording-link-preview')" if not library
+         else "document.querySelector('#recording-test button')")
+
+
+def wait(page, predicate):
+    assert page.evaluate(f"""(async () => {{
+      const deadline = Date.now() + 6000;
+      while (Date.now() < deadline) {{
+        if ({predicate}) return true;
+        await new Promise(resolve => setTimeout(resolve, 30));
+      }} return false;
+    }})()"""), predicate
+
+
+def click(page, label):
+    assert page.evaluate(f"""(() => {{
+      const button = [...document.querySelectorAll('#recording-test button')]
+        .find(item => item.textContent.trim() === {json.dumps(label)});
+      button?.click(); return !!button;
+    }})()"""), label
+
+
+def draft(page, value):
+    page.evaluate(f"""(() => {{
+      const input = document.querySelector('#recording-test input');
+      input.value = {json.dumps(value)};
+      input.dispatchEvent(new Event('input', {{bubbles: true}}));
+    }})()""")
+    page.wait_ms(50)
+
+
+def test_add_preview_save_and_persistent_undo_never_download(page):
+    mount(page)
+    draft(page, '  https://recording.example/video?t=30&list=one  ')
+    wait(page, "calls.some(call => call.path === '/api/media/preview')")
+    assert page.evaluate("recording.url") is None
+    click(page, "Add link")
+    wait(page, "recording.revision === 1")
+    assert page.evaluate("recording.url") == 'https://recording.example/video?t=30&list=one'
+    wait(page, "document.querySelector('#recording-test .recording-link-status').textContent.includes('Link added')")
+    assert page.evaluate("calls.filter(call => call.method === 'POST').length") == 0
+    click(page, "Undo")
+    wait(page, "recording.revision === 2")
+    assert page.evaluate("recording.url") is None
+    assert page.evaluate("calls.filter(call => call.path.endsWith('/replay')).length") == 0
+
+
+def test_change_focus_cancel_remove_and_undo(page):
+    original = 'https://recording.example/original?t=12'
+    mount(page, url=original)
+    click(page, "Change link")
+    wait(page, "document.activeElement === document.querySelector('#recording-test input')")
+    assert page.evaluate("document.activeElement.selectionEnd - document.activeElement.selectionStart") == len(original)
+    draft(page, 'https://recording.example/wrong')
+    page.evaluate("document.querySelector('#recording-test input').dispatchEvent("
+                  "new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))")
+    wait(page, "!document.querySelector('#recording-test input')")
+    assert page.evaluate("recording.url") == original
+    click(page, "Change link")
+    page.wait_for("#recording-test input")
+    click(page, "Remove link")
+    wait(page, "recording.url === null")
+    click(page, "Undo")
+    wait(page, "recording.revision === 2")
+    assert page.evaluate("recording.url") == original
+
+
+def test_failed_save_retains_draft_and_saved_link_then_retries(page):
+    mount(page, url='https://recording.example/original')
+    click(page, "Change link")
+    page.wait_for("#recording-test input")
+    draft(page, 'https://recording.example/replacement')
+    page.evaluate("window.failSave = true")
+    click(page, "Save link")
+    page.wait_for("#recording-test .recording-link-error")
+    assert page.evaluate("document.querySelector('#recording-test input').value") == 'https://recording.example/replacement'
+    assert page.evaluate("recording.url") == 'https://recording.example/original'
+    page.evaluate("window.failSave = false")
+    click(page, "Retry")
+    wait(page, "recording.revision === 1")
+    assert page.evaluate("recording.url") == 'https://recording.example/replacement'
+
+
+def test_revision_conflict_preserves_draft_until_deliberate_retry(page):
+    mount(page)
+    draft(page, 'https://recording.example/mine')
+    page.evaluate("window.conflict = true")
+    click(page, "Add link")
+    page.wait_for("#recording-test .recording-link-error")
+    assert page.evaluate("document.querySelector('#recording-test input').value") == 'https://recording.example/mine'
+    assert page.evaluate("recording.url") == 'https://recording.example/other'
+    click(page, "Retry")
+    wait(page, "recording.revision === 10")
+    assert page.evaluate("recording.url") == 'https://recording.example/mine'
+
+
+def test_malformed_link_keeps_input_and_narrow_editor_fits(page):
+    mount(page)
+    draft(page, 'javascript:alert(1)')
+    click(page, "Add link")
+    page.wait_for("#recording-test input[aria-invalid=true]")
+    assert page.evaluate("calls.filter(call => call.method === 'PUT').length") == 0
+    page.evaluate("document.querySelector('#recording-test').style.width = '285px'")
+    page.wait_ms(100)
+    assert page.evaluate("""(() => {
+      const panel = document.querySelector('#recording-test');
+      return [...panel.querySelectorAll('input,button')].every(el =>
+        el.getBoundingClientRect().right <= panel.getBoundingClientRect().right);
+    })()""")
+
+
+def test_library_browse_only_reads_cache_then_play_prepares_once(page):
+    mount(page, url='https://recording.example/library', library=True)
+    wait(page, "calls.some(call => call.path === '/api/media')")
+    assert page.evaluate("calls.filter(call => call.method === 'POST').length") == 0
+    page.evaluate("document.querySelector('#recording-test button').click()")
+    wait(page, "calls.some(call => call.method === 'POST')")
+    assert page.evaluate("calls.filter(call => call.method === 'POST').length") == 1
+    assert page.evaluate("document.querySelector('#recording-test .external-video-actions a').href") == 'https://recording.example/library'
+    assert page.evaluate("document.querySelectorAll('#recording-test .external-video-frames').length") == 0
+
+
+def test_native_capture_is_preferred_and_survives_link_edit(page):
+    mount(page, url='https://recording.example/original', imported=False)
+    page.wait_for("#recording-test .replay-player video")
+    click(page, "Change link")
+    page.wait_for("#recording-test input")
+    draft(page, 'https://recording.example/replacement')
+    click(page, "Save link")
+    wait(page, "recording.revision === 1")
+    assert page.evaluate("document.querySelectorAll('#recording-test .replay-player video').length") == 1
+    assert page.evaluate("calls.filter(call => call.path === '/api/media' && call.method === 'POST').length") == 0
+
+
+def test_replacing_external_link_waits_for_new_play_gesture(page):
+    mount(page, url='https://recording.example/old')
+    wait(page, "calls.filter(call => call.method === 'POST').length === 1")
+    click(page, "Change link")
+    page.wait_for("#recording-test input")
+    draft(page, 'https://recording.example/new')
+    page.evaluate("document.querySelector('#recording-test input').dispatchEvent("
+                  "new KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true}))")
+    wait(page, "recording.revision === 1")
+    page.wait_ms(150)
+    assert page.evaluate("calls.filter(call => call.method === 'POST').length") == 1
+    page.evaluate("document.querySelector('#recording-test .external-video > button').click()")
+    wait(page, "calls.filter(call => call.method === 'POST').length === 2")
+    assert page.evaluate("calls.filter(call => call.method === 'POST')[1].body.url") == 'https://recording.example/new'
+
+
+@pytest.mark.parametrize("frame_step", [None, 1 / 60])
+def test_cached_playback_uses_api_timing_capability_and_probes_on_play(page, frame_step):
+    # A MediaSource with no appended data keeps the video loading: this tests
+    # capability/selection, without conflating it with codec/seek accuracy.
+    page.evaluate(f"window.mediaReply = {{state:'ready', start_s:12, "
+                  f"frame_step_s:{json.dumps(frame_step)}, "
+                  "clip_url:URL.createObjectURL(new MediaSource())}")
+    mount(page, url='https://recording.example/cached', library=True)
+    wait(page, "calls.some(call => call.path === '/api/media')")
+    assert page.evaluate("calls.filter(call => call.method === 'POST').length") == 0
+    page.evaluate("document.querySelector('#recording-test .external-video > button').click()")
+    page.wait_for("#recording-test .external-video-local video")
+    wait(page, "calls.filter(call => call.method === 'POST').length === 1")
+    assert page.evaluate("document.querySelector('#recording-test video').src.startsWith('blob:')")
+    assert page.evaluate("!!document.querySelector('#recording-test .external-video-frames')") == (frame_step is not None)
+    assert page.evaluate("document.querySelectorAll('#recording-test iframe').length") == 0
+
+
+def test_export_html_preserves_exact_safe_link_and_paint(page):
+    copied = page.evaluate("""(async () => {
+      const {columnHtml} = await import('/ui/components/scorecard.js');
+      return columnHtml([
+        {text:'11.33',platform:'n64',video:'https://example.com/watch?t=4&name="clip"'},
+        {text:'12.00',platform:'emu',video:'javascript:alert(1)'},
+        {text:'',platform:null}],
+        {n64_fill:'#123456',emu_fill:'#654321',font_color:'#FFFFFF',font_family:'Roboto Mono'});
+    })()""")
+    from html.parser import HTMLParser
+
+    class ReadCells(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.links = []
+            self.cells = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag == 'a':
+                self.links.append(dict(attrs)['href'])
+            if tag == 'td':
+                self.cells.append(dict(attrs))
+
+    reader = ReadCells()
+    reader.feed(copied)
+    assert reader.links == ['https://example.com/watch?t=4&name="clip"']
+    assert len(reader.cells) == 3
+    assert 'background-color:#123456' in reader.cells[0]['style']
+    assert reader.cells[2] == {}

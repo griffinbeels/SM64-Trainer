@@ -453,16 +453,26 @@ const COPIED_FLASH_MS = 1500;
 // the fallback. Exported for the tests, which read the markup rather than
 // drive Google Sheets.
 export function columnHtml(cells, style) {
-  const escape = (line) => line.replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const escape = (line) => String(line).replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const paint = (cell) => {
     if (!cell.text || !cell.platform || !style) return "";
     const fill = cell.platform === N64 ? style.n64_fill : style.emu_fill;
     return ` style="background-color:${fill};color:${style.font_color};`
       + `font-family:${escape(style.font_family)}"`;
   };
+  const content = (cell) => {
+    const text = escape(cell.text);
+    // A clipboard anchor is an outbound action too. Do not mint active HTML
+    // from a malformed/unsafe legacy URL, even if it reached the cell payload.
+    let url;
+    try { url = new URL(cell.video); } catch { return text; }
+    if (!cell.text || !["https:", "http:"].includes(url.protocol)
+        || url.username || url.password) return text;
+    return `<a href="${escape(cell.video)}" style="color:inherit">${text}</a>`;
+  };
   return "<table>" + cells
-    .map((cell) => `<tr><td${paint(cell)}>${escape(cell.text)}</td></tr>`)
+    .map((cell) => `<tr><td${paint(cell)}>${content(cell)}</td></tr>`)
     .join("") + "</table>";
 }
 

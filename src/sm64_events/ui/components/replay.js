@@ -6,39 +6,30 @@ import { getJSON, send } from "../api.js";
 import { stepGameFrame, jumpToStart } from "../frame.js";
 import { Icon } from "./icons.js";
 import { InlineState } from "./states.js";
+import { RecordingLink } from "./recordinglink.js";
+import { ExternalVideo, attachSharedVolume } from "./externalvideo.js";
 
 const html = htm.bind(h);
 
-// One shared volume for every replay player — current and future. The last
-// user adjustment wins everywhere: changing volume on any player fans out
-// to all mounted players and persists (localStorage) for players not yet
-// opened, including after a reload. Default 30% — game audio is loud
-// against an otherwise-silent page; a stored user choice overrides it.
-const VOLUME_KEY = "replay_volume";
-
-function storedVolume() {
-  let v = NaN;
-  try { v = parseFloat(localStorage.getItem(VOLUME_KEY)); } catch {}
-  return v >= 0 && v <= 1 ? v : 0.3;   // NaN fails both comparisons
-}
-
-let applyingVolume = false; // re-entrancy guard: our fan-out, not the user
-
-function attachSharedVolume(el) {
-  el.volume = storedVolume(); // before addEventListener: must not self-fire
-  el.addEventListener("volumechange", () => {
-    if (applyingVolume) return;
-    try { localStorage.setItem(VOLUME_KEY, String(el.volume)); } catch {}
-    applyingVolume = true;
-    document.querySelectorAll(".replay-player video").forEach((v) => {
-      if (v !== el) v.volume = el.volume;
-    });
-    applyingVolume = false;
-  });
-}
-
 // Expanded row under an attempt: extract on mount (server caches), then play.
-export function ReplayPlayer({ attemptId, onCompare }) {
+export function ReplayPlayer({ attemptId, imported = false, onCompare }) {
+  const [url, setUrl] = useState(undefined);
+  const [nativeUnavailable, setNativeUnavailable] = useState(imported);
+  const [initialLink, setInitialLink] = useState(true);
+  return html`<div class="attempt-recording">
+    ${!nativeUnavailable
+      ? html`<${NativeReplayPlayer} attemptId=${attemptId} onCompare=${onCompare}
+          onUnavailable=${() => setNativeUnavailable(true)} />`
+      : url ? html`<${ExternalVideo} key=${url} url=${url} autoplay=${initialLink} />`
+      : url === undefined ? html`<p class="meta">Loading recording…</p>`
+      : html`<p class="meta">${imported ? "Add a public recording to watch this attempt."
+          : "No captured replay available. Add a public recording below."}</p>`}
+    <${RecordingLink} key=${attemptId} attemptId=${attemptId}
+      onLoaded=${setUrl} onChanged=${(next) => { setInitialLink(false); setUrl(next); }} />
+  </div>`;
+}
+
+function NativeReplayPlayer({ attemptId, onCompare, onUnavailable }) {
   const [state, setState] = useState({ phase: "loading" });
   const [savedPath, setSavedPath] = useState(null);
   const [playing, setPlaying] = useState(false); // event-driven (onplay/onpause)
@@ -61,7 +52,11 @@ export function ReplayPlayer({ attemptId, onCompare }) {
         // the Save button correctly shows "Saved" for clips saved last week
         setSavedPath(r.saved_path || null);
       })
-      .catch((e) => alive && setState({ phase: "error", message: String(e) }));
+      .catch((e) => {
+        if (!alive) return;
+        setState({ phase: "error", message: String(e) });
+        onUnavailable();
+      });
     return () => { alive = false; };
   }, [attemptId]);
 

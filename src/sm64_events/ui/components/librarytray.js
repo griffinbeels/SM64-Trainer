@@ -1,3 +1,4 @@
+import { ExternalVideo } from "./externalvideo.js";
 // src/sm64_events/ui/components/librarytray.js — the Library's comparison
 // tray (Task 5, spec 2026-08-07-library-page): chips docked under the
 // header, and the "vibes grid" overlay that plays every chip at once.
@@ -35,7 +36,7 @@ import { curve } from "../disclosure.js";
 import { feedTuning } from "../feedtuning.js";
 import { Icon } from "./icons.js";
 import { Disclose } from "./collapsible.js";
-import { gridShape, youtubeEmbed, youtubeThumb, videoSource } from "./librarymodel.js";
+import { gridShape, youtubeThumb } from "./librarymodel.js";
 
 const html = htm.bind(h);
 
@@ -146,34 +147,11 @@ export function LibraryTray({ items, onTrim, onRemove, onPlayAll, onStudy, study
 }
 
 function GridTile({ item, restartNonce }) {
-  // YouTube keeps its trim-aware start (`youtubeEmbed`'s own `startS`); every
-  // OTHER format goes through `videoSource` so a Twitch/X/Bluesky clip in the
-  // tray still plays in the grid instead of drawing a dead play button
-  // (round 1: "confirm we can load videos for EVERY SINGLE FORMAT provided").
-  const src = item.video ? videoSource(item.video,
-    typeof location !== "undefined" ? location.hostname : null) : null;
-  const embed = src && src.kind === "youtube"
-    ? youtubeEmbed(item.video, item.trim ? item.trim.start_s : null)
-    : (src && src.kind !== "file" && src.kind !== "image" ? src.embed : null);
   return html`<div class="library-grid-tile">
     <div class="library-grid-tile-media">
-      ${embed
-        ? html`<iframe key=${`${item.key}::${restartNonce}`} class="library-embed" src=${embed}
-            title=${`${item.runner} — ${fmtSeconds(item.time_cs / 100)}`}
-            allow="autoplay; encrypted-media" allowfullscreen></iframe>`
-        : src && src.kind === "file"
-          ? html`<video key=${`${item.key}::${restartNonce}`} class="library-example-thumb"
-              src=${src.embed} controls muted preload="metadata"></video>`
-        : src && src.thumb
-          ? html`<img class="library-example-thumb" src=${src.thumb} alt="" loading="lazy" />`
-          : html`<div class="library-example-thumb library-example-placeholder">
-              <${Icon} name="play" size=${20} />
-              ${src ? html`<span class="library-example-site">watch on ${src.site}</span>` : ""}
-            </div>`}
-      ${item.video && !embed
-        ? html`<a class="library-example-external" href=${item.video} target="_blank"
-            rel="noopener" title="open on the runner's site">
-            <${Icon} name="upload" size=${13} /></a>` : null}
+      <${ExternalVideo} key=${`${item.key}::${restartNonce}`} url=${item.video}
+        label=${`${item.runner} - ${fmtSeconds(item.time_cs / 100)}`}
+        autoplay=${true} startS=${item.trim ? item.trim.start_s : null} />
     </div>
     <div class="library-grid-tile-footer">
       <span class="library-grid-tile-runner">${item.runner}</span>
