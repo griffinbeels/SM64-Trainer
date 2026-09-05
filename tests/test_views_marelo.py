@@ -10,10 +10,14 @@ class FakeRanks:
     def __init__(self, data):
         self._data = data
 
-    def ladders(self, key):
+    # `version` mirrors the real store: the ROM a time was set on, None
+    # meaning the running one. These fixtures carry no JP overlay, so both
+    # answers are the same ladder — the parameter exists so the double keeps
+    # the signature its callers actually use.
+    def ladders(self, key, version=None):
         return self._data.get(key, {})
 
-    def ladder_cs(self, key, strat):
+    def ladder_cs(self, key, strat, version=None):
         return {rank: int(round(seconds * 100))
                 for rank, seconds in self._data.get(key, {}).get(strat, {}).items()}
 

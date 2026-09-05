@@ -10,6 +10,15 @@ annotated rule applied to display), and the per-entry version pill
 (`.library-example-version`) is DELETED — with every visible run being the
 mode's own version, it had nothing left to annotate.
 
+ROUND 24 (2026-09-02) kept that filter and changed its DEFAULT, because the
+filter had become the complaint: "By default, in the Library, we should show
+BOTH rank standards combined. (just with an annotation that it's JP or US...)
+Right now, information about runners / approaches feels hidden, which is not
+the intent." So a fresh page shows every entry of both regions, the control
+NARROWS rather than picks, and the annotation round 1 deleted comes back in
+the one form he asked for and the one this project trusts for a canonical
+shape: the country's own flag, fetched not drawn (`regionflag.js`).
+
 The expectations are DERIVED from the shipped snapshot at test time (this
 project's own rule against pinning today's community sheet as an equality),
 re-deriving the same predicate `Section::visibleEntries` computes, and
@@ -111,7 +120,12 @@ def _pick_worst_mixed_approach(payload):
                 best = {"group": target["group"], "target_label": target["label"],
                         "approach_name": approach["name"], "spread": spread,
                         "us": us_count, "jp": jp_count,
-                        "total": len(entries or [])}
+                        "total": len(entries or []),
+                        # Round 24: the per-entry flags this approach should
+                        # draw, one "JP"/"US" per TAGGED entry (an untagged
+                        # entry is real in both regions and wears none).
+                        "tags": [e["version"].upper() for e in (entries or [])
+                                 if e.get("version")]}
     return best
 
 
@@ -255,7 +269,16 @@ def fresh_page(library_server):
         yield page
 
 
-def test_each_mode_shows_only_its_own_versions_entries(payload, fresh_page):
+TOGGLE = ("Array.from(document.querySelectorAll('.version-switch-seg'))"
+          ".find((seg) => seg.getAttribute('aria-label') === '{}').click()")
+# Every rendered entry's region flag in the open section, by the region its
+# `alt` names -- the annotation round 24 asked for, read off the real DOM.
+FLAG_ALTS = ("Array.from(document.querySelectorAll("
+             "'.library-section.open .library-entry-flag'))"
+             ".map((img) => img.getAttribute('alt'))")
+
+
+def test_both_regions_show_by_default_and_the_control_narrows(payload, fresh_page):
     candidate = _pick_worst_mixed_approach(payload)
     assert candidate, "no approach in the shipped snapshot mixes JP and US entries"
     # Anti-vacuity: the filter must actually REMOVE something in each mode,
@@ -270,30 +293,45 @@ def test_each_mode_shows_only_its_own_versions_entries(payload, fresh_page):
     assert fresh_page.evaluate("!document.querySelector('.library-jp-toggle')"), (
         "the retired per-section chip is still rendering")
 
-    # Default is US -- the SECOND `.version-switch-seg` (versionswitch.js's
-    # own JP-left/US-right contract).
-    us_pressed = fresh_page.evaluate(
-        "document.querySelectorAll('.version-switch-seg')[1].getAttribute('aria-pressed')")
-    assert us_pressed == "true", us_pressed
+    # Round 24's default: BOTH segments on, and every entry of either region
+    # on screen. This is the assertion the whole round exists for.
+    pressed = fresh_page.evaluate(
+        "Array.from(document.querySelectorAll('.version-switch-seg'))"
+        ".map((seg) => seg.getAttribute('aria-pressed'))")
+    assert pressed == ["true", "true"], pressed
+    both_shown = fresh_page.evaluate(COUNT_VISIBLE)
+    assert both_shown == candidate["total"], (
+        f"the default view shows {both_shown} entries; the snapshot says this "
+        f"approach has {candidate['total']} on {candidate['approach_name']!r}")
+
+    # ...and every TAGGED one wears its own region's flag. Compared against
+    # the snapshot's own tags rather than a count, so the annotation is proved
+    # to follow the data instead of merely existing.
+    alts = fresh_page.evaluate(FLAG_ALTS)
+    assert sorted(alts) == sorted(candidate["tags"]), (
+        f"the rendered region flags {sorted(alts)} do not match the snapshot's "
+        f"own tags {sorted(candidate['tags'])}")
+
+    fresh_page.evaluate(TOGGLE.format("JP"))          # US only
+    fresh_page.evaluate(EXPAND_DIVISIONS)  # a fresh band list mounts collapsed again
     us_shown = fresh_page.evaluate(COUNT_VISIBLE)
     assert us_shown == candidate["us"], (
-        f"US mode shows {us_shown} entries; the snapshot says "
+        f"US-only shows {us_shown} entries; the snapshot says "
         f"{candidate['us']} are US-or-untagged on {candidate['approach_name']!r}")
 
-    fresh_page.evaluate("""
-      Array.from(document.querySelectorAll('.version-switch-seg'))
-        .find((seg) => seg.textContent.trim() === 'JP').click()
-    """)
-    fresh_page.evaluate(EXPAND_DIVISIONS)  # a fresh band list mounts collapsed again
+    fresh_page.evaluate(TOGGLE.format("JP"))          # both
+    fresh_page.evaluate(TOGGLE.format("US"))          # JP only
+    fresh_page.evaluate(EXPAND_DIVISIONS)
     jp_pressed = fresh_page.evaluate(
         "document.querySelectorAll('.version-switch-seg')[0].getAttribute('aria-pressed')")
     assert jp_pressed == "true", jp_pressed
     jp_shown = fresh_page.evaluate(COUNT_VISIBLE)
     assert jp_shown == candidate["jp"], (
-        f"JP mode shows {jp_shown} entries; the snapshot says "
+        f"JP-only shows {jp_shown} entries; the snapshot says "
         f"{candidate['jp']} are JP-or-untagged on {candidate['approach_name']!r}")
 
-    # The pill is gone WITH the mixed display, not merely restyled.
+    # Round 1's per-entry version PILL stays deleted -- round 24 brought the
+    # annotation back as a flag on the runner's name, never as that chip.
     assert fresh_page.evaluate(
         "document.querySelectorAll('.library-example-version').length") == 0
 
@@ -309,8 +347,14 @@ def test_a_jp_only_ladder_wears_its_chip_beside_the_version_switch(payload, fres
         "(() => { const el = document.querySelector("
         "'.library-section.open .library-ladder-version-chip'); "
         "return el ? el.textContent.trim() : null; })()")
-    expected_chip = ("JP" if candidate["ladder_version"] == "jp" else "US") + " ladder only"
-    assert chip == expected_chip, chip
+    # Round 24: the region is the flag inside the chip, so the chip's own
+    # text is just the noun; the region is read off the flag's `alt`.
+    assert chip == "ladder only", chip
+    flag_alt = fresh_page.evaluate(
+        "(() => { const img = document.querySelector("
+        "'.library-section.open .library-ladder-version-chip img.region-flag'); "
+        "return img ? img.getAttribute('alt') : null; })()")
+    assert flag_alt == ("JP" if candidate["ladder_version"] == "jp" else "US"), flag_alt
 
     # Round 1's coexistence rule ("mixed entries earn the mode toggle even
     # with no second ladder to switch to") is now structural rather than

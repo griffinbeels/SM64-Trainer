@@ -1097,6 +1097,15 @@ def test_the_library_tab_reaches_the_target_page(page):
     page.wait_for(".library-target", timeout_ms=15000)
 
 
+def test_the_scorecard_reaches_a_card_with_tiles(page):
+    """The Rank tab's scorecard (spec 2026-08-23-scorecard-design, task 3)
+    is behind a nav click, not on the page by default -- unreachable by
+    this gate until the 'scorecard' Story's own setup navigates there."""
+    reach(page, "scorecard")
+    page.wait_for(".rank-page .scorecard-card .score-line", timeout_ms=15000)
+    assert count(page, ".rank-page .scorecard-card .score-line") > 0
+
+
 def test_an_empty_log_falls_back_to_the_course_grid(fresh_db_page):
     """The other half of the same rule, with nothing to land on."""
     fresh_db_page.evaluate(CLICK_LIBRARY_TAB)

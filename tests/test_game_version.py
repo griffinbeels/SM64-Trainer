@@ -101,8 +101,12 @@ def test_the_view_carries_the_game_version(tmp_path):
 
 def make_client(tmp_path):
     db, svc, broadcaster = make(tmp_path, start=False)
+    # An empty library (round 33): this test's world is the two ladders it
+    # writes, and the bundled library's fitted rows would grade beside them.
     app = create_app(Poller(OfflineMemory(), [], svc), broadcaster, service=svc,
-                     mode_path=tmp_path / "tracker_mode.json")
+                     mode_path=tmp_path / "tracker_mode.json",
+                     library_path=tmp_path / "sheet_library.json.gz",
+                     library_bundled_path=tmp_path / "no-library.json.gz")
     return TestClient(app), svc
 
 

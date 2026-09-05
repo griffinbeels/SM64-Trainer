@@ -5,7 +5,11 @@ decides which tests may share a worker. These read the mark off the live item
 so the rule is proved on the test that asks, not restated: drop the hook and
 both go red.
 """
+from pathlib import Path
+
 import pytest
+
+REPO = Path(__file__).resolve().parents[1]
 
 
 def test_a_plain_test_stays_with_its_file(request):
@@ -64,3 +68,20 @@ def test_the_session_runs_every_file_in_its_own_order(request):
         "the session's items are not in file order (plus pytest's own "
         "param grouping); a plugin reordered them and conftest did not put "
         f"them back. First divergence at index {first_divergence}")
+
+
+def test_files_that_share_one_real_file_share_one_group():
+    """Two files that write and read the SAME path on disk may never run in
+    parallel, whatever worker is free. `test_ui_sync_page.py` writes the real
+    `data/version_sync/jp.json` (by design -- the dashboard is driven against
+    the real store, backed up and restored), and `test_layout_matches_report.py`
+    reads that path to catch layout drift, skipping when it is absent. Under
+    24 workers they overlapped once and the reader went red on the writer's
+    throwaway report, then could not be reproduced alone (2026-09-05)."""
+    from conftest import SHARED_GROUPS
+    pair = {"tests/test_ui_sync_page.py", "tests/test_layout_matches_report.py"}
+    assert pair <= set(SHARED_GROUPS), SHARED_GROUPS
+    assert len({SHARED_GROUPS[name] for name in pair}) == 1, SHARED_GROUPS
+    for name, group in SHARED_GROUPS.items():
+        assert (REPO / name).exists(), f"{name} no longer exists; drop its row"
+        assert not set(group) & {"@", "]"}, "xdist splits a group on those"

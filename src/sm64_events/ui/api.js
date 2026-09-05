@@ -20,6 +20,26 @@ export async function getJSON(url) {
   if (!r.ok) throw await httpError(url, r);
   return r.json();
 }
+// Poll a job's status URL until it leaves `running`, calling `onStep(status)`
+// on every poll so a progress line can narrate it; resolves with the job's
+// `result`, rejects with its `message` on `error`. The one shape every job
+// door answers with (`server/jobs.py`): `{state, progress, message, result}`.
+export function pollJob(statusUrl, onStep, intervalMs = 250) {
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      getJSON(statusUrl)
+        .then((status) => {
+          if (onStep) onStep(status);
+          if (status.state === "running") { setTimeout(tick, intervalMs); return; }
+          if (status.state === "error") { reject(new Error(status.message)); return; }
+          resolve(status.result);
+        })
+        .catch(reject);
+    };
+    tick();
+  });
+}
+
 export async function send(method, url, body) {
   const r = await fetch(url, {
     method, headers: { "Content-Type": "application/json" },

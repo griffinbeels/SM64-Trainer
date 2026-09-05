@@ -28,6 +28,22 @@ from sm64_events.tracking.service import TrackerService
 # touches the list, so the order can be put back afterwards (below).
 RAW_INDEX = pytest.StashKey[int]()
 
+# Files that touch ONE REAL file on disk and so may never run beside each
+# other, whatever worker is free. A file's own name is its group otherwise.
+#
+# `test_ui_sync_page.py` is the one test in this project that writes a real
+# PUT into `data/version_sync/jp.json` (it backs the file up and restores it,
+# by design -- the dashboard has to be driven against the real store), and
+# `test_layout_matches_report.py` READS that same path to catch layout drift,
+# skipping when it is absent. Under 24 workers those overlapped: the reader
+# found the writer's throwaway report mid-run and went red on a `failed`
+# verdict for a gate the layout ships, then the file vanished and the failure
+# could not be reproduced alone (2026-09-05). One group, no overlap.
+SHARED_GROUPS = {
+    "tests/test_ui_sync_page.py": "version_sync_report",
+    "tests/test_layout_matches_report.py": "version_sync_report",
+}
+
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
 def pytest_collection_modifyitems(items):
@@ -68,7 +84,8 @@ def pytest_collection_modifyitems(items):
         if item.get_closest_marker("spread"):
             group = re.sub(r"[^A-Za-z0-9_./:-]", "_", item.nodeid)
         else:
-            group = item.nodeid.split("::")[0]
+            group = SHARED_GROUPS.get(item.nodeid.split("::")[0],
+                                      item.nodeid.split("::")[0])
         item.add_marker(pytest.mark.xdist_group(group))
     yield
     items.sort(key=lambda item: item.stash.get(RAW_INDEX, len(items)))

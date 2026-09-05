@@ -308,14 +308,55 @@ rather than a finish.
 
 ### Personal best
 
-Your fastest finished [[attempt]] at one [[target]] on one [[strategy]]. The
-trainer keeps personal bests separately from the [[journal]], so clearing
-history never erases one, and it saves one only under the [[strategy]] you are
-practicing — so every [[strategy]] holds its own, and the [[practice log]]
-shows whichever [[strategy]] you have selected.
+Your fastest finished [[attempt]] at one [[target]] on one [[strategy]] —
+set by playing it here, or brought in as an [[imported time]]. The trainer
+keeps personal bests separately from the [[journal]], so clearing history never
+erases one, and it saves one only under the [[strategy]] you are practicing —
+so every [[strategy]] holds its own, and the [[practice log]] shows whichever
+[[strategy]] you have selected.
 
 - **Lives** — the store (`src/sm64_events/storage/db.py`)
   → the PB tag on the [[practice log]]
+
+### Imported time
+
+An [[attempt]] the trainer never watched you make, because you set the time
+before this tool existed. It is a real row in the [[practice log]] — stamped
+with the time you pressed Save, holding the [[personal best]] it brought — so you
+can clear it, undo it, or move it to another [[strategy]] exactly as you would
+a played one. The one thing it cannot offer is a replay.
+
+It remembers the source that brought it — you typed it, or you named your
+column in the [[Ultimate Sheet]] — and the
+[[game version]]
+that set it, so a JP time grades on the JP [[ladder]] while you play US. The
+trainer draws neither fact: nothing marks an imported time on any screen.
+
+An import lands a time only when it beats the [[personal best]] you already
+hold for that [[target]] and [[strategy]], so importing twice changes nothing
+and grows no second row. Every source names back what it could not read,
+rather than importing what it understood and staying quiet about the rest.
+
+- **Lives** — the import rule (`src/sm64_events/tracking/importing.py`)
+  → the projector (`src/sm64_events/tracking/projection.py`)
+  → the store (`src/sm64_events/storage/db.py`)
+
+### Held time
+
+A time from an [[Ultimate Sheet]] column that an import kept aside because
+the trainer had nowhere to put it: a [[sheet piece]] you have not linked to
+a [[segment]], a castle-movement [[approach]] with no entity, a whole-stage
+RTA row, or a [[star]] row the sheet times on a real-time clock. It is not
+an [[attempt]] and grades nothing. It shows on its row in the
+[[Library tab]], the [[column export]] prints it back exactly as the sheet
+had it, undoing the import erases it, and an [[adoption]] of its row lands
+it on that [[segment]] through the ordinary import rule as soon as you make
+the link — so the trainer loses nothing a [[runner]] wrote down, and invents
+nothing to hold it.
+
+- **Lives** — the hold (`src/sm64_events/storage/db.py`)
+  → the lander (`src/sm64_events/server/import_api.py`)
+  → the link strip on the [[Library tab]]'s target page
 
 ### Platform stamp
 
@@ -324,10 +365,43 @@ console's picture). Every [[attempt]] carries one, read off the [[event]] that
 closed it, and a [[personal best]] remembers its platform through the
 [[attempt]] you saved it from. An absent stamp means `emu`: until the console
 front-end existed, nothing but the emulator could close an [[attempt]], and
-one rule in the mode registry says so.
+one rule in the mode registry says so. An [[imported time]] takes its stamp
+from the [[sheet legend]] of the column it came from, and the [[column
+export]] paints each cell in its [[sheet colours]] by the stamp of the
+[[personal best]] it prints.
 
 - **Lives** — the mode registry (`src/sm64_events/core/modes.py`)
   → the [[practice log]] and the sheet export
+
+### Sheet legend
+
+The two cells a [[runner]] may write into rows 2 and 3 of their own
+[[Ultimate Sheet]] column — "Emu" in one fill and "N64" in another — so that
+every time below, wearing one of the two fills, says which machine set it.
+Raisn's convention, not the sheet's: on 2026-09-04 his was the only column
+with one. The sheet import reads a [[platform stamp]] off a timed cell only
+where the column's own legend names both platforms in two different fills,
+matching the cell to the nearest legend fill within a small distance; a
+column with no legend stamps nothing.
+
+- **Lives** — the sheet reader (`src/sm64_events/library/sheet.py`)
+  → the library payload's entries → the sheet import
+
+### Sheet colours
+
+The colours your pasted [[column export]] wears: the fill an emulator time
+wears, the fill a console time wears, the text colour, and the font family
+— one stored preference, tuned on the [[Rank tab]] beside the copy button:
+two legend cells reading EMU and N64 in their fills, three circle swatches,
+and a font dropdown that draws every name in its own face. The pasted column
+opens with those two legend cells (the sheet's own convention, in rows 2 and
+3), each timed cell wears the fill of its [[platform stamp]], and an empty
+cell wears nothing. The defaults are a blue and an orange darker than
+Raisn's, white text, and Trebuchet MS, and they are only a starting point.
+
+- **Lives** — the stored preference and its door (`src/sm64_events/server/scorecard_api.py`)
+  → the controls on the exports row (`src/sm64_events/ui/components/sheetstyle.js`)
+  → the clipboard's HTML half (`src/sm64_events/ui/components/scorecard.js`)
 
 ### Strategy
 
@@ -412,7 +486,11 @@ bar means you have never tried this [[target]], never that you went slowly.
 The time one [[rank]] demands, for one [[target]] on one [[strategy]]. The
 community publishes these; the trainer ships them and reconciles your file
 against a newer edition without discarding [[strategy]] rows you wrote
-yourself.
+yourself. Where the community published none, the trainer fits one from the
+[[Ultimate Sheet]]'s own times for every [[strategy]] the sheet has enough
+rows for — the [[star]]'s own row as its Standard [[strategy]] — and re-fits
+them whenever it pulls the sheet: an import, a [[column export]], a refresh,
+or the app starting. A published standard always wins over a fitted one.
 
 - **Lives** — the standards file (`src/sm64_events/ranks/standards.py`)
   → the [[standards ladder]]
@@ -484,6 +562,26 @@ top of a [[tier]] from its bottom at a glance.
   (`src/sm64_events/ui/components/librarymodel.js`,
   compared implementation-to-implementation by
   `tests/test_cross_language_parity.py`)
+
+### Goal
+
+The persisted choice the [[Scorecard]] grades every tile against — a
+[[tier]] and [[division]] inside it, one [[runner]]'s own times, a set of
+times you typed yourself and saved under a name, or SEVERAL of those at
+once. The trainer turns it into one time per tile and the [[Scorecard]]
+compares that time against your [[personal best]]. Picking several keeps
+the FASTEST time any of them offers on each tile — a [[runner]]'s own
+offer being their best across every [[strategy]] they have recorded that
+[[star]] with — so the goal is the best anybody you picked has managed,
+and the picks cover between them the [[star]]s none of them covers alone.
+That coverage matters because a single pick falls short: a [[runner]] has
+nothing wherever they never recorded a time, and a hand-typed goal
+reaches only the tiles you typed.
+
+- **Lives** — the goal resolvers (`src/sm64_events/server/scorecard_api.py`)
+  → the goal picker (`src/sm64_events/ui/scorecardgoal.js`), and, for typing
+  one tile's own time in place, the [[Scorecard]] card itself
+  (`src/sm64_events/ui/components/scorecard.js`)
 
 ### Scope
 
@@ -611,9 +709,10 @@ still govern other sessions' [[attempt]]s.
 
 ### Exit star
 
-A [[star]] you collect to leave a course rather than as the goal — which makes
-its time comparable only with other [[attempt]]s that left the same way. Its
-grab finishes the [[100-coin star]]'s [[attempt]] and records none of its own.
+A [[star]] you collect only to leave a course, not the one you set out for —
+which makes its time comparable only with other [[attempt]]s that left the
+same way. Its grab finishes the [[100-coin star]]'s [[attempt]] and records
+none of its own.
 
 - **Lives** — the 100-coin rules
   (`src/sm64_events/tracking/hundred_coin.py`)
@@ -657,9 +756,14 @@ it. Adopting an approach mints a [[strategy]] you can practice.
 ### Sheet entry
 
 One [[runner]]'s recorded time for one [[approach]], and the video they linked
-to it.
+to it. It belongs to the regional release its own sheet row names, and to
+BOTH releases where that row names none — his ruling, 2026-09-05: a row
+drawing no distinction times the same thing on either machine. The trainer
+stamps an [[imported time]] with that release and offers the same [[sheet
+entry]] as a [[goal]] under it, so the two readings cannot disagree.
 
-- **Lives** — the library builder (`src/sm64_events/library/build.py`)
+- **Lives** — the library builder (`src/sm64_events/library/build.py`) and
+  the release rule (`src/sm64_events/library/sheet.py`)
 
 ### Runner
 
@@ -724,6 +828,35 @@ name, the assignment still lands and the vetted [[ladder]] keeps grading.
 - **Lives** — the assignments (`src/sm64_events/library/adoptions.py`)
   → the link strip on the [[Library tab]]'s target page
 
+### Column export
+
+The reverse of an [[imported time]] — your [[personal best]]s written out in
+the [[Ultimate Sheet]]'s own notation, one line per live worksheet row, ready
+to paste back into the sheet as your own [[runner]] column. Its first line is
+worksheet row 2, so pasting into your column's second cell puts every time
+back on the row it came from. It prints a time exactly where an [[imported
+time]] would land one, under the same [[strategy]] name: a [[sheet piece]] or
+a castle-movement [[approach]] needs an [[adoption]] (or the unasked
+name/seed-key match that grants one) to say which [[segment]] it lands on,
+and an [[approach]] on a [[star]] otherwise files under its [[matched
+strategy]], or under the sheet's own row name where no match names one —
+qualified by its 100-coin heading or by the row it sits under wherever the
+sheet repeats a name, so every worksheet row of one entity is a slot of its own.
+A row that names the thing itself carries your best among the times no
+other row of its block claims. A name this database holds no
+[[personal best]] under prints the row's [[held time]] if an import left
+one, else stays blank, so the column can miss a time but never print a
+wrong one. Once built, the column stays on the [[Scorecard]]'s page until
+one of your times changes or you rebuild it: the button reads "Ready to
+copy", a click copies it, Open shows every line, and the clipboard fills by
+itself only while you are looking at the page — so tabbing away during the
+build costs nothing.
+
+- **Lives** — the column builder
+  (`src/sm64_events/library/export_column.py`)
+  → the scorecard's column endpoint (`src/sm64_events/server/scorecard_api.py`)
+  → the held column and its controls (`src/sm64_events/ui/components/scorecard.js`)
+
 ### Runner rating
 
 The [[MARELO]] this project derives for a [[runner]] from their [[sheet
@@ -780,6 +913,42 @@ pill]], the [[scope]] control, and your [[rank]]s across everything.
 
 - **Lives** — the rank page
   (`src/sm64_events/ui/components/rankpage.js`)
+
+### Scorecard
+
+The [[Rank tab]]'s grid of course cards — the reference sheet's own shape,
+compact enough that one landscape screenshot shows your whole progress:
+four aligned columns you read DOWN, so the cards follow the game's own
+course order, closing with the castle secrets' card, and the Bowser fights'
+card centred beneath the columns. The grid drops to two columns, then one,
+before any [[star]]'s name would need a second line. Each card belongs to one
+course (plus those two, the whole holding all 120 [[star]]s and the Bowser
+fights),
+wears its course's own colour and art, and prints one line per [[star]] or
+[[segment]]: its icon, its full name, your [[personal best]], the current
+[[Goal]]'s time, and the gap between the two — the icon and name together
+open that [[star]]'s [[Library tab]] page, landing on the example closest
+to the [[Goal]]'s time. The castle's Toad and MIPS [[star]]s sit out by
+default (no community tracker counts them and no [[Standard]] grades
+them); including one puts it back in the Secret card and the [[rank]]
+alike. A [[route]]-shaped [[Scope]] buckets
+that [[route]]'s entities into the same cards; a course-shaped one draws
+that course's card alone. A course's [[100-coin star]] is not its own
+line — its line combines it with a companion [[star]] (usually the course's
+red-coin [[star]]; five courses pair differently), because the 100-coin
+[[run]] collects that companion's objective on the way. A card's foot is
+its Stage Sum: your lines added up, the [[Goal]]'s lines added up, and the
+gap between the two counted only over the lines both sides have a time
+for, with a chip saying how many of the card's lines that gap compares —
+so wiping your data leaves the [[Goal]]'s sum standing while your column
+and the gap go blank.
+
+The [[Ultimate Sheet]] and the community's [[Standard]]s both file the
+Under-21 slide [[star]] under the box [[star]]'s heading; the trainer splits
+both sources so that [[star]] carries its own times and its own [[Ladder]].
+
+- **Lives** — the card builder (`src/sm64_events/ranks/scorecard.py`)
+  → the card (`src/sm64_events/ui/components/scorecard.js`)
 
 ### Runner page
 
@@ -945,6 +1114,30 @@ once, no restart.
   door (`src/sm64_events/server/mode_api.py`); the Settings drawer's Game
   section (`src/sm64_events/ui/components/header.js`)
 
+### Region switch
+
+The two-flag control that says which regional releases a surface shows at
+once — JP, US, or both, and never neither. It draws each release as its
+country's flag rather than the two letters, and it means something different
+on each surface that wears it: on the [[library tab]] it decides which
+[[sheet entry]] rows appear (both by default, so no community time hides),
+and on the [[scorecard]] it decides which regions BOTH sides of a tile may
+draw a time from — which regions a [[runner]] [[goal]] may offer, and which
+of your own [[personal best]]s count as yours (your [[effective version]] by
+default, and the faster of the two when both are on). Both sides read the
+same choice so that a [[runner]] whose times you imported grades at exactly
+zero however you set it; a [[personal best]] naming no release counts under
+either choice, since nothing recorded which release produced it.
+
+- **Not** — the [[game version]]. The [[game version]] decides what the
+  trainer grades YOUR [[attempt]]s on; a region switch only widens or narrows
+  which releases a surface draws times from.
+
+- **Lives** — the control itself
+  (`src/sm64_events/ui/components/versionswitch.js`) and the flags it draws
+  (`src/sm64_events/ui/components/regionflag.js`)
+  → the [[library tab]] and the [[scorecard]]
+
 ### Effective version
 
 What the [[game version]] resolves to — always JP or US, never Auto-detect.
@@ -969,16 +1162,18 @@ never moves it.
 
 The JP / US toggle — JP on the left, US on the right — that shows the other
 version's [[ladder]]s without changing which one the trainer grades you on.
-One on the [[library tab]]'s hero re-files every [[approach]] under that
-version's [[ladder]]; one on the [[standards ladder]]'s toolbar re-fetches
-that [[target]]'s [[ladder]]s under it. Both default to the
-[[effective version]], and the toolbar one names the graded version
-whenever it shows the other.
+It picks exactly ONE version, because a [[ladder]] table draws one version's
+cutoffs or none: the [[standards ladder]]'s toolbar wears it and re-fetches
+that [[target]]'s [[ladder]]s under the version you press. It defaults to
+the [[effective version]] and names the graded version whenever it shows the
+other.
+
+- **Not** — the [[region switch]], which picks one version or BOTH and
+  changes what a surface LISTS rather than which cutoffs it draws.
 
 - **Lives** — the shared control
-  (`src/sm64_events/ui/components/versionswitch.js`); mounted by the Library
-  page (`src/sm64_events/ui/components/library.js`) and the standards panel
-  (`src/sm64_events/ui/components/standards.js`)
+  (`src/sm64_events/ui/components/versionswitch.js`); mounted by the
+  standards panel (`src/sm64_events/ui/components/standards.js`)
 
 ### Rank icon
 

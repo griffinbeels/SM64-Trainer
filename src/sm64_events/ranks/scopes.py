@@ -54,11 +54,26 @@ def ranks_by_default(definition: dict) -> bool:
             or definition.get("seed_key") in RANKED_SEGMENT_SEED_KEYS)
 
 
+# The castle's five collect-anytime stars, ignored by default: "it seems
+# like nobody wants to track 'Toad Star (Basement)' / Toad Star (Upstairs)
+# / Toad Star (Tippy) / MIPS 1st Star / MIPS 2nd Star -- these seem to be
+# ignored in everyone's trackers. So we should ignore these by default,
+# too. If the user includes them manually, then it should be included in
+# the secret section" (2026-08-28). The community standards store carries
+# no ladder for any of them, which is the same fact from the other side.
+# An explicit include through the ordinary exclusion door brings one back
+# everywhere at once -- the scorecard's Secret card and the ratings read
+# this one resolved set.
+UNTRACKED_CASTLE_STARS = frozenset(
+    f"star:0:{star_id}" for star_id in range(5))
+
+
 def default_excluded(segment_defs: Iterable[dict]) -> set[str]:
     """Entity keys excluded from ranking unless the user includes them --
-    every segment definition that does not `ranks_by_default`."""
+    every segment definition that does not `ranks_by_default`, plus the
+    five castle stars nobody's tracker counts."""
     return {f"segment:{definition['id']}" for definition in segment_defs
-            if not ranks_by_default(definition)}
+            if not ranks_by_default(definition)} | set(UNTRACKED_CASTLE_STARS)
 
 
 def effective_excluded(default: set[str], included: Iterable[str],
@@ -85,7 +100,11 @@ def rankable_entities(ladders_by_entity: dict[str, dict[str, dict[str, float]]],
             if scoring.best_ladder(ladders) and entity_key not in excluded_keys]
 
 
-def _candidate_key(candidate: dict) -> str | None:
+def candidate_key(candidate: dict) -> str | None:
+    """A route candidate's entity key -- PUBLIC since round 6 (2026-08-24):
+    `ranks/scorecard.py` composes route-scope rows from the same candidates
+    and must translate them identically or the scorecard and MARELO would
+    disagree about what a step contains."""
     if candidate.get("type") == "segment":
         return f"segment:{candidate['segment_id']}"
     if candidate.get("type") == "star":
@@ -122,7 +141,7 @@ def entity_groups(scope_id: str, *, rankable: Iterable[str],
         groups = []
         for step in route.get("steps", []):
             candidates = [candidate_key for candidate_key in
-                          (_candidate_key(candidate)
+                          (candidate_key(candidate)
                            for candidate in step.get("candidates", []))
                           if candidate_key in ranked]
             if not candidates:

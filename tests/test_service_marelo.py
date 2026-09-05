@@ -64,7 +64,11 @@ def test_segments_outside_bowser_fights_and_hundred_coin_exits_are_excluded_by_d
     assert uncategorised, "no category-less segment left to judge"
     for key in by_category["Castle Movement"] + by_category["Tricks"] + uncategorised:
         assert key in excluded, key
-    assert not any(key.startswith("star:") for key in excluded)
+    # The ONLY stars excluded by default are the castle's five
+    # collect-anytime ones ("nobody wants to track [them]... ignored in
+    # everyone's trackers", 2026-08-28) -- every course star still ranks.
+    star_excluded = {key for key in excluded if key.startswith("star:")}
+    assert star_excluded == set(scopes.UNTRACKED_CASTLE_STARS)
 
 
 def test_the_three_bowser_course_entries_rank_by_default(service):

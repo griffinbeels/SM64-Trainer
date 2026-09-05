@@ -391,7 +391,7 @@ def build():
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     return create_app(poller, broadcaster, service=service, replay=replay,
                       updater=updater, compare=compare, compilation=compilation,
-                      db_retry=db_retry)
+                      db_retry=db_retry, refresh_library_on_start=True)
 
 
 _app = None

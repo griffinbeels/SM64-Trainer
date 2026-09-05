@@ -30,7 +30,8 @@ from sm64_events.ranks import scopes
 from sm64_events.ranks.classify import RANK_MODES
 from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
-from sm64_events.tracking import practicable
+from sm64_events.tracking import importing, practicable
+from sm64_events.tracking.views import current_pbs_by_strat
 from sm64_events.tracking.activestrat import ActiveStrats
 from sm64_events.tracking.defaults import remember_deletion, resolve_steps
 from sm64_events.tracking.hundred_coin import classify
@@ -78,6 +79,26 @@ def _now() -> datetime:
 
 def _iso(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
+
+
+def _import_identity(entity_key: str):
+    """`(course_id, star_id, segment_id)` for a pbs row — the kind-dispatched
+    shape `insert_pb` and `current_pb` both take, with the unused half None.
+
+    THE one parser of an import's entity key. The API takes that key from
+    anyone, so anything that is not a well-formed star or segment key raises
+    `ValueError` here rather than surfacing as a bare `int()` failure."""
+    kind, _, rest = entity_key.partition(":")
+    try:
+        if kind == "segment":
+            return None, None, int(rest)
+        if kind == "star":
+            course_id, star_id = rest.split(":")
+            return int(course_id), int(star_id), None
+    except ValueError:
+        pass
+    raise ValueError(
+        f"{entity_key!r} cannot be imported: only stars and your own segments can")
 
 
 def _strategies_key(ek: str) -> str:
@@ -253,7 +274,12 @@ class TrackerService:
     # for the poller's on_frame heartbeat.
     on_attempt_boundary = None
 
-    async def publish(self, event: Event) -> None:
+    async def publish(self, event: Event) -> int | None:
+        """Broadcast, then journal and track. Returns the JOURNAL ID of the
+        row written, or None when nothing was (a broadcast-only type, no live
+        session). An attempt's id is the journal id of its first event, so a
+        caller that journals a single-event attempt — `import_times` — learns
+        the attempt's id from this and nowhere else."""
         if event.type == "stage_changed":
             # The world NODE the player is standing in, stamped BEFORE the
             # broadcast because the browser MERGES this payload into its held
@@ -290,12 +316,15 @@ class TrackerService:
         if self.db is None or self.session_id is None:
             return
         try:
-            await self._track(event, seq)
+            return await self._track(event, seq)
         except Exception:
             log.exception("tracking pipeline failed for %s; event broadcast only",
                           event.type)
+            return None
 
-    async def _track(self, event: Event, seq: int) -> None:
+    async def _track(self, event: Event, seq: int) -> int:
+        """Journal the event, feed the projector, persist what closed.
+        Returns the journal id from every exit."""
         jid = self.db.append_event(self.session_id, seq, event)
         row = EventRow(id=jid, session_id=self.session_id, seq=seq,
                        type=event.type, frame=event.frame,
@@ -311,7 +340,7 @@ class TrackerService:
             # rebuild. Measured at ~140 ms over his 20k-event journal, paid
             # once per SUBAREA star, while Mario is locked in a dance.
             await self._reproject()
-            return
+            return jid
         if event.type == PRUNE_EVENT:
             # Startup prune of unlabelled attempts (tracking/prune.py). Like a
             # clear or a correction it is a compensating event folded in by
@@ -321,7 +350,7 @@ class TrackerService:
             # already-open page drop the rows, and delete_orphaned_pbs runs in
             # there too (a protected attempt is exactly one it must not find).
             await self._reproject()
-            return
+            return jid
         proj = self._projector
         target_before = proj.target
         closed = proj.feed(row)
@@ -355,7 +384,7 @@ class TrackerService:
                 payload={k: v for k, v in n.items()
                          if k not in ("event", "frame")}))
             if self._projector is not proj:
-                return
+                return jid
         # Run drain: persist any newly finished/aborted runs produced by this
         # event. These are broadcast-only derived events (run_finished/run_aborted
         # must NEVER be journaled — the projector re-derives them on replay from
@@ -366,13 +395,13 @@ class TrackerService:
             self._persisted_runs.append(r.id)
             await self.broadcaster.publish(self._run_completed_event(r, event))
             if self._projector is not proj:
-                return
+                return jid
         for n in list(proj.run_notices):
             await self.broadcaster.publish(Event(
                 type=n["event"], frame=event.frame,
                 timestamp_utc=event.timestamp_utc, payload=n))
             if self._projector is not proj:
-                return
+                return jid
         for attempt in closed:
             self.db.upsert_attempt(attempt)
             # The derived event's journal row carries the CURRENT session_id,
@@ -380,12 +409,13 @@ class TrackerService:
             # session_id — the payload's session_id is authoritative.
             await self.publish(self._attempt_completed_event(attempt, event))
             if self._projector is not proj:
-                return
+                return jid
         if self._projector.target != target_before:
             await self.publish(Event(
                 type="target_changed", frame=event.frame,
                 timestamp_utc=event.timestamp_utc,
                 payload=self.target_payload()))
+        return jid
 
     async def settle_frame(self, frame: int) -> None:
         """The game frame advanced; deliver any topological verdict waiting on
@@ -741,7 +771,12 @@ class TrackerService:
         star version deliberately: the practice UI drives both through one
         picker (ui/components/stratpicker.js)."""
         db = self._require_db()
-        if all(d.id != segment_id for d in self._segment_defs):
+        # The DB, not self._segment_defs: the cache lags a row created outside
+        # the service's own CRUD (a reconcile, a test's direct insert), and the
+        # import path already judges importability against the live table —
+        # round 4's auto-fill made the two sources meet (a re-seeded Bowser
+        # movement's fresh id was importable yet "not found" here).
+        if all(d["id"] != segment_id for d in db.segment_defs()):
             raise LookupError(f"segment {segment_id} not found")
         await self.publish(Event(type="strat_set", frame=0,
                                  timestamp_utc=_now(),
@@ -1975,6 +2010,219 @@ class TrackerService:
         await self.publish(Event(type="pb_undone", frame=0,
                                  timestamp_utc=_now(), payload=payload))
         return payload
+
+    async def import_times(self, source: str, candidates, held=()) -> dict:
+        """Land a batch of brought-in times, each as an attempt with a PB --
+        and HOLD the cells the source could not place.
+
+        `held` is `[{row_key, game_version, time_cs, reason}]`: sheet cells
+        the reader had no entity for (a piece nobody has linked, a castle
+        movement, a stage RTA, a real-time-clocked star row). They are kept
+        beside the journal under this source (`db.hold_times`) rather than
+        dropped -- his ruling, 2026-09-04, "maximize compatibility with the
+        sheet" -- so the column export prints them back, the Library row
+        shows them, `remove_imported` erases them with the rest, and a
+        LINK lands them (`server/import_api.py::held_row_lander`). Not
+        journaled: a held cell is not an attempt, and the projector never
+        reads it.
+
+        Every import door arrives here — typed by hand, a runner's Ultimate
+        Sheet column. The improvement rule lives in `tracking/importing.py`
+        and is pure; this owns only the parts that touch the world.
+
+        Each landed time is ONE journaled `time_imported` event, and the
+        PROJECTOR turns it into the attempt row he sees (`projection.
+        Projector._imported_attempt`) — "It should show the new entry in the
+        practice log as an entry row... it then affords us all of the
+        functionality of a practice log entry row (deleting, undoing, etc)"
+        (2026-08-22). Journaled rather than inserted so the row survives every
+        reproject like any other attempt. The PB row is written here, linked
+        to that attempt by the journal id `publish` hands back, exactly as
+        `save_pb` links one — so clearing the row erases its PB through the
+        door `clear_attempt` already has, and `delete_orphaned_pbs` collects
+        it if the event itself is ever erased (`remove_imported`).
+
+        CALLER'S OBLIGATION: a batch that lands anything moves ranks for a
+        reason that is not a run, so the caller must follow it with
+        `server/ranks_api.py::absorb_after_regrade` — the same thing the
+        game-version flip does in `server/mode_api.py`. Without it the next
+        rank fetch reads the climb as earned and fires a full-screen
+        celebration for something he did not just do, which he reads as a bug
+        (his ruling, 2026-08-01). That call lives in the route rather than
+        here because scoring a scope is server-side and `tracking/` must not
+        import `server/`.
+        """
+        plan = self._plan_import(candidates)
+        db = self._require_db()
+        for candidate, frames in plan.landing:
+            course_id, star_id, segment_id = _import_identity(
+                candidate.entity_key)
+            # NULL, never the empty string: every reader tests `if not strat`
+            # and a "" would be a second spelling of the same absence.
+            strat_tag = candidate.strat_tag or None
+            now = _now()
+            attempt_id = await self.publish(Event(
+                type=importing.IMPORT_EVENT, frame=0, timestamp_utc=now,
+                payload={"source": source, "course_id": course_id,
+                         "star_id": star_id, "segment_id": segment_id,
+                         "strat_tag": strat_tag,
+                         "timer_mode": candidate.timer_mode, "frames": frames,
+                         "game_version": candidate.game_version,
+                         # The platform stamp rides the closing event, so
+                         # the projector re-derives it on every replay
+                         # (`_imported_attempt`); absent when the source
+                         # did not say, never a guessed "emu".
+                         **({"platform": candidate.platform}
+                            if candidate.platform else {})}))
+            if attempt_id is None:
+                raise RuntimeError("the import could not be journaled")
+            db.insert_pb(course_id=course_id, star_id=star_id,
+                         segment_id=segment_id, strat_tag=strat_tag,
+                         timer_mode=candidate.timer_mode, frames=frames,
+                         attempt_id=attempt_id, saved_utc=_iso(now),
+                         imported_from=source,
+                         game_version=candidate.game_version)
+        if plan.landing:
+            await self._select_freshly_earned_strats(
+                {landed.entity_key for landed, _ in plan.landing})
+        if held:
+            db.hold_times(source, list(held), _iso(_now()))
+        return {"source": source, **plan.summary}
+
+    async def _select_freshly_earned_strats(self, entity_keys) -> None:
+        """An import fills an EMPTY hand: every entity the batch landed on
+        that has NO active strategy gets its fastest current PB's strategy
+        selected (round 4, 2026-08-24: "we should also automatically select
+        the fastest strategy for each star / segment that we've successfully
+        completed... If there are multiple entries for a given star/segment
+        using different strategies, whichever's fastest becomes selected").
+
+        An entity with an active strategy keeps it — explicit user choices
+        take priority (his standing ruling), and a seeded movement's
+        default_strat means it never reads as empty here. Fastest is judged
+        over per-strategy CURRENT PBs (views.current_pbs_by_strat, THE one
+        resolver) on the entity's own clock — stars igt, segments rta — so a
+        slower imported strategy never displaces a faster one already on
+        file. The fill goes through set_strat/set_strat_segment, so it is a
+        journaled strat_set like any hand pick: replay keeps it, and the
+        lifetime kind="all" wipe (which hard-deletes the journal) takes it
+        away with everything else — "if I clear all practice data, naturally,
+        all of these strategy selections should also be wiped out". Undoing
+        the import (DELETE /api/import/{source}) deliberately does NOT unset
+        it: a selection is configuration, and unselecting could not restore
+        whatever hand state preceded the batch anyway."""
+        db = self._require_db()
+        active = ActiveStrats.from_db(db, self.strat_by_star,
+                                      self.strat_by_segment)
+        by_strat = current_pbs_by_strat(db.pbs())
+
+        def fastest(match):
+            rows = [row for key, row in by_strat.items() if match(key)]
+            if not rows:
+                return None
+            return min(rows, key=lambda row: (row["frames"],
+                                              row["strat_tag"]))["strat_tag"]
+
+        for entity in sorted(entity_keys):
+            course_id, star_id, segment_id = _import_identity(entity)
+            if segment_id is not None:
+                if active.for_segment(segment_id):
+                    continue
+                pick = fastest(lambda key: key[0] == "segment"
+                               and key[1] == segment_id and key[2] == "rta")
+                if pick:
+                    await self.set_strat_segment(segment_id, pick)
+            else:
+                if active.for_star(course_id, star_id):
+                    continue
+                pick = fastest(lambda key: key[0] == course_id
+                               and key[1] == star_id and key[2] == "igt")
+                if pick:
+                    await self.set_strat(course_id, star_id, pick)
+
+    def _plan_import(self, candidates):
+        """Check every candidate, then decide what lands. Writes nothing.
+
+        Separate from the landing so the whole batch is checked before any
+        row is journaled: a candidate the database cannot file refuses the
+        batch, never half of it."""
+        db = self._require_db()
+        own_segments = {definition["id"] for definition in db.segment_defs()}
+        for candidate in candidates:
+            self._check_importable(candidate, own_segments)
+
+        def current_frames(entity_key, strat_tag, timer_mode, game_version=None):
+            course_id, star_id, segment_id = _import_identity(entity_key)
+            # An empty tag means NO strategy, and `current_pb` reads that as
+            # "do not restrict" — which is the right comparison for such a
+            # time: it can only be claimed by the strategy-blind best, so it
+            # must beat everything to land.
+            #
+            # The ROM is part of the comparison too (2026-09-02): a (JP) row
+            # and a (US) row for one star and one strategy are two records,
+            # and comparing them against each other dropped the slower
+            # region's time on every merged approach the sheet holds.
+            row = db.current_pb(course_id, star_id, timer_mode,
+                                segment_id=segment_id,
+                                strat_tag=strat_tag or None,
+                                game_version=game_version)
+            return row["frames"] if row else None
+
+        return importing.decide(candidates, current_frames)
+
+    @staticmethod
+    def _check_importable(candidate, own_segments) -> None:
+        """Refuse a candidate this database cannot honestly file.
+
+        A STAR always can be. A SEGMENT can only when the id is one of THIS
+        database's own. A segment named in his own sheet is matched by name
+        against segments he built here, and the Ultimate Sheet's six Bowser
+        rows reach their seeded movement through its seed_key
+        (`server/import_api.py::sheet_row_placer`) — both arrive here
+        carrying a local id. What this guard refuses is a bare id from
+        somewhere else, which is worse than a missing one: it may well EXIST
+        here and name a different movement, so the time would land silently
+        on the wrong thing.
+
+        Segments are RTA-only, the same rule `save_pb` enforces, so a segment
+        candidate carrying the IGT clock is refused rather than quietly
+        re-clocked."""
+        key = candidate.entity_key
+        _course_id, _star_id, segment_id = _import_identity(key)
+        if segment_id is None:
+            return                       # a star: always filable
+        if segment_id not in own_segments:
+            raise ValueError(
+                f"{key!r} is not one of your segments — a segment id from "
+                "somewhere else may name a different movement here")
+        if candidate.timer_mode != "rta":
+            raise ValueError(
+                f"{key!r} is timed on RTA; a segment has no IGT clock")
+
+    async def remove_imported(self, source: str) -> int:
+        """Erase every time one import brought, and say how many.
+
+        Erased, not marked — "marking them as 'removed' is still worthless.
+        Just completely erase them" (2026-08-02). The `time_imported` journal
+        rows are deleted and the journal replayed, so the attempts vanish and
+        `_reproject`'s orphan sweep takes their PB rows with them; whatever
+        each PB superseded is current again (latest-row-wins). Safe to cut
+        from the journal where a played attempt's events are not: an import
+        is a single self-contained row the projector reads without state, so
+        removing it rewrites no neighbour (contrast `purge_event_types`'s
+        measured 288 rewritten survivors for a span cut)."""
+        db = self._require_db()
+        doomed = [row.id for row in db.events()
+                  if row.type == importing.IMPORT_EVENT
+                  and row.payload.get("source") == source]
+        if doomed:
+            db.delete_events(doomed)
+            await self._reproject()
+        # The cells this source held go with it: they were brought by the
+        # same button press, and a held time surviving its import would be
+        # a column he cannot see and cannot undo.
+        db.delete_held_times(source=source)
+        return len(doomed)
 
     async def wipe_data(self, kind: str, course_id: int | None = None,
                         star_id: int | None = None,

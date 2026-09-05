@@ -7,6 +7,9 @@
 export const PLATFORMS = ["emu", "n64"];
 export const PLATFORM_LABELS = { emu: "Emulator", n64: "N64" };
 export const DEFAULT_PLATFORM = "emu";
+// The two values by name, for a module that compares a stamp (round 29's
+// sheet colours) without spelling the literal a second time.
+export const [EMU, N64] = PLATFORMS;
 
 // An absent stamp is the emulator: until the console front-end existed,
 // nothing but Project64's memory could close an attempt. ONE rule, mirrored

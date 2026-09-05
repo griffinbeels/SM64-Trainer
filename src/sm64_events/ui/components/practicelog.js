@@ -41,6 +41,7 @@ import { nestSubsections } from "../subsections.js";
 import { effectiveRankDisplayMode, readRankDisplayMode,
          writeRankDisplayMode } from "../rankdisplaymode.js";
 import { caveatOf, cardBadge } from "./marks.js";
+import { AddTime } from "./addtime.js";
 
 const html = htm.bind(h);
 
@@ -730,6 +731,25 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
         family=${standards.family} openLibrary=${openLibrary}
         gradingVersion=${t.view && t.view.game_version ? t.view.game_version.effective : null}
         onChanged=${t.refresh} defaultOpen=${false} />
+      ${/* Recording a time you already earned, for the card you are looking
+           at. It files under the strategy the card is already showing ("whatever
+           strategy is selected is the default") rather than growing a second
+           picker, and sends no game version: a typed time grades on whichever
+           ROM is running, like every time stored before imports existed.
+
+           STARS only, and the kind test is `isSegment`, NOT `course_id != null`:
+           a segment originating in a course carries a course_id too (views.py
+           stamps `origin_course`), so that guard drew this control on ~30
+           course movements where every save came back 422 -- a dead control
+           whose reason lives nowhere near the click. The source scan in
+           tests/test_ui_import_surfaces.py pins the guard, because no render
+           fixture can tell the two apart.
+
+           BELOW the standards panel: above it, it pushed the attempt list
+           47px from its ladder for one round, and it is a rare setup gesture
+           while that relationship is what the card is FOR. */""}
+      ${!isSegment(sec) && html`<${AddTime}
+          entityKey=${ek} strategy=${sec.last_strat} onDone=${t.refresh} />`}
       ${/* THE PIECES OF THIS ENTITY, inside its own card and indented one
            level (round 22). They sit INSIDE the `Disclose` body deliberately,
            which is what buys "These should follow the visibility of the

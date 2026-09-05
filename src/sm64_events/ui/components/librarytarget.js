@@ -20,6 +20,7 @@ import { RankIcon } from "./rankicon.js";
 import { capName, divisionDigit } from "./caps.js";
 import { Disclose } from "./collapsible.js";
 import { Icon } from "./icons.js";
+import { RegionFlag, regionLabel } from "./regionflag.js";
 import { SearchMenu } from "./searchselect.js";
 import { OverallStandards } from "./overallstandards.js";
 import { SegmentTimeline } from "./segmenttimeline.js";
@@ -330,11 +331,25 @@ function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd,
 // `.library-runner-link` resets the button to flowing text (index.html):
 // the global `button` rule would otherwise grow every row it sits in.
 function RunnerName({ entry, className, onOpenRunner }) {
-  if (!onOpenRunner || entry._isYou) return html`<span class=${className}>${entry.runner}</span>`;
-  return html`<button type="button" class="${className} library-runner-link textlink"
+  // Round 24 item 2: an entry the sheet tags with a region wears that
+  // region's flag -- "just with an annotation that it's JP or US". Here
+  // rather than in each of the three entry renderers because all three draw
+  // their name through this one function. An UNTAGGED entry wears nothing,
+  // and that is not an omission: an untagged sheet row is real in both
+  // regions (`visibleEntriesFor` shows it in either mode), so a flag on it
+  // would claim a distinction the sheet never made.
+  const flag = entry.version && !entry._isYou
+    ? html`<${RegionFlag} version=${entry.version} size=${16}
+        className="library-entry-flag"
+        title=${`${regionLabel(entry.version)} time`} />`
+    : "";
+  if (!onOpenRunner || entry._isYou)
+    return html`<span class=${className}>${entry.runner}${flag}</span>`;
+  return html`<span class="library-runner-wrap"><button type="button"
+      class="${className} library-runner-link textlink"
       title=${`View ${entry.runner}'s ratings`}
       onclick=${(clickEvent) => { clickEvent.stopPropagation(); onOpenRunner(entry.runner); }}
-      >${entry.runner}</button>`;
+      >${entry.runner}</button>${flag}</span>`;
 }
 
 // A run nobody filmed: still evidence (a real runner, a real time, a real
@@ -626,6 +641,21 @@ function LinkDoor({ linkedName, linkedNote, offerNote, doAdopt, doUnlink,
   </div>`;
 }
 
+// Round 28: a HELD TIME -- the sheet time an import kept aside for a row the
+// trainer had nowhere to put. One cell per ROM the sheet timed it on, each
+// wearing its flag (never the letters: his 2026-09-02 ruling). Drawn on the
+// row it belongs to -- the piece's link strip, a movement's section head --
+// because a time that lives only in the export is a time he cannot see.
+function HeldTime({ held }) {
+  if (!held || !held.length) return null;
+  return html`<span class="library-held-time"
+      title="Kept aside by an import — it lands the moment this row is linked to one of your segments.">
+    ${held.map((cell, index) => html`<span key=${index}>${index ? " · " : ""}${
+      fmtSeconds(cell.time_cs / 100)}${cell.game_version
+        ? html` <${RegionFlag} version=${cell.game_version} size=${12} />` : ""}</span>`)}
+  </span>`;
+}
+
 // A PIECE's own row-level door (round 5, narrowed round 7: approaches no
 // longer carry one -- the whole-target door in the page header covers them).
 function LinkControl({ row, kind, entityKey, adoptable, segments, segmentsError,
@@ -634,10 +664,13 @@ function LinkControl({ row, kind, entityKey, adoptable, segments, segmentsError,
   if (!linked && !(adoptable && linkable({ entity_key: entityKey }, row, kind))) {
     return null;
   }
+  const heldHere = row.held && row.held.length;
   return html`<${LinkDoor}
       linkedName=${linked ? resolveLabel(row.adopted) : null}
       linkedNote=${" — it grades there now."}
-      offerNote="Not graded yet — link one of your segments to grade it."
+      offerNote=${heldHere
+        ? html`Your sheet time <${HeldTime} held=${row.held} /> is kept aside — link one of your segments to land it there.`
+        : "Not graded yet — link one of your segments to grade it."}
       doAdopt=${async (segmentId) => {
         await send("POST", "/api/library/adopt",
           { row_key: row.row_key, entity_key: `segment:${segmentId}` });
@@ -729,13 +762,14 @@ function TargetLinkControl({ rows, approaches, linkCtx }) {
  * (a strategy's linking is target-level, round 7).
  */
 function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
-                      onAdd, linkCtx, version, gradingVersion, onOpenRunner }) {
+                      onAdd, linkCtx, version, versions = ["us"], gradingVersion,
+                      onOpenRunner }) {
   // 2026-08-31: the same query filter each Section applies to itself, applied
   // here too -- otherwise a search with no matching piece leaves the "Pieces
   // of this run" heading standing over nothing, which reads as a section that
   // failed to load rather than as one with no results.
   const shown = query
-    ? pieces.filter((piece) => hasRunnerMatch(piece, version, query))
+    ? pieces.filter((piece) => hasRunnerMatch(piece, versions, query))
     : pieces;
   if (!shown.length) return null;
   return html`<div class="library-pieces">
@@ -743,7 +777,8 @@ function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
     ${shown.map((piece) => html`<${Section} key=${approachIdentity(piece)}
         approach=${piece} open=${expanded === approachIdentity(piece)}
         onOpen=${() => onOpen(approachIdentity(piece))}
-        query=${query} stratInfo=${null} version=${version} gradingVersion=${gradingVersion}
+        query=${query} stratInfo=${null} version=${version} versions=${versions}
+        gradingVersion=${gradingVersion}
         trayKeys=${trayKeys}
         entityKey=${piece.entity_key || entityKey} onAdd=${onAdd}
         linkCtx=${linkCtx} onOpenRunner=${onOpenRunner}
@@ -780,13 +815,19 @@ function PiecesList({ pieces, query, expanded, onOpen, trayKeys, entityKey,
 // That second clause is not a corner case (see _visible_entries's own
 // docstring for the count), and the two had drifted apart before with no
 // test able to notice.
-function visibleEntriesFor(item, version) {
+function visibleEntriesFor(item, versions) {
   const entries = item.entries || [];
   const hasJp = !!item.ladder_jp;
   const tags = new Set(entries.map((entry) => entry.version).filter(Boolean));
   const versioned = hasJp || tags.size > 1;
+  // Round 24: `versions` is a SET now, and the Library shows BOTH by default
+  // -- "we should show BOTH rank standards combined... Right now,
+  // information about runners / approaches feels hidden, which is not the
+  // intent." A bare string is still accepted, so `ratings.py`'s genuinely
+  // single-region contract reads here unchanged.
+  const shown = new Set(Array.isArray(versions) ? versions : [versions]);
   return versioned
-    ? entries.filter((entry) => !entry.version || entry.version === version)
+    ? entries.filter((entry) => !entry.version || shown.has(entry.version))
     : entries;
 }
 
@@ -801,18 +842,61 @@ function visibleEntriesFor(item, version) {
 // always answers, Capless included) and drops only bands that end up with
 // neither an entry nor a cutoff, so "some visible entry matches" and "some
 // band survives the query" are the same statement about the same list.
-function hasRunnerMatch(item, version, query) {
-  return visibleEntriesFor(item, version)
+function hasRunnerMatch(item, versions, query) {
+  return visibleEntriesFor(item, versions)
     .some((entry) => matchesRunner(entry, query));
+}
+
+// WHICH region's ladder cut the bands below, said on the row itself -- one
+// chip, two reasons it appears, and `null` when neither holds.
+//
+//  * A row with NO `ladder_jp` still got ONE ladder, fitted entirely from
+//    whichever population it has (13 approaches are fitted from JP-only
+//    times, with too few US runs to earn a companion). That chip renders
+//    independently of the region control and always has: an approach can mix
+//    entry versions while its one ladder is still single-version-fitted, and
+//    both facts stay on screen.
+//  * A row WITH two ladders, while both regions are listed, draws its bands
+//    from exactly one of them (round 24). Naming which is the difference
+//    between a JP time sitting in a US band as a stated fact and as a silent
+//    mis-ranking.
+//
+// Its own component rather than two blocks inside `Section`, which was
+// already 166 lines and complexity 43 before this round -- the chips are a
+// self-contained sentence, so they move out instead of accumulating.
+function LadderRegionChip({ approach, version, versions }) {
+  if (!approach.ladder_jp) {
+    if (!approach.ladder_version) return null;
+    return html`<span class="chip library-ladder-version-chip"
+        title=${`Fitted from ${regionLabel(approach.ladder_version)}-only community times -- not enough of the other version's runs to fit a second ladder.`}>
+      <${RegionFlag} version=${approach.ladder_version} size=${17} title="" />
+      <span>ladder only</span>
+    </span>`;
+  }
+  if (versions.length < 2) return null;
+  return html`<span class="chip library-ladder-version-chip"
+      title=${`Both regions are listed here; the rank bands below are cut from the ${regionLabel(version)} ladder.`}>
+    <${RegionFlag} version=${version} size=${17} title="" />
+    <span>ladder</span>
+  </span>`;
 }
 
 function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey, onAdd,
                    linkCtx, door = null, focusMark = null, version = "us",
-                   gradingVersion = "us", onOpenRunner, focusYou = false }) {
+                   versions = ["us"], gradingVersion = "us", onOpenRunner,
+                   focusYou = false }) {
   const hasJp = !!approach.ladder_jp;
   const ladder = (hasJp && version === "jp" ? approach.ladder_jp : approach.ladder) || {};
-  const visibleEntries = useMemo(() => visibleEntriesFor(approach, version),
-    [approach, version]);
+  // Two different questions, and round 24 split them. WHICH ENTRIES are
+  // listed is the whole region set (`versions`); WHICH LADDER the bands
+  // are cut from is one region (`version`, the page's `primaryRegion`) --
+  // a set of cutoffs belongs to one ROM or it is nothing. So in "both" mode
+  // a JP-tagged entry sits in a band cut from the US ladder: the flag every
+  // tagged entry wears (RunnerName) and the head's ladder chip are what keep
+  // that a stated fact rather than a silent mis-ranking.
+  const versionKey = versions.join(",");
+  const visibleEntries = useMemo(() => visibleEntriesFor(approach, versions),
+    [approach, versionKey]);
   const bands = useMemo(() => bandsOf(ladder, visibleEntries),
     [ladder, visibleEntries]);
   // ROUND 4: a live query hides every band with no matching runner -- TOC
@@ -829,7 +913,7 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
   // choice is exactly where he left it the moment the box clears. The actual
   // `return null` cannot happen until every hook below has run.
   const searching = !!query;
-  const hidden = searching && !hasRunnerMatch(approach, version, query);
+  const hidden = searching && !hasRunnerMatch(approach, versions, query);
   const effectiveOpen = searching || open;
   const marioKey = approach.ladder && approach.ladder.Mario != null
     ? approach.ladder.Mario : -1;   // presentational echo of sectionOrder's own key; -1 (not -Infinity) so it survives JSON round-trips a render probe takes
@@ -933,6 +1017,9 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
             ? html`<span class="meta">Best ${fmtSeconds(approach.best_cs / 100)} · ${approach.best_runner}</span>` : ""}
           ${approach.fill_rate != null
             ? html`<span class="meta">Fill ${Math.round(approach.fill_rate * 100)}%</span>` : ""}
+          ${approach.held && approach.held.length
+            ? html`<span class="meta library-section-held">Your sheet time${" "}
+                <${HeldTime} held=${approach.held} /> · kept aside</span>` : ""}
           ${standing
             ? html`<span class="meta library-your-standing"
                 title=${standing.noTimes ? "Capless — no recorded time on this segment yet." : undefined}>
@@ -963,12 +1050,8 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
              the mode toggle since round 1: an approach can mix entry versions
              (so the toggle shows) while its one ladder is still fitted from a
              single version's times -- both facts stay on screen. */""}
-        ${!hasJp && approach.ladder_version
-          ? html`<span class="chip library-ladder-version-chip"
-              title=${`Fitted from ${approach.ladder_version === "jp" ? "JP" : "US"}-only community times -- not enough of the other version's runs to fit a second ladder.`}>
-              ${approach.ladder_version === "jp" ? "JP" : "US"} ladder only
-            </span>`
-          : ""}
+        <${LadderRegionChip} approach=${approach} version=${version}
+            versions=${versions} />
         ${/* LEADERBOARD MODE (task 1): a second reading of the same entries
              -- his ruling, add a reading, never touch the one that already
              works. Per-SECTION state (not page state, never persisted);
@@ -1045,10 +1128,11 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
  * (`/api/library/target/{index}`) to this same full shape before mounting
  * this component, so it never has to branch on which door it came through.
  */
-export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us",
+export function LibraryTarget({ t, targets, version = "us", versions, gradingVersion = "us",
                                onAdd, trayKeys, focusStrat, focusTier,
                                focusDivision = null, focusEntryUrl = null,
                                focusRunner = null, focusTimeCs = null,
+                               focusGoalCs = null,
                                focusYou = false, focusRow = null,
                                fallbackLabel = null, onRelink = () => {},
                                resolveEntityLabel = null, onOpenRunner = null }) {
@@ -1322,10 +1406,10 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
   const [focusMark, setFocusMark] = useState(null);
   const rootRef = useRef(null);
   useEffect(() => {
-    if (!focusStrat && !focusRunner) return undefined;
+    if (!focusStrat && !focusRunner && focusGoalCs == null) return undefined;
     const focusId = `${pageIdentity}::${focusStrat || ""}::${focusTier || ""}`
       + `::${focusDivision || ""}::${focusEntryUrl || ""}`
-      + `::${focusRunner || ""}::${focusTimeCs ?? ""}`;
+      + `::${focusRunner || ""}::${focusTimeCs ?? ""}::${focusGoalCs ?? ""}`;
     if (consumedFocusRef.current === focusId) return undefined;
     // A RUNNER focus (2026-08-22, the [[Runner page]]'s door): the entry is
     // the one the breakdown GRADED -- the runner's best visible time on this
@@ -1337,7 +1421,7 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
     let runnerEntry = null;
     if (focusRunner) {
       for (const approach of approaches) {
-        for (const entry of visibleEntriesFor(approach, version)) {
+        for (const entry of visibleEntriesFor(approach, versions)) {
           if (entry.runner !== focusRunner) continue;
           const exact = entry.time_cs === focusTimeCs;
           if (!runnerEntry || exact || (!runnerEntry.exact
@@ -1349,6 +1433,33 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
         if (runnerEntry && runnerEntry.exact) break;
       }
     }
+    // A GOAL focus (2026-08-28, round 11 -- the scorecard's line doors):
+    // "it finds the closest example in the library to my goal time... We
+    // should try to match the user's strategy (if they have one selected);
+    // if they don't have a strategy selected yet, it's just the closest
+    // time." Closest = smallest |time - goal| among VISIBLE timed entries;
+    // the active strategy's approach is tried first and wins outright when
+    // it has any timed entry, falling back to every approach when it has
+    // none (or no strategy rode the intent).
+    let goalEntry = null;
+    if (focusGoalCs != null && !focusRunner) {
+      const stratPool = focusStrat ? approaches.filter((approach) =>
+        approach.matched_strategy === focusStrat
+          || approach.name === focusStrat) : [];
+      const pools = stratPool.length ? [stratPool, approaches] : [approaches];
+      for (const pool of pools) {
+        for (const approach of pool) {
+          for (const entry of visibleEntriesFor(approach, versions)) {
+            if (entry.time_cs == null) continue;
+            const distance = Math.abs(entry.time_cs - focusGoalCs);
+            if (!goalEntry || distance < goalEntry.distance) {
+              goalEntry = { approach, entry, distance };
+            }
+          }
+        }
+        if (goalEntry) break;
+      }
+    }
     // `approaches.find` here still resolves by NAME alone and can still land
     // on the first of two sibling sections that share one `matched_strategy`
     // (the 100-coin case, caveat 4) — that is not this fix's bug to close:
@@ -1356,8 +1467,10 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
     // design ("your rank on a strategy is the same fact wherever it
     // appears"), so a strategy-named link has no third piece of information
     // to disambiguate WHICH sibling with, and landing on either is correct.
-    const hit = runnerEntry ? runnerEntry.approach : approaches.find((approach) =>
-      approach.matched_strategy === focusStrat || approach.name === focusStrat);
+    const hit = runnerEntry ? runnerEntry.approach
+      : goalEntry ? goalEntry.approach
+      : approaches.find((approach) =>
+          approach.matched_strategy === focusStrat || approach.name === focusStrat);
     if (!hit) return undefined;  // approaches not loaded yet -- stay
                                   // unconsumed, try again next render
     consumedFocusRef.current = focusId;
@@ -1373,6 +1486,7 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
     // matches no entry (a vetted-only example, a JP-filtered one).
     let mark = null;
     const landedEntry = runnerEntry ? runnerEntry.entry
+      : goalEntry ? goalEntry.entry
       : focusEntryUrl ? (hit.entries || []).find((one) => one.video === focusEntryUrl)
       : null;
     if (landedEntry) {
@@ -1404,7 +1518,7 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
     const helloTimer = setTimeout(() => {
       const root = rootRef.current;
       const card = !root ? null
-        : landedEntry && runnerEntry
+        : landedEntry && (runnerEntry || goalEntry)
           ? root.querySelector(`[data-runner="${CSS.escape(landedEntry.runner)}"]`
               + `[data-time-cs="${landedEntry.time_cs}"]`)
           : focusEntryUrl
@@ -1417,7 +1531,7 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
     }, 550);
     return () => { clearTimeout(timer); clearTimeout(helloTimer); };
   }, [focusStrat, focusTier, focusDivision, focusEntryUrl, focusRunner,
-      focusTimeCs, approaches, pageIdentity, version]);
+      focusTimeCs, focusGoalCs, approaches, pageIdentity, version]);
 
   const iconSrc = entityKey ? entityIconSrc(t, entityKey) : genericStarSrc();
   const activeStratInfo = activeStrat ? stratByName[activeStrat] : null;
@@ -1479,7 +1593,7 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
          Uses the SAME predicate the sections hide themselves by, so the two
          can never disagree about whether anything is on screen. */""}
     ${query && (approaches.length > 0 || pieces.length > 0)
-      && ![...approaches, ...pieces].some((item) => hasRunnerMatch(item, version, query))
+      && ![...approaches, ...pieces].some((item) => hasRunnerMatch(item, versions, query))
       ? html`<p class="library-target-empty">No runner here matches "${query}".</p>` : ""}
     ${approaches.length === 0
       ? html`<p class="library-target-empty">
@@ -1500,14 +1614,14 @@ export function LibraryTarget({ t, targets, version = "us", gradingVersion = "us
             ? focusMark : null}
           stratInfo=${approach.matched_strategy ? stratByName[approach.matched_strategy] : null}
           trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
-          linkCtx=${linkCtx} version=${version} gradingVersion=${gradingVersion}
+          linkCtx=${linkCtx} version=${version} versions=${versions} gradingVersion=${gradingVersion}
           onOpenRunner=${onOpenRunner} focusYou=${focusYou} />`)}
     <${PiecesList} pieces=${pieces} query=${query}
         expanded=${expanded}
         onOpen=${(identity) => setExpanded((prev) =>
           prev === identity ? null : identity)}
         trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
-        linkCtx=${linkCtx} version=${version} gradingVersion=${gradingVersion}
+        linkCtx=${linkCtx} version=${version} versions=${versions} gradingVersion=${gradingVersion}
         onOpenRunner=${onOpenRunner} />
     ${/* Task 0096: the record door's recorder — the IDENTICAL surface the
          Segments tab opens (one implementation, his own requirement), seeded

@@ -37,6 +37,7 @@ const PATHS = {
   upload: "M12 16V4m-5 5 5-5 5 5M5 20h14",
   download: "M12 4v12m-5-5 5 5 5-5M5 20h14",
   check: "M5 12l4 4L19 6",
+  copy: "M9 9h12v12H9V9zM5 15H3V3h12v2",
   shield: "M12 3l7 3v5c0 4.6-2.8 8.1-7 10-4.2-1.9-7-5.4-7-10V6l7-3z",
   stepBack: "M7 5v14M18 6l-8 6 8 6V6z",
   stepForward: "M17 5v14M6 6l8 6-8 6V6z",

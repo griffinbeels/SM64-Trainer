@@ -482,6 +482,28 @@ INVARIANTS = (
             "`scoring.division_for`/`scopes.gain_for` directly beside it.",
     ),
     SingleSource(
+        concept="a game region drawn as a flag",
+        owners=frozenset({"regionflag.js"}),
+        tokens=("/ui/assets/flag_",),
+        files=ui_js(),
+        why="Round 24 turned every JP/US label into a flag across seven "
+            "surfaces (the Library switch and its note, the standards panel, "
+            "the header's grading note, the target page's ladder chip, the "
+            "sync bar, the Scorecard's own region control, plus a per-entry "
+            "tag). Two ingredients, both measured. The ASSET PATHS, because a "
+            "flag has an authoritative form and a hand-drawn one is wrong "
+            "three times in five (2026-07-28's brand-mark round); "
+            "regionflag.js holds the fetched flag-icons 4x3 SVGs verbatim, and "
+            "every other surface asks it for a RegionFlag rather than naming "
+            "a path. The flag EMOJI is the other way this goes wrong and the "
+            "one this row cannot catch: Windows' Segoe UI Emoji carries no "
+            "flag glyphs and renders them as the two regional-indicator "
+            "letters, so the emoji shortcut ships the exact text this round "
+            "replaced while looking correct on every other platform a "
+            "reviewer might check it on. That trap is written into "
+            "regionflag.js's own header instead.",
+    ),
+    SingleSource(
         concept="which platform set a time",
         owners=frozenset({"modes.py", "platform.js"}),
         tokens=('"emu"', '"n64"'),

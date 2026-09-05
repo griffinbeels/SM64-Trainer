@@ -87,8 +87,13 @@ def _groups(service, scope_id: str, excluded: set[str] | None = None):
     letting them back into the aggregate."""
     if service.ranks is None or service.db is None:
         raise HTTPException(503, "rank standards unavailable")
+    # EVERY graded entity, not the user's file alone: since round 33 the
+    # sheet-fitted layer grades stars the file never names, and a scope that
+    # cannot see them would omit every runner rated only there (measured:
+    # 444 of the sheet's runners omitted from `overall`, the one scope where
+    # that count is structurally zero) while his own card graded them.
     ladders = {key: service.ranks.ladders(key)
-               for key in service.ranks.to_json()["entities"]}
+               for key in service.ranks.graded_entities()}
     rankable = scopes.rankable_entities(
         ladders, service.rank_excluded() if excluded is None else excluded)
     groups = scopes.entity_groups(

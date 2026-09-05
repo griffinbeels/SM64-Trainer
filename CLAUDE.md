@@ -44,6 +44,7 @@ uv run pytest tests/test_responsive.py -q            # render every breakpoint; 
 uv run python tools/check_glossary.py                # docs/glossary.md's own gate: closure, active voice, live Lives paths
 uv run python tools/check_jp_coverage.py             # every annotated JP difference (vetted seed + sheet layer) resolves to a JP ladder in the standards store; a JP time that resolves to US is a lost distinction
 uv run python tools/scrape_sheet.py                  # rebuild the Ultimate Sheet library snapshot -- READ the "unknown:" list, it IS the deliverable
+uv run python tools/scorecard_parity.py              # THE import gate: import a runner, point the scorecard at him, every tile must read +0.00 -- then the next runner with the goal set to both, and so on (his definition of done). Picks its own runner set covering every importable worksheet row; prints both sides of a mismatching tile. Reads the snapshot on disk, no fetch, no sheet touched. `--runner <name>` for one he reports, `--regions us` for one region
 uv run python tools/audit_library.py                 # AUDIT that snapshot by eye: every target, its verdict, the ratio behind each row; corrections save into the repo
 uv run python tools/scrape_ukikipedia.py             # snapshot Ukikipedia's RTA Guide page list -> src/sm64_events/ukikipedia_titles.py, and READ the "no page:" list: the wiki mark links only to a page that exists (a STAR in that list = the wiki renamed a page)
 uv run python tools/check_videos.py                  # sweep every example-video URL for liveness -> data/video_checks.seed.json.gz (a dead video must never be THE example a standard links to); incremental via the committed verdicts, also runs after scrape_sheet
@@ -100,6 +101,7 @@ automatically when you touch matching files. Zones:
 | Memory reads + detectors + recipes (new event, dust trick, memory hunting) | `memory/`, `detectors/`, `core/snapshot.py`, `core/events.py` | `.claude/rules/memory-detectors.md` |
 | **Version sync** — the per-ROM layout, behaviour symbols, gates, the sync runner + report, the dashboard | `memory/layout.py`, `memory/behaviours.py`, `memory/version_probe.py`, `sync/`, `server/sync_api.py`, `ui/sync.*`, `tools/sync_version.py`, `data/version_sync/` | `.claude/rules/sync.md` |
 | Tracking, storage, stats, routes/runs/segments, defaults corpus | `tracking/`, `storage/`, `stats/`, `data/`, `tools/corpus_*` | `.claude/rules/tracking-storage.md` |
+| **Imported times** — an attempt he brought rather than played: two doors (by hand, an Ultimate Sheet column) onto one back room; a paste, a LiveSplit and a link-to-your-own-sheet door are backlog task 0103 (`d70721b9` last carries the first two) | `tracking/importing.py`, `library/import_runner.py`, `server/import_api.py`, `ui/components/import*.js` | `.claude/rules/import.md` |
 | The world-graph rules a movement is judged against (topological cancels, the resurrection memory) | `tracking/topology.py`, `tracking/segments.py`, `tools/measure_topology_cancels.py`, `tools/why_cancelled.py`, `tools/topology_map.py` | `.claude/rules/segment-topology.md` |
 | When a segment's clock STARTS, and what number it records when it stops | `tracking/segments.py`, `detectors/igt_clock.py`, `detectors/counter_epoch.py` | `.claude/rules/segment-clock.md` |
 | The segment recorder — the journal read back as pointable sentences | `tracking/eventlabel.py`, `tracking/synthesize.py`, `ui/components/segmenttimeline.js` | `.claude/rules/recorder.md` |
@@ -108,6 +110,7 @@ automatically when you touch matching files. Zones:
 | The SELECTOR — quick-select row, cells and art | `ui/components/stagebanner.js`, `practicecell.js`, `entityicons.js`, `cellrow.js`, `ui/entities.js`, `ui/subsections.js` | `.claude/rules/ui-selector.md` |
 | Practice cards + the practice log, pickers, segments, routes, runs, strategies, graphs | `ui/components/practice*`, `ui/components/attemptlog.js`, `ui/entitysection.js`, `ui/focustarget.js`, `entitymodal.js`, `segments.js`, `routes.js`, `runview.js`, `strat*`, `links.py` | `.claude/rules/ui-practice.md` |
 | Rank icons + caps, banners, Rank tab, MARELO pill | `ui/components/caps.js`, `rankicon.js`, `hat.js`, `ranks.js`, `rankpage.js`, `marelo.js`, `standards.js` | `.claude/rules/ui-ranks.md` |
+| The Scorecard card + its goal picker + its region choice (the Rank tab mounts it) | `ui/components/scorecard.js`, `ui/scorecardgoal.js`, `server/scorecard_api.py` | `.claude/rules/ui-scorecard.md` |
 | Celebrations, the level-up climb, the tuning inspector | `ui/celebrations.js`, `rankclimb.js`, `climb*.js`, `tune*`, `components/celebrate.js`, `server/tuning_api.py` | `.claude/rules/ui-climb.md` |
 | Replay capture/encode/extract, compare, compilation + **their UI** | `replay/`, `compare/`, `core/recorder_lock.py`, `ui/components/replay.js`, `compare.js`, `videosync.js`, `failcomp.js` | `.claude/rules/replay-compare.md` |
 | Desktop shell, self-update, build, release | `desktop/`, `bootstrap/`, `core/update*`, `tools/build_exe.py`, `tools/release.py` | `.claude/rules/desktop-update-release.md` |
@@ -348,8 +351,11 @@ Contract changes land on main first, then dependent work fans out. Merge with
   `tools/check_glossary.py` keeps it closed and active-voice, and it cannot
   notice a word missing from the file entirely — that part is yours
 - **chain file current** — a change that adds, moves or renames a hop updates
-  `.claude/rules/chain-star-grab-time.md` in the SAME commit. `tests/test_chains.py`
-  catches a hop that stopped resolving; it cannot notice a hop nobody drew
+  the chain it belongs to in the SAME commit: `.claude/rules/chain-star-grab-time.md`
+  (Usamune's RAM → the practice-log row) or `.claude/rules/chain-imported-time.md`
+  (an Ultimate Sheet cell → the Scorecard tile and the pasted column, whose two
+  sinks check each other). `tests/test_chains.py` catches a hop that stopped
+  resolving; it cannot notice a hop nobody drew
 - **responsive sweep clean** (`uv run pytest tests/test_responsive.py -q`) — a
   new defect is fixed, or owed in `tools/uilab_project.py::known_defects` with a
   reason. Component layout gates on `@container`, never `@media`; the law and

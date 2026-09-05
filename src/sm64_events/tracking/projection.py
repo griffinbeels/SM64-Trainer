@@ -248,6 +248,7 @@ from sm64_events.memory.addresses import (CASTLE_LEVELS, LEVEL_CASTLE_INSIDE,
                                           course_for_level)
 # one-way import: segments.py pulls Attempt lazily at call time, so this
 # module-level import cannot cycle (see SegmentEngine.feed).
+from sm64_events.tracking.importing import IMPORT_EVENT
 from sm64_events.tracking.prune import PRUNE_EVENT
 from sm64_events.tracking.runs import RunTracker
 from sm64_events.tracking.segments import (
@@ -1002,6 +1003,13 @@ class Projector:
         return self._runs.active_run_view()
 
     def feed(self, ev) -> list[Attempt]:
+        if ev.type == IMPORT_EVENT:
+            # A time he BROUGHT rather than played (tracking/importing.py).
+            # Returned before anything below runs, deliberately: it is a
+            # finished attempt the moment it is journaled, and it must not
+            # close the run he has open, move the target, touch strategy
+            # memory or count as a grab — nothing happened in the game.
+            return [self._imported_attempt(ev)]
         # Usamune's late correction, folded into the grab it revises before
         # anyone reads it (caveat 19). Here rather than at the three payload
         # readers downstream, so no reader can be the one that forgets.
@@ -2239,6 +2247,44 @@ class Projector:
             jumps_dustless=self._jumps_dustless,
             timed_at=timed_at,
             platform=platform_from_payload(close.payload)))
+
+    def _imported_attempt(self, ev) -> Attempt:
+        """The attempt an imported time IS.
+
+        "It should show the new entry in the practice log as an entry row.
+        This is because it then affords us all of the functionality of a
+        practice log entry row (deleting, undoing, etc)" (2026-08-22). So it
+        is a real row, rebuilt from its own journal event on every replay,
+        and every row affordance — clear, restore, reclassify, undo PB — works
+        on it through the same pre-passes as on a played one.
+
+        A success with no anchor: started and ended at the moment he pressed
+        Save, the typed number on the clock the source measures
+        (`timer_mode`), and the other clock empty. `timed_by` is "imported"
+        rather than "igt" — this number was never read off Usamune, and the
+        old-clock caveat asks `igt_seen_in` whether one ever was. `timed_at`
+        is "xcam" for a star: the time he wrote down IS the legal leaderboard
+        quantity, and None here would mark every imported time as possibly
+        grab-timed — "the user DID beat it" (his ruling, 2026-08-20)."""
+        payload = ev.payload
+        segment_id = payload.get("segment_id")
+        frames = payload["frames"]
+        on_igt = payload.get("timer_mode", "igt") == "igt"
+        return self._auto_ignored(Attempt(
+            id=ev.id, session_id=ev.session_id,
+            course_id=payload.get("course_id"), star_id=payload.get("star_id"),
+            strat_tag=self._strat_overrides.get(ev.id, payload.get("strat_tag")),
+            anchor_type="none", anchor_frame=None,
+            outcome="success", outcome_detail=None,
+            igt_frames=frames if on_igt else None,
+            rta_frames=None if on_igt else frames,
+            started_utc=ev.wall_time_utc, ended_utc=ev.wall_time_utc,
+            cleared=ev.id in self._cleared,
+            cleared_reason=self._cleared.get(ev.id),
+            segment_id=segment_id,
+            timed_by="imported", closed_by=IMPORT_EVENT,
+            timed_at=None if segment_id is not None else "xcam",
+            platform=platform_from_payload(payload)))
 
     def _auto_ignored(self, a: Attempt) -> Attempt:
         """Range/validity check (spec 2026-07-23): an out-of-bounds SUCCESS

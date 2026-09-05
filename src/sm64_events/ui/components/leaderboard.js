@@ -12,9 +12,10 @@
 // - the user's own row is `you: true, runner: null` (board.py's contract),
 //   and `runnerName` is the only place that sentinel becomes text.
 import { h } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON } from "../api.js";
+import { useIdentityFetch } from "../refetch.js";
 import { Disclose } from "./collapsible.js";
 import { Icon } from "./icons.js";
 import { RankIcon } from "./rankicon.js";
@@ -123,21 +124,23 @@ export function LeaderboardCard({ t, scopeId, onOpenRunner = () => {} }) {
 // The board for one scope, refetched on a scope switch OR on `mareloRev` --
 // the same staleness fix rankpage.js's own comment explains for the rest of
 // the Rank tab: a board left open during play must not go stale.
-// Clear-then-fetch, so a 404 on a new scope never leaves the old scope's
-// rows under the new scope's name.
+// Clear-then-fetch on a SCOPE change, so a 404 on a new scope never leaves
+// the old scope's rows under the new scope's name -- but never on a
+// staleness bump, which would blank a board he is reading while he plays
+// (round 20; `ui/refetch.js` carries the measurement).
 function useBoard(scopeId, mareloRev) {
   const [board, setBoard] = useState(null);
   const [error, setError] = useState(null);
-  useEffect(() => {
+  useIdentityFetch(scopeId, mareloRev, (cleared) => {
     if (!scopeId) return undefined;
     let alive = true;
     setError(null);
-    setBoard(null);
+    if (cleared) setBoard(null);
     getJSON(`/api/leaderboard?scope=${encodeURIComponent(scopeId)}`)
       .then((response) => alive && setBoard(response))
       .catch((requestError) => alive && setError(requestError));
     return () => { alive = false; };
-  }, [scopeId, mareloRev]);
+  });
   return { board, error };
 }
 

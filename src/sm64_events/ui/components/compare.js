@@ -10,6 +10,7 @@ import { getJSON, send } from "../api.js";
 import { useSyncController, VideoStage, WorkArea } from "./videosync.js";
 import { Icon } from "./icons.js";
 import { PageState } from "./states.js";
+import { StrategySelect } from "./strategyselect.js";
 
 const html = htm.bind(h);
 
@@ -122,19 +123,9 @@ function MyRun({ attemptId, controller, inFrame, outFrame, onSync }) {
 }
 
 // ---- right: comparisons ----------------------------------------------------
-// Strategy picker: the entity's strategies + "— none —". Always includes the
-// current value so an unknown/legacy strat still shows.
-function StrategySelect({ strategies, value, onChange }) {
-  const opts = [];
-  for (const s of strategies) if (s && !opts.includes(s)) opts.push(s);
-  if (value && !opts.includes(value)) opts.unshift(value);
-  return html`<select class="cmp-strat meta" value=${value || ""}
-      onchange=${(e) => onChange(e.target.value)}>
-    <option value="">— no strategy —</option>
-    ${opts.map((s) => html`<option value=${s}>${s}</option>`)}
-  </select>`;
-}
-
+// The strategy dropdown moved to `strategyselect.js` when the add-a-time
+// control needed the same one; it carries the same "always list the current
+// value" rule it always did.
 // A raw URL is never shown — the title is (backfilled server-side); if a title
 // still can't be resolved, fall back to a friendly label, never the URL.
 function displayTitle(comp) {
@@ -249,7 +240,7 @@ function AddComparison({ entity, strat, strategies, suggestion, onAdded, hasVide
           <div class="meta">loading… ${Math.round((job.progress || 0) * 100)}% ${job.message || ""}</div></div>`
       : html`<div class="cd-inner">
           <div class="cd-strat meta">Strategy:
-            <${StrategySelect} strategies=${strategies} value=${addStrat} onChange=${setAddStrat} /></div>
+            <${StrategySelect} strategies=${strategies} value=${addStrat} onChange=${setAddStrat} className="cmp-strat" /></div>
           <div class="cd-icon"><${Icon} name="upload" size=${28} /></div>
           <div>Drag & drop ${hasVideos ? "another" : "a"} video here</div>
           <div class="meta">or</div>
@@ -566,7 +557,7 @@ export function Compare({ t, intent, clearIntent, active }) {
       <section class="practice-card compare-col compare-stage-card">
         <div class="compare-stage-heading cmp-head">
           <div><span class="eyebrow">Right video</span><h3>Comparison</h3></div>
-          <${StrategySelect} strategies=${entityStrategies} value=${strat || ""}
+          <${StrategySelect} strategies=${entityStrategies} value=${strat || ""} className="cmp-strat"
             onChange=${(s) => setStrat(s || null)} />
         </div>
         ${cmpError && html`<div class="badx">${cmpError}</div>`}
