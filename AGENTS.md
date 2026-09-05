@@ -34,6 +34,7 @@ after:
 | The world-graph rules a movement is judged against (topological cancels, resurrection) | `tracking/topology.py`, `tracking/segments.py`, `tools/measure_topology_cancels.py`, `tools/why_cancelled.py`, `tools/topology_map.py` | `.claude/rules/segment-topology.md` |
 | When a segment's clock STARTS, and what number it records when it stops | `tracking/segments.py`, `detectors/igt_clock.py`, `detectors/counter_epoch.py` | `.claude/rules/segment-clock.md` |
 | The star grab's time drawn hop by hop, so a report is diagnosed not guessed | `detectors/igt_clock.py`, `detectors/star_grab.py`, `tracking/segments.py` | `.claude/rules/chain-star-grab-time.md` |
+| An imported time drawn hop by hop, sheet cell to Scorecard tile — two sinks that check each other | `library/sheet.py`, `library/import_runner.py`, `library/ratings.py`, `library/export_column.py`, `server/scorecard_api.py`, `tracking/views.py` | `.claude/rules/chain-imported-time.md` |
 | The segment recorder — the journal read back as pointable sentences | `tracking/eventlabel.py`, `tracking/synthesize.py`, `ui/components/segmenttimeline.js` | `.claude/rules/recorder.md` |
 | Server, REST/WS APIs, wiring, paths | `server/`, `main.py`, `core/paths.py`, `core/logging_setup.py` | `.claude/rules/server.md` |
 | UI — always `ui-core.md`, plus the narrowest that matches | `ui/`, `links.py`, `tests/test_ui_*.py` | `.claude/rules/ui-core.md` **and** one of `ui-selector.md` / `ui-practice.md` / `ui-ranks.md` / `ui-scorecard.md` / `ui-climb.md` / `replay-compare.md` |
