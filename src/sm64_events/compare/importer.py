@@ -12,14 +12,19 @@ file without re-downloading or re-encoding. The downloader (yt-dlp) and the
 ffmpeg runner are injected so tests never touch the network or a codec.
 """
 import hashlib
+import ipaddress
 import logging
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.core.recording_url import media_identity, validate_recording_url
 from sm64_events.tracking.comparisons import cache_name_for
 
 log = logging.getLogger("sm64.compare")
@@ -28,10 +33,18 @@ log = logging.getLogger("sm64.compare")
 def _default_downloader(source_ref: str, dest_dir: Path) -> Path:
     """Fetch a YouTube URL to dest_dir at <=720p; return the downloaded file."""
     import yt_dlp
+    # Reject private addresses reached through DNS aliases, too. Local files
+    # have their own explicit import door and never pass through the web one.
+    host = urlsplit(validate_recording_url(source_ref)).hostname
+    addresses = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    if not addresses or any(not ipaddress.ip_address(info[4][0]).is_global
+                            for info in addresses):
+        raise ValueError("The recording link must point to a public website.")
     out_tmpl = str(dest_dir / "src.%(ext)s")
     opts = {"format": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
             "outtmpl": out_tmpl, "quiet": True, "noprogress": True,
-            "merge_output_format": "mp4"}
+            "merge_output_format": "mp4", "noplaylist": True,
+            "socket_timeout": 15, "retries": 2, "fragment_retries": 2}
     with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.download([source_ref])
     files = list(dest_dir.glob("src.*"))
@@ -60,6 +73,8 @@ class VideoImporter:
     def __init__(self, cache_dir: Path, ffmpeg: str, *,
                  downloader=None, runner=None):
         self.cache_dir = Path(cache_dir)
+        # Fixed-size stripes bound lock memory; all surfaces share this importer.
+        self._source_locks = [threading.Lock() for _ in range(64)]
         self.ffmpeg = ffmpeg
         self._download = downloader or _default_downloader
         self._run = runner or _default_runner
@@ -81,7 +96,8 @@ class VideoImporter:
         cmd = [self.ffmpeg, "-y", "-i", str(raw),
                "-vf", "scale=-2:min(720\\,ih)", "-c:v", "libx264",
                "-preset", "veryfast", "-crf", "20",
-               "-movflags", "+faststart", "-c:a", "aac", str(tmp_out)]
+               "-fps_mode", "cfr", "-movflags", "+faststart",
+               "-c:a", "aac", str(tmp_out)]
         try:
             try:
                 self._run(cmd)
@@ -98,7 +114,29 @@ class VideoImporter:
                      progress_cb=None) -> str:
         if source_kind not in ("youtube", "file"):
             raise ValueError(f"unknown source_kind {source_kind!r}")
+        original = source_ref
+        if source_kind == "youtube":
+            source_ref = media_identity(validate_recording_url(source_ref))
         name = cache_name_for(source_ref)
+        with self._source_locks[int(name[:2], 16) % len(self._source_locks)]:
+            # Preserve existing raw-URL caches when adopting canonical identities.
+            old = self.cache_path(cache_name_for(original))
+            canonical = self.cache_path(name)
+            if old != canonical and old.is_file() and not canonical.exists():
+                try:
+                    os.link(old, canonical)
+                except OSError:
+                    shutil.copyfile(old, canonical)
+            return self._import_video(source_kind, source_ref, name, progress_cb)
+
+    def cached_name(self, source_ref: str) -> str | None:
+        for source in (media_identity(source_ref), source_ref):
+            name = cache_name_for(source)
+            if self.cache_path(name).is_file():
+                return name
+        return None
+
+    def _import_video(self, source_kind, source_ref, name, progress_cb):
         dest = self.cache_path(name)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         if dest.exists():                       # dedup / load-once
