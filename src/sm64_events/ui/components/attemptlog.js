@@ -199,15 +199,10 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
         : html`<span>${a.strat_tag || "— no strategy —"}</span>`}
     </td>
     <td class="attempt-actions">
-      ${a.imported
-        // A brought-in time was never recorded, so there is no replay to
-        // offer and a dead play button would be the shape he reports as a
-        // bug. The spacer keeps this row's buttons on the same columns as
-        // its neighbours'.
-        ? html`<span class="icon-button attempt-no-replay" aria-hidden="true"></span>`
-        : html`<button class="icon-button" onclick=${() => setShowReplay(!showReplay)}
+      <button class="icon-button" onclick=${() => setShowReplay(!showReplay)}
+            aria-expanded=${showReplay}
             title="View replay" aria-label="View replay">
-          <${Icon} name=${showReplay ? "chevron" : "play"} size=${16} /></button>`}
+          <${Icon} name=${showReplay ? "chevron" : "play"} size=${16} /></button>
       ${/* THE action column, a straight cascade over the server's own
            resolved answer (tracking/pbaction.py). Three drawn states and no
            client-side precedence: undo, save, "the time is not a legal
@@ -247,7 +242,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
     ? () => openCompare({ attemptId: a.id, entity, strat })
     : null;
   const expandedRow = showReplay
-    ? html`<tr class="replay-row"><td colspan="6"><${ReplayPlayer} attemptId=${a.id} onCompare=${onCompare} /></td></tr>`
+    ? html`<tr class="replay-row"><td colspan="6"><${ReplayPlayer} attemptId=${a.id} imported=${a.imported} onCompare=${onCompare} /></td></tr>`
     : null;
   return [row, expandedRow];
 }

@@ -186,8 +186,10 @@ def test_setting_a_trim_start_and_restarting_updates_the_first_iframe_src(librar
     deadline = time.time() + 8
     after = before
     while time.time() < deadline:
+        # A restart checks the shared cache before choosing local playback
+        # or the provider embed, so the iframe may be absent during that read.
         after = library_page.evaluate(
-            "document.querySelectorAll('.library-grid iframe')[0].src")
+            "document.querySelectorAll('.library-grid iframe')[0]?.src || ''")
         if "start=12" in after:
             break
         time.sleep(0.05)
