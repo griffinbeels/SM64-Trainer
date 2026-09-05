@@ -756,9 +756,14 @@ it. Adopting an approach mints a [[strategy]] you can practice.
 ### Sheet entry
 
 One [[runner]]'s recorded time for one [[approach]], and the video they linked
-to it.
+to it. It belongs to the regional release its own sheet row names, and to
+BOTH releases where that row names none — his ruling, 2026-09-05: a row
+drawing no distinction times the same thing on either machine. The trainer
+stamps an [[imported time]] with that release and offers the same [[sheet
+entry]] as a [[goal]] under it, so the two readings cannot disagree.
 
-- **Lives** — the library builder (`src/sm64_events/library/build.py`)
+- **Lives** — the library builder (`src/sm64_events/library/build.py`) and
+  the release rule (`src/sm64_events/library/sheet.py`)
 
 ### Runner
 

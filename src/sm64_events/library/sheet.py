@@ -95,6 +95,28 @@ _VERSION_TOKEN = re.compile(r"^(JP|US)$", re.I)
 _STAGE_RTA = re.compile(r"\bRTA\b")
 
 
+def entry_version(entry: dict) -> str | None:
+    """The ROM one sheet ENTRY belongs to, or `None` meaning BOTH.
+
+    THE door for that question -- the import stamps a time with it and the
+    Scorecard's runner goal offers a time by it, so the two can never
+    disagree about which ROM a time is.
+
+    An entry's version is the one its own worksheet row's name declares
+    (`version_of`), and nothing else. His ruling, round 35 (2026-09-05):
+    *"if a row doesn't include a distinction between US/JP, we should assume
+    that it's the same for both, so we should have an entry for both US and
+    JP being the same."*
+
+    In particular NOT the target's, which is where this went wrong: the
+    payload merges a "(JP)"/"(US)" pair into ONE target, and that target
+    keeps only one of the two labels -- so 3,123 entries on 68 rows that
+    declare no version of their own (Big Bob-omb's "Warp fadeout" under a
+    target stamped `jp`, and 67 more) were landing as times on a ROM the
+    sheet never claimed for them. The whole target is really both."""
+    return entry.get("version") or None
+
+
 def version_of(label: str) -> str | None:
     """The ROM version a row's name declares, or `None` where it declares none.
 

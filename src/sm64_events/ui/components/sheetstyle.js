@@ -79,6 +79,8 @@ function loadGoogleFonts() {
 // top, above each color. plus a label for the font." The caption is a SPAN,
 // never a <label>: a label click activates its input, and activating a
 // colour input opens the picker from the empty space beside it (round 30).
+// The FONT carries no caption -- round 35: "I actually think it's pretty
+// obvious what it is, so no need for a label."
 // The caption is the platform VALUE upper-cased -- the same word the two
 // legend cells (and the paste's first two rows) print, so the dot and the
 // cell it colours are named alike.
@@ -143,14 +145,14 @@ export function SheetStyleControls() {
               oninput=${(inputEvent) => setStyle({ ...style, [key]: inputEvent.target.value.toUpperCase() })}
               onchange=${(changeEvent) => save({ ...style, [key]: changeEvent.target.value.toUpperCase() })} />
         </span>`)}
-      <span class="sheetstyle-option sheetstyle-font">
-        <span class="sheetstyle-option-label">Font</span>
+      <span class="sheetstyle-font">
         <${SearchSelect} value=${style.font_family} valueLabel=${style.font_family}
             valueStyle=${`font-family:${fontStack(style.font_family)}`}
             title="Font" groups=${FONT_GROUPS} align="right"
             onChange=${(font) => save({ ...style, font_family: font })} />
       </span>
     </span>
+    <span class="sheetstyle-arrow" aria-hidden="true">→</span>
     <span class="sheetstyle-preview">
       <span class="sheetstyle-preview-label">Preview</span>
       <span class="sheetstyle-preview-cells">${legendCell(EMU)}${legendCell(N64)}</span>

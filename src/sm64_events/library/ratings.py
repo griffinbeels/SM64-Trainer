@@ -33,6 +33,7 @@ already holds to, so pytest drives this module directly."""
 from dataclasses import dataclass
 
 from sm64_events.library.audit import row_key
+from sm64_events.library.sheet import entry_version
 from sm64_events.ranks import scoring
 
 
@@ -59,22 +60,21 @@ def _visible_entries(item: dict, version: str) -> list[dict]:
             if not entry.get("version") or entry["version"] == version]
 
 
-def _entries_set_on(target: dict, item: dict, version: str) -> list[dict]:
-    """The STRICT reading a runner GOAL takes (round 34, 2026-09-05): an
-    entry counts for `version` only when it was SET on that ROM -- its own
-    tag, else its target's, else untagged (which grades on whatever runs).
-    This is the exact stamp `library/import_runner.py` lands the same entry
-    under (`entry.version or target.version`), so a runner's own goal and
-    his imported column can never disagree about which ROM a time belongs
-    to. `_visible_entries` deliberately shows a single-tag row in both modes
-    (52 rows, ~1,100 entries would otherwise vanish from the Library page and
-    from every rating); a goal is a different question -- "what did this
-    runner run on the ROM I have on" -- and with only US on, a JP-tagged
-    time offered as the goal read as a gap against the runner's own import
-    (the parity walk found it under `regions=["jp"]`: YOU had no row, the
-    goal a US-tagged time)."""
+def _entries_set_on(item: dict, version: str) -> list[dict]:
+    """The reading a runner GOAL takes (round 34, 2026-09-05): an entry
+    counts for `version` when its own row claims that ROM, or claims none at
+    all -- `sheet.entry_version`, the exact door `library/import_runner.py`
+    stamps the same entry through, so a runner's goal and his imported column
+    can never disagree about which ROM a time is.
+
+    `_visible_entries` answers a different question and keeps its looser
+    rule: it says what the Library page DRAWS in a mode, where a single-tag
+    row shows under both (52 rows, ~1,100 entries would otherwise vanish).
+    Offering that as a GOAL read as a gap against the runner's own import --
+    the parity walk found it under `regions=["jp"]`, YOU with no row and the
+    goal holding a US-tagged time."""
     return [entry for entry in item.get("entries") or []
-            if (entry.get("version") or target.get("version") or version) == version]
+            if entry_version(entry) in (None, version)]
 
 
 def _row_entity(target: dict, item: dict, kind: str, adopted_rows: dict
@@ -130,7 +130,7 @@ def best_entries(payload: dict, adopted_rows: dict, *, version: str = "us",
                 entity_key = _row_entity(target, item, kind, adopted_rows)
                 if not entity_key:
                     continue
-                visible = (_entries_set_on(target, item, version) if strict
+                visible = (_entries_set_on(item, version) if strict
                            else _visible_entries(item, version))
                 for entry in visible:
                     runner = entry.get("runner")

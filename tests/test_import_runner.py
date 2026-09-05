@@ -202,9 +202,22 @@ def test_every_candidate_names_a_star_a_strategy_and_the_igt_clock():
 def test_the_jp_rows_carry_their_version():
     """A JP time is genuinely faster than the same star on US, so graded
     against a US ladder it reads as superhuman. The version has to ride with
-    the time."""
+    the time -- and ONLY where the sheet says so.
+
+    One, not two, since round 35 (2026-09-05): this runner's other JP-looking
+    row ("Bowser in the Dark World Red Coins" / "Red coin star Xcam") names no
+    version of its own and only INHERITED its target's, which the payload
+    stamps from whichever half of a merged (JP)/(US) pair it kept. His
+    ruling: "if a row doesn't include a distinction between US/JP, we should
+    assume that it's the same for both" -- so that time is unversioned now,
+    and counts on either ROM rather than on a ROM the sheet never claimed."""
     candidates, _ = candidates_for(payload(), "DentoriousRed")
-    assert sum(1 for c in candidates if c.game_version == "jp") == 2
+    jp = [c for c in candidates if c.game_version == "jp"]
+    assert len(jp) == 1, [(c.entity_key, c.strat_tag) for c in jp]
+    # The row that DOES name its version keeps it; the inherited one is both.
+    inherited = [c for c in candidates if c.entity_key == "segment:1"
+                 or "Red coin star" in (c.strat_tag or "")]
+    assert all(c.game_version is None for c in inherited), inherited
 
 
 def test_a_matched_strategy_wins_over_the_sheet_approach_name():

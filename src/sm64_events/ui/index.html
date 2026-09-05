@@ -7390,17 +7390,33 @@
   /* Round 30 item 8: the controls are one horizontal group on the exports
      row, after Rebuild -- the two legend cells the paste will write, three
      circle swatches, the font dropdown, Reset while anything differs. */
-  .sheetstyle { display: inline-flex; align-items: center; gap: 8px; margin-left: 6px; }
+  /* Round 35: the two boxes are the same height ("the preview box size
+     should be just as tall as the formatting box size"), so the row stretches
+     them and everything else on it centres itself. */
+  .sheetstyle { display: inline-flex; align-items: stretch; gap: 8px; margin-left: 6px; }
+  .sheetstyle-reset, .sheetstyle-error { align-self: center; }
+  /* Round 35: an arrow between them, "so that way it's obvious that the stuff
+     on the left results in the stuff on the right". */
+  .sheetstyle-arrow {
+    display: inline-flex; align-items: center; align-self: center;
+    color: var(--muted); font-size: 1rem; line-height: 1; padding: 0 1px;
+  }
   /* Round 34: the three swatches and the font sit in ONE box, each under a
      small caption along the top ("labels inside the rectangle aligned along
      the top, above each color. plus a label for the font"), the same box and
      caption the Preview beside it already wears, so the row reads as two
      labelled groups: what you chose, and what it paints. */
   .sheetstyle-options {
-    display: inline-flex; align-items: flex-end; gap: 10px;
+    display: inline-flex; align-items: stretch; gap: 10px;
     padding: 4px 8px 5px; border: 1px solid var(--border-soft); border-radius: 6px;
   }
-  .sheetstyle-option { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+  /* Round 35: a caption is centred over its own circle ("the text should be
+     centered above each circle"), and the font -- captionless -- centres
+     itself vertically in the box instead. */
+  .sheetstyle-option {
+    display: inline-flex; flex-direction: column; align-items: center; gap: 3px;
+  }
+  .sheetstyle-font { display: inline-flex; align-items: center; }
   .sheetstyle-option-label {
     font-size: .62rem; letter-spacing: .06em; text-transform: uppercase;
     color: var(--muted); line-height: 1;
@@ -7411,6 +7427,9 @@
     display: inline-flex; flex-direction: column; align-items: flex-start; gap: 3px;
     padding: 4px 6px 5px; border: 1px solid var(--border-soft); border-radius: 6px;
   }
+  /* The cells take the height the taller box gives this one, so the two
+     boxes read as one row rather than as a box beside a smaller box. */
+  .sheetstyle-preview-cells { flex: 1; align-items: center; }
   .sheetstyle-preview-label {
     font-size: .62rem; letter-spacing: .06em; text-transform: uppercase;
     color: var(--muted); line-height: 1;

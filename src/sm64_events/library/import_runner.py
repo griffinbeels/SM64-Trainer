@@ -51,6 +51,7 @@ import re
 
 from sm64_events.library.adoptions import sheet_strategy
 from sm64_events.library.audit import row_key
+from sm64_events.library.sheet import entry_version
 from sm64_events.tracking.importing import ImportCandidate
 
 # Sheet approach times are STAR times measured the way Usamune measures them.
@@ -166,21 +167,23 @@ def candidates_for(payload: dict, runner: str, place=None):
                 else:
                     reason = _hold_reason(target, item, kind)
                     held.extend(_held(target, item, entry, reason,
-                                      entry.get("version") or version)
+                                      entry_version(entry))
                                 for entry in entries)
                     continue
-                # The ENTRY's own version, not the target's. A merged
-                # (JP)/(US) approach holds both regions' times in one item and
-                # the TARGET carries only one of the two labels -- Big Bob-omb
-                # on the Summit is stamped `jp`, so Raisn's US 45.70 landed as
-                # a JP time and its own (US) row exported blank. 57 of his 58
-                # missing star cells were this (measured 2026-09-02). The
-                # target's version stays the fallback for a row the sheet does
-                # not tag.
+                # The ENTRY's own version and nothing else -- `sheet.
+                # entry_version` is that rule, and the Scorecard's runner goal
+                # reads the same one. A merged (JP)/(US) approach holds both
+                # regions' times in one item while the TARGET carries only one
+                # of the two labels, so Raisn's US 45.70 landed as a JP time
+                # and its own (US) row exported blank (57 of his 58 missing
+                # star cells, 2026-09-02). Falling back to the target's label
+                # for a row that declares none was the same artifact one level
+                # up: round 35 dropped it, and such a time is now unversioned
+                # -- the same on both ROMs, which is what the sheet says.
                 candidates.extend(ImportCandidate(
                     entity_key=entity_key, strat_tag=strategy,
                     time_cs=int(entry["time_cs"]),
-                    game_version=entry.get("version") or version,
+                    game_version=entry_version(entry),
                     timer_mode=timer_mode,
                     platform=entry.get("platform")) for entry in entries)
     return candidates, held

@@ -103,7 +103,8 @@ def test_the_controls_sit_on_the_exports_row_and_nowhere_in_settings(tmp_path):
                 const controls = row.querySelector('.sheetstyle').getBoundingClientRect();
                 // Round 34: the options live in one captioned box, so the
                 // row's parts are the four labelled options and the preview.
-                const parts = [...row.querySelectorAll('.sheetstyle-option, .sheetstyle-preview')]
+                const parts = [...row.querySelectorAll(
+                  '.sheetstyle-option, .sheetstyle-font, .sheetstyle-preview')]
                   .map((el) => el.getBoundingClientRect());
                 const preview = row.querySelector('.sheetstyle-preview');
                 const font = row.querySelector('.sheetstyle-font').getBoundingClientRect();
@@ -111,16 +112,37 @@ def test_the_controls_sit_on_the_exports_row_and_nowhere_in_settings(tmp_path):
                 const captions = [...row.querySelectorAll('.sheetstyle-option')].map((option) => {
                   const label = option.querySelector('.sheetstyle-option-label');
                   const control = option.querySelector('input, .search-select-trigger, button');
+                  const labelBox = label && label.getBoundingClientRect();
+                  const controlBox = control && control.getBoundingClientRect();
                   return {
                     text: label ? label.textContent.trim().toUpperCase() : null,
-                    above: !!label && !!control
-                      && label.getBoundingClientRect().bottom <= control.getBoundingClientRect().top,
+                    above: !!label && !!control && labelBox.bottom <= controlBox.top,
                     inside: !!label && options.contains(label),
+                    // Round 35: centred over its own circle, within a pixel.
+                    centred: !!label && !!control
+                      && Math.abs((labelBox.left + labelBox.right) / 2
+                                  - (controlBox.left + controlBox.right) / 2) <= 1,
                   };
                 });
+                const fontTrigger = row.querySelector(
+                  '.sheetstyle-font .search-select-trigger').getBoundingClientRect();
+                const optionsBox = options.getBoundingClientRect();
+                const previewBox = preview.getBoundingClientRect();
+                const arrow = row.querySelector('.sheetstyle-arrow');
+                const arrowBox = arrow && arrow.getBoundingClientRect();
                 return {
                   optionsBoxed: parseFloat(getComputedStyle(options).borderTopWidth) >= 1,
                   captions,
+                  // Round 35: the font wears no caption and centres itself.
+                  fontLabels: row.querySelectorAll('.sheetstyle-font .sheetstyle-option-label').length,
+                  fontCentred: Math.abs((fontTrigger.top + fontTrigger.bottom) / 2
+                                        - (optionsBox.top + optionsBox.bottom) / 2) <= 1.5,
+                  // Round 35: an arrow BETWEEN the two boxes, pointing right.
+                  arrowText: arrow ? arrow.textContent.trim() : null,
+                  arrowBetween: !!arrowBox && arrowBox.left >= optionsBox.right - 1
+                    && arrowBox.right <= previewBox.left + 1,
+                  // Round 35: the two boxes are the same height.
+                  sameHeight: Math.abs(optionsBox.height - previewBox.height) <= 1,
                   rightOfCopy: controls.left >= copy.right,
                   sameRow: parts.every((box) => Math.abs((box.top + box.bottom) / 2
                                                   - (copy.top + copy.bottom) / 2) < 14),
@@ -143,8 +165,14 @@ def test_the_controls_sit_on_the_exports_row_and_nowhere_in_settings(tmp_path):
     assert geometry["parts"] >= 5, geometry          # 3 swatches, font, preview
     # Round 34: every option wears its caption, along the top, inside one box.
     assert geometry["optionsBoxed"], geometry
-    assert [c["text"] for c in geometry["captions"]] == ["EMU", "N64", "TEXT", "FONT"], geometry
-    assert all(c["above"] and c["inside"] for c in geometry["captions"]), geometry
+    assert [c["text"] for c in geometry["captions"]] == ["EMU", "N64", "TEXT"], geometry
+    assert all(c["above"] and c["inside"] and c["centred"] for c in geometry["captions"]), geometry
+    # Round 35: no caption on the font, it centres vertically instead; an
+    # arrow sits between the two boxes; the boxes are the same height.
+    assert geometry["fontLabels"] == 0, geometry
+    assert geometry["fontCentred"], geometry
+    assert geometry["arrowText"] == "→" and geometry["arrowBetween"], geometry
+    assert geometry["sameHeight"], geometry
     assert geometry["previewAfterFont"], geometry
     assert geometry["previewLabel"] == "Preview" and geometry["previewBoxed"], geometry
     assert geometry["labelAboveCells"], geometry
