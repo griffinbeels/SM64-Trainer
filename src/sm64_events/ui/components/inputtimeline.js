@@ -300,15 +300,24 @@ export function mappedTimeAtFrame(frame, frameMap, clock, stretches) {
 function screenCheck(agreement, open, toggle) {
   if (!agreement || !agreement.pictures) return null;
   const off = agreement.pictures - agreement.agree;
+  // NEVER "N of N". A clip reaches past the attempt at both ends and the
+  // track has no pad for those frames, so the number checked is honestly
+  // smaller than the number of pictures -- and printing a ratio of a number
+  // against itself is what he rejected on the reader's chip (2026-09-01:
+  // "checked 1207/1207" was "literally and objectively wrong"). So the clean
+  // state states the count it checked, and the tooltip carries the rest.
   const label = off === 0
-    ? `pad-checked ${agreement.pictures} of ${agreement.pictures} pictures`
-    : `pad-checked ${agreement.agree} of ${agreement.pictures} pictures`
-      + ` \u00b7 ${off} disagree`;
+    ? `pad-checked ${agreement.pictures} pictures \u00b7 all agree`
+    : `pad-checked ${agreement.pictures} pictures \u00b7 ${off} disagree`;
+  const rows = agreement.rows || 0;
+  const outside = rows > agreement.pictures ? rows - agreement.pictures : 0;
   const title = "The capture layer copied the pad beside every picture it "
     + `stamped; the timeline holds the same pad on ${agreement.agree} of `
     + `${agreement.pictures}. `
+    + (outside ? `${outside} of the clip's ${rows} pictures fall outside the `
+                 + "attempt, where the track has no pad to check against. " : "")
     + (off ? "Click to list each disagreeing picture."
-           : "Every stamped picture agrees.");
+           : "Every checkable picture agrees.");
   // A datum on a summary surface is a DOOR to its evidence (his standing
   // rule): the chip opens the list when there is one to open.
   return html`<button type="button"

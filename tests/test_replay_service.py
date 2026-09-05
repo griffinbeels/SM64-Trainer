@@ -605,6 +605,9 @@ def test_a_capture_layer_clip_takes_its_stamps_as_the_map_and_audits_the_pads(tm
     assert res["frame_map_source"] == "plugin"
     assert res["pad_stamp_agreement"]["pictures"] == 3
     assert res["pad_stamp_agreement"]["agree"] == 2
+    # `rows` is the clip's WHOLE picture count, so the chip can say how much
+    # of the clip the check covers rather than printing "3 of 3".
+    assert res["pad_stamp_agreement"]["rows"] == 3
     assert res["pad_stamp_agreement"]["disagreements"] == [[2, 102, [3, 0, 0], [0, 0, 0]]]
     sidecar = _json.loads(
         (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())

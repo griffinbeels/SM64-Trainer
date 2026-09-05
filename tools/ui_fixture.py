@@ -1628,6 +1628,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                 "truncated": False, "saved_path": None,
                 "pad_stamp_agreement": {
                     "pictures": pictures, "agree": pictures - 1,
+                    "rows": pictures + 40,
                     "disagreements": [[pre * 2 + 40, first + 20,
                                        [71, 0, 0], [70, 0, 0]]]}}
 

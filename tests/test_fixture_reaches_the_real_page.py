@@ -1389,8 +1389,13 @@ def test_the_screen_check_chip_reaches_the_timeline_header(page):
         "(() => { const chip = document.querySelector('.input-screen-check');"
         " return [chip.textContent, chip.classList.contains('is-off')]; })()")
     assert text.startswith("pad-checked ") and "1 disagree" in text, text
-    # Honest units: "N of M pictures", never "N/N".
-    assert " of " in text and "pictures" in text, text
+    # Honest units, and NEVER a ratio of a number against itself: a clip
+    # reaches past the attempt at both ends, so the count checked is smaller
+    # than the clip's pictures and the tooltip carries the rest.
+    assert "pictures" in text and "/" not in text, text
+    hover = page.evaluate(
+        "document.querySelector('.input-screen-check').getAttribute('title')")
+    assert "fall outside the attempt" in hover, hover
     assert is_off, "one contradicted picture must read as off, not clean"
     # The chip is a DOOR (his rule: a datum on a summary surface leads to
     # its evidence): click it and every disagreeing picture is listed as the

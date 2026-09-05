@@ -555,7 +555,14 @@ class ReplayService:
                 agree += 1
             elif len(disagreements) < 50:
                 disagreements.append([slot, frame, tracked, list(stamped)])
+        # `pictures` is what could be CHECKED -- a clip reaches past the
+        # attempt at both ends, and the track has no pad for those frames --
+        # and `rows` is the clip's whole picture count, so the chip can say
+        # how much of the clip the check covers instead of printing a ratio
+        # of a number against itself. His 2026-09-01 ruling on the reader's
+        # chip: "checked 1207/1207" was "literally and objectively wrong".
         meta["pad_stamp_agreement"] = {"pictures": pictures, "agree": agree,
+                                       "rows": len(meta.get("picture_ledger") or []),
                                        "disagreements": disagreements}
         if pictures and agree != pictures:
             log.warning("pad stamps disagree with the track on %d of %d pictures",
