@@ -651,6 +651,19 @@ MIGRATIONS = [
     );
     CREATE INDEX IF NOT EXISTS held_times_row ON held_times(row_key);
     """,
+    # v31 -- public recording links belong to exact attempts, independently
+    # of the rebuildable attempt cache. NULL is an explicit removal when a
+    # row exists; missing rows inherit the imported journal URL. No cascade
+    # foreign key: replace_attempts rebuilds that entire table on replay.
+    """
+    CREATE TABLE attempt_recordings (
+      attempt_id INTEGER PRIMARY KEY,
+      url TEXT,
+      revision INTEGER NOT NULL,
+      user_edited INTEGER NOT NULL DEFAULT 0
+    );
+    ALTER TABLE held_times ADD COLUMN video TEXT;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -1375,6 +1388,62 @@ class Database:
             self._conn.execute("DELETE FROM pbs WHERE id=?", (pb_id,))
             self._conn.commit()
 
+    # -- public recording links (durable attempt metadata) -----------------
+    def _recording_link_unlocked(self, attempt_id: int) -> dict:
+        if self._conn.execute("SELECT 1 FROM attempts WHERE id=?",
+                              (attempt_id,)).fetchone() is None:
+            raise LookupError(f"no attempt {attempt_id}")
+        row = self._conn.execute(
+            "SELECT url, revision FROM attempt_recordings WHERE attempt_id=?",
+            (attempt_id,)).fetchone()
+        if row is not None:
+            return dict(row)
+        event = self._conn.execute(
+            "SELECT payload FROM events WHERE id=? AND type='time_imported'",
+            (attempt_id,)).fetchone()
+        return {"url": json.loads(event["payload"]).get("video") if event else None,
+                "revision": 0}
+
+    def recording_link(self, attempt_id: int) -> dict:
+        """Current public URL and revision, or LookupError for no attempt."""
+        with self._lock:
+            return self._recording_link_unlocked(attempt_id)
+
+    def set_recording_link(self, attempt_id: int, url: str | None,
+                           expected_revision: int | None = None) -> dict:
+        """Atomically edit an association; NULL records an explicit removal.
+
+        The service validates the URL. Revision comparison and write share
+        the database lock so concurrent editors cannot both win a stale undo.
+        """
+        with self._lock:
+            current = self._recording_link_unlocked(attempt_id)
+            if expected_revision is not None and expected_revision != current["revision"]:
+                raise ValueError("The recording link changed. Reload it before saving.")
+            revision = current["revision"] + 1
+            self._conn.execute(
+                "INSERT OR REPLACE INTO attempt_recordings"
+                " (attempt_id, url, revision, user_edited) VALUES (?,?,?,1)",
+                (attempt_id, url, revision))
+            self._conn.commit()
+            return {"url": url, "revision": revision}
+
+    def backfill_recording_link(self, attempt_id: int, url: str) -> bool:
+        """Fill an untouched import once; automatic work never undoes edits."""
+        with self._lock:
+            try:
+                current = self._recording_link_unlocked(attempt_id)
+            except LookupError:
+                return False
+            if current["url"] or current["revision"]:
+                return False
+            self._conn.execute(
+                "INSERT INTO attempt_recordings"
+                " (attempt_id, url, revision, user_edited) VALUES (?,?,1,0)",
+                (attempt_id, url))
+            self._conn.commit()
+            return True
+
     # -- held times (sheet cells an import kept aside) ---------------------
     def hold_times(self, source: str, cells, saved_utc: str) -> int:
         """Keep `cells` -- `[{row_key, game_version, time_cs, reason,
@@ -1390,11 +1459,11 @@ class Database:
                     (source, cell["row_key"], cell.get("game_version")))
                 self._conn.execute(
                     "INSERT INTO held_times (source, row_key, game_version,"
-                    " platform, time_cs, reason, saved_utc)"
-                    " VALUES (?,?,?,?,?,?,?)",
+                    " platform, time_cs, reason, saved_utc, video)"
+                    " VALUES (?,?,?,?,?,?,?,?)",
                     (source, cell["row_key"], cell.get("game_version"),
                      cell.get("platform"), int(cell["time_cs"]),
-                     cell.get("reason") or "", saved_utc))
+                     cell.get("reason") or "", saved_utc, cell.get("video")))
             self._conn.commit()
             return len(cells)
 

@@ -19,6 +19,25 @@ def payload():
     return json.loads(gzip.decompress(seed.read_bytes()).decode("utf-8"))
 
 
+def test_runner_recordings_and_row_identities_survive_both_import_outcomes():
+    from collections import Counter
+    from sm64_events.library.audit import row_key
+
+    source = payload()
+    expected = Counter((row_key(target, item["name"], item.get("ids") or ()),
+                        entry.get("video"))
+                       for target in source["targets"]
+                       for collection in ("approaches", "subsections")
+                       for item in target.get(collection, [])
+                       for entry in item.get("entries", [])
+                       if entry["runner"] == "RONC3NA")
+    candidates, held = candidates_for(source, "RONC3NA")
+    actual = Counter((candidate.row_key, candidate.video) for candidate in candidates)
+    actual.update((cell["row_key"], cell["video"]) for cell in held)
+    assert actual == expected
+    assert any(video for _key, video in actual)
+
+
 def test_dentoriousred_maps_to_fourteen_times_over_ten_stars():
     candidates, held = candidates_for(payload(), "DentoriousRed")
     assert len(candidates) == 14
@@ -258,6 +277,7 @@ def test_a_candidate_carries_the_platform_the_runners_legend_named():
     through build.py) rides onto the candidate, so the landing can stamp
     the attempt; an entry with none leaves the candidate's None."""
     target = {"entity_key": "star:1:0", "label": "Big Bob-omb on the Summit",
+              "section": "1. Bob-omb Battlefield",
               "version": None, "approaches": [
                   {"ids": ["1"], "name": "Big Bob-omb on the Summit",
                    "entries": [{"runner": "Raisn", "time_cs": 4380, "video": None,

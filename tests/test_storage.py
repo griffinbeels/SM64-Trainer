@@ -34,6 +34,28 @@ def test_reopening_existing_db_is_idempotent(tmp_path):
     assert row is not None and row["started_utc"] == "2026-06-10T12:00:00Z"
 
 
+def test_recording_migration_preserves_existing_held_cells(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    connection = sqlite3.connect(path)
+    for script in MIGRATIONS[:30]:
+        connection.executescript(script)
+    connection.execute("PRAGMA user_version = 30")
+    connection.execute(
+        "INSERT INTO held_times (source,row_key,time_cs,reason,saved_utc)"
+        " VALUES ('sheet:R','row',806,'subsections','2026-09-05')")
+    connection.commit()
+    connection.close()
+    db = Database(path)
+    assert db.held_times()[0]["time_cs"] == 806
+    assert db.held_times()[0]["video"] is None
+    db.hold_times("sheet:R", [{"row_key": "row", "time_cs": 806,
+                               "video": "https://youtu.be/abcdefghijk?t=12"}],
+                  "2026-09-05")
+    assert db.held_times()[0]["video"].endswith("?t=12")
+
+
 def test_journal_append_and_read_back(tmp_path):
     db = make_db(tmp_path)
     sid = db.insert_session("2026-06-10T12:00:00Z")

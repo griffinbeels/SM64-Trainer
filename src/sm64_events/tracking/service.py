@@ -24,13 +24,14 @@ from sm64_events.core.events import Event
 from sm64_events.core.landmark import landmark_group
 from sm64_events.core.modes import ModeConfig, effective_version
 from sm64_events.core.paths import bundled_defaults_seed
+from sm64_events.core.recording_url import validate_recording_url
 from sm64_events.core.timefmt import format_igt
 from sm64_events.memory.addresses import course_name, node_label, star_name
 from sm64_events.ranks import scopes
 from sm64_events.ranks.classify import RANK_MODES
 from sm64_events.ranks.standards import entity_key
 from sm64_events.storage.db import Database, EventRow
-from sm64_events.tracking import importing, practicable
+from sm64_events.tracking import importing, practicable, recordings
 from sm64_events.tracking.views import current_pbs_by_strat
 from sm64_events.tracking.activestrat import ActiveStrats
 from sm64_events.tracking.defaults import remember_deletion, resolve_steps
@@ -2011,6 +2012,20 @@ class TrackerService:
                                  timestamp_utc=_now(), payload=payload))
         return payload
 
+    def recording_link(self, attempt_id: int) -> dict:
+        """Public recording attached to this exact practice attempt."""
+        return self._require_db().recording_link(attempt_id)
+
+    async def set_recording_link(self, attempt_id: int, url: str | None,
+                                 expected_revision: int | None = None) -> dict:
+        """Save, remove or conditionally undo a public link without media I/O."""
+        value = validate_recording_url(url)
+        result = self._require_db().set_recording_link(
+            attempt_id, value, expected_revision)
+        await self.publish(Event(type="attempts_invalidated", frame=0,
+                                 timestamp_utc=_now(), payload={}))
+        return result
+
     async def import_times(self, source: str, candidates, held=()) -> dict:
         """Land a batch of brought-in times, each as an attempt with a PB --
         and HOLD the cells the source could not place.
@@ -2052,8 +2067,17 @@ class TrackerService:
         here because scoring a scope is server-side and `tracking/` must not
         import `server/`.
         """
+        # Validate the whole batch before landing anything. Saving a link
+        # never performs metadata lookup or starts a video download.
+        candidates = [dataclasses.replace(c, video=validate_recording_url(c.video))
+                      for c in candidates]
+        held = [{**cell, "video": validate_recording_url(cell.get("video"))}
+                for cell in held]
         plan = self._plan_import(candidates)
         db = self._require_db()
+        if any(candidate.video and candidate.row_key for candidate in candidates):
+            for attempt_id, url in recordings.backfill_matches(db.events(), source, candidates):
+                db.backfill_recording_link(attempt_id, url)
         for candidate, frames in plan.landing:
             course_id, star_id, segment_id = _import_identity(
                 candidate.entity_key)
@@ -2068,6 +2092,7 @@ class TrackerService:
                          "strat_tag": strat_tag,
                          "timer_mode": candidate.timer_mode, "frames": frames,
                          "game_version": candidate.game_version,
+                         "row_key": candidate.row_key, "video": candidate.video,
                          # The platform stamp rides the closing event, so
                          # the projector re-derives it on every replay
                          # (`_imported_attempt`); absent when the source
