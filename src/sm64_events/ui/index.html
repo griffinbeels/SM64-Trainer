@@ -4752,10 +4752,20 @@
   .setup-row-title { font-weight: 600; }
   .setup-row-detail { margin: .35rem 0 0; color: var(--muted); font-size: .8rem; }
   .setup-row-body { margin-top: .55rem; }
-  .setup-path {
-    word-break: break-all; background: #081422; padding: .05rem .3rem;
-    border-radius: 4px; font-family: monospace; font-size: .78rem;
+  /* A short name stays inline; a PATH gets its own line and wraps anywhere,
+     because an inline code span broken across two lines paints two
+     overlapping boxes (the responsive sweep's "code x code" overlap). */
+  .setup-name {
+    background: #081422; padding: .05rem .3rem; border-radius: 4px;
+    font-family: monospace; font-size: .78rem; white-space: nowrap;
   }
+  .setup-path {
+    display: block; margin: .15rem 0 0; overflow-wrap: anywhere;
+    background: #081422; padding: .15rem .4rem; border-radius: 4px;
+    font-family: monospace; font-size: .78rem;
+  }
+  .setup-writes { margin: .3rem 0 .4rem 1.1rem; padding: 0; font-size: .82rem; list-style: disc; }
+  .setup-writes li { margin: .2rem 0; }
   .setup-consent-card p { margin: .3rem 0; font-size: .82rem; color: var(--text); }
   .setup-consent-card .primary-button { margin-top: .5rem; }
   .setup-disabled-reason { margin: .4rem 0 0; color: #e0a4a4; font-size: .78rem; }

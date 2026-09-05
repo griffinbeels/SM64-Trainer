@@ -38,13 +38,18 @@ function ConsentCard({ emu, installing, installError, onInstall }) {
   const reason = installError || blockingReason;
   const disabled = installing || !!blockingReason;
   return html`<div class="setup-consent-card">
-    <p>Installs <code class="setup-path">sm64_trainer_gfx.dll</code> into
-      <code class="setup-path">${pluginDir}</code>, sets Project64's
-      <code>Graphics Dll</code> setting, and writes a small
-      <code class="setup-path">sm64_trainer_gfx.ini</code> naming your current
-      plugin${emu.wrapped_name ? html` (<code class="setup-path">${emu.wrapped_name}</code>)` : ""}.</p>
+    <p>Installing writes three things:</p>
+    <ul class="setup-writes">
+      <li>the file <code class="setup-name">sm64_trainer_gfx.dll</code> into
+        <code class="setup-path">${pluginDir}</code></li>
+      <li>Project64's <code class="setup-name">Graphics Dll</code> setting, so it loads that file</li>
+      <li>a small <code class="setup-name">sm64_trainer_gfx.ini</code> naming your current
+        plugin${emu.wrapped_name ? html`, <code class="setup-name">${emu.wrapped_name}</code>` : ""},
+        which keeps doing all the drawing</li>
+    </ul>
     <p>Your recording's frames become game frames, so the input timeline is
-      exact on every frame instead of estimated.</p>
+      exact on every frame instead of estimated. Remove it any time from this
+      row; Project64 must be closed to install or remove.</p>
     <button type="button" class="primary-button" disabled=${disabled}
         onclick=${onInstall}>
       ${installing ? "Installing…" : "Install the capture layer"}
@@ -86,7 +91,7 @@ function CaptureLayerRow({ setup, refresh }) {
   }
   if (emu.state === "needs_restart") {
     return html`<${ChecklistRow} status="warn" title="Frame-exact capture">
-      <p class="setup-row-detail">Installed — restart Project64 to load it.</p>
+      <p class="setup-row-detail">Installed. Restart Project64 to load it.</p>
       <button type="button" onclick=${remove}>Remove</button>
     <//>`;
   }
@@ -131,10 +136,8 @@ export function EmuSetupPane({ setup, refresh }) {
     <${ChecklistRow} status=${detected ? "ok" : "todo"} title="Usamune ROM">
       ${detected
         ? html`<p class="setup-row-detail">Detected: ${detected}</p>`
-        : html`<p class="setup-row-detail">
-            <a href="https://ukikipedia.net/wiki/RTA_Guide/Usamune"
-               target="_blank" rel="noopener">Get the Usamune practice ROM</a>
-          </p>`}
+        : html`<p class="setup-row-detail">Not detected. Open the Usamune 1.93
+            US ROM in Project64.</p>`}
     <//>
     <${CaptureLayerRow} setup=${setup} refresh=${refresh} />
   </div>`;
