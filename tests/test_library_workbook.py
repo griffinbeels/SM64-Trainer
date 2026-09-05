@@ -84,3 +84,26 @@ def test_a_workbook_with_no_log_tab_says_what_it_DOES_have():
     with pytest.raises(LookupError) as raised:
         wb.log_revision(no_log)
     assert wb.SHEET_MAIN in str(raised.value)
+
+
+def test_reads_a_cells_fill_in_both_forms_the_export_writes():
+    """Round 29 item 2: a runner colours a time by the machine that set it,
+    and the fill is where the sheet keeps that. The live export writes a
+    fill's colour two ways -- an explicit rgb (257 of 263 fills, alpha first)
+    and a theme index (6 fills; Raisn's N64 cells are theme 8 = accent5,
+    Sheets' orange FF6D01) -- and a cell with no fill reads None, never a
+    white that would match nothing."""
+    from library_fixture import THEME_ACCENTS
+
+    data = build_workbook({
+        wb.SHEET_MAIN: {
+            (1, 7): {"text": "Emu", "fill": "FFA5A9F1"},
+            (2, 7): {"text": "N64", "fill": "theme:8"},
+            (3, 7): {"text": "43.63"},
+        },
+        wb.SHEET_LOG: {(1, 1): {"text": "46238.5"}},
+    })
+    cells = wb.read_sheet(data, wb.SHEET_MAIN)
+    assert cells[(1, 7)].fill_rgb == "A5A9F1"
+    assert cells[(2, 7)].fill_rgb == THEME_ACCENTS["accent5"] == "FF6D01"
+    assert cells[(3, 7)].fill_rgb is None

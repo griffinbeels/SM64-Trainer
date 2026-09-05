@@ -2067,7 +2067,13 @@ class TrackerService:
                          "star_id": star_id, "segment_id": segment_id,
                          "strat_tag": strat_tag,
                          "timer_mode": candidate.timer_mode, "frames": frames,
-                         "game_version": candidate.game_version}))
+                         "game_version": candidate.game_version,
+                         # The platform stamp rides the closing event, so
+                         # the projector re-derives it on every replay
+                         # (`_imported_attempt`); absent when the source
+                         # did not say, never a guessed "emu".
+                         **({"platform": candidate.platform}
+                            if candidate.platform else {})}))
             if attempt_id is None:
                 raise RuntimeError("the import could not be journaled")
             db.insert_pb(course_id=course_id, star_id=star_id,

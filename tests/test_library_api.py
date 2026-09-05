@@ -116,7 +116,7 @@ def test_target_rows_carry_their_adoption_state(tmp_path):
                 "times": {}, "ideal_cs": None, "fill_rate": 0.2,
                 "ladder": dict(ladder), "ladder_samples": 40,
                 "entries": [{"runner": "r", "time_cs": 276,
-                             "video": None, "version": None}]}
+                             "video": None, "version": None, "platform": None}]}
 
     store = LibraryStore()
     store._payload = {

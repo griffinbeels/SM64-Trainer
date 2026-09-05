@@ -53,7 +53,7 @@ def test_new_target_opens_on_bold_and_subsection_on_grey():
     assert [r.opens_target for r in rows] == [True, False, False]
     assert rows[0].section == "1. Bob-omb Battlefield"
     assert rows[0].best_cs == 4363
-    assert rows[0].entries["Kally"] == (4380, "https://youtu.be/a")
+    assert rows[0].entries["Kally"] == (4380, "https://youtu.be/a", None)
 
 
 def test_single_id_reuse_is_a_subsection():
@@ -225,3 +225,72 @@ def test_only_the_version_token_is_dropped_when_pairing():
             != sheet.base_name("Tunnel door - HMC door (\u260650 MIPS, US)"))
     assert sheet.base_name("Big Bob-omb on the Summit (JP)") == "Big Bob-omb on the Summit"
     assert sheet.base_name("Left side strat") == "Left side strat"
+
+
+def _legend_sheet(legend, times, runner="Raisn"):
+    """One runner column: `legend` = {row: (text, fill)} for rows 2/3,
+    `times` = {row: (text, fill)} for the data rows below one BoB target."""
+    cells = {(1, 1): {"text": "Xcam IGT !"}, (1, 2): {"text": "Sheet Best"},
+             (1, 3): {"text": "Player"}, (1, 4): {"text": "Ideal Run"},
+             (1, 5): {"text": "Fill Rate"}, (1, 6): {"text": "---"},
+             (1, 7): {"text": runner},
+             (4, 1): {"text": "1. Bob-omb Battlefield"},
+             (5, 1): {"text": "[1] Big Bob-omb on the Summit", "bold": True,
+                      "rgb": BLACK},
+             (5, 2): {"text": "43.63"},
+             (6, 1): {"text": " [2] Big Bob-omb on the Summit (Cannonless)",
+                      "rgb": BLACK},
+             (6, 2): {"text": "45.03"},
+             (7, 1): {"text": "[1|2] Warp fadeout", "rgb": GREY},
+             (7, 2): {"text": "15.90"}}
+    for row, (text, fill) in legend.items():
+        cells[(row, 7)] = {"text": text, "fill": fill}
+    for row, (text, fill) in times.items():
+        cells[(row, 7)] = {"text": text, "fill": fill}
+    return build_workbook({wb.SHEET_MAIN: cells,
+                           wb.SHEET_LOG: {(1, 1): {"text": "46238.5"}}})
+
+
+def test_a_runners_own_legend_names_the_platform_of_each_timed_cell():
+    """Round 29 item 2, Raisn's convention measured on the live export: rows
+    2/3 of his column read "Emu" in A5A9F1 and "N64" in the theme's orange,
+    and every time below wears one of the two. A cell in a NEAR shade (his
+    hand-picked A1A3FF) stamps by the nearest legend fill; a cell with no
+    fill at all stamps nothing."""
+    data = _legend_sheet(
+        legend={2: ("Emu", "FFA5A9F1"), 3: ("N64", "theme:8")},
+        times={5: ("43.80", "FFA5A9F1"), 6: ("46.10", "theme:8"),
+               7: ("15.95", "FFA1A3FF")})
+    rows = sheet.read_rows(data)
+    assert [row.entries["Raisn"][2] for row in rows] == ["emu", "n64", "emu"]
+
+
+def test_a_column_with_no_legend_stamps_no_platform_however_it_is_coloured():
+    """471 of 473 columns carry no legend, and a fill with no legend means
+    nothing: an unstamped time reads as the emulator by the one rule in
+    core/modes.py, never as a guess from its colour."""
+    data = _legend_sheet(legend={}, times={5: ("43.80", "FFA5A9F1"),
+                                           6: ("46.10", "theme:8")})
+    rows = sheet.read_rows(data)
+    assert [row.entries["Raisn"][2] for row in rows[:2]] == [None, None]
+
+
+def test_a_legend_needs_both_platforms_in_two_fills():
+    """The other two-fill legend on the live sheet reads "Abood" / "BOB" --
+    a name and a course -- so labels that do not name the platforms are not
+    a legend; nor is a legend whose two labels share one fill."""
+    not_platforms = _legend_sheet(
+        legend={2: ("Abood", "FFCC0000"), 3: ("BOB", "FF38761D")},
+        times={5: ("43.80", "FFCC0000")})
+    assert sheet.read_rows(not_platforms)[0].entries["Raisn"][2] is None
+    one_fill = _legend_sheet(
+        legend={2: ("Emu", "FFA5A9F1"), 3: ("N64", "FFA5A9F1")},
+        times={5: ("43.80", "FFA5A9F1")})
+    assert sheet.read_rows(one_fill)[0].entries["Raisn"][2] is None
+
+
+def test_a_far_shade_stamps_nothing():
+    data = _legend_sheet(
+        legend={2: ("Emu", "FFA5A9F1"), 3: ("N64", "theme:8")},
+        times={5: ("43.80", "FF00FF00")})
+    assert sheet.read_rows(data)[0].entries["Raisn"][2] is None

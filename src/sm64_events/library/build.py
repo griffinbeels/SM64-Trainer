@@ -27,9 +27,13 @@ def _entries(row) -> list:
     # row and its (US) sibling merge into one approach but hold two genuinely
     # different populations -- JRB's stone pillar is 10.80 JP against 14.50 US
     # -- so anything fitting a ladder over the merged pile describes neither.
+    # `platform` is the machine the runner's own legend says set this time
+    # ("emu" / "n64"), None for the 471 columns with no legend -- see
+    # `sheet.py::runner_legends`. The import stamps it onto the attempt it
+    # lands, so an export can colour the cell back the way the runner had it.
     return [{"runner": runner, "time_cs": centiseconds, "video": link,
-             "version": row.version}
-            for runner, (centiseconds, link) in sorted(row.entries.items())]
+             "version": row.version, "platform": platform}
+            for runner, (centiseconds, link, platform) in sorted(row.entries.items())]
 
 
 def _new_approach(row, name) -> dict:

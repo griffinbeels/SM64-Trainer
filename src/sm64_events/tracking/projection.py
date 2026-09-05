@@ -2283,7 +2283,8 @@ class Projector:
             cleared_reason=self._cleared.get(ev.id),
             segment_id=segment_id,
             timed_by="imported", closed_by=IMPORT_EVENT,
-            timed_at=None if segment_id is not None else "xcam"))
+            timed_at=None if segment_id is not None else "xcam",
+            platform=platform_from_payload(payload)))
 
     def _auto_ignored(self, a: Attempt) -> Attempt:
         """Range/validity check (spec 2026-07-23): an out-of-bounds SUCCESS

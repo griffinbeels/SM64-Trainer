@@ -185,6 +185,7 @@ def held_row_lander(service, library, adoptions):
                     target, item, kind),
                 time_cs=int(cell["time_cs"]),
                 game_version=cell.get("game_version"),
+                platform=cell.get("platform"),
                 timer_mode=timer_mode or TIMER_MODE))
             placed_keys.add(cell["row_key"])
         landed = 0

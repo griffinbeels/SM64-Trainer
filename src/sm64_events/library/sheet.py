@@ -44,6 +44,7 @@ Column A's FILL was never the boundary either: it alternates between two greens
 as banding and only 38 of the 252 target rows carry a header fill, so reading
 the boundary off the fill is wrong in a way that looks right.
 """
+from sm64_events.core.modes import TrackerMode
 import re
 from dataclasses import dataclass, field
 
@@ -176,6 +177,60 @@ def runner_columns(cells) -> dict:
             if row == 1 and col >= FIRST_RUNNER_COL and cell.value.strip()}
 
 
+# The legend a runner may write into rows 2 and 3 of their own column: a cell
+# reading "Emu" in one fill and "N64" in another, and every time below wearing
+# one of the two. Round 29 item 2 (2026-09-04), measured on the live export:
+# Raisn does this (A5A9F1 for the emulator, the theme's orange for the
+# console), and he is the only runner whose rows 2/3 carry a platform legend
+# -- 2 of 473 columns carry any two-fill legend there, and the other's labels
+# are a name and a course. So a fill means a platform ONLY where the column's
+# own legend says so; with no legend, no cell is stamped, and `core/modes.py::
+# platform_of` reads an absent stamp as the emulator.
+LEGEND_ROWS = (2, 3)
+_EMU, _N64 = TrackerMode.EMU.value, TrackerMode.N64.value
+_LEGEND_LABELS = {_EMU: _EMU, "emulator": _EMU, "pc": _EMU,
+                  _N64: _N64, "console": _N64}
+# Raisn's own hand-picked near shades of his two fills (A1A3FF and ACABFF
+# beside A5A9F1; measured 2026-09-04): a cell is stamped by the NEAREST legend
+# fill within this RGB distance, and left unstamped past it.
+LEGEND_FILL_TOLERANCE = 48
+
+
+def _rgb_distance(a: str, b: str) -> float:
+    return sum((int(a[i:i + 2], 16) - int(b[i:i + 2], 16)) ** 2
+               for i in (0, 2, 4)) ** 0.5
+
+
+def runner_legends(cells, runners) -> dict:
+    """{column index: {fill rgb: platform}} for every runner whose rows 2/3
+    name the two platforms in two different fills; a column with no such
+    legend is absent."""
+    legends = {}
+    for col in runners:
+        fills = {}
+        for row in LEGEND_ROWS:
+            cell = cells.get((row, col))
+            if cell is None or not cell.fill_rgb:
+                continue
+            platform = _LEGEND_LABELS.get(cell.value.strip().lower())
+            if platform:
+                fills[cell.fill_rgb] = platform
+        if len(set(fills.values())) == 2:
+            legends[col] = fills
+    return legends
+
+
+def platform_for_fill(fill_rgb, legend) -> str | None:
+    """The platform a timed cell's fill names under this column's legend:
+    the nearest legend fill within `LEGEND_FILL_TOLERANCE`, else None."""
+    if not fill_rgb or not legend:
+        return None
+    nearest = min(legend, key=lambda candidate: _rgb_distance(candidate, fill_rgb))
+    if _rgb_distance(nearest, fill_rgb) > LEGEND_FILL_TOLERANCE:
+        return None
+    return legend[nearest]
+
+
 def _classify(ids, seen, grey, best_cs, basis_cs, exempt, label, row) -> str:
     """One row's kind. `basis_cs` is the best of the approaches this row's own
     ids name, falling back to the target's best approach so far when the row
@@ -206,6 +261,7 @@ def read_rows(data: bytes) -> list:
     """Every bracketed data row of the main tab, classified and timed."""
     cells = read_sheet(data, SHEET_MAIN)
     runners = runner_columns(cells)
+    legends = runner_legends(cells, runners)
     last_row = max(row for row, _ in cells)
     # Headers nest two deep: "Castle Movements (Lobby)" then "★ BoB". Keeping
     # only the innermost loses the outer context entirely, which is what tells
@@ -253,7 +309,8 @@ def read_rows(data: bytes) -> list:
                 continue
             centiseconds = parse_time(cell.value)
             if centiseconds is not None:
-                entries[runner] = (centiseconds, cell.link)
+                entries[runner] = (centiseconds, cell.link,
+                                   platform_for_fill(cell.fill_rgb, legends.get(col)))
 
         out.append(SheetRow(
             row=row, group=group, section=section, label=label, ids=ids, kind=kind,

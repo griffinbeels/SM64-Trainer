@@ -238,3 +238,39 @@ def test_an_unknown_runner_yields_nothing_rather_than_raising():
 
 def test_an_empty_payload_is_not_an_error():
     assert candidates_for({}, "DentoriousRed") == ([], [])
+
+
+def test_a_candidate_carries_the_platform_the_runners_legend_named():
+    """Round 29 item 2: the entry's `platform` (sheet.py::runner_legends,
+    through build.py) rides onto the candidate, so the landing can stamp
+    the attempt; an entry with none leaves the candidate's None."""
+    target = {"entity_key": "star:1:0", "label": "Big Bob-omb on the Summit",
+              "version": None, "approaches": [
+                  {"ids": ["1"], "name": "Big Bob-omb on the Summit",
+                   "entries": [{"runner": "Raisn", "time_cs": 4380, "video": None,
+                                "version": None, "platform": "n64"},
+                               {"runner": "Kally", "time_cs": 4390, "video": None,
+                                "version": None, "platform": None}]}],
+              "subsections": []}
+    (raisn,), _held = candidates_for({"targets": [target]}, "Raisn")
+    (kally,), _held = candidates_for({"targets": [target]}, "Kally")
+    assert raisn.platform == "n64"
+    assert kally.platform is None
+
+
+def test_a_held_row_keeps_the_platform_its_legend_named():
+    """Round 29 item 2: a cell the door cannot land is HELD with the
+    platform the runner's legend gave it, so the column export can paint it
+    back -- a held cell is not an attempt, and 144 of Raisn's 245 held cells
+    were N64 (measured 2026-09-04) before the hold carried it."""
+    target = {"entity_key": None, "label": "Lobby door (L) - BoB door",
+              "group": "Castle Movements (Lobby)", "section": "★ BoB",
+              "version": None, "miss_reason": "castle_movement",
+              "approaches": [{"ids": ["1"], "name": "Lobby door (L) - BoB door",
+                              "entries": [{"runner": "Raisn", "time_cs": 923,
+                                           "video": None, "version": None,
+                                           "platform": "n64"}]}],
+              "subsections": []}
+    candidates, (held,) = candidates_for({"targets": [target]}, "Raisn")
+    assert candidates == []
+    assert held["reason"] == "no_entity" and held["platform"] == "n64"

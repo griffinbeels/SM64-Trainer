@@ -634,13 +634,17 @@ MIGRATIONS = [
     # it, and linking the row lands it. Keyed by the row's stable key and
     # the ROM the cell was set on (NULL = the sheet did not say); `source`
     # is the import that brought it, so undoing that import erases it.
-    # Later rows win, exactly as pbs do.
+    # Later rows win, exactly as pbs do. `platform` (round 29 item 2) is the
+    # machine the runner's own legend says set the cell, NULL when it did
+    # not say -- a held cell is not an attempt, so the platform stamp has
+    # to ride the hold itself for the column export to paint it back.
     """
     CREATE TABLE IF NOT EXISTS held_times (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       source TEXT NOT NULL,
       row_key TEXT NOT NULL,
       game_version TEXT,
+      platform TEXT,
       time_cs INTEGER NOT NULL,
       reason TEXT NOT NULL,
       saved_utc TEXT NOT NULL
@@ -1373,7 +1377,8 @@ class Database:
 
     # -- held times (sheet cells an import kept aside) ---------------------
     def hold_times(self, source: str, cells, saved_utc: str) -> int:
-        """Keep `cells` -- `[{row_key, game_version, time_cs, reason}]` --
+        """Keep `cells` -- `[{row_key, game_version, time_cs, reason,
+        platform?}]` --
         for `source`, replacing that source's earlier hold of the same row
         and ROM. Another source's hold of the row survives underneath, so
         undoing the later import uncovers it (latest-row-wins, as pbs)."""
@@ -1385,10 +1390,11 @@ class Database:
                     (source, cell["row_key"], cell.get("game_version")))
                 self._conn.execute(
                     "INSERT INTO held_times (source, row_key, game_version,"
-                    " time_cs, reason, saved_utc) VALUES (?,?,?,?,?,?)",
+                    " platform, time_cs, reason, saved_utc)"
+                    " VALUES (?,?,?,?,?,?,?)",
                     (source, cell["row_key"], cell.get("game_version"),
-                     int(cell["time_cs"]), cell.get("reason") or "",
-                     saved_utc))
+                     cell.get("platform"), int(cell["time_cs"]),
+                     cell.get("reason") or "", saved_utc))
             self._conn.commit()
             return len(cells)
 

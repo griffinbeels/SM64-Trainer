@@ -295,3 +295,30 @@ def test_an_import_holds_what_it_could_not_place_and_the_undo_erases_it(tmp_path
     assert asyncio.run(svc.remove_imported("sheet:Raisn")) == 1
     assert db.held_times() == [], "the undo must take the held cells with it"
     assert db.current_pb(2, 0, "igt", strat_tag="Standard") is not None
+
+
+def test_the_platform_the_source_named_stamps_the_attempt_and_its_pb(tmp_path):
+    """Round 29 item 2: an imported time whose source says which machine set
+    it lands as an attempt wearing that platform stamp, the PB answers
+    through it, and -- because the stamp rides the `time_imported` event --
+    a reproject brings it back. A candidate that does not say leaves the
+    stored stamp None, which core/modes.py reads as the emulator."""
+    from sm64_events.core.modes import platform_of
+
+    db, svc = make(tmp_path)
+    console = ImportCandidate(entity_key="star:1:0", strat_tag="Standard",
+                              time_cs=886, platform="n64")
+    unsaid = ImportCandidate(entity_key="star:1:1", strat_tag="Standard",
+                             time_cs=900)
+    asyncio.run(svc.import_times("sheet:Raisn", [console, unsaid]))
+    by_star = {attempt.star_id: attempt for attempt in imported_attempts(db)}
+    assert by_star[0].platform == "n64"
+    assert by_star[1].platform is None
+    assert db.current_pb(1, 0, "igt", strat_tag="Standard")["platform"] == "n64"
+    assert platform_of(db.current_pb(1, 1, "igt", strat_tag="Standard")["platform"]) == "emu"
+
+    db._conn.execute("UPDATE attempts SET platform = NULL")
+    db._conn.commit()
+    asyncio.run(svc._reproject())
+    by_star = {attempt.star_id: attempt for attempt in imported_attempts(db)}
+    assert by_star[0].platform == "n64"

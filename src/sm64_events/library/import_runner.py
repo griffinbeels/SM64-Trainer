@@ -110,7 +110,8 @@ def _held(target: dict, item: dict, entry: dict, reason: str,
     return {"text": " — ".join(parts), "reason": reason,
             "row_key": row_key(target, item.get("name") or "",
                                item.get("ids") or ()),
-            "time_cs": int(entry["time_cs"]), "game_version": version}
+            "time_cs": int(entry["time_cs"]), "game_version": version,
+            "platform": entry.get("platform")}
 
 
 def _hold_reason(target: dict, item: dict, kind: str) -> str:
@@ -180,5 +181,6 @@ def candidates_for(payload: dict, runner: str, place=None):
                     entity_key=entity_key, strat_tag=strategy,
                     time_cs=int(entry["time_cs"]),
                     game_version=entry.get("version") or version,
-                    timer_mode=timer_mode) for entry in entries)
+                    timer_mode=timer_mode,
+                    platform=entry.get("platform")) for entry in entries)
     return candidates, held

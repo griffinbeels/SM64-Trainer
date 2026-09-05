@@ -51,6 +51,10 @@ class ImportCandidate:
     time_cs: int
     game_version: str | None = None
     timer_mode: str = "igt"
+    # WHICH MACHINE set it -- "emu" / "n64" -- when the source says (a sheet
+    # column whose legend colours by platform); None otherwise, which the
+    # platform stamp reads as the emulator (`core/modes.py::platform_of`).
+    platform: str | None = None
 
 
 @dataclass

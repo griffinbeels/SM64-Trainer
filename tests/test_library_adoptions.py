@@ -26,7 +26,7 @@ def _payload():
                 "ladder": dict(LADDER) if ladder else None,
                 "ladder_samples": entries,
                 "entries": [{"runner": f"r{i}", "time_cs": 276 + i,
-                             "video": None, "version": None}
+                             "video": None, "version": None, "platform": None}
                             for i in range(entries)]}
     return {"schema_version": 1, "sheet_revision": "2026-08-05T09:15:18",
             "fetched_at": "x", "runners": [], "ladder_model": {}, "targets": [
