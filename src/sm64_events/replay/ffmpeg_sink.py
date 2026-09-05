@@ -640,7 +640,23 @@ class FfmpegAvSink:
                 _time.sleep(0.005)  # fine tick: smooth, low-latency pacing
 
     def _teardown_audio_pipe(self) -> None:
-        self._audio_q.put(None)  # wake the writer
+        # Wake the writer WITHOUT blocking: when the ffmpeg child died young
+        # the writer is already gone and the queue may be full, and a
+        # blocking put here parked the recorder's attach thread forever --
+        # no window re-found, no recording, for the rest of the session
+        # (2026-09-05, the capture layer's first install). Make room, then
+        # wake whoever is left.
+        try:
+            self._audio_q.put_nowait(None)
+        except queue.Full:
+            try:
+                self._audio_q.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._audio_q.put_nowait(None)
+            except queue.Full:
+                pass
         if self._audio_thread is not None:
             self._audio_thread.join(timeout=5)
             self._audio_thread = None

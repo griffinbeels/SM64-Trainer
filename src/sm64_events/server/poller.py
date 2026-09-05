@@ -74,6 +74,15 @@ class Poller:
         self._frame_now: int | None = None      # the frame ticks are landing in
         self._snapshot_frame: int | None = None  # the last frame we snapshotted
         self._ticks_in_frame = 0
+        # Consecutive ticks the sampler could not read. On the sampler-paced
+        # path a snapshot is due only when the FRAME advances, and a dead
+        # emulator advances nothing -- so the read that would notice it
+        # (MemoryReadError -> detach -> re-attach) was never reached: the
+        # tracker sat "attached" to a closed Project64 with a frozen
+        # snapshot (2026-09-05, the first install of the capture layer:
+        # PJ64 closed and reopened under a live tracker, and nothing came
+        # back). Past UNREADABLE_TICKS_BEFORE_READ the tick reads anyway.
+        self._unreadable_ticks = 0
         # Wait until the game has FINISHED writing a frame before reading it.
         # The pad's own rewrite lands ~62% in (addresses.CONTROLLER_SETTLE_PHASE,
         # measured); the phases of the other fields are UNMEASURED, so this is
@@ -154,7 +163,9 @@ class Poller:
         """
         frame_now = self.input_sampler.sample()
         if frame_now is None:
+            self._unreadable_ticks += 1
             return False                       # straddled or unreadable
+        self._unreadable_ticks = 0
         # Capture needs the RELATION between the two clocks, not another
         # estimate of display lag.  InputSampler read this pair inside its
         # gGlobalTimer sandwich; FrameClock exposes it to the capture thread
@@ -181,6 +192,9 @@ class Poller:
     # process restarted) -- a live counter ticks every frame. Big enough
     # that a lag spike or a console reset's black screen never trips it.
     PRESENT_FROZEN_FRAMES = 120
+    #: consecutive unreadable sampler ticks (half a second at 250 Hz) before
+    #: the tick reads the snapshot regardless, so a dead emulator detaches
+    UNREADABLE_TICKS_BEFORE_READ = 125
 
     def _watch_presents(self) -> None:
         """One 250 Hz look at the host present counter (map v4).
@@ -231,8 +245,13 @@ class Poller:
             due_for_a_snapshot = self._due_for_a_snapshot()
             if self.present_hunter is not None:
                 self._watch_presents()
-            if not due_for_a_snapshot:
+            if (not due_for_a_snapshot
+                    and self._unreadable_ticks < self.UNREADABLE_TICKS_BEFORE_READ):
                 return
+            if not due_for_a_snapshot:
+                # Half a second of unreadable samples: read the snapshot
+                # anyway so a dead emulator raises and detaches below.
+                self._unreadable_ticks = 0
         elif self.present_hunter is not None:
             self._watch_presents()
         try:
