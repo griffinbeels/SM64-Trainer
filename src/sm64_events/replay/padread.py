@@ -7,7 +7,7 @@ the lag between the game finishing a frame and its picture landing in an
 encoded slot wanders by whole frames inside one clip (attempt 5431: +5 to
 -1 across 24 s). Every map built from stamps -- edges, feeds, presents,
 the picture ledger -- inherits that wander, and the ink anchor on top of
-them (`mapalign.py`) reads one number per slot, which is too weak to pin
+them (the deleted ink aligner) read one number per slot, too weak to pin
 a picture on its own. His ruling, verbatim: "we need to always capture the
 same input display that's on screen, and display it as the input timeline
 with 100% accuracy; anything less than 100% accuracy is failure."
@@ -37,7 +37,8 @@ on labelled frames 12,962 right / 8 wrong (d1), 3,958 / 6 (d2), 4,116 / 0
 (letter); every fully-read slot agreed with the aligned frame -- 7,494 of
 7,494 (Y row) and 6,079 of 6,080 (X row) -- and zero reads named a value
 the track never held nearby. The per-field fingerprint reader this
-replaces (`pixelmap.py`) read 84% / 49% on the same kind of footage,
+replaced (the deleted per-field fingerprints) read 84% / 49% on the same
+kind of footage,
 because it needed a template per VALUE (hundreds) where this needs one
 per GLYPH (fifteen).
 

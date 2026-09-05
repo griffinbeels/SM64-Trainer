@@ -4,6 +4,12 @@ The reader itself needs a clip and ffmpeg; what is pinned here is the part
 that decides whether a reading may be believed WITHOUT a map -- the +1 rule
 -- and how a map is scored against the oracle, because those two are what
 turn "the screen says 12632" into a verdict.
+
+AND the pixel path, since 2026-09-05: every test here was a pure-function
+test, so when `replay/timerread.py` was deleted and took the three lazy
+imports inside `register` with it, THE ORACLE was dead and this file was
+green. The instrument that certifies every frame map cannot be covered only
+where it is easiest to cover.
 """
 from sm64_events.replay import oracleread as O
 
@@ -70,3 +76,40 @@ def test_the_shipped_reference_alphabet_holds_every_digit():
     table = O.load_reference()
     assert sorted(table) == list("0123456789")
     assert all(template.exemplars >= 8 for template in table.values())
+
+
+def test_the_reader_can_actually_REGISTER_and_read_a_synthetic_row():
+    """Drive the pixel path end to end on a row painted from the shipped
+    alphabet itself: registration, box extraction, per-box distances, and
+    assembly. No clip and no ffmpeg -- the cells are built here.
+
+    This is the test whose absence let the oracle die silently: every other
+    test in this file is a pure function over lists, and `register` /
+    `_box` / `_box_score` reached none of them. Mutation proof: break any
+    one of the three (a wrong BOX_H, a removed offset search) and this goes
+    red where the rest stay green."""
+    import numpy as np
+
+    table = O.load_reference()
+    # Paint "12345" into a blank row at the reader's own geometry, one
+    # template per box, and give the last box the blank sky a five-digit
+    # counter really has.
+    height = O.ROW0 + O.BOX_H + 12
+    width = O.BOX_X0 + O.PITCH * O.BOX_COUNT + O.BOX_W
+    row = np.zeros((height, width, 3), dtype=np.uint8)
+    for index, digit in enumerate("12345"):
+        glyph = table[digit].median.astype(np.uint8)
+        top, left = O.ROW0, O.BOX_X0 + O.PITCH * index
+        row[top:top + O.BOX_H, left:left + O.BOX_W, :] = glyph
+    cells = np.stack([row, row])
+
+    offsets = O.register(cells, table)
+    assert set(offsets) == {f"d{index}" for index in range(O.BOX_COUNT)}
+    # Painted exactly where the reader looks, so it must find no shift at all.
+    assert offsets["d0"] == (0, 0), offsets
+    box = O._box(cells, offsets, "d0")
+    assert box.shape[1:3] == (O.BOX_H, O.BOX_W), box.shape
+    # And the box it cut is the glyph that was painted there.
+    names, distances = O._distances(box.astype(np.float32), table)
+    assert names[int(distances[0].argmin())].split("~")[0] == "1", (
+        names[int(distances[0].argmin())])

@@ -126,7 +126,7 @@ class Pj64Memory(RdramReader):
             return None
         return None
 
-    # -- host-side process memory (memory/present.py's hunt) -----------------
+    # -- host-side process memory (used by the capture-layer install checks) --
     # The present counter lives in the emulator's OWN heap, outside the
     # emulated RDRAM, so it is read by absolute process address. Same handle,
     # same read-only discipline; every failure is a MemoryReadError so the

@@ -16,7 +16,7 @@ needs no map: consecutive distinct pictures differ by exactly one (or by the
 RAM stamps' own delta when a present was skipped), so a misread contradicts
 its neighbours and is dropped, and a value is vouched for only when a
 neighbour agrees. The glyphs are the SAME HUD digits the clock reader reads
-(`timerread`), at the same capture scale, so its alphabet and its
+(the deleted clock reader), at the same capture scale, so its alphabet and its
 distance/margin gate are reused rather than redefined; only the region, the
 box row and the left-aligned variable length are this module's own.
 
@@ -47,6 +47,14 @@ ROW0 = 14                                 # the box top: ink rows 16-55 in a 43-
 REGISTER_SPAN = 8                         # shared coarse search, every second pixel
 REGISTER_FINE = 3                         # per-box refinement after the coarse pass
 REGISTER_SAMPLE = 40
+# The glyph box Usamune's HUD font paints into, in the reader's own scaled
+# cell. Owned here since 2026-09-05: it was imported from `replay/timerread.py`
+# -- three lazy imports inside the registration path -- and that module was
+# deleted with the derived-map stack, which left THE ORACLE dead while its own
+# test still passed, because the test never drove `read_clip`. The instrument
+# that certifies every frame map may not depend on anything the next cleanup
+# can remove.
+BOX_H, BOX_W = 43, 34
 
 
 @dataclass
@@ -177,16 +185,24 @@ def _boxes() -> dict:
 
 
 def _fits(cells: np.ndarray, top: int, left: int) -> bool:
-    from sm64_events.replay.timerread import BOX_H, BOX_W
     return (top >= 0 and left >= 0 and top + BOX_H <= cells.shape[1]
             and left + BOX_W <= cells.shape[2])
+
+
+def _box_score(sample: np.ndarray, table: dict, top: int, left: int) -> float:
+    """How little the box at (top, left) looks like ANY digit, over the
+    sampled frames: the median per-frame distance to the nearest template."""
+    box = sample[:, top:top + BOX_H, left:left + BOX_W, :]
+    dists = np.stack([
+        (np.abs(box - t.median).mean(axis=-1) * t.weight).sum(axis=(1, 2))
+        / max(float(t.weight.sum()), 1.0) for t in table.values()])
+    return float(np.median(dists.min(axis=0)))
 
 
 def register(cells: np.ndarray, table: dict) -> dict:
     """Each box's (dy, dx) for this clip: one coarse shift shared by the row
     (the HUD moves as one bitmap), then each box refines within a few pixels
     -- the pitch is measured, not exact, so the error grows along the row."""
-    from sm64_events.replay.timerread import _box_score
     boxes = _boxes()
     if len(cells) == 0:
         return {name: (0, 0) for name in boxes}
@@ -222,7 +238,6 @@ def register(cells: np.ndarray, table: dict) -> dict:
 
 
 def _box(cells: np.ndarray, offsets: dict, name: str) -> np.ndarray:
-    from sm64_events.replay.timerread import BOX_H, BOX_W
     dy, dx = offsets[name]
     top, left = ROW0 + dy, _boxes()[name] + dx
     return cells[:, top:top + BOX_H, left:left + BOX_W, :]

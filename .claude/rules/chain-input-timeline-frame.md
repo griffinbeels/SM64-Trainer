@@ -75,6 +75,22 @@ paused picture":
 
 ## Failure catalogue
 
+- **2026-09-05, THE ORACLE DIED IN THE CLEANUP AND ITS TESTS STAYED GREEN.**
+  `oracleread.register` reached `BOX_H`, `BOX_W` and `_box_score` through
+  three LAZY imports of `replay/timerread.py`, so deleting that module left
+  the witness this whole chain leans on raising `ModuleNotFoundError` on
+  every clip -- while `tests/test_oracleread.py` passed, because all nine of
+  its tests were pure functions over lists and none touched a pixel. Two
+  rules come out of it, both already written down in this repo and both
+  broken here: an instrument that certifies everything else may not depend on
+  anything a cleanup can remove (it owns those three constants now), and a
+  suite that covers only the easy half of an instrument is a green light for
+  the half that matters. `test_the_reader_can_actually_REGISTER_and_read_a_
+  synthetic_row` now paints a row from the shipped alphabet at the reader's
+  own geometry and drives registration, box extraction and matching with no
+  clip and no ffmpeg; mutation-proved by moving `BOX_H`. THE HABIT that would
+  have caught it in seconds: run the instrument on a real clip after touching
+  anything near it, and READ its first line.
 - **2026-09-05, THE THREE CERTIFIED CLIPS — the evidence the deletion rests
   on, and the ones to re-run against.** He played Shoot into the Wild Blue
   (attempt 7267), A-Maze-Ing Emergency Exit (7285) and Inside the Ancient

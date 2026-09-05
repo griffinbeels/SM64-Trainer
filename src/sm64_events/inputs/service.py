@@ -155,8 +155,11 @@ class InputsService:
                    duration_s: float) -> dict[int, tuple[int, int, int]]:
         """Every captured frame in a wall-clock span: raw game frame ->
         (buttons, stick_x, stick_y) -- the pad as Usamune's display draws
-        it. The pixel refiner (replay/pixelmap.py) reads the display out of
-        the footage and fits the clip's frame map against this."""
+        it. Read by the offline pad instruments (`tools/score_pad_read.py`,
+        `tools/score_picture_offset.py`), which check what the screen shows
+        against what the timeline holds. Nothing in extraction calls it: the
+        capture layer stamps the pad beside each picture, so the shipped
+        check compares two numbers rather than reading pixels."""
         from datetime import datetime, timedelta
         start = datetime.fromisoformat(start_utc.replace("Z", "+00:00"))
         end = (start + timedelta(seconds=duration_s)).isoformat()

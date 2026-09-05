@@ -12,16 +12,16 @@ presented picture is grabbed several times. This module watches those
 grabs, notices each NEW picture by content, and records one row for it:
 the picture's own composition time, the RAM frame current at that moment,
 and every extra stamp registered. Extraction matches the encoded clip's
-picture runs to these rows by time (mapalign.ledger_map), which is what
-retires estimating the capture journey with timing constants -- the rows
-SAY when each picture appeared and what the game was doing.
+frames to these rows through the FEED LOG (`replay/feedmap.py`), which is
+what retires estimating the capture journey with timing constants -- the
+rows SAY when each picture appeared and what the game was doing.
 
 Dedup is EXACT equality of a strided sample: pre-encode grabs of one
 presented picture are byte-identical copies of the same surface, unlike
-encoded frames, whose compression noise is why picture_runs thresholds a
-mean instead. A change the sample misses costs nothing downstream: that
-run inherits its neighbour's row and the rising rule advances it by the
-consecutive-pictures law (mapalign's second rule).
+encoded frames, whose compression noise is why the offline pad reader's
+`picture_runs` thresholds a mean instead. A change the sample misses costs
+nothing downstream: the sink feeds one frame per row either way, so a
+missed change is one fewer picture in the clip, never a wrong one.
 
 Extending the per-picture record is ONE line at wiring time:
 ``ledger.stamps["name"] = callable``. Every later row carries that field,
@@ -40,8 +40,8 @@ log = logging.getLogger(__name__)
 # Cost, measured at his 1600x1224 window: 93 us per grab, ~1.1% of a core
 # at the full 120 grabs/s (2026-08-28) -- the strided copy dominates.
 SAMPLE_STRIDE = 8
-# How long a row is answerable -- matches frameclock.RETENTION_S: the ring's
-# own retention decides how far back a clip can be cut, never this.
+# How long a row is answerable. The ring's own retention decides how far
+# back a clip can be cut; this only has to outlast it.
 RETENTION_S = 1800.0
 _ROWS_CEILING = 35                     # eviction sizing only, above real 30/s
 # A grab can catch the surface MID-update: the torn picture differs from

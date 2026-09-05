@@ -134,10 +134,14 @@ def detail(attempt_id, side, track, seams, panel_frames) -> None:
     frame_times = side.get("frame_times")
     rows = side.get("picture_ledger") or []
     pads = dict(track)
+    # The map's own health, in the terms the ONE path still has: which
+    # source built it, how much of the clip the feed log accounted for, and
+    # how many rows the plugin could not call exact. The aligner's
+    # offset/fit fields it used to print died with the aligner (2026-09-05).
+    match = side.get("feed_match") or {}
     print(f"attempt {attempt_id}: map source {side.get('frame_map_source')}"
-          f", aligned {side.get('frame_map_aligned')}"
-          f" offset {side.get('frame_map_offset')}"
-          f" fit {side.get('frame_map_fit')}")
+          f", feed matched {match.get('matched')} of {match.get('frames')}"
+          f", inexact rows {side.get('plugin_inexact_rows')}")
     for panel in panel_frames:
         axis = panel                # the panel's FRAME readout is 0-based
         raw = game_frame_of(axis, seams)
