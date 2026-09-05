@@ -26,6 +26,23 @@ def test_sheet_time_pads_centiseconds():
     assert sheet_time(500) == "5.00"
 
 
+def test_linked_pb_and_held_cells_keep_url_without_changing_legacy_cells():
+    from sm64_events.library.export_column import column_cells
+
+    rows, payload = _fixture()
+    for target in payload["targets"]:
+        target["section"] = "Fixture section"
+    url = "https://youtu.be/abcdefghijk?t=12&feature=shared"
+    cells = column_cells(rows, payload,
+                         lambda *_args, **_kwargs: (4370, "n64", url),
+                         held=lambda *_: (806, "emu", url))
+    assert cells[0] == {"text": "43.70", "platform": "n64", "video": url}
+    assert cells[2] == {"text": "8.06", "platform": "emu", "video": url}
+    assert cells[3] == {"text": "", "platform": None}
+    legacy = column_cells(rows, payload, lambda *_args, **_kwargs: (4370, "n64"))
+    assert legacy[0] == {"text": "43.70", "platform": "n64"}
+
+
 def _fixture():
     """A header gap at row 5, a target at rows 2-4 (one matched-strategy
     approach, one placer-only approach, one unlinked subsection), and an

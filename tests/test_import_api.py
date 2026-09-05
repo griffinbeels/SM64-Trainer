@@ -279,6 +279,10 @@ def test_linking_a_held_row_lands_its_time_the_moment_the_link_is_made(tmp_path)
         held_texts = [row["text"] for row in payload["held"]]
         assert any("Volcano entry" in text for text in held_texts), held_texts
         assert any(cell["row_key"] == VOLCANO_ENTRY_ROW for cell in db.held_times())
+        original_video = "https://youtu.be/abcdefghijk?t=12"
+        # A held recording must travel through the real adoption door.
+        cell = next(cell for cell in db.held_times() if cell["row_key"] == VOLCANO_ENTRY_ROW)
+        db.hold_times(cell["source"], [{**cell, "video": original_video}], cell["saved_utc"])
 
         piece = db.insert_segment_def(
             "Volcano entry", [{"type": "level_enter", "to": 22}],
@@ -292,6 +296,7 @@ def test_linking_a_held_row_lands_its_time_the_moment_the_link_is_made(tmp_path)
                                strat_tag="Standard")
         assert landed and landed["frames"] == 242          # 8.06s, rounded up
         assert landed["imported_from"] == "sheet:GTM"
+        assert _svc.recording_link(landed["attempt_id"])["url"] == original_video
         assert not any(cell["row_key"] == VOLCANO_ENTRY_ROW
                        for cell in db.held_times())
         # Linking the same row again lands nothing and releases nothing.
