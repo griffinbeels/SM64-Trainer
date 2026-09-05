@@ -13,41 +13,82 @@
 // Raisn's setup"). The Copy sheet column button reads the stored style at
 // copy time, so a change here paints the very next paste.
 //
-// The font field is FREE TEXT with the Sheets menu's own fonts as suggestions:
-// no primary source for that menu was reachable when this was built
-// (2026-09-04), so the list is a convenience, and any name your Sheets menu
-// shows works -- Sheets applies a `font-family` it recognises and ignores
-// one it does not.
+// ROUND 30 rebuilt the CONTROLS after he opened it, and MOVED them: they live
+// on the Rank tab's exports row, to the right of Rebuild, in one horizontal
+// row ("The color pickers / text pickers should live here on the scorecard
+// itself"), never in Settings -- the button that uses them is the place to
+// tune them. The two preview cells read EMU / N64 in their fills: they are
+// exactly the legend the paste now writes into worksheet rows 2 and 3.
+// The font is a DROPDOWN --
+// the app's own `SearchSelect`, never a text field ("This font choice should
+// definitely be a DROPDOWN, not this weird text entry"; a native datalist
+// drew an unstyled popup pinned to the wrong edge) -- and every name draws
+// in its own face, in the list, on the closed trigger and in the preview
+// ("we should see its name *in its font*"). No typing means no empty value.
+// The colour rows are plain rows, not `<label>`s: a label click activates
+// its control, and for a colour input that OPENS the picker, which is how
+// clicking the empty space beside "N64 cell" opened one. The swatches are
+// circles filled edge to edge, with an outline.
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { EMU, N64, PLATFORM_LABELS } from "../platform.js";
+import { SearchSelect } from "./searchselect.js";
 
 const html = htm.bind(h);
 
-// Google Sheets' font menu as of 2026-09 (the "Default (Arial)" entry is
-// spelled as its font). A suggestion list, not a whitelist -- see above.
+// Google Sheets' font menu. THE list (round 30): the picker offers exactly
+// these, so a name outside it cannot be chosen here. The eight system faces
+// need no download; the rest are Google Fonts, loaded once when this
+// section mounts so the names render in their faces (offline they fall back
+// to the system font, and everything else still works).
 export const SHEETS_FONTS = [
-  "Arial", "Amatic SC", "Caveat", "Comfortaa", "Comic Sans MS", "Courier New",
+  "Amatic SC", "Arial", "Caveat", "Comfortaa", "Comic Sans MS", "Courier New",
   "EB Garamond", "Georgia", "Impact", "Lexend", "Lobster", "Lora",
   "Merriweather", "Montserrat", "Nunito", "Oswald", "Pacifico",
   "Playfair Display", "Roboto", "Roboto Mono", "Roboto Serif", "Spectral",
   "Times New Roman", "Trebuchet MS", "Verdana",
 ];
+const SYSTEM_FONTS = new Set(["Arial", "Comic Sans MS", "Courier New", "Georgia",
+                              "Impact", "Times New Roman", "Trebuchet MS", "Verdana"]);
+export const GOOGLE_FONTS_HREF = "https://fonts.googleapis.com/css2?"
+  + SHEETS_FONTS.filter((font) => !SYSTEM_FONTS.has(font))
+    .map((font) => `family=${font.replace(/ /g, "+")}`).join("&")
+  + "&display=swap";
+const FONTS_LINK_ID = "sheetstyle-google-fonts";
 
-const FIELDS = [
+// A CSS `font-family` value for one name, with a generic fallback so a face
+// that has not loaded still reads as text of the right kind.
+export function fontStack(font) {
+  return `'${font}', sans-serif`;
+}
+
+function loadGoogleFonts() {
+  if (typeof document === "undefined" || document.getElementById(FONTS_LINK_ID)) return;
+  const link = document.createElement("link");
+  link.id = FONTS_LINK_ID;
+  link.rel = "stylesheet";
+  link.href = GOOGLE_FONTS_HREF;
+  document.head.appendChild(link);
+}
+
+const COLOURS = [
   ["emu_fill", `${PLATFORM_LABELS[EMU]} cell`],
   ["n64_fill", `${PLATFORM_LABELS[N64]} cell`],
   ["font_color", "Text"],
 ];
 
-export function SheetStyleSection() {
+const FONT_GROUPS = [{ label: null, options: SHEETS_FONTS.map((font) => (
+  { value: font, label: font, style: `font-family:${fontStack(font)}` })) }];
+
+export function SheetStyleControls() {
   const [style, setStyle] = useState(null);
   const [defaults, setDefaults] = useState(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    loadGoogleFonts();
     let alive = true;
     getJSON("/api/scorecard/sheet_style")
       .then((body) => { if (alive) { setStyle(body.style); setDefaults(body.defaults); } })
@@ -67,43 +108,32 @@ export function SheetStyleSection() {
   }
 
   if (!style) return null;
-  const preview = (platform, text) => html`<span class="sheetstyle-cell"
+  const isDefault = !!defaults && Object.keys(defaults)
+    .every((key) => style[key] === defaults[key]);
+  // The legend cells the paste writes into rows 2 and 3, drawn as they will
+  // land: the platform values upper-cased (never spelled here), in their
+  // fills, in the chosen text colour and font.
+  const legendCell = (platform) => html`<span class="sheetstyle-cell"
       data-platform=${platform}
       style=${`background-color:${platform === N64 ? style.n64_fill : style.emu_fill};`
-        + `color:${style.font_color};font-family:${style.font_family}`}>${text}</span>`;
-  return html`<section class="settings-section sheetstyle">
-    <div class="settings-section-head">
-      <div>
-        <h3>Sheet column colours</h3>
-        <p>Pasted cells are coloured by the machine that set the time.</p>
-      </div>
-    </div>
-    <div class="sheetstyle-preview" aria-label="How two pasted cells will look">
-      ${preview(EMU, "43.63")}
-      ${preview(N64, "45.03")}
-    </div>
-    ${FIELDS.map(([key, label]) => html`<label class="settings-field" key=${key}>
-      <span>${label}</span>
-      <input type="color" class=${`sheetstyle-${key}`} value=${style[key]}
-          oninput=${(inputEvent) => setStyle({ ...style, [key]: inputEvent.target.value.toUpperCase() })}
-          onchange=${(changeEvent) => save({ ...style, [key]: changeEvent.target.value.toUpperCase() })} />
-    </label>`)}
-    <label class="settings-field">
-      <span>Font</span>
-      <input type="text" class="sheetstyle-font_family" list="sheetstyle-fonts"
-          value=${style.font_family} maxlength="64" spellcheck="false"
-          oninput=${(inputEvent) => setStyle({ ...style, font_family: inputEvent.target.value })}
-          onchange=${(changeEvent) => save({ ...style, font_family: changeEvent.target.value })} />
-      <datalist id="sheetstyle-fonts">
-        ${SHEETS_FONTS.map((font) => html`<option value=${font} key=${font} />`)}
-      </datalist>
-    </label>
-    <p class="settings-note">Any font your Sheets menu offers works; the list
-      is only a hint. Copy sheet column paints every next copy with these.</p>
-    <button type="button" class="quiet-button sheetstyle-reset"
-        disabled=${!defaults || FIELDS.every(([key]) => style[key] === defaults[key])
-          && style.font_family === (defaults && defaults.font_family)}
-        onclick=${() => defaults && save({ ...defaults })}>Reset to defaults</button>
-    ${error ? html`<p class="settings-note is-bad">${error}</p>` : ""}
-  </section>`;
+        + `color:${style.font_color};font-family:${fontStack(style.font_family)}`}
+      >${platform.toUpperCase()}</span>`;
+  return html`<div class="sheetstyle" role="group" aria-label="Sheet column colours">
+    <span class="sheetstyle-preview">${legendCell(EMU)}${legendCell(N64)}</span>
+    ${COLOURS.map(([key, caption]) => html`<input type="color" key=${key}
+        class=${`sheetstyle-swatch sheetstyle-${key}`}
+        title=${caption} aria-label=${caption} value=${style[key]}
+        oninput=${(inputEvent) => setStyle({ ...style, [key]: inputEvent.target.value.toUpperCase() })}
+        onchange=${(changeEvent) => save({ ...style, [key]: changeEvent.target.value.toUpperCase() })} />`)}
+    <span class="sheetstyle-font">
+      <${SearchSelect} value=${style.font_family} valueLabel=${style.font_family}
+          valueStyle=${`font-family:${fontStack(style.font_family)}`}
+          title="Font" groups=${FONT_GROUPS} align="right"
+          onChange=${(font) => save({ ...style, font_family: font })} />
+    </span>
+    ${isDefault ? "" : html`<button type="button" class="quiet-button sheetstyle-reset"
+        title="Back to the default colours and font"
+        onclick=${() => defaults && save({ ...defaults })}>Reset</button>`}
+    ${error ? html`<span class="settings-note is-bad sheetstyle-error">${error}</span>` : ""}
+  </div>`;
 }

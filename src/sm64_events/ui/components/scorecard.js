@@ -49,6 +49,7 @@ import { SearchSelect } from "./searchselect.js";
 import { InlineState, ProgressLine } from "./states.js";
 import { Modal } from "./modal.js";
 import { N64 } from "../platform.js";
+import { SheetStyleControls } from "./sheetstyle.js";
 
 const html = htm.bind(h);
 
@@ -573,6 +574,10 @@ function ScorecardExports({ staleKey }) {
         onclick=${build} disabled=${busy}>
       <${Icon} name="restart" size=${13} />${" "}Rebuild
     </button>` : ""}
+    ${/* Round 30 item 8: the sheet colours live HERE, beside the button that
+         uses them -- "to the right of the Rebuild button. Laid out
+         horizontally on the same row." */""}
+    <${SheetStyleControls} />
     ${error ? html`<${InlineState} kind="error">${error}<//>` : ""}
     ${status ? html`<${ProgressLine} className="scorecard-status"
         progress=${status.progress} message=${status.message}

@@ -2202,7 +2202,8 @@ def test_the_pasted_html_paints_each_timed_cell_by_the_machine_that_set_it(monke
         assert landed["imported"] == 1, landed
         column = json.loads(urllib.request.urlopen(
             f"{base}/api/scorecard/column", timeout=10).read())
-        assert [cell["platform"] for cell in column["cells"] if cell["text"]] == ["n64"], column
+        assert [cell["platform"] for cell in column["cells"]
+                if cell["text"] and not cell.get("legend")] == ["n64"], column
 
         with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
             page.goto(f"{base}/ui/index.html")
@@ -2217,8 +2218,13 @@ def test_the_pasted_html_paints_each_timed_cell_by_the_machine_that_set_it(monke
     import re
     cells = re.findall(r"<td([^>]*)>([^<]*)</td>", html_copied)
     assert len(cells) == column["total_rows"]
-    timed = [(attrs, text) for attrs, text in cells if text]
-    assert timed == [(
-        ' style="background-color:#AB3F14;color:#FFFFFF;font-family:Roboto Mono"',
-        "11.00")], timed
+    painted = [(attrs, text) for attrs, text in cells if text]
+    # Round 30 item 7: the pasted column opens with the legend in its own
+    # fills -- here only the EMU cell, because this stub's row 3 holds a
+    # data row the N64 cell must never print over -- then the one timed
+    # cell, in the N64 fill.
+    assert painted == [
+        (' style="background-color:#4F7BE0;color:#FFFFFF;font-family:Roboto Mono"', "EMU"),
+        (' style="background-color:#AB3F14;color:#FFFFFF;font-family:Roboto Mono"', "11.00"),
+    ], painted
     assert all(attrs == "" for attrs, text in cells if not text), cells

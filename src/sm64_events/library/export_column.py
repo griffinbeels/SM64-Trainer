@@ -44,6 +44,7 @@ star row under `matched_strategy or the sheet's own name`, so refusing the
 name half meant a column he had just imported exported 0 of 803 lines. The
 fallback can never print a WRONG time either -- a name this database has not
 heard of resolves to `None` and the line stays blank."""
+from sm64_events.core.modes import TrackerMode
 from sm64_events.library.adoptions import DEFAULT_STRATEGY, sheet_strategy
 from sm64_events.library.audit import row_key
 from sm64_events.library.sheet import base_name
@@ -264,7 +265,28 @@ def column_lines(rows, payload, resolve, place=None, held=None) -> list:
                                                   place=place, held=held)]
 
 
-def column_cells(rows, payload, resolve, place=None, held=None) -> list:
+# The sheet's own convention for a runner's column (Raisn's rows 2 and 3,
+# and round 30 item 7's ask: "the first two lines should be the EMU color,
+# and the N64 color. Emu is first cell, N64 is second cell. All caps"): a
+# legend cell per platform, in worksheet row order. The values come from the
+# platform registry, upper-cased -- never spelled here.
+LEGEND_ROWS = tuple(zip((2, 3), (mode.value for mode in TrackerMode), strict=True))
+
+
+def _with_legend(cells, by_row):
+    """Write the legend into worksheet rows 2 and 3 -- only where no data row
+    sits (the live sheet has a section header and a blank there), so a legend
+    can never print over a time."""
+    for worksheet_row, platform in LEGEND_ROWS:
+        index = worksheet_row - 2
+        if index < len(cells) and worksheet_row not in by_row and not cells[index]["text"]:
+            cells[index] = {"text": platform.upper(), "platform": platform,
+                            "legend": True}
+    return cells
+
+
+def column_cells(rows, payload, resolve, place=None, held=None,
+                 legend=False) -> list:
     """One `{"text", "platform"}` per worksheet row, row 2 through the last
     data row -- `text` is the sheet's own time notation, `platform` the
     machine the answering PB says set it (`"emu"` / `"n64"`, None when the
@@ -298,7 +320,11 @@ def column_cells(rows, payload, resolve, place=None, held=None) -> list:
 
     `held(row_key, version) -> (cs, platform) | cs | None` is the cell an
     import kept aside for a row with no home (round 28), printed only where
-    nothing else answers; omit it and such rows stay blank."""
+    nothing else answers; omit it and such rows stay blank.
+
+    `legend=True` writes the two platform legend cells into worksheet rows 2
+    and 3 (`LEGEND_ROWS`, marked `legend: True`) wherever those rows hold no
+    data -- the column a runner keeps on the sheet opens with them."""
     if not rows:
         return []
     blocks = _blocks(payload.get("targets") or [])
@@ -319,4 +345,4 @@ def column_cells(rows, payload, resolve, place=None, held=None) -> list:
         if row.opens_target:
             claimed = _claimed_names(block)
         lines.append(_cell_for(row, block, resolve, place, claimed, held))
-    return lines
+    return _with_legend(lines, by_row) if legend else lines

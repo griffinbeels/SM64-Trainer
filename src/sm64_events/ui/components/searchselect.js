@@ -27,10 +27,12 @@ const FILTER_FLOOR = 8;
 
 /**
  * The overlaid panel itself. `groups`: [{label: string|null, options:
- * [{value, label}]}] — a null group label draws no heading (a flat list is
- * one anonymous group). The caller owns open/close state so it can keep the
- * panel up through a failed action (the link door shows the server's 409
- * where the click landed).
+ * [{value, label, style?}]}] — a null group label draws no heading (a flat
+ * list is one anonymous group). An option's optional `style` is an inline
+ * style string drawn on its row (round 30: a font picker shows each name in
+ * its own face — "we should see its name *in its font*"). The caller owns
+ * open/close state so it can keep the panel up through a failed action (the
+ * link door shows the server's 409 where the click landed).
  */
 export function SearchMenu({ title, groups, onPick, onClose, busy = false,
                              error = null, emptyNote = "Nothing to pick.",
@@ -97,6 +99,7 @@ export function SearchMenu({ title, groups, onPick, onClose, busy = false,
                 class="search-menu-option ${isPicked ? "is-picked" : ""}"
                 data-value=${String(option.value)} disabled=${busy}
                 aria-pressed=${selected ? String(isPicked) : null}
+                style=${option.style || null}
                 onclick=${() => onPick(option.value)}>
                 ${selected ? html`<span class="search-menu-check"
                     aria-hidden="true">${isPicked ? "✓" : ""}</span>` : ""}
@@ -127,7 +130,8 @@ export function SearchMenu({ title, groups, onPick, onClose, busy = false,
  */
 export function SearchSelect({ value, valueLabel, title, groups, onChange,
                                buttonClass = "quiet-button search-select-trigger",
-                               onOpen = null, align = "left", multi = false }) {
+                               onOpen = null, align = "left", multi = false,
+                               valueStyle = null }) {
   const [open, setOpen] = useState(false);
   // `onOpen` is a lazy-load hook, not a mount fetch: the scorecard's Runners
   // group (448 names) would otherwise download every time the Rank tab
@@ -145,7 +149,7 @@ export function SearchSelect({ value, valueLabel, title, groups, onChange,
   return html`<div class="search-select">
     <button type="button" class=${buttonClass} aria-expanded=${open}
         onclick=${toggle}>
-      <span class="search-select-value">${valueLabel}</span>
+      <span class="search-select-value" style=${valueStyle}>${valueLabel}</span>
       <${Icon} name="chevron" size=${13} />
     </button>
     ${open ? html`<${SearchMenu} title=${title} groups=${groups} align=${align}

@@ -85,10 +85,11 @@ _REGIONS_KEY = "scorecard_regions"
 # stored preference, edited in Settings with a live preview -- an inspector,
 # never a guessed constant -- and these defaults are only its starting point:
 # a blue / orange pair "darker than Raisn's setup" (his A5A9F1 / FF6D01), white
-# text on both, and Arial because it is what Sheets itself defaults to.
+# text on both, and Trebuchet MS (round 30, his call: "Default should be
+# Trebuchet MS").
 _SHEET_STYLE_KEY = "sheet_style"
 DEFAULT_SHEET_STYLE = {"emu_fill": "#4F7BE0", "n64_fill": "#E07A2F",
-                       "font_color": "#FFFFFF", "font_family": "Arial"}
+                       "font_color": "#FFFFFF", "font_family": "Trebuchet MS"}
 _HEX_COLOUR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _VALID_REGIONS = ("us", "jp")
 _VALID_TIERS = [tier for tier in RANK_NAMES if tier != "Iron"]
@@ -831,7 +832,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
     def _resolve_column(rows, payload):
         place = sheet_row_placer(service, adoptions)
         cells = column_cells(rows, payload, _column_resolve(service),
-                             place=place, held=_held_lookup(service))
+                             place=place, held=_held_lookup(service), legend=True)
         return cells, payload
 
     def _column_body(cells, payload):
@@ -845,9 +846,11 @@ def create_scorecard_router(service, library=None, adoptions=None,
         lines = [cell["text"] for cell in cells]
         return {"lines": lines, "sheet_revision": payload.get("sheet_revision"),
                 "cells": [{"text": cell["text"],
-                           "platform": platform_of(cell["platform"]) if cell["text"] else None}
+                           "platform": platform_of(cell["platform"]) if cell["text"] else None,
+                           **({"legend": True} if cell.get("legend") else {})}
                           for cell in cells],
-                "mapped": sum(1 for line in lines if line),
+                # The two legend cells are not times.
+                "mapped": sum(1 for cell in cells if cell["text"] and not cell.get("legend")),
                 "total_rows": len(lines)}
 
     def _column_work(step):

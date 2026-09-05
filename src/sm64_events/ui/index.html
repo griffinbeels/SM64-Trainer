@@ -7384,13 +7384,37 @@
   /* Round 29 item 2: the sheet-colour inspector's two preview cells -- drawn
      the size and shape of a Sheets cell, so what he tunes is what he will
      paste. */
-  .sheetstyle-preview { display: flex; gap: 8px; margin: 6px 0 10px; }
+  /* Round 30 item 8: the controls are one horizontal group on the exports
+     row, after Rebuild -- the two legend cells the paste will write, three
+     circle swatches, the font dropdown, Reset while anything differs. */
+  .sheetstyle { display: inline-flex; align-items: center; gap: 8px; margin-left: 6px; }
+  .sheetstyle-preview { display: inline-flex; gap: 4px; }
   .sheetstyle-cell {
-    display: inline-flex; align-items: center; justify-content: flex-end;
-    min-width: 84px; height: 24px; padding: 0 6px; box-sizing: border-box;
-    border: 1px solid rgba(255,255,255,.18); font-size: 13px;
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 46px; height: 24px; padding: 0 8px; box-sizing: border-box;
+    border: 1px solid rgba(255,255,255,.18); font-size: 12px; letter-spacing: .02em;
   }
-  .sheetstyle input[type="color"] { width: 44px; height: 28px; padding: 0; border-radius: 4px; }
+  .sheetstyle-error { flex-basis: 100%; }
+  /* Round 30: a swatch is a CIRCLE filled edge to edge with the chosen
+     colour, inside a thin outline ("circles where the whole circle color is
+     the color we've selected, with an outline"). Chromium's default draws a
+     padded square; the two pseudo-elements are where that padding and the
+     inner border live. */
+  .sheetstyle-swatch {
+    -webkit-appearance: none; appearance: none;
+    width: 28px; height: 28px; min-height: 0; padding: 0; margin: 0;
+    border: 2px solid var(--border-soft); border-radius: 50%;
+    background: none; cursor: pointer; overflow: hidden;
+    transition: border-color .12s ease;
+  }
+  .sheetstyle-swatch:hover, .sheetstyle-swatch:focus-visible { border-color: var(--gold-soft); }
+  .sheetstyle-swatch::-webkit-color-swatch-wrapper { padding: 0; }
+  .sheetstyle-swatch::-webkit-color-swatch { border: none; border-radius: 50%; }
+  /* The font trigger is a dropdown lined up with the row's right edge; its
+     menu opens beneath it (searchselect.js's own overlay), rightward-anchored
+     so it stays inside the drawer. */
+  .sheetstyle-font .search-select-trigger { min-width: 9.5rem; justify-content: space-between; }
+  .sheetstyle-font .search-select-value { font-size: .9rem; }
   /* Round 29: once a column is HELD the primary button becomes the copy
      affordance (glyph + "Ready to copy") and two quiet controls join it --
      Open (inspect every line) and Rebuild (fetch the sheet again). The

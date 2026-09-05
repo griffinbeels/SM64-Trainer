@@ -391,14 +391,16 @@ column with no legend stamps nothing.
 
 The colours your pasted [[column export]] wears: the fill an emulator time
 wears, the fill a console time wears, the text colour, and the font family
-— one stored preference, edited in Settings under "Sheet column colours"
-with a live preview of the two cells a paste produces. Each timed cell of the
-pasted column wears the fill of its [[platform stamp]]; an empty cell wears
-nothing. The defaults are a blue and an orange darker than Raisn's, white
-text, and Arial, and they are only a starting point.
+— one stored preference, tuned on the [[Rank tab]] beside the copy button:
+two legend cells reading EMU and N64 in their fills, three circle swatches,
+and a font dropdown that draws every name in its own face. The pasted column
+opens with those two legend cells (the sheet's own convention, in rows 2 and
+3), each timed cell wears the fill of its [[platform stamp]], and an empty
+cell wears nothing. The defaults are a blue and an orange darker than
+Raisn's, white text, and Trebuchet MS, and they are only a starting point.
 
 - **Lives** — the stored preference and its door (`src/sm64_events/server/scorecard_api.py`)
-  → the Settings inspector (`src/sm64_events/ui/components/sheetstyle.js`)
+  → the controls on the exports row (`src/sm64_events/ui/components/sheetstyle.js`)
   → the clipboard's HTML half (`src/sm64_events/ui/components/scorecard.js`)
 
 ### Strategy

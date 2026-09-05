@@ -218,7 +218,11 @@ def roundtrip(runner, rows, payload, scratch, link=0):
         if exported.status_code != 200:
             raise SystemExit(f"export for {runner!r} failed: {exported.text[:300]}")
         body = exported.json()
-        actual = body["lines"]
+        # Round 30: the column opens with the two legend cells (rows 2/3);
+        # they are not the runner's values, so they are compared apart.
+        legend = [(index + 2, cell["text"], cell["platform"])
+                  for index, cell in enumerate(body["cells"]) if cell.get("legend")]
+        actual = ["" if cell.get("legend") else cell["text"] for cell in body["cells"]]
         # The COLOUR round trip (round 29 item 2): a cell the runner's legend
         # stamped must come back with the same platform. Counted only over
         # rows whose value matched -- a value that did not round-trip has no
@@ -230,6 +234,7 @@ def roundtrip(runner, rows, payload, scratch, link=0):
                                     expected_column(rows, payload, runner), actual,
                                     strict=False))
                    if want is not None and want_text == got_text]
+        summary["legend"] = legend
         summary["platform_cells"] = len(stamped)
         summary["platform_mismatches"] = [(row, want, got) for row, want, got in stamped
                                           if want != got]
@@ -313,6 +318,8 @@ def report(runner, expected, actual, summary, labels, verbose):
           f"landed {summary.get('imported', '?'):>4}  "
           f"linked {summary.get('linked', 0):>3}  -> {verdict}")
     held = Counter(row.get("reason", "?") for row in (summary.get("held") or []))
+    if summary.get("legend"):
+        print(f"    legend rows: {summary['legend']}")
     stamped = summary.get("platform_cells", 0)
     if stamped:
         # The colour round trip, for a runner whose column carries a legend.

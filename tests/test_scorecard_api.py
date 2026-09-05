@@ -645,7 +645,10 @@ def test_the_column_lands_each_time_on_the_row_it_came_from(tmp_path, monkeypatc
         db.insert_pb(1, 0, "Big Bob-omb on the Summit", "igt", 1324, None,
                      "2026-08-24T00:00:00Z")
         payload = client.get("/api/scorecard/column").json()
-        assert payload["lines"][0] == ""                      # row 2, header
+        # Row 2 is column A's section header -- no runner cell there -- so
+        # the column opens with the legend's EMU cell (round 30 item 7); row
+        # 3 holds a DATA row, so the N64 legend cell yields to the time.
+        assert payload["lines"][0] == "EMU"
         assert payload["lines"][1] == sheet_time(display_cs(1324))   # row 3
         assert payload["lines"][2] == ""                      # row 4, unlinked
         assert payload["mapped"] == 1
@@ -1280,8 +1283,16 @@ def test_the_column_body_pairs_every_line_with_its_platform(tmp_path, monkeypatc
                      "2026-08-23T00:00:00Z")
         body = client.get("/api/scorecard/column").json()
         assert [cell["text"] for cell in body["cells"]] == body["lines"]
-        timed = [cell for cell in body["cells"] if cell["text"]]
+        # Round 30 item 7: the column OPENS with the legend -- on the live
+        # sheet worksheet rows 2 and 3 are a section header and a blank, so
+        # both cells land (tools/roundtrip_sheet.py shows them). This stub
+        # puts its TARGET on row 3, so the N64 cell yields to the time: a
+        # legend never prints over a data row.
+        assert body["cells"][0] == {"text": "EMU", "platform": "emu", "legend": True}
+        assert body["cells"][1]["text"] and "legend" not in body["cells"][1]
+        timed = [cell for cell in body["cells"] if cell["text"] and not cell.get("legend")]
         assert timed and all(cell["platform"] == "emu" for cell in timed), body["cells"]
+        assert body["mapped"] == len(timed), "the legend cells are not times"
         assert all(cell["platform"] is None for cell in body["cells"] if not cell["text"])
 
 

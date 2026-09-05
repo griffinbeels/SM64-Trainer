@@ -452,3 +452,27 @@ def test_a_cell_carries_the_platform_the_resolver_names():
     assert silent[0] == {"text": "", "platform": None}
     assert column_lines(rows, payload, lambda *a, **_: (4370, "emu")) == [
         cell["text"] for cell in stamped]
+
+
+def test_the_legend_opens_the_column_and_never_prints_over_a_time():
+    """Round 30 item 7: with `legend=True` the two platform cells land in
+    worksheet rows 2 and 3 (the live sheet's section header and blank), all
+    caps, marked -- and a data row sitting on either of those rows keeps its
+    time, because a legend must never print over one."""
+    from sm64_events.library.export_column import column_cells
+
+    payload = {"targets": [
+        {"entity_key": "star:1:0", "label": "Some Star",
+         "approaches": [{"name": "Approach A", "ids": ["1"]}],
+         "subsections": []}]}
+    rows_from_four = [_row(4, "Approach A", "approach", True, ids=("1",))]
+    cells = column_cells(rows_from_four, payload, lambda *a, **_: 4370, legend=True)
+    assert cells[:2] == [{"text": "EMU", "platform": "emu", "legend": True},
+                         {"text": "N64", "platform": "n64", "legend": True}]
+    assert cells[2] == {"text": "43.70", "platform": None}
+    assert column_lines(rows_from_four, payload, lambda *a, **_: 4370) == ["", "", "43.70"]
+
+    rows_from_three = [_row(3, "Approach A", "approach", True, ids=("1",))]
+    guarded = column_cells(rows_from_three, payload, lambda *a, **_: 4370, legend=True)
+    assert guarded == [{"text": "EMU", "platform": "emu", "legend": True},
+                       {"text": "43.70", "platform": None}]
