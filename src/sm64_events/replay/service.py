@@ -70,11 +70,17 @@ DISPLAY_LAG_FRAMES = 1
 #: 0: 66.8%, +1: 60.1% of 1076 slots; the A-button icon, templates learned
 #: under offset-0 labels so the test leaned AGAINST the answer, scored
 #: -1: 352 of 352 lit slots, 0: 311, +1: 272. Clip 6918 agreed (41 vs 129
-#: reader disagreements at -1 vs 0). Whether the picture IS the previous
-#: list (SM64 swaps the buffer it rendered the iteration before) or the
-#: ROM's input display draws the previous pad, the panel must show
-#: pad(stamp - 1); which of the two it is -- and so whether the frame
-#: label is also one off -- is the oracle clip's to say (round 33 item 3).
+#: reader disagreements at -1 vs 0). THE ORACLE THEN SETTLED WHY (his three
+#: clips with the HUD memory display of gGlobalTimer on, 7049/7090/7116):
+#: the frame number the game printed into each picture equals stamp - 1 on
+#: 780 of 781, 668 of 668 and 415 of 415 readable slots, 0 contradicted --
+#: the picture the layer grabs at the VI whose origin changed IS the list
+#: before the one it just stamped, because SM64 presents the buffer it
+#: rendered the iteration before (display_and_vsync swaps
+#: gFrameBuffers[sRenderedFramebuffer], then gGlobalTimer++). Not padding:
+#: the game's own one-frame display latency, and the sweep peaks at 0 on
+#: both channels under this constant (7116: 177 of 177 icons; 7049: 227 of
+#: 227). A picture's pad, IGT and Mario are therefore the PREVIOUS row's.
 PLUGIN_PICTURE_LAG = 1
 # How much of a clip the feed log must account for before its bookkeeping is
 # trusted over the pad reader's per-slot alignment (item 89). Measured on
