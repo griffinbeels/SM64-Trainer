@@ -270,6 +270,14 @@ class CaptureLayer:
                             "Plugin folder; re-install to restore it")
         elif state == NEEDS_RESTART:
             problems.append("restart Project64 to load the capture layer")
+        if header is not None and not gl_context and getattr(header, "dropped", 0):
+            # The layer is presenting but found no GL context on the
+            # emulation thread when a frame was wanted -- the wrapped
+            # plugin's threaded-video option moves the context to its own
+            # thread (review finding 8).
+            problems.append("the graphics plugin has no OpenGL context on the emulation "
+                            "thread (threaded video?); turn threaded video off in its "
+                            "settings so frames can be read")
 
         return LayerStatus(
             pj64_dir=str(pj64_dir) if pj64_dir is not None else None,

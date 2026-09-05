@@ -72,7 +72,7 @@ def test_a_slot_overwritten_before_the_reader_looked_counts_as_skipped(stream):
     for seed in range(F.SLOT_COUNT + 2):
         stream.publish(picture(2, 2, seed), [])
     slots, skipped = stream.read_new(0)
-    assert skipped == 2 and [slot.seq for slot in slots] == [3, 4, 5]
+    assert skipped == 2 and [slot.seq for slot in slots] == list(range(3, F.SLOT_COUNT + 3))
 
 
 def test_set_table_lands_in_the_header_count_last(stream):
@@ -107,3 +107,18 @@ def test_two_handles_on_one_name_share_the_memory(stream):
         assert other.alive_since(0) is True
     finally:
         other.close()
+
+
+def test_a_recreated_mapping_does_not_strand_a_reader_holding_a_high_seq(stream):
+    """Review finding 12: the plugin restarts on a fresh mapping at seq 1
+    while the reader remembers seq 40; the reader must follow it."""
+    stream.publish(picture(2, 2, 1), [])
+    slots, skipped = stream.read_new(40)
+    assert [slot.seq for slot in slots] == [1] and skipped == 0
+
+
+def test_the_event_handle_is_pointer_sized_and_checked(stream):
+    assert stream._event is not None and stream._event != 0
+    assert stream.plugin_process_alive() is False       # no plugin wrote a pid
+    stream.set_plugin_fields(F.STATUS_INITIATED, plugin_pid=os.getpid())
+    assert stream.plugin_process_alive() is True         # this process

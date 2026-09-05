@@ -96,7 +96,12 @@ class FrameStamp:
 
     def extras(self) -> dict:
         """The ledger row's fields (JSON-able)."""
-        out = {"exact": True, "vi_origin": self.vi_origin,
+        # ONE display list between this present and the last is the case
+        # the stamp is exact for: the picture is that list's. Zero (the same
+        # buffer presented again) or two-plus (a second list before the VI)
+        # leaves which list the pixels came from an inference, and the row
+        # says so instead of claiming exactness (review finding 9).
+        out = {"exact": self.lists_since == 1, "vi_origin": self.vi_origin,
                "lists_since": self.lists_since}
         if self.igt_overall is not None:
             out["igt_overall"] = self.igt_overall
@@ -213,9 +218,12 @@ class PluginVideoSource:
                 self._stream.touch()
                 self._stream.set_want_frames(not self._idle_check())
                 alive = self._stream.header().alive
-                if alive == last_alive and self._stream.header().initiated is False:
-                    # The plugin closed (ROM closed / PJ64 exited): hand the
-                    # recorder back to its attach loop, like a lost window.
+                if alive == last_alive and (self._stream.header().initiated is False
+                                            or not self._stream.plugin_process_alive()):
+                    # The plugin closed (ROM closed, PJ64 exited) or its
+                    # process died with the header's bits still set: hand
+                    # the recorder back to its attach loop, like a lost
+                    # window.
                     log.info("capture layer stopped presenting; source ends")
                     break
                 last_alive = alive

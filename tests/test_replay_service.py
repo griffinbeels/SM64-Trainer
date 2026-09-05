@@ -1088,3 +1088,33 @@ def test_a_clip_with_one_inexact_row_takes_the_old_path(tmp_path):
     svc.map_aligner = lambda *a, **k: aligned.append(a) or None
     res = svc.view(42)
     assert res["frame_map_source"] == "ledger" and aligned
+
+
+def test_a_few_inexact_rows_keep_the_plugin_map_but_say_so(tmp_path):
+    """Review finding 9: a present that saw two display lists is marked
+    inexact; one such row in a hundred keeps the rows as the map and the
+    sidecar says the map is inferred there. Many such rows do not."""
+    class MostlyExact(ExactLedger):
+        def __init__(self, count, inexact_every):
+            super().__init__(count)
+            self.inexact_every = inexact_every
+        def rows_between(self, t0, t1):
+            rows = super().rows_between(t0, t1)
+            for index, row in enumerate(rows):
+                if index % self.inexact_every == 0:
+                    row["exact"] = False
+            return rows
+
+    svc = make_service(tmp_path, [attempt()])
+    svc.recorder.ledger = MostlyExact(count=200, inexact_every=200)   # 1 of 200
+    svc.ledger_mapper = lambda clip, rows, *a, **k: [row["frame"] for row in rows]
+    svc.map_aligner = lambda *a, **k: (_ for _ in ()).throw(AssertionError("aligner ran"))
+    res = svc.view(42)
+    assert res["frame_map_source"] == "plugin" and res["frame_map_inferred"] is True
+    svc = make_service(tmp_path / "many", [attempt()])
+    svc.recorder.ledger = MostlyExact(count=200, inexact_every=10)    # 20 of 200
+    svc.ledger_mapper = lambda clip, rows, *a, **k: [row["frame"] for row in rows]
+    aligned = []
+    svc.map_aligner = lambda *a, **k: aligned.append(1) or None
+    res = svc.view(42)
+    assert res["frame_map_source"] != "plugin" and aligned

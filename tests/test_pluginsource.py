@@ -117,3 +117,15 @@ def test_idle_turns_the_frames_off(layout, stream):
     source.start(lambda *args: None, lambda: None)
     assert stream.header().want_frames == 0
     source.stop()
+
+
+def test_a_present_with_two_lists_or_none_is_not_called_exact(layout):
+    table = P.table_for(layout)
+    memory = rdram_with(layout, frame=77)
+    def slot_with(lists_since):
+        return F.Slot(seq=1, list_qpc=1, present_qpc=2, vi_origin=1, width=1, height=1,
+                      stride=4, lists_since=lists_since, table=tuple(raw_table(memory, table)),
+                      pixels=np.zeros((1, 1, 3), dtype=np.uint8))
+    assert P.decode_stamp(slot_with(1), table, layout).extras()["exact"] is True
+    assert P.decode_stamp(slot_with(2), table, layout).extras()["exact"] is False
+    assert P.decode_stamp(slot_with(0), table, layout).extras()["exact"] is False

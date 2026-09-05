@@ -179,6 +179,10 @@ static void open_stream(void) {
 }
 
 static void close_stream(void) {
+    /* Leaving: say so in the header, so a reader does not wait on a
+     * plugin that unloaded (or a process that died with this DLL's
+     * detach still running) as if it were merely quiet. */
+    if (g_hdr) g_hdr->status &= ~(uint32_t)(STATUS_INITIATED | STATUS_ROM_OPEN | STATUS_GL_CONTEXT);
     if (g_hdr) UnmapViewOfFile(g_hdr);
     if (g_map) CloseHandle(g_map);
     if (g_event) CloseHandle(g_event);
@@ -379,7 +383,10 @@ EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
     g_gl_entry_points_looked_up = FALSE;      /* a new context: look them up again */
     open_stream();
     if (g_hdr) {
-        g_hdr->status |= STATUS_INITIATED;
+        /* A fresh attach starts from a clean status: bits a crashed
+         * previous session left behind must not read as this one's. */
+        g_hdr->status = (g_wrapped_module ? STATUS_WRAPPED_LOADED : 0) | STATUS_INITIATED;
+        g_hdr->dropped = 0;
         if (g_wrapped.GetDllInfo) {
             PLUGIN_INFO wrapped_info;
             memset(&wrapped_info, 0, sizeof wrapped_info);

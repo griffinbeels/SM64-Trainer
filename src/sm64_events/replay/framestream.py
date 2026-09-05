@@ -53,7 +53,7 @@ MAGIC = b"SM64GFX1"
 VERSION = 1
 
 HEADER_BYTES = 4096
-SLOT_COUNT = 3
+SLOT_COUNT = 6                           # ~200 ms of pictures at 30/s; only touched pages cost memory
 MAX_WIDTH = 3840
 MAX_HEIGHT = 2160
 BYTES_PER_PIXEL = 3
@@ -149,7 +149,19 @@ class FrameStream:
             raise RuntimeError(f"frame stream {name}: version {self._u32(H_VERSION)}, "
                                f"this build speaks {VERSION}")
         kernel32 = ctypes.windll.kernel32
+        # HANDLEs are pointer-sized: without restype/argtypes ctypes would
+        # squeeze them through a C int (fresh-context review, 2026-09-05).
+        kernel32.CreateEventW.restype = ctypes.c_void_p
+        kernel32.CreateEventW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                                          ctypes.c_wchar_p]
+        kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+        kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        kernel32.SetEvent.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
         self._event = kernel32.CreateEventW(None, False, False, name + "_frame")
+        if not self._event:
+            self._map.close()
+            raise OSError(ctypes.get_last_error(), f"frame stream {name}: no event")
         self._wait_for = kernel32.WaitForSingleObject
         self._set_event = kernel32.SetEvent
         self._close_handle = kernel32.CloseHandle
@@ -225,6 +237,25 @@ class FrameStream:
     def alive_since(self, previous_alive: int) -> bool:
         return self._u32(H_ALIVE) != previous_alive
 
+    def plugin_process_alive(self) -> bool:
+        """Is the process that wrote `plugin_pid` still running? A crash
+        leaves the header's bits behind; the process is the truth."""
+        pid = self._u32(H_PLUGIN_PID)
+        if not pid:
+            return False
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+        # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION: waiting on the
+        # handle needs the first, and nothing here needs more than the second
+        handle = kernel32.OpenProcess(0x100000 | 0x1000, False, pid)
+        if not handle:
+            return False
+        try:
+            return self._wait_for(handle, 0) == 0x102             # WAIT_TIMEOUT: still running
+        finally:
+            self._close_handle(handle)
+
     # -- the slots ---------------------------------------------------------
     def wait(self, timeout_s: float) -> bool:
         """True when the plugin signalled a new slot within the timeout."""
@@ -234,6 +265,11 @@ class FrameStream:
         """Every slot with seq in (after_seq, write_seq], oldest first, and
         the number skipped as torn or already overwritten."""
         write_seq = self._u32(H_WRITE_SEQ)
+        if write_seq < after_seq:
+            # The plugin restarted on a recreated mapping (seq back to 1):
+            # follow it rather than wait forever for a seq it will never
+            # reach again.
+            after_seq = 0
         slots, skipped = [], 0
         first = max(after_seq + 1, write_seq - SLOT_COUNT + 1)
         skipped += max(0, first - (after_seq + 1))     # overwritten before we looked

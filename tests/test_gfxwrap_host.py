@@ -85,7 +85,8 @@ def check_drive(host: Path, wrapper: Path):
         header = stream.header()
         assert header.initiated is False           # CloseDLL cleared it
         assert header.status & F.STATUS_WRAPPED_LOADED
-        assert header.status & F.STATUS_GL_CONTEXT
+        # GL_CONTEXT is cleared at detach with INITIATED (a reader must not
+        # wait on a gone plugin); the five captured slots prove it was there
         assert header.wrapped_name == "fake_gfx.dll"
         assert header.wrapped_version == 0x0103
         assert header.plugin_version == F.LAYOUT["GFXWRAP_VERSION"] if "GFXWRAP_VERSION" in F.LAYOUT else True
@@ -94,8 +95,8 @@ def check_drive(host: Path, wrapper: Path):
         assert header.write_seq == 5               # ...and one capture per origin change
         assert header.dropped == 0
         slots, skipped = stream.read_new(0)
-        assert skipped == 2                         # a 3-slot ring: seqs 1-2 overwritten
-        assert [slot.seq for slot in slots] == [3, 4, 5]
+        assert skipped == 0                         # six slots hold all five
+        assert [slot.seq for slot in slots] == [1, 2, 3, 4, 5]
         for slot in slots:
             frame = slot.seq - 1
             assert slot.table[0] == (1000 + frame).to_bytes(4, "little")

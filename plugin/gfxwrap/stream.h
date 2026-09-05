@@ -14,7 +14,7 @@
 #define STREAM_VERSION 1
 
 #define HEADER_BYTES 4096
-#define SLOT_COUNT 3
+#define SLOT_COUNT 6
 #define MAX_WIDTH 3840
 #define MAX_HEIGHT 2160
 #define BYTES_PER_PIXEL 3

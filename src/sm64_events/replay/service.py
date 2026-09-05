@@ -633,13 +633,23 @@ class ReplayService:
         log.info("frame map held to one answer per picture: %d slots moved",
                  moved)
 
-    @staticmethod
-    def _rows_are_exact(meta: dict) -> bool:
-        """A clip recorded through the capture layer (item 95): every ledger
-        row carries `exact`, the frame the plugin read inside Project64 at
-        the display list that drew that picture."""
+    #: the share of a capture-layer clip's rows that must be exact for the
+    #: rows to be the map; a row whose present saw zero or two display lists
+    #: is marked inexact by the plugin source, and a few such rows (a lag
+    #: frame) do not hand the whole clip back to inference
+    PLUGIN_EXACT_SHARE = 0.98
+
+    @classmethod
+    def _rows_are_exact(cls, meta: dict) -> bool:
+        """A clip recorded through the capture layer (item 95): its ledger
+        rows carry `exact` -- the frame the plugin read inside Project64 at
+        the one display list that drew that picture -- on all but a handful."""
         rows = meta.get("picture_ledger") or []
-        return bool(rows) and all(row.get("exact") for row in rows)
+        stamped = [row for row in rows if "exact" in row]
+        if not rows or len(stamped) != len(rows):
+            return False
+        exact = sum(1 for row in stamped if row["exact"])
+        return exact >= cls.PLUGIN_EXACT_SHARE * len(rows)
 
     def _take_the_stamps(self, meta: dict, clip: Path, attempt) -> None:
         """The map IS the rows: nothing is aligned, joined or read into
@@ -647,10 +657,13 @@ class ReplayService:
         alignment stand down; the pad reader still AUDITS (his 100% test,
         3 s a clip) and the stamp's own pad is checked against the input
         track -- a per-picture agreement with no pixels in it."""
+        rows = meta.get("picture_ledger") or []
+        inexact = sum(1 for row in rows if not row.get("exact"))
         meta["frame_map_base_source"] = meta.get("frame_map_source")
         meta["frame_map_source"] = "plugin"
         meta["frame_map_mode"] = "plugin"
-        meta["frame_map_inferred"] = False
+        meta["frame_map_inferred"] = inexact > 0
+        meta["plugin_inexact_rows"] = inexact
         meta.pop("_clock_pairs", None)
         self._read_the_display(meta, clip, attempt, audit_only=True)
         self._audit_pad_stamps(meta, attempt)
