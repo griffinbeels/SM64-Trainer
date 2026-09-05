@@ -102,6 +102,12 @@ class LayerStatus:
     #: read), "readscreen" (the wrapped plugin's own ReadScreen -- his
     #: GLideN64 renders on a thread of its own), None while none has
     pictures_via: str | None = None
+    #: THE EXACT STEPS from here to a live layer, in order, each
+    #: {id, label, done, action}: the setup screen renders these as its
+    #: checklist and ticks them live. His rule (2026-09-05): "onboarding is
+    #: the exact set of steps the user needs to follow to set everything up
+    #: PERFECTLY" -- including close Project64, wait, start it again.
+    steps: list = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -314,7 +320,10 @@ class CaptureLayer:
                             "capture until this is fixed")
         if state in (ACTIVE, NEEDS_RESTART) and wrapper_present and not wrapper_current:
             problems.append("this build carries a newer capture layer; "
-                            + ("close Project64, then Update" if running else "Update to install it"))
+                            + ("close Project64 and the trainer updates it by itself"
+                               if running else "Update to install it"))
+        steps = self._steps(state, running, wrapper_present and not wrapper_current,
+                            layer_alive)
 
         return LayerStatus(
             pj64_dir=str(pj64_dir) if pj64_dir is not None else None,
@@ -327,6 +336,7 @@ class CaptureLayer:
             layer_alive=layer_alive,
             gl_context=gl_context,
             pictures_via=pictures_via,
+            steps=steps,
             consented_at=consented_at,
             problems=problems,
             state=state,
@@ -371,6 +381,36 @@ class CaptureLayer:
 
         return self.status()
 
+    @staticmethod
+    def _steps(state: str, running: bool, stale: bool, layer_alive: bool) -> list:
+        """The ordered steps from this state to a live layer. Every step is
+        a thing HE does (close, click, start) or a thing the trainer does
+        by itself that he can watch tick; a state with nothing left to do
+        has no steps."""
+        close = {"id": "close", "label": "Close Project64", "done": not running,
+                 "action": None}
+        start = {"id": "start", "label": "Start Project64 and open the Usamune ROM",
+                 "done": layer_alive, "action": None}
+        if state == NOT_INSTALLED:
+            return [close,
+                    {"id": "install", "label": "Install the capture layer",
+                     "done": False, "action": "install"},
+                    start]
+        if state == REGRESSED:
+            return [close,
+                    {"id": "install", "label": "Re-install the capture layer",
+                     "done": False, "action": "install"},
+                    start]
+        if stale:
+            return [dict(close, label="Close Project64 -- the trainer then updates "
+                                      "the capture layer by itself"),
+                    {"id": "update", "label": "Capture layer updated", "done": False,
+                     "action": None},
+                    start]
+        if state == NEEDS_RESTART:
+            return ([close, start] if running else [start])
+        return []
+
     def refresh_if_stale(self) -> bool:
         """Copy this build's DLL over an installed older one while Project64
         is closed. True when a copy happened; False when nothing was
@@ -392,12 +432,12 @@ class CaptureLayer:
         shutil.copyfile(self._dll_source, dll_path)
         return True
 
-    def refresh_loop(self, stop, interval_s: float = 10.0, log=None) -> None:
+    def refresh_loop(self, stop, interval_s: float = 2.0, log=None) -> None:
         """`refresh_if_stale` every `interval_s` until `stop` is set -- so a
-        newer build's layer lands whenever Project64 happens to be closed,
-        not only at the trainer's boot. His rule (2026-09-05): "order
-        shouldn't matter... Open the game first, or open the tool first,
-        who cares."""
+        newer build's layer lands within a breath of Project64 closing, and
+        the setup screen's "updated" step ticks while he watches. His rule
+        (2026-09-05): "order shouldn't matter... Open the game first, or
+        open the tool first, who cares."""
         while not stop.wait(interval_s):
             try:
                 if self.refresh_if_stale() and log is not None:

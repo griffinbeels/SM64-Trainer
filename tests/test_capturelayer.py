@@ -309,6 +309,47 @@ def test_the_refresh_loop_keeps_trying_until_stopped(pj64_dir, dll_source, setti
     assert not thread.is_alive()
 
 
+def test_the_steps_are_the_exact_path_from_each_state_to_a_live_layer(pj64_dir, dll_source, settings_path):
+    """His rule: onboarding is the exact set of steps, close/wait/start
+    included. Never installed with PJ64 open: close, install, start. A
+    newer build with PJ64 open: close (then the trainer updates), updated,
+    start -- and closing PJ64 ticks the first step by itself."""
+    layer, _registry, processes = make_layer(
+        pj64_dir, dll_source, settings_path, image_path=str(pj64_dir / "Project64.exe"))
+    ids = lambda status: [(s["id"], s["done"], s["action"]) for s in status.steps]
+    assert ids(layer.status()) == [("close", False, None), ("install", False, "install"),
+                                   ("start", False, None)]
+    processes.image_path = None
+    assert ids(layer.status())[0] == ("close", True, None)
+    layer.install(consent=True)
+    assert ids(layer.status()) == [("start", False, None)]          # needs_restart, PJ64 closed
+    processes.image_path = str(pj64_dir / "Project64.exe")
+    dll_source.write_bytes(b"a newer capture layer")
+    header = FakeHeader(status=2)
+    processes2 = FakeProcesses(str(pj64_dir / "Project64.exe"))
+    layer2 = CaptureLayer(_registry, processes2, settings_path, dll_source,
+                          stream_header=lambda: header)      # the consent already given stands
+    layer2.status()
+    header.alive += 1
+    stale = layer2.status()
+    assert stale.state == ACTIVE and stale.wrapper_current is False
+    assert [s["id"] for s in stale.steps] == ["close", "update", "start"]
+    assert stale.steps[0]["done"] is False and "updates the capture layer" in stale.steps[0]["label"]
+    processes2.image_path = None
+    header.alive += 1
+    assert layer2.status().steps[0]["done"] is True
+    assert layer2.refresh_if_stale() is True
+    header.alive += 1
+    after = layer2.status()
+    assert after.wrapper_current is True
+
+
+def test_an_active_current_layer_has_no_steps_left(pj64_dir, dll_source, settings_path):
+    header = FakeHeader(status=2)
+    layer, _registry, _processes = _installed_and_alive(pj64_dir, dll_source, settings_path, header)
+    assert layer.status().steps == []
+
+
 def test_refresh_does_nothing_for_a_user_who_never_consented(pj64_dir, dll_source, settings_path):
     layer, _registry, _processes = make_layer(pj64_dir, dll_source, settings_path)
     (pj64_dir / "Plugin" / WRAPPER_DLL).write_bytes(b"someone else's file")

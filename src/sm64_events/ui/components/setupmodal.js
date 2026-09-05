@@ -36,7 +36,6 @@ function ConsentCard({ emu, installing, installError, onInstall }) {
   const pluginDir = emu.pj64_dir ? `${emu.pj64_dir}\\Plugin` : "the Plugin folder";
   const blockingReason = (emu.problems || [])[0] || null;
   const reason = installError || blockingReason;
-  const disabled = installing || !!blockingReason;
   return html`<div class="setup-consent-card">
     <p>Installing writes three things:</p>
     <ul class="setup-writes">
@@ -50,12 +49,32 @@ function ConsentCard({ emu, installing, installError, onInstall }) {
     <p>Your recording's frames become game frames, so the input timeline is
       exact on every frame instead of estimated. Remove it any time from this
       row; Project64 must be closed to install or remove.</p>
-    <button type="button" class="primary-button" disabled=${disabled}
-        onclick=${onInstall}>
-      ${installing ? "Installing…" : "Install the capture layer"}
-    </button>
     ${reason && html`<p class="setup-disabled-reason">${reason}</p>`}
   </div>`;
+}
+
+// THE EXACT STEPS, as the server orders them (core/capturelayer.py::_steps),
+// ticked live by the modal's poll: close Project64 -> install / the trainer
+// updates -> start Project64. A step that carries an action gets its button
+// here, enabled once the steps before it are done.
+function StepList({ steps, installing, onInstall }) {
+  if (!steps || !steps.length) return null;
+  let blocked = false;
+  return html`<ol class="setup-steps">
+    ${steps.map((step) => {
+      const enabled = !blocked && !step.done;
+      const row = html`<li key=${step.id}
+          class=${`setup-step ${step.done ? "is-done" : ""} ${enabled ? "is-next" : ""}`}>
+        <span class="setup-tick" aria-hidden="true">${step.done ? "✓" : "○"}</span>
+        <span class="setup-tick-label">${step.label}</span>
+        ${step.action === "install" && !step.done && html`<button type="button"
+            class="primary-button" disabled=${installing || !enabled}
+            onclick=${onInstall}>${installing ? "Installing…" : step.label}</button>`}
+      </li>`;
+      if (!step.done) blocked = true;
+      return row;
+    })}
+  </ol>`;
 }
 
 function CaptureLayerRow({ setup, refresh }) {
@@ -88,6 +107,8 @@ function CaptureLayerRow({ setup, refresh }) {
   const stale = emu.wrapper_current === false;
   const problemLines = problems.map((problem) =>
     html`<p class="setup-row-detail setup-row-problem">${problem}</p>`);
+  const stepList = html`<${StepList} steps=${emu.steps} installing=${installing}
+      onInstall=${install} />`;
   const updateButton = stale && html`<button type="button" class="primary-button"
       disabled=${installing} onclick=${install}>${installing ? "Updating…" : "Update"}</button>`;
   if (emu.state === "active") {
@@ -98,13 +119,15 @@ function CaptureLayerRow({ setup, refresh }) {
         ${updateButton}
         <button type="button" onclick=${remove}>Remove</button>
       </div>
+      ${stepList}
       ${problemLines}
       ${installError && html`<p class="setup-disabled-reason">${installError}</p>`}
     <//>`;
   }
   if (emu.state === "needs_restart") {
     return html`<${ChecklistRow} status="warn" title="Frame-exact capture">
-      <p class="setup-row-detail">Installed. Restart Project64 to load it.</p>
+      <p class="setup-row-detail">Installed. Project64 has not loaded it yet.</p>
+      ${stepList}
       ${problemLines.slice(1)}
       ${updateButton}
       <button type="button" onclick=${remove}>Remove</button>
@@ -115,8 +138,8 @@ function CaptureLayerRow({ setup, refresh }) {
     return html`<${ChecklistRow} status="warn" title="Frame-exact capture">
       <p class="setup-row-detail">${(emu.problems || [])[0]
         || "Project64 now names a different plugin."}</p>
-      <button type="button" class="primary-button" disabled=${installing}
-          onclick=${install}>${installing ? "Installing…" : "Re-install"}</button>
+      ${stepList}
+      ${installError && html`<p class="setup-disabled-reason">${installError}</p>`}
     <//>`;
   }
   if (emu.state === "unavailable") {
@@ -126,6 +149,7 @@ function CaptureLayerRow({ setup, refresh }) {
     <//>`;
   }
   return html`<${ChecklistRow} status="todo" title="Frame-exact capture">
+    ${stepList}
     <${ConsentCard} emu=${emu} installing=${installing}
         installError=${installError} onInstall=${install} />
   <//>`;

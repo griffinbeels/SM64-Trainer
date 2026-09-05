@@ -4775,6 +4775,12 @@
   .setup-active-line button { margin-left: .5rem; }
   .setup-active-line button:first-of-type { margin-left: auto; }
   .setup-row-problem { color: #e0c48a; }
+  .setup-steps { list-style: none; margin: .5rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .35rem; }
+  .setup-step { display: flex; align-items: center; gap: .55rem; font-size: .85rem; color: var(--muted); }
+  .setup-step.is-next { color: var(--text); }
+  .setup-step.is-done { color: #59d98e; }
+  .setup-tick { width: 1.1rem; text-align: center; flex: 0 0 auto; }
+  .setup-step .primary-button { margin-left: auto; }
   .setup-n64-note { color: var(--muted); margin: 0; }
   @media (prefers-reduced-motion: no-preference) {
     .setup-row-body, .setup-disabled-reason, .setup-active-line,

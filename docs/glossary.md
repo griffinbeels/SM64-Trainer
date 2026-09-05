@@ -819,10 +819,14 @@ address to play.
 The modal that asks which platform you practice on -- Emulator or N64 -- and
 then shows that platform's checklist, each row a door to its own fix. The
 Emulator rows are Project64 (found, or how to let the trainer find it), the
-Usamune ROM, and the [[capture layer]]'s consent card: what the install
-writes, why, and the undo. It opens on its own once each time you open the app while the trainer
-detects an emulator and you have not consented to the layer, and again from
-the header any time. N64's rows arrive with console support.
+Usamune ROM, and the [[capture layer]]'s row: the exact ordered steps from
+where you are to a live layer -- close Project64, install (or the trainer
+updates the layer by itself), start Project64 -- each ticking as you do it,
+with the consent card saying what the install writes, why, and the undo. It
+opens on its own once each time you open the app while the trainer detects
+an emulator and you have not consented to the layer, or this build carries
+a newer layer than the one installed, and again from the header any time.
+N64's rows arrive with console support.
 
 - **Lives** -- `src/sm64_events/ui/components/setupmodal.js`; its API is
   `src/sm64_events/server/setup_api.py`

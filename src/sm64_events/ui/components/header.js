@@ -43,7 +43,11 @@ function rememberSetupPrompt() {
 function shouldOfferSetup(setup) {
   if (!setup || setup.platform === "n64") return false;
   const emu = setup.emu;
-  return !!emu && (emu.state === "not_installed" || emu.state === "regressed");
+  if (!emu) return false;
+  // ...and for a layer this build has outgrown: the steps to update it are
+  // the onboarding, so the screen carries them the moment the page opens.
+  const stale = !!emu.consented_at && emu.wrapper_present && emu.wrapper_current === false;
+  return emu.state === "not_installed" || emu.state === "regressed" || stale;
 }
 
 const CLOCK_OPTIONS = [["igt", "Usamune IGT"], ["rta", "Anchor → grab"]];

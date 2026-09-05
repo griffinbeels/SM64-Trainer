@@ -65,16 +65,25 @@ def test_the_consent_card_names_the_dll_the_setting_and_the_wrapped_plugin():
 
 
 def test_the_install_button_carries_its_disabled_reason():
+    """The Install button lives on its STEP now, and stays disabled until
+    the step before it (close Project64) is ticked; the reason still
+    prints on the consent card."""
+    steps = [{"id": "close", "label": "Close Project64", "done": False, "action": None},
+             {"id": "install", "label": "Install the capture layer", "done": False,
+              "action": "install"},
+             {"id": "start", "label": "Start Project64 and open the Usamune ROM", "done": False,
+              "action": None}]
     with serve_ui(capture_layer_status={
             "state": "not_installed", "pj64_dir": LONG_PJ64_DIR,
-            "pj64_running": True,
+            "pj64_running": True, "steps": steps,
             "problems": ["close Project64 before installing"]}) as url, \
             get_driver().launch() as page:
         page.goto(url + "/ui/index.html")
         page.wait_ms(1500)
         _open_setup(page)
         assert page.evaluate(
-            "document.querySelector('.setup-consent-card button').disabled") is True
+            "document.querySelector('.setup-steps button').disabled") is True
+        assert page.count(".setup-consent-card button") == 0
         reason = page.evaluate(
             "document.querySelector('.setup-disabled-reason').textContent")
         assert "close Project64 before installing" in reason
@@ -120,6 +129,55 @@ def test_an_active_layer_with_a_problem_shows_it_on_the_row_and_offers_update():
         buttons = page.evaluate(
             "Array.from(document.querySelectorAll('.setup-active-line button')).map(b => b.textContent.trim())")
         assert buttons == ["Update", "Remove"]
+
+
+def test_the_steps_render_in_order_with_live_ticks_and_the_screen_opens_for_a_stale_layer():
+    """His rule (2026-09-05): onboarding is the exact set of steps. A newer
+    build's layer with Project64 open: the row lists close / updated /
+    start, the first unticked step is the one to do, and the screen opens
+    by itself on load because those steps ARE the onboarding."""
+    steps = [{"id": "close", "label": "Close Project64 -- the trainer then updates the capture layer by itself",
+              "done": False, "action": None},
+             {"id": "update", "label": "Capture layer updated", "done": False, "action": None},
+             {"id": "start", "label": "Start Project64 and open the Usamune ROM", "done": False,
+              "action": None}]
+    with serve_ui(capture_layer_status={
+            "state": "active", "pj64_dir": LONG_PJ64_DIR, "wrapper_current": False,
+            "problems": ["this build carries a newer capture layer; close Project64, then Update"],
+            "steps": steps}) as url, \
+            get_driver().launch() as page:
+        page.goto(url + "/ui/index.html")
+        page.wait_for(".setup-platform-picks")          # opened by itself
+        labels = page.evaluate(
+            "Array.from(document.querySelectorAll('.setup-tick-label')).map(e => e.textContent)")
+        assert [label.split(" ")[0] for label in labels] == ["Close", "Capture", "Start"]
+        marks = page.evaluate(
+            "Array.from(document.querySelectorAll('.setup-tick')).map(e => e.textContent)")
+        assert marks == ["○", "○", "○"]
+        assert page.count(".setup-step.is-next") == 1
+
+
+def test_a_first_install_puts_the_install_button_on_its_step_after_close(tmp_path):
+    steps = [{"id": "close", "label": "Close Project64", "done": True, "action": None},
+             {"id": "install", "label": "Install the capture layer", "done": False,
+              "action": "install"},
+             {"id": "start", "label": "Start Project64 and open the Usamune ROM", "done": False,
+              "action": None}]
+    with serve_ui(capture_layer_status={
+            "state": "not_installed", "pj64_dir": LONG_PJ64_DIR, "consented_at": None,
+            "wrapper_present": False, "wrapper_current": False, "wrapper_selected": False,
+            "registry_graphics_dll": WRAPPED_PLUGIN, "layer_alive": False, "gl_context": False,
+            "pj64_running": False, "problems": [], "steps": steps}) as url, \
+            get_driver().launch() as page:
+        page.goto(url + "/ui/index.html")
+        page.wait_for(".setup-platform-picks")
+        marks = page.evaluate(
+            "Array.from(document.querySelectorAll('.setup-tick')).map(e => e.textContent)")
+        assert marks == ["✓", "○", "○"]
+        button = page.evaluate(
+            "(() => { const b = document.querySelector('.setup-step.is-next button'); return b && [b.textContent.trim(), b.disabled]; })()")
+        assert button == ["Install the capture layer", False]
+        assert page.count(".setup-consent-card button") == 0
 
 
 def test_the_screen_opens_by_itself_for_a_user_who_never_set_up_even_before_project64_is_seen():

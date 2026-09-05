@@ -241,10 +241,26 @@ def _distances(box: np.ndarray, table: dict) -> tuple[list, np.ndarray]:
     for glyph in names:
         variants = [table[key] for key in table if key.split("~")[0] == glyph]
         stack = np.stack([
-            (np.abs(box - t.median).mean(axis=-1) * t.weight).sum(axis=(1, 2))
+            (np.abs(box - _fit(t.median, box.shape[1:3])).mean(axis=-1)
+             * _fit(t.weight, box.shape[1:3])).sum(axis=(1, 2))
             / max(float(t.weight.sum()), 1.0) for t in variants], axis=1)
         columns.append(stack.min(axis=1))
     return names, np.stack(columns, axis=1)
+
+
+def _fit(template: np.ndarray, shape: tuple) -> np.ndarray:
+    """A template resampled (nearest) to the clip's own box shape. The
+    reference alphabet was learned at one window size; a clip recorded at
+    another cuts narrower or wider boxes (7141: 43x26 against 43x34 learned)
+    and the read used to fail on the shape mismatch instead of reading."""
+    height, width = int(shape[0]), int(shape[1])
+    if template.shape[0] == height and template.shape[1] == width:
+        return template
+    rows = np.clip(np.round(np.linspace(0, template.shape[0] - 1, height)).astype(int),
+                   0, template.shape[0] - 1)
+    cols = np.clip(np.round(np.linspace(0, template.shape[1] - 1, width)).astype(int),
+                   0, template.shape[1] - 1)
+    return template[rows][:, cols]
 
 
 # The counter is printed PROPORTIONALLY: a box's exact column depends on the
