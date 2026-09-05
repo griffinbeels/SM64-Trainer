@@ -237,9 +237,13 @@ static void release_wrapped(void) {
 /* How much of RDRAM is really there. GFX_INFO carries no size, and the
  * tracker's claim (8 MB, the expansion pak) can exceed a 4 MB configuration;
  * a copy past the allocation would take the emulator down mid-run. So the
- * committed span from RDRAM's base is measured once, and every copy runs
- * under a structured-exception guard as well -- a bad page becomes a
- * dropped stamp, never a crash. */
+ * committed span from RDRAM's base is measured, and every copy runs under a
+ * structured-exception guard as well -- a bad page becomes a dropped stamp,
+ * never a crash. Measured at InitiateGFX, at RomOpen, and again whenever an
+ * entry sits past the span but inside the tracker's claim: his first three
+ * plugin clips (2026-09-05) carried no IGT at all, because the span was
+ * read once at InitiateGFX, before the ROM's expansion pak was committed,
+ * and `usamune_overall` (above 4 MB) was refused all session. */
 static size_t g_rdram_span;
 
 static void measure_rdram(void) {
@@ -326,7 +330,13 @@ static void stamp_pending(void) {
     g_pending.count = count;
     g_pending.list_qpc = qpc_now();
     size_t limit = g_hdr->rdram_bytes;
-    if (g_rdram_span && g_rdram_span < limit) limit = g_rdram_span;
+    if (g_rdram_span && g_rdram_span < limit) {
+        for (unsigned index = 0; index < count; index++) {
+            size_t end = (size_t)g_hdr->table[index].rdram_offset + g_hdr->table[index].length;
+            if (end > g_rdram_span && end <= limit) { measure_rdram(); break; }
+        }
+        if (g_rdram_span && g_rdram_span < limit) limit = g_rdram_span;
+    }
     for (unsigned index = 0; index < count; index++) {
         unsigned offset = g_hdr->table[index].rdram_offset;
         unsigned length = g_hdr->table[index].length;
@@ -632,6 +642,7 @@ EXPORT void CALL RomOpen(void) {
     HGLRC context_before = wglGetCurrentContext();
     if (g_wrapped.RomOpen) g_wrapped.RomOpen();
     note_context(&g_note_rom_open, context_before, wglGetCurrentContext());
+    measure_rdram();                          /* the expansion pak is committed by now */
     g_last_origin = 0xFFFFFFFFu;
     memset(&g_pending, 0, sizeof g_pending);
     if (g_hdr) g_hdr->status |= STATUS_ROM_OPEN;

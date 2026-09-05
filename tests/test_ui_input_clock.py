@@ -73,6 +73,20 @@ def run_function(name, expression: str):
 MARKERS = '[{"frame": 10, "label": "a"}, {"frame": 40, "label": "b"}]'
 
 
+def test_the_inspectors_clock_is_the_stamped_igt_when_the_slot_has_one():
+    """A capture-layer clip: the inspector shows the timer the game printed
+    in the picture on screen; a slot with no stamp, or no stamps at all,
+    counts from the track's first frame; the lead-in with nothing stamped
+    is the lead-in."""
+    stamped = run_function("inspectorClock", "inspectorClock(47, 0, [null, 45, 46], 2)")
+    assert stamped == {"frames": 46, "stamped": True}
+    counted = run_function("inspectorClock", "inspectorClock(47, 0, [null, 45, 46], 0)")
+    assert counted == {"frames": 47, "stamped": False}
+    assert run_function("inspectorClock", "inspectorClock(50, 3, null, 4)") == {"frames": 47, "stamped": False}
+    assert run_function("inspectorClock", "inspectorClock(1, 3, null, 0)") is None
+    assert run_function("inspectorClock", "inspectorClock(1, 3, [12], 0)") == {"frames": 12, "stamped": True}
+
+
 def test_the_inspector_reads_the_last_moment_at_or_before_the_frame():
     assert run_function("momentAt", f"momentAt({MARKERS}, 40)")["label"] == "b"
     assert run_function("momentAt", f"momentAt({MARKERS}, 39)")["label"] == "a"

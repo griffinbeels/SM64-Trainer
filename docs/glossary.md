@@ -550,7 +550,10 @@ track was doing on a [[frame]] and names nothing as the reason — you read
 the gap yourself. It opens inside an [[attempt]]'s own row, beside that
 [[attempt]]'s clip, and follows the clip's clock rather than keeping one.
 It draws the [[lead-in]] before its own [[frame]] 0, so what you did on the
-way in is visible without moving where the [[attempt]] starts.
+way in is visible without moving where the [[attempt]] starts. On a clip the
+[[capture layer]] recorded, the time it prints for a [[frame]] is the timer
+the game itself held when it drew the picture on screen; on any other clip
+it counts from the [[attempt]]'s first [[frame]].
 
 - **Lives** — the timeline component
   (`src/sm64_events/ui/components/inputtimeline.js`)

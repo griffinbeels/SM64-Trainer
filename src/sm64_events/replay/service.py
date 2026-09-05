@@ -440,6 +440,9 @@ class ReplayService:
                 "anchor_offset_s": self._anchor_offset(a, m),
                 "frame_map": m.get("frame_map"),
                 "frame_map_source": m.get("frame_map_source"),
+                # A capture-layer clip: the game's own timer per video
+                # slot, from the stamps (None where a slot has none).
+                "picture_igt": m.get("picture_igt"),
                 # The pad reader's verdict (sure / agree / nowhere /
                 # disagreements): how many pictures the game's own display
                 # confirmed the map on. None for a clip it could not read.
@@ -567,8 +570,18 @@ class ReplayService:
             feeds = ledger.feeds_between(start - 1.0, end + 1.0)
             if not rows or not feeds:
                 return
+            # A capture-layer clip's rows carry the frame the plugin read at
+            # the list that DREW the picture: no display lag applies, and an
+            # inexact row (two lists between presents) claims nothing. The
+            # first plugin clips (2026-09-05, 6918/6942/6986) went through
+            # the desktop lag and sat one frame behind their own stamps on
+            # every picture -- his "the time is always one frame later".
+            plugin_rows = bool(rows) and all("exact" in row for row in rows)
             built, repeats, stats = feed_map(
-                res.frame_times, start, rows, feeds, DISPLAY_LAG_FRAMES)
+                res.frame_times, start, rows, feeds,
+                0 if plugin_rows else DISPLAY_LAG_FRAMES,
+                row_value=((lambda row: row["frame"] if row.get("exact") else None)
+                           if plugin_rows else None))
             # The SAME feed-to-row join, projected onto the pair sampled
             # inside InputSampler's counter sandwich.
             clock_pairs, _clock_repeats, _clock_stats = feed_map(
@@ -664,7 +677,17 @@ class ReplayService:
         meta["frame_map_mode"] = "plugin"
         meta["frame_map_inferred"] = inexact > 0
         meta["plugin_inexact_rows"] = inexact
-        meta.pop("_clock_pairs", None)
+        # The game's own timer in each picture: the IGT the plugin copied at
+        # the list that drew it. The panel shows THIS as the frame's time,
+        # so it reads what the screen printed rather than counting from the
+        # track's first frame (the two clocks start a frame or two apart).
+        pairs = meta.pop("_clock_pairs", None)
+        if pairs is not None:
+            frame_map = meta.get("frame_map") or []
+            igts = [pair[1] if pair and index < len(frame_map) and frame_map[index] is not None
+                    else None
+                    for index, pair in enumerate(pairs)]
+            meta["picture_igt"] = igts if any(igt is not None for igt in igts) else None
         self._read_the_display(meta, clip, attempt, audit_only=True)
         self._audit_pad_stamps(meta, attempt)
 

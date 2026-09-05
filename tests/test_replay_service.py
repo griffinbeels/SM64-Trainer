@@ -1080,6 +1080,59 @@ def test_a_capture_layer_clip_takes_its_stamps_as_the_map_and_audits_the_pads(tm
     assert sidecar["picture_ledger"][0]["exact"] is True
 
 
+class FeedExactLedger(ExactLedger):
+    """A capture-layer ledger with the feed log the picture-feed path joins
+    on: one feed entry per row, written 4 ms after its present."""
+    def __init__(self, count, inexact_at=None):
+        super().__init__(count)
+        self.inexact_at = inexact_at
+    def rows_between(self, t0, t1):
+        rows = [{"ts": t0 + 1.5 + i / 30, "frame": 100 + i, "exact": i != self.inexact_at,
+                 "pad": [0, 0, 0], "igt_overall": 40 + i, "vi_origin": 0x100000 + i,
+                 "lists_since": 2 if i == self.inexact_at else 1}
+                for i in range(self.count)]
+        return rows
+    def feeds_between(self, t0, t1):
+        return [{"at": t0 + 1.0 + i / 30 + 0.004, "ts": t0 + 1.0 + i / 30}
+                for i in range(self.count)]
+
+
+class FeedExtractor(FakeExtractor):
+    """A picture-feed clip: every video frame carries its own time."""
+    def __init__(self, count):
+        super().__init__()
+        self.count = count
+    def extract(self, ring, start, end, out_path):
+        import dataclasses
+        frame_times = [i / 30 + 0.004 for i in range(self.count)]
+        return dataclasses.replace(super().extract(ring, start, end, out_path),
+                                   frame_times=frame_times, video_start_s=frame_times[0])
+
+
+def test_a_plugin_clips_map_is_its_stamps_with_no_display_lag_and_carries_the_igt(tmp_path):
+    """The first plugin clips went through the desktop grab's display lag
+    and sat one frame behind their own stamps on every picture. Through the
+    feed log, a capture-layer clip's map IS the stamps: no lag, None where a
+    present saw two lists, and the game's own timer per slot rides the view."""
+    svc = make_service(tmp_path, [attempt()])
+    svc.extractor = FeedExtractor(count=120)
+    svc.recorder.ledger = FeedExactLedger(count=120, inexact_at=7)
+    svc.map_aligner = lambda *a, **k: (_ for _ in ()).throw(AssertionError("aligner ran"))
+    svc.timer_reader = lambda *a, **k: (_ for _ in ()).throw(AssertionError("timer ran"))
+    svc.pad_reader = lambda clip, frame_map, attempt, **k: None
+    svc.track_pads = lambda attempt: {}
+    res = svc.view(42)
+    assert res["frame_map_source"] == "plugin"
+    assert res["frame_map"][:7] == [100, 101, 102, 103, 104, 105, 106]
+    assert res["frame_map"][7] is None                    # two lists: nothing claimed
+    assert res["frame_map"][8:12] == [108, 109, 110, 111]
+    assert res["picture_igt"][:3] == [40, 41, 42] and res["picture_igt"][7] is None
+    import json as _json
+    sidecar = _json.loads(
+        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
+    assert sidecar["plugin_inexact_rows"] == 1 and sidecar["picture_igt"][8] == 48
+
+
 def test_a_clip_with_one_inexact_row_takes_the_old_path(tmp_path):
     svc = make_service(tmp_path, [attempt()])
     svc.recorder.ledger = FakeLedger()          # no `exact` on any row

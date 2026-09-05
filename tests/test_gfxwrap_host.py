@@ -206,6 +206,26 @@ def test_a_stamp_entry_past_the_committed_rdram_is_dropped_not_a_crash(built):
         stream.close()
 
 
+def test_an_entry_committed_after_initiate_is_copied_once_the_rom_opens(built):
+    """His first three plugin clips carried no IGT: the RDRAM span was
+    measured once at InitiateGFX, before PJ64 committed the expansion pak,
+    so `usamune_overall` (above 4 MB) was refused all session. The host
+    commits the upper half after InitiateGFX; the entry at 6 MB must copy."""
+    name = unique_name()
+    stream = F.FrameStream(name)
+    try:
+        stream.set_table([(0, 4), (6 << 20, 4)], rdram_bytes=8 << 20)
+        stream.set_want_frames(True)
+        drive(built["host"], built["wrapper"], 3, name, "--commit-late")
+        slots, _ = stream.read_new(0)
+        assert [slot.seq for slot in slots] == [1, 2, 3]
+        for slot in slots:
+            assert len(slot.table[0]) == 4
+            assert len(slot.table[1]) == 4, "the late-committed entry was refused"
+    finally:
+        stream.close()
+
+
 def test_gl_state_the_wrapped_plugin_leaves_bound_does_not_redirect_the_capture(built):
     """Review finding 5's guard: the fake leaves a framebuffer object, a
     pixel-pack buffer and odd pack parameters bound after every present;

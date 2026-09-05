@@ -286,6 +286,29 @@ def test_a_newer_build_refreshes_the_installed_dll_only_while_project64_is_close
     assert layer.status().wrapper_current is True
 
 
+def test_the_refresh_loop_keeps_trying_until_stopped(pj64_dir, dll_source, settings_path):
+    import threading
+    header = FakeHeader(status=2)
+    layer, _registry, processes = _installed_and_alive(pj64_dir, dll_source, settings_path, header)
+    dll_source.write_bytes(b"a newer capture layer")
+    processes.image_path = str(pj64_dir / "Project64.exe")
+    stop = threading.Event()
+    thread = threading.Thread(target=layer.refresh_loop, args=(stop, 0.02), daemon=True)
+    thread.start()
+    import time
+    time.sleep(0.1)
+    installed = pj64_dir / "Plugin" / WRAPPER_DLL
+    assert installed.read_bytes() == b"the real capture layer bytes"   # PJ64 open: waits
+    processes.image_path = None                                          # ...closed
+    deadline = time.monotonic() + 2.0
+    while installed.read_bytes() != b"a newer capture layer" and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert installed.read_bytes() == b"a newer capture layer"
+    stop.set()
+    thread.join(timeout=2.0)
+    assert not thread.is_alive()
+
+
 def test_refresh_does_nothing_for_a_user_who_never_consented(pj64_dir, dll_source, settings_path):
     layer, _registry, _processes = make_layer(pj64_dir, dll_source, settings_path)
     (pj64_dir / "Plugin" / WRAPPER_DLL).write_bytes(b"someone else's file")

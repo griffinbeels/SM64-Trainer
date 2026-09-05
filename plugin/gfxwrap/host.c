@@ -16,6 +16,9 @@
  *        makes its own or the wrapper has to read through ReadScreen.
  *        --wrapped <dll>: drive a REAL plugin (an absolute path is used as
  *        is) -- how GLideN64_LINK_4.2 was measured on 2026-09-05.
+ *        --commit-late: only the lower 4 MB of RDRAM exist at InitiateGFX;
+ *        the rest is committed before RomOpen, as PJ64 does for the
+ *        expansion pak.
  *   --info <wrapper.dll>           print GetDllInfo's name and version
  *
  * The window is a tool window shown without activation at the top-left of
@@ -45,6 +48,7 @@ static int print_layout(void) {
 
 static int g_no_context;   /* --no-context: the wrapped plugin creates its own, as inside PJ64 */
 static int g_cpu_thread;   /* --cpu-thread: plugin calls on a second thread, the window's thread pumps */
+static int g_commit_late;  /* --commit-late: the upper half of RDRAM is committed after InitiateGFX */
 
 static HWND make_gl_window(HDC *device_out, HGLRC *context_out) {
     WNDCLASSA klass;
@@ -109,8 +113,18 @@ static unsigned char *allocate_rdram(void) {
     if (!base) return NULL;
     size_t committed = (size_t)g_rdram_committed_mb << 20;
     if (committed > RDRAM_BYTES) committed = RDRAM_BYTES;
+    if (g_commit_late && committed > (RDRAM_BYTES / 2)) committed = RDRAM_BYTES / 2;
     if (!VirtualAlloc(base, committed, MEM_COMMIT, PAGE_READWRITE)) return NULL;
     return base;
+}
+
+/* PJ64's shape: the expansion pak's half is committed once the ROM is
+ * loaded, after the plugin's InitiateGFX has already run. */
+static void commit_the_rest(unsigned char *base) {
+    size_t committed = (size_t)g_rdram_committed_mb << 20;
+    if (committed > RDRAM_BYTES) committed = RDRAM_BYTES;
+    if (committed <= RDRAM_BYTES / 2) return;
+    VirtualAlloc(base + RDRAM_BYTES / 2, committed - RDRAM_BYTES / 2, MEM_COMMIT, PAGE_READWRITE);
 }
 
 static int info(const char *wrapper_path) {
@@ -179,6 +193,7 @@ static int drive_calls(drive_job_t *job) {
     api.GetDllInfo(&plugin_info);
     printf("name %s\n", plugin_info.Name);
     if (!api.InitiateGFX(gfx)) { fprintf(stderr, "InitiateGFX failed\n"); return 5; }
+    if (g_commit_late) commit_the_rest(rdram);
     api.RomOpen();
     for (int frame = 0; frame < frames; frame++) {
         unsigned counter = 1000u + (unsigned)frame;
@@ -258,11 +273,13 @@ int main(int argc, char **argv) {
         if (strcmp(argv[index], "--no-context") == 0) g_no_context = 1;
     for (int index = 1; index < argc; index++)
         if (strcmp(argv[index], "--cpu-thread") == 0) g_cpu_thread = 1;
+    for (int index = 1; index < argc; index++)
+        if (strcmp(argv[index], "--commit-late") == 0) g_commit_late = 1;
     if (argc >= 2 && strcmp(argv[1], "--layout") == 0) return print_layout();
     if (argc >= 3 && strcmp(argv[1], "--info") == 0) return info(argv[2]);
     if (argc >= 4 && strcmp(argv[1], "--drive") == 0)
         return drive(argv[2], atoi(argv[3]), stream_name);
     fprintf(stderr, "usage: gfxwrap_host --layout | --info <dll> | --drive <dll> <frames> "
-                    "[--stream <name>] [--wrapped <dll>] [--rdram-mb <n>] [--dirty-gl] [--no-context] [--cpu-thread]\n");
+                    "[--stream <name>] [--wrapped <dll>] [--rdram-mb <n>] [--dirty-gl] [--no-context] [--cpu-thread] [--commit-late]\n");
     return 1;
 }

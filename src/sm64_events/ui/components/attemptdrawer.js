@@ -63,6 +63,7 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
           if (view) {
             setAnchorOffsetS(view.anchor_offset_s || 0);
             setClipClock({ frameMap: view.frame_map || null,
+                           pictureIgt: view.picture_igt || null,
                            clock: buildClipClock(view),
                            padReading: view.pad_reading || null,
                            degraded: !!view.frame_map_degraded,
@@ -75,6 +76,7 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
         ? html`<${InputTimeline} attemptId=${attemptId} video=${video}
               anchorOffsetS=${anchorOffsetS}
               frameMap=${clipClock.frameMap} clock=${clipClock.clock}
+              pictureIgt=${clipClock.pictureIgt}
               padReading=${clipClock.padReading}
               degraded=${clipClock.degraded}
               frameMapSource=${clipClock.frameMapSource}

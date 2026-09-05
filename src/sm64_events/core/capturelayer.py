@@ -392,6 +392,21 @@ class CaptureLayer:
         shutil.copyfile(self._dll_source, dll_path)
         return True
 
+    def refresh_loop(self, stop, interval_s: float = 10.0, log=None) -> None:
+        """`refresh_if_stale` every `interval_s` until `stop` is set -- so a
+        newer build's layer lands whenever Project64 happens to be closed,
+        not only at the trainer's boot. His rule (2026-09-05): "order
+        shouldn't matter... Open the game first, or open the tool first,
+        who cares."""
+        while not stop.wait(interval_s):
+            try:
+                if self.refresh_if_stale() and log is not None:
+                    log.info("capture layer refreshed to this build's DLL "
+                             "(Project64 was closed)")
+            except Exception:
+                if log is not None:
+                    log.exception("capture layer refresh failed")
+
     def uninstall(self) -> LayerStatus:
         if self._processes.pj64_image_path() is not None:
             raise LayerRefused("close Project64, then uninstall")

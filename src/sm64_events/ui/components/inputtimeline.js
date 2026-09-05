@@ -370,8 +370,26 @@ function DisagreementList({ reading, frameMap, stretches, seek, lead }) {
   </ul>`;
 }
 
+// THE INSPECTOR'S CLOCK. A capture-layer clip stamps every picture with the
+// IGT the game held when it drew that picture -- the number Usamune printed
+// on screen -- so the inspector shows that for the slot on screen, and only
+// counts from the track's first frame (`frame - lead`) when no stamp is
+// there. The two clocks start a frame or two apart (the track is cut to the
+// attempt's final time), which is what he saw as "the time is always one
+// frame later" on his first plugin clip (2026-09-05). Returns {frames,
+// stamped}, or null in the lead-in with nothing stamped.
+export function inspectorClock(frame, lead, pictureIgt, slot) {
+  if (pictureIgt && slot != null && slot >= 0 && slot < pictureIgt.length) {
+    const igt = pictureIgt[slot];
+    if (igt != null) return { frames: igt, stamped: true };
+  }
+  if (frame < lead) return null;
+  return { frames: frame - lead, stamped: false };
+}
+
 export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
                                 frameMap = null, clock = null,
+                                pictureIgt = null,
                                 padReading = null, degraded = false,
                                 frameMapSource = null,
                                 compact = false,
@@ -662,8 +680,19 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       <div class="input-inspector-frame">
         <span class="eyebrow">Frame</span>
         <strong>${frame - lead} / ${total - lead}</strong>
-        <span class="meta">${frame >= lead ? timeLabel(frame - lead)
-                                           : "lead-in"}</span>
+        ${(() => {
+          // The slot the axis frame is shown on -- through the map, not the
+          // video element, so the stamped clock reads the same with or
+          // without a player (the fixture has none).
+          const seconds = mappedTimeAtFrame(frame, frameMap, clock, data.stretches);
+          const slot = seconds == null ? null : slotAtTime(seconds, clock);
+          const shown = inspectorClock(frame, lead, pictureIgt, slot);
+          if (!shown) return html`<span class="meta">lead-in</span>`;
+          return html`<span class="meta ${shown.stamped ? "is-stamped" : ""}"
+              title=${shown.stamped ? "the game's own timer in this picture"
+                                    : "counted from the attempt's first frame"}>
+            ${timeLabel(shown.frames)}</span>`;
+        })()}
       </div>
       <${ControllerPanel} frame=${here} buttons=${data.buttons}
           stickMax=${data.stick_max} deadZone=${data.dead_zone}

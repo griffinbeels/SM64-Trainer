@@ -640,10 +640,16 @@ def build():
         # A build carrying a newer layer than the one installed refreshes it
         # while Project64 is closed -- the update path for every plugin fix,
         # under the consent already given; a running PJ64 holds its DLL and
-        # the setup screen says so instead.
+        # the setup screen says so instead. At boot, and then every ten
+        # seconds, so the order he opens things in never matters.
         if capture_layer.refresh_if_stale():
             logging.getLogger("sm64.replay").info(
                 "capture layer refreshed to this build's DLL (Project64 was closed)")
+        import threading as _threading
+        _threading.Thread(target=capture_layer.refresh_loop,
+                          args=(_threading.Event(),),
+                          kwargs={"log": logging.getLogger("sm64.replay")},
+                          name="capture-layer-refresh", daemon=True).start()
     except Exception:
         logging.getLogger("sm64.replay").exception("capture layer refresh failed")
     return create_app(poller, broadcaster, service=service, replay=replay,

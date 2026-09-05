@@ -1614,9 +1614,16 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
         # confirmed, so the chip is reachable by the sweeps. One contradicted
         # slot, so the "disagree" wording is the one that renders.
         sure = len(frame_map) - 200
+        # A capture-layer clip's stamps: the game's timer per slot, one
+        # frame ahead of the track's own count inside the attempt, None in
+        # the run-up and the tail -- so the inspector's stamped clock is
+        # reachable by the sweeps.
+        picture_igt = [raw - first + 1 if first <= raw < close else None
+                       for raw in frame_map]
         return {"clip_url": None,
                 "duration_s": len(frame_map) / 60,
                 "fps": 60, "game_fps": 30, "frame_map": frame_map,
+                "picture_igt": picture_igt,
                 "source": "buffer", "anchor_offset_s": pre / 30,
                 "truncated": False, "saved_path": None,
                 "pad_reading": {"sure": sure, "agree": sure - 1, "nowhere": 0,
