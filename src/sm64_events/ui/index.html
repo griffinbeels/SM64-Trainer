@@ -7510,7 +7510,11 @@
      grid's midline and exactly one column wide -- `--score-cols` is the
      count the component chunked, so the card matches the cards above it
      at every width. */
-  .score-centred { display: flex; justify-content: center; margin-top: 10px; }
+  /* No margin of its own: the row is a child of `.scorecard-card`'s grid,
+     whose 10px gap already separates it from the stacks -- a margin on top
+     of that doubled the space (his report: "The other cards have a much
+     smaller gap between them. Make sure the gap is the same."). */
+  .score-centred { display: flex; justify-content: center; }
   .score-centred > .score-card {
     flex: none;
     width: calc((100% - (var(--score-cols, 4) - 1) * 10px) / var(--score-cols, 4));

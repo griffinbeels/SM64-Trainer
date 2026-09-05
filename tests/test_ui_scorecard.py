@@ -1642,10 +1642,14 @@ def test_a_full_monitor_keeps_four_columns_and_centres_bowser():
                 "      const grid = cards.getBoundingClientRect();"
                 "      const box = card.getBoundingClientRect();"
                 "      const column = cols[0].querySelector('.score-card').getBoundingClientRect();"
+                "      const stack = [...cols[0].querySelectorAll('.score-card')]"
+                "        .map((c) => c.getBoundingClientRect());"
                 "      return {label: card.querySelector('.score-card-name').textContent.trim(),"
                 "              offCentre: Math.abs((box.left + box.right) / 2 - (grid.left + grid.right) / 2),"
                 "              widthGap: Math.abs(box.width - column.width),"
-                "              below: box.top >= grid.bottom};"
+                "              below: box.top >= grid.bottom,"
+                "              gapBelowGrid: box.top - grid.bottom,"
+                "              gapInStack: stack[1].top - stack[0].bottom};"
                 "    })(),"
                 "  };"
                 "})()")
@@ -1663,6 +1667,10 @@ def test_a_full_monitor_keeps_four_columns_and_centres_bowser():
         assert state["centred"]["offCentre"] <= 1.5, state["centred"]
         assert state["centred"]["widthGap"] <= 1.5, state["centred"]
         assert state["centred"]["below"], state["centred"]
+        # The row sits one grid gap below the stacks -- the SAME gap the
+        # cards in a stack keep between themselves (his report: the Bowser
+        # gap read as twice the others).
+        assert abs(state["centred"]["gapBelowGrid"] - state["centred"]["gapInStack"]) <= 1, state["centred"]
 
 
 def test_every_line_is_a_door_to_that_stars_library_page():
