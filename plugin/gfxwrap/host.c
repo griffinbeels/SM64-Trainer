@@ -9,6 +9,13 @@
  *        0x11223300+i, RDRAM[128..130] = (i, 2i, 3i) as b,g,r; ProcessDList;
  *        VI_ORIGIN = 0x100000+i; UpdateScreen; then ONE extra UpdateScreen
  *        with the origin unchanged (must capture nothing).
+ *        --cpu-thread: the window's thread pumps messages while a second
+ *        thread makes every plugin call (Project64 1.6's shape); a wrapped
+ *        plugin that renders on its own thread deadlocks without it.
+ *        --no-context: no host GL context at all, so the wrapped plugin
+ *        makes its own or the wrapper has to read through ReadScreen.
+ *        --wrapped <dll>: drive a REAL plugin (an absolute path is used as
+ *        is) -- how GLideN64_LINK_4.2 was measured on 2026-09-05.
  *   --info <wrapper.dll>           print GetDllInfo's name and version
  *
  * The window is a tool window shown without activation at the top-left of
@@ -36,6 +43,9 @@ static int print_layout(void) {
     return 0;
 }
 
+static int g_no_context;   /* --no-context: the wrapped plugin creates its own, as inside PJ64 */
+static int g_cpu_thread;   /* --cpu-thread: plugin calls on a second thread, the window's thread pumps */
+
 static HWND make_gl_window(HDC *device_out, HGLRC *context_out) {
     WNDCLASSA klass;
     memset(&klass, 0, sizeof klass);
@@ -49,6 +59,12 @@ static HWND make_gl_window(HDC *device_out, HGLRC *context_out) {
                                   NULL, NULL, klass.hInstance, NULL);
     if (!window) return NULL;
     HDC device = GetDC(window);
+    if (g_no_context) {
+        ShowWindow(window, SW_SHOWNOACTIVATE);
+        *device_out = device;
+        *context_out = NULL;
+        return window;
+    }
     PIXELFORMATDESCRIPTOR descriptor;
     memset(&descriptor, 0, sizeof descriptor);
     descriptor.nSize = sizeof descriptor;
@@ -59,7 +75,7 @@ static HWND make_gl_window(HDC *device_out, HGLRC *context_out) {
     int format = ChoosePixelFormat(device, &descriptor);
     if (!format || !SetPixelFormat(device, format, &descriptor)) return NULL;
     HGLRC context = wglCreateContext(device);
-    if (!context || !wglMakeCurrent(device, context)) return NULL;
+    if (!context) return NULL;
     ShowWindow(window, SW_SHOWNOACTIVATE);
     *device_out = device;
     *context_out = context;
@@ -111,11 +127,22 @@ static int info(const char *wrapper_path) {
     return 0;
 }
 
-static int drive(const char *wrapper_path, int frames, const char *stream_name) {
-    write_ini(wrapper_path, stream_name);
-    HDC device; HGLRC context;
-    HWND window = make_gl_window(&device, &context);
-    if (!window) { fprintf(stderr, "no GL window\n"); return 2; }
+typedef struct {
+    const char *wrapper_path;
+    int frames;
+    HWND window;
+    HDC device;
+    HGLRC context;
+    int result;
+} drive_job_t;
+
+static int drive_calls(drive_job_t *job) {
+    const char *wrapper_path = job->wrapper_path;
+    int frames = job->frames;
+    HWND window = job->window;
+    HDC device = job->device;
+    HGLRC context = job->context;
+    if (context && !wglMakeCurrent(device, context)) { fprintf(stderr, "wglMakeCurrent failed\n"); return 2; }
     HMODULE wrapper = LoadLibraryExA(wrapper_path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!wrapper) { fprintf(stderr, "LoadLibrary failed: %lu\n", GetLastError()); return 2; }
     gfx_api_t api;
@@ -169,14 +196,53 @@ static int drive(const char *wrapper_path, int frames, const char *stream_name) 
         MSG message;
         while (PeekMessageA(&message, NULL, 0, 0, PM_REMOVE)) DispatchMessageA(&message);
     }
+    printf("host thread %lu: GL context %p after the run\n", (unsigned long)GetCurrentThreadId(),
+           (void *)wglGetCurrentContext());
     api.RomClosed();
     api.CloseDLL();
     wglMakeCurrent(NULL, NULL);
-    wglDeleteContext(context);
+    if (context) wglDeleteContext(context);
     ReleaseDC(window, device);
-    DestroyWindow(window);
     printf("drove %d frames\n", frames);
     return 0;
+}
+
+static DWORD WINAPI drive_thread(LPVOID parameter) {
+    drive_job_t *job = (drive_job_t *)parameter;
+    job->result = drive_calls(job);
+    return 0;
+}
+
+static int drive(const char *wrapper_path, int frames, const char *stream_name) {
+    write_ini(wrapper_path, stream_name);
+    drive_job_t job;
+    memset(&job, 0, sizeof job);
+    job.wrapper_path = wrapper_path;
+    job.frames = frames;
+    job.window = make_gl_window(&job.device, &job.context);
+    if (!job.window) { fprintf(stderr, "no GL window\n"); return 2; }
+    if (!g_cpu_thread) {
+        int result = drive_calls(&job);
+        DestroyWindow(job.window);
+        return result;
+    }
+    /* PJ64's shape: the window's thread pumps messages while a second
+     * thread makes every plugin call -- a wrapped plugin that does its
+     * window work on yet another thread needs this pump to make progress. */
+    HANDLE thread = CreateThread(NULL, 0, drive_thread, &job, 0, NULL);
+    if (!thread) { fprintf(stderr, "no CPU thread\n"); return 2; }
+    for (;;) {
+        DWORD waited = MsgWaitForMultipleObjects(1, &thread, FALSE, INFINITE, QS_ALLINPUT);
+        if (waited == WAIT_OBJECT_0) break;
+        MSG message;
+        while (PeekMessageA(&message, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&message);
+            DispatchMessageA(&message);
+        }
+    }
+    CloseHandle(thread);
+    DestroyWindow(job.window);
+    return job.result;
 }
 
 int main(int argc, char **argv) {
@@ -188,11 +254,15 @@ int main(int argc, char **argv) {
     }
     for (int index = 1; index < argc; index++)
         if (strcmp(argv[index], "--dirty-gl") == 0) g_dirty_gl = 1;
+    for (int index = 1; index < argc; index++)
+        if (strcmp(argv[index], "--no-context") == 0) g_no_context = 1;
+    for (int index = 1; index < argc; index++)
+        if (strcmp(argv[index], "--cpu-thread") == 0) g_cpu_thread = 1;
     if (argc >= 2 && strcmp(argv[1], "--layout") == 0) return print_layout();
     if (argc >= 3 && strcmp(argv[1], "--info") == 0) return info(argv[2]);
     if (argc >= 4 && strcmp(argv[1], "--drive") == 0)
         return drive(argv[2], atoi(argv[3]), stream_name);
     fprintf(stderr, "usage: gfxwrap_host --layout | --info <dll> | --drive <dll> <frames> "
-                    "[--stream <name>] [--wrapped <dll>] [--rdram-mb <n>] [--dirty-gl]\n");
+                    "[--stream <name>] [--wrapped <dll>] [--rdram-mb <n>] [--dirty-gl] [--no-context] [--cpu-thread]\n");
     return 1;
 }

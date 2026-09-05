@@ -51,6 +51,10 @@ USE_DEFAULT_PLUGIN_DIR_VALUE = "Use Default Plugin Dir"
 # `LayerStatus.state`
 NOT_INSTALLED = "not_installed"   # nothing of ours in PJ64 (consent not given, or undone)
 NEEDS_RESTART = "needs_restart"   # installed and selected; PJ64 has not loaded it yet
+#: the frame stream's status bits this module reads (mirrored from
+#: plugin/gfxwrap/stream.h through replay/framestream.py)
+STATUS_GL_CONTEXT = 2
+STATUS_READSCREEN = 32
 ACTIVE = "active"                 # the frame stream's heartbeat is advancing
 REGRESSED = "regressed"           # we installed it, but the registry names another plugin now
 UNAVAILABLE = "unavailable"       # no PJ64 folder known / no DLL shipped with this build
@@ -89,10 +93,14 @@ class LayerStatus:
     wrapper_selected: bool        # the registry names the wrapper
     wrapped_name: str | None      # what the ini forwards to
     layer_alive: bool             # the frame stream's heartbeat advanced
-    gl_context: bool              # the layer found a GL context to read from
+    gl_context: bool              # the layer found a GL context on the emulation thread
     consented_at: str | None
     problems: list = field(default_factory=list)   # fixable sentences, in order
     state: str = NOT_INSTALLED
+    #: which capture point the pictures take: "gl" (the layer's own GL_FRONT
+    #: read), "readscreen" (the wrapped plugin's own ReadScreen -- his
+    #: GLideN64 renders on a thread of its own), None while none has
+    pictures_via: str | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -238,6 +246,7 @@ class CaptureLayer:
         header = self._stream_header()
         layer_alive = False
         gl_context = False
+        pictures_via = None
         if header is not None:
             alive = getattr(header, "alive", None)
             if isinstance(alive, int):
@@ -245,7 +254,11 @@ class CaptureLayer:
                 self._last_alive = alive
             status_bits = getattr(header, "status", None)
             if isinstance(status_bits, int):
-                gl_context = bool(status_bits & 2)
+                gl_context = bool(status_bits & STATUS_GL_CONTEXT)
+                if gl_context:
+                    pictures_via = "gl"
+                elif status_bits & STATUS_READSCREEN:
+                    pictures_via = "readscreen"
 
         # UNAVAILABLE means this BUILD has nothing to install. Not knowing
         # where Project64 lives is a step the setup screen walks the user
@@ -278,14 +291,19 @@ class CaptureLayer:
                             "Plugin folder; re-install to restore it")
         elif state == NEEDS_RESTART:
             problems.append("restart Project64 to load the capture layer")
-        if header is not None and not gl_context and getattr(header, "dropped", 0):
-            # The layer is presenting but found no GL context on the
-            # emulation thread when a frame was wanted -- the wrapped
-            # plugin's threaded-video option moves the context to its own
-            # thread (review finding 8).
-            problems.append("the graphics plugin has no OpenGL context on the emulation "
-                            "thread (threaded video?); turn threaded video off in its "
-                            "settings so frames can be read")
+        if header is not None and pictures_via is None and getattr(header, "dropped", 0):
+            # The layer presents but no picture reaches it: no GL context on
+            # the emulation thread (GLideN64_LINK_4.2 renders on a thread of
+            # its own, measured 2026-09-05) AND its ReadScreen answered
+            # nothing. The recorder has already fallen back to the desktop
+            # grab; this row says so, where the click lands.
+            problems.append("the capture layer is loaded but no picture reaches it "
+                            "(no OpenGL context on the emulation thread, and the graphics "
+                            "plugin's ReadScreen gave nothing); recording uses desktop "
+                            "capture until this is fixed")
+        if state in (ACTIVE, NEEDS_RESTART) and wrapper_present and not wrapper_current:
+            problems.append("this build carries a newer capture layer; "
+                            + ("close Project64, then Update" if running else "Update to install it"))
 
         return LayerStatus(
             pj64_dir=str(pj64_dir) if pj64_dir is not None else None,
@@ -297,6 +315,7 @@ class CaptureLayer:
             wrapped_name=wrapped_name,
             layer_alive=layer_alive,
             gl_context=gl_context,
+            pictures_via=pictures_via,
             consented_at=consented_at,
             problems=problems,
             state=state,
@@ -340,6 +359,27 @@ class CaptureLayer:
         self._save_overlay(overlay)
 
         return self.status()
+
+    def refresh_if_stale(self) -> bool:
+        """Copy this build's DLL over an installed older one while Project64
+        is closed. True when a copy happened; False when nothing was
+        installed, the file is current, or PJ64 holds it open. Runs at boot
+        under the consent already given -- the one update path for a plugin
+        fix, so a user never re-consents to what they already chose."""
+        if self._dll_source is None or not self._dll_source.exists():
+            return False
+        if self._load_overlay().get("consented_at") is None:
+            return False
+        if self._processes.pj64_image_path() is not None:
+            return False
+        pj64_dir = self.locate()
+        if pj64_dir is None:
+            return False
+        dll_path = self._plugin_dir(pj64_dir) / WRAPPER_DLL
+        if not dll_path.exists() or _files_match(dll_path, self._dll_source):
+            return False
+        shutil.copyfile(self._dll_source, dll_path)
+        return True
 
     def uninstall(self) -> LayerStatus:
         if self._processes.pj64_image_path() is not None:

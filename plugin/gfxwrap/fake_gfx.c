@@ -1,10 +1,16 @@
 /* A FAKE wrapped graphics plugin for the test host: exports the Zilmar 1.3
  * surface, and its UpdateScreen paints the window the colour the host wrote
  * into fake RDRAM at FAKE_COLOUR_OFFSET (b, g, r bytes) and swaps -- so the
- * wrapper's GL_FRONT read has a known picture to capture. Nothing else. */
+ * wrapper's GL_FRONT read has a known picture to capture. Its ReadScreen
+ * answers the same colour WITHOUT a GL context, the way a plugin that
+ * renders on its own thread (GLideN64_LINK_4.2) does: a malloc of
+ * width*height*3 packed BGR rows, the client rectangle's size, that the
+ * caller frees -- so the host's --no-context run exercises the wrapper's
+ * second capture point end to end, the free included. */
 #include <windows.h>
 #include <GL/gl.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 #include "zilmar.h"
 
@@ -74,6 +80,24 @@ EXPORT void CALL UpdateScreen(void) {
     ReleaseDC(g_gfx.hWnd, device);
     if (g_gfx.RDRAM[FAKE_DIRTY_GL_OFFSET]) leave_gl_dirty();
     g_updates++;
+}
+
+EXPORT void CALL ReadScreen(void **dest, long *width, long *height) {
+    *dest = NULL; *width = 0; *height = 0;
+    if (!g_have_gfx) return;
+    RECT client;
+    if (!GetClientRect(g_gfx.hWnd, &client)) return;
+    long client_width = client.right - client.left, client_height = client.bottom - client.top;
+    if (client_width <= 0 || client_height <= 0) return;
+    unsigned char *buffer = malloc((size_t)client_width * (size_t)client_height * 3);
+    if (!buffer) return;
+    const unsigned char *colour = g_gfx.RDRAM + FAKE_COLOUR_OFFSET;
+    for (size_t pixel = 0; pixel < (size_t)client_width * (size_t)client_height; pixel++) {
+        buffer[pixel * 3] = colour[0];
+        buffer[pixel * 3 + 1] = colour[1];
+        buffer[pixel * 3 + 2] = colour[2];
+    }
+    *dest = buffer; *width = client_width; *height = client_height;
 }
 
 EXPORT void CALL ProcessDList(void) {}

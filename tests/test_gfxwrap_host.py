@@ -79,17 +79,21 @@ def test_the_wrapper_exports_everything_pj64_16_requires_and_names_the_wrapped_p
     assert "version 0x0103" in info and "bswaped 1" in info
 
 
-def check_drive(host: Path, wrapper: Path):
+def check_drive(host: Path, wrapper: Path, *flags, pictures_via=F.STATUS_GL_CONTEXT):
     name = unique_name()
     stream = F.FrameStream(name)
     try:
         stream.set_table([(0, 4), (64, 4)], rdram_bytes=8 << 20)
         stream.set_want_frames(True)
-        output = drive(host, wrapper, 5, name)
+        output = drive(host, wrapper, 5, name, *flags)
         assert "drove 5 frames" in output
         header = stream.header()
         assert header.initiated is False           # CloseDLL cleared it
         assert header.status & F.STATUS_WRAPPED_LOADED
+        # which capture point the pictures took: the layer's own GL_FRONT
+        # read, or the wrapped plugin's ReadScreen when the calling thread
+        # has no context (GLideN64_LINK_4.2's shape, measured 2026-09-05)
+        assert header.status & (F.STATUS_GL_CONTEXT | F.STATUS_READSCREEN) == pictures_via
         # GL_CONTEXT is cleared at detach with INITIATED (a reader must not
         # wait on a gone plugin); the five captured slots prove it was there
         assert header.wrapped_name == "fake_gfx.dll"
@@ -120,6 +124,24 @@ def check_drive(host: Path, wrapper: Path):
 
 def test_five_frames_through_a_fresh_build(built):
     check_drive(built["host"], built["wrapper"])
+
+
+def test_the_same_frames_when_the_emulator_calls_from_its_own_cpu_thread(built):
+    """PJ64 1.6's shape: the window's thread pumps messages while a second
+    thread makes every plugin call. The layer keeps no per-thread state, so
+    the pictures and stamps are the same."""
+    check_drive(built["host"], built["wrapper"], "--cpu-thread")
+
+
+def test_pictures_come_through_the_wrapped_plugins_readscreen_when_the_thread_has_no_context(built):
+    """His GLideN64 (LINK 4.2) runs every GL call on a render thread of its
+    own, so the emulation thread never holds a context -- the first live
+    session refused 30,000 pictures that way. The second capture point asks
+    the wrapped plugin's own ReadScreen: the fake answers without a context,
+    from a malloc the layer frees through the process heap, and every slot
+    still carries the right colour, stamp and origin, nothing dropped."""
+    check_drive(built["host"], built["wrapper"], "--no-context", "--cpu-thread",
+                pictures_via=F.STATUS_READSCREEN)
 
 
 def test_the_shipped_dll_behaves_like_the_source(built):

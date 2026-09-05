@@ -148,6 +148,7 @@ class ReplayRecorder:
         self._writer: SegmentWriter | None = None
         self._video_source: VideoSource | None = None
         self._frame_source = "desktop"
+        self._frame_source_note = None
         self._audio_source: AudioSource | None = None
         self._clock: CaptureClock | None = None
         self._last_frame: np.ndarray | None = None
@@ -295,6 +296,7 @@ class ReplayRecorder:
         # can always reclaim it, even if something below raises.
         video = self._video_factory(win)
         self._frame_source = getattr(video, "frame_source", "desktop")
+        self._frame_source_note = getattr(video, "frame_source_note", None)
         # Idle throttle: while the recorder is idle (AFK / manual pause) the
         # capture source drops to a trickle grab rate — every segment is
         # discarded anyway, so the dominant cost (the per-grab ~8 MB surface
@@ -692,6 +694,10 @@ class ReplayRecorder:
             # Project64 (every picture stamped by the game), "desktop" = the
             # window grab the frame clock places in game time afterwards.
             "frame_source": self._frame_source,
+            # ...and WHY it is the desktop when the capture layer is installed
+            # (the layer refused every picture, presented none) -- None
+            # when nothing fell back.
+            "frame_source_note": self._frame_source_note,
             "frame_source_health": (self._video_source.status()
                                     if hasattr(self._video_source, "status")
                                     else None),

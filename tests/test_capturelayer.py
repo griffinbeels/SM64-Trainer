@@ -51,12 +51,14 @@ class FakeProcesses:
 
 
 class FakeHeader:
-    """A frame stream header: `alive` is a heartbeat counter, `status` bit 1
-    (value 2) is whether a GL context was found."""
+    """A frame stream header: `alive` is a heartbeat counter, `status` bit
+    2 is a GL context on the emulation thread, bit 32 the wrapped plugin's
+    ReadScreen path, `dropped` the pictures the layer could not read."""
 
-    def __init__(self, alive=0, status=0):
+    def __init__(self, alive=0, status=0, dropped=0):
         self.alive = alive
         self.status = status
+        self.dropped = dropped
 
 
 @pytest.fixture
@@ -202,6 +204,74 @@ def test_state_walks_from_not_installed_through_active_to_regressed(pj64_dir, dl
     regressed_status = layer.status()
     assert regressed_status.state == REGRESSED
     assert any(OTHER_GRAPHICS_DLL in problem for problem in regressed_status.problems)
+
+
+def _installed_and_alive(pj64_dir, dll_source, settings_path, header, image_path=None):
+    layer, registry, processes = make_layer(
+        pj64_dir, dll_source, settings_path, stream_header=lambda: header,
+        image_path=image_path)
+    processes.image_path = None
+    layer.install(consent=True)
+    processes.image_path = image_path
+    layer.status()
+    header.alive += 1
+    return layer, registry, processes
+
+
+def test_pictures_via_says_which_capture_point_the_layer_used(pj64_dir, dll_source, settings_path):
+    header = FakeHeader(status=2)
+    layer, _registry, _processes = _installed_and_alive(pj64_dir, dll_source, settings_path, header)
+    assert layer.status().pictures_via == "gl"
+    header.status = 32
+    header.alive += 1
+    status = layer.status()
+    assert status.pictures_via == "readscreen" and status.gl_context is False
+    assert status.problems == []
+
+
+def test_a_layer_that_refuses_every_picture_says_so_and_names_the_desktop_fallback(
+        pj64_dir, dll_source, settings_path):
+    """The first live session: heartbeat moving, `dropped` climbing, no
+    context and nothing from ReadScreen. The setup screen said Active.
+    Now the row carries the problem, and it names where recording went."""
+    header = FakeHeader(status=0, dropped=30476)
+    layer, _registry, _processes = _installed_and_alive(pj64_dir, dll_source, settings_path, header)
+    status = layer.status()
+    assert status.state == ACTIVE and status.pictures_via is None
+    assert len(status.problems) == 1
+    assert "no picture reaches it" in status.problems[0]
+    assert "desktop capture" in status.problems[0]
+
+
+def test_a_newer_build_refreshes_the_installed_dll_only_while_project64_is_closed(
+        pj64_dir, dll_source, settings_path):
+    header = FakeHeader(status=2)
+    layer, _registry, processes = _installed_and_alive(pj64_dir, dll_source, settings_path, header)
+    dll_source.write_bytes(b"a newer capture layer")
+    installed = pj64_dir / "Plugin" / WRAPPER_DLL
+
+    processes.image_path = str(pj64_dir / "Project64.exe")
+    header.alive += 1
+    status = layer.status()
+    assert status.wrapper_current is False
+    assert any("newer capture layer" in problem and "close Project64" in problem
+               for problem in status.problems)
+    assert layer.refresh_if_stale() is False           # PJ64 holds the file
+    assert installed.read_bytes() == b"the real capture layer bytes"
+
+    processes.image_path = None
+    assert layer.refresh_if_stale() is True
+    assert installed.read_bytes() == b"a newer capture layer"
+    assert layer.refresh_if_stale() is False           # current now
+    header.alive += 1
+    assert layer.status().wrapper_current is True
+
+
+def test_refresh_does_nothing_for_a_user_who_never_consented(pj64_dir, dll_source, settings_path):
+    layer, _registry, _processes = make_layer(pj64_dir, dll_source, settings_path)
+    (pj64_dir / "Plugin" / WRAPPER_DLL).write_bytes(b"someone else's file")
+    assert layer.refresh_if_stale() is False
+    assert (pj64_dir / "Plugin" / WRAPPER_DLL).read_bytes() == b"someone else's file"
 
 
 # -- locate --------------------------------------------------------------

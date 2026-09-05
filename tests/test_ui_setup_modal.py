@@ -96,6 +96,32 @@ def test_an_active_layer_renders_active_and_a_remove_button():
             ).strip() == "Remove"
 
 
+def test_an_active_layer_with_a_problem_shows_it_on_the_row_and_offers_update():
+    """2026-09-05: the row read a green "Active" while the layer refused
+    every picture and the timeline said capture was off. The problem now
+    sits on the row itself, and a newer build's layer gets its Update."""
+    problem = ("the capture layer is loaded but no picture reaches it (no OpenGL "
+               "context on the emulation thread, and the graphics plugin's ReadScreen "
+               "gave nothing); recording uses desktop capture until this is fixed")
+    with serve_ui(capture_layer_status={
+            "state": "active", "pj64_dir": LONG_PJ64_DIR, "wrapper_current": False,
+            "problems": [problem, "this build carries a newer capture layer; Update to install it"],
+            }) as url, \
+            get_driver().launch() as page:
+        page.goto(url + "/ui/index.html")
+        page.wait_ms(1500)
+        _open_setup(page)
+        assert "Active" in page.evaluate(
+            "document.querySelector('.setup-active-line').textContent")
+        problems = page.evaluate(
+            "Array.from(document.querySelectorAll('.setup-row-problem')).map(p => p.textContent)")
+        assert problems[0] == problem
+        assert "newer capture layer" in problems[1]
+        buttons = page.evaluate(
+            "Array.from(document.querySelectorAll('.setup-active-line button')).map(b => b.textContent.trim())")
+        assert buttons == ["Update", "Remove"]
+
+
 def test_the_screen_opens_by_itself_for_a_user_who_never_set_up_even_before_project64_is_seen():
     """His first launch after the layer shipped showed no screen because
     Project64 was not running yet. The rule now: not consented (or regressed)

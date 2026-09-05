@@ -360,18 +360,31 @@ def build():
                 "frame stream unavailable; desktop capture only")
 
         def video_factory(win):
+            fallback_note = None
             if frame_stream is not None:
                 import time as _time
+                from sm64_events.replay.pluginsource import pictures_flow
                 before = frame_stream.header()
                 _time.sleep(0.2)
                 after = frame_stream.header()
                 if after.initiated and after.alive != before.alive:
-                    logging.getLogger("sm64.replay").info(
-                        "capture layer live (wrapping %s): frames come stamped "
-                        "from inside Project64", after.wrapped_name or "?")
-                    return PluginVideoSource(frame_stream, stamp_table, layout,
-                                             fps=replay_cfg.fps)
-            return DwmSurfaceVideoSource(win, fps=replay_cfg.fps)
+                    # The heartbeat moving says the layer is loaded; only a
+                    # picture says it can READ. His first live session
+                    # (2026-09-05) had the first without the second and the
+                    # recorder held an empty ring for an hour.
+                    flowing, reason = pictures_flow(frame_stream)
+                    if flowing:
+                        logging.getLogger("sm64.replay").info(
+                            "capture layer live (wrapping %s): frames come stamped "
+                            "from inside Project64", after.wrapped_name or "?")
+                        return PluginVideoSource(frame_stream, stamp_table, layout,
+                                                 fps=replay_cfg.fps)
+                    fallback_note = f"the capture layer is loaded but {reason}"
+                    logging.getLogger("sm64.replay").warning(
+                        "%s; recording through desktop capture instead", fallback_note)
+            source = DwmSurfaceVideoSource(win, fps=replay_cfg.fps)
+            source.frame_source_note = fallback_note
+            return source
 
         recorder = ReplayRecorder(
             cfg=replay_cfg,
@@ -618,6 +631,16 @@ def build():
         settings_path=capture_layer_settings_path(),
         dll_source=bundled_plugin_dll(),
         stream_header=(frame_stream.header if frame_stream is not None else None))
+    try:
+        # A build carrying a newer layer than the one installed refreshes it
+        # while Project64 is closed -- the update path for every plugin fix,
+        # under the consent already given; a running PJ64 holds its DLL and
+        # the setup screen says so instead.
+        if capture_layer.refresh_if_stale():
+            logging.getLogger("sm64.replay").info(
+                "capture layer refreshed to this build's DLL (Project64 was closed)")
+    except Exception:
+        logging.getLogger("sm64.replay").exception("capture layer refresh failed")
     return create_app(poller, broadcaster, service=service, replay=replay,
                       inputs=inputs,
                       updater=updater, compare=compare, compilation=compilation,

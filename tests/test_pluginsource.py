@@ -111,6 +111,42 @@ def test_the_source_delivers_top_down_bgra_and_the_stamp(layout, stream):
     assert source.status()["delivered"] == 1
 
 
+def test_pictures_flow_answers_true_on_the_first_picture(layout, stream):
+    table = P.table_for(layout)
+    stream.set_plugin_fields(F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED)
+
+    def present_soon():
+        time.sleep(0.1)
+        assert stream.header().want_frames == 1      # the probe asked
+        stream.publish(np.zeros((2, 2, 3), dtype=np.uint8), raw_table(rdram_with(layout, 7), table))
+
+    threading.Thread(target=present_soon, daemon=True).start()
+    assert P.pictures_flow(stream, timeout_s=2.0) == (True, None)
+
+
+def test_pictures_flow_names_a_layer_that_refuses_every_picture(layout, stream):
+    """The first live session's shape: the heartbeat moves, `dropped` climbs,
+    no slot is ever written. The probe says why and turns frames back off,
+    so the recorder can take the desktop grab instead of an empty ring."""
+    stream.set_plugin_fields(F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED, dropped=10)
+
+    def refuse_soon():
+        time.sleep(0.1)
+        stream.set_plugin_fields(F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED, dropped=25)
+
+    threading.Thread(target=refuse_soon, daemon=True).start()
+    flowing, reason = P.pictures_flow(stream, timeout_s=0.5)
+    assert flowing is False
+    assert "refused 15 pictures" in reason and "ReadScreen" in reason
+    assert stream.header().want_frames == 0
+
+
+def test_pictures_flow_names_a_layer_that_presents_nothing(layout, stream):
+    stream.set_plugin_fields(F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED, dropped=0)
+    flowing, reason = P.pictures_flow(stream, timeout_s=0.2)
+    assert flowing is False and "no new picture" in reason
+
+
 def test_idle_turns_the_frames_off(layout, stream):
     source = P.PluginVideoSource(stream, P.table_for(layout), layout)
     source.set_idle_check(lambda: True)

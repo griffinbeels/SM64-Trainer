@@ -76,6 +76,7 @@ STATUS_GL_CONTEXT = 2
 STATUS_ROM_OPEN = 4
 STATUS_FRAME_TOO_LARGE = 8
 STATUS_INITIATED = 16
+STATUS_READSCREEN = 32         # pictures come through the wrapped plugin's own ReadScreen
 FORMAT_BGR8_BOTTOM_UP = 1
 KIND_PICTURE = 1
 
@@ -347,11 +348,14 @@ class FrameStream:
         return seq
 
     def set_plugin_fields(self, status: int, wrapped_name: str = "",
-                          plugin_pid: int = 0, plugin_version: int = 1) -> None:
+                          plugin_pid: int = 0, plugin_version: int = 1,
+                          dropped: int | None = None) -> None:
         """The plugin's own header fields, for a Python stand-in."""
         self._put_u32(H_STATUS, status)
         self._put_u32(H_PLUGIN_PID, plugin_pid)
         self._put_u32(H_PLUGIN_VERSION, plugin_version)
+        if dropped is not None:
+            self._put_u32(H_DROPPED, dropped)
         raw = wrapped_name.encode("utf-8")[:H_WRAPPED_NAME_BYTES - 1]
         self._map[H_WRAPPED_NAME:H_WRAPPED_NAME + H_WRAPPED_NAME_BYTES] = raw.ljust(
             H_WRAPPED_NAME_BYTES, b"\0")

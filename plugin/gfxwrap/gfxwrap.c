@@ -24,10 +24,24 @@
  *
  * Reading GL_FRONT after the wrapped plugin's swap is exactly what GLideN64's
  * own screenshot path does (windows_DisplayWindow.cpp::_readScreen), on the
- * same thread, which is why it is the first capture point tried; the
- * fallbacks are in the spec (GL_BACK after ProcessDList; a swap hook). The
- * wrapped plugin's ReadScreen is NOT used: GLideN64_LINK_4.2 links its CRT
- * statically, so the buffer it mallocs could never be freed from here. */
+ * same thread, which is why it is the first capture point tried. It needs a
+ * GL context current on the emulation thread, and GLideN64_LINK_4.2 has
+ * none there: MEASURED 2026-09-05 through the test host driving that DLL
+ * the way PJ64 does (window thread pumping, plugin calls on a second
+ * thread) -- no context at InitiateGFX, RomOpen, ProcessDList or
+ * UpdateScreen, and a host whose window thread is also the caller
+ * deadlocks in RomOpen, because that build runs every GL call on a render
+ * thread of its own (its RTTI names ReadScreenCommand and friends: the
+ * threaded-video command queue, with no setting to turn it off). So the
+ * second capture point is the wrapped plugin's own ReadScreen: a command
+ * that render thread executes in order, after the swap, so the bytes it
+ * hands back ARE the presented picture, already offset past PJ64's status
+ * bar. It mallocs that buffer from its static CRT (linker 14.30, no
+ * ucrtbase import): a VS2015+ static CRT allocates on the PROCESS heap,
+ * which HeapValidate confirms before HeapFree returns the block -- a block
+ * that fails validation is leaked once and the path retired, never freed
+ * blind. The header's STATUS_READSCREEN bit says which path a session's
+ * pictures took. */
 #include <windows.h>
 #include <GL/gl.h>
 #include <stdio.h>
@@ -93,6 +107,61 @@ static void plugin_log(const char *message) {
     fprintf(log, "%04u-%02u-%02u %02u:%02u:%02u %s\n", now.wYear, now.wMonth, now.wDay,
             now.wHour, now.wMinute, now.wSecond, message);
     fclose(log);
+}
+
+/* -- where the GL context lives ------------------------------------------
+ * The layer reads pixels on the thread that calls UpdateScreen. The first
+ * Project64 it ran inside (2026-09-05: wermi's 1.6 v7 + GLideN64_LINK_4.2)
+ * had no context current there and refused 30,000 pictures without a line
+ * saying so. So each callback notes its thread and the context current
+ * before and after the wrapped plugin ran, and logs the FIRST sighting of
+ * each answer -- one line per change, never one per frame -- which is the
+ * measurement that says where the context went. */
+typedef struct {
+    const char *name;
+    BOOL seen;
+    DWORD thread;
+    HGLRC before, after;
+} context_note_t;
+static context_note_t g_note_initiate = {"InitiateGFX"};
+static context_note_t g_note_rom_open = {"RomOpen"};
+static context_note_t g_note_list = {"ProcessDList"};
+static context_note_t g_note_screen = {"UpdateScreen"};
+
+static void note_context(context_note_t *note, HGLRC before, HGLRC after) {
+    DWORD thread = GetCurrentThreadId();
+    if (note->seen && note->thread == thread && note->before == before && note->after == after)
+        return;
+    note->seen = TRUE;
+    note->thread = thread;
+    note->before = before;
+    note->after = after;
+    char message[200];
+    snprintf(message, sizeof message,
+             "%s on thread %lu: GL context %p before the wrapped plugin, %p after",
+             note->name, (unsigned long)thread, (void *)before, (void *)after);
+    plugin_log(message);
+}
+
+/* The refusal itself, once per flip: the header's counter says how many,
+ * this line says why and on which thread. */
+static int g_context_state = -1;   /* -1 unknown, 0 refused, 1 reading */
+
+static void note_capture_context(BOOL have_context) {
+    int state = have_context ? 1 : 0;
+    if (state == g_context_state) return;
+    g_context_state = state;
+    char message[160];
+    if (have_context)
+        snprintf(message, sizeof message, "GL context found on thread %lu; pictures flow",
+                 (unsigned long)GetCurrentThreadId());
+    else
+        snprintf(message, sizeof message,
+                 "no GL context on thread %lu (the one that calls UpdateScreen); "
+                 "pictures go through the wrapped plugin's ReadScreen%s",
+                 (unsigned long)GetCurrentThreadId(),
+                 g_wrapped.ReadScreen ? "" : " -- which it does not export, so none");
+    plugin_log(message);
 }
 
 static BOOL g_ini_read;
@@ -236,7 +305,8 @@ static void close_stream(void) {
     /* Leaving: say so in the header, so a reader does not wait on a
      * plugin that unloaded (or a process that died with this DLL's
      * detach still running) as if it were merely quiet. */
-    if (g_hdr) g_hdr->status &= ~(uint32_t)(STATUS_INITIATED | STATUS_ROM_OPEN | STATUS_GL_CONTEXT);
+    if (g_hdr) g_hdr->status &= ~(uint32_t)(STATUS_INITIATED | STATUS_ROM_OPEN
+                                             | STATUS_GL_CONTEXT | STATUS_READSCREEN);
     if (g_hdr) UnmapViewOfFile(g_hdr);
     if (g_map) CloseHandle(g_map);
     if (g_event) CloseHandle(g_event);
@@ -332,6 +402,57 @@ static void read_front_buffer(void *pixels, unsigned width, unsigned height,
     while (glGetError() != GL_NO_ERROR) { /* leave no error of ours for the plugin to find */ }
 }
 
+/* -- the second capture point: the wrapped plugin's own ReadScreen ------- */
+static BOOL g_readscreen_retired;      /* a returned block was not ours to free: never call it again */
+
+static BOOL process_heap_block(void *block) {
+    __try {
+        return HeapValidate(GetProcessHeap(), 0, block);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return FALSE;
+    }
+}
+
+static void free_wrapped_buffer(void *block) {
+    if (process_heap_block(block)) {
+        HeapFree(GetProcessHeap(), 0, block);
+        return;
+    }
+    g_readscreen_retired = TRUE;
+    plugin_log("ReadScreen returned a buffer that is not a process-heap block; "
+               "the ReadScreen path is retired (one buffer leaked, nothing freed blind)");
+}
+
+/* Asks the wrapped plugin for the presented picture. On success `*out`
+ * holds its buffer (tightly packed BGR rows, bottom-up, width*3 bytes each,
+ * exactly what glReadPixels writes into a malloc of width*height*3) and the
+ * caller frees it through free_wrapped_buffer; on failure nothing is held. */
+static BOOL read_screen_via_wrapped(void **out, unsigned *width, unsigned *height) {
+    *out = NULL;
+    if (g_readscreen_retired || !g_wrapped.ReadScreen) return FALSE;
+    void *buffer = NULL;
+    long buffer_width = 0, buffer_height = 0;
+    g_wrapped.ReadScreen(&buffer, &buffer_width, &buffer_height);
+    if (!buffer) return FALSE;
+    if (buffer_width <= 0 || buffer_height <= 0
+            || buffer_width > (long)MAX_WIDTH || buffer_height > (long)MAX_HEIGHT) {
+        free_wrapped_buffer(buffer);
+        return FALSE;
+    }
+    *out = buffer;
+    *width = (unsigned)buffer_width;
+    *height = (unsigned)buffer_height;
+    return TRUE;
+}
+
+static void copy_packed_rows(uint8_t *destination, unsigned stride, const uint8_t *source,
+                             unsigned width, unsigned height) {
+    unsigned row_bytes = width * BYTES_PER_PIXEL;
+    if (row_bytes == stride) { memcpy(destination, source, (size_t)stride * height); return; }
+    for (unsigned row = 0; row < height; row++)
+        memcpy(destination + (size_t)row * stride, source + (size_t)row * row_bytes, row_bytes);
+}
+
 static void capture_if_presented(void) {
     if (!g_hdr || !g_have_gfx) return;
     g_hdr->alive++;
@@ -339,29 +460,39 @@ static void capture_if_presented(void) {
     if (origin == g_last_origin) return;
     g_last_origin = origin;
     if (!g_hdr->want_frames) return;
-    if (!wglGetCurrentContext()) {
-        g_hdr->status &= ~(uint32_t)STATUS_GL_CONTEXT;
-        g_hdr->dropped++;
-        return;
-    }
-    g_hdr->status |= STATUS_GL_CONTEXT;
-    RECT client;
-    if (!GetClientRect(g_gfx.hWnd, &client)) { g_hdr->dropped++; return; }
-    unsigned width = (unsigned)(client.right - client.left);
-    unsigned height = (unsigned)(client.bottom - client.top);
-    /* PJ64's status bar sits INSIDE the client area; the wrapped plugin
-     * draws above it (GLideN64 offsets its viewport by the bar's height),
-     * so the picture starts that many GL rows up from the bottom. */
-    unsigned bottom_offset = 0;
-    if (g_gfx.hStatusBar && IsWindowVisible(g_gfx.hStatusBar)) {
-        RECT bar;
-        if (GetWindowRect(g_gfx.hStatusBar, &bar)) {
-            bottom_offset = (unsigned)(bar.bottom - bar.top);
-            if (bottom_offset < height) height -= bottom_offset; else bottom_offset = 0;
+    BOOL have_context = wglGetCurrentContext() != NULL;
+    note_capture_context(have_context);
+    unsigned width = 0, height = 0, bottom_offset = 0;
+    void *wrapped_buffer = NULL;
+    if (have_context) {
+        g_hdr->status |= STATUS_GL_CONTEXT;
+        g_hdr->status &= ~(uint32_t)STATUS_READSCREEN;
+        RECT client;
+        if (!GetClientRect(g_gfx.hWnd, &client)) { g_hdr->dropped++; return; }
+        width = (unsigned)(client.right - client.left);
+        height = (unsigned)(client.bottom - client.top);
+        /* PJ64's status bar sits INSIDE the client area; the wrapped plugin
+         * draws above it (GLideN64 offsets its viewport by the bar's height),
+         * so the picture starts that many GL rows up from the bottom. */
+        if (g_gfx.hStatusBar && IsWindowVisible(g_gfx.hStatusBar)) {
+            RECT bar;
+            if (GetWindowRect(g_gfx.hStatusBar, &bar)) {
+                bottom_offset = (unsigned)(bar.bottom - bar.top);
+                if (bottom_offset < height) height -= bottom_offset; else bottom_offset = 0;
+            }
         }
+    } else {
+        g_hdr->status &= ~(uint32_t)STATUS_GL_CONTEXT;
+        if (!read_screen_via_wrapped(&wrapped_buffer, &width, &height)) {
+            g_hdr->status &= ~(uint32_t)STATUS_READSCREEN;
+            g_hdr->dropped++;
+            return;
+        }
+        g_hdr->status |= STATUS_READSCREEN;
     }
     unsigned stride = (width * BYTES_PER_PIXEL + 3u) & ~3u;
     if (width == 0 || height == 0 || width > MAX_WIDTH || height > MAX_HEIGHT) {
+        if (wrapped_buffer) free_wrapped_buffer(wrapped_buffer);
         g_hdr->status |= STATUS_FRAME_TOO_LARGE;
         g_hdr->dropped++;
         return;
@@ -386,7 +517,12 @@ static void capture_if_presented(void) {
         slot->lengths[index] = length;
         if (length) memcpy(slot->table + index * TABLE_ENTRY_BYTES, g_pending.bytes[index], length);
     }
-    read_front_buffer(slot->pixels, width, height, bottom_offset);
+    if (wrapped_buffer) {
+        copy_packed_rows(slot->pixels, stride, (const uint8_t *)wrapped_buffer, width, height);
+        free_wrapped_buffer(wrapped_buffer);
+    } else {
+        read_front_buffer(slot->pixels, width, height, bottom_offset);
+    }
     MemoryBarrier();
     slot->seq_end = seq;
     MemoryBarrier();
@@ -437,6 +573,7 @@ EXPORT void CALL GetDllInfo(PLUGIN_INFO *info) {
 }
 
 EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
+    HGLRC context_before = wglGetCurrentContext();
     ensure_wrapped();
     g_gfx = info;
     g_have_gfx = TRUE;
@@ -444,6 +581,8 @@ EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
     memset(&g_pending, 0, sizeof g_pending);
     measure_rdram();
     g_gl_entry_points_looked_up = FALSE;      /* a new context: look them up again */
+    g_context_state = -1;
+    g_readscreen_retired = FALSE;
     open_stream();
     if (g_hdr) {
         /* A fresh attach starts from a clean status: bits a crashed
@@ -470,21 +609,29 @@ EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
             MessageBoxA(g_gfx.hWnd, message, "SM64 Trainer capture layer", MB_OK | MB_ICONWARNING);
         return FALSE;
     }
-    return g_wrapped.InitiateGFX(info);
+    BOOL initiated = g_wrapped.InitiateGFX(info);
+    note_context(&g_note_initiate, context_before, wglGetCurrentContext());
+    return initiated;
 }
 
 EXPORT void CALL ProcessDList(void) {
+    HGLRC context_before = wglGetCurrentContext();
     if (g_wrapped.ProcessDList) g_wrapped.ProcessDList();
+    note_context(&g_note_list, context_before, wglGetCurrentContext());
     stamp_pending();
 }
 
 EXPORT void CALL UpdateScreen(void) {
+    HGLRC context_before = wglGetCurrentContext();
     if (g_wrapped.UpdateScreen) g_wrapped.UpdateScreen();
+    note_context(&g_note_screen, context_before, wglGetCurrentContext());
     capture_if_presented();
 }
 
 EXPORT void CALL RomOpen(void) {
+    HGLRC context_before = wglGetCurrentContext();
     if (g_wrapped.RomOpen) g_wrapped.RomOpen();
+    note_context(&g_note_rom_open, context_before, wglGetCurrentContext());
     g_last_origin = 0xFFFFFFFFu;
     memset(&g_pending, 0, sizeof g_pending);
     if (g_hdr) g_hdr->status |= STATUS_ROM_OPEN;

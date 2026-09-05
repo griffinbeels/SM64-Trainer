@@ -81,18 +81,34 @@ function CaptureLayerRow({ setup, refresh }) {
     refresh();
   }
 
+  // A problem on a loaded layer (no picture reaches it; a newer build is
+  // waiting) shows where the click lands -- "Active" alone read as fine
+  // while every picture was refused (2026-09-05).
+  const problems = emu.problems || [];
+  const stale = emu.wrapper_current === false;
+  const problemLines = problems.map((problem) =>
+    html`<p class="setup-row-detail setup-row-problem">${problem}</p>`);
+  const updateButton = stale && html`<button type="button" class="primary-button"
+      disabled=${installing} onclick=${install}>${installing ? "Updating…" : "Update"}</button>`;
   if (emu.state === "active") {
-    return html`<${ChecklistRow} status="ok" title="Frame-exact capture">
+    return html`<${ChecklistRow} status=${problems.length ? "warn" : "ok"}
+        title="Frame-exact capture">
       <div class="setup-active-line">
         <${Icon} name="check" size=${14} /><span>Active</span>
+        ${updateButton}
         <button type="button" onclick=${remove}>Remove</button>
       </div>
+      ${problemLines}
+      ${installError && html`<p class="setup-disabled-reason">${installError}</p>`}
     <//>`;
   }
   if (emu.state === "needs_restart") {
     return html`<${ChecklistRow} status="warn" title="Frame-exact capture">
       <p class="setup-row-detail">Installed. Restart Project64 to load it.</p>
+      ${problemLines.slice(1)}
+      ${updateButton}
       <button type="button" onclick=${remove}>Remove</button>
+      ${installError && html`<p class="setup-disabled-reason">${installError}</p>`}
     <//>`;
   }
   if (emu.state === "regressed") {

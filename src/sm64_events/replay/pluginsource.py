@@ -41,6 +41,38 @@ TABLE_ORDER = ("global_timer", "player1_controller", "mario", "usamune_overall")
 IDLE_POLL_S = 1.0
 #: how long the reader waits on the event before checking stop / idle
 WAIT_S = 0.25
+#: how long the recorder waits for the layer's FIRST picture before it
+#: records through desktop capture instead (a game presents ~30 pictures/s,
+#: so a layer that can read at all answers inside a few of these)
+PICTURE_PROBE_S = 0.6
+
+
+def pictures_flow(stream: F.FrameStream, timeout_s: float = PICTURE_PROBE_S) -> tuple:
+    """Whether the capture layer can hand over a picture RIGHT NOW: asks for
+    frames and waits for its write sequence to advance. `(True, None)` on
+    the first picture; `(False, reason)` otherwise, frames turned back off,
+    with the reason the header gives -- the first live session (2026-09-05)
+    had a layer whose heartbeat moved while every picture was refused (no
+    GL context on the emulation thread), and the recorder sat on it for an
+    hour recording nothing. A source that cannot deliver is never chosen;
+    the desktop grab is, with this reason beside it."""
+    import time
+    before = stream.header()
+    stream.set_want_frames(True)
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        stream.wait(0.05)
+        if stream.header().write_seq != before.write_seq:
+            return True, None
+    after = stream.header()
+    stream.set_want_frames(False)
+    if not after.initiated:
+        return False, "the capture layer is not initiated"
+    if after.dropped > before.dropped:
+        return False, (f"it refused {after.dropped - before.dropped} pictures in "
+                       f"{timeout_s:.1f} s: no OpenGL context on the emulation thread and "
+                       "nothing from the wrapped plugin's ReadScreen")
+    return False, f"it presented no new picture in {timeout_s:.1f} s"
 
 
 def _aligned(address: int, length: int) -> tuple:
