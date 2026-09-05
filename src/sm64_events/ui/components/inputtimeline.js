@@ -679,7 +679,15 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
     <footer class="input-inspector">
       <div class="input-inspector-frame">
         <span class="eyebrow">Frame</span>
-        <strong>${frame - lead} / ${total - lead}</strong>
+        ${/* BOTH HALVES ARE FRAME NUMBERS -- never a number over a count.
+              The axis is zero-based (frame 0 is the attempt's own start, the
+              lead-in counts backwards from it), so a 499-frame track's last
+              frame IS 498, and printing the COUNT beside it meant the
+              readout could never reach its own denominator. His report,
+              2026-09-05: "we always stop before the last frame of the
+              video... from a user perspective this looks like an error, not
+              intentional." The last frame now names itself: 498 / 498. */""}
+        <strong>${frame - lead} / ${Math.max(0, total - lead - 1)}</strong>
         ${(() => {
           // The slot the axis frame is shown on -- through the map, not the
           // video element, so the stamped clock reads the same with or

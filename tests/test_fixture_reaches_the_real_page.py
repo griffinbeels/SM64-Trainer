@@ -1342,7 +1342,32 @@ def test_the_timeline_reaches_a_LEAD_IN_and_frame_zero_stays_the_attempt(page):
     assert shown < total, (frames_head, total)
     readout = page.evaluate(
         "document.querySelector('.input-inspector-frame strong').textContent")
-    assert int(readout.split("/")[1].strip()) == total - lead
+    # BOTH halves are frame NUMBERS on the same zero-based axis, so the
+    # denominator is the LAST frame rather than how many there are.
+    assert int(readout.split("/")[1].strip()) == total - lead - 1
+
+
+def test_the_frame_readout_can_reach_its_own_last_frame(page):
+    """His report, 2026-09-05: the panel read 498 / 499 at the end of the
+    clip and no step could reach 499 -- "from a user perspective this looks
+    like an error, not intentional". The numerator was the zero-based axis
+    frame and the denominator was the COUNT, so the readout could never
+    equal itself. Seeking to the far right of the track must now land on
+    n / n. Mutation proof: put the count back and this goes red."""
+    reach(page, "input-timeline")
+    page.evaluate(
+        "(() => { const lanes = document.querySelector('.input-lanes');"
+        " const box = lanes.getBoundingClientRect();"
+        " lanes.dispatchEvent(new PointerEvent('pointerdown',"
+        "   {bubbles: true, clientX: box.right, clientY: box.top + 4}));"
+        " return true; })()")
+    page.wait_ms(200)
+    readout = page.evaluate(
+        "document.querySelector('.input-inspector-frame strong').textContent")
+    here, last = (part.strip() for part in readout.split("/"))
+    assert here == last, (
+        f"seeking to the end of the track reads {readout!r} -- the panel "
+        "cannot reach its own last frame")
 
 
 def test_the_screen_check_chip_reaches_the_timeline_header(page):
